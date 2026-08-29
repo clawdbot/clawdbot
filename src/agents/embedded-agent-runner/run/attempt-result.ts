@@ -440,6 +440,7 @@ export function completeEmbeddedAttemptResult(
       toolMetas: toolMetasNormalized,
       replayMetadata,
       terminal: state.terminal,
+      blockRuntimeResumeSilentReply: attempt.blockRuntimeResumeSilentReply,
     },
   });
   const settledTurnFinalizationContext = resolveSettledTurnFinalizationContext({
@@ -487,6 +488,7 @@ export function completeEmbeddedAttemptResult(
     clientToolCalls,
     yieldDetected: state.yieldDetected || undefined,
     yieldAcknowledgment: state.yieldAcknowledgment,
+    blockRuntimeResumeSilentReply: attempt.blockRuntimeResumeSilentReply,
   };
   return finalizeEmbeddedAttempt({
     result,

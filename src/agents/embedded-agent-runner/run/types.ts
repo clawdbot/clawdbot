@@ -358,6 +358,11 @@ export type EmbeddedRunAttemptResult = {
   /** Explicit user-facing waiting status supplied to sessions_yield. */
   yieldAcknowledgment?: string;
   /**
+   * Runtime-only resume with an open resume contract must not accept exact
+   * NO_REPLY / empty finals as intentional silence.
+   */
+  blockRuntimeResumeSilentReply?: boolean;
+  /**
    * True when code mode owned this attempt's model tool surface. Absent means
    * the harness did not report engagement (treated as not engaged), which is
    * how config-enabled code mode stays visible as a no-op on harness routes.

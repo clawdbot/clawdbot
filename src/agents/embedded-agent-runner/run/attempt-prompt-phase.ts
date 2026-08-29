@@ -28,6 +28,7 @@ import {
 } from "./attempt-prompt-support.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { shouldBlockSilentReplyOnRuntimeResume } from "./runtime-resume-contract.js";
 
 type PromptAssemblyInput = Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0];
 type PromptAssemblyResult = Awaited<ReturnType<typeof prepareEmbeddedAttemptPromptAssembly>>;
@@ -257,6 +258,11 @@ export async function runEmbeddedAttemptPromptPhase(input: {
         activeSession.agent.state.messages = messages;
       },
       ...input.context,
+    });
+    // Runtime-only resume with an open contract must not accept exact NO_REPLY.
+    attempt.blockRuntimeResumeSilentReply = shouldBlockSilentReplyOnRuntimeResume({
+      runtimeOnly: promptContext.promptSubmission.runtimeOnly,
+      resumeContract: promptContext.promptSubmission.resumeContract,
     });
     const { hookMessagesForCurrentPrompt, promptForModel, systemPromptForHook } = promptContext;
     input.lifecycle.setPrePromptMessageCount(promptContext.prePromptMessageCount);

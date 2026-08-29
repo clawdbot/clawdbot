@@ -22,6 +22,10 @@ import {
   joinAssistantTexts,
   type IncompleteTurnAttempt,
 } from "./incomplete-turn-classification.js";
+import {
+  isBlockedRuntimeResumeSilentReply,
+  RUNTIME_RESUME_SILENT_REPLY_BLOCKED_TEXT,
+} from "./runtime-resume-contract.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 type SilentToolResultAttempt = Pick<
@@ -57,6 +61,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   timedOut: boolean;
   hadPotentialSideEffects?: boolean;
   hasIntentionalTerminalCompletion?: boolean;
+  blockRuntimeResumeSilentReply?: boolean;
   terminalAuthFailure?: TerminalAuthFailureContext;
   attempt: IncompleteTurnAttempt;
 }): string | null {
@@ -93,6 +98,17 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.hasIntentionalTerminalCompletion
   ) {
     return null;
+  }
+
+  if (
+    isBlockedRuntimeResumeSilentReply({
+      blockRuntimeResumeSilentReply:
+        params.blockRuntimeResumeSilentReply === true ||
+        params.attempt.blockRuntimeResumeSilentReply === true,
+      assistantTexts: params.attempt.assistantTexts,
+    })
+  ) {
+    return RUNTIME_RESUME_SILENT_REPLY_BLOCKED_TEXT;
   }
 
   if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {

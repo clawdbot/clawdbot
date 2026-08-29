@@ -38,7 +38,10 @@ export type IncompleteTurnAttempt = Pick<
   | "terminal"
   | "toolMetas"
 > &
-  Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">>;
+  Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">> & {
+    /** Set on runtime-only resume turns with an open resume contract. */
+    blockRuntimeResumeSilentReply?: boolean;
+  };
 
 export function hasPositiveOutputTokenUsage(message: AgentMessage | null): boolean {
   if (!message || typeof message !== "object") {

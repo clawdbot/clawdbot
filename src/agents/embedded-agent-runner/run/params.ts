@@ -414,6 +414,11 @@ export type RunEmbeddedAgentParams = {
    */
   allowEmptyAssistantReplyAsSilent?: boolean;
   /**
+   * Runtime-only resume turns with an open resume contract must not accept
+   * exact NO_REPLY / empty finals as intentional silence.
+   */
+  blockRuntimeResumeSilentReply?: boolean;
+  /**
    * Whether this run still owes a visible reply after settled non-reporting tools.
    * Exact configured silence and committed delivery remain terminal outcomes.
    */
