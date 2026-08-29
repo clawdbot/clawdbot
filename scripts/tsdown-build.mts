@@ -39,10 +39,6 @@ import {
   tsdownPackageOutputRoot,
 } from "./lib/tsdown-output-roots.mts";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
-import {
-  isSourceCheckoutRoot,
-  pruneBundledPluginSourceNodeModules,
-} from "./postinstall-bundled-plugins.mjs";
 
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
 const INEFFECTIVE_DYNAMIC_IMPORT_MARKER = "[INEFFECTIVE_DYNAMIC_IMPORT]";
@@ -547,26 +543,6 @@ export function pruneUntrackedGeneratedSourceDeclarations(
     }
   }
   return removed;
-}
-
-export function pruneSourceCheckoutBundledPluginNodeModules(
-  params: { cwd?: string; logger?: Pick<Console, "warn"> } = {},
-) {
-  const cwd = params.cwd ?? process.cwd();
-  const logger = params.logger ?? console;
-  if (!isSourceCheckoutRoot({ packageRoot: cwd, existsSync: fs.existsSync })) {
-    return;
-  }
-  try {
-    pruneBundledPluginSourceNodeModules({
-      extensionsDir: path.join(cwd, "extensions"),
-      existsSync: fs.existsSync,
-      readdirSync: fs.readdirSync,
-      rmSync: fs.rmSync,
-    });
-  } catch (error) {
-    logger.warn(`tsdown: could not prune bundled plugin source node_modules: ${String(error)}`);
-  }
 }
 
 function findFatalUnresolvedImport(lines: string[]) {
@@ -1542,7 +1518,6 @@ export function prepareTsdownBuildExecution(
       // Reject unsafe custom output roots before any preparatory mutation. The second
       // validation in cleanTsdownOutputRoots closes a symlink race before deletion.
       assertTsdownCleanOutputRoots({ roots });
-      pruneSourceCheckoutBundledPluginNodeModules();
       pruneUntrackedGeneratedSourceDeclarations();
       pruneStaleRuntimeSymlinks();
       cleanTsdownOutputRoots({ roots });

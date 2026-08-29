@@ -4290,7 +4290,7 @@ NODE
     const install = step("Install dependencies");
     const installScript = expectDefined(install.run, "Install dependencies script");
     const cachePaths =
-      "node_modules\nui/node_modules\npackages/*/node_modules\nexamples/*/node_modules\n.cache/openclaw-pnpm-store\n";
+      "node_modules\nui/node_modules\npackages/*/node_modules\nextensions/*/node_modules\nexamples/*/node_modules\n.cache/openclaw-pnpm-store\n";
 
     expect(action.inputs["cache-mode"].default).toBe("off");
     expect(action.inputs["dependency-cache"].default).toBe("false");

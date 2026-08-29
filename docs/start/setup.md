@@ -37,6 +37,11 @@ ignores these settings; Node runtime support does not imply support for its
 bundled npm as a source resolver. [Published/global installs](/install) do not
 inherit the repository's `.npmrc`. Source installs continue to use pnpm.
 
+pnpm owns root and plugin-local dependencies, including workspace links and
+versions that differ between packages. Postinstall and build preparation preserve
+those trees. If an older checkout pruned plugin-local dependencies, run
+`pnpm install --frozen-lockfile` after updating to restore them before testing.
+
 ## Tailoring strategy (so updates do not hurt)
 
 If you want "100% tailored to me" _and_ easy updates, keep your customization in:
