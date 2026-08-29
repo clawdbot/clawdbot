@@ -216,6 +216,7 @@ describe("resolveLineNonDispatchRetryable", () => {
     { label: "a forbidden recipient", error: httpError(403), retryable: false },
     { label: "an unknown recipient", error: httpError(404), retryable: false },
     { label: "a request timeout", error: httpError(408), retryable: undefined },
+    { label: "an accepted retry-key conflict", error: httpError(409), retryable: undefined },
     { label: "a rate limit", error: httpError(429), retryable: true },
     { label: "an upstream failure", error: httpError(503), retryable: undefined },
     {
@@ -246,6 +247,9 @@ describe("resolveLineNonDispatchRetryable", () => {
 
     expect(attempt).toBeGreaterThan(1);
     expect(resolveLineNonDispatchRetryable(failure)).toBeUndefined();
+    expect(
+      resolveLineNonDispatchRetryable(new Error("wrapped send failure", { cause: failure })),
+    ).toBeUndefined();
   });
 
   it("still proves a push was refused when LINE rejected the only attempt", async () => {

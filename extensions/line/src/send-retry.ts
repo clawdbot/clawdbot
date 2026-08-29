@@ -25,6 +25,11 @@ function resolveAttemptNonDispatchRetryable(error: unknown): boolean | undefined
   if (status === 429) {
     return true;
   }
+  // The send owner consumes retry-key 409 as an accepted delivery. Never let a
+  // wrapped/injected form cross this boundary as proof that nothing was sent.
+  if (status === 409) {
+    return undefined;
+  }
   return status !== undefined && status >= 400 && status < 500 && status !== 408
     ? false
     : undefined;
@@ -38,7 +43,16 @@ const pushErrorsWithAmbiguousAttempt = new WeakSet<object>();
 
 /** Retryability when LINE refused every attempt, or undefined when delivery is ambiguous. */
 export function resolveLineNonDispatchRetryable(error: unknown): boolean | undefined {
-  if (typeof error === "object" && error !== null && pushErrorsWithAmbiguousAttempt.has(error)) {
+  const hasAmbiguousAttempt = collectErrorGraphCandidates(error, (candidate) => [
+    candidate.cause,
+    candidate.error,
+  ]).some(
+    (candidate) =>
+      typeof candidate === "object" &&
+      candidate !== null &&
+      pushErrorsWithAmbiguousAttempt.has(candidate),
+  );
+  if (hasAmbiguousAttempt) {
     return undefined;
   }
   return resolveAttemptNonDispatchRetryable(error);
