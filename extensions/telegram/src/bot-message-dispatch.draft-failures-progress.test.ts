@@ -206,6 +206,9 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
     createTelegramDraftStream.mockImplementation(actualDraft.createTelegramDraftStream);
     const bot = createBot();
+    const sendMessage = vi.spyOn(bot.api, "sendMessage");
+    const editMessageText = vi.spyOn(bot.api, "editMessageText");
+    const deleteMessage = vi.spyOn(bot.api, "deleteMessage");
     const partialText = "A visible partial answer before the provider failed";
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -232,15 +235,15 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       telegramCfg: { streaming: { mode: "partial" } },
     });
 
-    expect(bot.api.sendMessage).toHaveBeenCalledOnce();
-    expect(bot.api.editMessageText).toHaveBeenLastCalledWith(
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(editMessageText).toHaveBeenLastCalledWith(
       123,
       1001,
       `${partialText}\n\nThe model failed. Please try again.`,
       expect.anything(),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
-    expect(bot.api.deleteMessage).not.toHaveBeenCalled();
+    expect(deleteMessage).not.toHaveBeenCalled();
   });
 
   it("clears a pending partial and sends one fallback after an unexpected reply failure", async () => {
