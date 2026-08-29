@@ -21,6 +21,7 @@ describe("createLineImageSetIngressBuffer", () => {
     total?: number;
     laneKey?: string;
     setId?: string;
+    event?: string;
     flushDelayMs?: number;
   }) =>
     buffer.admit({
@@ -28,7 +29,7 @@ describe("createLineImageSetIngressBuffer", () => {
       setId: params.setId ?? "set-1",
       messageId: `m${params.index}`,
       index: params.index,
-      event: `image-${params.index}`,
+      event: params.event ?? `image-${params.index}`,
       lifecycle: `claim-${params.index}`,
       ...(params.total === undefined ? {} : { total: params.total }),
       ...(params.flushDelayMs === undefined ? {} : { flushDelayMs: params.flushDelayMs }),
@@ -113,6 +114,30 @@ describe("createLineImageSetIngressBuffer", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
     await expect(senderB).resolves.toMatchObject({ events: ["image-1"] });
+  });
+
+  it("keeps two senders apart when LINE reuses a set id", async () => {
+    // A set id identifies a send inside one conversation. Keyed on its own it
+    // would fold a second sender's image into this turn, answering it in a
+    // conversation it was never sent to.
+    const senderA = arrive({ index: 1, total: 2, laneKey: "user:UA", setId: "shared-id" });
+    const senderB = arrive({
+      index: 1,
+      total: 2,
+      laneKey: "user:UB",
+      setId: "shared-id",
+      event: "b-image-1",
+    });
+
+    await expect(
+      arrive({ index: 2, total: 2, laneKey: "user:UA", setId: "shared-id" }),
+    ).resolves.toBeNull();
+    await expect(senderA).resolves.toMatchObject({ events: ["image-1", "image-2"] });
+
+    await expect(
+      arrive({ index: 2, total: 2, laneKey: "user:UB", setId: "shared-id", event: "b-image-2" }),
+    ).resolves.toBeNull();
+    await expect(senderB).resolves.toMatchObject({ events: ["b-image-1", "b-image-2"] });
   });
 
   it("takes a total that only a later part reports", async () => {

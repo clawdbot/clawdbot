@@ -93,10 +93,12 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     flushDelayMs?: number;
   }) => Promise<LineImageSetDelivery<TEvent, TLifecycle> | null>;
 } {
-  // Sets still open to their remaining parts, keyed the way LINE ties them
-  // together. Registered before the starter waits its turn, so parts that arrive
-  // while it is still queued join it instead of starting a second set.
+  // Sets still open to their remaining parts. The lane is part of the key: a set
+  // id identifies a send within one conversation, not across the account, so
+  // keying on it alone would let another sender's parts join this turn and be
+  // answered in a conversation they were never sent to.
   const pendingBySet = new Map<string, PendingImageSet<TEvent, TLifecycle>>();
+  const pendingKey = (laneKey: string, setId: string) => `${laneKey}\u0000${setId}`;
   // Tail of each lane's queue: everything that deferred waits behind it in turn.
   const laneChain = new Map<string, Promise<void>>();
 
@@ -134,7 +136,8 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
       lifecycle: input.lifecycle,
     };
 
-    const forming = pendingBySet.get(input.setId);
+    const key = pendingKey(input.laneKey, input.setId);
+    const forming = pendingBySet.get(key);
     if (forming) {
       forming.parts.set(input.messageId, part);
       // A later part may carry the total an earlier one omitted.
@@ -157,7 +160,7 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
         release();
       },
     };
-    pendingBySet.set(input.setId, pending);
+    pendingBySet.set(key, pending);
     const releaseLane = await enterLane(input.laneKey);
     // The wait starts here, not on arrival: time spent queued behind earlier work
     // on this lane is not time LINE spent delivering the rest of the set.
@@ -169,7 +172,7 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     await whole;
     // These parts are the turn. A part arriving after this starts its own set and
     // queues behind this delivery rather than joining a snapshot it missed.
-    pendingBySet.delete(input.setId);
+    pendingBySet.delete(key);
     const ordered = orderedParts(pending);
     return {
       events: ordered.map((entry) => entry.event),
