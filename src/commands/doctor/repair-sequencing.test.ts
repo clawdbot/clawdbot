@@ -1014,6 +1014,7 @@ describe("doctor repair sequencing", () => {
 
   it("seeds post-repair metadata from the returned install records", async () => {
     const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-test" };
+    const workspaceDir = "/tmp/openclaw-doctor-test/workspace";
     const candidate = {} as OpenClawConfig;
     const repairedRecords = {
       demo: {
@@ -1051,11 +1052,13 @@ describe("doctor repair sequencing", () => {
       config: candidate,
       env,
       installRecords: repairedRecords,
+      workspaceDir,
     });
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
       config: candidate,
       env,
       index: refreshedIndex,
+      workspaceDir,
     });
   });
 
