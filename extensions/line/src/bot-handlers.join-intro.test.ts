@@ -178,6 +178,13 @@ describe("LINE group join introductions", () => {
     { name: "disabled group policy", config: { groupPolicy: "disabled" as const } },
     { name: "a disabled group", config: { groups: { [groupId]: { enabled: false } } } },
     { name: "disabled wildcard groups", config: { groups: { "*": { enabled: false } } } },
+    // An allowlist with nobody on it rejects every message from the room, so
+    // introducing the bot there would speak in a room it may not act in.
+    { name: "an allowlist with nobody on it", config: { groupAllowFrom: [] } },
+    {
+      name: "a per-group allowlist with nobody on it",
+      config: { groups: { [groupId]: { allowFrom: [] } } },
+    },
   ])("reports denied admission for $name without reading metadata", async ({ config }) => {
     await handleLineWebhookEvents([joinEvent(sources[0])], createContext(config));
 
@@ -185,5 +192,22 @@ describe("LINE group join introductions", () => {
       expect.objectContaining({ conversationId: groupId, roomAllowed: false }),
     );
     expect(getGroupSummary).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "an open group policy needs no allowlist",
+      config: { groupPolicy: "open" as const, groupAllowFrom: [] },
+    },
+    {
+      name: "a per-group allowlist admits the room its account list does not",
+      config: { groupAllowFrom: [], groups: { [groupId]: { allowFrom: [userId] } } },
+    },
+  ])("introduces the bot when $name", async ({ config }) => {
+    await handleLineWebhookEvents([joinEvent(sources[0])], createContext(config));
+
+    expect(reportJoin).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: groupId, roomAllowed: true }),
+    );
   });
 });

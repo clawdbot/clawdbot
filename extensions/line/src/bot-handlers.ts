@@ -107,12 +107,48 @@ function resolveLineGroupConfig(params: {
   });
 }
 
-function resolveLineRuntimeGroupPolicy({ cfg, account }: LineHandlerContext) {
-  return resolveAllowlistProviderRuntimeGroupPolicy({
-    providerConfigPresent: cfg.channels?.line !== undefined,
-    groupPolicy: account.config.groupPolicy,
-    defaultGroupPolicy: resolveDefaultGroupPolicy(cfg),
-  });
+/**
+ * The effective group admission for one room.
+ *
+ * Both the message gate and the join gate read this, so the answer to "does
+ * this bot serve this room" cannot differ between an event that carries a
+ * sender and one that does not.
+ */
+function resolveLineRoomAdmission(params: {
+  context: LineHandlerContext;
+  groupConfig?: LineGroupConfig;
+}): {
+  groupPolicy: GroupPolicy;
+  groupAllowFrom: string[];
+  providerMissingFallbackApplied: boolean;
+  /** True when some sender could be admitted here; a join has none to check. */
+  servesRoom: boolean;
+} {
+  const { context, groupConfig } = params;
+  const { groupPolicy: runtimeGroupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: context.cfg.channels?.line !== undefined,
+      groupPolicy: context.account.config.groupPolicy,
+      defaultGroupPolicy: resolveDefaultGroupPolicy(context.cfg),
+    });
+  const groupPolicy: GroupPolicy =
+    runtimeGroupPolicy === "disabled"
+      ? "disabled"
+      : groupConfig?.allowFrom !== undefined
+        ? "allowlist"
+        : runtimeGroupPolicy;
+  // LINE group allowlists are scoped separately from DM allowFrom.
+  // The shared ingress policy below intentionally keeps fallback disabled.
+  const groupAllowFrom = normalizeStringEntries(
+    firstDefined(groupConfig?.allowFrom, context.account.config.groupAllowFrom),
+  );
+  const servesRoom =
+    groupConfig?.enabled !== false &&
+    groupPolicy !== "disabled" &&
+    // LINE admits group senders, not rooms, so an allowlist with nobody on it
+    // is a room whose every message is rejected.
+    (groupPolicy !== "allowlist" || groupAllowFrom.length > 0);
+  return { groupPolicy, groupAllowFrom, providerMissingFallbackApplied, servesRoom };
 }
 
 async function sendLinePairingReply(params: {
@@ -190,19 +226,10 @@ async function shouldProcessLineEvent(
   const rawText = resolveEventRawText(event);
   const requireMention = isGroup ? groupConfig?.requireMention !== false : false;
   const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const { groupPolicy: runtimeGroupPolicy, providerMissingFallbackApplied } =
-    resolveLineRuntimeGroupPolicy(context);
-  const groupPolicy: GroupPolicy =
-    runtimeGroupPolicy === "disabled"
-      ? "disabled"
-      : groupConfig?.allowFrom !== undefined
-        ? "allowlist"
-        : runtimeGroupPolicy;
-  // LINE group allowlists are scoped separately from DM allowFrom.
-  // The shared ingress policy below intentionally keeps fallback disabled.
-  const groupAllowFrom = normalizeStringEntries(
-    firstDefined(groupConfig?.allowFrom, account.config.groupAllowFrom),
-  );
+  const { groupPolicy, groupAllowFrom, providerMissingFallbackApplied } = resolveLineRoomAdmission({
+    context,
+    groupConfig,
+  });
   const mentionFacts = (() => {
     if (!isGroup || event.type !== "message") {
       return { canDetectMention: false, wasMentioned: false, hasAnyMention: false };
@@ -504,11 +531,10 @@ async function handleJoinEvent(event: JoinEvent, context: LineHandlerContext): P
   logVerbose(`line: bot joined ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
   const { cfg, account } = context;
   const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
-  // LINE allowlists authorize human senders, not the bot's own join; only
-  // conversation policy and the room's enabled state apply here.
-  const roomAllowed =
-    resolveLineRuntimeGroupPolicy(context).groupPolicy !== "disabled" &&
-    groupConfig?.enabled !== false;
+  // A join carries no sender to authorize, so this asks the room-level question
+  // instead: could any message from here be admitted? Introducing the bot in a
+  // room whose every message is rejected would speak where it may not act.
+  const { servesRoom: roomAllowed } = resolveLineRoomAdmission({ context, groupConfig });
   await reportChannelRoomJoin({
     cfg,
     channel: "line",
