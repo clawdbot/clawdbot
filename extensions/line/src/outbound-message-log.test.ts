@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { quotesLineBotMessage, recordLineSentMessages } from "./outbound-message-log.js";
 
 describe("outbound message log", () => {
-  it("recognises an id this account sent and nothing else", () => {
+  it("recognizes an id this account sent and nothing else", () => {
     recordLineSentMessages("default", ["sent-1", "sent-2"]);
 
     expect(quotesLineBotMessage("default", "sent-1")).toBe(true);

@@ -2,9 +2,9 @@
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 
 // LINE's webhook reports a quoted message's id but never its author, so the only
-// way to recognise our own message is to remember what we sent. Bounded and in
+// way to recognize our own message is to remember what we sent. Bounded and in
 // memory on purpose: after a restart a quote stops counting as an address, which
-// is exactly today's behaviour, rather than ever counting the wrong one.
+// is exactly today's behavior, rather than ever counting the wrong one.
 const RECENT_SENT_LIMIT = 500;
 
 // The bound is per account, not shared: LINE runs several configured accounts in

@@ -20,7 +20,7 @@ const pairingDeliveryMocks = vi.hoisted(() => ({
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
-  // Mention-kind construction is pure and part of the behaviour under test, so it
+  // Mention-kind construction is pure and part of the behavior under test, so it
   // comes from the real module rather than a stub.
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
   buildMentionRegexes: () => [],
