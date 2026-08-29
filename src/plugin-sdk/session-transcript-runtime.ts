@@ -54,6 +54,7 @@ export type {
   TranscriptEntryAnchor,
   TranscriptTurnAdmission,
 } from "../config/sessions/session-accessor.js";
+export { hasPromptImageInput } from "../media/prompt-image-order.js";
 
 export {
   formatSessionTranscriptMemoryHitKey,

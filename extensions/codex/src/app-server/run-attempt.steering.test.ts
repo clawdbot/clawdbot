@@ -99,6 +99,7 @@ function createSteeringParams() {
   params.sessionKey = `agent:main:${sessionId}`;
   params.runId = `run-${sessionId}`;
   params.toolAuthorityFingerprint = `authority-${sessionId}`;
+  params.model = { ...params.model, input: ["text", "image"] };
   return params;
 }
 
@@ -223,12 +224,25 @@ describe("runCodexAppServerAttempt steering", () => {
       });
       let steerPersisted = false;
       const userTurnTranscriptRecorder = {
+        message: { role: "user" as const, content: "steer this active turn", timestamp: 1 },
+        async resolveMessage() {
+          return this.message;
+        },
+        getAdmissionReceipt: () => undefined,
+        markRuntimePersistencePending: vi.fn(),
+        markRuntimePersisted: vi.fn(),
+        markBlocked: vi.fn(),
+        isBlocked: () => false,
+        hasRuntimePersistencePending: () => false,
+        waitForRuntimePersistence: async () => {},
+        persistBlocked: async () => undefined,
+        persistFallback: async () => undefined,
         persistApproved: vi.fn(async () => {
           if (steerPersisted) {
             return undefined;
           }
           steerPersisted = true;
-          return await appendSessionTranscriptMessageByIdentity({
+          await appendSessionTranscriptMessageByIdentity({
             ...sessionTarget,
             message: {
               role: "user",
@@ -237,9 +251,10 @@ describe("runCodexAppServerAttempt steering", () => {
               idempotencyKey: `${params.runId}:steer:user`,
             },
           });
+          return undefined;
         }),
         hasPersisted: () => steerPersisted,
-      } as unknown as NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
+      } satisfies NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
 
       const run = runCodexAppServerAttempt(params, {
         pluginConfig: { appServer: { mode: "yolo" } },

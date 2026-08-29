@@ -41,6 +41,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
+import { hasPromptImageInput } from "../../media/prompt-image-order.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-admission.js";
 import {
@@ -506,7 +507,7 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
       (prepared.outcome.reason === "tool_authority_mismatch" ||
         prepared.outcome.reason === "image_input_unsupported") &&
       options?.isInboundUserMessage === true &&
-      options.images?.length &&
+      hasPromptImageInput(options) &&
       pendingInputAuthorityProven
     ) {
       try {
@@ -521,7 +522,7 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
       !prepared.outcome.queued &&
       prepared.outcome.reason === "tool_authority_mismatch" &&
       options?.isInboundUserMessage === true &&
-      !options.images?.length &&
+      !hasPromptImageInput(options) &&
       pendingInputAuthorityProven
     ) {
       const claimPendingUserInputAnswer =

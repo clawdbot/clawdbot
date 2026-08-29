@@ -381,6 +381,13 @@ default `messages.queue.mode: "steer"`, OpenClaw batches steer-mode chat
 messages for the configured quiet window and sends them as one `turn/steer`
 request in arrival order.
 
+Inline images and stored attachments keep their original image order. Stored
+images use the same hydration, size limits, and filesystem restrictions as a
+new turn. If an attachment cannot be prepared or steering is rejected, the
+complete message remains queued for a follow-up turn. Preparation and the
+`turn/steer` acknowledgment do not count as consumption; a message sent to
+Codex without confirmed consumption is not replayed automatically.
+
 When Codex confirms consumption, OpenClaw saves completed visible assistant
 items before the steered user message, including items before a tool or sleep
 handoff. Each item keeps its own identity so later steers do not duplicate it.

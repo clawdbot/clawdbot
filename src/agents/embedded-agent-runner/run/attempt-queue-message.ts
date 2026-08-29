@@ -4,7 +4,10 @@
 import { toErrorObject } from "../../../infra/errors.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
-import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
+import {
+  hasPromptImageInput,
+  type PromptImageOrderEntry,
+} from "../../../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import {
   cancelPendingAgentQuestionForSession,
@@ -307,7 +310,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   canInject?: () => boolean,
 ): Promise<void | EmbeddedAgentQueueMessageResult> {
   const isInboundUserMessage = options?.isInboundUserMessage === true;
-  const isPlainTextAnswer = !options?.images?.length;
+  const isPlainTextAnswer = !hasPromptImageInput(options);
   if (isInboundUserMessage && !isPlainTextAnswer) {
     try {
       await cancelPendingAgentQuestionForSession({ sessionKey, resolvedBy: "image-reply" });
@@ -371,7 +374,7 @@ export async function claimEmbeddedPendingUserInputAnswer(
   options: EmbeddedAgentQueueMessageOptions | undefined,
   sessionKey?: string,
 ): Promise<boolean> {
-  if (options?.isInboundUserMessage !== true || options.images?.length) {
+  if (options?.isInboundUserMessage !== true || hasPromptImageInput(options)) {
     return false;
   }
   const claimed = await claimPendingAgentQuestionAnswer({

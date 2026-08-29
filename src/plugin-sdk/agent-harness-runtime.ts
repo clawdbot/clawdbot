@@ -337,6 +337,7 @@ export { normalizeProviderToolSchemas } from "../agents/embedded-agent-runner/to
 /** Detect prompt image references and load them through the same limits used by embedded runs. */
 export async function detectAndLoadAgentHarnessPromptImages(params: {
   prompt: string;
+  userTurnTranscriptRecorder?: EmbeddedAgentQueueMessageOptions["userTurnTranscriptRecorder"];
   workspaceDir: string;
   model: { input?: string[] };
   existingImages?: ImageContent[];
@@ -351,6 +352,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   detectedRefs: Array<{ raw: string; resolved: string; type: "path" | "media-uri" }>;
   loadedCount: number;
   skippedCount: number;
+  failedMediaCount: number;
 }> {
   const [{ resolveImageSanitizationLimits }, { detectAndLoadPromptImages }, { MAX_IMAGE_BYTES }] =
     await Promise.all([
@@ -366,6 +368,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
     existingImages: params.existingImages,
     imageOrder: params.imageOrder,
     media: params.media,
+    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     maxBytes: MAX_IMAGE_BYTES,
     maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
     workspaceOnly: params.workspaceOnly,
