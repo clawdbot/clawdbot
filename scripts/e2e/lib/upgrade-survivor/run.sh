@@ -1216,14 +1216,14 @@ repair_fixture_plugin_consent() {
   fi
   if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
     local attempts=1
-    if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    local minimum_attempts=1
+    if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] || [ "$update_repair_required" = "1" ]; then
       attempts=complete
-    elif [ "$update_repair_required" = "1" ]; then
-      attempts=2
+      minimum_attempts=2
     fi
     phase assert-prepublish-recovery-requests node \
       "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
-      assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version" "$clawhub_security_mode" "$attempts"
+      assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version" "$clawhub_security_mode" "$attempts" "$minimum_attempts"
   fi
 }
 

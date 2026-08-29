@@ -91,11 +91,11 @@ jobs:
               --argjson current_run_id "$GITHUB_RUN_ID" \
               --arg one_hour_ago "$one_hour_ago" \
               '.workflow_runs[]
-                | select(.database_id != $current_run_id)
+                | select(.id != $current_run_id)
                 | select(.created_at >= $one_hour_ago)
                 | select(.status != "cancelled")
                 | select((.conclusion // "") != "skipped")
-                | [.database_id, .status, (.conclusion // ""), .created_at, .head_sha]
+                | [.id, .status, (.conclusion // ""), .created_at, .head_sha]
                 | @tsv' "$runs_json"
           )"
 
@@ -111,7 +111,7 @@ jobs:
               --argjson current_run_id "$GITHUB_RUN_ID" \
               --arg remote_main "$remote_main" \
               '.workflow_runs[]
-                | select(.database_id != $current_run_id)
+                | select(.id != $current_run_id)
                 | select(.status != "cancelled")
                 | select((.conclusion // "") != "skipped")
                 | .head_sha

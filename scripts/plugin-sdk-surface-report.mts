@@ -328,7 +328,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: prepared model-provider builder preserves the stable builder's return contract.
       // +1: canonical SecretRef default-alias predicate for plugin binding parity.
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
-      4355,
+      // +1: manifest-owned plugin capability secret availability guard.
+      4356,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -433,7 +434,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: prepared model-provider builder preserves the stable builder's return contract.
       // +1: canonical SecretRef default-alias predicate for plugin binding parity.
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
-      2591,
+      // +1: manifest-owned plugin capability secret availability guard.
+      2592,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -208,6 +208,7 @@ function resolveDispatchResetAdmission(params: {
 }
 
 export function createDispatchReplyOperationCoordinator(params: {
+  allowActiveQueueResolution?: boolean;
   agentId: string;
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
@@ -351,7 +352,10 @@ export function createDispatchReplyOperationCoordinator(params: {
       phase !== "pre_dispatch" &&
       preDispatchAbortOperation?.result &&
       preDispatchAbortOperation.result.kind !== "completed" &&
-      !dispatchReplyOperation
+      !dispatchReplyOperation &&
+      // Low-level queue resolution can abort the old owner before final delivery acquires its
+      // successor operation. The old result belongs to that owner, not to this inbound turn.
+      params.allowActiveQueueResolution !== true
     ) {
       dispatchAbortOperation = preDispatchAbortOperation;
       return { status: "busy" };
@@ -370,7 +374,8 @@ export function createDispatchReplyOperationCoordinator(params: {
     );
     const allowGatewayEmbeddedQueueResolution =
       replyTurnKind === "visible" &&
-      params.replyOptions?.turnAdoptionLifecycle !== undefined &&
+      (params.replyOptions?.turnAdoptionLifecycle !== undefined ||
+        params.allowActiveQueueResolution === true) &&
       activeReplyOperation === undefined &&
       activeEmbeddedSessionId === operationSessionId;
     if (allowGatewayEmbeddedQueueResolution) {
@@ -384,12 +389,13 @@ export function createDispatchReplyOperationCoordinator(params: {
     const allowGatewayQueueResolution =
       phase !== "pre_dispatch" &&
       replyTurnKind === "visible" &&
-      params.replyOptions?.turnAdoptionLifecycle !== undefined &&
+      (params.replyOptions?.turnAdoptionLifecycle !== undefined ||
+        params.allowActiveQueueResolution === true) &&
       activeReplyOperation !== undefined &&
       activeReplyOperation.turnKind !== "heartbeat";
     if (allowGatewayQueueResolution) {
-      // Gateway turns need to reach getReplyFromConfig while the owner is active;
-      // that layer applies the session's steer/followup/collect/drop policy.
+      // Gateway and low-level plugin turns must reach getReplyFromConfig while the owner is active;
+      // that layer applies the session's steer/followup/collect/drop policy without concurrent runs.
       return { status: "ready" };
     }
     const allowSlackRoutedThreadBypass =

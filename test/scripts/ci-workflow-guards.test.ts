@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { isBuiltin } from "node:module";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,7 +32,7 @@ import { visitModuleSpecifiers } from "../../scripts/lib/guard-inventory-utils.m
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const CHECKOUT_V6 = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const CACHE_V5 = "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
@@ -4432,14 +4433,23 @@ NODE
 
   it.skipIf(process.platform === "win32")(
     "preserves pnpm hard links and validates cached importers offline",
-    () => {
-      const root = tempDirs.make("openclaw-dependency-cache-");
+    async ({ onTestFinished, signal }) => {
+      const fixtureDirs = createTempDirTracker();
+      let stopRegistry: (() => Promise<void>) | undefined;
+      let readyTimeout: NodeJS.Timeout | undefined;
+      // Timeout does not join the test body. Keep close and deletion in one hook,
+      // outside afterEach, so a failed join cannot release the registry's files.
+      onTestFinished(async () => {
+        clearTimeout(readyTimeout);
+        await stopRegistry?.();
+        fixtureDirs.cleanup();
+      });
+      const root = fixtureDirs.make("openclaw-dependency-cache-");
       const source = path.join(root, "source");
       const registry = path.join(root, "registry");
       const workspace = path.join(root, "workspace");
       const consumer = path.join(workspace, "packages", "consumer");
       const store = path.join(workspace, ".cache", "openclaw-pnpm-store");
-      const readyFile = path.join(root, "registry-ready");
       mkdirSync(source, { recursive: true });
       mkdirSync(registry, { recursive: true });
       mkdirSync(consumer, { recursive: true });
@@ -4477,10 +4487,9 @@ NODE
       const tarball = path.join(registry, "cache-proof-dep-1.0.0.tgz");
       const registryScript = String.raw`
 const { createHash } = require("node:crypto");
-const { readFileSync, renameSync, writeFileSync } = require("node:fs");
+const { readFileSync } = require("node:fs");
 const { createServer } = require("node:http");
 const tarballPath = process.argv[1];
-const readyPath = process.argv[2];
 const tarball = readFileSync(tarballPath);
 const server = createServer((request, response) => {
   if (request.url === "/cache-proof-dep") {
@@ -4513,24 +4522,44 @@ const server = createServer((request, response) => {
   response.end();
 });
 server.listen(0, "127.0.0.1", () => {
-  // Publish the complete port before existence can signal readiness to the parent.
-  const pendingPath = readyPath + ".tmp";
-  writeFileSync(pendingPath, String(server.address().port));
-  renameSync(pendingPath, readyPath);
+  process.send(server.address().port);
 });
 `;
-      const registryServer = spawn(process.execPath, ["-e", registryScript, tarball, readyFile], {
-        stdio: "ignore",
+      const registryServer = spawn(process.execPath, ["-e", registryScript, tarball], {
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
       });
-      try {
-        for (let attempt = 0; attempt < 200 && !existsSync(readyFile); attempt += 1) {
-          if (registryServer.exitCode !== null) {
-            throw new Error(`fixture registry exited with ${registryServer.exitCode}`);
-          }
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      let registryDidClose = false;
+      // Retain actual close from launch, including failed spawn; readiness must not own this join.
+      const registryClosed = new Promise<void>((resolve) => {
+        registryServer.once("close", () => {
+          registryDidClose = true;
+          resolve();
+        });
+      });
+      const failures: unknown[] = [];
+      registryServer.on("error", (error) => failures.push(error));
+      stopRegistry = async () => {
+        if (!registryDidClose) {
+          registryServer.kill("SIGTERM");
         }
-        expect(existsSync(readyFile)).toBe(true);
-        const registryUrl = `http://127.0.0.1:${readFileSync(readyFile, "utf8")}`;
+        await registryClosed;
+      };
+      try {
+        const port = await new Promise<number>((resolve, reject) => {
+          readyTimeout = setTimeout(() => reject(new Error("fixture registry not ready")), 2_000);
+          registryServer.once("message", (message) => {
+            if (typeof message !== "number") {
+              reject(new Error("fixture registry sent an invalid port"));
+              return;
+            }
+            resolve(message);
+          });
+          registryServer.once("error", reject);
+          void registryClosed.then(() => reject(new Error("fixture registry closed before ready")));
+        });
+        clearTimeout(readyTimeout);
+        signal.throwIfAborted();
+        const registryUrl = `http://127.0.0.1:${port}`;
         writeFileSync(
           path.join(workspace, "package.json"),
           JSON.stringify({
@@ -4617,7 +4646,22 @@ server.listen(0, "127.0.0.1", () => {
           readFileSync(path.join(consumer, "node_modules", "cache-proof-dep", "index.js"), "utf8"),
         ).toBe('module.exports = "cache-proof-v1";\n');
 
-        registryServer.kill("SIGTERM");
+        await stopRegistry();
+        signal.throwIfAborted();
+        expect(registryDidClose, "registry closed before source deletion/offline install").toBe(
+          true,
+        );
+        await expect(
+          new Promise<void>((resolve, reject) => {
+            const socket = connect({ host: "127.0.0.1", port, signal });
+            socket.once("error", reject);
+            socket.once("connect", () => {
+              socket.destroy();
+              resolve();
+            });
+          }),
+        ).rejects.toMatchObject({ code: "ECONNREFUSED" });
+        signal.throwIfAborted();
         rmSync(registry, { force: true, recursive: true });
         const cachedIdentity = statSync(restoredPackageFile);
         const cachedLockfile = readFileSync(path.join(workspace, "pnpm-lock.yaml"), "utf8");
@@ -4640,8 +4684,23 @@ server.listen(0, "127.0.0.1", () => {
         expect(`${drift.stdout}${drift.stderr}`).toContain(
           "cache-proof-dep (lockfile: 1.0.0, manifest: 2.0.0)",
         );
+      } catch (error) {
+        if (failures[0] !== error) {
+          failures.unshift(error);
+        }
       } finally {
-        registryServer.kill("SIGTERM");
+        clearTimeout(readyTimeout);
+        try {
+          await stopRegistry();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "dependency cache fixture failed");
       }
     },
   );

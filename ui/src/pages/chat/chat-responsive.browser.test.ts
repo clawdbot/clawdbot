@@ -1908,7 +1908,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                     <div class="chat-topbar-notices"></div>
                     <div class="chat-main__conversation">
                       <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
-                      <button class="btn btn--sm chat-history-available">Earlier history available</button>
                       <div class="chat-gutter-stack"><div class="task-suggestions">Task suggestion</div></div>
                       <div class="agent-chat__composer-shell">
                         <div class="agent-chat__composer-overlay"></div>
@@ -1979,21 +1978,16 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         ).toBe("absolute");
         const header = await getBoundingBox(page, ".chat-pane__header");
         const overlayTops = await Promise.all(
-          [
-            ".chat-history-available",
-            ".chat-topbar-notices",
-            ".chat-gutter-stack",
-            ".app-toast",
-          ].map(async (selector) => ({ selector, top: (await getBoundingBox(page, selector)).y })),
+          [".chat-topbar-notices", ".chat-gutter-stack", ".app-toast"].map(async (selector) => ({
+            selector,
+            top: (await getBoundingBox(page, selector)).y,
+          })),
         );
         if (label.startsWith("mobile")) {
           for (const overlay of overlayTops) {
             expect(overlay.top, overlay.selector).toBeGreaterThanOrEqual(header.y + header.height);
           }
         } else {
-          expect(
-            overlayTops.find((overlay) => overlay.selector === ".chat-history-available")?.top,
-          ).toBeCloseTo(header.y + header.height + 10, 0);
           expect(
             overlayTops.find((overlay) => overlay.selector === ".chat-topbar-notices")?.top,
           ).toBeCloseTo(8, 0);

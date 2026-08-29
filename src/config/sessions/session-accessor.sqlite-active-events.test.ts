@@ -191,107 +191,6 @@ describe("SQLite active transcript event projection", () => {
     expect(readSessionTranscriptActiveStats(scope).sizeBytes).toBeLessThan(1_000);
   });
 
-  it("counts paired reset tool results without counting discarded orphan results", async () => {
-    const assistantMessage = {
-      role: "assistant" as const,
-      api: "openai-responses" as const,
-      provider: "openai",
-      model: "gpt-5.6-sol",
-      content: [{ type: "toolCall" as const, id: "call-1", name: "read", arguments: {} }],
-      stopReason: "toolUse" as const,
-      timestamp: Date.parse("2026-08-15T00:00:00.000Z"),
-      usage: {
-        input: 1,
-        output: 1,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 2,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-    };
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        {
-          eventId: "discarded-old",
-          parentId: null,
-          message: { role: "user", content: `discarded ${"x".repeat(12_000)}` },
-        },
-        {
-          eventId: "kept-user",
-          parentId: "discarded-old",
-          message: { role: "user", content: "kept question" },
-        },
-        { eventId: "kept-assistant", parentId: "kept-user", message: assistantMessage },
-        {
-          eventId: "kept-result",
-          parentId: "kept-assistant",
-          message: {
-            role: "toolResult",
-            toolCallId: "call-1",
-            toolName: "read",
-            content: [{ type: "text", text: `paired ${"p".repeat(3_000)}` }],
-            isError: false,
-            timestamp: Date.parse("2026-08-15T00:00:01.000Z"),
-          },
-        },
-        {
-          eventId: "discarded-orphan",
-          parentId: "kept-result",
-          message: {
-            role: "toolResult",
-            toolCallId: "orphan-call",
-            toolName: "read",
-            content: [{ type: "text", text: `orphan ${"o".repeat(20_000)}` }],
-            isError: false,
-            timestamp: Date.parse("2026-08-15T00:00:02.000Z"),
-          },
-        },
-      ],
-      touchSessionEntry: false,
-    });
-    await appendTranscriptEvent(scope, {
-      type: "reset",
-      id: "reset-boundary",
-      parentId: "discarded-orphan",
-      timestamp: "2026-08-15T00:00:03.000Z",
-      reason: "new",
-      firstKeptEntryId: "kept-user",
-    });
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        {
-          eventId: "post-reset",
-          parentId: "reset-boundary",
-          message: { role: "user", content: "fresh turn" },
-        },
-      ],
-      touchSessionEntry: false,
-    });
-
-    const stats = readSessionTranscriptActiveStats(scope);
-    expect(stats.eventCount).toBe(4);
-    expect(stats.sizeBytes).toBeGreaterThan(3_000);
-    expect(stats.sizeBytes).toBeLessThan(8_000);
-
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        {
-          eventId: "second-post-reset",
-          parentId: "post-reset",
-          message: { role: "assistant", content: "fresh answer" },
-        },
-      ],
-      touchSessionEntry: false,
-    });
-    const parseSpy = vi.spyOn(JSON, "parse");
-    try {
-      expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(5);
-      expect(parseSpy).not.toHaveBeenCalled();
-    } finally {
-      parseSpy.mockRestore();
-    }
-  });
-
   it("keeps counting genuinely oversized post-reset events", async () => {
     await appendTranscriptEvent(scope, {
       type: "reset",
@@ -491,8 +390,8 @@ describe("SQLite active transcript event projection", () => {
       id: "newer-compaction",
       parentId: "post-reset",
       timestamp: "2026-07-22T00:01:00.000Z",
-      summary: "newer boundary shadows reset",
-      firstKeptEntryId: "old",
+      summary: "fresh-only summary",
+      firstKeptEntryId: "post-reset",
       tokensBefore: 10,
     });
     expect(
@@ -504,8 +403,8 @@ describe("SQLite active transcript event projection", () => {
     ).toBe("newer-compaction");
     expect(readSessionTranscriptActivePathEntryRelation(scope, "newer-compaction")).toBe("exact");
     expect(readSessionTranscriptActivePathEntryRelation(scope, "post-reset")).toBe("ancestor");
-    expect(readSessionTranscriptMessageEventCount(scope)).toBe(5);
-    expect(readSessionTranscriptMessageEventById(scope, "old")).toBeDefined();
+    expect(readSessionTranscriptMessageEventCount(scope)).toBe(3);
+    expect(readSessionTranscriptMessageEventById(scope, "old")).toBeUndefined();
   });
 
   it("fails closed when the latest indexed reset payload is malformed", async () => {

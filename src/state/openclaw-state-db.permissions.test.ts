@@ -1,9 +1,9 @@
 // State database permission hardening tests cover best-effort chmod on
 // filesystems without POSIX permission support (Azure Files, NFS, certain
 // Docker volume drivers).
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 // The permission helper hardens via the named import `chmodSync` from node:fs.
 // A namespace `vi.spyOn(fs, ...)` cannot rebind an
@@ -57,23 +57,20 @@ function enotsupError(): Error {
 }
 
 describe("state database permission hardening without chmod support", () => {
-  let stateDir: string | undefined;
-
-  afterEach(() => {
-    chmodFailHook.error = undefined;
-    chmodFailHook.calls = 0;
-    chmodFailHook.failProbe = true;
-    chmodFailHook.removeTargetSuffix = undefined;
-    chmodFailHook.targets = [];
-    closeOpenClawStateDatabaseForTest();
-    if (stateDir) {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-      stateDir = undefined;
-    }
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+    afterEach(() => {
+      chmodFailHook.error = undefined;
+      chmodFailHook.calls = 0;
+      chmodFailHook.failProbe = true;
+      chmodFailHook.removeTargetSuffix = undefined;
+      chmodFailHook.targets = [];
+      closeOpenClawStateDatabaseForTest();
+      cleanup();
+    });
   });
 
   it("opens the state database when chmodSync throws ENOTSUP", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    const stateDir = tempDirs.make("openclaw-state-chmod-");
     chmodFailHook.error = enotsupError();
 
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
@@ -84,7 +81,7 @@ describe("state database permission hardening without chmod support", () => {
   });
 
   it("rethrows EPERM when existing permissions are too broad", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    const stateDir = tempDirs.make("openclaw-state-chmod-");
     fs.chmodSync(stateDir, 0o755);
     chmodFailHook.error = chmodError("EPERM");
     chmodFailHook.failProbe = false;
@@ -95,7 +92,7 @@ describe("state database permission hardening without chmod support", () => {
   });
 
   it("opens when EPERM leaves existing permissions restrictive", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    const stateDir = tempDirs.make("openclaw-state-chmod-");
     openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
     closeOpenClawStateDatabaseForTest();
     chmodFailHook.error = chmodError("EPERM");
@@ -106,7 +103,7 @@ describe("state database permission hardening without chmod support", () => {
   });
 
   it("opens when EROFS leaves existing permissions restrictive", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    const stateDir = tempDirs.make("openclaw-state-chmod-");
     openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
     closeOpenClawStateDatabaseForTest();
     chmodFailHook.error = chmodError("EROFS");
@@ -117,7 +114,7 @@ describe("state database permission hardening without chmod support", () => {
   });
 
   it("rethrows EROFS when existing permissions are too broad", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    const stateDir = tempDirs.make("openclaw-state-chmod-");
     fs.chmodSync(stateDir, 0o755);
     chmodFailHook.error = chmodError("EROFS");
 
@@ -127,7 +124,7 @@ describe("state database permission hardening without chmod support", () => {
   });
 
   it("opens when the filesystem probe also rejects chmod with EPERM", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    const stateDir = tempDirs.make("openclaw-state-chmod-");
     fs.chmodSync(stateDir, 0o755);
     chmodFailHook.error = chmodError("EPERM");
 
@@ -139,7 +136,7 @@ describe("state database permission hardening without chmod support", () => {
   it("rethrows unexpected chmod errors at open", () => {
     // EACCES is not in CHMOD_UNSUPPORTED_CODES: a real permission fault on a
     // POSIX filesystem must keep the credentials-adjacent hardening fatal.
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    const stateDir = tempDirs.make("openclaw-state-chmod-");
     chmodFailHook.error = chmodError("EACCES");
 
     expect(() => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })).toThrow(
@@ -150,7 +147,7 @@ describe("state database permission hardening without chmod support", () => {
   it.each(["-wal", "-shm", "-journal"])(
     "opens when the %s sidecar disappears before chmod",
     (suffix) => {
-      stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+      const stateDir = tempDirs.make("openclaw-state-chmod-");
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
       openOpenClawStateDatabase(options);
       closeOpenClawStateDatabaseForTest();
@@ -170,7 +167,7 @@ describe("state database permission hardening without chmod support", () => {
     // resolveSqliteDatabaseFilePaths lists the unsuffixed database first. Losing
     // it must stay fatal: swallowing that ENOENT would fall through to a SQLite
     // open that creates a fresh empty database instead of surfacing the loss.
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    const stateDir = tempDirs.make("openclaw-state-chmod-");
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     openOpenClawStateDatabase(options);
     closeOpenClawStateDatabaseForTest();
@@ -182,7 +179,7 @@ describe("state database permission hardening without chmod support", () => {
   });
 
   it("repairs the schema when chmodSync throws ENOTSUP", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    const stateDir = tempDirs.make("openclaw-state-chmod-");
     openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
     closeOpenClawStateDatabaseForTest();
 
@@ -194,7 +191,7 @@ describe("state database permission hardening without chmod support", () => {
   });
 
   it("commits write transactions when chmodSync throws ENOTSUP", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    const stateDir = tempDirs.make("openclaw-state-chmod-");
     chmodFailHook.error = enotsupError();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
 

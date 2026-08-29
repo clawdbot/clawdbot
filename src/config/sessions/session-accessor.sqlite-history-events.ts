@@ -89,18 +89,16 @@ function resolveVisibleHistoryProjection(
       .where("identity.event_type", "in", ["compaction", "reset"])
       .orderBy("active.active_position", "asc"),
   ).rows;
-  const latestBoundaryIsReset = rows.at(-1)?.event_type === "reset";
-  const visibleRows = latestBoundaryIsReset ? rows.slice(-1) : rows;
-  let priorBoundaries = 0;
-  const boundaries = visibleRows.map((row): VisibleHistoryBoundary => {
-    const messagePosition = latestBoundaryIsReset
-      ? visibleMessages.kept.length
-      : Math.min(
-          row.next_message_position ?? projection.state.activeMessageCount,
-          visibleMessages.total,
-        );
+  const resetIndex = rows.findLastIndex((row) => row.event_type === "reset");
+  const visibleRows = rows.slice(Math.max(0, resetIndex));
+  const boundaries = visibleRows.map((row, index): VisibleHistoryBoundary => {
+    // Kept messages precede the latest reset; later markers share its logical window.
+    // Rebase raw positions so discarded messages cannot shift those markers.
+    const nextMessagePosition = row.next_message_position ?? projection.state.activeMessageCount;
+    const messagePosition =
+      visibleMessages.kept.length + Math.max(0, nextMessagePosition - visibleMessages.postStart);
     return {
-      displayPosition: messagePosition + priorBoundaries++,
+      displayPosition: messagePosition + index,
       eventId: row.event_id,
       eventSeq: row.seq,
       messagePosition,
