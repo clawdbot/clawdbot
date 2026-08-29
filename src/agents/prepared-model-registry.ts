@@ -101,7 +101,7 @@ function registryOwnerCandidates(
 async function loadReadSnapshot(
   input: PreparedModelRuntimeInput,
   allowConfiguredWorkspaceFallback: boolean,
-): Promise<PreparedModelRuntimeLease> {
+): Promise<Pick<PreparedModelRuntimeLease, "snapshot" | "release">> {
   for (const candidate of registryOwnerCandidates(input, allowConfiguredWorkspaceFallback)) {
     try {
       const prepared = await prepareModelRuntimeSnapshot(candidate);

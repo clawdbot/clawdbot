@@ -166,7 +166,10 @@ async function runPdfPrompt(params: {
 }> {
   const requestedCfg = applyImageModelConfigDefaults(params.cfg, params.pdfModelConfig);
 
-  let preparedRuntimeLease: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>>;
+  let preparedRuntimeLease: Pick<
+    Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>>,
+    "snapshot" | "release"
+  >;
   if (params.preparedModelRuntime) {
     preparedRuntimeLease = { snapshot: params.preparedModelRuntime, release: () => {} };
   } else {

@@ -48,6 +48,7 @@ vi.mock("./harness/runtime-plugin-load-plan.js", () => ({
   resolveAgentRuntimePluginSelections: hoisted.resolveAgentRuntimePluginSelections,
 }));
 
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -126,6 +127,35 @@ describe("agent runtime plugin registries", () => {
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
       expect.not.objectContaining({ onlyPluginIds: expect.anything() }),
     );
+  });
+
+  it.each([true, false])("reuses only an imported selected owner (imported=%s)", (imported) => {
+    const base = createEmptyPluginRegistry();
+    base.plugins.push(
+      createPluginRecord({ id: "memory-core" }),
+      createPluginRecord({ id: "codex", format: "openclaw", imported }),
+    );
+    const selected = loadAgentRuntimePluginRegistryHandle({
+      config: {},
+      metadataSnapshot: createPluginMetadataSnapshot({
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        workspaceDir: "/tmp/gateway-workspace",
+      }),
+      basePluginIds: ["memory-core"],
+      reusableRegistry: base,
+      selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
+    });
+    expect(selected === base).toBe(imported);
+    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledTimes(imported ? 0 : 1);
+    expect(hoisted.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+    if (!imported) {
+      expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activate: false,
+          onlyPluginIds: ["codex", "memory-core"],
+        }),
+      );
+    }
   });
 
   it("bounds unscoped agent loads to active runtime plugins and selected owners", async () => {

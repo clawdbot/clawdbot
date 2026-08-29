@@ -4224,7 +4224,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
           },
         ]);
         setActivePluginRegistry(registry);
-        harness.loadAgentRuntimePluginRegistryHandleMock.mockReturnValue(registry);
+        harness.preparedRunPluginRegistryMock.mockReturnValue(registry);
         harness.runEmbeddedAgentMock.mockResolvedValue({
           payloads: partialSend
             ? [{ text: "First payload." }, { text: "Second payload." }]

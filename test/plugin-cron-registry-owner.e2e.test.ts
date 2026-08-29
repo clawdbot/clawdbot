@@ -139,7 +139,7 @@ function writeModelResponse(res: ServerResponse, sequence: number): void {
   );
 }
 
-async function startMockModelServer(): Promise<MockModelServer> {
+async function startMockModelServer(rejectModel?: string): Promise<MockModelServer> {
   const requests: MockModelRequest[] = [];
   const server = createServer((req, res) => {
     void (async () => {
@@ -153,7 +153,13 @@ async function startMockModelServer(): Promise<MockModelServer> {
         res.writeHead(404).end();
         return;
       }
-      requests.push({ body: await readJsonRequest(req) });
+      const body = await readJsonRequest(req);
+      requests.push({ body });
+      if (rejectModel && body.model === rejectModel) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "Model temporarily unavailable" } }));
+        return;
+      }
       writeModelResponse(res, requests.length);
     })();
   });
@@ -263,6 +269,149 @@ async function listCronJobs(client: {
 }
 
 describe("plugin cron registry ownership e2e", () => {
+  it(
+    "prepares a job-selected provider and fallback under per-agent defaults",
+    async () => {
+      const fixtureDir = await mkdtemp(path.join(tmpdir(), "openclaw-cron-selection-e2e-"));
+      cleanupDirs.push(fixtureDir);
+      const bundledRoot = path.join(fixtureDir, "bundled");
+      const pluginId = "selected-cron-provider";
+      const pluginDir = path.join(bundledRoot, pluginId);
+      const provider = "selected-cron";
+      const providerMarker = "SELECTED_CRON_PROVIDER_RUNTIME";
+      await mkdir(pluginDir, { recursive: true });
+      await writeFile(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: pluginId,
+          providers: [provider],
+          activation: { onStartup: false, onProviders: [provider] },
+          configSchema: { type: "object", additionalProperties: false },
+        }),
+      );
+      await writeFile(
+        path.join(pluginDir, "index.js"),
+        `module.exports = {
+      id: ${JSON.stringify(pluginId)},
+      register(api) {
+        api.registerProvider({
+          id: ${JSON.stringify(provider)}, label: "Selected cron provider", auth: [],
+          resolveSyntheticAuth: () => ({ apiKey: "cron-fixture", source: "fixture", mode: "api-key" }),
+          transformSystemPrompt: ({ systemPrompt }) => systemPrompt + "\\n" + ${JSON.stringify(providerMarker)},
+        });
+      },
+    };\n`,
+      );
+      const server = await startMockModelServer("unavailable");
+      modelServers.push(server);
+      const model = (id: string) => ({
+        id,
+        name: id,
+        reasoning: false,
+        input: ["text"] as ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 4_096,
+      });
+      const config: OpenClawConfig = {
+        plugins: { entries: { [pluginId]: { enabled: true } }, slots: { memory: "none" } },
+        agents: {
+          defaults: {
+            workspace: path.join(fixtureDir, "workspace"),
+            model: { primary: "cron-owner/default" },
+            skills: [],
+          },
+          entries: { main: { model: { primary: "cron-owner/agent-default" } } },
+        },
+        tools: { profile: "minimal" },
+        models: {
+          mode: "replace",
+          providers: {
+            "cron-owner": {
+              baseUrl: `${server.baseUrl}/v1`,
+              api: "openai-responses",
+              apiKey: TEST_API_KEY,
+              request: { allowPrivateNetwork: true },
+              models: [model("default"), model("agent-default")],
+            },
+            [provider]: {
+              baseUrl: `${server.baseUrl}/v1`,
+              api: "openai-responses",
+              request: { allowPrivateNetwork: true },
+              models: [model("unavailable"), model("available")],
+            },
+          },
+        },
+      };
+      const instance = await createOpenClawTestInstance({
+        name: "cron-selected-provider",
+        config,
+        env: {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENCLAW_SKIP_CRON: undefined,
+          OPENCLAW_SKIP_PROVIDERS: undefined,
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        },
+      });
+      instances.push(instance);
+      await instance.startGateway();
+      const client = await connectGatewayClient({
+        url: instance.url,
+        token: instance.gatewayToken,
+      });
+      let jobId: string | undefined;
+      try {
+        const job = await client.request<{ id: string }>("cron.add", {
+          name: "Selected provider fallback",
+          agentId: "main",
+          enabled: true,
+          schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          delivery: { mode: "none" },
+          payload: {
+            kind: "agentTurn",
+            message: "Prove the selected provider runtime.",
+            model: `${provider}/unavailable`,
+            fallbacks: [`${provider}/available`],
+          },
+        });
+        jobId = job.id;
+        const run = await client.request<{ runId: string }>("cron.run", {
+          id: jobId,
+          mode: "force",
+        });
+        let terminal: { status?: string; summary?: string; error?: string } | undefined;
+        await expect
+          .poll(async () => {
+            const history = await client.request<{
+              entries: Array<{ status?: string; summary?: string; error?: string }>;
+            }>("cron.runs", { id: jobId, runId: run.runId, limit: 1 });
+            terminal = history.entries[0];
+            return terminal?.status;
+          }, WAIT_OPTIONS)
+          .toBeDefined();
+        expect(terminal?.error).toBeUndefined();
+        expect(terminal).toMatchObject({
+          status: "ok",
+          summary: expect.stringContaining("CRON_OWNER_RESPONSE_"),
+        });
+        const models = server.requests.map(({ body }) => body.model);
+        expect(models).toContain("unavailable");
+        expect(models.at(-1)).toBe("available");
+        expect(
+          server.requests.every((request) => requestText(request).includes(providerMarker)),
+        ).toBe(true);
+      } finally {
+        if (jobId) await client.request("cron.remove", { id: jobId });
+        await disconnectGatewayClient(client);
+      }
+    },
+    E2E_TIMEOUT_MS,
+  );
+
   it(
     "keeps recurring startup-plugin jobs through workspace registry churn",
     { timeout: E2E_TIMEOUT_MS },

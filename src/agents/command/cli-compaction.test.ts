@@ -127,6 +127,12 @@ function createPreparedRuntimeLease(input: {
       agentDir: input.agentDir,
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     },
+    pluginGeneration: {
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+      pluginMetadataSnapshot: prepared.metadataSnapshot,
+      pluginRegistry: prepared.pluginRegistry,
+    },
     release: vi.fn(),
   };
 }
