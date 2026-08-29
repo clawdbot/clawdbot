@@ -597,6 +597,7 @@ struct CommandCenterTab: View {
                 expectedSessionID: session.sessionId,
                 label: nil,
                 category: nil,
+                color: nil,
                 pinned: nil,
                 archived: true,
                 unread: nil)
@@ -1165,6 +1166,7 @@ struct CommandSessionsScreen: View {
                         expectedSessionID: nil,
                         label: nil,
                         category: .some(category),
+                        color: nil,
                         pinned: nil,
                         archived: nil,
                         unread: nil)
@@ -1253,6 +1255,7 @@ struct CommandSessionsScreen: View {
                 expectedSessionID: session.sessionId,
                 label: nil,
                 category: nil,
+                color: nil,
                 pinned: nil,
                 archived: archivesSession,
                 unread: nil)
