@@ -6123,6 +6123,16 @@ export const en: TranslationMap = {
       loadingEarlier: "Loading earlier history…",
       noMatches: "No matching messages",
     },
+    pendingInputs: {
+      count: "Retained accepted inputs: {count}",
+      queued: "Accepted by the Gateway. Waiting for its turn.",
+      cancelled:
+        "Cancelled before its turn. This input will not run automatically; copy it to send a new message.",
+      interrupted:
+        "Interrupted before its turn. This input will not run automatically; copy it to send a new message.",
+      earlier: "Earlier accepted inputs",
+      latest: "Latest accepted inputs",
+    },
     pairingQrExpired: {
       title: "Pairing QR expired",
       reason: "Run /pair qr again to generate a fresh setup code.",

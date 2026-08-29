@@ -1,5 +1,6 @@
 import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
@@ -47,6 +48,7 @@ import {
   resolveStartupRetryDelayMs,
   sleep,
 } from "./chat-history-retry.ts";
+import { applyChatPendingInputs, clearChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
@@ -242,6 +244,7 @@ function shouldApplyChatHistoryResult(
 }
 
 export function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
+  clearChatPendingInputs(state);
   const requests = getChatHistoryPaneRequests(state);
   // A destructive reset keeps the session key, so invalidate both the old
   // snapshot owner and its coalesced request before creating the next epoch.
@@ -348,6 +351,7 @@ type ChatSessionMessageSubscriptionState = ChatState & {
 };
 
 export type ChatHistoryResult = {
+  pendingInputs?: ChatPendingInputsPage;
   sourceCanonicalListRevision?: number;
   deltaCursor?: string;
   messages?: Array<unknown>;
@@ -381,6 +385,7 @@ export type ChatHistoryResult = {
 };
 
 type ChatHistoryDeltaResult = {
+  pendingInputs?: ChatPendingInputsPage;
   kind: "delta";
   messages: unknown[];
   deltaCursor: string;
@@ -2006,6 +2011,7 @@ async function loadChatHistoryUncached(
         state.chatDisplayedLeafEntryId = response.sessionInfo.activeLeafEntryId?.trim() || null;
       }
       state.currentSessionId = response.sessionInfo.sessionId?.trim() || previousSessionId;
+      applyChatPendingInputs(state, response.pendingInputs);
       // An accepted delta advances the same transcript generation, not a branch replacement.
       // Carry ownership across its leaf advance; reseeding loses attributed pending sends and runs.
       setChatSessionProjection(state, {
@@ -2037,6 +2043,7 @@ async function loadChatHistoryUncached(
       return {
         messages: state.chatMessages,
         deltaCursor: response.deltaCursor,
+        pendingInputs: response.pendingInputs,
         sessionInfo: response.sessionInfo,
         ...(response.inFlightRun ? { inFlightRun: response.inFlightRun } : {}),
         ...(response.metadata ? { metadata: response.metadata } : {}),
@@ -2110,6 +2117,7 @@ async function loadChatHistoryUncached(
     }
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     state.currentSessionId = nextSessionId;
+    applyChatPendingInputs(state, res.pendingInputs);
     commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null);
     if (
       state.reconnectResumeSessionId &&

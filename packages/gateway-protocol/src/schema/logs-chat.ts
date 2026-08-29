@@ -29,10 +29,28 @@ export const ChatHistoryParamsSchema = closedObject({
   cursor: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
+  pendingBefore: Type.Optional(Type.Integer({ minimum: 1 })),
   messageId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
 });
+
+/** Accepted input awaiting a turn, separate from canonical model history. */
+export const ChatPendingInputsPageSchema = closedObject({
+  items: Type.Array(
+    closedObject({
+      id: NonEmptyString,
+      runId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+      message: Type.Unknown(),
+      acceptedAt: Type.Number(),
+      state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
+    }),
+    { maxItems: 20 },
+  ),
+  total: Type.Integer({ minimum: 0 }),
+  nextBefore: Type.Optional(Type.Integer({ minimum: 1 })),
+});
+export type ChatPendingInputsPage = Static<typeof ChatPendingInputsPageSchema>;
 
 /**
  * Bounded forward catch-up response. Clients replay `messages` as `session.message`
@@ -47,6 +65,7 @@ export const ChatHistoryDeltaResultSchema = closedObject({
   agentsList: Type.Optional(Type.Unknown()),
   inFlightRun: Type.Optional(Type.Unknown()),
   metadata: Type.Optional(Type.Unknown()),
+  pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
 });
 
 /** Normal cursor discontinuity; clients recover with a fresh tail request. */

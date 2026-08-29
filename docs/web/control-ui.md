@@ -124,6 +124,15 @@ On the first identified connection, the Control UI uploads existing browser-loca
 
 When a remote project session starts before its repository finishes cloning, chat shows workspace preparation progress. If preparation fails, opening or reloading chat restores the session's failure summary. Correct the reported problem, then send a new message in the same session to retry preparation.
 
+Inputs accepted while a cloud turn is running remain visible with a waiting
+notice until their own turn starts. They are stored separately from the active
+model transcript. If cancellation or a Gateway restart interrupts that wait,
+the input stays readable with its recorded disposition and is never resent
+automatically. Copy it into the composer to start a new attempt. **Earlier
+accepted inputs** pages through retained inputs; **Latest accepted inputs**
+returns to the newest page. Long accepted input uses the normal full-message
+reader without becoming a transcript reply, fork, or rewind target.
+
 ## Personal identity
 
 Authenticated people have a durable Gateway profile with a display name, avatar, linked emails, and optional verified GitHub identity. Open **Settings → Profile → Identity** to update the editable fields. The profile follows the authenticated person across browsers; clearing browser site data does not delete it.

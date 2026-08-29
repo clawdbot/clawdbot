@@ -2592,51 +2592,56 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryRunId).toBe("session-1");
   });
 
-  it("persists only the CLI assistant reply after the runner persists the current user turn", async () => {
-    type AttemptCall = {
-      onUserMessagePersisted?: () => void;
-      userTurnTranscriptRecorder: UserTurnTranscriptRecorder;
-    };
-    setupSingleAttemptFallback();
-    setupStoredSession();
-    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
-      typeof makeSuccessResult
-    > & {
-      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
-    };
-    result.meta.executionTrace = {
-      runner: "cli",
-      fallbackUsed: false,
-      winnerProvider: "openai",
-      winnerModel: "gpt-5.4",
-    };
-    state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
-      attemptParams.userTurnTranscriptRecorder.markRuntimePersisted();
-      attemptParams.onUserMessagePersisted?.();
-      return result;
-    });
-    state.persistCliTurnTranscriptMock.mockResolvedValue({
-      kind: "persisted",
-      sessionEntry: state.sessionEntryMock,
-    });
-    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
-      input: { text: "hello", idempotencyKey: "canonical-user:user" },
-      target: () => undefined,
-    });
+  it.each([true, false])(
+    "does not duplicate a recorder-owned CLI input after completion (persisted=%s)",
+    async (persisted) => {
+      type AttemptCall = {
+        onUserMessagePersisted?: () => void;
+        userTurnTranscriptRecorder: UserTurnTranscriptRecorder;
+      };
+      setupSingleAttemptFallback();
+      setupStoredSession();
+      const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+        typeof makeSuccessResult
+      > & {
+        meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+      };
+      result.meta.executionTrace = {
+        runner: "cli",
+        fallbackUsed: false,
+        winnerProvider: "openai",
+        winnerModel: "gpt-5.4",
+      };
+      state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
+        if (persisted) {
+          attemptParams.userTurnTranscriptRecorder.markRuntimePersisted();
+          attemptParams.onUserMessagePersisted?.();
+        }
+        return result;
+      });
+      state.persistCliTurnTranscriptMock.mockResolvedValue({
+        kind: "persisted",
+        sessionEntry: state.sessionEntryMock,
+      });
+      const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+        input: { text: "hello", idempotencyKey: "canonical-user:user" },
+        target: () => undefined,
+      });
 
-    await agentCommand({
-      message: "hello",
-      to: "+1234567890",
-      userTurnTranscriptRecorder,
-    });
+      await agentCommand({
+        message: "hello",
+        to: "+1234567890",
+        userTurnTranscriptRecorder,
+      });
 
-    expect(mockCallArg(state.runAgentAttemptMock)).toMatchObject({
-      userTurnTranscriptRecorder,
-    });
-    expect(mockCallArg(state.persistCliTurnTranscriptMock)).toMatchObject({
-      skipUserTurn: true,
-    });
-  });
+      expect(mockCallArg(state.runAgentAttemptMock)).toMatchObject({
+        userTurnTranscriptRecorder,
+      });
+      expect(mockCallArg(state.persistCliTurnTranscriptMock)).toMatchObject({
+        skipUserTurn: true,
+      });
+    },
+  );
 
   it("does not treat backend CLI session id as OpenClaw session identity", async () => {
     setupSingleAttemptFallback();
@@ -5184,12 +5189,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const onExecutionStarted = vi.fn();
     state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
       const callbacks = params as {
-        onBeforePrompt?: () => void;
+        onBeforePrompt?: () => Promise<void> | void;
         onLifecycle?: (event: { type: string; at: number }) => void;
         onEvent?: (event: unknown) => void;
       };
       expect(onExecutionStarted).not.toHaveBeenCalled();
-      callbacks.onBeforePrompt?.();
+      await callbacks.onBeforePrompt?.();
       expect(onExecutionStarted).toHaveBeenCalledOnce();
       callbacks.onLifecycle?.({ type: "prompt_submitted", at: Date.now() });
       callbacks.onEvent?.({ type: "done", stopReason: "end_turn" });
@@ -5202,6 +5207,34 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
 
     expect(onExecutionStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an ACP prompt before execution when its accepted input cannot enter the transcript", async () => {
+    setupAcpSession();
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "accepted ACP input", idempotencyKey: "acp-input:user" },
+      target: () => undefined,
+    });
+    const onExecutionStarted = vi.fn();
+    const submitPrompt = vi.fn();
+    state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
+      const callbacks = params as { onBeforePrompt?: () => Promise<void> | void };
+      await callbacks.onBeforePrompt?.();
+      submitPrompt();
+    });
+
+    await expect(
+      agentCommand({
+        message: "accepted ACP input",
+        sessionKey: "agent:main:main",
+        userTurnTranscriptRecorder: recorder,
+        onExecutionStarted,
+      }),
+    ).rejects.toThrow("ACP input could not enter the session transcript");
+
+    expect(onExecutionStarted).not.toHaveBeenCalled();
+    expect(submitPrompt).not.toHaveBeenCalled();
+    expect(state.persistAcpTurnTranscriptMock).not.toHaveBeenCalled();
   });
 
   it("keeps session provenance for internal ACP turns", async () => {

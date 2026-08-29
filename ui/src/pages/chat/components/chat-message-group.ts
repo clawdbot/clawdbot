@@ -512,7 +512,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     : group.messages[lastMessageIndex]?.key;
   const hasUserFooterActions =
     normalizedRole === "user" &&
-    Boolean((footerActionDetails?.replyTarget && opts.onReply) || opts.onRewind);
+    Boolean(
+      (footerActionDetails?.replyTarget && opts.onReply) ||
+      opts.onRewind ||
+      footerActionDetails?.markdown,
+    );
   const userFooterActions = hasUserFooterActions
     ? html`
         <div
@@ -524,6 +528,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             : nothing}
           ${opts.onRewind
             ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled))
+            : nothing}
+          ${footerActionDetails?.markdown
+            ? renderMessageActionButtons(footerActionDetails, {})
             : nothing}
         </div>
       `

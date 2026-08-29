@@ -78,6 +78,7 @@ export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOpti
   return [
     "Read sanitized visible-session history.",
     "Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages.",
+    "pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }

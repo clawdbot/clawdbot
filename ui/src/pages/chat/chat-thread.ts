@@ -251,6 +251,7 @@ function sameChatItemsStructuralInput(
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
+    previous.pendingInputs === next.pendingInputs &&
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&

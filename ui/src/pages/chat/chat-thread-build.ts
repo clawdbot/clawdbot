@@ -1,5 +1,10 @@
+import {
+  isLocallyOptimisticSessionMessage,
+  readSessionMessageIdentity,
+} from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
@@ -22,6 +27,7 @@ import {
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import { buildPendingInputItems } from "./chat-pending-inputs.ts";
 import {
   buildCompactionDividerItem,
   buildGuardianNoticeItem,
@@ -84,6 +90,7 @@ export type BuildChatItemsProps = {
   stream: string | null;
   streamStartedAt: number | null;
   queue?: ChatQueueItem[];
+  pendingInputs?: ChatPendingInputsPage["items"];
   showToolCalls: boolean;
   persistCommentary?: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
@@ -100,10 +107,16 @@ export type BuildChatItemsProps = {
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const tools = props.toolMessages.filter((message) => asRecord(message) !== null);
+  const pendingInputs = props.pendingInputs ?? [];
+  const acceptedRunIds = new Set(pendingInputs.map((input) => input.runId));
   const history = composeTranscriptDisplay(
     props.messages.filter(
       (message) =>
         !isAssistantHeartbeatAckForDisplay(message) &&
+        !(
+          isLocallyOptimisticSessionMessage(message) &&
+          acceptedRunIds.has(readSessionMessageIdentity(message)?.runId ?? "")
+        ) &&
         (props.persistCommentary !== false || !isKeyedAssistantStreamFallbackMessage(message)),
     ),
   );
@@ -214,7 +227,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   // Once authoritative history carries the send id, that message owns the bubble.
   // Keep the queue row for run progress and delivery retirement, but do not render both copies.
   const threadQueuedSends = queuedSends.filter(
-    (queued) => !chatMessagesContainQueuedSend(history, queued, true),
+    (queued) =>
+      !acceptedRunIds.has(queued.sendRunId ?? "") &&
+      !chatMessagesContainQueuedSend(history, queued, true),
   );
   const currentRunQueuedSends = threadQueuedSends.filter(
     (queued) =>
@@ -673,5 +688,12 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     appendQueuedSend(queued);
   }
 
+  items.push(
+    ...buildPendingInputItems(
+      pendingInputs,
+      history,
+      props.searchOpen ? props.searchQuery : undefined,
+    ),
+  );
   return groupMessages(collapseSequentialDuplicateMessages(coalesceToolActivityMessages(items)));
 }
