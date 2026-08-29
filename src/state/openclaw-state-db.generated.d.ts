@@ -938,6 +938,29 @@ export interface OperatorApprovalExecutionIdentities {
   source_execution_id: string;
 }
 
+export interface OperatorApprovalPlacementGrants {
+  agent_id: string;
+  approval_scope: string;
+  command: string;
+  created_at_ms: number;
+  cwd: string;
+  environment_id: string;
+  expires_at_ms: number;
+  grant_id: string;
+  last_used_at_ms: number | null;
+  minted_by_approval_id: string;
+  node_id: string;
+  owner_epoch: number;
+  pairing_generation: string;
+  placement_generation: number;
+  plugin_id: string;
+  revoked_at_ms: number | null;
+  revoked_by: string | null;
+  session_id: string;
+  session_key: string;
+  use_count: Generated<number>;
+}
+
 export interface OperatorApprovalStandingGrants {
   agent_id: string;
   created_at_ms: number;
@@ -1626,6 +1649,7 @@ export interface DB {
   node_worker_turns: NodeWorkerTurns;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
+  operator_approval_placement_grants: OperatorApprovalPlacementGrants;
   operator_approval_standing_grants: OperatorApprovalStandingGrants;
   operator_approvals: OperatorApprovals;
   outbound_media_provenance: OutboundMediaProvenance;

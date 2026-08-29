@@ -20,7 +20,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
-import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.js";
+import type { OperatorStandingGrantMintSpec } from "./operator-approval-standing-grant-types.js";
 import {
   consumeOperatorApprovalAllowOnce,
   forceDenyOperatorApproval,
@@ -136,10 +136,10 @@ type ExecApprovalManagerOptions<TPayload> = {
     context: { approvalId: string; approvalKind: OperatorApprovalKind; operation: "expire" },
   ) => void;
   onLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
-  /** Cron-context allow-always requests mint a scoped standing grant in the
+  /** Eligible allow-always requests mint a scoped standing grant in the
    * durable resolution transaction. Returning null keeps the decision
-   * grant-free (non-cron requests, aborted runs, missing bindings). */
-  resolveStandingGrantMint?: (request: TPayload) => CronStandingGrantMintSpec | null;
+   * grant-free (ineligible requests, aborted runs, missing bindings). */
+  resolveStandingGrantMint?: (request: TPayload) => OperatorStandingGrantMintSpec | null;
   /** Default grant terms frozen at resolve time: config-driven expiry stamp,
    * or null for until-revoked. A per-resolve override wins over this default. */
   resolveStandingGrantExpiresAtMs?: (nowMs: number) => number | null;
@@ -248,6 +248,21 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
   private pending = new Map<string, PendingEntry<TPayload>>();
 
   constructor(private readonly options: ExecApprovalManagerOptions<TPayload> = {}) {}
+
+  private isRuntimeAuthorityActive(record: ExecApprovalRecord<TPayload>): boolean {
+    const delegated = record.agentRuntimeDelegatedAuthority;
+    if (delegated && this.options.validateAgentRuntimeDelegatedAuthority?.(delegated) !== true) {
+      return false;
+    }
+    if (record.approvalSignals?.some((signal) => signal.aborted)) {
+      return false;
+    }
+    try {
+      return record.approvalAuthority?.() !== false;
+    } catch {
+      return false;
+    }
+  }
 
   get approvalKind(): OperatorApprovalKind {
     return this.options.approvalKind ?? "exec";
@@ -393,13 +408,13 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     this.pending.set(record.id, entry);
     for (const signal of record.approvalSignals ?? []) {
       if (signal.aborted) {
-        this.forceDenyIfDelegatedAuthorityClosed(record.id);
+        this.forceDenyIfRuntimeAuthorityClosed(record.id);
         continue;
       }
       signal.addEventListener(
         "abort",
         () => {
-          const closed = this.forceDenyIfDelegatedAuthorityClosed(record.id);
+          const closed = this.forceDenyIfRuntimeAuthorityClosed(record.id);
           if (closed?.outcome === "denied" && closed.liveRecord) {
             this.options.onExpired?.(closed.record, closed.liveRecord);
           }
@@ -482,7 +497,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     } = {},
   ): ExecApprovalResolveResult<TPayload> {
     if (decision !== "deny") {
-      const closed = this.forceDenyIfDelegatedAuthorityClosed(recordId);
+      const closed = this.forceDenyIfRuntimeAuthorityClosed(recordId);
       if (closed) {
         if (closed.outcome === "not-found" || closed.outcome === "corrupt") {
           return closed;
@@ -1022,7 +1037,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     options: { grantExpiresAtMs?: number | null } = {},
   ): boolean {
     if (!this.options.persistence) {
-      if (decision !== "deny" && this.forceDenyIfDelegatedAuthorityClosed(recordId)) {
+      if (decision !== "deny" && this.forceDenyIfRuntimeAuthorityClosed(recordId)) {
         return false;
       }
       return this.resolveLocal(recordId, decision, resolvedBy ?? null);
@@ -1176,7 +1191,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
   }
 
   consumeAllowOnce(recordId: string, consumerId = recordId): boolean {
-    if (this.forceDenyIfDelegatedAuthorityClosed(recordId)) {
+    if (this.forceDenyIfRuntimeAuthorityClosed(recordId)) {
       return false;
     }
     const entry = this.pending.get(recordId);
@@ -1227,7 +1242,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
    * Returns the decision promise if the ID is pending, null otherwise.
    */
   awaitDecision(recordId: string): Promise<ExecApprovalDecision | null> | null {
-    this.forceDenyIfDelegatedAuthorityClosed(recordId);
+    this.forceDenyIfRuntimeAuthorityClosed(recordId);
     if (!this.getSnapshot(recordId)) {
       return null;
     }
@@ -1249,29 +1264,21 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       // binding is gone, stale handoffs must fail closed even if they kept its verdict.
       return null;
     }
-    const authority = record.agentRuntimeDelegatedAuthority;
-    if (!authority || this.options.validateAgentRuntimeDelegatedAuthority?.(authority) === true) {
+    if (this.isRuntimeAuthorityActive(record)) {
       return decision;
     }
     // Durable first-answer truth remains auditable even when closure races an
     // already-allowed row. Executable projection fails closed at this handoff.
-    this.forceDenyIfDelegatedAuthorityClosed(recordId);
+    this.forceDenyIfRuntimeAuthorityClosed(recordId);
     return null;
   }
 
-  /** Atomically closes a live approval whose exact delegated owner is gone. */
-  forceDenyIfDelegatedAuthorityClosed(
+  /** Atomically closes a live approval whose exact runtime owner is gone. */
+  forceDenyIfRuntimeAuthorityClosed(
     recordId: string,
   ): ExecApprovalForceDenyResult<TPayload> | null {
     const record = this.pending.get(recordId)?.record;
-    const authority = record?.agentRuntimeDelegatedAuthority;
-    const delegatedAuthorityClosed =
-      authority !== undefined &&
-      this.options.validateAgentRuntimeDelegatedAuthority?.(authority) !== true;
-    const approvalAuthorityClosed =
-      record?.approvalAuthority !== undefined && record.approvalAuthority() === false;
-    const approvalSignalClosed = record?.approvalSignals?.some((signal) => signal.aborted) === true;
-    if (!delegatedAuthorityClosed && !approvalAuthorityClosed && !approvalSignalClosed) {
+    if (!record || this.isRuntimeAuthorityActive(record)) {
       return null;
     }
     return this.forceDenyDetailed(
