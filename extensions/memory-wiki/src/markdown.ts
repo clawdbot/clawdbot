@@ -20,7 +20,7 @@ export const WIKI_RAW_SOURCE_MARKER = "<!-- openclaw:wiki:raw-source -->";
 export type WikiPageKind = (typeof WIKI_PAGE_KINDS)[number];
 type GeneratedSourceBody = "bridge" | "unsafe-local" | "local-file" | "chatgpt-export";
 
-type ParsedWikiMarkdown = {
+export type ParsedWikiMarkdown = {
   hasFrontmatter: boolean;
   frontmatter: Record<string, unknown>;
   body: string;

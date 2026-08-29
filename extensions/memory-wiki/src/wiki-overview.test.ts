@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { compileMemoryWikiVault } from "./compile.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { listMemoryWikiOverview } from "./wiki-overview.js";
@@ -9,6 +10,35 @@ import { listMemoryWikiOverview } from "./wiki-overview.js";
 const { createVault } = createMemoryWikiTestHarness();
 
 describe("listMemoryWikiOverview", () => {
+  it("serves the immutable compiled projection without rereading source markdown", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-overview-cache-",
+      initialize: true,
+    });
+    await fs.mkdir(path.join(rootDir, "entities"), { recursive: true });
+    const entityPath = path.join(rootDir, "entities", "cached.md");
+    await fs.writeFile(
+      entityPath,
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          title: "Cached entity",
+          claims: [{ text: "The compiled dashboard is immutable." }],
+          updatedAt: "2026-02-01T00:00:00.000Z",
+        },
+        body: "# Cached entity\n\nThe dashboard reads this summary from the publication.",
+      }),
+      "utf8",
+    );
+    await compileMemoryWikiVault(config);
+    await fs.rm(entityPath);
+
+    const result = await listMemoryWikiOverview(config);
+    const entity = result.clusters.find((cluster) => cluster.key === "entity")?.items[0];
+    expect(entity?.title).toBe("Cached entity");
+    expect(entity?.snippet).toBe("The dashboard reads this summary from the publication.");
+  });
+
   it("groups wiki pages by kind and surfaces claims, questions, and contradictions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-overview-",

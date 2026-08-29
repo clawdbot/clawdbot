@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { compileMemoryWikiVault } from "./compile.js";
 import { listMemoryWikiImportInsights } from "./import-insights.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -27,6 +28,51 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("listMemoryWikiImportInsights", () => {
+  it("serves the immutable compiled projection without rereading source markdown", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-import-insights-cache-",
+      initialize: true,
+    });
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    const sourcePath = path.join(rootDir, "sources", "chatgpt-cache.md");
+    await fs.writeFile(
+      sourcePath,
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          title: "ChatGPT Export: cached dashboard",
+          sourceType: "chatgpt-export",
+          labels: ["topic/cache"],
+          updatedAt: "2026-02-01T00:00:00.000Z",
+        },
+        body: [
+          "# ChatGPT Export: cached dashboard",
+          "",
+          "## Auto Digest",
+          "- User messages: 1",
+          "- Assistant messages: 1",
+          "- First user line: cache this",
+          "",
+          "## Active Branch Transcript",
+          "### User",
+          "",
+          "cache this",
+          "",
+          "### Assistant",
+          "",
+          "Done.",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+    await compileMemoryWikiVault(config);
+    await fs.rm(sourcePath);
+
+    const result = await listMemoryWikiImportInsights(config);
+    expect(result.totalItems).toBe(1);
+    expect(result.clusters[0]?.items[0]?.firstUserLine).toBe("cache this");
+  });
+
   it("clusters ChatGPT import pages by topic and extracts digest fields", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-import-insights-",

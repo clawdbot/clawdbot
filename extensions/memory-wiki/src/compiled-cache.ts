@@ -5,6 +5,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import type { PluginBlobStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { WikiFreshnessLevel } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import type { MemoryWikiDashboardProjection } from "./dashboard-types.js";
 import type { WikiPageKind, WikiPageSummary, WikiRelationship } from "./markdown.js";
 
 export const LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS = [
@@ -46,6 +47,7 @@ export type MemoryWikiCompiledDigestPage = {
   topRelationships: WikiRelationship[];
   claimCount: number;
   topClaims: MemoryWikiCompiledDigestClaim[];
+  dashboard?: MemoryWikiDashboardProjection;
 };
 
 export type MemoryWikiCompiledClaim = {

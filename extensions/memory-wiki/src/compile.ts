@@ -35,6 +35,8 @@ import {
   type MemoryWikiCompiledCacheSnapshot,
 } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import type { MemoryWikiDashboardProjection } from "./dashboard-types.js";
+import { buildMemoryWikiImportInsightItem } from "./import-insights.js";
 import {
   appendMemoryWikiLog,
   loadMemoryWikiValidatedVaultIdentity,
@@ -59,6 +61,7 @@ import {
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
+import { buildMemoryWikiOverviewItem } from "./wiki-overview.js";
 
 const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: string }> = [
   { kind: "source", dir: "sources", heading: "Sources" },
@@ -387,6 +390,7 @@ async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promi
 async function readPageSummaries(rootDir: string): Promise<{
   pages: WikiPageSummary[];
   frontmatterErrors: WikiPageFrontmatterError[];
+  dashboard: Record<string, MemoryWikiDashboardProjection>;
 }> {
   const filePaths = (
     await Promise.all(COMPILE_PAGE_GROUPS.map((group) => collectMarkdownFiles(rootDir, group.dir)))
@@ -399,7 +403,19 @@ async function readPageSummaries(rootDir: string): Promise<{
         () => fs.readFile(absolutePath, "utf8"),
         `read wiki page ${absolutePath}`,
       );
-      return scanWikiPageSummary({ absolutePath, relativePath, raw });
+      const result = scanWikiPageSummary({ absolutePath, relativePath, raw });
+      if (result.status !== "valid") {
+        return { result };
+      }
+      const parsed = parseWikiMarkdown(raw);
+      const importInsight = buildMemoryWikiImportInsightItem({ page: result.page, parsed });
+      return {
+        result,
+        dashboard: {
+          overview: buildMemoryWikiOverviewItem({ page: result.page, parsed }),
+          ...(importInsight ? { importInsight } : {}),
+        },
+      };
     }),
     limit: READ_PAGE_SUMMARIES_CONCURRENCY,
     errorMode: "stop",
@@ -410,10 +426,17 @@ async function readPageSummaries(rootDir: string): Promise<{
 
   return {
     pages: readResult.results
-      .flatMap((result) => (result.status === "valid" ? [result.page] : []))
+      .flatMap((entry) => (entry.result.status === "valid" ? [entry.result.page] : []))
       .toSorted((left, right) => left.title.localeCompare(right.title)),
-    frontmatterErrors: readResult.results.flatMap((result) =>
-      result.status === "invalid-frontmatter" ? [result.error] : [],
+    frontmatterErrors: readResult.results.flatMap((entry) =>
+      entry.result.status === "invalid-frontmatter" ? [entry.result.error] : [],
+    ),
+    dashboard: Object.fromEntries(
+      readResult.results.flatMap((entry) =>
+        entry.result.status === "valid" && entry.dashboard
+          ? [[entry.result.page.relativePath, entry.dashboard] as const]
+          : [],
+      ),
     ),
   };
 }
@@ -1126,10 +1149,12 @@ function sortClaims(page: WikiPageSummary): WikiClaim[] {
 
 function buildCompiledCacheSnapshot(
   pagesInput: WikiPageSummary[],
+  dashboardByPath: Record<string, MemoryWikiDashboardProjection> = {},
 ): MemoryWikiCompiledCacheSnapshot {
   const pages = [...pagesInput]
     .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath))
     .map((page) => {
+      const dashboard = dashboardByPath[page.relativePath];
       return Object.assign(
         {},
         page.id ? { id: page.id } : {},
@@ -1171,6 +1196,7 @@ function buildCompiledCacheSnapshot(
               );
             }),
         },
+        dashboard ? { dashboard } : {},
       );
     });
   const claims = pagesInput
@@ -1278,7 +1304,7 @@ async function compileMemoryWikiVaultUnlocked(
     pages = scan.pages;
   }
   const counts = buildPageCounts(pages);
-  const compiledSnapshot = buildCompiledCacheSnapshot(pages);
+  const compiledSnapshot = buildCompiledCacheSnapshot(pages, scan.dashboard);
   const compiledCacheGeneration = resolveMemoryWikiCompiledCacheGeneration(compiledSnapshot);
   const compiledCachePublicationId = createMemoryWikiCompiledCachePublicationId();
   let compiledCacheSourceGeneration: string | undefined;
@@ -1335,7 +1361,7 @@ async function compileMemoryWikiVaultUnlocked(
       const sourceGenerationBeforeScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
       const verifiedScan = await readPageSummaries(rootDir);
       const verifiedGeneration = resolveMemoryWikiCompiledCacheGeneration(
-        buildCompiledCacheSnapshot(verifiedScan.pages),
+        buildCompiledCacheSnapshot(verifiedScan.pages, verifiedScan.dashboard),
       );
       const sourceGenerationAfterScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
       if (
