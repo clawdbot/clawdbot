@@ -185,6 +185,13 @@ export function inspectManagedProcessGroup(
   }
   try {
     process.kill(-pid, 0);
+    if (
+      platform === "linux" &&
+      (child.exitCode != null || child.signalCode != null) &&
+      isLinuxZombieProcessGroup(pid)
+    ) {
+      return "dead";
+    }
     return "live";
   } catch (error) {
     if (isMissingProcessError(error)) {
@@ -209,6 +216,27 @@ export function inspectManagedProcessGroup(
       return "dead";
     }
   }
+}
+
+function isLinuxZombieProcessGroup(pid: number): boolean {
+  // Detached children lead their own session. Linux kill(0) includes zombies,
+  // which cannot write or respond to signals while awaiting their parent's reap.
+  const result = spawnSync("ps", ["-s", String(pid), "-o", "pgid=,state="], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: PROCESS_GROUP_DRAIN_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+  });
+  const zombie = new RegExp(`^\\s*${pid}\\s+Z\\s*$`, "u");
+  // Missing, failed or unrecognized snapshots never certify completion.
+  return (
+    !result.error &&
+    result.status === 0 &&
+    result.stdout
+      .trim()
+      .split("\n")
+      .every((row) => zombie.test(row))
+  );
 }
 
 export async function waitForManagedProcessGroupExit(

@@ -52,7 +52,7 @@ function copyFlatDeclarations(fromDir: string, toDir: string): void {
   }
 }
 
-export async function writePluginSdkEntryDts() {
+async function writePluginSdkEntryDts() {
   const distPluginSdkDir = path.join(process.cwd(), "dist/plugin-sdk");
   const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
   const flatDeclarationEntrypoints = shouldBuildPrivateQaEntries

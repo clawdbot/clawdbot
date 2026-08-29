@@ -1,12 +1,14 @@
 // Checkout-local ownership for build outputs, declaration preparation and consumers.
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { acquireFileLock } from "@openclaw/fs-safe/file-lock";
 import { root as openLockRoot } from "@openclaw/fs-safe/root";
+import { isDirectRunUrl } from "./direct-run.mjs";
 
 export const DIST_ARTIFACT_LOCK_PATH = ".artifacts/dist-artifacts.lock";
 const LOCK_POLL_MS = 500;
+let inheritedOwnershipRoot: string | undefined;
 
 function lockPath(rootDir: string) {
   return path.join(rootDir, DIST_ARTIFACT_LOCK_PATH);
@@ -25,30 +27,38 @@ function hasUnjoinedWork(error: unknown): boolean {
   return "cause" in error && hasUnjoinedWork(error.cause);
 }
 
-export function retainUnjoinedDistArtifactWork(rootDir: string, error: unknown) {
+function retainUnjoinedDistArtifactWork(rootDir: string, error: unknown) {
   if (hasUnjoinedWork(error)) {
     fs.writeFileSync(path.join(lockPath(rootDir), "unjoined"), "Child cleanup was not verified.\n");
   }
 }
 
-export async function runOwnedDistArtifactEntry<T>(run: () => Promise<T>) {
+async function runOwnedDistArtifactEntry(script: string, args: string[]) {
   const directory = lockPath(process.cwd());
   const claim = path.join(directory, `child-${process.pid}`);
   // A killed nested wrapper cannot certify its detached compiler has joined.
   // Its surviving claim keeps the outer owner from releasing on leader exit.
   fs.writeFileSync(claim, "Awaiting child completion.\n", { flag: "wx" });
+  inheritedOwnershipRoot = process.cwd();
+  process.argv = [process.execPath, fileURLToPath(script), ...args];
   try {
-    return await run();
+    await import(script);
   } catch (error) {
     retainUnjoinedDistArtifactWork(process.cwd(), error);
     throw error;
   } finally {
+    inheritedOwnershipRoot = undefined;
     fs.unlinkSync(claim);
   }
 }
 
 /** The callback must join every writer/reader before returning, including on failure. */
 export async function withDistArtifactOwnership<T>(rootDir: string, run: () => Promise<T>) {
+  // Only the private child entry can inherit its parent's checkout ownership;
+  // the same standalone CLI flow runs without reacquiring that parent's lock.
+  if (rootDir === inheritedOwnershipRoot) {
+    return await run();
+  }
   const directory = lockPath(rootDir);
   fs.mkdirSync(directory, { recursive: true });
   const ownerPath = path.join(directory, "owner.json");
@@ -115,17 +125,21 @@ export async function withDistArtifactOwnership<T>(rootDir: string, run: () => P
  * An owning orchestrator calls the same implementation in a separately sized Node
  * process. It joins that child without re-entering the standalone CLI's lock.
  */
-export function distArtifactEntryArgs(script: string, entry: string, args: string[] = []) {
+export function distArtifactEntryArgs(script: string, args: string[] = []) {
   return [
     "--import",
     new URL("../tsx.mjs", import.meta.url).href,
-    "--input-type=module",
-    "--eval",
-    [
-      `const { runOwnedDistArtifactEntry } = await import(${JSON.stringify(import.meta.url)});`,
-      `process.exitCode = (await runOwnedDistArtifactEntry(async () => {`,
-      `const { ${entry} } = await import(${JSON.stringify(pathToFileURL(path.resolve(script)).href)});`,
-      `return await ${entry}(${JSON.stringify(args)}); })) ?? 0;`,
-    ].join("\n"),
+    fileURLToPath(import.meta.url),
+    pathToFileURL(path.resolve(script)).href,
+    ...args,
   ];
+}
+
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
+  const [script, ...args] = process.argv.slice(2);
+  // Complete this module's evaluation before importing commands that import it back.
+  void runOwnedDistArtifactEntry(script!, args).catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }

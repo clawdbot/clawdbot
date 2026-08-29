@@ -281,7 +281,6 @@ export async function main(
         bin: process.execPath,
         args: distArtifactEntryArgs(
           path.resolve("scripts/prepare-extension-package-boundary-artifacts.mts"),
-          "prepareExtensionPackageBoundaryArtifacts",
         ),
         env,
         requireProcessTreeExit: process.platform !== "win32",
@@ -519,10 +518,7 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
   const args =
     runner === path.resolve("scripts", "run-oxlint.mjs") &&
     shouldPrepareExtensionPackageBoundaryArtifactsForShards([shard], extraArgs)
-      ? distArtifactEntryArgs(path.resolve("scripts/run-oxlint.mts"), "runOxlint", [
-          ...shard.args,
-          ...extraArgs,
-        ])
+      ? distArtifactEntryArgs(path.resolve("scripts/run-oxlint.mts"), [...shard.args, ...extraArgs])
       : [runner, ...shard.args, ...extraArgs];
   const child = spawn(process.execPath, args, {
     stdio: ["inherit", "pipe", "pipe"],

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readFlagValue } from "./lib/arg-utils.mts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import {
   applyLocalTsgoPolicy,
@@ -33,7 +34,7 @@ export function resolveTsgoTimeoutMs(env: NodeJS.ProcessEnv): number | undefined
   );
 }
 
-export async function runTsgo(argv: string[] = process.argv.slice(2)): Promise<number> {
+async function runTsgo(argv: string[] = process.argv.slice(2)): Promise<number> {
   const hostResources = {
     logicalCpuCount:
       typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
@@ -94,9 +95,9 @@ export async function runTsgo(argv: string[] = process.argv.slice(2)): Promise<n
   }
 }
 
-if (import.meta.main) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   // noEmit does not distinguish source checks from dist-backed consumers, and
   // argv can override project settings. Keep standalone runs serialized; owning
-  // orchestrators call runTsgo directly to preserve their explicit concurrency.
+  // orchestrators inherit ownership to preserve their explicit concurrency.
   process.exitCode = await withDistArtifactOwnership(process.cwd(), () => runTsgo());
 }

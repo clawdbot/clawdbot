@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
@@ -18,7 +19,6 @@ import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
 const PREPARE_EXTENSION_BOUNDARY_ARGS = distArtifactEntryArgs(
   path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mts"),
-  "prepareExtensionPackageBoundaryArtifacts",
 );
 const OXLINT_PREPARE_SKIP_FLAGS = new Set([
   "--help",
@@ -243,7 +243,7 @@ async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) 
 /**
  * Applies wrapper policy and runs oxlint with the final argument list.
  */
-export async function runOxlint(
+async function runOxlint(
   argv: string[] = process.argv.slice(2),
   runtimeEnv: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
@@ -293,10 +293,10 @@ export async function runOxlint(
   });
 }
 
-if (import.meta.main) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const argv = process.argv.slice(2);
   // Skip-prepare callers still consume shared declarations. Source-only lint
-  // remains independent; sharded lint enters runOxlint under its parent's owner.
+  // remains independent; sharded lint inherits its parent's owner.
   process.exitCode =
     !argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG) &&
     shouldPrepareExtensionPackageBoundaryArtifacts(argv)

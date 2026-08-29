@@ -86,7 +86,6 @@ if (typeof nativePreviewBin !== "string") {
 const tsgoBin = resolve(dirname(nativePreviewPackageJsonPath), nativePreviewBin);
 const prepareBoundaryArtifactsArgs = distArtifactEntryArgs(
   resolve(repoRoot, "scripts/prepare-extension-package-boundary-artifacts.mts"),
-  "prepareExtensionPackageBoundaryArtifacts",
 );
 const extensionPackageBoundaryBaseConfig = "../tsconfig.package-boundary.base.json";
 const FAILURE_OUTPUT_TAIL_LINES = 40;

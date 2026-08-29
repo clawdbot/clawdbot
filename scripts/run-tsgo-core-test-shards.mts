@@ -53,7 +53,7 @@ const env = resolveLocalCheckEnv(process.env);
 function runShard(config: string): Promise<number> {
   return runManagedCommand({
     bin: process.execPath,
-    args: distArtifactEntryArgs(path.join(repoRoot, "scripts/run-tsgo.mts"), "runTsgo", [
+    args: distArtifactEntryArgs(path.join(repoRoot, "scripts/run-tsgo.mts"), [
       "-b",
       config,
       "--builders",

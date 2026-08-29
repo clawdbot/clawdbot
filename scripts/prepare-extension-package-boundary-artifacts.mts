@@ -8,6 +8,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
@@ -31,7 +32,7 @@ import {
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const runTsgoArgs = (...args: string[]) =>
-  distArtifactEntryArgs(path.join(repoRoot, "scripts/run-tsgo.mts"), "runTsgo", args);
+  distArtifactEntryArgs(path.join(repoRoot, "scripts/run-tsgo.mts"), args);
 const TYPE_INPUT_EXTENSIONS = new Set([
   ".ts",
   ".tsx",
@@ -1177,10 +1178,7 @@ export async function prepareExtensionPackageBoundaryArtifacts(
   if (mode === "all" && (!entryShimsFresh || prerequisiteSteps.length > 0)) {
     await runNodeStep(
       "plugin-sdk boundary root shims",
-      distArtifactEntryArgs(
-        resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts"),
-        "writePluginSdkEntryDts",
-      ),
+      distArtifactEntryArgs(resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts")),
       ROOT_BOUNDARY_TIMEOUT_MS,
       {
         env: {
@@ -1206,6 +1204,6 @@ export async function prepareExtensionPackageBoundaryArtifacts(
   }
 }
 
-if (import.meta.main) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   await withDistArtifactOwnership(repoRoot, () => prepareExtensionPackageBoundaryArtifacts());
 }

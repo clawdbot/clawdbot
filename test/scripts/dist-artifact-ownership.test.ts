@@ -399,11 +399,10 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         "owner.mts",
         [
           `import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);`,
-          `import { withDistArtifactOwnership } from ${JSON.stringify(path.join(sourceRoot, "scripts/lib/dist-artifact-ownership.mts"))};`,
-          `import { runTsgo } from ${JSON.stringify(path.join(sourceRoot, "scripts/run-tsgo.mts"))};`,
           checkpoint("exit-owner"),
           `socket.on('data', () => process.exit(2));`,
-          `await withDistArtifactOwnership(process.cwd(), () => runTsgo(${JSON.stringify(tsgoArgs)}));`,
+          `process.argv = [process.execPath, ${JSON.stringify(path.join(sourceRoot, "scripts/run-tsgo.mts"))}, ...${JSON.stringify(tsgoArgs)}];`,
+          `await import(${JSON.stringify(path.join(sourceRoot, "scripts/run-tsgo.mts"))});`,
         ].join("\n"),
       );
       const supervisor = start(root, owner);
@@ -450,7 +449,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           `import { withDistArtifactOwnership, distArtifactEntryArgs } from ${JSON.stringify(path.join(sourceRoot, "scripts/lib/dist-artifact-ownership.mts"))};`,
           `import { runManagedCommand } from ${JSON.stringify(path.join(sourceRoot, "scripts/lib/managed-child-process.mts"))};`,
           `await withDistArtifactOwnership(process.cwd(), () => runManagedCommand({`,
-          `bin: process.execPath, args: distArtifactEntryArgs(${JSON.stringify(path.join(sourceRoot, "scripts/run-tsgo.mts"))}, 'runTsgo', ${JSON.stringify(tsgoArgs)}), requireProcessTreeExit: true }));`,
+          `bin: process.execPath, args: distArtifactEntryArgs(${JSON.stringify(path.join(sourceRoot, "scripts/run-tsgo.mts"))}, ${JSON.stringify(tsgoArgs)}), requireProcessTreeExit: true }));`,
         ].join("\n"),
       );
       const supervisor = start(root, owner);

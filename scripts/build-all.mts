@@ -1041,18 +1041,13 @@ export async function runBuildAllSteps(
     params.runStep ??
     (async (invocation: ReturnType<typeof resolveBuildAllStep>) => {
       const script = invocation.args[2];
-      const entry =
-        script === "scripts/tsdown-build.mts"
-          ? "runTsdownBuild"
-          : script === "scripts/write-plugin-sdk-entry-dts.ts"
-            ? "writePluginSdkEntryDts"
-            : undefined;
       return {
         status: await runManagedCommand({
           bin: invocation.command,
           args:
-            script && entry
-              ? distArtifactEntryArgs(script, entry, invocation.args.slice(3))
+            script === "scripts/tsdown-build.mts" ||
+            script === "scripts/write-plugin-sdk-entry-dts.ts"
+              ? distArtifactEntryArgs(script, invocation.args.slice(3))
               : invocation.args,
           ...invocation.options,
           requireProcessTreeExit: process.platform !== "win32",

@@ -64,6 +64,65 @@ fs.renameSync(pidPath + ".tmp", pidPath);
 }
 
 describe("managed-child-process", () => {
+  it.runIf(process.platform === "linux")(
+    "accepts exited tooling descendants still awaiting reaping",
+    async () => {
+      const dir = createTempDir("openclaw-managed-zombie-");
+      const childPath = path.join(dir, "child.mts");
+      const runnerPath = path.join(dir, "runner.mjs");
+      fs.writeFileSync(childPath, 'const value: number = 7; console.log("typed-child", value);');
+      fs.writeFileSync(
+        runnerPath,
+        `
+import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
+process.exitCode = await runManagedCommand({
+  bin: process.execPath,
+  args: ["--import", ${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)}, ${JSON.stringify(childPath)}],
+  requireProcessTreeExit: true,
+});
+`,
+      );
+      // Linux may reap orphaned tool services after the leader's close. Adopt
+      // them here and defer reaping until the real supervisor has settled.
+      const reaper = `
+import ctypes, os, subprocess, sys
+if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
+    raise OSError(ctypes.get_errno(), "PR_SET_CHILD_SUBREAPER failed")
+try:
+    result = subprocess.run(sys.argv[1:])
+finally:
+    reaped = 0
+    while True:
+        try:
+            pid, code = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            break
+        if pid == 0 or code != 0:
+            raise RuntimeError("tool descendant did not exit successfully")
+        reaped += 1
+    print("successfully reaped:", reaped)
+    if reaped == 0:
+        raise RuntimeError("fixture did not retain an exited descendant")
+sys.exit(result.returncode)
+`;
+      let output = "";
+      const code = await runManagedCommand({
+        bin: "python3",
+        args: ["-c", reaper, process.execPath, runnerPath],
+        stdio: ["ignore", "pipe", "pipe"],
+        timeoutMs: 10_000,
+        onReady(child) {
+          for (const pipe of [child.stdout, child.stderr]) {
+            pipe?.on("data", (chunk) => (output += String(chunk)));
+          }
+        },
+      });
+      expect(code, output).toBe(0);
+      expect(output).toContain("typed-child 7");
+      expect(output).toMatch(/successfully reaped: [1-9]/u);
+    },
+  );
+
   posixIt.each([
     { runner: "managed", resistant: false, abort: false },
     { runner: "managed", resistant: true, abort: false },
