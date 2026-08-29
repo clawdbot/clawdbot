@@ -28,7 +28,7 @@ import {
 } from "./chat-text-normalization.js";
 import {
   appendAssistantTranscriptMessage,
-  readLastCommittedAssistantText,
+  readLastCommittedAssistantRow,
 } from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -100,13 +100,17 @@ export async function persistAbortedPartials(params: {
       createIfMissing: true,
       idempotencyKey: `${snapshot.runId}:assistant`,
       shouldAppend: async (writerContext) => {
-        const committedText = await readLastCommittedAssistantText({
+        const committed = await readLastCommittedAssistantRow({
           sessionKey: params.sessionKey,
           sessionId: writerContext.sessionId ?? sessionId,
           storePath: writerContext.storePath ?? storePath,
           ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
         });
-        return committedText !== snapshot.text;
+        // Text equality alone cannot prove this run's reply committed: an
+        // unrelated run may have committed the same reply, and dropping the
+        // abort partial then would silently lose the abort record. Skip only
+        // when the terminal row carries this exact run's identity.
+        return !(committed?.runId === snapshot.runId && committed?.text === snapshot.text);
       },
       cfg,
       abortMeta: {

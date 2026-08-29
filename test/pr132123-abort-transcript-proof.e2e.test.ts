@@ -264,12 +264,24 @@ describe("PR #132123 real gateway proof", () => {
             : "",
         );
         const verdict = {
+          firstRunId: first.runId,
+          abortedRunId: second.runId,
           assistantRowCount: assistantRows.length,
           assistantTexts,
+          // The committed first-turn row must carry the run identity the skip
+          // predicate scopes to; otherwise the same-run skip is unreachable.
+          committedRowRunId: ((assistantRows[0]?.["__openclaw"] ?? {}) as { runId?: string }).runId,
           abortMarkedRows: assistantRows.filter((entry) => entry.openclawAbort).length,
         };
         console.info(`PR132123_VERDICT ${JSON.stringify(verdict)}`);
-        expect(verdict.assistantTexts.filter((text) => text === REPLY_TEXT)).toEqual([REPLY_TEXT]);
+        // The committed reply belongs to the first run, so the second run's
+        // abort partial must survive: text equality alone is not ownership.
+        expect(verdict.committedRowRunId).toBe(verdict.firstRunId);
+        expect(verdict.assistantTexts.filter((text) => text === REPLY_TEXT)).toEqual([
+          REPLY_TEXT,
+          REPLY_TEXT,
+        ]);
+        expect(verdict.abortMarkedRows).toBe(1);
       } finally {
         if (gateway) {
           await disconnectGatewayClient(gateway.client).catch(() => undefined);
