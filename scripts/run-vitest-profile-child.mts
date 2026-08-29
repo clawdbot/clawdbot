@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import type { ViteUserConfig } from "vitest/config";
-import { startVitestProfile } from "./lib/vitest-profiler.mts";
+import { isVitestProfileError, startVitestProfile } from "./lib/vitest-profiler.mts";
 
 const [mode, outputDir, ...args] = process.argv.slice(2);
 if ((mode !== "main" && mode !== "runner") || !outputDir) {
@@ -57,8 +57,17 @@ try {
   const normalizedFilters = filter.map((file) => normalizePath(file.replaceAll("\\", "/")));
   const vitest = await startVitest("test", normalizedFilters, cliOptions, profilingConfig);
   if (!vitest.shouldKeepServer()) {
-    await finishMain?.();
-    await vitest.exit();
+    try {
+      await finishMain?.();
+    } finally {
+      await vitest.exit();
+    }
+    // Worker teardown can report errors after Vitest has finalized the test result.
+    const profileErrors = vitest.state.getUnhandledErrors().filter(isVitestProfileError);
+    if (profileErrors.length) {
+      vitest.logger.printUnhandledErrors(profileErrors);
+      process.exitCode ||= 1;
+    }
   }
 } catch (error) {
   try {

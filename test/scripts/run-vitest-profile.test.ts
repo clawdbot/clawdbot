@@ -71,10 +71,30 @@ describe("scripts/run-vitest-profile", () => {
       { pool: "forks", isolate: true, custom: true, failRun: true },
       { pool: "threads", isolate: true, custom: true, failRun: false },
       { pool: "forks", isolate: true, custom: true, failRun: false, projects: true },
-    ].map((testCase) => ({ projects: false, ...testCase })),
+      { pool: "forks", isolate: false, custom: false, failRun: false, failProfile: true },
+      { pool: "threads", isolate: false, custom: false, failRun: true, failProfile: true },
+      ...["ignore", "filter"].flatMap((errorPolicy) =>
+        [false, true].map((failProfile) => ({
+          pool: errorPolicy === "ignore" ? "forks" : "threads",
+          isolate: false,
+          custom: false,
+          failRun: false,
+          failProfile,
+          unhandled: true,
+          errorPolicy,
+        })),
+      ),
+      { pool: "forks", isolate: false, custom: false, failRun: false, unhandled: true },
+    ].map((testCase) => ({
+      projects: false,
+      failProfile: false,
+      unhandled: false,
+      errorPolicy: "default",
+      ...testCase,
+    })),
   )(
-    "profiles selected $pool runner (isolated: $isolate, custom: $custom, failed: $failRun, projects: $projects)",
-    async ({ pool, isolate, custom, failRun, projects }) => {
+    "profiles selected $pool runner (isolated: $isolate, custom: $custom, failed: $failRun, projects: $projects, write failure: $failProfile, unhandled: $unhandled, policy: $errorPolicy)",
+    async ({ pool, isolate, custom, failRun, projects, failProfile, unhandled, errorPolicy }) => {
       const root = createTempDir("oc-profile-sibling-");
       fs.writeFileSync(path.join(root, "package.json"), '{"private":true,"type":"module"}');
       fs.symlinkSync(
@@ -83,12 +103,15 @@ describe("scripts/run-vitest-profile", () => {
         "junction",
       );
       const environment = custom && pool === "threads" ? "jsdom" : "node";
+      const outputDir = path.join(root, "profiles with spaces");
       const configPath = path.join(root, "custom.config.ts");
       fs.writeFileSync(
         configPath,
         `export default { test: {
   include: ["*.test.ts"], exclude: ["config-excluded.test.ts"], reporters: ["default", "json"], outputFile: "report.json",
   globalSetup: "./custom-setup.ts",
+  dangerouslyIgnoreUnhandledErrors: ${errorPolicy === "ignore"},
+  ${errorPolicy === "filter" ? 'onUnhandledError(error) { console.error("filtered workload error:", error.message); return false; },' : ""}
   ${projects ? `projects: ["first", "second"].map(name => ({ test: { name, include: [name + ".test.ts"], runner: ${JSON.stringify(path.join(root, "custom-runner.ts"))} } })),` : ""}
 } };`,
       );
@@ -131,11 +154,12 @@ it("retains the selected execution context", async () => {
       : ""
   }
   fs.writeFileSync(${JSON.stringify(path.join(root, name + ".json"))}, JSON.stringify({ pid: process.pid, threadId }));
+  ${failProfile && name === "second" ? `fs.rmdirSync(${JSON.stringify(outputDir)});` : ""}
+  ${unhandled && name === "second" ? 'process.emit("unhandledRejection", new Error("intentional unhandled profiling workload"), Promise.resolve());' : ""}
   ${failRun && name === "second" ? 'expect.fail("intentional profiling sibling failure");' : ""}
 });`,
         );
       }
-      const outputDir = path.join(root, "profiles with spaces");
       const args = [
         path.join(repoRoot, "scripts/run-vitest-profile.mts"),
         "runner",
@@ -161,13 +185,22 @@ it("retains the selected execution context", async () => {
       const result = await runProfileProcess(process.execPath, args, root);
       const reportPath = path.join(root, "report.json");
       const reportText = fs.existsSync(reportPath) ? fs.readFileSync(reportPath, "utf8") : "";
-      expect(result.code, `${result.output}\n${reportText}`).toBe(failRun ? 1 : 0);
-      if (failRun) {
+      const shouldFail = failRun || failProfile || (unhandled && errorPolicy === "default");
+      expect(result.code, `${result.output}\n${reportText}`).toBe(shouldFail ? 1 : 0);
+      if (shouldFail) {
         expect(result.output.trimEnd()).toMatch(/\[run-vitest-profile\] FAILED \(exit 1\)$/u);
       }
+      if (failRun) expect(result.output).toContain("intentional profiling sibling failure");
+      if (unhandled) expect(result.output).toContain("intentional unhandled profiling workload");
       const report = JSON.parse(reportText);
       expect(report.numTotalTests).toBe(2);
       expect(report.numFailedTests).toBe(failRun ? 1 : 0);
+      if (failProfile) {
+        expect(result.output).toContain("Failed to write Vitest profiles.");
+        expect(result.output).toContain("ENOENT");
+        expect(fs.existsSync(outputDir)).toBe(false);
+        return;
+      }
       const profiles = fs.readdirSync(outputDir);
       for (const name of ["first", "second"]) {
         const { pid, threadId } = JSON.parse(

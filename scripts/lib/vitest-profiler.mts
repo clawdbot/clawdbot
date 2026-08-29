@@ -6,6 +6,18 @@ import { fileURLToPath } from "node:url";
 import { threadId } from "node:worker_threads";
 import type { TestProject } from "vitest/node";
 
+const PROFILE_ERROR_CODE = "OPENCLAW_VITEST_PROFILE_FAILED";
+
+// Vitest serializes worker errors into plain objects, preserving named fields.
+export function isVitestProfileError(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === PROFILE_ERROR_CODE
+  );
+}
+
 declare module "vitest" {
   interface ProvidedContext {
     openclawVitestProfileDir: string;
@@ -15,6 +27,11 @@ declare module "vitest" {
 
 /** Root global setup also runs when only independent workspace projects are selected. */
 export default async function setupVitestProfiles(root: TestProject) {
+  const state = root.vitest.state;
+  const onUnhandledError = state.onUnhandledError;
+  // Workload error filters must not discard the profiler's own failed I/O.
+  state.onUnhandledError = (error) =>
+    isVitestProfileError(error) || onUnhandledError?.call(state, error);
   const { normalizePath } = await import("vite");
   const outputDir = root.getProvidedContext().openclawVitestProfileDir;
   const runner = fileURLToPath(new URL("./vitest-profile-runner.mts", import.meta.url));
@@ -85,7 +102,9 @@ export async function startVitestProfile(outputDir: string, heap: boolean) {
         result.status === "rejected" ? [result.reason] : [],
       );
       if (errors.length) {
-        throw new AggregateError(errors, "Failed to write Vitest profiles.");
+        throw Object.assign(new AggregateError(errors, "Failed to write Vitest profiles."), {
+          code: PROFILE_ERROR_CODE,
+        });
       }
     } finally {
       session.disconnect();

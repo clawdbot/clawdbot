@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
+import packageJson from "../../package.json" with { type: "json" };
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -36,7 +37,10 @@ posixIt.each(cleanupCases)(
     const home = path.join(root, "home");
     fs.mkdirSync(tmp);
     fs.mkdirSync(home);
-    fs.writeFileSync(path.join(root, "package.json"), '{"private":true,"type":"module"}');
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, type: "module", packageManager: packageJson.packageManager }),
+    );
     fs.symlinkSync(
       path.join(repoRoot, "node_modules"),
       path.join(root, "node_modules"),
