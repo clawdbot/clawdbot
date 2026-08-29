@@ -247,7 +247,12 @@ export function buildSlackProgressCommentaryRun(
       }
       const toolTimestamps = new Set(
         progressMessages
-          .filter((message) => observedSlackText(message).includes(toolMarker))
+          .filter(
+            (message) =>
+              [toolMarker, outputMarker].some((marker) =>
+                observedSlackText(message).includes(marker),
+              ) || isSlackSafeExecSummary({ text: message.text.split(/\r?\n/u)[0] ?? "" }),
+          )
           .map((message) => message.ts),
       );
       if (expectation.toolProgress === "standalone-redacted") {
@@ -285,7 +290,6 @@ export function buildSlackProgressCommentaryRun(
         const toolMessages = progressMessages.filter((message) =>
           isSlackSafeExecSummary({ text: message.text.split(/\r?\n/u)[0] ?? "" }),
         );
-        const toolMessageTimestamps = new Set(toolMessages.map((message) => message.ts));
         const outputTimestamps = new Set(
           toolMessages
             .filter((message) =>
@@ -296,7 +300,7 @@ export function buildSlackProgressCommentaryRun(
             .map((message) => message.ts),
         );
         if (
-          toolMessageTimestamps.size !== 1 ||
+          toolTimestamps.size !== 1 ||
           outputTimestamps.size !== 1 ||
           outputTimestamps.has(undefined) ||
           outputTimestamps.has(commentaryTs) ||

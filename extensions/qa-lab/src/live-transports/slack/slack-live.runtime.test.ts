@@ -830,13 +830,19 @@ describe("Slack live QA runtime helpers", () => {
         final,
       ]),
     ).toThrow("status headline");
-    expect(
-      verify("slack-progress-commentary-true", ([commentary, tool, final]) => [
-        `💬 ${commentary}`,
-        tool,
-        final,
-      ]),
-    ).toThrow("tool progress to stay out");
+    for (const toolPresentation of ["command", "output", "safe-summary"]) {
+      expect(
+        verify("slack-progress-commentary-true", ([commentary, tool, final]) => [
+          `💬 ${commentary}`,
+          toolPresentation === "command"
+            ? tool
+            : toolPresentation === "output"
+              ? tool.replace("-TOOL-", "-OUTPUT-")
+              : "🛠️ Exec",
+          final,
+        ]),
+      ).toThrow("tool progress to stay out");
+    }
     expect(
       verify("slack-progress-commentary-omitted", ([commentary, , final]) => [commentary, final]),
     ).toThrow("tool progress on the draft");
