@@ -14,6 +14,7 @@ import {
 } from "./auto-reply-delivery.test-helpers.js";
 import { processLineMessage as processOrderedLineMessage } from "./markdown-to-line.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
+import { prepareLineReplyPayload } from "./rich-messages.js";
 import {
   createFlexMessage as createProviderFlexMessage,
   createLocationMessage as createRealLocationMessage,
@@ -194,6 +195,40 @@ describe("deliverLineAutoReply", () => {
       });
       expect(messages.slice(0, -1).every((message) => !("quickReply" in message))).toBe(true);
     }
+  });
+
+  // A select-only presentation renders quick replies but no Flex body, so the
+  // fallback prose is the only thing carrying the question. Delivering bare
+  // option labels would leave the user choosing between answers to nothing.
+  it("delivers the question with the options when only quick replies render", async () => {
+    const prepared = prepareLineReplyPayload({
+      text: "Agent needs input:\n1. Alpha",
+      presentationTextMode: "fallback",
+      presentation: {
+        blocks: [
+          {
+            type: "select",
+            options: [{ label: "Alpha", action: { type: "callback", value: "alpha" } }],
+          },
+        ],
+      },
+    });
+    const lineData = expectDefined(
+      prepared.channelData?.line as Record<string, unknown> | undefined,
+      "prepared LINE channel data",
+    );
+    const { deps, replyMessageLine } = createDeps();
+
+    await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: prepared,
+      lineData,
+      deps,
+    });
+
+    expect(replyMessageLine.mock.calls[0]?.[1]).toMatchObject([
+      { type: "text", text: "Agent needs input:\n1. Alpha" },
+    ]);
   });
 
   it("sends text and rich messages on one reply token instead of pushing the rich bubble", async () => {

@@ -113,7 +113,7 @@ describe("LINE rich-message boundaries", () => {
     });
   });
 
-  it("replaces fallback text with the controls it was standing in for", () => {
+  it("keeps fallback text when only quick replies render", () => {
     const prepared = prepareLineReplyPayload({
       text: "Agent needs input:\n1. Alpha",
       presentationTextMode: "fallback",
@@ -127,9 +127,33 @@ describe("LINE rich-message boundaries", () => {
       },
     });
 
-    const line = prepared.channelData?.line as { quickReplyItems?: unknown[] } | undefined;
-    expect(prepared.text).toBeUndefined();
+    const line = prepared.channelData?.line as
+      | { quickReplyItems?: unknown[]; flexMessage?: unknown }
+      | undefined;
+    // A select alone renders no Flex body, so the prose is still the only thing
+    // carrying the question. Clearing it delivers bare option labels.
+    expect(prepared.text).toBe("Agent needs input:\n1. Alpha");
+    expect(line?.flexMessage).toBeUndefined();
     expect(line?.quickReplyItems).toHaveLength(1);
+  });
+
+  it("replaces fallback text once a Flex body renders the same controls", () => {
+    const prepared = prepareLineReplyPayload({
+      text: "Agent needs input:\n1. Approve",
+      presentationTextMode: "fallback",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Approve", action: { type: "callback", value: "approve" } }],
+          },
+        ],
+      },
+    });
+
+    const line = prepared.channelData?.line as { flexMessage?: unknown } | undefined;
+    expect(line?.flexMessage).toBeDefined();
+    expect(prepared.text).toBeUndefined();
   });
 
   it("keeps a presentation LINE has no native controls for in the visible text", () => {

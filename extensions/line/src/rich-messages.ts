@@ -223,7 +223,13 @@ export function prepareLineReplyPayload(payload: ReplyPayload): ReplyPayload {
     }),
   );
   if (rendered) {
-    return rendered;
+    // Only a Flex body replaces the fallback prose. A select-only presentation
+    // renders quick replies without one, so dropping the text there would send
+    // bare option labels and lose the question they answer.
+    const renderedLine = isRecord(rendered.channelData?.line) ? rendered.channelData.line : {};
+    return usesFallbackText && renderedLine.flexMessage === undefined
+      ? { ...rendered, text: rest.text }
+      : rendered;
   }
   // LINE renders these controls natively or not at all; keep their labels visible.
   return {
