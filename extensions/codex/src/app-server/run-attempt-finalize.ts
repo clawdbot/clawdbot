@@ -1,9 +1,11 @@
+import { addAbortListener } from "node:events";
 import {
   buildEmbeddedForegroundPromptContext,
   embeddedAgentLog,
   formatErrorMessage,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -94,8 +96,15 @@ export async function finalizeCodexAttempt(
   } = activeTurn;
   await completion;
   await state.abortCleanup;
-  // Include projection work already queued when timeout completion wins.
-  await drainNotificationQueue();
+  // Normal completion joins projection work; Stop must also escape a blocked
+  // handler while the interrupted route is still reserved.
+  const aborted = createDeferred<void>();
+  const abortListener = addAbortListener(runAbortController.signal, () => aborted.resolve());
+  try {
+    await Promise.race([drainNotificationQueue(), aborted.promise]);
+  } finally {
+    abortListener[Symbol.dispose]();
+  }
   const hasQuiescentCompletedAssistant =
     activeProjector.hasCompletedTerminalAssistantText() &&
     state.activeAppServerTurnRequests === 0 &&
