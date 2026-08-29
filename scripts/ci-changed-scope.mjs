@@ -59,6 +59,8 @@ const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
+const WINDOWS_MCP_STDIO_SCOPE_RE = /^src\/agents\/mcp-stdio-transport(?:\.windows\.test)?\.ts$/;
+const WINDOWS_MCP_STDIO_TEST_SCOPE_RE = /^src\/agents\/mcp-stdio-transport\.windows\.test\.ts$/;
 const WINDOWS_FILE_URL_SCOPE_RE =
   /^(?:src\/agents\/tools\/(?:media-tool-file-url\.windows\.test|media-tool-shared(?:\.test)?|pdf-tool(?:\.test)?)|src\/auto-reply\/(?:reply\/stage-sandbox-media|reply\.triggers\.trigger-handling\.stages-inbound-media-into-sandbox-workspace\.test)|src\/media\/(?:local-media-path(?:\.windows\.test)?|local-roots(?:\.test)?|web-media(?:\.file-url\.windows\.test)?)|src\/channels\/inbound-event\/media(?:\.test)?|src\/gateway\/managed-image-attachments(?:\.test)?|extensions\/msteams\/src\/(?:media-helpers|messenger)(?:\.test)?)\.ts$/;
 const WINDOWS_SCOPE_RE =
@@ -199,6 +201,7 @@ export function detectChangedScope(changedPaths) {
 
     if (
       (WINDOWS_SCOPE_RE.test(path) ||
+        WINDOWS_MCP_STDIO_SCOPE_RE.test(path) ||
         WINDOWS_SQLITE_SCOPE_RE.test(path) ||
         WINDOWS_FILE_URL_SCOPE_RE.test(path) ||
         WINDOWS_SECRETREF_SCOPE_RE.test(path) ||
@@ -216,6 +219,7 @@ export function detectChangedScope(changedPaths) {
         WINDOWS_WORKER_WORKSPACE_SCOPE_RE.test(path)) &&
       (!facts.isTestOnly ||
         WINDOWS_TEST_SCOPE_RE.test(path) ||
+        WINDOWS_MCP_STDIO_TEST_SCOPE_RE.test(path) ||
         WINDOWS_FILE_URL_SCOPE_RE.test(path) ||
         WINDOWS_SECRETREF_TEST_SCOPE_RE.test(path) ||
         WINDOWS_DAEMON_SCOPE_RE.test(path) ||

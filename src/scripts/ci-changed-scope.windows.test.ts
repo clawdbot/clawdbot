@@ -4,6 +4,16 @@ import { describe, expect, it } from "vitest";
 const { detectChangedScope } = await import("../../scripts/ci-changed-scope.mjs");
 
 describe("detectChangedScope Windows routing", () => {
+  it.each(["src/agents/mcp-stdio-transport.ts", "src/agents/mcp-stdio-transport.windows.test.ts"])(
+    "routes MCP stdio Windows coverage for %s",
+    (changedPath) => {
+      expect(detectChangedScope([changedPath]), changedPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    },
+  );
+
   it("routes source CLI invocation owners and their native proof to Windows", () => {
     for (const sourceCliPath of [
       "src/infra/openclaw-cli-invocation.ts",
