@@ -19,6 +19,7 @@ import {
   validateReleaseStateArtifact,
 } from "./full-release-validation-policy.mjs";
 import { execGhRead } from "./lib/plain-gh.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
 const WORKFLOW = "full-release-validation.yml";
 const TRUSTED_WORKFLOW_PATH = `.github/workflows/${WORKFLOW}`;
@@ -361,9 +362,17 @@ export function verifyTargetRef(
       );
     }
   } else if (extendedStableMatch) {
-    if (targetVersion !== extendedStableMatch[1]) {
+    const branchVersion = parseReleaseVersion(extendedStableMatch[1]!);
+    const candidateVersion = parseReleaseVersion(targetVersion);
+    if (
+      branchVersion === null ||
+      candidateVersion === null ||
+      classifyReleaseTrain(candidateVersion) !== "extended-stable" ||
+      candidateVersion.year !== branchVersion.year ||
+      candidateVersion.month !== branchVersion.month
+    ) {
       throw new Error(
-        `Target package version ${targetVersion} does not match extended-stable branch ${targetRef}`,
+        `Target package version ${targetVersion} does not belong to extended-stable branch ${targetRef}; expected a final ${branchVersion?.year}.${branchVersion?.month}.PATCH version with PATCH >= 33`,
       );
     }
   } else if (tagMatch && targetVersion !== tagMatch[1]) {
