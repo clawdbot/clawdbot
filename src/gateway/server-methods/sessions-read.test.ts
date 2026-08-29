@@ -342,14 +342,16 @@ test("sessions.describe preserves model-derived reasoning metadata", async () =>
     { agentId: "main", sessionKey, storePath: resolveStorePath(undefined, { agentId: "main" }) },
     { sessionId: "session-model-reasoning-describe", updatedAt: 42 },
   );
-  const readPreparedGatewayModelCatalog = vi.fn(async () => [
-    {
-      provider: "anthropic",
-      id: "claude-opus-4-8",
-      name: "Claude Opus 4.8",
-      reasoning: true,
-    },
-  ]);
+  const readPreparedGatewayModelCatalog = vi.fn(async () => ({
+    entries: [
+      {
+        provider: "anthropic",
+        id: "claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        reasoning: true,
+      },
+    ],
+  }));
   const loadGatewayModelCatalog = vi.fn(async () => {
     throw new Error("sessions.describe must not activate model discovery");
   });

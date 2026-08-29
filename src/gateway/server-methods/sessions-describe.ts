@@ -32,7 +32,7 @@ export const handleSessionsDescribe: GatewayRequestHandlers["sessions.describe"]
   if (!entry) {
     return respond(true, { session: null }, undefined);
   }
-  const modelCatalog = await readPreparedServerMethodModelCatalog(context, {
+  const preparedCatalog = await readPreparedServerMethodModelCatalog(context, {
     agentId: target.agentId,
   });
   const row = buildGatewaySessionRow({
@@ -42,7 +42,7 @@ export const handleSessionsDescribe: GatewayRequestHandlers["sessions.describe"]
     key: target.canonicalKey,
     entry,
     agentId: target.agentId,
-    ...(modelCatalog !== undefined ? { modelCatalog } : {}),
+    ...(preparedCatalog !== undefined ? { modelCatalog: preparedCatalog.entries } : {}),
     includeDerivedTitles: params.includeDerivedTitles,
     includeLastMessage: params.includeLastMessage,
     transcriptUsageMaxBytes: 64 * 1024,

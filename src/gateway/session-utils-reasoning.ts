@@ -38,9 +38,15 @@ export function resolveGatewaySessionReasoningLevel(
       : undefined) ??
     configuredReasoningDefault ??
     "off";
+  const reasoningExplicitlySet =
+    storedReasoningLevel !== undefined || configuredReasoningDefault !== undefined;
+  // Without a catalog, an unowned reasoning default stays unknown even when a
+  // model-family fallback enables thinking. Do not project a destructive "off".
+  if (!reasoningExplicitlySet && !thinkingExplicitlySet && params.modelCatalog === undefined) {
+    return undefined;
+  }
   const usesModelReasoningDefault = shouldUseModelReasoningDefault({
-    reasoningExplicitlySet:
-      storedReasoningLevel !== undefined || configuredReasoningDefault !== undefined,
+    reasoningExplicitlySet,
     resolvedReasoningLevel: projectedReasoningLevel,
     thinkingActive: params.effectiveThinkingLevel !== "off",
     thinkingExplicitlySet,

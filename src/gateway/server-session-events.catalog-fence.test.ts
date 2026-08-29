@@ -117,7 +117,7 @@ describe("transcript session-event catalog fencing", () => {
     const pending = handler({
       sessionKey: "agent:main:main",
       agentId: "main",
-      reason: "delete",
+      reason: "updated",
     });
 
     await vi.waitFor(() => expect(loadModelCatalog).toHaveBeenCalledOnce());

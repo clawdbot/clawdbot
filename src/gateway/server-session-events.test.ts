@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import {
+  createActiveRun,
   createGatewayBroadcaster,
   createHandler,
+  createLifecycleEventBroadcastHandler,
   createTranscriptUpdateBroadcastHandler,
   emitAssistantTranscriptUpdate,
   expectPrivateSessionInvalidation,

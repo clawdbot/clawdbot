@@ -17,7 +17,7 @@ import {
   resolveSubagentSessionStatus,
 } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
-import { normalizeReasoningLevel, resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
+import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
   buildGroupDisplayName,
   buildGroupDisplayTitle,
@@ -74,6 +74,7 @@ import {
   resolveSessionSelectedModelRef,
   resolveTranscriptUsageFallback,
 } from "./session-utils-projection.js";
+import { resolveGatewaySessionReasoningLevel } from "./session-utils-reasoning.js";
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
@@ -399,14 +400,15 @@ export function buildGatewaySessionRow(params: {
     authoredContextTokens,
   });
 
-  const storedReasoningLevel = normalizeOptionalString(entry?.reasoningLevel);
-  const effectiveReasoningLevel =
-    (storedReasoningLevel
-      ? (normalizeReasoningLevel(storedReasoningLevel) ?? storedReasoningLevel)
-      : undefined) ??
-    normalizeReasoningLevel(cfg.agents?.entries?.[sessionAgentId]?.reasoningDefault) ??
-    normalizeReasoningLevel(cfg.agents?.defaults?.reasoningDefault) ??
-    "off";
+  const effectiveReasoningLevel = resolveGatewaySessionReasoningLevel({
+    cfg,
+    agentId: sessionAgentId,
+    provider: thinkingProvider,
+    model: thinkingModel,
+    entry,
+    modelCatalog: reasoningModelCatalog,
+    effectiveThinkingLevel: thinkingProjection.effectiveThinkingLevel,
+  });
   const fastModeState = resolveFastModeState({
     cfg,
     provider: selectedModelProvider,
