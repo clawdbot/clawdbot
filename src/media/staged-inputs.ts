@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { root as fsRoot, sanitizeUntrustedFileName, type Root } from "../infra/fs-safe.js";
 
-export const STAGED_INPUT_DIRECTORY_PREFIX = "media/inbound/openclaw-staged-";
+const STAGED_INPUT_DIRECTORY_PREFIX = "media/inbound/openclaw-staged-";
 export const STAGED_INPUT_GIT_PATHSPEC = `:(glob)${STAGED_INPUT_DIRECTORY_PREFIX}*/**`;
 const STAGED_INPUT_GITIGNORE =
   "# Raw task inputs remain private; copy outputs into the project to publish.\n*\n";
