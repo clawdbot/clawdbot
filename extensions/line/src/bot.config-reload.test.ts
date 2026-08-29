@@ -1,4 +1,3 @@
-// Line tests cover which config a delivered LINE event is handled with.
 import type { webhook } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -38,10 +37,7 @@ function configWithHistoryLimit(historyLimit: number): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-// The bot only reveals the config it chose by handing it to the handlers, so
-// build one, then drive the spool's deliver callback and read what they were
-// given. Creation and delivery stay separate so a reload can land between them,
-// which is the only ordering the Gateway ever produces.
+// Capture the spool callback so a reload can land between creation and delivery.
 function createDeliverableBot(startupConfig: OpenClawConfig): {
   deliverOnce: () => Promise<{ cfg: OpenClawConfig; historyLimit: number }>;
 } {
@@ -84,11 +80,7 @@ describe("the config a delivered LINE event is handled with", () => {
   });
 
   it("follows a reload for a monitor the Gateway started from the process config", async () => {
-    // The real sequence: the Gateway starts the channel with the config it
-    // loaded, then a later write replaces the runtime config AND its source.
-    // `messages` changes are hot-applied without restarting the channel, so a
-    // monitor that never re-reads them keeps answering with the config it booted
-    // on for the rest of the process.
+    // `messages` reloads without restarting LINE, so the existing monitor must see it.
     const startupConfig = configWithHistoryLimit(10);
     setRuntimeConfigSnapshot(startupConfig, configWithHistoryLimit(10));
     const bot = createDeliverableBot(startupConfig);
@@ -101,11 +93,8 @@ describe("the config a delivered LINE event is handled with", () => {
     expect(handled.historyLimit).toBe(75);
   });
 
-  // A monitor handed a config that is not what the process loaded owns it; a
-  // scoped or test monitor must not be hijacked by an unrelated global reload.
-  // Not every runtime snapshot carries the source it was built from - a pinned
-  // load publishes the config alone - and that is the case where the shared
-  // selector answers with the runtime config for any input at all.
+  // A distinct supplied config is scoped. A missing source snapshot cannot prove
+  // that it belongs to the process runtime.
   it.each([
     { label: "against a snapshot that carries its source", withSource: true },
     { label: "against a snapshot published without its source", withSource: false },
@@ -124,6 +113,17 @@ describe("the config a delivered LINE event is handled with", () => {
       expect(handled.historyLimit).toBe(10);
     },
   );
+
+  it("keeps a supplied config when the process snapshot appears after startup", async () => {
+    const ownConfig = configWithHistoryLimit(10);
+    const bot = createDeliverableBot(ownConfig);
+
+    setRuntimeConfigSnapshot(configWithHistoryLimit(75), configWithHistoryLimit(75));
+    const handled = await bot.deliverOnce();
+
+    expect(handled.cfg).toBe(ownConfig);
+    expect(handled.historyLimit).toBe(10);
+  });
 
   it("keeps the account's own history limit ahead of the reloaded shared default", async () => {
     const startupConfig = {

@@ -50,23 +50,15 @@ export function createLineBot(opts: LineBotOptions): LineBot {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const startupConfig = opts.config ?? getRuntimeConfig();
-  // A channel monitor outlives config reloads. Everything read here from outside
-  // `channels.line` — mention patterns, the group-chat history limit, routing
-  // bindings, the shared group-policy default — is hot-applied without restarting
-  // the channel, so each delivered event runs on the config live at that moment.
-  //
-  // Ownership is decided once, against the snapshot that was current at startup:
-  // a later reload replaces both the runtime config and its source, so asking
-  // again after one would always answer "not mine" and pin the monitor forever.
+  // LINE monitors outlive reloads outside `channels.line`. Bind snapshot ownership
+  // once at startup; checking after reload would compare against the replaced source
+  // and pin a process-owned monitor to stale config.
   const startupRuntimeConfig = getRuntimeConfigSnapshot();
   const startupRuntimeSourceConfig = getRuntimeConfigSourceSnapshot();
-  // Without a source snapshot there is nothing to compare a distinct supplied
-  // config against, and the selector answers with the runtime config for any
-  // input. Taking that as ownership would hand a monitor started with its own
-  // config to unrelated process-global config on the next reload, so a scoped
-  // monitor stays with what it was started with.
+  // A snapshot without its source cannot prove that a distinct supplied config is
+  // process-owned, so keep scoped monitors pinned through later global reloads.
   const followsRuntimeConfig =
-    !startupRuntimeConfig ||
+    opts.config === undefined ||
     startupRuntimeConfig === startupConfig ||
     (startupRuntimeSourceConfig !== null &&
       selectApplicableRuntimeConfig({
@@ -76,9 +68,8 @@ export function createLineBot(opts: LineBotOptions): LineBot {
       }) === startupRuntimeConfig);
   const resolveTurnConfig = (): OpenClawConfig =>
     (followsRuntimeConfig ? getRuntimeConfigSnapshot() : undefined) ?? startupConfig;
-  // Credentials and the account's own settings live under `channels.line`, whose
-  // changes restart the channel, so the account stays a prepared fact rather than
-  // a per-event re-read of its secret files.
+  // `channels.line` changes restart the monitor, so account credentials and settings
+  // remain startup-prepared facts.
   const account = resolveLineAccount({
     cfg: startupConfig,
     accountId: opts.accountId,
