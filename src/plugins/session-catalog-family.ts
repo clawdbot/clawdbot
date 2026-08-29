@@ -143,6 +143,7 @@ function isNodeSession(value: unknown, sessionIdPattern: RegExp): value is Sessi
     typeof value.canContinue === "boolean" &&
     typeof value.canArchive === "boolean" &&
     isOptionalString(value.name) &&
+    isOptionalString(value.color) &&
     isOptionalString(value.cwd) &&
     isOptionalString(value.source) &&
     isOptionalString(value.modelProvider) &&

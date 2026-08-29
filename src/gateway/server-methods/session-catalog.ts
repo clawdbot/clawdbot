@@ -415,7 +415,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           ...catalog,
           hosts: catalog.hosts.map((host) =>
             filterSessionCatalogHost(
-              requestEntries.projectHostCreatedActors(host, result.instances),
+              requestEntries.projectHostSessions(host, result.instances),
               visibility,
               {
                 requestEntries,

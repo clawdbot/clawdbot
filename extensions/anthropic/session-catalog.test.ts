@@ -679,7 +679,13 @@ describe("Claude session catalog", () => {
           projectPath: "/work/source",
         },
       ],
-      transcripts: { [sessionId]: [message(sessionId, "user", "source prompt", 1)] },
+      transcripts: {
+        [sessionId]: [
+          message(sessionId, "user", "source prompt", 1),
+          { type: "custom-title", customTitle: "Renamed source", sessionId },
+          { type: "agent-color", agentColor: "purple", sessionId },
+        ],
+      },
     });
     const createSessionEntry = vi.fn(async (params: Record<string, unknown>) => ({
       key: `agent:main:${String(params.key)}`,
@@ -738,7 +744,9 @@ describe("Claude session catalog", () => {
       expect.objectContaining({
         displayName: "Source session",
         spawnedCwd: "/work/source",
+        label: "Renamed source",
         initialEntry: expect.objectContaining({
+          color: "purple",
           cliBackendId: "claude-cli",
           model: "claude-opus-4-8",
           modelSelectionLocked: true,
@@ -1070,6 +1078,7 @@ describe("Claude session catalog", () => {
               {
                 threadId,
                 name: "Node source",
+                color: "cyan",
                 cwd: "/work/on-node",
                 status: "stored",
                 source: "claude-cli",
@@ -1112,6 +1121,7 @@ describe("Claude session catalog", () => {
     expect(hosts?.[0]?.sessions[0]).toMatchObject({
       threadId,
       pullRequest: { numbers: [1234], state: "open" },
+      color: "cyan",
       canContinue: true,
       canOpenTerminal: true,
     });
@@ -1139,7 +1149,9 @@ describe("Claude session catalog", () => {
         execNode: "node-a",
         execCwd: "/work/on-node",
         spawnedCwd: "/work/on-node",
+        label: "Node source",
         initialEntry: expect.objectContaining({
+          color: "cyan",
           cliSessionBinding: {
             sessionId: threadId,
             forceReuse: true,
@@ -1651,6 +1663,191 @@ describe("Claude session catalog", () => {
         "Claude session is unavailable",
       );
     }
+  });
+
+  it.each([
+    { indexed: false, symlink: false },
+    { indexed: true, symlink: false },
+    { indexed: true, symlink: true },
+  ])(
+    "imports appended CLI titles and colors (indexed: $indexed, symlink: $symlink)",
+    async ({ indexed, symlink }) => {
+      const home = await createHome();
+      const transcripts = Object.fromEntries(
+        ["custom", "automatic", "prompt"].map((sessionId) => [
+          sessionId,
+          [
+            sdkCliMessage(sessionId, "First prompt"),
+            ...(sessionId !== "prompt"
+              ? [{ type: "ai-title", aiTitle: "Automatic title", sessionId }]
+              : []),
+            ...(sessionId === "custom"
+              ? [
+                  { type: "custom-title", customTitle: "Earlier rename", sessionId },
+                  { type: "custom-title", customTitle: "My renamed session", sessionId },
+                  { type: "ai-title", aiTitle: "Later automatic title", sessionId },
+                  { type: "agent-color", agentColor: "red", sessionId },
+                  { type: "agent-color", agentColor: "blue", sessionId },
+                  { type: "agent-color", agentColor: "pink", sessionId: "another-session" },
+                  {
+                    type: "custom-title",
+                    customTitle: "Wrong session",
+                    sessionId: "another-session",
+                  },
+                ]
+              : []),
+          ],
+        ]),
+      );
+      await writeProject({
+        home,
+        entries: indexed ? Object.keys(transcripts).map((sessionId) => ({ sessionId })) : [],
+        transcripts,
+      });
+
+      let scanHome = home;
+      if (symlink) {
+        scanHome = await createHome();
+        await fs.mkdir(path.join(scanHome, ".claude"));
+        await fs.symlink(
+          path.join(home, ".claude", "projects"),
+          path.join(scanHome, ".claude", "projects"),
+        );
+      }
+      const sessions = (await listLocalClaudeSessionPage({}, scanHome)).sessions;
+      expect(
+        Object.fromEntries(sessions.map((session) => [session.threadId, session.name])),
+      ).toEqual({
+        custom: "My renamed session",
+        automatic: "Automatic title",
+        prompt: "First prompt",
+      });
+      expect(sessions.find((session) => session.threadId === "custom")).toMatchObject({
+        color: "blue",
+      });
+    },
+  );
+
+  it("finds a valid duplicate after an empty transcript on cold and cached scans", async () => {
+    const home = await createHome();
+    const sessionId = "duplicate-session";
+    for (const project of ["a-project", "b-project"]) {
+      await writeProject({ home, project, entries: [], transcripts: { [sessionId]: [] } });
+    }
+    const projectsRoot = path.join(home, ".claude", "projects");
+    const projects = await fs.readdir(projectsRoot);
+    await fs.writeFile(
+      path.join(projectsRoot, projects[1]!, `${sessionId}.jsonl`),
+      `${JSON.stringify(sdkCliMessage(sessionId, "Valid duplicate"))}\n`,
+    );
+    const first = await listLocalClaudeSessionPage({}, home);
+    expect(first.sessions).toEqual([
+      expect.objectContaining({ threadId: sessionId, name: "Valid duplicate" }),
+    ]);
+    // Invalidate only the assembled scan; the negative and positive per-file caches stay warm.
+    await fs.utimes(
+      path.join(projectsRoot, projects[0]!),
+      new Date(),
+      new Date(Date.now() + 2_000),
+    );
+    expect(await listLocalClaudeSessionPage({}, home)).toEqual(first);
+  });
+
+  it("does not revive an earlier color when a clear or invalid value is appended", async () => {
+    const home = await createHome();
+    const sessionId = "cleared-color";
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Color changes")] },
+    });
+    const transcriptPath = path.join(
+      home,
+      ".claude",
+      "projects",
+      "-workspace",
+      `${sessionId}.jsonl`,
+    );
+    for (const agentColor of [
+      "default",
+      "reset",
+      "none",
+      "gray",
+      "grey",
+      "unknown",
+      "",
+      null,
+      42,
+    ]) {
+      await fs.appendFile(
+        transcriptPath,
+        `${JSON.stringify({ type: "agent-color", agentColor: "red", sessionId })}\n`,
+      );
+      expect((await listLocalClaudeSessionPage({}, home)).sessions[0]?.color).toBe("red");
+      await fs.appendFile(
+        transcriptPath,
+        `${JSON.stringify({ type: "agent-color", agentColor, sessionId })}\n`,
+      );
+      // The plugin passes strings through; the Gateway's palette seam removes invalid names.
+      expect((await listLocalClaudeSessionPage({}, home)).sessions[0]?.color).toBe(
+        typeof agentColor === "string" && agentColor ? agentColor : undefined,
+      );
+    }
+  });
+
+  it("reads appended metadata beyond the prefix budget and refreshes the cached tail", async () => {
+    const home = await createHome();
+    const sessionId = "large-colored-session";
+    await writeProject({
+      home,
+      entries: [{ sessionId, summary: "Stale index title" }],
+      transcripts: {
+        [sessionId]: [
+          sdkCliMessage(sessionId, "First prompt"),
+          { type: "agent-color", agentColor: "red", sessionId },
+          message(sessionId, "assistant", "x".repeat(3 * 1024 * 1024), 2),
+          { type: "custom-title", customTitle: "Tail rename", sessionId },
+          { type: "ai-title", aiTitle: "Tail automatic title", sessionId },
+          { type: "agent-color", agentColor: "green", sessionId },
+        ],
+      },
+    });
+    const openSpy = vi.spyOn(fs, "open");
+    const first = await listLocalClaudeSessionPage({}, home);
+    expect(first.sessions[0]).toMatchObject({ name: "Tail rename", color: "green" });
+    openSpy.mockClear();
+    expect(await listLocalClaudeSessionPage({}, home)).toEqual(first);
+    expect(openSpy).not.toHaveBeenCalled();
+
+    const transcriptPath = path.join(
+      home,
+      ".claude",
+      "projects",
+      "-workspace",
+      `${sessionId}.jsonl`,
+    );
+    await fs.appendFile(
+      transcriptPath,
+      [
+        { type: "custom-title", customTitle: "New tail rename", sessionId },
+        { type: "agent-color", agentColor: "orange", sessionId },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n"),
+    );
+    expect((await listLocalClaudeSessionPage({}, home)).sessions[0]).toMatchObject({
+      name: "New tail rename",
+      color: "orange",
+    });
+    await writeDesktopMetadata(home, "colored-cli", {
+      cliSessionId: sessionId,
+      title: "Desktop title",
+    });
+    expect((await listLocalClaudeSessionPage({}, home)).sessions[0]).toMatchObject({
+      name: "Desktop title",
+      source: "claude-desktop",
+      color: undefined,
+    });
   });
 
   it("serves an unchanged assembled scan without reparsing transcript files", async () => {
@@ -2972,7 +3169,7 @@ describe("Claude session catalog", () => {
     ]);
   });
 
-  it("rejects malformed fields returned by a paired node", async () => {
+  it.each(["name", "color"])("rejects a malformed %s returned by a paired node", async (field) => {
     const runtime = {
       nodes: {
         list: vi.fn().mockResolvedValue({
@@ -2990,7 +3187,7 @@ describe("Claude session catalog", () => {
             sessions: [
               {
                 threadId: "session",
-                name: 1,
+                [field]: 1,
                 status: "stored",
                 source: "claude-cli",
                 modelProvider: "anthropic",
