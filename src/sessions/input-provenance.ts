@@ -154,7 +154,7 @@ function removeFirstInterSessionPromptPrefix(text: string): string {
   if (headerEnd === -1) {
     return [
       text.slice(0, index).trimEnd(),
-      text.slice(index + INTER_SESSION_PROMPT_PREFIX_BASE.length).trimStart(),
+      text.slice(index + INTER_SESSION_PROMPT_PREFIX_BASE.length).replace(/^\r?\n/, ""),
     ]
       .filter(Boolean)
       .join("\n");
@@ -163,7 +163,10 @@ function removeFirstInterSessionPromptPrefix(text: string): string {
   const explanationEnd = text.startsWith(INTER_SESSION_PROMPT_EXPLANATION, explanationStart)
     ? explanationStart + INTER_SESSION_PROMPT_EXPLANATION.length
     : explanationStart;
-  return [text.slice(0, index).trimEnd(), text.slice(explanationEnd).trimStart()]
+  // Only the generated separator newline belongs to the envelope; the body's
+  // own leading indentation is content (e.g. an indented code block) and must
+  // survive display projection verbatim.
+  return [text.slice(0, index).trimEnd(), text.slice(explanationEnd).replace(/^\r?\n/, "")]
     .filter(Boolean)
     .join("\n");
 }

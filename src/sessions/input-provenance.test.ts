@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   annotateInterSessionPromptText,
+  INTER_SESSION_PROMPT_PREFIX_BASE,
   isAgentMediatedCompletionSourceTool,
   shouldPreserveUserFacingSessionStateForInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
@@ -78,6 +79,23 @@ describe("stripInterSessionPromptPrefixForDisplay", () => {
     });
 
     expect(stripInterSessionPromptPrefixForDisplay(marked)).toBe("forwarded report");
+  });
+
+  it("preserves the projected body's original indentation after the envelope", () => {
+    const body = "    indented code line\n      deeper indent";
+    const marked = annotateInterSessionPromptText(body, {
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:discord:source",
+      sourceTool: "sessions_send",
+    });
+
+    expect(stripInterSessionPromptPrefixForDisplay(marked)).toBe(body);
+  });
+
+  it("preserves indentation when the envelope lacks its explanation line", () => {
+    const marked = `${INTER_SESSION_PROMPT_PREFIX_BASE} sourceSession=agent:main:discord:source\n    indented body`;
+
+    expect(stripInterSessionPromptPrefixForDisplay(marked)).toBe("    indented body");
   });
 });
 
