@@ -29,7 +29,7 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { buildPluginDependencyStatus } from "../../../plugins/status-dependencies-core.js";
 import { resolveUserPath } from "../../../utils.js";
-import { VERSION } from "../../../version.js";
+import { resolveCompatibilityHostVersion } from "../../../version.js";
 import { CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES } from "./configured-runtime-plugin-installs.js";
 import {
   collectConfiguredChannelIds,
@@ -96,9 +96,10 @@ export async function resolveConfiguredPluginInstallContext(params: {
     });
   const records =
     params.baselineRecords ?? (await loadInstalledPluginIndexInstallRecords({ env: params.env }));
+  const compatibilityHostVersion = resolveCompatibilityHostVersion(params.env);
   const updateChannel = resolveRegistryUpdateChannel({
     configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
-    currentVersion: VERSION,
+    currentVersion: compatibilityHostVersion,
   });
   const installedPluginIdsWithRepairablePackageDiagnostics =
     collectInstalledPluginIdsWithRepairablePackageDiagnostics({
@@ -110,6 +111,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
       snapshot,
       installRecords: records,
       configuredPluginIds: params.configuredPluginIds,
+      currentVersion: compatibilityHostVersion,
       updateChannel,
       env: params.env,
     });

@@ -11,7 +11,6 @@ import type { UpdateChannel } from "../../../infra/update-channels.js";
 import { safeRealpathSync } from "../../../plugins/path-safety.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveUserPath } from "../../../utils.js";
-import { VERSION } from "../../../version.js";
 import {
   CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES,
   resolveConfiguredRuntimePluginInstallCandidate,
@@ -210,11 +209,12 @@ export function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(pa
   snapshot: PluginMetadataSnapshot;
   installRecords: Record<string, PluginInstallRecord>;
   configuredPluginIds: ReadonlySet<string>;
+  currentVersion: string;
   updateChannel: UpdateChannel;
   env: NodeJS.ProcessEnv;
 }): Set<string> {
   const pluginIds = new Set<string>();
-  const currentVersion = normalizeOptionalLowercaseString(VERSION);
+  const currentVersion = normalizeOptionalLowercaseString(params.currentVersion);
   if (!currentVersion) {
     return pluginIds;
   }
