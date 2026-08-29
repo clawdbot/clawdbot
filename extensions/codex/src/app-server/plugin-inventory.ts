@@ -543,9 +543,16 @@ function resolveOwnedApps(params: {
 export function resolveOwnedAppReadOnlyToolConfigKeys(
   app: v2.AppInfo,
 ): Pick<CodexPluginOwnedApp, "readOnlyToolConfigKeys"> {
+  const appName = app.name.trim();
+  const appNameLower = appName.toLowerCase();
   const keys = (app.toolSummaries ?? [])
     .filter((tool) => tool.isReadOnly)
-    .flatMap((tool) => (tool.title ? [tool.name, tool.title] : [tool.name]));
+    .flatMap((tool) => [
+      tool.name,
+      ...(tool.title ? [tool.title] : []),
+      ...(appName ? [`${appName}_${tool.name}`] : []),
+      ...(appNameLower && appNameLower !== appName ? [`${appNameLower}_${tool.name}`] : []),
+    ]);
   return keys.length > 0 ? { readOnlyToolConfigKeys: Array.from(new Set(keys)).toSorted() } : {};
 }
 

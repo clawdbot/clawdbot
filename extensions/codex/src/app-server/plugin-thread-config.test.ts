@@ -675,8 +675,8 @@ describe("Codex plugin thread config", () => {
       ...appInfo("linear", true),
       toolSummaries: [
         {
-          name: "linear_fetch",
-          title: "linear/fetch",
+          name: "fetch",
+          title: "Fetch",
           description: "Fetch a Linear issue.",
           isEnabled: true,
           disabledReason: null,
