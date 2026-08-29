@@ -17,7 +17,9 @@ const COMPILED_CACHE_NAMESPACE = "compiled-cache";
 const COMPILED_CACHE_MAX_ENTRIES = 256;
 const COMPILED_CACHE_MAX_BYTES_PER_ENTRY = 100 * 1024 * 1024;
 const COMPILED_CACHE_MAX_BYTES = 512 * 1024 * 1024;
-const COMPILED_CACHE_VERSION = 2;
+// Dashboard projections are persisted in each digest page. Bump the snapshot
+// version so pre-dashboard publications are rejected and rebuilt safely.
+const COMPILED_CACHE_VERSION = 3;
 
 export type MemoryWikiCompiledDigestClaim = {
   id?: string;

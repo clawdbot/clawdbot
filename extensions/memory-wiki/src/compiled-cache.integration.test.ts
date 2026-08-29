@@ -258,6 +258,24 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe(text);
   });
 
+  it("rejects pre-dashboard cache snapshots after the format version bump", async () => {
+    const { config } = await createPersistentVault({ initialize: true });
+    const legacyStore = createMemoryWikiCompiledCacheStore(<T>(options: OpenBlobStoreOptions) => {
+      const store = createPluginBlobStoreForTests<T>("memory-wiki", options, blobStoreEnv);
+      return {
+        ...store,
+        async register(key: string, bytes: Uint8Array, metadata: T) {
+          await store.register(key, bytes, { ...metadata, version: 2 } as T);
+        },
+      };
+    });
+    configureMemoryWikiCompiledCacheStore(legacyStore);
+
+    await publishSnapshot(config, snapshot("legacy dashboard-free snapshot"));
+
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+  });
+
   it("loads an externally compiled generation after lifecycle refresh without polling", async () => {
     const { config } = await createPersistentVault({
       initialize: true,
