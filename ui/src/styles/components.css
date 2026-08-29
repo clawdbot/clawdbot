@@ -1364,7 +1364,7 @@ openclaw-session-progress-hovercard-provider {
 
 .github-link-hovercard__coauthors-more {
   margin-left: 5px;
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 12px;
 }
 
