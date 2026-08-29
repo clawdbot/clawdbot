@@ -10,7 +10,6 @@ const ENDPOINT_PREFIX = "/qa-credentials/v1";
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 const CONVEX_BROKER_DEPLOYMENT = "reminiscent-ibex-847";
 const CONVEX_BROKER_SITE_URL = `https://${CONVEX_BROKER_DEPLOYMENT}.convex.site`;
-const CONVEX_CLI_PACKAGE = "convex@1.44.0";
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PAYLOAD_MAX_CHUNKS = 4096;
@@ -63,7 +62,13 @@ function parseBrokerConfig({ siteUrl, secret, allowInsecureHttp }) {
 }
 
 async function defaultRunConvexCli(args, { cwd }) {
-  const { stdout } = await execFile("bunx", [CONVEX_CLI_PACKAGE, ...args], {
+  const executable = path.join(
+    cwd,
+    "node_modules",
+    ".bin",
+    process.platform === "win32" ? "convex.cmd" : "convex",
+  );
+  const { stdout } = await execFile(executable, args, {
     cwd,
     encoding: "utf8",
     maxBuffer: 1024 * 1024,
@@ -99,7 +104,7 @@ async function resolveBrokerConfig({ env, cwd, runConvexCliImpl, convexProjectDi
     return parseBrokerConfig({ siteUrl: CONVEX_BROKER_SITE_URL, secret: cliSecret });
   } catch (error) {
     throw new Error(
-      "Could not load the QA broker through the Convex CLI. Log in to Convex and request access to the OpenClaw broker project.",
+      "Could not load the QA broker through the installed Convex CLI. Install qa/convex-credential-broker dependencies, log in to Convex, and request access to the OpenClaw broker project.",
       { cause: error },
     );
   }
