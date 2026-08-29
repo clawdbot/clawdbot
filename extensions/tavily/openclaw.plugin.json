@@ -29,7 +29,8 @@
       "paths": [
         {
           "path": "webSearch.apiKey",
-          "expected": "string"
+          "expected": "string",
+          "ownerKind": "capability"
         }
       ]
     }

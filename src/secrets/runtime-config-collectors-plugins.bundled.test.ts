@@ -62,6 +62,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         disposition: "isolate",
       },
     ]);
+    expect(context.assignments[0]?.ownerContractDigest).toBeTruthy();
   });
 
   it("collects Codex app-server SecretRefs from bundled manifest contracts", () => {
@@ -204,7 +205,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         includeChannelConfigs: false,
         includeSyntheticChannelConfigs: false,
       })?.manifest.configContracts?.secretInputs?.paths,
-    ).toEqual([{ path: "webSearch.apiKey", expected: "string" }]);
+    ).toEqual([{ path: "webSearch.apiKey", expected: "string", ownerKind: "capability" }]);
     const sourceConfig = {
       agents: explicitMainRoster,
       plugins: {
@@ -234,6 +235,15 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     expect(context.assignments.map((assignment) => assignment.path)).toEqual([
       "plugins.entries.tavily.config.webSearch.apiKey",
     ]);
+    expect(context.assignments).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "plugins.entries.tavily.config.webSearch.apiKey",
+        requiredForGateway: false,
+        disposition: "isolate",
+      },
+    ]);
+    expect(context.assignments[0]?.ownerContractDigest).toBeUndefined();
     const resolved = await resolveSecretRefValues(
       context.assignments.map((assignment) => assignment.ref),
       { config: sourceConfig, env, cache: context.cache },
