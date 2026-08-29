@@ -60,17 +60,23 @@ type CommanderUpdateOptions = Record<string, unknown> & {
   yes?: boolean;
 };
 
-function rejectUnsupportedInheritedUpdateDryRun(command: Command): boolean {
-  if (!inheritOptionFromParent<boolean>(command, "dryRun")) {
-    return false;
-  }
-
-  handleUpdateCommandError(
-    new Error(
-      `--dry-run is not supported for \`openclaw update ${command.name()}\`. Run \`openclaw update --dry-run\` instead.`,
-    ),
-  );
-  return true;
+// Every update leaf must reject the parent-only dry-run flag before owner work starts.
+// Keeping that policy in the shared action wrapper prevents a new leaf from silently ignoring it.
+function createUpdateLeafAction(
+  action: (opts: Record<string, unknown>, command: Command) => Promise<void>,
+) {
+  return async (opts: Record<string, unknown>, command: Command) => {
+    try {
+      if (inheritOptionFromParent<boolean>(command, "dryRun")) {
+        throw new Error(
+          `--dry-run is not supported for \`openclaw update ${command.name()}\`. Run \`openclaw update --dry-run\` instead.`,
+        );
+      }
+      await action(opts, command);
+    } catch (err) {
+      handleUpdateCommandError(err);
+    }
+  };
 }
 
 function registerUpdateFinalizationCommand(update: Command, name: string, hidden: boolean) {
@@ -100,12 +106,8 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
           "Docs:",
         )} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`,
     )
-    .action(async (opts, actionCommand) => {
-      try {
-        if (rejectUnsupportedInheritedUpdateDryRun(actionCommand)) {
-          return;
-        }
-
+    .action(
+      createUpdateLeafAction(async (opts, actionCommand) => {
         await updateFinalizeCommand({
           json: Boolean(opts.json) || inheritedUpdateJson(actionCommand),
           channel:
@@ -119,10 +121,8 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
           restart: false,
           deferCompletionCache: hidden && process.env[POST_CORE_UPDATE_ENV]?.trim() === "1",
         });
-      } catch (err) {
-        handleUpdateCommandError(err);
-      }
-    });
+      }),
+    );
 }
 
 /** Attach the update command group to the root CLI. */
@@ -221,22 +221,16 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       "after",
       `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}\n`,
     )
-    .action(async (opts, command) => {
-      try {
-        if (rejectUnsupportedInheritedUpdateDryRun(command)) {
-          return;
-        }
-
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
         await updateWizardCommand({
           timeout: inheritedUpdateTimeout(opts, command),
           acceptCapabilities:
             Boolean(opts.acceptCapabilities) ||
             Boolean(inheritOptionFromParent<boolean>(command, "acceptCapabilities")),
         });
-      } catch (err) {
-        handleUpdateCommandError(err);
-      }
-    });
+      }),
+    );
 
   update
     .command("status")
@@ -256,18 +250,12 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           "Docs:",
         )} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`,
     )
-    .action(async (opts, command) => {
-      try {
-        if (rejectUnsupportedInheritedUpdateDryRun(command)) {
-          return;
-        }
-
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
         await updateStatusCommand({
           json: Boolean(opts.json) || inheritedUpdateJson(command),
           timeout: inheritedUpdateTimeout(opts, command),
         });
-      } catch (err) {
-        handleUpdateCommandError(err);
-      }
-    });
+      }),
+    );
 }
