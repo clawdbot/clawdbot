@@ -41,11 +41,7 @@ export const zaloSetupAdapter = {
             : {},
     // Resolution prefers inline botToken over tokenFile, so writing one source
     // has to retire the other or the stale credential keeps winning (see #132231).
-    // The full pair is retired on any credential write because a promoted
-    // accounts.default record outranks root regardless of which form it holds;
-    // the patch re-adds the written source after the clear.
-    buildClearFields: (input) =>
-      input.useEnv || input.tokenFile || input.token ? ["tokenFile", "botToken"] : [],
+    credentialSourceFields: ["tokenFile", "botToken"],
   }),
   singleAccountKeysToMove: ["webhookSecret", "tokenFile"],
 };

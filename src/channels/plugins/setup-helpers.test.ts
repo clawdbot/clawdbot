@@ -387,12 +387,16 @@ describe("createPatchedAccountSetupAdapter", () => {
     expect(next.channels?.["demo-accounts"]).not.toHaveProperty("authDir");
   });
 
-  it("retires buildClearFields output before applying the replacement patch", () => {
+  it("retires credentialSourceFields before applying the replacement patch", () => {
     const adapter = createPatchedAccountSetupAdapter({
       channelKey: "demo-setup",
       buildPatch: (input) =>
-        input.tokenFile ? { tokenFile: input.tokenFile } : { botToken: input.token },
-      buildClearFields: (input) => (input.tokenFile ? ["botToken"] : ["tokenFile"]),
+        input.tokenFile
+          ? { tokenFile: input.tokenFile }
+          : input.token
+            ? { botToken: input.token }
+            : {},
+      credentialSourceFields: ["tokenFile", "botToken"],
     });
     const fromInline = adapter.applyAccountConfig({
       cfg: asConfig({}),
@@ -409,6 +413,44 @@ describe("createPatchedAccountSetupAdapter", () => {
     const channel = channelRecord(rotated, "demo-setup");
     expect(channel.tokenFile).toBe("/run/secrets/tok");
     expect(channel).not.toHaveProperty("botToken");
+  });
+
+  it("retires credentialSourceFields on an env-selection write and skips non-credential writes", () => {
+    const adapter = createPatchedAccountSetupAdapter({
+      channelKey: "demo-setup",
+      buildPatch: (input) =>
+        input.tokenFile
+          ? { tokenFile: input.tokenFile }
+          : input.token
+            ? { botToken: input.token }
+            : {},
+      credentialSourceFields: ["tokenFile", "botToken"],
+    });
+    const fromInline = adapter.applyAccountConfig({
+      cfg: asConfig({ channels: { "demo-setup": { webhookPath: "/keep" } } }),
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { token: "inline-tok" },
+    });
+
+    // Selecting env counts as a credential write: both stored sources are
+    // retired so the environment variable wins resolution.
+    const envSelected = adapter.applyAccountConfig({
+      cfg: fromInline,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { useEnv: true },
+    });
+    const envChannel = channelRecord(envSelected, "demo-setup");
+    expect(envChannel).not.toHaveProperty("botToken");
+    expect(envChannel).not.toHaveProperty("tokenFile");
+
+    // A write without credential input must not touch stored credentials.
+    const untouched = adapter.applyAccountConfig({
+      cfg: fromInline,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: {},
+    });
+    const untouchedChannel = channelRecord(untouched, "demo-setup");
+    expect(untouchedChannel.botToken).toBe("inline-tok");
   });
 });
 

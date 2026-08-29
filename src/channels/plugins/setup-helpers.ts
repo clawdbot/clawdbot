@@ -125,7 +125,12 @@ export function applySetupAccountConfigPatch(params: {
 
 /** Creates a setup adapter that turns validated setup input into an account config patch. */
 export function createPatchedAccountSetupAdapter<
-  Input extends { name?: string } = ChannelSetupInput,
+  Input extends {
+    name?: string;
+    token?: string;
+    tokenFile?: string;
+    useEnv?: boolean;
+  } = ChannelSetupInput,
 >(params: {
   channelKey: string;
   alwaysUseAccounts?: boolean;
@@ -133,7 +138,15 @@ export function createPatchedAccountSetupAdapter<
   ensureAccountEnabled?: boolean;
   validateInput?: ChannelSetupAdapter<Input>["validateInput"];
   buildPatch: (input: Input) => Record<string, unknown>;
-  buildClearFields?: (input: Input) => readonly string[];
+  /**
+   * Mutually exclusive credential-source fields (inline token, token file,
+   * service account blob, ...). When a setup write supplies credentials
+   * through the standard credential inputs (`token`, `tokenFile`, `useEnv`),
+   * every listed field is retired at the channel root and the default account
+   * before the patch re-adds the written source. Resolution precedence means
+   * a superseded source otherwise keeps winning over the rotated credential.
+   */
+  credentialSourceFields?: readonly string[];
 }): ChannelSetupAdapter<Input> {
   return {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
@@ -156,13 +169,17 @@ export function createPatchedAccountSetupAdapter<
         migrateBaseName: !params.alwaysUseAccounts,
       });
       const patch = params.buildPatch(input);
+      const credentialWrite = Boolean(input.useEnv || input.token || input.tokenFile);
       return patchScopedAccountConfig({
         cfg: next,
         channelKey: params.channelKey,
         accountId,
         patch,
         accountPatch: patch,
-        clearFields: params.buildClearFields?.(input),
+        clearFields:
+          credentialWrite && params.credentialSourceFields?.length
+            ? params.credentialSourceFields
+            : undefined,
         ensureChannelEnabled: params.ensureChannelEnabled ?? !params.alwaysUseAccounts,
         ensureAccountEnabled: params.ensureAccountEnabled ?? true,
         scopeDefaultToAccounts: params.alwaysUseAccounts,
@@ -222,7 +239,7 @@ export function createEnvPatchedAccountSetupAdapter(params: {
   hasCredentials: (input: ChannelSetupInput) => boolean;
   validateInput?: ChannelSetupAdapter["validateInput"];
   buildPatch: (input: ChannelSetupInput) => Record<string, unknown>;
-  buildClearFields?: (input: ChannelSetupInput) => readonly string[];
+  credentialSourceFields?: readonly string[];
 }): ChannelSetupAdapter {
   return createPatchedAccountSetupAdapter({
     channelKey: params.channelKey,
@@ -239,7 +256,7 @@ export function createEnvPatchedAccountSetupAdapter(params: {
       return params.validateInput?.(inputParams) ?? null;
     },
     buildPatch: params.buildPatch,
-    buildClearFields: params.buildClearFields,
+    credentialSourceFields: params.credentialSourceFields,
   });
 }
 
