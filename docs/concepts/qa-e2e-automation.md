@@ -725,9 +725,12 @@ Slack YAML module scenarios (`qa/scenarios/channels/slack-*.yaml`):
 - `slack-restart-resume`
 - `slack-progress-commentary-true`, `slack-progress-commentary-false`,
   `slack-progress-commentary-omitted`, and
-  `slack-progress-commentary-verbose-dedupe` - opt-in real-Slack probes for
+  `slack-progress-commentary-verbose-dedupe` / `slack-progress-commentary-verbose-full` - opt-in real-Slack probes for
   independent commentary/tool-progress controls, the omitted-key legacy
-  default, and single-delivery behavior when durable verbose progress is on.
+  default, and single-delivery behavior for durable verbose progress. The `on`
+  probe requires a safe Exec summary without command text; the `full` probe
+  separately verifies command-marker delivery. Failures retain bounded
+  presentation facts without raw Slack messages or platform identities.
 - `slack-reaction-glyph-native` - opt-in live message-tool reaction scenario.
   Instructs the agent to pass the exact `✅` glyph and confirms Slack stored
   `white_check_mark` for the SUT bot on the target message.

@@ -74,7 +74,7 @@ export function renderSlackTableAccessibleText(summaryText: string) {
 
 type SlackProgressCommentaryExpectation = {
   commentary: "headline" | "lane" | "standalone";
-  toolProgress: "absent" | "draft" | "standalone";
+  toolProgress: "absent" | "draft" | "standalone" | "standalone-redacted";
 };
 
 function observedSlackText(message: { blockText?: string[]; text: string }) {
@@ -90,6 +90,11 @@ function hasSlackCommentaryLaneMarker(
   }
   const blockText = message.blockText ?? [];
   return blockText.some((text) => text.trim() === `• *Update* — ${marker}`);
+}
+
+function isSlackSafeExecSummary(message: { text: string }) {
+  // Slack history converts Unicode emoji to colon names; captured writes retain Unicode.
+  return /^(?:🛠️|:hammer_and_wrench:) Exec$/u.test(message.text.trim());
 }
 
 export function buildSlackProgressCommentaryRun(
@@ -113,11 +118,36 @@ export function buildSlackProgressCommentaryRun(
     matchText: finalMarker,
     settleObservedMs: 3_000,
     verifyObserved: ({ finalMessage, messages }) => {
+      function fail(reason: string): never {
+        const identities = new Map<string, number>();
+        // Failure artifacts may be public. Emit only closed presentation facts,
+        // never message text, platform ids, command text, or credential fields.
+        const presentation = messages.slice(-16).map((message) => {
+          if (message.ts && !identities.has(message.ts)) {
+            identities.set(message.ts, identities.size + 1);
+          }
+          const text = message.text.trim();
+          return {
+            identity: message.ts ? identities.get(message.ts) : 0,
+            final: observedSlackText(message).includes(finalMarker),
+            commentary: observedSlackText(message).includes(commentaryMarker),
+            commentaryLane: hasSlackCommentaryLaneMarker(message, commentaryMarker),
+            bareCommentary: text === commentaryMarker,
+            colonCommentary: text === `:speech_balloon: ${commentaryMarker}`,
+            typedCommentaryBlock: (message.blockText ?? []).some(
+              (line) => line.trim() === `• *Commentary* — _${commentaryMarker}_`,
+            ),
+            safeExec: isSlackSafeExecSummary(message),
+            commandMarker: observedSlackText(message).includes(toolMarker),
+          };
+        });
+        throw new Error(`${reason}; presentation=${JSON.stringify(presentation)}`);
+      }
       if (!finalMessage.ts) {
-        throw new Error("Slack progress commentary final message had no ts");
+        fail("Slack progress commentary final message had no ts");
       }
       if ((finalMessage.text ?? "").trim() !== finalMarker) {
-        throw new Error("expected the Slack final answer to contain only the final marker");
+        fail("expected the Slack final answer to contain only the final marker");
       }
       const progressMessages = messages.filter(
         (message) => !observedSlackText(message).includes(finalMarker),
@@ -128,12 +158,12 @@ export function buildSlackProgressCommentaryRun(
       const commentaryTimestamps = new Set(commentaryMessages.map((message) => message.ts));
       const [commentaryTs] = commentaryTimestamps;
       if (commentaryTimestamps.size !== 1 || commentaryTs === undefined) {
-        throw new Error(
+        fail(
           `expected exactly one Slack message identity containing commentary; got ${commentaryTimestamps.size}`,
         );
       }
       if (commentaryTs === finalMessage.ts) {
-        throw new Error("expected Slack progress commentary to stay separate from the fresh final");
+        fail("expected Slack progress commentary to stay separate from the fresh final");
       }
       // Slack prefixes durable standalone commentary with the same glyph used by
       // draft-lane rendering, so message identity—not that marker—owns dedupe proof.
@@ -147,10 +177,10 @@ export function buildSlackProgressCommentaryRun(
           expectation.commentary === "lane" &&
           (commentaryLaneTimestamps.size !== 1 || !commentaryLaneTimestamps.has(commentaryTs))
         ) {
-          throw new Error("expected commentary in the Slack progress commentary lane");
+          fail("expected commentary in the Slack progress commentary lane");
         }
         if (expectation.commentary === "headline" && commentaryLaneTimestamps.size !== 0) {
-          throw new Error("expected the preamble as the Slack progress status headline");
+          fail("expected the preamble as the Slack progress status headline");
         }
       }
       const toolTimestamps = new Set(
@@ -158,19 +188,37 @@ export function buildSlackProgressCommentaryRun(
           .filter((message) => observedSlackText(message).includes(toolMarker))
           .map((message) => message.ts),
       );
-      if (expectation.toolProgress === "draft") {
+      if (expectation.toolProgress === "standalone-redacted") {
+        if (messages.some((message) => observedSlackText(message).includes(toolMarker))) {
+          fail("command details must stay hidden in verbose-on progress");
+        }
+        const safeToolTimestamps = new Set(
+          progressMessages.filter(isSlackSafeExecSummary).map((message) => message.ts),
+        );
+        if (
+          safeToolTimestamps.size !== 1 ||
+          safeToolTimestamps.has(commentaryTs) ||
+          safeToolTimestamps.has(finalMessage.ts)
+        ) {
+          fail("expected one safe Exec summary in a standalone verbose message");
+        }
+      } else if (expectation.toolProgress === "draft") {
         if (toolTimestamps.size !== 1 || toolTimestamps.has(finalMessage.ts)) {
-          throw new Error("expected tool progress on the draft separate from the fresh final");
+          fail("expected tool progress on the draft separate from the fresh final");
         }
         if (expectation.commentary !== "standalone" && !toolTimestamps.has(commentaryTs)) {
-          throw new Error("expected commentary and tool progress on one Slack draft identity");
+          fail("expected commentary and tool progress on one Slack draft identity");
         }
       } else if (expectation.toolProgress === "standalone") {
-        if (toolTimestamps.size === 0 || toolTimestamps.has(finalMessage.ts)) {
-          throw new Error("expected tool progress only in standalone verbose messages");
+        if (
+          toolTimestamps.size === 0 ||
+          toolTimestamps.has(commentaryTs) ||
+          toolTimestamps.has(finalMessage.ts)
+        ) {
+          fail("expected tool progress only in standalone verbose messages");
         }
       } else if (toolTimestamps.size !== 0) {
-        throw new Error("expected tool progress to stay out of Slack progress messages");
+        fail("expected tool progress to stay out of Slack progress messages");
       }
       const finalTimestamps = new Set(
         messages
@@ -178,9 +226,7 @@ export function buildSlackProgressCommentaryRun(
           .map((message) => message.ts),
       );
       if (finalTimestamps.size !== 1 || !finalTimestamps.has(finalMessage.ts)) {
-        throw new Error(
-          "expected one final-marker Slack message identity matching the final answer",
-        );
+        fail("expected one final-marker Slack message identity matching the final answer");
       }
       const commentaryDetails =
         expectation.commentary === "lane"

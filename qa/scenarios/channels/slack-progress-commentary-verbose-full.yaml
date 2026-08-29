@@ -1,0 +1,20 @@
+title: Slack full verbose progress retains command detail without duplicate commentary
+scenario:
+  id: slack-progress-commentary-verbose-full
+  surface: channels
+  coverage:
+    primary:
+      - agent-runtime.streaming-replies
+  execution:
+    kind: flow
+    channel: slack
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    isolationReason: Overrides Slack progress presentation and the agent verbose default.
+flow:
+  module: ./live-transports/slack/scenario-runtime.js
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - { moduleExport: slackQaProgressCommentaryVerboseFullScenario }
