@@ -52,7 +52,13 @@ export function createSessionEventRefreshCoordinator({
     }
     queued = false;
     const operationGeneration = generation;
-    const operation = refresh().catch(() => undefined);
+    let operation: Promise<void>;
+    try {
+      operation = refresh();
+    } catch {
+      operation = Promise.resolve();
+    }
+    operation = operation.catch(() => undefined);
     const pending = operation.finally(() => {
       if (generation !== operationGeneration || inFlight !== pending) {
         return;

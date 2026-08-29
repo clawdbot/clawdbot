@@ -514,7 +514,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
     if (inFlight) {
       eventRefreshQueued = true;
-      return inFlight;
+      return Promise.resolve();
     }
     eventRefreshQueued = false;
     return startRefresh({ ...lastListOptions, force: true });

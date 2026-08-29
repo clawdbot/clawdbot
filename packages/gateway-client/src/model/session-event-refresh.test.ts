@@ -51,6 +51,26 @@ describe("session event refresh coordinator", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
+  it("contains synchronous refresh failures and remains reusable", async () => {
+    vi.useFakeTimers();
+    const refresh = vi
+      .fn<() => Promise<void>>()
+      .mockImplementationOnce(() => {
+        throw new Error("synchronous failure");
+      })
+      .mockResolvedValue(undefined);
+    const coordinator = createSessionEventRefreshCoordinator({
+      active: true,
+      refresh,
+    });
+
+    coordinator.schedule();
+    await vi.advanceTimersByTimeAsync(200);
+    coordinator.schedule();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
   it("defers hidden work and redeems it once after activation", async () => {
     vi.useFakeTimers();
     const refresh = vi.fn().mockResolvedValue(undefined);

@@ -138,6 +138,8 @@ describe("session roster refresh completion", () => {
       }
     },
   );
+});
+
 describe("session roster refresh coordination", () => {
   it("runs one event refresh after a burst during an explicit refresh", async () => {
     vi.useFakeTimers();
