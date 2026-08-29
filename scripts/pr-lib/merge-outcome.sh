@@ -3,7 +3,7 @@
 # textual OIDs in a blob alone would not keep historical proof alive through GC.
 merge_outcome_stop() {
   echo "Merge outcome: $*" >&2
-  echo "No merge retry. Repeated merge-run only reconciles a recorded attempt. Inspect the PR timeline, main history, and $MERGE_OUTCOME_REF; unresolved uncertainty requires operator action outside this automatic path." >&2
+  echo "No automatic merge retry. Repeated merge-run only reconciles a recorded attempt. Inspect the PR timeline, main history, and $MERGE_OUTCOME_REF; a new attempt requires explicit operator recovery through merge-recover." >&2
   return 1
 }
 

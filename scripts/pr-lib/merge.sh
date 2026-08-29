@@ -347,19 +347,29 @@ $source_trailers"
 merge_run() {
   local pr="$1"
   local auto_merge_requested="${2:-false}"
+  local recovery_oid="${3:-}" recovery_record="" recovery_actor=""
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
   local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION
   merge_outcome_init "$pr" || return 1
-  # Reconciliation needs neither the old worktree nor its prepare artifacts.
-  if [ -n "$MERGE_OUTCOME_OID" ]; then
+  if [ -n "$recovery_oid" ]; then
+    if [ "$recovery_oid" != "$MERGE_OUTCOME_OID" ] ||
+      ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '
+        .phase == "intent" and .accepted == false and .route == "immediate"
+      ' >/dev/null; then
+      merge_outcome_stop "operator recovery requires the exact retained unaccepted immediate intent; no attempt was authorized"
+      return 1
+    fi
+    recovery_record="$MERGE_OUTCOME_RECORD"
+  elif [ -n "$MERGE_OUTCOME_OID" ]; then
+    # Reconciliation needs neither the old worktree nor its prepare artifacts.
     merge_outcome_resume "$pr"
     return
   fi
   enter_worktree "$pr" false || return 1
   # Earlier wrappers captured output at dispatch without recording intent. Even
   # an empty capture may represent a submitted request; never overwrite that evidence.
-  if [ -e .local/merge-output.log ] || [ -L .local/merge-output.log ]; then
-    merge_outcome_stop "prior merge output exists without an outcome record; preserve .local/merge-output.log and reconcile the earlier request manually"
+  if [ -z "$recovery_oid" ] && has_worktree_merge_output .; then
+    merge_outcome_stop "prior merge output exists without an outcome record; preserve the captures and reconcile the earlier request manually"
     return 1
   fi
 
@@ -382,6 +392,11 @@ merge_run() {
   source .local/prep.env
 
   local merge_method="${OPENCLAW_PR_MERGE_METHOD:-squash}"
+  if [ -n "$recovery_oid" ] && ! printf '%s\n' "$recovery_record" | jq -e \
+    --arg head "$PREP_HEAD_SHA" --arg method "$merge_method" '.head == $head and .method == $method' >/dev/null; then
+    merge_outcome_stop "operator recovery requires the retained prepared head and merge method"
+    return 1
+  fi
   local merge_flag
   local merge_label
   case "$merge_method" in
@@ -430,10 +445,11 @@ merge_run() {
   # Pin all other facts and each projection as soon as it becomes known.
   for admission_attempt in 1 2 3; do
     merge_outcome_observe "$pr" || return 1
-    if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg head "$PREP_HEAD_SHA" '
+    if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg head "$PREP_HEAD_SHA" --argjson recovery "${recovery_record:-null}" '
       .pr.state == "OPEN" and .pr.headRefOid == $head and .pr.baseRefName == "main" and
       .pr.isDraft == false and .pr.mergeable != "CONFLICTING" and
-      .pr.autoMergeRequest == null and .pr.isInMergeQueue == false
+      .pr.autoMergeRequest == null and .pr.isInMergeQueue == false and
+      ($recovery == null or .pr.id == $recovery.prId)
     ' >/dev/null; then
       merge_outcome_stop "require OPEN, exact prepared head, main base, non-draft, no conflicts, and no existing auto/queue request; inspect current PR state"
       return 1
@@ -479,6 +495,10 @@ merge_run() {
       *) merge_outcome_stop "auto-merge admission requires MERGEABLE with CLEAN or BEHIND status"; return 1 ;;
     esac
   fi
+  if [ -n "$recovery_oid" ] && [ "$route" != immediate ]; then
+    merge_outcome_stop "operator recovery requires current immediate admission without admin, auto, or queue routing"
+    return 1
+  fi
   # gh skips local status refusals for queue-enabled PRs; admin bypasses BLOCKED/BEHIND.
   # Reject known client-side refusals before recording non-retryable intent.
   if printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg route "$route" '
@@ -499,6 +519,10 @@ merge_run() {
       return 1
     fi
   fi
+  if [ -n "$recovery_oid" ]; then
+    recovery_actor=$(gh_plain api --hostname "$MERGE_REPO_HOST" user --jq '.login | select(type == "string" and length > 0)') || return 1
+    [ -n "$recovery_actor" ] || { merge_outcome_stop "cannot identify the operator recovery actor"; return 1; }
+  fi
   merge_outcome_stable "$pr" || return 1
   if [ "$route" = admin ]; then
     verify_crabbox_admin_merge_bypass "$pr" "$PREP_HEAD_SHA" || return 1
@@ -514,14 +538,29 @@ merge_run() {
     {version:1,repo:$repo,pr:.pr.number,prId:.pr.id,base:.pr.baseRefName,head:.pr.headRefOid,
      main:.main,method:$method,route:$route,attempt:$attempt,phase:"intent",accepted:false,landed:null}
   ') || return 1
+  if [ -n "$recovery_oid" ]; then
+    # This records a new operator decision, not proof that the prior request failed.
+    # The outcome CAS consumes that exact decision and retains the old intent as a parent.
+    intent=$(printf '%s\n' "$intent" | jq -c --arg outcome "$recovery_oid" \
+      --argjson previous "$recovery_record" --arg actor "$recovery_actor" \
+      '.recovery={outcome:$outcome,attempt:$previous.attempt,actor:$actor,reason:"explicit-operator-recovery"}') || return 1
+  fi
   mark_pr_operation_side_effects_started
   merge_outcome_write "$intent" || return 1
+  local merge_output=".local/merge-output.$attempt.log"
   # Both success and failure are reconciled. A killed process leaves intent for
-  # the next invocation; an OPEN read can never authorize another dispatch.
-  if gh_plain pr merge "$pr" --repo "$MERGE_REPO_URL" "$merge_flag" "${merge_args[@]}" >.local/merge-output.log 2>&1; then
+  # the next invocation; an OPEN read can never authorize another dispatch. Each
+  # attempt owns an exclusive capture, so recovery cannot overwrite earlier evidence.
+  if (
+    set -o noclobber
+    exec >"$merge_output" || exit 125
+    exec 2>&1
+    gh_plain pr merge "$pr" --repo "$MERGE_REPO_URL" "$merge_flag" "${merge_args[@]}"
+  ); then
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.accepted=true')" || return 1
   else
-    print_relevant_log_excerpt .local/merge-output.log
+    # Do not read a capture we could not create; it may be somebody else's symlink.
+    [ "$?" -eq 125 ] || print_relevant_log_excerpt "$merge_output"
   fi
   merge_outcome_reconcile "$pr" || return 1
   [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .phase)" != intent ] || return 0
