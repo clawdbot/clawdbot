@@ -1,12 +1,22 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   WebPushDetailLevel,
   WebPushDevicePreferences,
   WebPushNotificationCategory,
   WebPushNotificationPreferences,
 } from "../../packages/gateway-protocol/src/schema/push.js";
+import { sanitizeExecApprovalDisplayText } from "./exec-approval-text-sanitize.js";
 
 export const WEB_PUSH_USER_PREFERENCES_KEY = "notifications.web.v1";
+
+export function normalizeWebPushDisplayLabel(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  // Redact and escape before truncation; raw IDs still own filtering and authorization.
+  return truncateUtf16Safe(sanitizeExecApprovalDisplayText(value.trim()), 80) || undefined;
+}
 
 const DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES: WebPushNotificationPreferences = {
   categories: {
@@ -139,7 +149,7 @@ export function normalizeWebPushDevicePreferences(value: unknown): WebPushDevice
   const normalizedAgentIds = normalizeAgentIds(source.agentIds);
   return {
     enabled: typeof source.enabled === "boolean" ? source.enabled : true,
-    label: typeof source.label === "string" ? source.label.trim().slice(0, 80) : "",
+    label: normalizeWebPushDisplayLabel(source.label) ?? "",
     ...(categories && Object.keys(categories).length > 0 ? { categories } : {}),
     ...(normalizedDetailLevel ? { detailLevel: normalizedDetailLevel } : {}),
     ...(normalizedQuietHours ? { quietHours: normalizedQuietHours } : {}),

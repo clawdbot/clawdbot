@@ -69,7 +69,8 @@ export function autoPromptNotificationsOnSend(context: NotificationsContext): vo
   if (
     !snapshot.supported ||
     snapshot.permission !== "default" ||
-    snapshot.subscribed ||
+    snapshot.subscription === "registered" ||
+    snapshot.subscription === "vapid-mismatch" ||
     snapshot.loading
   ) {
     // Denied and granted permissions are terminal for automatic prompts.

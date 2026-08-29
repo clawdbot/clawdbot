@@ -16,6 +16,8 @@ type WebPushReconcileResult =
   | { state: "registered" }
   | { state: "vapid-mismatch"; error: string };
 
+export type WebPushSubscriptionState = WebPushReconcileResult["state"] | "unknown";
+
 export type WebPushPreferencesResult = {
   durableIdentity: boolean;
   user: WebPushNotificationPreferences;
@@ -35,7 +37,7 @@ export type WebPushCapabilityPatch = {
   error?: string | null;
   loading?: boolean;
   permission?: NotificationPermission | "unsupported";
-  subscribed?: boolean;
+  subscription?: WebPushSubscriptionState;
   preferences?: WebPushPreferencesResult | null;
 };
 
@@ -131,48 +133,43 @@ function serializePushSubscription(subscription: PushSubscription) {
 async function registerPushSubscription(
   client: GatewayBrowserClient,
   subscription: PushSubscription,
-): Promise<{ subscriptionId: string }> {
-  return (await client.request("push.web.subscribe", serializePushSubscription(subscription))) as {
-    subscriptionId: string;
-  };
-}
-
-async function clearMismatchedGatewaySubscription(
-  client: GatewayBrowserClient,
-  subscription: PushSubscription,
-): Promise<void> {
-  // Remove only this Gateway's unusable row. Keep the browser subscription so
-  // the Gateway that owns its VAPID identity continues receiving notifications.
-  await client
-    .request("push.web.unsubscribe", { endpoint: subscription.endpoint })
-    .catch(() => undefined);
-}
-
-export async function reconcileExistingWebPushSubscription(
-  client: GatewayBrowserClient,
+  vapidPublicKey: Uint8Array,
 ): Promise<WebPushReconcileResult> {
-  const subscription = await getExistingSubscription();
-  if (!subscription) {
-    return { state: "missing" };
-  }
-  const vapidPublicKey = await resolveGatewayVapidPublicKey(client);
   if (!subscriptionUsesVapidKey(subscription, vapidPublicKey)) {
-    await clearMismatchedGatewaySubscription(client, subscription);
+    // Keep the browser subscription for its owning Gateway until the operator
+    // explicitly resets it; only this Gateway's unusable row is removed here.
+    await client
+      .request("push.web.unsubscribe", { endpoint: subscription.endpoint })
+      .catch(() => undefined);
     return { state: "vapid-mismatch", error: VAPID_MISMATCH_MESSAGE };
   }
-  await registerPushSubscription(client, subscription);
+  await client.request("push.web.subscribe", serializePushSubscription(subscription));
   return { state: "registered" };
 }
 
-export async function reconcileWebPushCapability(
+async function resolveWebPushCapabilityPatch(
   client: GatewayBrowserClient,
+  result: WebPushReconcileResult,
 ): Promise<WebPushCapabilityPatch> {
-  const result = await reconcileExistingWebPushSubscription(client);
   return {
-    subscribed: result.state === "registered",
+    subscription: result.state,
     preferences: result.state === "registered" ? await getWebPushPreferences(client) : null,
     error: result.state === "vapid-mismatch" ? result.error : null,
   };
+}
+
+async function reconcileWebPushCapability(
+  client: GatewayBrowserClient,
+): Promise<WebPushCapabilityPatch> {
+  const subscription = await getExistingSubscription();
+  const result = subscription
+    ? await registerPushSubscription(
+        client,
+        subscription,
+        await resolveGatewayVapidPublicKey(client),
+      )
+    : ({ state: "missing" } as const);
+  return await resolveWebPushCapabilityPatch(client, result);
 }
 
 export function startWebPushReconciliation(params: {
@@ -198,9 +195,6 @@ export function startWebPushReconciliation(params: {
       params.publish(patch);
     }
   };
-  void getExistingSubscription()
-    .then((subscription) => params.publish({ subscribed: subscription !== null }))
-    .catch(() => {});
   const handleGateway = (snapshot: ApplicationGateway["snapshot"]) => {
     const client = snapshot.phase === "connected" ? snapshot.client : null;
     if (client === connectedClient) {
@@ -208,6 +202,7 @@ export function startWebPushReconciliation(params: {
     }
     connectedClient = client;
     const currentGeneration = ++generation;
+    params.publish({ subscription: "unknown", preferences: null, error: null });
     if (client) {
       void reconcile(client, currentGeneration);
     }
@@ -283,7 +278,7 @@ export function createWebPushCapabilityRuntime(params: {
 
 export async function subscribeToWebPush(
   client: GatewayBrowserClient,
-): Promise<{ subscriptionId: string }> {
+): Promise<WebPushReconcileResult> {
   const permission = await Notification.requestPermission();
   if (permission !== "granted") {
     throw new Error(`Notification permission ${permission}`);
@@ -294,11 +289,7 @@ export async function subscribeToWebPush(
   const vapidPublicKey = await resolveGatewayVapidPublicKey(client);
   const existingSubscription = await pushManager.getSubscription();
   if (existingSubscription) {
-    if (!subscriptionUsesVapidKey(existingSubscription, vapidPublicKey)) {
-      await clearMismatchedGatewaySubscription(client, existingSubscription);
-      throw new Error(VAPID_MISMATCH_MESSAGE);
-    }
-    return await registerPushSubscription(client, existingSubscription);
+    return await registerPushSubscription(client, existingSubscription, vapidPublicKey);
   }
   const pushSubscription = await pushManager.subscribe({
     userVisibleOnly: true,
@@ -306,7 +297,7 @@ export async function subscribeToWebPush(
   });
 
   try {
-    return await registerPushSubscription(client, pushSubscription);
+    return await registerPushSubscription(client, pushSubscription, vapidPublicKey);
   } catch (error) {
     try {
       await pushSubscription.unsubscribe();
@@ -376,11 +367,10 @@ export async function runWebPushCapabilityAction(
 ): Promise<WebPushCapabilityPatch> {
   switch (action.kind) {
     case "enable":
-      await subscribeToWebPush(client);
-      return { subscribed: true, preferences: await getWebPushPreferences(client) };
+      return await resolveWebPushCapabilityPatch(client, await subscribeToWebPush(client));
     case "disable":
       await unsubscribeFromWebPush(client);
-      return { subscribed: false, preferences: null };
+      return { subscription: "missing", preferences: null };
     case "test":
       await sendTestWebPush(client);
       return {};

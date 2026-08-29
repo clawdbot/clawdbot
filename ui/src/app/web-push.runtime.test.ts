@@ -107,7 +107,7 @@ describe("web push Gateway identity", () => {
     const { client, request } = gatewayClient([4, 1, 2, 3]);
 
     await expect(subscribeToWebPush(client)).resolves.toEqual({
-      subscriptionId: "subscription-1",
+      state: "registered",
     });
     expect(request).toHaveBeenNthCalledWith(1, "push.web.vapidPublicKey", {});
     expect(request).toHaveBeenNthCalledWith(2, "push.web.subscribe", {
@@ -131,7 +131,10 @@ describe("web push Gateway identity", () => {
     vi.stubGlobal("Notification", { requestPermission: vi.fn().mockResolvedValue("granted") });
     const { client, request } = gatewayClient([4, 9, 8, 7]);
 
-    await expect(subscribeToWebPush(client)).rejects.toThrow("belongs to another Gateway");
+    await expect(subscribeToWebPush(client)).resolves.toEqual({
+      state: "vapid-mismatch",
+      error: expect.stringContaining("belongs to another Gateway"),
+    });
     expect(request).toHaveBeenNthCalledWith(2, "push.web.unsubscribe", {
       endpoint: subscription.endpoint,
     });

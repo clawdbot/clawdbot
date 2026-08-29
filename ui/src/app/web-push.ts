@@ -6,12 +6,13 @@ import type {
   WebPushCapabilityPatch,
   WebPushCapabilityRuntime,
   WebPushPreferencesResult,
+  WebPushSubscriptionState,
 } from "./web-push.runtime.ts";
 
-type WebPushSnapshot = {
+export type WebPushSnapshot = {
   supported: boolean;
   permission: NotificationPermission | "install-required" | "unsupported";
-  subscribed: boolean;
+  subscription: WebPushSubscriptionState;
   loading: boolean;
   error?: string | null;
   preferences?: WebPushPreferencesResult | null;
@@ -43,7 +44,7 @@ export function createWebPushCapability(gateway: ApplicationGateway): WebPushCap
         ? Notification.permission
         : "unsupported"
       : "install-required",
-    subscribed: false,
+    subscription: "unknown",
     loading: false,
   };
   const listeners = new Set<() => void>();

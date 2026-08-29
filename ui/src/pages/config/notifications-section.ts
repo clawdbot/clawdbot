@@ -7,6 +7,7 @@ import type {
   NativeNotificationsPermission,
   NativeNotificationTestOutcome,
 } from "../../app/native-notifications.ts";
+import type { WebPushSnapshot } from "../../app/web-push.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsRow,
@@ -16,20 +17,6 @@ import {
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
-
-export type WebPushUiState = {
-  supported: boolean;
-  permission: NotificationPermission | "install-required" | "unsupported";
-  subscribed: boolean;
-  loading: boolean;
-  error?: string | null;
-  preferences?: {
-    durableIdentity: boolean;
-    user: WebPushNotificationPreferences;
-    device: WebPushDevicePreferences;
-    effective: WebPushNotificationPreferences & { enabled: boolean; label: string };
-  } | null;
-};
 
 // Leaf props contract: view.ts imports this module, so importing ConfigProps
 // back from view.ts would create an import cycle. ConfigProps is structurally
@@ -42,7 +29,7 @@ type NotificationsSectionProps = {
   };
   onNativeNotificationsRequestPermission?: () => void;
   onNativeNotificationsSendTest?: () => void;
-  webPush?: WebPushUiState;
+  webPush?: WebPushSnapshot;
   onWebPushSubscribe?: () => void;
   onWebPushUnsubscribe?: () => void;
   onWebPushTest?: () => void;
@@ -543,27 +530,35 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
         : push.permission === "default"
           ? t("configView.notifications.notRequested")
           : t("configView.notifications.unsupported");
-  const subscriptionLabel = push.subscribed
+  const registered = push.subscription === "registered";
+  const canReset = registered || push.subscription === "vapid-mismatch";
+  const subscriptionLabel = registered
     ? t("configView.notifications.subscribed")
-    : t("configView.notifications.notSubscribed");
+    : push.subscription === "unknown"
+      ? t("configView.notifications.checking")
+      : t("configView.notifications.notSubscribed");
   const statusLabel = !push.supported
     ? t("configView.notifications.unsupported")
     : push.permission === "denied"
       ? t("configView.notifications.blocked")
-      : push.subscribed
+      : registered
         ? t("configView.notifications.subscribed")
-        : t("configView.notifications.ready");
+        : push.subscription === "vapid-mismatch"
+          ? t("configView.notifications.unavailable")
+          : push.subscription === "unknown"
+            ? t("configView.notifications.checking")
+            : t("configView.notifications.ready");
   const statusKind = !push.supported
     ? ("muted" as const)
-    : push.permission === "denied"
+    : push.permission === "denied" || push.subscription === "vapid-mismatch"
       ? ("danger" as const)
-      : push.subscribed
+      : registered
         ? ("ok" as const)
         : ("accent" as const);
 
   const actionButtons =
     push.supported && push.permission !== "denied"
-      ? push.subscribed
+      ? canReset
         ? html`
             <button
               class="btn"
@@ -572,13 +567,15 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             >
               ${icons.x} ${t("configView.notifications.unsubscribe")}
             </button>
-            <button
-              class="btn primary"
-              ?disabled=${push.loading || !props.connected}
-              @click=${() => props.onWebPushTest?.()}
-            >
-              ${icons.send} ${t("configView.notifications.sendTest")}
-            </button>
+            ${registered
+              ? html`<button
+                  class="btn primary"
+                  ?disabled=${push.loading || !props.connected}
+                  @click=${() => props.onWebPushTest?.()}
+                >
+                  ${icons.send} ${t("configView.notifications.sendTest")}
+                </button>`
+              : nothing}
           `
         : html`
             <button
@@ -624,7 +621,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
           ${renderSettingsRow({
             title: t("configView.notifications.status"),
             control: renderSettingsStatus({
-              kind: push.subscribed ? "ok" : "muted",
+              kind: registered ? "ok" : "muted",
               label: subscriptionLabel,
             }),
           })}
@@ -656,7 +653,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             : nothing}
         </div>
       </section>
-      ${push.subscribed && push.preferences
+      ${registered && push.preferences
         ? html`<div class="settings-page" ?inert=${push.loading}>
             ${push.preferences.durableIdentity
               ? renderUserNotificationPreferences(push.preferences.user, (preferences) =>

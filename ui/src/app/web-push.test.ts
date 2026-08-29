@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebPushNotificationPreferences } from "../../../packages/gateway-protocol/src/schema/push.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { renderNotificationsSection } from "../pages/config/notifications-section.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
@@ -412,13 +414,14 @@ describe("web push Gateway reconciliation", () => {
       expect(first.request).toHaveBeenCalledWith("push.web.vapidPublicKey", {});
     });
     harness.connect(second.client);
+    expect(capability.snapshot).toMatchObject({ subscription: "unknown", preferences: null });
     await vi.waitFor(() => {
       expect(second.request).toHaveBeenCalledWith("push.web.vapidPublicKey", {});
     });
 
     secondKey.resolve(encodedVapidKey([4, 9, 8, 7]));
     await vi.waitFor(() => expect(capability.snapshot.error).toContain("another Gateway"));
-    expect(capability.snapshot.subscribed).toBe(false);
+    expect(capability.snapshot.subscription).toBe("vapid-mismatch");
 
     firstKey.resolve(encodedVapidKey([4, 1, 2, 3]));
     await vi.waitFor(() =>
@@ -428,7 +431,99 @@ describe("web push Gateway reconciliation", () => {
       ),
     );
     expect(capability.snapshot.error).toContain("another Gateway");
-    expect(capability.snapshot.subscribed).toBe(false);
+    expect(capability.snapshot.subscription).toBe("vapid-mismatch");
     capability.dispose();
   });
+
+  it.each(["reconnect", "enable"] as const)(
+    "resets a mismatched browser subscription detected during %s from Settings before enabling the new Gateway",
+    async (source) => {
+      const unsubscribe = vi.fn(async () => {
+        currentSubscription = null;
+        return true;
+      });
+      const mismatchedSubscription = existingSubscription([4, 1, 2, 3]);
+      mismatchedSubscription.unsubscribe = unsubscribe;
+      let currentSubscription: PushSubscription | null =
+        source === "reconnect" ? mismatchedSubscription : null;
+      const subscribe = vi.fn(async () => {
+        currentSubscription = existingSubscription([4, 9, 8, 7]);
+        return currentSubscription;
+      });
+      Object.defineProperty(navigator, "serviceWorker", {
+        configurable: true,
+        value: {
+          ready: Promise.resolve({
+            pushManager: {
+              getSubscription: async () => currentSubscription,
+              subscribe,
+            },
+          }),
+        },
+      });
+      vi.stubGlobal("Notification", {
+        permission: "granted",
+        requestPermission: vi.fn().mockResolvedValue("granted"),
+      });
+      const request = vi.fn(async (method: string) => {
+        if (method === "push.web.vapidPublicKey") {
+          return { vapidPublicKey: encodedVapidKey([4, 9, 8, 7]) };
+        }
+        if (method === "push.web.preferences.get") {
+          return preferenceResult(notificationPreferences(true));
+        }
+        return { subscriptionId: "subscription-1", removed: true };
+      });
+      const harness = gatewayHarness();
+      const capability = createWebPushCapability(harness.gateway);
+      const container = document.createElement("div");
+      const update = () => {
+        render(
+          renderNotificationsSection({
+            connected: true,
+            webPush: capability.snapshot,
+            onWebPushSubscribe: () => void capability.run({ kind: "enable" }),
+            onWebPushUnsubscribe: () => void capability.run({ kind: "disable" }),
+          }),
+          container,
+        );
+      };
+      const stop = capability.subscribe(update);
+      const button = (label: string) =>
+        Array.from(container.querySelectorAll("button")).find((candidate) =>
+          candidate.textContent?.includes(label),
+        );
+
+      try {
+        harness.connect({ request } as unknown as GatewayBrowserClient);
+        if (source === "enable") {
+          await vi.waitFor(() => expect(capability.snapshot.subscription).toBe("missing"));
+          currentSubscription = mismatchedSubscription;
+          button("Enable notifications")?.click();
+        }
+        await vi.waitFor(() => expect(container.textContent).toContain("another Gateway"));
+        expect(container.textContent).toContain("Not subscribed");
+        expect(button("Send test")).toBeUndefined();
+        const resetButton = button("Unsubscribe");
+        expect(resetButton).toBeDefined();
+        await vi.waitFor(() => expect(resetButton?.disabled).toBe(false));
+        resetButton?.click();
+        await vi.waitFor(() => expect(unsubscribe).toHaveBeenCalledOnce());
+        await vi.waitFor(() => expect(button("Enable notifications")?.disabled).toBe(false));
+        button("Enable notifications")?.click();
+
+        await vi.waitFor(() => expect(button("Send test")?.disabled).toBe(false));
+        expect(subscribe).toHaveBeenCalledOnce();
+        expect(request).toHaveBeenCalledWith("push.web.subscribe", {
+          endpoint: "https://push.example.test/subscription",
+          keys: { p256dh: "p256dh", auth: "auth" },
+        });
+        expect(container.textContent).not.toContain("another Gateway");
+      } finally {
+        stop();
+        capability.dispose();
+        render(nothing, container);
+      }
+    },
+  );
 });

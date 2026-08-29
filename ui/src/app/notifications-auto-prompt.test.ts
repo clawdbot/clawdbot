@@ -32,7 +32,7 @@ function createContext(
   overrides: {
     supported?: boolean;
     permission?: NotificationPermission | "unsupported";
-    subscribed?: boolean;
+    subscription?: AutoPromptContext["webPush"]["snapshot"]["subscription"];
     loading?: boolean;
     nativePermission?: NativePermission | null;
   } = {},
@@ -49,7 +49,7 @@ function createContext(
       snapshot: {
         supported: overrides.supported ?? true,
         permission: overrides.permission ?? "default",
-        subscribed: overrides.subscribed ?? false,
+        subscription: overrides.subscription ?? "unknown",
         loading: overrides.loading ?? false,
         error: null,
       },
@@ -108,7 +108,8 @@ describe("notification auto-prompt", () => {
   );
 
   it.each([
-    ["subscribed", { subscribed: true }],
+    ["subscribed", { subscription: "registered" as const }],
+    ["mismatched", { subscription: "vapid-mismatch" as const }],
     ["loading", { loading: true }],
     ["unsupported", { supported: false, permission: "unsupported" as const }],
   ])("does not enable web push when it is %s", (_name, overrides) => {

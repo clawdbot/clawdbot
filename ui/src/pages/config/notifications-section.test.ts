@@ -83,7 +83,7 @@ describe("Web Push preference saves", () => {
         webPush: {
           supported: true,
           permission: "granted",
-          subscribed: true,
+          subscription: "registered",
           loading: true,
           preferences: {
             durableIdentity: true,
