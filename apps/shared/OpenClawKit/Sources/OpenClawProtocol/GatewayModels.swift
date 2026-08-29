@@ -5368,6 +5368,7 @@ public struct SessionCatalogSession: Codable, Sendable {
     public let threadid: String
     public let sourcehomeid: String?
     public let name: String?
+    public let color: String?
     public let cwd: String?
     public let status: String
     public let createdat: Double?
@@ -5390,6 +5391,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         threadid: String,
         sourcehomeid: String? = nil,
         name: String? = nil,
+        color: String? = nil,
         cwd: String? = nil,
         status: String,
         createdat: Double? = nil,
@@ -5411,6 +5413,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         self.threadid = threadid
         self.sourcehomeid = sourcehomeid
         self.name = name
+        self.color = color
         self.cwd = cwd
         self.status = status
         self.createdat = createdat
@@ -5434,6 +5437,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         case threadid = "threadId"
         case sourcehomeid = "sourceHomeId"
         case name
+        case color
         case cwd
         case status
         case createdat = "createdAt"
@@ -6330,6 +6334,7 @@ public struct SessionRow: Codable, Sendable {
     public let kind: AnyCodable
     public let label: String?
     public let icon: String?
+    public let color: String?
     public let channelavatarurl: String?
     public let boardface: AnyCodable?
     public let displayname: String?
@@ -6403,6 +6408,7 @@ public struct SessionRow: Codable, Sendable {
         kind: AnyCodable,
         label: String? = nil,
         icon: String? = nil,
+        color: String? = nil,
         channelavatarurl: String? = nil,
         boardface: AnyCodable? = nil,
         displayname: String? = nil,
@@ -6475,6 +6481,7 @@ public struct SessionRow: Codable, Sendable {
         self.kind = kind
         self.label = label
         self.icon = icon
+        self.color = color
         self.channelavatarurl = channelavatarurl
         self.boardface = boardface
         self.displayname = displayname
@@ -6549,6 +6556,7 @@ public struct SessionRow: Codable, Sendable {
         case kind
         case label
         case icon
+        case color
         case channelavatarurl = "channelAvatarUrl"
         case boardface = "boardFace"
         case displayname = "displayName"
@@ -9762,6 +9770,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let expectedmarkedunreadat: AnyCodable?
     public let label: AnyCodable?
     public let icon: AnyCodable?
+    public let color: AnyCodable?
     public let category: AnyCodable?
     public let boardface: AnyCodable?
     public let statusnote: AnyCodable?
@@ -9800,6 +9809,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         expectedmarkedunreadat: AnyCodable? = nil,
         label: AnyCodable? = nil,
         icon: AnyCodable? = nil,
+        color: AnyCodable? = nil,
         category: AnyCodable? = nil,
         boardface: AnyCodable? = nil,
         statusnote: AnyCodable? = nil,
@@ -9837,6 +9847,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.expectedmarkedunreadat = expectedmarkedunreadat
         self.label = label
         self.icon = icon
+        self.color = color
         self.category = category
         self.boardface = boardface
         self.statusnote = statusnote
@@ -9876,6 +9887,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case expectedmarkedunreadat = "expectedMarkedUnreadAt"
         case label
         case icon
+        case color
         case category
         case boardface = "boardFace"
         case statusnote = "statusNote"
@@ -9911,6 +9923,7 @@ public struct SessionsPatchParams: Codable, Sendable {
 public struct SessionsPatchMutation: Codable, Sendable {
     public let label: AnyCodable?
     public let icon: AnyCodable?
+    public let color: AnyCodable?
     public let category: AnyCodable?
     public let boardface: AnyCodable?
     public let statusnote: AnyCodable?
@@ -9944,6 +9957,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     public init(
         label: AnyCodable? = nil,
         icon: AnyCodable? = nil,
+        color: AnyCodable? = nil,
         category: AnyCodable? = nil,
         boardface: AnyCodable? = nil,
         statusnote: AnyCodable? = nil,
@@ -9976,6 +9990,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     {
         self.label = label
         self.icon = icon
+        self.color = color
         self.category = category
         self.boardface = boardface
         self.statusnote = statusnote
@@ -10010,6 +10025,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case label
         case icon
+        case color
         case category
         case boardface = "boardFace"
         case statusnote = "statusNote"

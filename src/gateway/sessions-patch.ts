@@ -11,7 +11,9 @@ import {
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
+  normalizeSessionColorValue,
   normalizeSessionIconValue,
+  SESSION_COLOR_IDS,
   SESSION_ICON_GLYPH_IDS,
 } from "../../packages/gateway-protocol/src/session-agent-status.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
@@ -302,6 +304,19 @@ export async function projectSessionsPatchEntry(params: {
         );
       }
       next.icon = icon;
+    }
+  }
+
+  if ("color" in patch) {
+    const raw = patch.color;
+    if (raw === null || raw === "") {
+      delete next.color;
+    } else if (raw !== undefined) {
+      const color = normalizeSessionColorValue(raw);
+      if (!color) {
+        return invalid(`color must be one of: ${SESSION_COLOR_IDS.join(", ")}`);
+      }
+      next.color = color;
     }
   }
 
