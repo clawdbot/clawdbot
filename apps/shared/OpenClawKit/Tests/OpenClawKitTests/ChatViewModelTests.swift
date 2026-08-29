@@ -978,6 +978,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         expectedSessionID: String?,
         label: String??,
         category _: String??,
+        color _: String?? = nil,
         pinned: Bool?,
         archived: Bool?,
         unread _: Bool?) async throws
@@ -2701,6 +2702,7 @@ struct ChatViewModelTests {
             sessionKey: "main",
             transport: TestChatTransport(historyResponses: []))
         var running = sessionEntry(key: "main", updatedAt: 1)
+        running.color = "red"
         running.status = "running"
         running.hasActiveRun = true
         running.activeRunIds = ["run-stale"]
@@ -2718,6 +2720,7 @@ struct ChatViewModelTests {
                 hasActiveRun: true,
                 activeRunIds: nil))))
         #expect(viewModel.currentSessionEntry()?.activeRunIds == ["run-stale"])
+        #expect(viewModel.currentSessionEntry()?.color == "red")
 
         viewModel.handleTransportEvent(.sessionsChanged(.init(
             sessionKey: "main",
@@ -2732,9 +2735,11 @@ struct ChatViewModelTests {
                 activeRunIds: nil),
             hasActiveRun: true,
             activeRunIds: nil,
+            colorPresent: true,
             activeRunIdsPresent: true)))
 
         #expect(viewModel.currentSessionEntry()?.activeRunIds == nil)
+        #expect(viewModel.currentSessionEntry()?.color == nil)
         #expect(viewModel.activeSessionRunIDs.isEmpty)
     }
 

@@ -726,6 +726,24 @@ extension OpenClawChatViewModel {
         }
     }
 
+    public func setSessionColor(key: String, color: String?) async {
+        do {
+            let routeLease = await self.transport.acquireSessionMutationRouteLease()
+            guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
+            try await routeLease.patchSession(
+                key: key,
+                label: nil,
+                category: nil,
+                color: .some(color),
+                pinned: nil,
+                archived: nil,
+                unread: nil)
+            self.refreshSessions(limit: Self.sessionListFetchLimit)
+        } catch {
+            self.errorText = error.localizedDescription
+        }
+    }
+
     public func setSessionPinned(key: String, pinned: Bool) {
         let previous = self.sessions
         if let index = self.sessions.firstIndex(where: { $0.key == key }) {

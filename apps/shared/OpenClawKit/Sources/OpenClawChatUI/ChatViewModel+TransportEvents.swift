@@ -259,7 +259,9 @@ extension OpenClawChatViewModel {
             snapshot: snapshot,
             phase: phase,
             activeRunIDs: change.activeRunIds,
-            activeRunIDsPresent: change.activeRunIdsPresent)
+            activeRunIDsPresent: change.activeRunIdsPresent,
+            color: change.color,
+            colorPresent: change.colorPresent)
         self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
         self.persistSessionsToCache(
             self.sessions,
@@ -329,9 +331,14 @@ extension OpenClawChatViewModel {
         snapshot: OpenClawChatSessionEntry,
         phase: String,
         activeRunIDs: [String]?,
-        activeRunIDsPresent: Bool) -> OpenClawChatSessionEntry
+        activeRunIDsPresent: Bool,
+        color: String?,
+        colorPresent: Bool) -> OpenClawChatSessionEntry
     {
         var merged = existing
+        if colorPresent {
+            merged.color = color
+        }
         merged.updatedAt = snapshot.updatedAt ?? existing.updatedAt
         merged.status = snapshot.status ?? existing.status
         merged.hasActiveRun = snapshot.hasActiveRun ?? existing.hasActiveRun

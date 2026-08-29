@@ -666,6 +666,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         expectedSessionID: String? = nil,
         label: String??,
         category: String??,
+        color: String?? = nil,
         pinned: Bool?,
         archived: Bool?,
         unread: Bool?) async throws
@@ -676,6 +677,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
                 expectedSessionID: expectedSessionID,
                 label: label,
                 category: category,
+                color: color,
                 pinned: pinned,
                 archived: archived,
                 unread: unread)

@@ -34,6 +34,7 @@ struct CommandCenterTab: View {
         let route: WorkRoute
         let isUnread: Bool
         let isPinned: Bool
+        var sessionColor: String?
     }
 
     var body: some View {
@@ -373,6 +374,12 @@ struct CommandCenterTab: View {
             VStack(spacing: 10) {
                 self.cardHeader(title: "Recent sessions")
 
+                if let sessionErrorText = self.dashboardModel.sessionErrorText {
+                    Text(verbatim: sessionErrorText)
+                        .font(OpenClawType.captionMedium)
+                        .foregroundStyle(OpenClawBrand.warn)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 if self.recentSessionPreviewSessions.isEmpty {
                     CommandEmptyStateRow(
                         icon: self.gatewayConnected ? "bubble.left.and.text.bubble.right.fill" : "wifi.slash",
@@ -401,6 +408,7 @@ struct CommandCenterTab: View {
                                 actions: CommandSessionActions(
                                     rename: { self.patchSession(session, label: .some($0)) },
                                     moveToGroup: { self.patchSession(session, category: .some($0)) },
+                                    setColor: { self.patchSession(session, color: .some($0)) },
                                     togglePinned: { self.patchSession(session, pinned: session.pinned != true) },
                                     toggleUnread: { self.patchSession(session, unread: session.unread != true) },
                                     fork: { self.forkSession(session) },
@@ -487,7 +495,8 @@ struct CommandCenterTab: View {
             progress: nil,
             route: .chat(nil),
             isUnread: self.effectiveDefaultChatSessionEntry?.unread == true,
-            isPinned: self.effectiveDefaultChatSessionEntry?.pinned == true)
+            isPinned: self.effectiveDefaultChatSessionEntry?.pinned == true,
+            sessionColor: self.effectiveDefaultChatSessionEntry?.color)
     }
 
     private var defaultChatActivityText: String {
@@ -557,6 +566,7 @@ struct CommandCenterTab: View {
         _ session: OpenClawChatSessionEntry,
         label: String?? = nil,
         category: String?? = nil,
+        color: String?? = nil,
         pinned: Bool? = nil,
         archived: Bool? = nil,
         unread: Bool? = nil)
@@ -567,6 +577,7 @@ struct CommandCenterTab: View {
                 expectedSessionID: archived == nil ? nil : session.sessionId,
                 label: label,
                 category: category,
+                color: color,
                 pinned: pinned,
                 archived: archived,
                 unread: unread)
@@ -600,7 +611,9 @@ struct CommandCenterTab: View {
                     fromLastCompleted: session.hasActiveRun == true)
                 await self.dashboardModel.refreshSessions(appModel: self.appModel)
                 self.open(.chat(key))
-            } catch {}
+            } catch {
+                self.dashboardModel.reportSessionError(error)
+            }
         }
     }
 
@@ -615,7 +628,9 @@ struct CommandCenterTab: View {
                     self.appModel.focusChatSession(nil)
                 }
                 await self.dashboardModel.refreshSessions(appModel: self.appModel)
-            } catch {}
+            } catch {
+                self.dashboardModel.reportSessionError(error)
+            }
         }
     }
 
@@ -644,7 +659,8 @@ struct CommandCenterTab: View {
             progress: nil,
             route: .chat(session.key),
             isUnread: session.unread == true,
-            isPinned: session.pinned == true)
+            isPinned: session.pinned == true,
+            sessionColor: session.color)
     }
 
     static func sessionTitle(_ session: OpenClawChatSessionEntry) -> String {
@@ -1183,6 +1199,7 @@ struct CommandSessionsScreen: View {
             actions: CommandSessionActions(
                 rename: { self.patchSession(session, label: .some($0)) },
                 moveToGroup: { self.patchSession(session, category: .some($0)) },
+                setColor: { self.patchSession(session, color: .some($0)) },
                 togglePinned: { self.patchSession(session, pinned: session.pinned != true) },
                 toggleUnread: { self.patchSession(session, unread: session.unread != true) },
                 fork: { self.forkSession(session) },
@@ -1204,6 +1221,7 @@ struct CommandSessionsScreen: View {
         _ session: OpenClawChatSessionEntry,
         label: String?? = nil,
         category: String?? = nil,
+        color: String?? = nil,
         pinned: Bool? = nil,
         archived: Bool? = nil,
         unread: Bool? = nil)
@@ -1214,6 +1232,7 @@ struct CommandSessionsScreen: View {
                 expectedSessionID: archived == nil ? nil : session.sessionId,
                 label: label,
                 category: category,
+                color: color,
                 pinned: pinned,
                 archived: archived,
                 unread: unread)
