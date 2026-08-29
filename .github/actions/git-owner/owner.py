@@ -350,9 +350,17 @@ def checkout():
     os.makedirs(harness, exist_ok=True)
     run_git(harness, "init", harness)
     run_git(harness, "remote", "add", "origin", remote)
-    fetch(harness, f"+{os.environ['WORKFLOW_SHA']}:refs/remotes/origin/ci-harness", max_attempts=1)
+    # The harness only supplies .github/actions, so narrow the fetch before it runs:
+    # sparse first, then blob-less. A full snapshot here downloads a second copy of
+    # the repository that the checkout below immediately discards, and every extra
+    # byte is amplified by the shared runner egress.
     run_git(harness, "sparse-checkout", "set", ".github/actions")
-    run_git(harness, "checkout", "--force", "--detach", os.environ["WORKFLOW_SHA"])
+    fetch(harness, f"+{os.environ['WORKFLOW_SHA']}:refs/remotes/origin/ci-harness",
+          max_attempts=1, blobless=True)
+    # Checkout now materializes the sparse blobs over the network, so it carries the
+    # fetch deadline instead of running unbounded like a local checkout.
+    run_git(harness, "checkout", "--force", "--detach", os.environ["WORKFLOW_SHA"],
+            timeout=fetch_timeout_seconds)
     if not os.path.isfile(os.path.join(harness, action)):
         raise GitFailure(1)
     check_cancelled()

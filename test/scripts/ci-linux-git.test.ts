@@ -1,12 +1,16 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
 
 const candidate = "a".repeat(40);
+const harness = "b".repeat(40);
 const base = "c".repeat(40);
 const moved = "d".repeat(40);
 const merge = "e".repeat(40);
 const linuxIt = it.skipIf(process.platform !== "linux");
+// Command-shape assertions need no process-group census, so they also run on macOS.
+const posixIt = it.skipIf(process.platform === "win32");
 
 const resetProfiles = [
   {
@@ -437,6 +441,40 @@ linuxIt(
     expect(report.code).toBe(2);
     expect(report.fetches).toEqual([]);
     expect(report.readyAttempts).toEqual([]);
+  },
+  55_000,
+);
+
+posixIt(
+  "fetches the CI harness without a second full-repository snapshot",
+  async () => {
+    const report = await runCiGitStep({ job: "checks-fast-core", fetchResults: [0, 0] });
+    expect(report.code).toBe(0);
+    const harnessDirectory = path.join(report.workspace, ".ci-harness");
+    const harnessCommands = report.commands.filter(
+      ({ tool, cwd }) => tool === "git" && cwd === harnessDirectory,
+    );
+    // The harness supplies only .github/actions: narrowing must be in place before the
+    // fetch runs, so it never downloads the blobs the sparse checkout discards.
+    expect(harnessCommands.map(({ args }) => args[0])).toEqual([
+      "init",
+      "remote",
+      "sparse-checkout",
+      "fetch",
+      "checkout",
+    ]);
+    const harnessFetch = expectDefined(
+      harnessCommands.find(({ args }) => args[0] === "fetch"),
+      "harness fetch",
+    );
+    expect(harnessFetch.args).toEqual(expect.arrayContaining(["--filter=blob:none"]));
+    expect(harnessFetch.args.at(-1)).toBe(`+${harness}:refs/remotes/origin/ci-harness`);
+    // The selected checkout still needs real file contents, so it must stay unfiltered.
+    const workspaceFetch = expectDefined(
+      report.fetches.find(({ cwd }) => cwd === report.workspace),
+      "workspace fetch",
+    );
+    expect(workspaceFetch.args).not.toContain("--filter=blob:none");
   },
   55_000,
 );
