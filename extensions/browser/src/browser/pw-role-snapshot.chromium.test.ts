@@ -36,7 +36,9 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
       );
       try {
         const page = context.pages()[0] ?? (await context.newPage());
-        await page.setContent('<main><button id="present">Present</button></main>');
+        await page.setContent(
+          '<main><button id="present">Present</button><a href="https://example.test/docs">Docs</a></main>',
+        );
         const session = await context.newCDPSession(page);
         const { targetInfo } = await session.send("Target.getTargetInfo");
         await session.detach();
@@ -47,6 +49,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
           ...target,
           selector: "#missing",
           timeoutMs: 30_000,
+          urls: true,
         });
         const elapsedMs = performance.now() - startedAt;
         const present = await snapshotRoleViaPlaywright({
@@ -55,10 +58,21 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
           timeoutMs: 30_000,
         });
 
+        const refFree = await snapshotRoleViaPlaywright({
+          ...target,
+          selector: "main",
+          options: { maxDepth: 0 },
+          timeoutMs: 30_000,
+          urls: true,
+        });
+
         expect(missing.snapshot).toBe("(empty)");
+        expect(missing.snapshot).not.toContain("https://example.test/docs");
         expect(missing.refs).toEqual({});
         expect(elapsedMs).toBeLessThan(1_000);
         expect(present.snapshot).toContain('button "Present"');
+        expect(refFree.refs).toEqual({});
+        expect(refFree.snapshot).toContain("https://example.test/docs");
       } finally {
         await closePlaywrightBrowserConnection({ cdpUrl });
         await context.close();
