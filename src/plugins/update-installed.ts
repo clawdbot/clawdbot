@@ -182,6 +182,7 @@ export async function updateNpmInstalledPlugins(params: {
     const npmSpecOverride =
       params.specOverrides?.[pluginId] ??
       (replacementPluginId ? trustedOfficialNpmSpec : undefined);
+    const versionBoundToCore = params.versionBoundToCorePluginIds?.has(pluginId) === true;
     const trustedOfficialClawHubInstall = resolveOfficialClawHubInstall({ pluginId, record });
     const officialNpmSpec = params.syncOfficialPluginInstalls ? trustedOfficialNpmSpec : undefined;
     const officialClawHubSpec = params.syncOfficialPluginInstalls
@@ -194,7 +195,9 @@ export async function updateNpmInstalledPlugins(params: {
       (trustedOfficialNpmSpec || trustedOfficialClawHubInstall
         ? params.officialPluginUpdateChannel
         : undefined);
-    const officialNpmPackageName = resolveNpmSpecPackageName(trustedOfficialNpmSpec);
+    const officialNpmPackageName =
+      resolveNpmSpecPackageName(trustedOfficialNpmSpec) ??
+      (versionBoundToCore ? resolveNpmSpecPackageName(npmSpecOverride) : undefined);
     if (normalizedPluginConfig) {
       const enableState = resolveEffectiveEnableState({
         id: pluginId,
@@ -225,7 +228,7 @@ export async function updateNpmInstalledPlugins(params: {
             updateChannel,
             officialPackageName: officialNpmPackageName,
             coreVersion: params.coreVersion,
-            versionBoundToCore: params.versionBoundToCorePluginIds?.has(pluginId),
+            versionBoundToCore,
           })
         : undefined;
     const clawhubSpecs =
