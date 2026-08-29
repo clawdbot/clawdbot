@@ -76,14 +76,8 @@ vi.mock("../media/media-probe.js", () => ({
 }));
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
-  const testApi = (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.playbackTranscodeTestApi")
-  ] as {
-    PLAYBACK_TRANSCODE_POLICY: Record<"audio" | "video", unknown>;
-    resolvePlaybackMode(mimeType: string, policy: unknown): "native" | "transcode" | undefined;
-  };
-  resolvePlaybackModeForSourceMock.mockImplementation(async (params) =>
-    testApi.resolvePlaybackMode(params.mimeType, testApi.PLAYBACK_TRANSCODE_POLICY[params.kind]),
+  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
+    mimeType === "audio/x-caf" ? "transcode" : "native",
   );
   return {
     ...actual,
@@ -124,7 +118,10 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
   probeMediaFileDescriptorMock.mockReset();
   probeMediaFileDescriptorMock.mockResolvedValue({});
-  resolvePlaybackModeForSourceMock.mockClear();
+  resolvePlaybackModeForSourceMock.mockReset();
+  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
+    mimeType === "audio/x-caf" ? "transcode" : "native",
+  );
   resolvePlaybackTranscodeMock.mockReset();
   resolvePlaybackTranscodeMock.mockResolvedValue({ kind: "passthrough" });
 });

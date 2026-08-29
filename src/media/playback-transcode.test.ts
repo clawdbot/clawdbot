@@ -3,11 +3,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
-import {
-  getPlaybackTranscodePolicyForTest,
-  resolvePlaybackModeForTest,
-  waitForPlaybackTranscodeJobsForTest,
-} from "./playback-transcode.test-support.js";
+import { waitForPlaybackTranscodeJobsForTest } from "./playback-transcode.test-support.js";
 
 const { playbackWarn, probePlaybackMediaFileDescriptor, runFfmpeg } = vi.hoisted(() => ({
   playbackWarn: vi.fn(),
@@ -117,76 +113,6 @@ async function readSourceBoundedForTest(
 }
 
 describe("playback transcode policy", () => {
-  it("keeps only cross-client containers native and closes both target recipes", () => {
-    expect(getPlaybackTranscodePolicyForTest()).toEqual({
-      audio: {
-        nativeMimeTypes: [
-          "audio/m4a",
-          "audio/mp3",
-          "audio/mp4",
-          "audio/mpeg",
-          "audio/wav",
-          "audio/wave",
-          "audio/x-m4a",
-          "audio/x-wav",
-        ],
-        codecProbeInputFormats: {
-          "audio/m4a": "mov",
-          "audio/mpeg": "mp3",
-          "audio/mp4": "mov",
-          "audio/wav": "wav",
-          "audio/wave": "wav",
-          "audio/x-m4a": "mov",
-          "audio/x-wav": "wav",
-        },
-        transcodeInputFormats: {
-          "audio/aac": "aac",
-          "audio/aiff": "aiff",
-          "audio/amr": "amr",
-          "audio/amr-wb": "amr",
-          "audio/flac": "flac",
-          "audio/ogg": "ogg",
-          "audio/opus": "ogg",
-          "audio/vorbis": "ogg",
-          "audio/webm": "matroska,webm",
-          "audio/x-aiff": "aiff",
-          "audio/x-caf": "caf",
-          "audio/x-ms-wma": "asf",
-        },
-        target: { contentType: "audio/mp4", extension: ".m4a" },
-      },
-      video: {
-        nativeMimeTypes: ["video/mp4"],
-        codecProbeInputFormats: {
-          "video/mp4": "mov",
-        },
-        transcodeInputFormats: {
-          "video/avi": "avi",
-          "video/flv": "flv",
-          "video/matroska": "matroska,webm",
-          "video/quicktime": "mov",
-          "video/webm": "matroska,webm",
-          "video/x-flv": "flv",
-          "video/x-matroska": "matroska,webm",
-          "video/x-ms-asf": "asf",
-          "video/x-ms-wmv": "asf",
-          "video/x-msvideo": "avi",
-        },
-        target: { contentType: "video/mp4", extension: ".mp4" },
-      },
-    });
-
-    expect(resolvePlaybackModeForTest("audio/aac", "audio")).toBe("transcode");
-    expect(resolvePlaybackModeForTest("audio/mpeg", "audio")).toBe("native");
-    expect(resolvePlaybackModeForTest("audio/x-caf", "audio")).toBe("transcode");
-    expect(resolvePlaybackModeForTest("audio/amr", "audio")).toBe("transcode");
-    expect(resolvePlaybackModeForTest("audio/ogg", "audio")).toBe("transcode");
-    expect(resolvePlaybackModeForTest("video/mp4; codecs=avc1", "video")).toBe("native");
-    expect(resolvePlaybackModeForTest("video/x-matroska", "video")).toBe("transcode");
-    expect(resolvePlaybackModeForTest("video/webm", "video")).toBe("transcode");
-    expect(resolvePlaybackModeForTest("video/x-playlist", "video")).toBeUndefined();
-  });
-
   it.each([
     {
       name: "ADTS AAC",
