@@ -669,7 +669,7 @@ describe("TwilioProvider", () => {
         providerCallId: "CA-nostream",
         text: "Hello TwiML",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ playback: "unconfirmed" });
     expect(apiRequest).toHaveBeenCalledTimes(1);
     const [endpoint, params] = requireApiRequestCall(apiRequest) as [string, { Twiml?: string }];
     expect(endpoint).toBe("/Calls/CA-nostream.json");
@@ -694,7 +694,7 @@ describe("TwilioProvider", () => {
       expect(apiRequest).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(250);
-      await expect(playback).resolves.toBeUndefined();
+      await expect(playback).resolves.toEqual({ playback: "unconfirmed" });
 
       expect(apiRequest).toHaveBeenCalledTimes(2);
       expectApiRequestEndpoint(apiRequest, 0, "/Calls/CA-race-play.json");
@@ -938,7 +938,7 @@ describe("TwilioProvider", () => {
           voice: "default",
           locale: "en-US",
         }),
-      ).resolves.toBeUndefined();
+      ).resolves.toEqual({ playback: "cancelled" });
 
       expect(Date.now()).toBe(startedAt);
       expect(sendAudio).toHaveBeenCalledTimes(2);
@@ -1039,8 +1039,8 @@ describe("TwilioProvider", () => {
       text: "play next",
     });
 
-    await expect(cancelled).resolves.toBeUndefined();
-    await expect(next).resolves.toBeUndefined();
+    await expect(cancelled).resolves.toEqual({ playback: "cancelled" });
+    await expect(next).resolves.toEqual({ playback: "unconfirmed" });
     expect(synthesizeForTelephony).toHaveBeenCalledTimes(2);
   });
 });

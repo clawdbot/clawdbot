@@ -13,6 +13,7 @@ import {
   scheduleHangupAfterPlayback as scheduleHangupAfterPlaybackWithContext,
   sendDtmf as sendDtmfWithContext,
   speak as speakWithContext,
+  type SpeakResult,
   speakInitialMessage as speakInitialMessageWithContext,
   type SpeakOptions,
 } from "./manager/outbound.js";
@@ -33,6 +34,7 @@ import {
   type EndReason,
   type NormalizedEvent,
   type OutboundCallOptions,
+  type PlaybackOutcome,
 } from "./types.js";
 import { resolveUserPath } from "./utils.js";
 
@@ -308,11 +310,7 @@ export class CallManager {
   /**
    * Speak to user in an active call.
    */
-  async speak(
-    callId: CallId,
-    text: string,
-    options?: SpeakOptions,
-  ): Promise<{ success: boolean; error?: string }> {
+  async speak(callId: CallId, text: string, options?: SpeakOptions): Promise<SpeakResult> {
     return speakWithContext(this.getContext(), callId, text, options);
   }
 
@@ -350,8 +348,8 @@ export class CallManager {
   /**
    * End an active call once its last reply has finished playing to the caller.
    */
-  endCallAfterPlayback(callId: CallId, label: string): void {
-    scheduleHangupAfterPlaybackWithContext(this.getContext(), callId, label);
+  endCallAfterPlayback(callId: CallId, label: string, playback: PlaybackOutcome): void {
+    scheduleHangupAfterPlaybackWithContext(this.getContext(), callId, label, playback);
   }
 
   private getContext(): CallManagerContext {

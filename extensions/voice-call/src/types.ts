@@ -270,6 +270,19 @@ export type PlayTtsInput = {
   listenAfterPlayback?: boolean;
 };
 
+/**
+ * Outcome of one playback request.
+ *
+ * - `confirmed`: the carrier acknowledged that buffered audio finished playing.
+ * - `unconfirmed`: playback was requested but completion was never observed.
+ * - `cancelled`: playback stopped early, e.g. the caller barged in.
+ */
+export type PlaybackOutcome = "confirmed" | "unconfirmed" | "cancelled";
+
+export type PlayTtsResult = {
+  playback: PlaybackOutcome;
+};
+
 export type SendDtmfInput = {
   callId: CallId;
   providerCallId: ProviderCallId;

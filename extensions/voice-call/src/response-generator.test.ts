@@ -628,6 +628,15 @@ describe("generateVoiceResponse", () => {
     expect(result.endCall).toBeUndefined();
   });
 
+  it("ignores an end_call flag in a reply that never parsed as JSON", async () => {
+    const { result } = await runGenerateVoiceResponse([
+      { text: 'Sure thing. {"spoken":"Bye now.","end_call":true' },
+    ]);
+
+    expect(result.text).toBe("Bye now.");
+    expect(result.endCall).toBeUndefined();
+  });
+
   it("reads end_call from fenced JSON", async () => {
     const { result } = await runGenerateVoiceResponse([
       { text: '```json\n{"spoken":"Goodbye.","end_call":true}\n```' },

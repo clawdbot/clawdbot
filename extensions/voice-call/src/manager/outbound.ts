@@ -15,6 +15,7 @@ import {
   type CallId,
   type CallRecord,
   type OutboundCallOptions,
+  type PlaybackOutcome,
 } from "../types.js";
 import { mapVoiceToPolly } from "../voice-mapping.js";
 import type { CallEndResult, CallManagerContext } from "./context.js";
@@ -278,15 +279,22 @@ export type SpeakOptions = {
   listenAfterPlayback?: boolean;
 };
 
+export type SpeakResult = {
+  success: boolean;
+  error?: string;
+  /** What happened to this playback; "unconfirmed" when the provider cannot tell. */
+  playback: PlaybackOutcome;
+};
+
 export async function speak(
   ctx: SpeakContext,
   callId: CallId,
   text: string,
   options?: SpeakOptions,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<SpeakResult> {
   const connected = requireConnectedCall(ctx, callId);
   if (!connected.ok) {
-    return { success: false, error: connected.error };
+    return { success: false, error: connected.error, playback: "unconfirmed" };
   }
   const { call, providerCallId, provider } = connected;
 
@@ -305,7 +313,7 @@ export async function speak(
       resolveVoiceCallEffectiveConfig(ctx.config, numberRouteKey).config,
     );
     const playbackOptions = options?.listenAfterPlayback ? { listenAfterPlayback: true } : {};
-    await provider.playTts({
+    const playbackResult = await provider.playTts({
       callId,
       providerCallId,
       text,
@@ -316,12 +324,12 @@ export async function speak(
     addTranscriptEntry(call, "bot", text);
     persistCallRecord(ctx.storePath, call);
 
-    return { success: true };
+    return { success: true, playback: playbackResult?.playback ?? "unconfirmed" };
   } catch (err) {
     // A failed playback should not leave the call stuck in speaking state.
     transitionState(call, "listening");
     persistCallRecord(ctx.storePath, call);
-    return { success: false, error: formatErrorMessage(err) };
+    return { success: false, error: formatErrorMessage(err), playback: "unconfirmed" };
   }
 }
 
@@ -370,18 +378,24 @@ export async function sendDtmf(
 /**
  * Hang up once the final reply has reached the caller.
  *
- * Providers that confirm playback drain (mark-acknowledged media streams) can end
- * immediately because `speak` already awaited the audio. Providers that only
- * acknowledge a playback request get the configured notify grace instead, so the
- * closing words are not cut off mid-sentence.
+ * The decision follows what actually happened to that playback, not what the
+ * provider is capable of: a carrier-confirmed drain can end the call at once,
+ * an unobserved playback keeps the configured notify grace so closing words are
+ * not cut off, and a cancelled playback (caller barge-in) keeps the line open
+ * because the caller took the floor.
  */
 export function scheduleHangupAfterPlayback(
   ctx: SpeakContext,
   callId: CallId,
   label: string,
+  playback: PlaybackOutcome,
 ): void {
   const call = ctx.activeCalls.get(callId);
   if (!call || TerminalStates.has(call.state)) {
+    return;
+  }
+  if (playback === "cancelled") {
+    console.log(`[voice-call] ${label}: playback interrupted, keeping call ${callId} open`);
     return;
   }
   const hangUp = async () => {
@@ -397,10 +411,7 @@ export function scheduleHangupAfterPlayback(
     }
   };
 
-  const playbackConfirmed = Boolean(
-    call.providerCallId && ctx.provider?.awaitsPlaybackCompletion?.(call.providerCallId),
-  );
-  if (playbackConfirmed) {
+  if (playback === "confirmed") {
     console.log(`[voice-call] ${label}: playback drained, hanging up call ${callId}`);
     void hangUp();
     return;
@@ -459,7 +470,7 @@ export async function speakInitialMessage(
     }
 
     if (mode === "notify") {
-      scheduleHangupAfterPlayback(ctx, call.callId, "Notify mode");
+      scheduleHangupAfterPlayback(ctx, call.callId, "Notify mode", result.playback);
     } else if (
       mode === "conversation" &&
       ctx.provider &&

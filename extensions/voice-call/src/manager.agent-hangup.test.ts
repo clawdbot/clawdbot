@@ -2,13 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createManagerHarness, FakeProvider, markCallAnswered } from "./manager.test-harness.js";
 
-/** Provider whose playback is mark-confirmed, so `playTts` resolves after audio drains. */
-class DrainConfirmingProvider extends FakeProvider {
-  awaitsPlaybackCompletion(): boolean {
-    return true;
-  }
-}
-
 async function answeredCall(manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"]) {
   const { callId } = await manager.initiateCall("+15550000020");
   if (!callId) {
@@ -22,14 +15,14 @@ describe("CallManager agent-requested hangup", () => {
   it("hangs up without a grace delay when the provider confirms playback drain", async () => {
     vi.useFakeTimers();
     try {
-      const provider = new DrainConfirmingProvider("plivo");
+      const provider = new FakeProvider("plivo");
       const { manager } = await createManagerHarness(
         { outbound: { notifyHangupDelaySec: 5 } },
         provider,
       );
       const callId = await answeredCall(manager);
 
-      manager.endCallAfterPlayback(callId, "Agent hangup");
+      manager.endCallAfterPlayback(callId, "Agent hangup", "confirmed");
       await vi.advanceTimersByTimeAsync(0);
 
       expect(provider.hangupCalls).toHaveLength(1);
@@ -48,7 +41,7 @@ describe("CallManager agent-requested hangup", () => {
       );
       const callId = await answeredCall(manager);
 
-      manager.endCallAfterPlayback(callId, "Agent hangup");
+      manager.endCallAfterPlayback(callId, "Agent hangup", "unconfirmed");
       await vi.advanceTimersByTimeAsync(0);
       expect(provider.hangupCalls).toHaveLength(0);
 
@@ -60,14 +53,35 @@ describe("CallManager agent-requested hangup", () => {
   });
 
   it("ignores a hangup request for a call that already ended", async () => {
-    const provider = new DrainConfirmingProvider("plivo");
+    const provider = new FakeProvider("plivo");
     const { manager } = await createManagerHarness({}, provider);
     const callId = await answeredCall(manager);
     await manager.endCall(callId);
     const hangupsAfterEnd = provider.hangupCalls.length;
 
-    manager.endCallAfterPlayback(callId, "Agent hangup");
+    manager.endCallAfterPlayback(callId, "Agent hangup", "confirmed");
 
     expect(provider.hangupCalls).toHaveLength(hangupsAfterEnd);
+  });
+
+  it("keeps the line open when the caller barges in over the closing reply", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new FakeProvider("plivo");
+      const { manager } = await createManagerHarness(
+        { outbound: { notifyHangupDelaySec: 1 } },
+        provider,
+      );
+      const callId = await answeredCall(manager);
+
+      manager.endCallAfterPlayback(callId, "Agent hangup", "cancelled");
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(provider.hangupCalls).toHaveLength(0);
+      expect(manager.getCall(callId)).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -2196,6 +2196,62 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
 });
 
 describe("VoiceCallWebhookServer classic response routing", () => {
+  async function runClassicHangupTurn(params: {
+    speakResult: { success: boolean; error?: string; playback?: string };
+  }) {
+    const call = createCall(Date.now());
+    const speak = vi.fn(async () => params.speakResult);
+    const endCallAfterPlayback = vi.fn();
+    const manager = {
+      getCall: (callId: string) => (callId === call.callId ? call : undefined),
+      speak,
+      endCallAfterPlayback,
+    } as unknown as CallManager;
+    const server = new VoiceCallWebhookServer(
+      createConfig({}),
+      manager,
+      provider,
+      {} as never,
+      undefined,
+      {} as never,
+    );
+    mocks.generateVoiceResponse
+      .mockReset()
+      .mockResolvedValue({ text: "Talk soon", deliveredEarly: false, endCall: true });
+
+    await (
+      server as unknown as {
+        handleInboundResponse: (callId: string, message: string) => Promise<void>;
+      }
+    ).handleInboundResponse(call.callId, "bye");
+
+    return { call, speak, endCallAfterPlayback };
+  }
+
+  it("hands the observed playback outcome to the hangup when the agent asks to end", async () => {
+    const { call, endCallAfterPlayback } = await runClassicHangupTurn({
+      speakResult: { success: true, playback: "confirmed" },
+    });
+
+    expect(endCallAfterPlayback).toHaveBeenCalledWith(call.callId, "Agent hangup", "confirmed");
+  });
+
+  it("does not hang up when the closing reply failed to play", async () => {
+    const { endCallAfterPlayback } = await runClassicHangupTurn({
+      speakResult: { success: false, error: "synthetic tts failure" },
+    });
+
+    expect(endCallAfterPlayback).not.toHaveBeenCalled();
+  });
+
+  it("forwards a barge-in so the hangup owner can keep the call open", async () => {
+    const { call, endCallAfterPlayback } = await runClassicHangupTurn({
+      speakResult: { success: true, playback: "cancelled" },
+    });
+
+    expect(endCallAfterPlayback).toHaveBeenCalledWith(call.callId, "Agent hangup", "cancelled");
+  });
+
   it("keeps outbound calls on their frozen agent when the dialed number has an inbound route", async () => {
     const call = createCall(Date.now());
     call.agentId = "support";

@@ -7,6 +7,7 @@ import type {
   InitiateCallInput,
   InitiateCallResult,
   PlayTtsInput,
+  PlayTtsResult,
   ProviderName,
   SendDtmfInput,
   WebhookParseOptions,
@@ -72,15 +73,12 @@ export interface VoiceCallProvider {
   /**
    * Play TTS audio to the caller.
    * The provider should handle streaming if supported.
+   *
+   * Providers that can observe playback report its outcome so callers know
+   * whether the audio actually reached the caller. Returning nothing means
+   * "requested, outcome unknown".
    */
-  playTts(input: PlayTtsInput): Promise<void>;
-
-  /**
-   * Whether `playTts` resolves only after the carrier confirms playback finished.
-   * Providers that merely acknowledge a playback request must leave this unset so
-   * callers keep a grace period before hanging up.
-   */
-  awaitsPlaybackCompletion?: (providerCallId: string) => boolean;
+  playTts(input: PlayTtsInput): Promise<PlayTtsResult | void>;
 
   /**
    * Send DTMF digits to an active call.

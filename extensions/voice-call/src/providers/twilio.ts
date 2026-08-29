@@ -16,6 +16,8 @@ import type {
   InitiateCallResult,
   NormalizedEvent,
   PlayTtsInput,
+  PlayTtsResult,
+  PlaybackOutcome,
   ProviderWebhookParseResult,
   SendDtmfInput,
   StartListeningInput,
@@ -197,13 +199,6 @@ export class TwilioProvider implements VoiceCallProvider {
     }
     this.callStreamMap.delete(callSid);
     this.activeStreamCalls.delete(callSid);
-  }
-
-  /** Stream playback is mark-confirmed, so `playTts` resolves after audio drains. */
-  awaitsPlaybackCompletion(providerCallId: string): boolean {
-    return Boolean(
-      this.callStreamMap.has(providerCallId) && this.ttsProvider && this.mediaStreamHandler,
-    );
   }
 
   isConversationStreamConnectEnabled(): boolean {
@@ -624,7 +619,7 @@ export class TwilioProvider implements VoiceCallProvider {
    *    If telephony TTS is unavailable in that state, playback fails rather than mixing paths.
    * 2. TwiML <Say>: fallback only when there is no active stream for the call.
    */
-  async playTts(input: PlayTtsInput): Promise<void> {
+  async playTts(input: PlayTtsInput): Promise<PlayTtsResult> {
     const streamSid = this.callStreamMap.get(input.providerCallId);
     if (streamSid) {
       if (!this.ttsProvider || !this.mediaStreamHandler) {
@@ -634,8 +629,7 @@ export class TwilioProvider implements VoiceCallProvider {
       }
 
       try {
-        await this.playTtsViaStream(input.text, streamSid);
-        return;
+        return { playback: await this.playTtsViaStream(input.text, streamSid) };
       } catch (err) {
         console.warn(
           `[voice-call] Telephony TTS failed:`,
@@ -665,6 +659,8 @@ export class TwilioProvider implements VoiceCallProvider {
 </Response>`;
 
     await this.updateLiveCallTwiml(input.providerCallId, twiml, "playTts");
+    // TwiML <Say> only acknowledges the request; the carrier never reports completion.
+    return { playback: "unconfirmed" };
   }
 
   async sendDtmf(input: SendDtmfInput): Promise<void> {
@@ -687,7 +683,7 @@ export class TwilioProvider implements VoiceCallProvider {
    * Generates audio with core TTS, converts to mu-law, and streams via WebSocket.
    * Uses a queue to serialize playback and prevent overlapping audio.
    */
-  private async playTtsViaStream(text: string, streamSid: string): Promise<void> {
+  private async playTtsViaStream(text: string, streamSid: string): Promise<PlaybackOutcome> {
     if (!this.ttsProvider || !this.mediaStreamHandler) {
       throw new Error("TTS provider and media stream handler required");
     }
@@ -699,6 +695,8 @@ export class TwilioProvider implements VoiceCallProvider {
 
     const handler = this.mediaStreamHandler;
     const ttsProvider = this.ttsProvider;
+    // Set inside the queued playback; stays "cancelled" if it never reaches the mark.
+    let outcome: PlaybackOutcome = "cancelled";
 
     const normalizeSendResult = (raw: unknown): StreamSendResult => {
       if (!raw || typeof raw !== "object") {
@@ -806,14 +804,23 @@ export class TwilioProvider implements VoiceCallProvider {
       }
 
       if (signal.aborted) {
+        // Barge-in: the caller took the floor, so this reply never finished.
+        outcome = "cancelled";
         return;
       }
       if (chunkAttempts === 0 || chunkDelivered !== chunkAttempts) {
         throw new Error("Telephony stream playback failed: incomplete audio delivery");
       }
       const markName = `tts-${Date.now()}-${++this.playbackMarkSequence}`;
-      await handler.sendMarkAndWait(streamSid, markName, muLawAudio.length / 8, signal);
+      const acknowledged = await handler.sendMarkAndWait(
+        streamSid,
+        markName,
+        muLawAudio.length / 8,
+        signal,
+      );
+      outcome = acknowledged ? "confirmed" : "unconfirmed";
     });
+    return outcome;
   }
 
   /**

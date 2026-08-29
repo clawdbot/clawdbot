@@ -214,10 +214,8 @@ function tryParseSpokenJson(text: string): SpokenTurn | null {
 
   try {
     const decoded = JSON.parse(`"${inlineSpokenMatch[1] ?? ""}"`) as string;
-    return {
-      text: normalizeSpokenText(decoded) ?? "",
-      endCall: /"end_call"\s*:\s*true/i.test(trimmed),
-    };
+    // Speech only: call control never comes from text that failed to parse.
+    return { text: normalizeSpokenText(decoded) ?? "", endCall: false };
   } catch {
     return null;
   }

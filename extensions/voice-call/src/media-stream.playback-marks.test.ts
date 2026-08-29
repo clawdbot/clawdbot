@@ -118,6 +118,63 @@ describe("MediaStreamHandler playback marks", () => {
     }
   });
 
+  it("reports whether the carrier acknowledged the mark or the wait timed out", async () => {
+    const onConnect = vi.fn();
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+      shouldAcceptStream: () => true,
+      onConnect,
+    });
+    const server = await startWsServer(handler);
+    let ws: WebSocket | undefined;
+
+    try {
+      ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-ack",
+          start: { callSid: "CA-ack" },
+        }),
+      );
+      await vi.waitFor(() => expect(onConnect).toHaveBeenCalledOnce());
+
+      const acknowledgedMark = nextWsMessage(ws);
+      let acknowledged: boolean | undefined;
+      const playback = handler.queueTts("MZ-ack", async (signal) => {
+        acknowledged = await handler.sendMarkAndWait("MZ-ack", "tts-acked", 100, signal);
+      });
+      await withTimeout(acknowledgedMark);
+      ws.send(
+        JSON.stringify({
+          event: "mark",
+          streamSid: "MZ-ack",
+          mark: { name: "tts-acked" },
+        }),
+      );
+      await withTimeout(playback);
+      expect(acknowledged).toBe(true);
+
+      // Never echoed back: the local timeout resolves the wait as unconfirmed.
+      const timedOutMark = nextWsMessage(ws);
+      let timedOut: boolean | undefined;
+      const stalled = handler.queueTts("MZ-ack", async (signal) => {
+        timedOut = await handler.sendMarkAndWait("MZ-ack", "tts-timeout", 1, signal);
+      });
+      await withTimeout(timedOutMark);
+      // Waits out PLAYBACK_MARK_TIMEOUT_GRACE_MS (2s) with no echo from the carrier.
+      await withTimeout(stalled, 6_000);
+      expect(timedOut).toBe(false);
+
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      ws?.terminate();
+      await server.close();
+    }
+  });
+
   it("ignores a playback mark echoed after clear", async () => {
     const onConnect = vi.fn();
     const talkEvents: TalkEvent[] = [];
