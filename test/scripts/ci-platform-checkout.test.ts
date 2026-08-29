@@ -252,6 +252,52 @@ def run_git(`,
   55_000,
 );
 
+it("does not revive an observed-dead fixture instance when its PID is reused", () => {
+  const result = spawnSync(
+    process.platform === "win32" ? "python" : "python3",
+    [
+      "-I",
+      "-S",
+      "-c",
+      String.raw`
+import json, os, pathlib, subprocess, sys, tempfile
+
+with tempfile.TemporaryDirectory(prefix="checkout-pid-reuse-") as directory:
+    root = pathlib.Path(directory).resolve()
+    workspace = root / "workspace"
+    workspace.mkdir()
+    records = root / "pids"
+    records.mkdir()
+    (root / "lease").write_text("owned")
+    with subprocess.Popen([sys.executable, "-I", "-S", "-c", "pass"]) as child:
+        child.wait(timeout=10)
+        retired = dict(pid=child.pid, role="grandchild", attempt=1, instance="retired")
+        current = dict(pid=os.getpid(), role="grandchild", attempt=2, instance="current")
+        (records / "retired.json").write_text(json.dumps(retired))
+        (records / "current.json").write_text(json.dumps(current))
+
+        def observe():
+            subprocess.run([sys.argv[1], sys.argv[2], "git", str(root), "early-leader-exit",
+                            "-C", str(workspace), "checkout"], cwd=workspace, check=True)
+            return json.loads((root / "events.jsonl").read_text().splitlines()[-1])["alive"]
+
+        assert observe() == [current], "first boundary must observe real child termination"
+        # Fault-inject PID reuse only after actual death was observed. The fresh
+        # instance at that live PID must remain visible, never hidden by retirement.
+        retired["pid"] = current["pid"]
+        (records / "retired.json").write_text(json.dumps(retired))
+        assert observe() == [current], "a retired instance was revived by a reused PID"
+print("fixture lifetime contract passed")
+`,
+      process.execPath,
+      fixture,
+    ],
+    { encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL" },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain("fixture lifetime contract passed");
+});
+
 it.skipIf(process.platform === "win32")(
   "recognizes terminated POSIX groups without accepting live signal denials",
   () => {
@@ -293,9 +339,9 @@ with subprocess.Popen([sys.executable, "-I", "-S", "-c", "pass"], start_new_sess
         (root / "pids").mkdir()
         (root / "lease").write_text("owned")
         for pid, role, attempt in [(child.pid, "grandchild", 1), (os.getpid(), "sentinel", 0)]:
-            (root / "pids" / f"{pid}.json").write_text(json.dumps(dict(pid=pid, role=role, attempt=attempt)))
+            (root / "pids" / f"{pid}.json").write_text(json.dumps(dict(pid=pid, role=role, attempt=attempt, instance=str(pid))))
         subprocess.run([sys.argv[1], sys.argv[2], "git", directory, "early-leader-exit",
-                        "-C", str(root / "workspace"), "checkout"], check=True)
+                        "-C", str(root / "workspace"), "checkout"], cwd=root / "workspace", check=True)
         observed = json.loads((root / "events.jsonl").read_text())
         assert observed["alive"] == [], "fixture counted a terminated zombie as a live writer"
         assert observed["sentinelAlive"]

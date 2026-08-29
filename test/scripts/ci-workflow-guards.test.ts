@@ -5863,9 +5863,8 @@ server.listen(0, "127.0.0.1", () => {
     );
   });
 
-  it("kills timed manual checkout fetches after the grace period", () => {
+  it("retains fetch deadlines in other standalone workflows", () => {
     const workflowPaths = [
-      [".github/workflows/ci.yml", "120s"],
       [".github/workflows/workflow-sanity.yml", "30s"],
       [".github/workflows/crabbox-hydrate.yml", "30s"],
     ] as const;
@@ -6047,38 +6046,6 @@ server.listen(0, "127.0.0.1", () => {
     expect(action).toContain("::error title=ensure-base-commit missing base::");
   });
 
-  it("bounds specialized early checkout fetches", () => {
-    const workflow = readCiWorkflow();
-
-    for (const jobName of ["preflight", "skills-python"]) {
-      const checkoutStep = workflow.jobs[jobName].steps.find(
-        (step: WorkflowStep) => step.name === "Checkout",
-      );
-
-      expect(checkoutStep.run, jobName).toContain(
-        'timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE"',
-      );
-      expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
-      expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
-      expect(checkoutStep.run, jobName).not.toContain("if timeout --signal=TERM");
-      expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
-      expect(checkoutStep.run, jobName).toContain(
-        "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
-      );
-      if (jobName === "preflight") {
-        expect(checkoutStep.run, jobName).toContain("--filter=blob:none");
-        expect(checkoutStep.run, jobName).toContain("fetch_parent_metadata");
-      }
-      if (jobName === "preflight") {
-        expect(checkoutStep.run, jobName).toContain('if [ "$fetch_status" = "124" ]');
-        expect(checkoutStep.run, jobName).toContain("timed out");
-      }
-      expect(checkoutStep.run, jobName).not.toContain(
-        'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
-      );
-    }
-  });
-
   it("uses the maintained authenticated checkout for security-fast", () => {
     const workflow = readCiWorkflow();
     const checkoutStep = workflow.jobs["security-fast"].steps.find(
@@ -6097,25 +6064,6 @@ server.listen(0, "127.0.0.1", () => {
       "github.event_name == 'workflow_dispatch' && inputs.target_ref != ''",
     );
     expect(manualCheckoutStep.run).toContain("workflow_dispatch target_ref");
-  });
-
-  it("refetches an exact manual target when the workflow branch moves", () => {
-    const workflow = readCiWorkflow();
-    const checkoutStep = workflow.jobs.preflight.steps.find(
-      (step: WorkflowStep) => step.name === "Checkout",
-    );
-    const run = checkoutStep.run;
-    const driftCheck = run.indexOf(
-      'if [ "$resolved_sha" != "$requested_sha" ] && [ "$checkout_ref" != "$requested_sha" ]; then',
-    );
-    const exactFetch = run.indexOf('fetch_checkout_ref "$checkout_ref"', driftCheck);
-    const finalCheck = run.indexOf('if [ "$resolved_sha" != "$requested_sha" ]; then', driftCheck);
-
-    expect(driftCheck).toBeGreaterThan(-1);
-    expect(run).toContain("while the manual run waits for a runner");
-    expect(run).toContain('checkout_ref="$requested_sha"');
-    expect(exactFetch).toBeGreaterThan(driftCheck);
-    expect(finalCheck).toBeGreaterThan(exactFetch);
   });
 
   it("keeps manual candidates separate from trusted cache authority", () => {
@@ -6987,7 +6935,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}",
     );
     expect(checkShardStep.run).toContain(
-      'timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"',
+      'python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 120 fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"',
     );
   });
 
@@ -7376,9 +7324,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(releaseGateMerge.run).toContain('"$merge_head" == "$TARGET_SHA"');
     expect(releaseGateMerge.run).toContain('git show -s --format=%P "$merge_sha"');
     expect(releaseGateMerge.run).toContain(
-      "timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=2 origin \\",
-    );
-    expect(releaseGateMerge.run).toContain(
       "Freeze GitHub's canonical merge snapshot once it contains the exact head",
     );
     expect(releaseGateMerge.run).toContain(
@@ -7388,7 +7333,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "release-gate merge tree did not refresh to the target head",
     );
     expect(releaseGateMerge.run).not.toContain(".base.sha");
-    expect(releaseGateMerge.run).toContain('git checkout --detach "$merge_sha"');
+    expect(releaseGateMerge.run).toContain('--git 0 checkout --detach "$merge_sha"');
     expect(releaseGateMerge.run).toContain(
       'echo "RATCHET_BASE_REF=${frozen_base_sha}" >> "$GITHUB_ENV"',
     );

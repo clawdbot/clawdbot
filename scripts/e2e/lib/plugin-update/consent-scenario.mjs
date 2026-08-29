@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fixtureCapabilityConsentArgs } from "../package-compat.mjs";
+import { observePostCoreCommand } from "./process-observer.mjs";
 
 export async function runConsentScenario(entry, coreTarball) {
   assert(entry && coreTarball, "expected installed entry and canonical core tarball");
@@ -51,39 +52,6 @@ export async function runConsentScenario(entry, coreTarball) {
     );
   }
 
-  // Inspect only this command's descendants and the existing post-core marker.
-  // process.title overwrites Linux argv, so retain argv before that mutation.
-  function descendants(pid, seen = new Map()) {
-    try {
-      const children = fs
-        .readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8")
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean);
-      for (const child of children) {
-        const argv = fs.readFileSync(`/proc/${child}/cmdline`, "utf8").split("\0").filter(Boolean);
-        const postCore =
-          (argv.includes("update") || argv[0] === "openclaw-update") &&
-          fs
-            .readFileSync(`/proc/${child}/environ`, "utf8")
-            .split("\0")
-            .includes("OPENCLAW_UPDATE_POST_CORE=1");
-        const previous = seen.get(child);
-        seen.set(child, {
-          pid: child,
-          argv: previous?.argv.includes("update") ? previous.argv : argv,
-          postCore: previous?.postCore || postCore,
-        });
-        descendants(child, seen);
-      }
-    } catch (error) {
-      if (error.code !== "ENOENT" && error.code !== "ESRCH" && error.code !== "EACCES") {
-        throw error;
-      }
-    }
-    return seen;
-  }
-
   async function cli(label, args, { allowFailure = false } = {}) {
     const stdout = path.join(root, `${label}.stdout`);
     const stderr = path.join(root, `${label}.stderr`);
@@ -102,13 +70,11 @@ export async function runConsentScenario(entry, coreTarball) {
       ],
       { stdio: ["ignore", out, err] },
     );
-    const observed = new Map();
-    const observer = setInterval(() => descendants(child.pid, observed), 20);
     let code;
+    let children;
     try {
-      [code] = await once(child, "exit");
+      ({ code, children } = await observePostCoreCommand(child, label));
     } finally {
-      clearInterval(observer);
       fs.closeSync(out);
       fs.closeSync(err);
     }
@@ -129,14 +95,14 @@ export async function runConsentScenario(entry, coreTarball) {
       code,
       stdout,
       stderr,
-      children: [...observed.values()].filter(
+      children: children.filter(
         (descendant) => descendant.argv.includes("update") || descendant.postCore,
       ),
       ...(result ? { result } : {}),
     });
     fs.writeFileSync(path.join(root, "runs.json"), JSON.stringify(runs, null, 2));
     console.log(JSON.stringify({ event: "consent-command", ...runs.at(-1) }));
-    return { code, output, diagnostic, children: [...observed.values()] };
+    return { code, output, diagnostic, children };
   }
 
   async function stopRegistry() {

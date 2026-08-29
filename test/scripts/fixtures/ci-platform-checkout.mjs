@@ -1,20 +1,40 @@
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { isPidAlive } from "../../../src/shared/pid-alive.ts";
+import { getProcessStartTime } from "../../../src/shared/pid-alive.ts";
 
 const [mode, root, policyScenario, ...args] = process.argv.slice(2);
 const linux = policyScenario.startsWith("linux:");
 const scenario = linux ? policyScenario.slice("linux:".length) : policyScenario;
 const fixture = fileURLToPath(import.meta.url);
+const instance = randomUUID();
 const workspace = path.join(root, "workspace");
 const lease = path.join(root, "lease");
 const recordsDir = path.join(root, "pids");
 const eventsFile = path.join(root, "events.jsonl");
 const commandsFile = path.join(root, "commands.jsonl");
+const optionsFile = path.join(root, "fixture-options.json");
+const options = fs.existsSync(optionsFile) ? JSON.parse(fs.readFileSync(optionsFile, "utf8")) : {};
+const refsFile = path.join(root, "refs.json");
+
+function resolveRef(cwd, ref) {
+  const refs = fs.existsSync(refsFile) ? JSON.parse(fs.readFileSync(refsFile, "utf8")) : {};
+  return refs[`${cwd}:${ref}`] ?? options.revisions?.[ref] ?? ref;
+}
+
+function saveRef(cwd, ref, revision) {
+  const refs = fs.existsSync(refsFile) ? JSON.parse(fs.readFileSync(refsFile, "utf8")) : {};
+  refs[`${cwd}:${ref}`] = revision;
+  publish("refs.json", refs);
+}
+
+function recordCommand(tool, cwd, commandArgs) {
+  fs.appendFileSync(commandsFile, `${JSON.stringify({ tool, cwd, args: commandArgs })}\n`);
+}
 
 function publish(name, value) {
   const target = path.join(root, name);
@@ -23,7 +43,7 @@ function publish(name, value) {
 }
 
 function record(pid, role, attempt = 0) {
-  publish(`pids/${pid}.json`, { pid, role, attempt });
+  publish(`pids/${pid}.json`, { pid, role, attempt, instance: `${instance}-${pid}` });
 }
 
 function records() {
@@ -36,29 +56,51 @@ function records() {
 }
 
 function liveRecords() {
-  const owned = records();
-  if (process.platform === "win32") {
-    return owned.filter((entry) => isPidAlive(entry.pid));
-  }
-  // PID existence includes macOS zombies; observe active writers in one POSIX snapshot.
-  const result = spawnSync("/bin/ps", ["-axo", "pid=,stat="], {
-    encoding: "utf8",
-    timeout: 1_000,
-  });
-  if (result.error || result.status !== 0) {
-    throw new Error(`Fixture process census failed (${result.error?.code ?? result.status})`);
-  }
+  const owned = records().filter(
+    (entry) => !fs.existsSync(path.join(recordsDir, `${entry.instance}.dead`)),
+  );
   const alive = new Set();
-  for (const line of result.stdout.trim().split("\n")) {
-    const [pid, state] = line.trim().split(/\s+/u);
-    if (!Number.isInteger(Number(pid)) || !state) {
-      throw new Error("Fixture process census returned an invalid row");
+  if (process.platform === "win32") {
+    for (const { pid } of owned) {
+      try {
+        process.kill(pid, 0);
+        alive.add(pid);
+      } catch (error) {
+        if (error.code === "EPERM") {
+          alive.add(pid);
+        } else if (error.code !== "ESRCH") {
+          throw error;
+        }
+      }
     }
-    if (!state.startsWith("Z")) {
-      alive.add(Number(pid));
+  } else {
+    // PID existence includes macOS zombies; observe active writers in one POSIX snapshot.
+    const result = spawnSync("/bin/ps", ["-axo", "pid=,stat="], {
+      encoding: "utf8",
+      timeout: 1_000,
+    });
+    if (result.error || result.status !== 0) {
+      throw new Error(`Fixture process census failed (${result.error?.code ?? result.status})`);
+    }
+    for (const line of result.stdout.trim().split("\n")) {
+      const [pid, state] = line.trim().split(/\s+/u);
+      if (!Number.isInteger(Number(pid)) || !state) {
+        throw new Error("Fixture process census returned an invalid row");
+      }
+      if (!state.startsWith("Z")) {
+        alive.add(Number(pid));
+      }
     }
   }
-  return owned.filter((entry) => alive.has(entry.pid));
+  return owned.filter((entry) => {
+    if (alive.has(entry.pid)) {
+      return true;
+    }
+    // Separate command processes share this observed-dead fact. PID reuse cannot
+    // revive that instance, while a newly registered instance is still checked.
+    fs.writeFileSync(path.join(recordsDir, `${entry.instance}.dead`), "");
+    return false;
+  });
 }
 
 function boundary(name) {
@@ -130,7 +172,11 @@ async function command() {
   }
   if (mode === "child" || mode === "grandchild") {
     const attempt = Number(args[0]);
-    process.on("SIGTERM", () => {});
+    process.on("SIGTERM", () => {
+      if (options.cancelDuringCleanup) {
+        publish("cleanup-started.json", attempt);
+      }
+    });
     record(process.pid, mode, attempt);
     if (mode === "child") {
       // Startup faults belong to the caller, not every consumer of this shared fixture.
@@ -144,10 +190,30 @@ async function command() {
     }
     return;
   }
+  if (["gh", "node", "pnpm"].includes(mode)) {
+    const cwd = insideWorkspace(process.cwd());
+    recordCommand(mode, cwd, args);
+    if (mode === "node" && args[0] === "-e") {
+      // The workflow's package-script capability probe; never evaluate candidate code.
+      process.exit(0);
+    }
+    boundary(`consumer:${mode}`);
+    if (mode === "gh") {
+      fs.writeSync(
+        1,
+        JSON.stringify({
+          state: "open",
+          head: { sha: "a".repeat(40) },
+          base: { repo: { full_name: "fixture/checkout" } },
+        }),
+      );
+    }
+    process.exit(0);
+  }
   if (mode !== "git") {
     throw new Error(`Unexpected fixture mode: ${mode}`);
   }
-  let cwd = workspace;
+  let cwd = insideWorkspace(process.cwd());
   while (args[0] === "-C" || args[0] === "-c") {
     const flag = args.shift();
     const value = args.shift();
@@ -155,7 +221,7 @@ async function command() {
       cwd = insideWorkspace(value);
     }
   }
-  fs.appendFileSync(commandsFile, `${JSON.stringify({ cwd, args })}\n`);
+  recordCommand("git", cwd, args);
   const operation = args.shift();
   if (operation === "init") {
     boundary("init");
@@ -163,12 +229,18 @@ async function command() {
     if (fs.existsSync(config)) {
       await delay(JSON.parse(fs.readFileSync(config, "utf8")).initDelayMs);
     }
-    fs.mkdirSync(insideWorkspace(args[0]), { recursive: true });
-    if (linux && cwd === workspace) {
-      if (fs.readdirSync(workspace).length !== 0) {
+    const directory = insideWorkspace(args[0] ?? cwd);
+    fs.mkdirSync(directory, { recursive: true });
+    const kind = options.env?.CHECKOUT_KIND ?? "linux-node";
+    if (
+      linux &&
+      directory !== path.join(workspace, ".ci-harness") &&
+      ["linux-node", "clawhub", "android"].includes(kind)
+    ) {
+      if (fs.readdirSync(directory).length !== 0) {
         throw new Error("Previous checkout survived workspace deletion");
       }
-      fs.writeFileSync(path.join(workspace, ".previous-checkout"), "owned\n");
+      fs.writeFileSync(path.join(directory, ".previous-checkout"), "owned\n");
     }
   } else if (operation === "fetch") {
     const counter = path.join(root, "attempt.json");
@@ -176,6 +248,11 @@ async function command() {
     boundary(`fetch:${attempt}`);
     publish("attempt.json", attempt);
     record(process.pid, "parent", attempt);
+    if (options.cancelDuringCleanup) {
+      const pid = process.ppid;
+      publish("owner.json", { pid, startTime: getProcessStartTime(pid) });
+      record(pid, "owner");
+    }
     launch("child", attempt);
     await until(() => fs.existsSync(path.join(root, `ready-${attempt}.json`)), "tree readiness");
     if (scenario.startsWith("cancel-")) {
@@ -197,6 +274,24 @@ async function command() {
       const signal = scenario.slice("cancel-".length);
       fs.writeSync(1, `cancellation: ${JSON.stringify({ signal, owner: owner.pid, alive })}\n`);
       process.kill(owner.pid, signal);
+    }
+    if (options.fetchResults) {
+      const result = options.fetchResults[attempt - 1] ?? 0;
+      if (result === "cleanup-failure") {
+        fs.writeFileSync(path.join(root, "bin/ps"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+        process.exit(0);
+      }
+      if (result === "hang") {
+        return;
+      }
+      if (result === 0) {
+        for (const refspec of args.slice(args.indexOf("origin") + 1)) {
+          const [source, target] = refspec.replace(/^\+/u, "").split(":");
+          const revision = options.mergeSnapshots?.[attempt - 1]?.sha ?? resolveRef(cwd, source);
+          saveRef(cwd, target ?? "FETCH_HEAD", revision);
+        }
+      }
+      process.exit(result);
     }
     if (scenario === "early-leader-exit") {
       process.exit(0);
@@ -227,15 +322,36 @@ async function command() {
     }
     return;
   } else if (operation === "checkout") {
-    boundary(cwd === workspace ? "checkout" : "harness-checkout");
+    boundary(cwd === path.join(workspace, ".ci-harness") ? "harness-checkout" : "checkout");
     if (scenario === "checkout-failure") {
       process.exit(23);
     }
+    if (options.checkoutResults) {
+      const attempt = JSON.parse(fs.readFileSync(path.join(root, "attempt.json"), "utf8"));
+      const code = options.checkoutResults[attempt - 1] ?? 0;
+      if (code !== 0) {
+        process.exit(code);
+      }
+    }
+    saveRef(cwd, "HEAD", resolveRef(cwd, args.at(-1)));
     if (linux || cwd !== workspace) {
       const action = path.join(cwd, ".github/actions/setup-node-env");
       fs.mkdirSync(action, { recursive: true });
       fs.writeFileSync(path.join(action, "action.yml"), "fixture\n");
     }
+    if (options.env?.CHECKOUT_KIND === "android") {
+      const gradlew = path.join(cwd, "apps/android/gradlew");
+      fs.mkdirSync(path.dirname(gradlew), { recursive: true });
+      fs.writeFileSync(gradlew, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    }
+  } else if (operation === "rev-parse") {
+    boundary("rev-parse");
+    fs.writeSync(1, `${args.map((ref) => resolveRef(cwd, ref)).join("\n")}\n`);
+  } else if (operation === "show" && args.join(" ").startsWith("-s --format=%P ")) {
+    boundary("show-parents");
+    const snapshot = options.mergeSnapshots?.find((entry) => entry.sha === args.at(-1));
+    const head = snapshot?.head ?? "a".repeat(40);
+    fs.writeSync(1, `${"c".repeat(40)} ${head}\n`);
   } else if (!["config", "remote", "sparse-checkout", "fetch"].includes(operation)) {
     throw new Error(`Unexpected fake git command: ${operation}`);
   }
@@ -250,8 +366,10 @@ async function supervise() {
   const bin = path.join(root, "bin");
   const commandPath = `${bin}${path.delimiter}${process.env.PATH}`;
   const home = path.join(root, "home");
+  const runnerTemp = path.join(root, "temp");
   fs.mkdirSync(bin);
   fs.mkdirSync(home);
+  fs.mkdirSync(runnerTemp);
   const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
   // Git Bash accepts forward-slash native paths; native Node records native Windows PIDs.
   const shellPath = (value) => value.replaceAll("\\", "/");
@@ -267,9 +385,13 @@ async function supervise() {
       mode: 0o755,
     });
   }
-  if (linux) {
-    const argv = [process.execPath, fixture, "find", root, policyScenario].map(quote);
-    fs.writeFileSync(path.join(bin, "find"), `#!/bin/bash\nexec ${argv.join(" ")} "$@"\n`, {
+  const extraTools = [
+    ...(linux ? ["find"] : []),
+    ...(options.consumers ? ["gh", "node", "pnpm"] : []),
+  ];
+  for (const tool of extraTools) {
+    const argv = [process.execPath, fixture, tool, root, policyScenario].map(quote);
+    fs.writeFileSync(path.join(bin, tool), `#!/bin/bash\nexec ${argv.join(" ")} "$@"\n`, {
       mode: 0o755,
     });
   }
@@ -285,6 +407,7 @@ async function supervise() {
   let stopping;
   const report = {
     code: null,
+    cancelledDuringCleanup: false,
     boundaries: [],
     readyAttempts: [],
     cleanupRemaining: [],
@@ -366,7 +489,7 @@ async function supervise() {
           'for mock in "$@"; do resolved=$(command -v "${mock##*/}") || resolved=; if [[ "$resolved" != "$mock" || ! -x "$mock" ]]; then printf "mock unavailable: %s (resolved: %s)\\n" "$mock" "$resolved" >&2; exit 1; fi; done',
           "checkout-fixture",
           path.join(bin, "git"),
-          ...(linux ? [path.join(bin, "find")] : []),
+          ...extraTools.map((tool) => path.join(bin, tool)),
         ],
         {
           cwd: workspace,
@@ -416,18 +539,41 @@ async function supervise() {
         TEMP: root,
         TMP: root,
         GITHUB_WORKSPACE: shellPath(workspace),
+        RUNNER_TEMP: shellPath(runnerTemp),
+        GITHUB_OUTPUT: path.join(root, "github-output"),
+        GITHUB_ENV: path.join(root, "github-env"),
         RUNNER_OS: linux ? "Linux" : process.platform === "win32" ? "Windows" : "macOS",
         PATHEXT: process.env.PATHEXT,
         CHECKOUT_REPO: "fixture/checkout",
         CHECKOUT_SHA: "a".repeat(40),
         CHECKOUT_BASE_SHA: linux && scenario === "early-leader-exit" ? "c".repeat(40) : "",
         WORKFLOW_SHA: "b".repeat(40),
+        ...options.env,
       },
     });
     if (shell.pid) {
       record(shell.pid, "shell");
     }
     const exited = once(shell, "exit");
+    if (options.cancelDuringCleanup) {
+      await until(
+        () => fs.existsSync(path.join(root, "cleanup-started.json")),
+        "cleanup readiness",
+      );
+      const owner = JSON.parse(fs.readFileSync(path.join(root, "owner.json"), "utf8"));
+      const ownerStatus = fs.readFileSync(`/proc/${owner.pid}/status`, "utf8");
+      const parentPid = Number(ownerStatus.match(/^PPid:\s+(\d+)$/mu)?.[1]);
+      // The raw owner is a child of Bash; bind the signal to the birth identity Git observed.
+      if (
+        parentPid !== shell.pid ||
+        owner.startTime === null ||
+        getProcessStartTime(owner.pid) !== owner.startTime
+      ) {
+        throw new Error("Raw Git owner changed before cleanup cancellation");
+      }
+      process.kill(owner.pid, "SIGTERM");
+      report.cancelledDuringCleanup = true;
+    }
     const [code] = await exited;
     report.code = code;
     boundary("exit");

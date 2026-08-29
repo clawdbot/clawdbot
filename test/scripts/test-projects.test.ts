@@ -647,6 +647,7 @@ describe("scripts/test-projects changed-target routing", () => {
       [".github/workflows/ci.yml"],
       [
         "test/scripts/ci-platform-checkout.test.ts",
+        "test/scripts/ci-linux-git.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/check-workflows.test.ts",
