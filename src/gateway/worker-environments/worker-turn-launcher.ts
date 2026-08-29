@@ -5,7 +5,6 @@ import type { SandboxContext } from "../../agents/sandbox/types.js";
 import type {
   LocalTurnPlacementClaim,
   SessionPlacementAdmissionProvider,
-  SessionPlacementTurnParams,
 } from "../../agents/session-placement-admission.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -84,20 +83,12 @@ type WorkerTurnLauncherOptions = {
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 };
 
-async function executeWorkerTurn(params: {
-  environments: WorkerTurnEnvironmentService;
-  onHandoff: () => void;
-  onTerminal: () => void;
-  placement: ActiveWorkerPlacement;
-  placements: WorkerSessionPlacementStore;
-  reconcileActivePlacement: (environmentId: string) => Promise<void>;
-  workspaceOperations: WorkerWorkspaceOperationCoordinator;
-  turn: SessionPlacementTurnParams;
-  turnClaim: WorkerSessionTurnClaim;
-  localWorkspaceDir: string;
-  prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
-  publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
-}) {
+async function executeWorkerTurn(
+  params: Omit<Parameters<typeof executeRemoteExecTurn>[0], "environments" | "runLocal"> & {
+    environments: WorkerTurnEnvironmentService;
+    onTerminal: () => void;
+  },
+) {
   const { placement, turn } = params;
   const modelRef = assertSupportedTurn(turn);
   const environment = params.environments.get(placement.environmentId);
@@ -615,7 +606,6 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           },
           placement,
           placements: options.placements,
-          reconcileActivePlacement: options.reconcileActivePlacement,
           localWorkspaceDir,
           ...(options.prepareAcceptedWorkspacePublication
             ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }

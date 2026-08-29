@@ -584,14 +584,15 @@ describe("node worker tunnel manager", () => {
     expect(transportTimeoutMs).toBeLessThanOrEqual(65_000);
     expect(validationOutputs).toEqual([]);
 
-    const listCurrentNodes = nodeTransport.listCurrentNodes;
+    const listCurrentNodes = nodeTransport.listCurrentNodes.bind(nodeTransport);
     let current = true;
     nodeTransport.listCurrentNodes = async () => {
       const nodes = await listCurrentNodes();
       current = false;
       return nodes;
     };
-    const sentCommands = vi.mocked(nodeTransport.invoke).mock.calls.length;
+    const invoke = vi.spyOn(nodeTransport, "invoke");
+    const sentCommands = invoke.mock.calls.length;
     await expect(
       handle.runWorkspaceCommand({
         argv: ["slow-command"],
@@ -603,7 +604,7 @@ describe("node worker tunnel manager", () => {
         },
       }),
     ).rejects.toThrow("turn claim closed");
-    expect(nodeTransport.invoke).toHaveBeenCalledTimes(sentCommands);
+    expect(invoke).toHaveBeenCalledTimes(sentCommands);
   });
 
   it("preserves a typed workspace transfer cause from the node", async () => {
