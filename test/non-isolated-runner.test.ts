@@ -100,6 +100,7 @@ function fixtureFiles(): Record<string, string> {
   const agentEventsPath = JSON.stringify(path.join(repoRoot, "src", "infra", "agent-events.ts"));
   const loggingConsolePath = JSON.stringify(path.join(repoRoot, "src", "logging", "console.ts"));
   const loggingStatePath = JSON.stringify(path.join(repoRoot, "src", "logging", "state.ts"));
+  const testEnvPath = JSON.stringify(path.join(repoRoot, "src", "test-utils", "env.ts"));
   const payloadImports = [
     'import { createRequire } from "node:module";',
     'import { queryObjects } from "node:v8";',
@@ -142,6 +143,29 @@ function fixtureFiles(): Record<string, string> {
       'it("restores gateway helper env", () => {',
       "  expect(process.env.OPENCLAW_SKIP_CHANNELS).toBeUndefined();",
       "  expect(process.env.OPENCLAW_SKIP_CRON).toBeUndefined();",
+      "});",
+      "",
+    ].join("\n"),
+    "02-c-agent-env.test.ts": [
+      `import { setTestEnvValue } from ${testEnvPath};`,
+      'import { expect, it, vi } from "vitest";',
+      'it("leaves agent selectors for file-completion env unstub", () => {',
+      "  expect(process.env.HOME).toBe(process.env.OPENCLAW_TEST_HOME);",
+      "  expect(process.env.OPENCLAW_TEST_HOME).toBeTruthy();",
+      '  for (const key of ["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"]) {',
+      "    setTestEnvValue(key, `/tmp/inherited-${key}`);",
+      "    vi.stubEnv(key, undefined);",
+      "    expect(process.env[key]).toBeUndefined();",
+      "  }",
+      "});",
+      "",
+    ].join("\n"),
+    "02-d-agent-env.test.ts": [
+      'import { expect, it } from "vitest";',
+      'it("clears restored agent selectors before the next file", () => {',
+      "  expect(process.env.HOME).toBe(process.env.OPENCLAW_TEST_HOME);",
+      "  expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();",
+      "  expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();",
       "});",
       "",
     ].join("\n"),
@@ -434,7 +458,7 @@ it("cleans every shared runner surface between files", async () => {
     // The collection failure is intentional. Every behavior test after it must
     // pass; any leaked surface turns the summary into a second failure.
     expect(output).toContain("synthetic collect failure");
-    expect(output).toContain("1 failed | 32 passed");
+    expect(output).toContain("1 failed | 34 passed");
     expect(output).not.toContain("first-file");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
