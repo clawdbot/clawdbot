@@ -1024,7 +1024,6 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       const rawStore = parseAuthProfileMigrationSource(
         receiptByPath.get(path.resolve(candidate.authPath)),
       );
-      // Parse the standalone rotation state early so it canonicalizes with the credentials.
       const rawState = parseAuthProfileMigrationSource(
         receiptByPath.get(path.resolve(candidate.statePath)),
       );
@@ -1703,10 +1702,6 @@ function canonicalizeLegacyOpenAIAuthStore(
   stateRaw: unknown,
   profileIdMap: ReadonlyMap<string, string>,
 ): number | null {
-  // No credential store: still canonicalize the standalone rotation state so the
-  // config-backed path (#130018, credentials in config, rotation in auth-state.json)
-  // drops stale openai-codex ids. Copy the static map (rotation helpers mutate
-  // it); return null — no credentials migrated, so the credential warning stays off.
   if (!isRecord(raw) || !isRecord(raw.profiles)) {
     if (isRecord(stateRaw)) {
       canonicalizeOpenAIAuthRotationState(stateRaw, new Map(profileIdMap));
@@ -1714,34 +1709,30 @@ function canonicalizeLegacyOpenAIAuthStore(
     return null;
   }
   const rewrite = canonicalizeOpenAIProfileEntries(raw.profiles, { profileIdMap });
-  // Canonicalize order/lastGood/usageStats on both the credential store and the
-  // standalone rotation state with the SAME profile-id map; state-only refs (no
-  // matching credential) are left dangling by the shared helpers, never stale.
-  const rotation = canonicalizeOpenAIAuthRotationState(raw, rewrite.profileIdMap);
+  // Config-only and store-only profiles must keep the collision decision made before import.
+  const effectiveProfileIdMap = new Map([...profileIdMap, ...rewrite.profileIdMap]);
+  const rotation = canonicalizeOpenAIAuthRotationState(raw, effectiveProfileIdMap);
   if (isRecord(stateRaw)) {
-    canonicalizeOpenAIAuthRotationState(stateRaw, rewrite.profileIdMap);
+    canonicalizeOpenAIAuthRotationState(stateRaw, effectiveProfileIdMap);
   }
   if (rewrite.profileIdMap.size > 0) {
     replaceMappedProfileId(raw, rewrite.profileIdMap);
   }
-  return rewrite.changed || rotation.order || rotation.usage || rotation.lastGood
-    ? rewrite.profileIdMap.size
-    : null;
+  return rewrite.changed || rotation ? rewrite.profileIdMap.size : null;
 }
 
 function canonicalizeOpenAIAuthRotationState(
   auth: Record<string, unknown>,
   profileIdMap: Map<string, string>,
-): { order: boolean; usage: boolean; lastGood: boolean } {
-  return {
-    order: canonicalizeOpenAIAuthOrder(auth, profileIdMap),
-    usage: isRecord(auth.usageStats)
-      ? renameMappedProfileIdKeys(auth.usageStats, profileIdMap)
-      : false,
-    lastGood: isRecord(auth.lastGood)
-      ? canonicalizeOpenAILastGood(auth.lastGood, profileIdMap)
-      : false,
-  };
+): boolean {
+  const orderChanged = canonicalizeOpenAIAuthOrder(auth, profileIdMap);
+  const usageChanged = isRecord(auth.usageStats)
+    ? renameMappedProfileIdKeys(auth.usageStats, profileIdMap)
+    : false;
+  const lastGoodChanged = isRecord(auth.lastGood)
+    ? canonicalizeOpenAILastGood(auth.lastGood, profileIdMap)
+    : false;
+  return orderChanged || usageChanged || lastGoodChanged;
 }
 
 function recoverArchivedOpenAICodexAuthProfileIdMap(params: {

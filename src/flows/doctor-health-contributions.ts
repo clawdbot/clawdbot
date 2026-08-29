@@ -61,11 +61,8 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const {
-    maybeMigrateAuthProfileJsonStoresToSqlite,
-    collectOpenAICodexAuthProfileStoreIdMap,
-    maybeRepairOpenAICodexAuthConfig,
-  } = await import("../commands/doctor-auth-flat-profiles.js");
+  const { maybeMigrateAuthProfileJsonStoresToSqlite } =
+    await import("../commands/doctor-auth-flat-profiles.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
   const { maybeRepairLegacyOAuthSidecarProfiles } =
@@ -80,28 +77,9 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     cfg: ctx.cfg,
     prompter: ctx.prompter,
   });
-  // The interactive (non---fix) path reaches the SQLite migration without the
-  // config repair sequence, so the collision map must be collected once here and
-  // shared with the config-side canonicalization: after the legacy JSON is
-  // archived the map cannot be recreated, and leaving auth.profiles on legacy
-  // ids the migrated store no longer contains makes runtime drop the profile.
-  const openAICodexAuthProfileIdMap = collectOpenAICodexAuthProfileStoreIdMap({
-    cfg: ctx.cfg,
-    ...(ctx.env ? { env: ctx.env } : {}),
-  });
-  // Canonicalize config BEFORE the migration imports config-backed credentials
-  // (the same pre-import order as repair-sequencing): the migration persists
-  // credentials under their configured profile ids, so importing from a legacy
-  // config would archive them under ids canonical runtime selection never
-  // looks up. The migration itself strips imported credentials from this
-  // config object in place.
-  ctx.cfg = maybeRepairOpenAICodexAuthConfig(ctx.cfg, {
-    profileIdMap: openAICodexAuthProfileIdMap,
-  }).config;
   await maybeMigrateAuthProfileJsonStoresToSqlite({
     cfg: ctx.cfg,
     prompter: ctx.prompter,
-    openAICodexAuthProfileIdMap,
     ...(ctx.env ? { env: ctx.env } : {}),
   });
   await maybeMigrateLegacyPluginModelCatalogs({
