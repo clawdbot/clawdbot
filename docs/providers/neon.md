@@ -287,6 +287,11 @@ Google roll out gradually, so a catalog model may not be enabled for your projec
       agents: {
         defaults: {
           model: { primary: "neon-anthropic/claude-sonnet-4-6" },
+          models: {
+            "neon-anthropic/claude-sonnet-4-6": {
+              params: { cacheRetention: "short" },
+            },
+          },
         },
       },
     }
@@ -294,7 +299,15 @@ Google roll out gradually, so a catalog model may not be enabled for your projec
 
     The same `cost`, `maxTokens` and `contextWindow` caveats from the OpenAI entry apply here: the
     zeros are the beta rate, and you take `contextWindow` from the
-    [Neon model catalog](https://neon.com/docs/ai-gateway/models). Two behaviors matter here:
+    [Neon model catalog](https://neon.com/docs/ai-gateway/models).
+
+    Prompt caching stays off until you ask for it. OpenClaw seeds a default `cacheRetention` only for
+    direct Anthropic routes, so on a custom `anthropic-messages` endpoint like Neon you set
+    `params.cacheRetention` yourself under `agents.defaults.models`, as the example above does. Use
+    `"short"` for the 5-minute cache or `"long"` for the 1-hour TTL; `"none"` disables it. See
+    [Prompt caching](/reference/prompt-caching).
+
+    Two behaviors matter here:
 
     - This endpoint takes Claude model IDs only. Sending a non-Anthropic ID returns
       `400 model "<model-id>" is not available on the anthropic_messages endpoint`, so keep this entry
