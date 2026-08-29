@@ -2,7 +2,12 @@
 import type { webhook } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  getRuntimeConfig,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createNonExitingRuntime,
   logVerbose,
@@ -28,7 +33,10 @@ interface LineBotOptions {
   mediaMaxMb?: number;
   onMessage?: (
     ctx: LineInboundContext,
-    control: { turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle },
+    control: {
+      cfg: OpenClawConfig;
+      turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle;
+    },
   ) => Promise<void>;
 }
 
@@ -41,9 +49,31 @@ interface LineBot {
 export function createLineBot(opts: LineBotOptions): LineBot {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
-  const cfg = opts.config ?? getRuntimeConfig();
+  const startupConfig = opts.config ?? getRuntimeConfig();
+  // A channel monitor outlives config reloads. Everything read here from outside
+  // `channels.line` — mention patterns, the group-chat history limit, routing
+  // bindings, the shared group-policy default — is hot-applied without restarting
+  // the channel, so each delivered event runs on the config live at that moment.
+  //
+  // Ownership is decided once, against the snapshot that was current at startup:
+  // a later reload replaces both the runtime config and its source, so asking
+  // again after one would always answer "not mine" and pin the monitor forever.
+  const startupRuntimeConfig = getRuntimeConfigSnapshot();
+  const followsRuntimeConfig =
+    !startupRuntimeConfig ||
+    startupRuntimeConfig === startupConfig ||
+    selectApplicableRuntimeConfig({
+      inputConfig: startupConfig,
+      runtimeConfig: startupRuntimeConfig,
+      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
+    }) === startupRuntimeConfig;
+  const resolveTurnConfig = (): OpenClawConfig =>
+    (followsRuntimeConfig ? getRuntimeConfigSnapshot() : undefined) ?? startupConfig;
+  // Credentials and the account's own settings live under `channels.line`, whose
+  // changes restart the channel, so the account stays a prepared fact rather than
+  // a per-event re-read of its secret files.
   const account = resolveLineAccount({
-    cfg,
+    cfg: startupConfig,
     accountId: opts.accountId,
   });
 
@@ -66,7 +96,8 @@ export function createLineBot(opts: LineBotOptions): LineBot {
   const spool = createLineWebhookSpool({
     accountId: account.accountId,
     runtime,
-    deliver: async (event, _destination, control) =>
+    deliver: async (event, _destination, control) => {
+      const cfg = resolveTurnConfig();
       await handleLineWebhookEvents([event], {
         cfg,
         account,
@@ -82,7 +113,8 @@ export function createLineBot(opts: LineBotOptions): LineBot {
           account.config.historyLimit ??
           cfg.messages?.groupChat?.historyLimit ??
           DEFAULT_GROUP_HISTORY_LIMIT,
-      }),
+      });
+    },
   });
   spool.start();
 

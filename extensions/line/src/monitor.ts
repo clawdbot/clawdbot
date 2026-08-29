@@ -163,12 +163,15 @@ export async function monitorLineProvider(
       }
 
       const { ctxPayload, replyToken, route } = ctx;
+      // Admission already resolved the config live for this event; the turn and
+      // its delivery run on that same one so the two can never disagree.
+      const turnConfig = deliveryControl.cfg;
 
       const shouldShowLoading = Boolean(ctx.userId && !ctx.isGroup);
 
       const stopLoading = shouldShowLoading
         ? startLineLoadingKeepalive({
-            cfg: config,
+            cfg: turnConfig,
             userId: ctx.userId!,
             accountId: ctx.accountId,
           })
@@ -204,7 +207,7 @@ export async function monitorLineProvider(
               rawText: ctxPayload.RawBody ?? ctxPayload.BodyForAgent ?? "",
             }),
             resolveTurn: () => ({
-              cfg: config,
+              cfg: turnConfig,
               channel: "line",
               accountId: route.accountId,
               route: { agentId: route.agentId, sessionKey: route.sessionKey },
@@ -228,7 +231,7 @@ export async function monitorLineProvider(
 
                   if (ctx.userId && !ctx.isGroup) {
                     void showLoadingAnimation(ctx.userId, {
-                      cfg: config,
+                      cfg: turnConfig,
                       accountId: ctx.accountId,
                     }).catch(() => {});
                   }
@@ -240,7 +243,7 @@ export async function monitorLineProvider(
                     replyToken,
                     replyTokenUsed,
                     accountId: ctx.accountId,
-                    cfg: config,
+                    cfg: turnConfig,
                     textLimit,
                     deps: {
                       buildTemplateMessageFromPayload,
