@@ -545,14 +545,22 @@ export function resolveOwnedAppReadOnlyToolConfigKeys(
 ): Pick<CodexPluginOwnedApp, "readOnlyToolConfigKeys"> {
   const appName = app.name.trim();
   const appNameLower = appName.toLowerCase();
-  const keys = (app.toolSummaries ?? [])
-    .filter((tool) => tool.isReadOnly)
-    .flatMap((tool) => [
-      tool.name,
-      ...(tool.title ? [tool.title] : []),
-      ...(appName ? [`${appName}_${tool.name}`] : []),
-      ...(appNameLower && appNameLower !== appName ? [`${appNameLower}_${tool.name}`] : []),
-    ]);
+  const keys: string[] = [];
+  for (const tool of app.toolSummaries ?? []) {
+    if (!tool.isReadOnly) {
+      continue;
+    }
+    keys.push(tool.name);
+    if (tool.title) {
+      keys.push(tool.title);
+    }
+    if (appName) {
+      keys.push(`${appName}_${tool.name}`);
+    }
+    if (appNameLower && appNameLower !== appName) {
+      keys.push(`${appNameLower}_${tool.name}`);
+    }
+  }
   return keys.length > 0 ? { readOnlyToolConfigKeys: Array.from(new Set(keys)).toSorted() } : {};
 }
 
