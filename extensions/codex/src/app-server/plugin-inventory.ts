@@ -66,6 +66,8 @@ export type CodexPluginOwnedApp = {
   accessible: boolean;
   enabled: boolean;
   needsAuth: boolean;
+  /** Tool config keys Codex explicitly classifies as read-only. */
+  readOnlyToolConfigKeys?: readonly string[];
 };
 
 /** Inventory record for one configured Codex plugin policy. */
@@ -521,17 +523,30 @@ function resolveOwnedApps(params: {
           needsAuth: true,
         };
       }
-      return {
-        id: app.id,
-        name: app.name,
-        accessible: info.isAccessible,
-        enabled: info.isEnabled,
-        // Modern plugin summaries carry no auth bit; account-authorized
-        // app/read metadata is the canonical connector access proof.
-        needsAuth: !info.isAccessible,
-      };
+      return Object.assign(
+        {
+          id: app.id,
+          name: app.name,
+          accessible: info.isAccessible,
+          enabled: info.isEnabled,
+          // Modern plugin summaries carry no auth bit; account-authorized
+          // app/read metadata is the canonical connector access proof.
+          needsAuth: !info.isAccessible,
+        },
+        resolveOwnedAppReadOnlyToolConfigKeys(info),
+      );
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+/** Returns the config keys that Codex metadata proves belong to read-only tools. */
+export function resolveOwnedAppReadOnlyToolConfigKeys(
+  app: v2.AppInfo,
+): Pick<CodexPluginOwnedApp, "readOnlyToolConfigKeys"> {
+  const keys = (app.toolSummaries ?? [])
+    .filter((tool) => tool.isReadOnly)
+    .flatMap((tool) => (tool.title ? [tool.name, tool.title] : [tool.name]));
+  return keys.length > 0 ? { readOnlyToolConfigKeys: Array.from(new Set(keys)).toSorted() } : {};
 }
 
 function findPluginSummary(

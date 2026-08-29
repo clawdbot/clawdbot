@@ -106,6 +106,8 @@ export type CodexAppInfo = {
   isAccessible: boolean;
   isEnabled: boolean;
   pluginDisplayNames: string[];
+  /** Present when app/read was requested with includeTools. */
+  toolSummaries?: CodexAppToolSummary[];
 };
 
 export type CodexAppsListParams = {
@@ -136,7 +138,7 @@ export type CodexAppsInstalledResponse = {
   apps: CodexInstalledApp[];
 };
 
-type CodexAppToolSummary = {
+export type CodexAppToolSummary = {
   name: string;
   title: string | null;
   description: string;
