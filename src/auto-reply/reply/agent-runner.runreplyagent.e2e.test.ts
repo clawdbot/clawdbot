@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 // E2E tests for run-reply-agent execution and generated session artifacts.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import {
@@ -80,6 +81,7 @@ type AgentRunParams = {
     isReasoning?: boolean;
     isCommentary?: boolean;
   }) => Promise<void> | void;
+  onBlockReplyFlush?: () => Promise<void>;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
@@ -1771,6 +1773,75 @@ describe("runReplyAgent heartbeat followup guard", () => {
       });
       expect(onPartialReply).toHaveBeenCalledOnce();
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    { label: "accepted answer", payload: { text: "answer block" }, delivered: true },
+    { label: "in-flight answer", payload: { text: "answer block" }, delivered: true },
+    { label: "queued answer", payload: { text: "answer block" }, delivered: true },
+    { label: "aborted answer", payload: { text: "answer block" }, delivered: false },
+    {
+      label: "reasoning",
+      payload: { text: "internal reasoning", isReasoning: true },
+      delivered: false,
+    },
+    {
+      label: "commentary",
+      payload: { text: "working on it", isCommentary: true },
+      delivered: false,
+    },
+    { label: "rejected answer", payload: { text: "answer block" }, delivered: false },
+  ])(
+    "reports provider failure after $label block delivery",
+    async ({ label, payload, delivered }) => {
+      const replyOperation =
+        label === "aborted answer"
+          ? createReplyOperation({
+              sessionKey: "main",
+              sessionId: "session",
+              resetTriggered: false,
+            })
+          : undefined;
+      const deliveryStarted = Promise.withResolvers<void>();
+      let blockFlush: Promise<void> | undefined;
+      const onBlockReply = vi.fn(async () => {
+        deliveryStarted.resolve();
+        if (label === "in-flight answer" || replyOperation) {
+          await setImmediate();
+          replyOperation?.abortByUser();
+        }
+        if (label === "rejected answer") {
+          throw new Error("transport rejected the block");
+        }
+      });
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        await params.onBlockReply?.(payload);
+        blockFlush = label === "queued answer" ? undefined : params.onBlockReplyFlush?.();
+        if (label !== "queued answer") {
+          await deliveryStarted.promise;
+        }
+        if (label !== "in-flight answer" && label !== "queued answer" && !replyOperation) {
+          await blockFlush;
+        }
+        throw new Error("model stream failed after block delivery");
+      });
+      const { run } = createMinimalRun({
+        replyOperation,
+        blockStreamingEnabled: true,
+        opts: { onBlockReply, reasoningPayloadsEnabled: true, commentaryPayloadsEnabled: true },
+        sessionCtx: { ChatType: "group" },
+      });
+
+      const result = await run();
+      await blockFlush;
+      const reply = Array.isArray(result) ? result[0] : result;
+
+      expect(onBlockReply).toHaveBeenCalledOnce();
+      expect(reply).toMatchObject({
+        text: delivered ? GENERIC_EXTERNAL_RUN_FAILURE_TEXT : "NO_REPLY",
+        ...(delivered ? { isError: true } : {}),
+      });
     },
   );
 
@@ -4439,6 +4510,29 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
+  });
+
+  it("does not duplicate an empty terminal failure after an accepted answer block", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({ text: "complete answer" });
+      return {
+        payloads: [],
+        meta: { error: { kind: "tool_result_mismatch", message: "terminal error after delivery" } },
+      };
+    });
+    const { run } = createMinimalRun({
+      blockStreamingEnabled: true,
+      opts: { onBlockReply },
+      sessionCtx: { ChatType: "group" },
+    });
+
+    expect(await run()).toBeUndefined();
+    expect(onBlockReply).toHaveBeenCalledOnce();
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "complete answer" }),
+      expect.any(Object),
+    );
   });
 
   it("does not persist active fallback state for internal subagent announce fallback", async () => {

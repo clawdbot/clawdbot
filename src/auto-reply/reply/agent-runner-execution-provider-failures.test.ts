@@ -131,7 +131,7 @@ describe("executeAgentTurn: provider failures", () => {
             },
           },
         },
-        { didDeliverVisiblePartialReply: () => partialDelivered },
+        { resolveVisibleReplyDelivery: async () => partialDelivered },
       );
 
       expect(result).toMatchObject({
