@@ -198,6 +198,55 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     });
   });
 
+  it("materializes Tavily tool credentials from the plugin secret contract", async () => {
+    expect(
+      findBundledPluginMetadataById("tavily", {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      })?.manifest.configContracts?.secretInputs?.paths,
+    ).toEqual([{ path: "webSearch.apiKey", expected: "string" }]);
+    const sourceConfig = {
+      agents: explicitMainRoster,
+      plugins: {
+        entries: {
+          tavily: {
+            enabled: true,
+            config: {
+              webSearch: {
+                apiKey: envRef("TAVILY_API_KEY"),
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = structuredClone(sourceConfig);
+    const env = { ...isolatedEnv, TAVILY_API_KEY: "resolved-tavily-key" };
+    const context = createResolverContext({ sourceConfig, env });
+
+    collectPluginConfigAssignments({
+      config: runtimeConfig,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["tavily", "bundled"]]),
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "plugins.entries.tavily.config.webSearch.apiKey",
+    ]);
+    const resolved = await resolveSecretRefValues(
+      context.assignments.map((assignment) => assignment.ref),
+      { config: sourceConfig, env, cache: context.cache },
+    );
+    applyResolvedAssignments({ assignments: context.assignments, resolved });
+    expect(sourceConfig.plugins?.entries?.tavily?.config).toMatchObject({
+      webSearch: { apiKey: envRef("TAVILY_API_KEY") },
+    });
+    expect(runtimeConfig.plugins?.entries?.tavily?.config).toMatchObject({
+      webSearch: { apiKey: "resolved-tavily-key" },
+    });
+  });
+
   it("collects voice-call SecretRef assignments from bundled manifest contracts", () => {
     expect(
       findBundledPluginMetadataById("voice-call", {
