@@ -22,6 +22,7 @@ import {
   type AuditStore,
   type GuardAdapter,
   type ReplayStore,
+  type ReviewGate,
 } from "../protocol/index.js";
 import type { ReefChannelConfig } from "./config-schema.js";
 import { autonomyBudget } from "./config-schema.js";
@@ -32,7 +33,7 @@ import {
 } from "./friend-types.js";
 import { reefMessageTextHash } from "./rejection-resend.js";
 import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
-import { ReefTransportClient } from "./transport.js";
+import { ReefInboxEntryParkedError, ReefTransportClient } from "./transport.js";
 import {
   REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
   REEF_OUTBOUND_DELIVERY_TTL_MS,
@@ -187,7 +188,7 @@ export class ReefMessageFlow {
       guard: this.options.guard,
       audit: this.options.audit,
       policyVersion: this.guardPolicyVersion(),
-      reviewGate: (request) => this.options.reviews.request(request),
+      reviewGate: reviewGateFor(this.options.reviews),
     });
     signal?.throwIfAborted();
     // Persist the exact peer/id/body binding before the relay can return a
@@ -409,12 +410,19 @@ export class ReefMessageFlow {
         guard: this.options.guard,
         audit: this.options.audit,
         policyVersion: this.guardPolicyVersion(),
-        reviewGate: (request) => this.options.reviews.request(request),
+        reviewGate: reviewGateFor(this.options.reviews),
       });
     } catch (error) {
       if (error instanceof PipelineError && error.receipt) {
         await this.options.transport.acknowledge(relayPeer, envelope.id, error.receipt);
         return;
+      }
+      // Parked outcomes are domain states, not transport failures: the message
+      // stays un-acked at the relay and the next inbox poll re-attempts it.
+      // Pending reviews wait for the owner; guard_failure waits out a provider
+      // outage. Neither may tear down the inbox socket or reject the peer.
+      if (error instanceof PipelineError && isParkedInboundPipelineError(error)) {
+        throw new ReefInboxEntryParkedError(error.message);
       }
       throw error;
     }
@@ -464,6 +472,24 @@ export class ReefMessageFlow {
     const guard = this.requireGuardConfig();
     return effectiveGuardPolicyVersion(guard.policyVersion, guard.rules);
   }
+}
+
+function reviewGateFor(reviews: ReviewApprovalStore): ReviewGate {
+  return {
+    lookup: (approvalDigest) => reviews.lookupDecision(approvalDigest),
+    request: (request) => reviews.request(request),
+  };
+}
+
+function isParkedInboundPipelineError(error: PipelineError): boolean {
+  if (error.stage === "review" && error.reviewOutcome === "pending") {
+    return true;
+  }
+  return (
+    error.stage === "guard" &&
+    error.verdict?.decision === "deny" &&
+    error.verdict.category === "guard_failure"
+  );
 }
 
 export function createConfiguredGuard(

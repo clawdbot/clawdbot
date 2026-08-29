@@ -106,6 +106,59 @@ describe("ReefMessageFlow inbound", () => {
     expect(relay.acknowledge).toHaveBeenCalledTimes(2);
   });
 
+  it("parks a review-pending inbound message until the owner decides, without re-classifying", async () => {
+    const alice = generateIdentity();
+    const bob = reefKeys();
+    const id = "01JZ0000000000000000000106";
+    const stores = flowStores();
+    const onIngress = vi.fn(async () => {});
+    const relay = transport();
+    const review: Verdict = { ...allow, decision: "review", category: "ambiguous" };
+    // A stochastic classifier would roll "allow" on the second call; the
+    // recorded pending review must own redelivery instead.
+    const classifier = guard(review, allow);
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trust({ alice: peerTrust(alice) }).store,
+      keys: bob,
+      transport: relay as unknown as ReefTransportClient,
+      guard: classifier,
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(11)),
+      replay: new MemoryReplayStore(),
+      ...stores,
+      onIngress,
+      onOwnerNotice: async () => {},
+    });
+    const entry: InboxEntry = {
+      seq: 1,
+      peer: "alice",
+      id,
+      kind: "message",
+      envelope: await envelope(alice, bob, id, "needs an owner decision"),
+      ts: Math.floor(Date.now() / 1_000),
+    };
+
+    await expect(flow.processEntries([entry])).rejects.toMatchObject({
+      name: "ReefInboxEntryParkedError",
+    });
+    expect(relay.acknowledge).not.toHaveBeenCalled();
+    // Redelivery before the decision parks again with zero guard calls.
+    await expect(flow.processEntries([{ ...entry, seq: 2 }])).rejects.toMatchObject({
+      name: "ReefInboxEntryParkedError",
+    });
+    expect(classifier.classify).toHaveBeenCalledTimes(1);
+    expect(onIngress).not.toHaveBeenCalled();
+
+    const pending = await stores.reviews.list();
+    expect(pending).toHaveLength(1);
+    await stores.reviews.decide(pending[0]!.approvalDigest, true);
+    await flow.processEntries([{ ...entry, seq: 3 }]);
+    expect(onIngress).toHaveBeenCalledOnce();
+    expect(relay.acknowledge).toHaveBeenCalledOnce();
+    // One post-approval classification, never a per-redelivery re-roll.
+    expect(classifier.classify).toHaveBeenCalledTimes(2);
+  });
+
   it("acks a signed accepted receipt and delivers duplicate redelivery once, keyed by envelope id", async () => {
     const alice = generateIdentity();
     const bob = reefKeys();
