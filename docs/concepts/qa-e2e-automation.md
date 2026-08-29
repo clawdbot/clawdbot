@@ -1127,6 +1127,13 @@ after-stop cleanup when the process group is confirmed stopped. This ordering
 requires adapters to use the two cleanup phases; it does not change broker TTLs
 or provide a durable guarantee after the QA parent or host is lost.
 
+Temporary runtime and staged-plugin directories are removed independently, and
+removal failures are reported with redacted diagnostics. A cleanup error can
+therefore leave isolated runtime or auth state on disk even when process
+termination is confirmed. Correct the filesystem problem and retry `stop()` on
+the retained lifecycle owner; confirmed termination still permits after-stop
+credential cleanup.
+
 Payload shapes the broker validates on `admin/add`:
 
 - Buzz (`kind: "buzz"`): `{ relayUrl: string, roomId: string,

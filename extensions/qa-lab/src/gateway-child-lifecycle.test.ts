@@ -314,6 +314,32 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     expect(pids()).toHaveLength(1);
   });
 
+  it("reports failed runtime removal without undoing confirmed shutdown and retries cleanup", async () => {
+    const { params, pids } = await fixture();
+    const owner = own(params);
+    const gateway = await owner.start();
+    pids();
+    const originalRm = fs.rm;
+    const fault = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (target === gateway.tempRoot) {
+        throw Object.assign(new Error("EACCES: runtime removal denied"), { code: "EACCES" });
+      }
+      return originalRm(target, options);
+    });
+    try {
+      const result = await owner.stop();
+      expect(result.process).toBe("confirmed-stopped");
+      expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
+      await expect(fs.stat(gateway.tempRoot)).resolves.toBeDefined();
+      expect(result.errors.map(String).join("; ")).toContain("EACCES");
+      await expect(gateway.stop()).rejects.toThrow("EACCES");
+    } finally {
+      fault.mockRestore();
+    }
+    await expect(owner.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
+    await expect(fs.stat(gateway.tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("reports artifact failure while still confirming process shutdown", async () => {
     const { params, pids } = await fixture();
     const owner = own(params);
