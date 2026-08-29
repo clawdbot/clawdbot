@@ -1,4 +1,5 @@
 // Slack plugin module owns durable Events API admission and replay.
+import { randomUUID } from "node:crypto";
 import type { App, Receiver, ReceiverEvent } from "@slack/bolt";
 import {
   createChannelIngressError,
@@ -45,6 +46,7 @@ type SlackIngressPayload = {
   // key space — instead of a router delivery id whose redelivery stability
   // is not a documented contract.
   | { kind: "relay"; message: PluginJsonValue }
+  | { kind: "interaction"; body: PluginJsonValue }
 );
 
 type SlackRelayIngressEvent = {
@@ -64,6 +66,12 @@ type SlackIngressRawEvent =
       kind: "relay";
       deliveryId: string;
       message: PluginJsonValue;
+    }
+  | {
+      kind: "interaction";
+      id: string;
+      body: PluginJsonValue;
+      afterDurableAdmission?: () => Promise<void>;
     };
 
 type SlackIngressBody =
@@ -74,7 +82,8 @@ type SlackIngressBody =
       retryNum?: number;
       retryReason?: string;
     }
-  | { receivedAt: number; kind: "relay"; message: PluginJsonValue };
+  | { receivedAt: number; kind: "relay"; message: PluginJsonValue }
+  | { receivedAt: number; kind: "interaction"; body: PluginJsonValue };
 
 type SlackRelayIngressDispatch = (
   message: PluginJsonValue,
@@ -123,6 +132,7 @@ function resolveSlackIngressLane(body: unknown, eventId: string): string {
   const event = asOptionalRecord(envelope?.event);
   const item = asOptionalRecord(event?.item);
   const assistantThread = asOptionalRecord(event?.assistant_thread);
+  const container = asOptionalRecord(envelope?.container);
   const team = asOptionalRecord(envelope?.team);
   const teamId =
     [envelope?.team_id, team?.id, event?.team]
@@ -137,6 +147,8 @@ function resolveSlackIngressLane(body: unknown, eventId: string): string {
     event?.new_channel_id,
     item?.channel,
     assistantThread?.channel_id,
+    asOptionalRecord(envelope?.channel)?.id,
+    container?.channel_id,
   ]
     .find((value) => typeof value === "string" && value.trim())
     ?.toString()
@@ -144,7 +156,7 @@ function resolveSlackIngressLane(body: unknown, eventId: string): string {
   if (channelId) {
     return `team:${teamId}:conversation:${channelId}`;
   }
-  const userId = [event?.user, event?.user_id]
+  const userId = [event?.user, event?.user_id, asOptionalRecord(envelope?.user)?.id]
     .find((value) => typeof value === "string" && value.trim())
     ?.toString()
     .trim();
@@ -153,6 +165,30 @@ function resolveSlackIngressLane(body: unknown, eventId: string): string {
 
 function isSlackEventCallback(body: unknown): boolean {
   return asOptionalRecord(body)?.type === "event_callback";
+}
+
+const SLACK_INTERACTION_INGRESS_ID_PREFIX = "interaction:";
+
+const SLACK_INTERACTION_CALLBACK_TYPES = new Set([
+  "block_actions",
+  "shortcut",
+  "message_action",
+  "view_submission",
+  "view_closed",
+]);
+
+function isSlackInteractionCallback(body: unknown): boolean {
+  const type = asOptionalRecord(body)?.type;
+  return typeof type === "string" && SLACK_INTERACTION_CALLBACK_TYPES.has(type);
+}
+
+function sanitizeSlackInteractionIngressBody(body: PluginJsonValue): PluginJsonValue {
+  if (!body || typeof body !== "object" || Array.isArray(body) || body.token === undefined) {
+    return body;
+  }
+  const sanitized = { ...body };
+  delete sanitized.token;
+  return sanitized;
 }
 
 function decodeSlackIngressPayload(
@@ -165,6 +201,14 @@ function decodeSlackIngressPayload(
     }
     return { version: payload.version, body: payload };
   }
+  if (payload.kind === "interaction") {
+    if (!asOptionalRecord(payload.body)) {
+      throw new SlackIngressPayloadError(
+        `Slack interaction ingress payload ${eventId} was invalid.`,
+      );
+    }
+    return { version: payload.version, body: payload };
+  }
   if (!asOptionalRecord(payload.body) || resolveSlackEventId(payload.body) !== eventId) {
     throw new SlackIngressPayloadError(`Slack ingress payload ${eventId} was invalid.`);
   }
@@ -172,6 +216,10 @@ function decodeSlackIngressPayload(
 }
 
 function inspectSlackIngress(raw: SlackIngressRawEvent): { eventId: string; laneKey: string } {
+  if (raw.kind === "interaction") {
+    const eventId = `${SLACK_INTERACTION_INGRESS_ID_PREFIX}${raw.id}`;
+    return { eventId, laneKey: resolveSlackIngressLane(raw.body, eventId) };
+  }
   if (raw.kind === "relay") {
     const eventId = resolveSlackRelayIngressEventId({
       deliveryId: raw.deliveryId,
@@ -242,29 +290,45 @@ export function createSlackDurableIngress(
     inspect: inspectSlackIngress,
     payload: {
       version: SLACK_INGRESS_PAYLOAD_VERSION,
-      serialize: (raw, { receivedAt }) =>
-        raw.kind === "relay"
-          ? { kind: "relay", receivedAt, message: raw.message }
-          : {
-              kind: "events-api",
-              receivedAt,
-              body: raw.body,
-              ...(raw.retryNum === undefined ? {} : { retryNum: raw.retryNum }),
-              ...(raw.retryReason === undefined ? {} : { retryReason: raw.retryReason }),
-            },
-      deserialize: (body, { claim }) =>
-        body.kind === "relay"
-          ? {
-              kind: "relay",
-              deliveryId: claim.id.startsWith("relay:") ? claim.id.slice(6) : claim.id,
-              message: body.message,
-            }
-          : {
-              kind: "events-api",
-              body: body.body,
-              ...(body.retryNum === undefined ? {} : { retryNum: body.retryNum }),
-              ...(body.retryReason === undefined ? {} : { retryReason: body.retryReason }),
-            },
+      serialize: (raw, { receivedAt }) => {
+        if (raw.kind === "relay") {
+          return { kind: "relay", receivedAt, message: raw.message };
+        }
+        if (raw.kind === "interaction") {
+          return { kind: "interaction", receivedAt, body: raw.body };
+        }
+        return {
+          kind: "events-api",
+          receivedAt,
+          body: raw.body,
+          ...(raw.retryNum === undefined ? {} : { retryNum: raw.retryNum }),
+          ...(raw.retryReason === undefined ? {} : { retryReason: raw.retryReason }),
+        };
+      },
+      deserialize: (body, { claim }) => {
+        if (body.kind === "relay") {
+          return {
+            kind: "relay",
+            deliveryId: claim.id.startsWith("relay:") ? claim.id.slice(6) : claim.id,
+            message: body.message,
+          };
+        }
+        if (body.kind === "interaction") {
+          return {
+            kind: "interaction",
+            id: claim.id.startsWith(SLACK_INTERACTION_INGRESS_ID_PREFIX)
+              ? claim.id.slice(SLACK_INTERACTION_INGRESS_ID_PREFIX.length)
+              : claim.id,
+            body: body.body,
+          };
+        }
+        return {
+          kind: "events-api",
+          body: body.body,
+          ...(body.retryNum === undefined ? {} : { retryNum: body.retryNum }),
+          ...(body.retryReason === undefined ? {} : { retryReason: body.retryReason }),
+        };
+      },
       encode: ({ body }) => ({ version: SLACK_INGRESS_PAYLOAD_VERSION, ...body }),
       decode: (payload, { claim }) => decodeSlackIngressPayload(payload, claim.id),
       createClaimError: (_kind, claim) =>
@@ -273,7 +337,7 @@ export function createSlackDurableIngress(
     // Slack's HTTP acknowledgement is transport-private and must complete after
     // durable append but before the shared monitor makes the row drainable.
     onDurableAdmission: async (raw) => {
-      if (raw.kind === "events-api") {
+      if (raw.kind !== "relay") {
         await raw.afterDurableAdmission?.();
       }
     },
@@ -386,11 +450,12 @@ export function createSlackDurableIngress(
           if (!app) {
             throw new Error("Slack ingress receiver is not attached to a Bolt app.");
           }
+          const retry = raw.kind === "events-api" ? raw : undefined;
           await app.processEvent({
             body: raw.body as ReceiverEvent["body"],
             ack: async () => {},
-            ...(raw.retryNum === undefined ? {} : { retryNum: raw.retryNum }),
-            ...(raw.retryReason === undefined ? {} : { retryReason: raw.retryReason }),
+            ...(retry?.retryNum === undefined ? {} : { retryNum: retry.retryNum }),
+            ...(retry?.retryReason === undefined ? {} : { retryReason: retry.retryReason }),
             customProperties: {
               [SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY]: routedLifecycle,
             },
@@ -425,20 +490,30 @@ export function createSlackDurableIngress(
   });
 
   const acceptReceiverEvent = async (event: ReceiverEvent): Promise<void> => {
-    if (!isSlackEventCallback(event.body)) {
-      if (!app) {
-        throw new Error("Slack ingress receiver is not attached to a Bolt app.");
-      }
-      await app.processEvent(event);
+    const body = event.body as PluginJsonValue;
+    if (isSlackEventCallback(body)) {
+      await monitor.admit({
+        kind: "events-api",
+        body,
+        ...(event.retryNum === undefined ? {} : { retryNum: event.retryNum }),
+        ...(event.retryReason === undefined ? {} : { retryReason: event.retryReason }),
+        afterDurableAdmission: () => event.ack(),
+      });
       return;
     }
-    await monitor.admit({
-      kind: "events-api",
-      body: event.body as PluginJsonValue,
-      ...(event.retryNum === undefined ? {} : { retryNum: event.retryNum }),
-      ...(event.retryReason === undefined ? {} : { retryReason: event.retryReason }),
-      afterDurableAdmission: () => event.ack(),
-    });
+    if (isSlackInteractionCallback(body)) {
+      await monitor.admit({
+        kind: "interaction",
+        id: randomUUID(),
+        body: sanitizeSlackInteractionIngressBody(body),
+        afterDurableAdmission: () => event.ack(),
+      });
+      return;
+    }
+    if (!app) {
+      throw new Error("Slack ingress receiver is not attached to a Bolt app.");
+    }
+    await app.processEvent(event);
   };
 
   const acceptRelayEvent = async (event: SlackRelayIngressEvent): Promise<void> => {
