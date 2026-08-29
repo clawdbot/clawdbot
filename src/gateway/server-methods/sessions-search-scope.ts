@@ -3,6 +3,11 @@ import {
   errorShape,
   type SessionsSearchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  AgentSelectionRequiredError,
+  listAgentIds,
+  tryResolveAmbientOwnerAgentId,
+} from "../../agents/agent-scope-config.js";
 import { isConfiguredSessionStoreAgentId } from "../../config/sessions.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -63,13 +68,21 @@ export function resolveSessionSearchScope(cfg: OpenClawConfig, params: SessionsS
       error: errorShape(ErrorCodes.INVALID_REQUEST, "sessions.search supports one agent per call"),
     };
   }
-  let agentId = requestedAgentId ?? agentIds.values().next().value;
+  // Unfiltered search with no explicit agentId: fall back to the configured
+  // ambient owner (agents.defaults.systemAgent.agentId), matching skills.list /
+  // models.list. The prior fallback passed the literal "main" to
+  // resolveRequestedSessionAgentId as a session key, so explicit multi-agent
+  // rosters without a legacy `default: true` marker rejected it with a
+  // misleading 'session key "main" has no explicit owner' error (same
+  // owner-loss class as the Talk path in #126730).
+  const agentId =
+    requestedAgentId ?? agentIds.values().next().value ?? tryResolveAmbientOwnerAgentId(cfg);
   if (!agentId) {
-    const fallbackAgent = resolveRequestedSessionAgentId(cfg, "main");
-    if (!fallbackAgent.ok) {
-      return { ok: false as const, error: fallbackAgent.error };
-    }
-    agentId = fallbackAgent.agentId;
+    const selection = new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: "sessions.search",
+      hint: "Pass an explicit agentId or configure agents.defaults.systemAgent.agentId.",
+    });
+    return { ok: false as const, error: errorShape(ErrorCodes.INVALID_REQUEST, selection.message) };
   }
   return {
     ok: true as const,

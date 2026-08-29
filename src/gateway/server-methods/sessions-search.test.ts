@@ -282,6 +282,55 @@ describe("sessions.search gateway method", () => {
     });
   });
 
+  it("resolves the configured systemAgent for an unfiltered search under explicit multi-agent ownership", async () => {
+    // Regression (#126730 sessions.search sibling): agents.ownership "explicit"
+    // with an `entries` roster and no legacy `default: true` marker. The pre-fix
+    // fallback passed the literal "main" to resolveRequestedSessionAgentId as a
+    // session key, which rejected it with 'session key "main" has no explicit
+    // owner'. agents.defaults.systemAgent.agentId must own an unfiltered search.
+    cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, alpha: {}, beta: {}, gamma: {} },
+      },
+    };
+
+    const respond = await callSearch({ query: "needle" });
+
+    expect(respond).not.toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("has no explicit owner") }),
+    );
+    expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
+      agentId: "main",
+      query: "needle",
+      limit: undefined,
+      storePath: expect.any(String),
+    });
+  });
+
+  it("resolves the configured systemAgent for an unfiltered search under global session scope", async () => {
+    cfg = {
+      session: { scope: "global" },
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, alpha: {}, beta: {} },
+      },
+    };
+
+    await callSearch({ query: "needle" });
+
+    expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
+      agentId: "main",
+      query: "needle",
+      limit: undefined,
+      storePath: expect.any(String),
+    });
+  });
+
   it("does not allow agentId to widen an unfiltered search", async () => {
     const respond = await callSearch({ agentId: "work", query: "needle" });
 
