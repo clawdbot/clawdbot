@@ -1745,7 +1745,6 @@ describe("scripts/test-projects changed-target routing", () => {
       "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
       "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
       "test/scripts/mcp-code-mode-gateway-client.test.ts",
-      "test/scripts/session-log-mentions.test.ts",
       "src/agents/agent-bundle-mcp-runtime.test.ts",
       "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
       "src/gateway/server.cron.test.ts",

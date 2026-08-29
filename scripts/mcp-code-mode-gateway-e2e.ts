@@ -19,10 +19,9 @@ import { startGatewayServer } from "../src/gateway/server.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
 import { writeProbeMcpServer } from "./e2e/lib/mcp-code-mode-probe-server.ts";
 import {
-  type McpCodeModeMentions,
+  extractMcpCodeModeRequestEvidence,
   validateMcpCodeModeResult,
 } from "./e2e/lib/mcp-code-mode-validation.ts";
-import { countSessionLogMentions } from "./e2e/lib/session-log-mentions.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 
 async function freePort(): Promise<number> {
@@ -74,21 +73,6 @@ async function fetchJson(url: string, init: RequestInit = {}): Promise<unknown> 
       clearNodeTimeout(timeout);
     }
   }
-}
-
-async function readSessionLogMentions(stateDir: string): Promise<Record<string, number>> {
-  const sessionsDir = path.join(stateDir, "agents", "qa", "sessions");
-  return await countSessionLogMentions({
-    sessionsDir,
-    needles: {
-      apiCall: "MCP.$api",
-      apiFileList: "API.list",
-      apiFileRead: "API.read",
-      mcpNamespace: "MCP.fixture",
-      mcpTool: "MCP.fixture.lookupNote",
-      toolSearchPollution: 'catalog.search("lookup note"',
-    },
-  });
 }
 
 function restoreEnvValue(key: string, value: string | undefined): void {
@@ -245,17 +229,17 @@ async function main() {
     )) as Array<{
       raw?: string;
       body?: { tools?: unknown[] };
+      plannedToolArgs?: Record<string, unknown>;
+      plannedToolCallId?: string;
       plannedToolName?: string;
+      toolOutput?: string;
+      toolOutputCallId?: string;
+      toolOutputStructuredError?: true;
     }>;
     const firstRequest = laneRequests[0] ?? {};
-    const mentions = await readSessionLogMentions(stateDir);
-    const plannedTools = laneRequests
-      .map((request) => request.plannedToolName)
-      .filter((name): name is string => typeof name === "string");
-    const finalText = validateMcpCodeModeResult(response, mentions as McpCodeModeMentions, {
-      plannedTools,
-      requireExec: true,
-    });
+    const evidence = extractMcpCodeModeRequestEvidence(laneRequests);
+    const finalText = validateMcpCodeModeResult(response, evidence);
+    const plannedTools = evidence.execCalls.map(() => "exec");
 
     const summary = {
       ok: true,
@@ -269,7 +253,7 @@ async function main() {
         : 0,
       providerRawBytes: typeof firstRequest.raw === "string" ? firstRequest.raw.length : 0,
       plannedTools,
-      sessionLogMentions: mentions,
+      matchedExecCallIds: evidence.execCalls.map(({ callId }) => callId),
     };
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   } finally {
