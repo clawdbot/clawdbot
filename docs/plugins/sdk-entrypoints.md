@@ -310,9 +310,11 @@ CLI registration:
   `machineOutput({ argv, stdoutIsTTY })` resolver for JSON, JSONL, or other
   machine-readable stdout modes that are not selected solely by `--json`.
   Parse command tokens with `getRootOptionAwareCommandPath` from
-  `openclaw/plugin-sdk/cli-argv`. Keep the resolver in lightweight CLI metadata
-  and share it with full registration. Nested descriptors do not expose this
-  field.
+  `openclaw/plugin-sdk/cli-argv`. Keep the descriptor in a lightweight
+  plugin-local module and reuse it from both `cli-metadata.ts` and full
+  registration; do not import runtime barrels to construct metadata.
+  Meeting runtime shells accept that descriptor through `cli.descriptor`.
+  Nested descriptors do not expose `machineOutput`.
 - Use `api.registerNodeCliFeature(...)` for paired-node feature commands so
   they land under `openclaw nodes` (equivalent to
   `registerCli(registrar, { parentPath: ["nodes"], ... })`).

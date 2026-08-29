@@ -1099,6 +1099,27 @@ QA Lab acquires an exclusive lease, heartbeats it for the duration of the
 run, and releases it on shutdown. Pool kinds are `"buzz"`, `"discord"`,
 `"slack"`, `"telegram"`, and `"whatsapp"`.
 
+The suite owns its Gateway lifecycle before startup begins, including startup
+retries and replacement processes. Transport adapters drain their driver work in
+`cleanup()` and release Gateway-backed credentials in
+`cleanupAfterGatewayStop()`. The suite runs that second phase only when no
+Gateway was spawned or process-group termination was confirmed. A readiness
+failure or an exited group leader is not shutdown proof.
+
+Failed startup or replacement settles the process without finalizing its logs
+or staging directory. The caller retains the lifecycle owner and always calls
+`stop()`, including after startup rejects. That explicit stop applies the
+caller's artifact policy, so failure reports can preserve sanitized Gateway logs
+before temporary runtime state is removed.
+
+If termination cannot be confirmed, the suite reports a cleanup failure, keeps
+the runtime directory, and leaves the adapter's lease and heartbeat owned.
+Inspect the reported process group and retained runtime before reusing those
+credentials. Log, RPC, or artifact errors are still reported, but do not prevent
+after-stop cleanup when the process group is confirmed stopped. This ordering
+requires adapters to use the two cleanup phases; it does not change broker TTLs
+or provide a durable guarantee after the QA parent or host is lost.
+
 Payload shapes the broker validates on `admin/add`:
 
 - Buzz (`kind: "buzz"`): `{ relayUrl: string, roomId: string,

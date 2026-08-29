@@ -43,10 +43,8 @@ import {
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import {
-  prepareChannelParticipantObservation,
-  recordAcceptedSessionParticipantInput,
-} from "../../sessions/session-participant-input.js";
+import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
+import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { cleanDeferredFinalText, shouldDeferFinalTtsText } from "../../tts/captioned-final.js";

@@ -1,11 +1,7 @@
 import type { PresenceEntry } from "../api/types.ts";
 import { readPresenceEntries } from "../app/user-profile.ts";
 
-export type PresenceViewer = {
-  id: string;
-  name?: string;
-  email?: string;
-  avatarUrl?: string;
+export type PresenceViewer = NonNullable<PresenceEntry["user"]> & {
   watchedSessions: readonly string[];
   entries?: readonly PresenceEntry[];
 };
@@ -67,6 +63,11 @@ function projectPresenceViewers(
       .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([id, userEntries]) => ({
         id,
+        // Raw-id grouping can combine qualified and unqualified connections.
+        // Carry provenance only when every connection supplies the same fact.
+        identity: userEntries.every((entry) => entry.user?.identity?.id === id)
+          ? userEntries[0]?.user?.identity
+          : undefined,
         name: firstSorted(userEntries.map((entry) => entry.user?.name)),
         email: firstSorted(userEntries.map((entry) => entry.user?.email)),
         avatarUrl: firstSorted(userEntries.map((entry) => entry.user?.avatarUrl)),
@@ -109,7 +110,7 @@ export function projectPresencePayload(
   return cachedPresenceProjection;
 }
 
-export function presenceViewerLabel(user: PresenceViewer): string {
+export function presenceViewerLabel(user: Pick<PresenceViewer, "id" | "name" | "email">): string {
   return user.name ?? user.email ?? user.id;
 }
 

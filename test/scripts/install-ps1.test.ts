@@ -213,6 +213,49 @@ describe("install.ps1 failure handling", () => {
         ].join("\n"),
       },
       {
+        name: "pnpm-prefer-offline-policy",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          '$root = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-pnpm-policy-" + [guid]::NewGuid().ToString("N"))',
+          '$project = Join-Path $root "project"',
+          "$previousUpper = $env:PNPM_CONFIG_PREFER_OFFLINE",
+          "$previousLower = $env:pnpm_config_prefer_offline",
+          "$script:PnpmConfigValue = 'undefined'",
+          "function Get-PnpmCommandPath { return 'Get-TestPnpmConfig' }",
+          "function Get-TestPnpmConfig {",
+          "  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)",
+          "  if ($Arguments -join ' ' -ne 'config get prefer-offline') { throw \"unexpected pnpm command: $($Arguments -join ' ')\" }",
+          '  if ((Get-Location).Path -ne $project) { throw "unexpected pnpm cwd: $(Get-Location)" }',
+          "  if ($script:PnpmConfigValue -eq 'failure') { $global:LASTEXITCODE = 1; return }",
+          "  $global:LASTEXITCODE = 0",
+          "  return $script:PnpmConfigValue",
+          "}",
+          "try {",
+          "  New-Item -ItemType Directory -Force -Path $project | Out-Null",
+          "  Remove-Item Env:PNPM_CONFIG_PREFER_OFFLINE -ErrorAction SilentlyContinue",
+          "  Remove-Item Env:pnpm_config_prefer_offline -ErrorAction SilentlyContinue",
+          "  if (-not (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project)) { throw 'default was disabled' }",
+          "  $script:PnpmConfigValue = 'false'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'false pnpm config was ignored' }",
+          "  $script:PnpmConfigValue = 'true'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'true pnpm config was ignored' }",
+          "  $script:PnpmConfigValue = 'failure'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'failed pnpm config query enabled the default' }",
+          "  $env:PNPM_CONFIG_PREFER_OFFLINE = 'false'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'uppercase override was ignored' }",
+          "  Remove-Item Env:PNPM_CONFIG_PREFER_OFFLINE -ErrorAction SilentlyContinue",
+          "  $env:pnpm_config_prefer_offline = 'false'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'lowercase override was ignored' }",
+          "} finally {",
+          "  $env:PNPM_CONFIG_PREFER_OFFLINE = $previousUpper",
+          "  $env:pnpm_config_prefer_offline = $previousLower",
+          "  Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
         name: "npm-candidate-validation",
         source: [
           scriptWithoutEntryPoint,
@@ -949,6 +992,10 @@ describe("install.ps1 failure handling", () => {
     expectBatchedPowerShellCase("npm-lifecycle-policy");
   });
 
+  runIfPowerShell("preserves explicit pnpm prefer-offline settings for Git installs", () => {
+    expectBatchedPowerShellCase("pnpm-prefer-offline-policy");
+  });
+
   runIfPowerShell("rejects npm success without a usable candidate package", () => {
     expectBatchedPowerShellCase("npm-candidate-validation");
   });
@@ -1298,7 +1345,8 @@ describe("install.ps1 failure handling", () => {
     expect(mainBody).toContain("$npmInstallResults = @(Install-OpenClaw)");
     expect(mainBody).toContain("Test-BooleanSuccessResult -Results $npmInstallResults");
     expect(gitInstallBody).toContain("Push-Location -LiteralPath $RepoDir");
-    expect(gitInstallBody).toContain("$sourceInstallArgs = @(");
+    expect(gitInstallBody).toContain('$sourceInstallArgs = @("install")');
+    expect(gitInstallBody).toContain("Test-ShouldPreferOfflinePnpmInstall -ProjectDir $RepoDir");
     expect(gitInstallBody).toContain('"--config.node-linker=hoisted"');
     expect(gitInstallBody).toContain('"--config.enable-pre-post-scripts=true"');
     expect(gitInstallBody).toContain('"--config.side-effects-cache=false"');

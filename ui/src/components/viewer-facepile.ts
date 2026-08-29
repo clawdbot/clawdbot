@@ -57,7 +57,7 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
     }
     const label = presenceViewerLabel(user);
     const view = resolveIdentityAvatarView({
-      identity: this.identity,
+      identity: this.identity ?? user.identity,
       id: user.id,
       name: user.name,
       username: user.email,
@@ -115,9 +115,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
           avatarUrl,
           watchedSessions: [],
         }))
-      : (this.staticUsers ?? viewers).map((user) =>
-          Object.assign({}, user, { identity: { type: "profile" as const, id: user.id } }),
-        );
+      : (this.staticUsers ?? viewers);
     if (users.length === 0) {
       return nothing;
     }

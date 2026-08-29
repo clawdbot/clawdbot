@@ -761,11 +761,11 @@ describe("chat typing status", () => {
     expect(indicator?.textContent).toContain(expectedText);
   });
 
-  it("anchors the run error and queue to the composer without moving transcript presence", () => {
+  it("anchors the run error and local command queue without moving transcript presence", () => {
     const container = renderChatView({
       typingActors: [{ id: "ayaan", label: "Ayaan" }],
       runError: { summary: "Gateway unavailable" },
-      queue: [{ id: "queued", text: "Try again", createdAt: 1 }],
+      queue: [{ id: "queued", text: "/compact", localCommandName: "compact", createdAt: 1 }],
     });
     const indicator = requireElement(
       container,
@@ -1371,7 +1371,7 @@ describe("chat history pagination", () => {
     expect(container.querySelector(".chat-history-sentinel")).toBeNull();
   });
 
-  it("renders the auto-load sentinel and a spinner while older history loads", () => {
+  it("renders the auto-load sentinel and a structural skeleton while older history loads", () => {
     const container = renderChatView({
       historyPagination: {
         hasMore: true,
@@ -1383,10 +1383,11 @@ describe("chat history pagination", () => {
     const sentinel = requireElement(container, ".chat-history-sentinel", "history sentinel");
 
     expect(threadInner.firstElementChild).toBe(sentinel);
-    expect(sentinel.querySelector(".session-run-spinner")).not.toBeNull();
-    expect(sentinel.querySelector('[role="status"]')?.textContent?.trim()).toBe(
-      t("common.loading"),
-    );
+    const skeleton = sentinel.querySelector("openclaw-panel-loading-skeleton");
+    expect(skeleton).not.toBeNull();
+    expect(skeleton?.getAttribute("aria-label")).toBe(t("common.loading"));
+    expect(skeleton?.getAttribute("aria-busy")).toBe("true");
+    expect(skeleton?.compact).toBe(true);
     expect(sentinel.querySelector("button")).toBeNull();
   });
 
@@ -1748,6 +1749,156 @@ describe("chat transcript rendering", () => {
     );
   });
 
+  it.each(["ordinary", "active", "completed"])(
+    "announces named attachment failures within the cap in %s assistant rows",
+    (flow) => {
+      const transcript = createTestTranscript();
+      const container = document.createElement("div");
+      const existing = {
+        testVirtualRow: true,
+        testVirtualKey: "assistant-existing",
+        testVirtualRole: "assistant",
+        role: "assistant",
+        content: "Existing answer",
+      };
+      const renderMessages = (messages: unknown[]) =>
+        renderChatInto(container, { transcript, messages });
+
+      renderMessages([existing]);
+      expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe("");
+      const attachmentOnly = {
+        testVirtualRow: true,
+        testVirtualKey: "assistant-missing-attachment",
+        testVirtualRole: "assistant",
+        role: "assistant",
+        content: [
+          {
+            type: "attachment_error",
+            attachment: { code: "file-not-found", kind: "document", label: "missing.pdf" },
+          },
+        ],
+      };
+      renderMessages([existing, attachmentOnly]);
+      expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+        "missing.pdf: Not sent. File not found. Check the path and try again.",
+      );
+
+      const mixed = {
+        testVirtualRow: true,
+        testVirtualKey: "assistant-mixed-attachments",
+        testVirtualRole: "assistant",
+        role: "assistant",
+        content: [
+          { type: "text", text: "Partial result" },
+          {
+            type: "attachment_error",
+            attachment: {
+              code: "unsupported-format",
+              kind: "document",
+              label: "settings.toml",
+            },
+          },
+        ],
+      };
+      renderMessages([existing, attachmentOnly, mixed]);
+      const mixedAnnouncement = container.querySelector(
+        ".chat-transcript-announcement",
+      )?.textContent;
+
+      const runBoundary = {
+        kind: "group" as const,
+        key: "group:user:attachment-run",
+        role: "user" as const,
+        messages: [
+          {
+            key: "user:attachment-run",
+            message: {
+              role: "user",
+              content: "Send the attachment",
+              __openclaw: {
+                id: "user:attachment-run",
+                idempotencyKey: "attachment-run:user",
+              },
+            },
+          },
+        ],
+        timestamp: 1,
+        isStreaming: false,
+      };
+      const completedFailure = {
+        kind: "group" as const,
+        key: "group:assistant:attachment-run",
+        role: "assistant" as const,
+        messages: [
+          {
+            key: "assistant:attachment-run",
+            message: {
+              role: "assistant",
+              content: attachmentOnly.content,
+              runId: "attachment-run",
+            },
+          },
+        ],
+        timestamp: 2,
+        isStreaming: false,
+        runId: "attachment-run",
+      };
+      vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+        runBoundary,
+        completedFailure,
+      ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+      renderChatInto(container, {
+        transcript,
+        messages: [runBoundary, completedFailure],
+      });
+      expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+        "missing.pdf: Not sent. File not found. Check the path and try again.",
+      );
+
+      for (const [index, prose] of [
+        "Here is the requested summary. ".repeat(25),
+        `${"x".repeat(430)}🦞${"y".repeat(100)}`,
+      ].entries()) {
+        const message = {
+          role: "assistant",
+          content: [{ type: "text", text: prose }, ...attachmentOnly.content],
+          runId: "attachment-run",
+        };
+        const reply = {
+          ...completedFailure,
+          key: `group:assistant:long-${index}`,
+          messages: [{ key: `assistant:long-${index}`, message }],
+          isStreaming: flow === "active",
+        };
+        const items = flow === "ordinary" ? [reply] : [runBoundary, reply];
+        vi.mocked(chatThread.buildCachedChatItems).mockReturnValue(items);
+        renderChatInto(container, { transcript, messages: items });
+        const announcement = expectDefined(
+          container.querySelector(".chat-transcript-announcement")?.textContent,
+          "attachment failure announcement",
+        );
+        expect(announcement).toContain(
+          "missing.pdf: Not sent. File not found. Check the path and try again.",
+        );
+        expect(announcement).toContain(prose.slice(0, 30));
+        expect(announcement.length).toBe(index === 0 ? 500 : 499);
+        expect(announcement).not.toMatch(/[\uD800-\uDFFF]/u);
+
+        vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+          ...items.slice(0, -1),
+          { ...reply, messages: [{ key: `assistant:long-${index}`, message: mixed }] },
+        ]);
+        renderChatInto(container, { transcript, messages: [mixed] });
+        expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+          announcement,
+        );
+      }
+      expect(mixedAnnouncement).toBe(
+        "settings.toml: Not sent. Rejected by the local attachment allowlist. Send a supported file type. Partial result",
+      );
+    },
+  );
+
   it("announces a run preamble and its later terminal answer separately", () => {
     const transcript = createTestTranscript();
     const container = document.createElement("div");
@@ -2089,8 +2240,8 @@ describe("chat scroll-to-bottom affordance", () => {
     const container = renderChatView({
       showNewMessages: true,
       queue: [
-        { id: "queued-1", text: "first queued message", createdAt: 1 },
-        { id: "queued-2", text: "second queued message", createdAt: 2 },
+        { id: "queued-1", text: "/compact", localCommandName: "compact", createdAt: 1 },
+        { id: "queued-2", text: "/reset", localCommandName: "reset", createdAt: 2 },
       ],
     });
 
@@ -2625,14 +2776,14 @@ describe("chat loading skeleton", () => {
     {
       name: "shows the skeleton while the initial history load has no rendered content",
       props: { loading: true },
-      present: { ".chat-loading-skeleton": null },
+      present: { "openclaw-panel-loading-skeleton": null },
       absent: [".agent-chat__welcome"],
-      counts: { ".chat-loading-skeleton": 1 },
+      counts: { "openclaw-panel-loading-skeleton": 1 },
     },
     {
       name: "shows the loading skeleton for an active run with no stream",
       props: { canAbort: true, loading: true },
-      present: { ".chat-loading-skeleton": null },
+      present: { "openclaw-panel-loading-skeleton": null },
       absent: [".agent-chat__welcome"],
       counts: { ".chat-reading-indicator": 0 },
     },
@@ -2673,18 +2824,18 @@ describe("chat loading skeleton", () => {
         messages: [{ role: "assistant", content: "Already loaded answer", timestamp: 1 }],
       },
       present: { ".chat-group": "Already loaded answer" },
-      absent: [".chat-loading-skeleton"],
+      absent: ["openclaw-panel-loading-skeleton"],
     },
     {
       name: "keeps active stream content visible without the skeleton during a background reload",
       props: { loading: true, stream: "Partial streamed answer", streamStartedAt: 1 },
       present: { ".chat-stream": "Partial streamed answer" },
-      absent: [".chat-loading-skeleton"],
+      absent: ["openclaw-panel-loading-skeleton"],
     },
     {
       name: "keeps the reading indicator visible without the skeleton before stream text arrives",
       props: { loading: true, stream: "", streamStartedAt: 1 },
-      absent: [".chat-loading-skeleton"],
+      absent: ["openclaw-panel-loading-skeleton"],
       counts: { ".chat-reading-indicator": 1 },
     },
   ] satisfies Array<{

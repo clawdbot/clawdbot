@@ -35,7 +35,7 @@ import {
   waitForGatewayReady,
   waitForQaGatewayRestartBoundary,
 } from "./gateway-child-readiness.js";
-import { startQaGatewayChild } from "./gateway-child.js";
+import { createQaGatewayChild } from "./gateway-child.js";
 import { readQaLiveProviderConfigOverrides } from "./providers/live-config.js";
 import {
   assertQaLiveCodexAuthAvailable,
@@ -66,11 +66,20 @@ vi.mock("./node-exec.js", () => ({
 }));
 
 const tempDirs = createTempDirHarness();
+const owners: ReturnType<typeof createQaGatewayChild>[] = [];
+function ownGateway() {
+  const owner = createQaGatewayChild();
+  owners.push(owner);
+  return owner;
+}
 
 afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
   resolveQaNodeExecPathMock.mockReset();
   qaTempPathState.preferredTmpDir = process.env.TMPDIR || "/tmp";
+  for (const owner of owners.splice(0)) {
+    await owner.stop();
+  }
   await tempDirs.cleanup();
 });
 
@@ -483,8 +492,9 @@ describe("buildQaRuntimeEnv", () => {
     qaTempPathState.preferredTmpDir = tempParent;
     resolveQaNodeExecPathMock.mockRejectedValueOnce(new Error("node missing"));
 
+    const owner = ownGateway();
     await expect(
-      startQaGatewayChild({
+      owner.start({
         repoRoot: process.cwd(),
         transport: {
           requiredPluginIds: [],
@@ -493,6 +503,7 @@ describe("buildQaRuntimeEnv", () => {
         transportBaseUrl: "http://127.0.0.1:43123",
       }),
     ).rejects.toThrow("node missing");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
 
     await expect(readdir(tempParent)).resolves.toStrictEqual([]);
   });
@@ -502,13 +513,15 @@ describe("buildQaRuntimeEnv", () => {
     const emptyRepo = await tempDirs.makeTempDir("qa-gateway-empty-repo-");
     qaTempPathState.preferredTmpDir = tempParent;
 
+    const owner = ownGateway();
     await expect(
-      startQaGatewayChild({
+      owner.start({
         repoRoot: emptyRepo,
         useRepoCli: true,
         transportBaseUrl: "http://127.0.0.1:43123",
       }),
     ).rejects.toThrow("OpenClaw CLI entry not found");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
 
     await expect(readdir(tempParent)).resolves.toStrictEqual([]);
   });
@@ -534,8 +547,9 @@ describe("buildQaRuntimeEnv", () => {
       await writeFile(path.join(repoRoot, "package.json"), packageContents, "utf8");
     }
 
+    const owner = ownGateway();
     await expect(
-      startQaGatewayChild({
+      owner.start({
         repoRoot,
         transport: {
           requiredPluginIds: [],
@@ -544,6 +558,7 @@ describe("buildQaRuntimeEnv", () => {
         transportBaseUrl: "http://127.0.0.1:43123",
       }),
     ).rejects.toThrow(expectedError);
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
 
     await expect(readdir(tempParent)).resolves.toStrictEqual([]);
     await expect(readdir(stagedRuntimeParent)).resolves.toStrictEqual([]);
@@ -555,8 +570,9 @@ describe("buildQaRuntimeEnv", () => {
     qaTempPathState.preferredTmpDir = preferredTempParent;
     const missingExecutable = path.join(commandTempParent, "missing-openclaw-node");
 
+    const owner = ownGateway();
     await expect(
-      startQaGatewayChild({
+      owner.start({
         repoRoot: process.cwd(),
         command: {
           executablePath: missingExecutable,
@@ -570,6 +586,7 @@ describe("buildQaRuntimeEnv", () => {
         transportBaseUrl: "http://127.0.0.1:43123",
       }),
     ).rejects.toThrow(/installed package mock auth bootstrap failed for openai: .*ENOENT/u);
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
 
     await expect(readdir(preferredTempParent)).resolves.toStrictEqual([]);
     await expect(readdir(commandTempParent)).resolves.toStrictEqual([]);
@@ -901,8 +918,9 @@ describe("buildQaRuntimeEnv", () => {
       `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify(env));`,
     ].join("\n");
 
+    const owner = ownGateway();
     await expect(
-      startQaGatewayChild({
+      owner.start({
         repoRoot: process.cwd(),
         command: {
           executablePath: process.execPath,
@@ -926,6 +944,7 @@ describe("buildQaRuntimeEnv", () => {
         transportBaseUrl: "http://127.0.0.1:43123",
       }),
     ).rejects.toThrow("gateway exited before listening");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
 
     await expect(readFile(observedEnvPath, "utf8")).resolves.toBe(
       JSON.stringify({ SAFE_VALUE: "patched" }),
@@ -1475,8 +1494,9 @@ describe("buildQaRuntimeEnv", () => {
     const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
     await mkdir(tempParentDir);
 
+    const owner = ownGateway();
     await expect(
-      startQaGatewayChild({
+      owner.start({
         repoRoot: process.cwd(),
         command: {
           executablePath: process.execPath,
@@ -1489,6 +1509,7 @@ describe("buildQaRuntimeEnv", () => {
         runtimeEnvPatch: { QA_RECORD_PATH: recordPath },
       }),
     ).rejects.toThrow("fixture gateway exit");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
 
     const records = await readJsonLines(recordPath);
     const authRecords = records.filter((record) => record.kind === "auth");
@@ -1549,7 +1570,8 @@ describe("buildQaRuntimeEnv", () => {
     const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
     await mkdir(tempParentDir);
 
-    const result = startQaGatewayChild({
+    const owner = ownGateway();
+    const result = owner.start({
       repoRoot: process.cwd(),
       command: {
         executablePath: process.execPath,
@@ -1566,6 +1588,7 @@ describe("buildQaRuntimeEnv", () => {
     });
 
     const error = await result.catch((caught: unknown) => caught);
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
     expect(error).toBeInstanceOf(Error);
     if (!(error instanceof Error)) {
       throw new Error("expected package auth bootstrap error");
@@ -1700,6 +1723,36 @@ describe("buildQaRuntimeEnv", () => {
           ? "qa gateway process tree remained alive after forced shutdown: pgid=12345 members=unknown (/proc unavailable) childExitRecorded=false"
           : "qa gateway process tree remained alive after forced shutdown: pid=12345 childExitRecorded=false",
       );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not confirm shutdown when an exited leader's group probe is denied",
+    async () => {
+      const child = Object.assign(new EventEmitter(), {
+        pid: 12345,
+        exitCode: 17,
+        signalCode: null,
+        kill: vi.fn(() => false),
+      });
+      const realKill = process.kill.bind(process);
+      const fault = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid === -child.pid) {
+          throw Object.assign(new Error("owned fake group probe denied"), { code: "EPERM" });
+        }
+        return realKill(pid, signal);
+      });
+      try {
+        await expect(
+          stopQaGatewayChildProcessTree(child as never, {
+            gracefulTimeoutMs: 1,
+            forceTimeoutMs: 1,
+            inspectLinuxProcessGroup: () => null,
+          }),
+        ).rejects.toThrow("process tree remained alive");
+      } finally {
+        fault.mockRestore();
+      }
     },
   );
 

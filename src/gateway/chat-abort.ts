@@ -662,7 +662,7 @@ export function abortChatRunById(
     return { aborted: false };
   }
 
-  const bufferedText = ops.chatRunState.resolveBuffer(runId).text;
+  const bufferedText = ops.chatRunState.resolveBuffer(runId, { final: true }).text;
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
   if (stopReason) {

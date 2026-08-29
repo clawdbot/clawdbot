@@ -8,6 +8,7 @@ import {
 import {
   buildModelsListResult,
   createGatewayAgentModelCatalogProjector,
+  prepareModelsListResult,
 } from "./models-list-result.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -247,17 +248,18 @@ describe("models.list provider catalog outcomes", () => {
       metadataSnapshot,
       preparedAuthStore: emptyAuthStore,
     });
-    vi.spyOn(projector, "evaluateEntry").mockResolvedValue({
+    const evaluateEntry = vi.spyOn(projector, "evaluateEntry").mockResolvedValue({
       ...evaluation,
       routeResolution: null,
     });
+    const evaluateNative = vi.spyOn(projector, "evaluateNative");
     const context = {
       getRuntimeConfig: () => config,
       loadGatewayModelCatalogSnapshot: vi.fn(),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
 
-    const result = await buildModelsListResult({
+    const prepared = await prepareModelsListResult({
       context,
       params: { view: "configured" },
       preloadedCatalog: { agentId: "main", config, snapshot },
@@ -265,6 +267,12 @@ describe("models.list provider catalog outcomes", () => {
       catalogProjector: projector,
     });
 
-    expect(result.models).toEqual([{ ...model, tags: ["configured"], ...expected }]);
+    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], ...expected }]);
+    const hostEvaluations = evaluateEntry.mock.calls.length;
+    evaluateNative.mockReturnValue({ availability: true, routeResolution: null });
+    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: true }]);
+    evaluateNative.mockReturnValue({ availability: false, routeResolution: null });
+    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: false }]);
+    expect(evaluateEntry).toHaveBeenCalledTimes(hostEvaluations);
   });
 });

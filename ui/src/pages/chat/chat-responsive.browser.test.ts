@@ -4,6 +4,10 @@ import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.ts";
+import {
+  createPlaybackMediaFixture,
+  type PlaybackMediaFixtureFormat,
+} from "../../../../test/fixtures/media-playback.js";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
@@ -53,7 +57,17 @@ let cachedUiCss: string | null = null;
 const SHARED_APP_CONTEXT_TEXT = "Context hover regression fixture.";
 const SHARED_APP_SLASH_TEXT = "Short landscape slash command keyboard regression fixture.";
 const SHARED_APP_IMAGE_URL = "https://cdn.example/render%2Epng?download=1";
-const SHARED_APP_VIDEO_URL = "https://cdn.example/clip%252Emp4?download=1";
+const SHARED_APP_ATTACHMENT_OUTCOME_TEXT = "Mixed attachment outcome fixture.";
+const SHARED_APP_TTS_TEXT = "Audio generated and delivered via native TTS.";
+const SHARED_APP_PLAYBACK_MEDIA = [
+  ["voice---a75c70c7-0112-4d07-8fb5-40c82c979ee8.mp3", "audio", "audio/mpeg", "native"],
+  ["reply.ogg", "audio", "audio/ogg", "transcode"],
+  ["reply.m4a", "audio", "audio/x-m4a", "native"],
+  ["reply.flac", "audio", "audio/flac", "transcode"],
+  ["reply.mp4", "video", "video/mp4", "native"],
+  ["reply.webm", "video", "video/webm", "transcode"],
+] as const;
+const sharedAppPlaybackRequests: string[] = [];
 
 function installResponsiveChatGateway(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
   return installMockGateway(page, {
@@ -76,7 +90,23 @@ async function createSharedAppPage(): Promise<Page> {
   const page = await openBrowserPage(1366, 900, { isolated: true });
   try {
     page.on("pageerror", (error) => sharedAppPageErrors.push(error.message));
-    await page.route("https://cdn.example/**", (route) => route.abort());
+    await page.route("https://cdn.example/**", async (route) => {
+      const request = route.request();
+      const fileName = decodeURIComponent(new URL(request.url()).pathname.split("/").at(-1) ?? "");
+      const media = SHARED_APP_PLAYBACK_MEDIA.find(([candidate]) => candidate === fileName);
+      if (!media) {
+        await route.abort();
+        return;
+      }
+      const format = fileName.split(".").at(-1) as PlaybackMediaFixtureFormat;
+      const body = createPlaybackMediaFixture(format);
+      sharedAppPlaybackRequests.push(request.url());
+      await route.fulfill({
+        status: 200,
+        contentType: media[2],
+        body: request.method() === "HEAD" ? Buffer.alloc(0) : body,
+      });
+    });
     await installResponsiveChatGateway(page, {
       assistantName: "Claw",
       historyMessages: [
@@ -93,15 +123,58 @@ async function createSharedAppPage(): Promise<Page> {
           timestamp: Date.UTC(2026, 6, 9, 10, 0),
         },
         {
-          content: "Encoded transcript video",
-          __openclaw: { media: [{ url: SHARED_APP_VIDEO_URL, contentType: "video/mp4" }] },
-          role: "user",
+          content: [
+            { text: SHARED_APP_TTS_TEXT, type: "text" },
+            ...SHARED_APP_PLAYBACK_MEDIA.map(([fileName, type, mimeType, playback]) => ({
+              fileName,
+              mimeType,
+              playback,
+              type,
+              url: `https://cdn.example/${fileName}`,
+            })),
+          ],
+          role: "assistant",
           timestamp: Date.UTC(2026, 6, 9, 10, 1),
         },
         {
           content: [{ text: SHARED_APP_SLASH_TEXT, type: "text" }],
           role: "assistant",
           timestamp: Date.UTC(2026, 6, 9, 10, 2),
+        },
+        {
+          content: [
+            { text: SHARED_APP_ATTACHMENT_OUTCOME_TEXT, type: "text" },
+            {
+              type: "attachment",
+              attachment: {
+                url: "https://files.example/deploy.yaml",
+                kind: "document",
+                label: "deploy.yaml",
+                mimeType: "application/yaml",
+              },
+            },
+            ...["settings.toml", "schema.sql", "events.ndjson", "font.ttf", "font.woff2"].map(
+              (label) => ({
+                type: "attachment_error",
+                attachment: {
+                  code: "unsupported-format",
+                  kind: "document",
+                  label,
+                },
+              }),
+            ),
+            {
+              type: "attachment_error",
+              attachment: {
+                code: "delivery-failed",
+                kind: "document",
+                label: "bundle.7z",
+                mimeType: "application/x-7z-compressed",
+              },
+            },
+          ],
+          role: "assistant",
+          timestamp: Date.UTC(2026, 6, 9, 10, 3),
         },
       ],
     });
@@ -2241,7 +2314,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("keeps managed image actions anchored around tiny rendered images", async () => {
+  // Concurrent siblings clear Vitest's ambient test when they finish. Bind polls
+  // to this test so an awaited hover cannot lose its assertion context.
+  it("keeps managed image actions anchored around tiny rendered images", async (context) => {
     const page = await openBrowserPage(1280, 900);
     try {
       await page.setContent(
@@ -2281,7 +2356,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         </body></html>`,
       );
       const frames = page.locator(".chat-image-frame--managed");
-      await expect.poll(() => frames.count()).toBe(2);
+      await context.expect.poll(() => frames.count()).toBe(2);
       const frameRows = await frames.evaluateAll((elements) =>
         elements.map((element) => {
           const box = element.getBoundingClientRect();
@@ -2292,7 +2367,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       for (const [index, expectedWidth] of [160, 84].entries()) {
         const frame = frames.nth(index);
         await frame.hover();
-        await expect
+        await context.expect
           .poll(() => frame.evaluate((element) => getComputedStyle(element, "::after").opacity))
           .toBe("1");
         const geometry = await frame.evaluate((element) => {
@@ -2706,26 +2781,154 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
+  it("renders delivered playback media inline", FULL_APP_TEST_OPTIONS, async () => {
+    const page = await getSharedAppPage();
+    const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
+    await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
+    expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);
+    expect(await page.getByText(SHARED_APP_TTS_TEXT, { exact: true }).count()).toBe(1);
+    expect(await page.getByText(/MEDIA:/u).count()).toBe(0);
+    for (const [fileName, type, , playback] of SHARED_APP_PLAYBACK_MEDIA) {
+      const player = page
+        .locator(type === "audio" ? "openclaw-chat-audio-player" : "openclaw-chat-video-player")
+        .filter({ hasText: fileName });
+      await player.waitFor({ state: "attached", timeout: 10_000 });
+      expect(await player.evaluate((element) => (element as { playback?: unknown }).playback)).toBe(
+        playback,
+      );
+      const card = player.locator(".chat-assistant-attachment-card");
+      await card.waitFor({ state: "visible", timeout: 10_000 });
+      await card.scrollIntoViewIfNeeded();
+      const compactFallback =
+        (await player.locator(".chat-assistant-attachment-card--compact").count()) > 0;
+      if (!compactFallback && fileName !== "reply.m4a" && fileName !== "reply.mp4") {
+        const media = player.locator(type);
+        await expect
+          .poll(() => media.evaluate((element) => (element as HTMLMediaElement).readyState), {
+            timeout: 10_000,
+          })
+          .toBeGreaterThanOrEqual(1);
+      }
+      if (!compactFallback) {
+        expect(
+          sharedAppPlaybackRequests.some((url) => {
+            if (!url.includes(fileName)) {
+              return false;
+            }
+            return playback === "native" || new URL(url).searchParams.get("playback") === "1";
+          }),
+        ).toBe(true);
+      }
+    }
+    expect(await page.getByText(/can't play this format/iu).count()).toBe(0);
+  });
+
   it(
-    "renders encoded media extensions as images and compact cards",
+    "renders one named card for every success and failure in a mixed attachment batch",
     FULL_APP_TEST_OPTIONS,
     async () => {
       const page = await getSharedAppPage();
-      const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
-      const videoDownload = page.locator(
-        `a.chat-assistant-attachment-card__download[href="${SHARED_APP_VIDEO_URL}"]`,
-      );
-      const videoCard = page
-        .locator(".chat-assistant-attachment-card--compact")
-        .filter({ has: videoDownload });
-      await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-      await videoCard.waitFor({ state: "attached", timeout: 10_000 });
-      expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);
-      expect(await videoDownload.getAttribute("href")).toBe(SHARED_APP_VIDEO_URL);
+      const bubble = page
+        .locator(".chat-bubble")
+        .filter({ hasText: SHARED_APP_ATTACHMENT_OUTCOME_TEXT });
+      const cards = bubble.locator(".chat-assistant-attachment-card");
+      await expect.poll(() => cards.count()).toBe(7);
       expect(
-        (await videoCard.locator(".chat-assistant-attachment-card__title").textContent())?.trim(),
-      ).toBe("clip%2Emp4");
-      expect(await videoCard.locator("video").count()).toBe(0);
+        await cards.locator(".chat-assistant-attachment-card__title").allTextContents(),
+      ).toEqual([
+        "deploy.yaml",
+        "settings.toml",
+        "schema.sql",
+        "events.ndjson",
+        "font.ttf",
+        "font.woff2",
+        "bundle.7z",
+      ]);
+      expect(await bubble.locator(".chat-assistant-attachment-card--compact").count()).toBe(1);
+      expect(await bubble.locator(".chat-assistant-attachment-card--definitive").count()).toBe(6);
+      expect(
+        await bubble
+          .getByText(
+            "Not sent · Rejected by the local attachment allowlist. Send a supported file type.",
+          )
+          .count(),
+      ).toBe(5);
+      expect(
+        await bubble.getByText("Not sent · Delivery failed. Try sending this file again.").count(),
+      ).toBe(1);
+      expect(await bubble.getByText("Media failed").count()).toBe(0);
+
+      try {
+        const desktopStatusSpacing = await cards
+          .filter({ hasText: "settings.toml" })
+          .evaluate((card) => {
+            const badge = card.querySelector<HTMLElement>(
+              ".chat-assistant-attachment-card__status-badge",
+            )!;
+            const reason = card.querySelector<HTMLElement>(
+              ".chat-assistant-attachment-card__status-reason",
+            )!;
+            const separator = card.querySelector<HTMLElement>(
+              ".chat-assistant-attachment-card__status-separator",
+            )!;
+            const badgeRect = badge.getBoundingClientRect();
+            const reasonRect = reason.getBoundingClientRect();
+            const separatorRect = separator.getBoundingClientRect();
+            return {
+              leftGap: separatorRect.left - badgeRect.right,
+              rightGap: reasonRect.left - separatorRect.right,
+            };
+          });
+        expect(desktopStatusSpacing.leftGap).toBeGreaterThan(4);
+        expect(desktopStatusSpacing.rightGap).toBeGreaterThan(4);
+        expect(Math.abs(desktopStatusSpacing.leftGap - desktopStatusSpacing.rightGap)).toBeLessThan(
+          0.25,
+        );
+
+        for (const width of [320, 560]) {
+          await page.setViewportSize({ width, height: 852 });
+          const failedCard = cards.filter({ hasText: "settings.toml" });
+          const mobileStatusLayout = await failedCard.evaluate((card) => {
+            const badge = card.querySelector<HTMLElement>(
+              ".chat-assistant-attachment-card__status-badge",
+            )!;
+            const reason = card.querySelector<HTMLElement>(
+              ".chat-assistant-attachment-card__status-reason",
+            )!;
+            const separator = card.querySelector<HTMLElement>(
+              ".chat-assistant-attachment-card__status-separator",
+            )!;
+            const cardRect = card.getBoundingClientRect();
+            const reasonRect = reason.getBoundingClientRect();
+            return {
+              badgeBottom: badge.getBoundingClientRect().bottom,
+              cardBottom: cardRect.bottom,
+              cardClientWidth: card.clientWidth,
+              cardScrollWidth: card.scrollWidth,
+              reasonBottom: reasonRect.bottom,
+              reasonRight: reasonRect.right,
+              reasonTop: reasonRect.top,
+              separatorDisplay: getComputedStyle(separator).display,
+              reasonWhiteSpace: getComputedStyle(reason).whiteSpace,
+            };
+          });
+          expect(mobileStatusLayout.separatorDisplay).toBe("none");
+          expect(mobileStatusLayout.reasonWhiteSpace).toBe("normal");
+          expect(mobileStatusLayout.reasonTop).toBeGreaterThanOrEqual(
+            mobileStatusLayout.badgeBottom,
+          );
+          expect(mobileStatusLayout.reasonBottom).toBeLessThanOrEqual(
+            mobileStatusLayout.cardBottom,
+          );
+          expect(mobileStatusLayout.reasonRight).toBeLessThanOrEqual(width);
+          expect(mobileStatusLayout.cardScrollWidth).toBeLessThanOrEqual(
+            mobileStatusLayout.cardClientWidth,
+          );
+          await expectNoHorizontalOverflow(page);
+        }
+      } finally {
+        await page.setViewportSize({ width: 1366, height: 900 });
+      }
     },
   );
 

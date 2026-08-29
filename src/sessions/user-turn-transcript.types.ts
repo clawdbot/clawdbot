@@ -1,5 +1,6 @@
 // User-turn transcript type contracts shared by runtime and queue option types.
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import type { TranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
@@ -62,8 +63,13 @@ export type UserTurnInput = {
   replyToPreview?: { text: string; senderLabel?: string | null } | null;
   senderIsOwner?: boolean;
   provenance?: InputProvenance;
-  /** Durable participant attribution. Callers must opt in at the product boundary. */
-  sender?: { id?: string | null; name?: string | null; username?: string | null } | null;
+  /** Identity is producer-owned attribution; labels remain editable display metadata. */
+  sender?: {
+    id?: string | null;
+    name?: string | null;
+    username?: string | null;
+    identity?: TranscriptSenderIdentity;
+  } | null;
   /** Durable transport correlation; stored privately and never rendered into model input. */
   transport?: {
     channel?: string;

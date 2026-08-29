@@ -14,6 +14,7 @@ import {
   useAutoCleanupTempDirTracker,
 } from "../../test/helpers/temp-dir.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
+import { materializeRequesterScopedMcpToolsForHarnessRunCore } from "./agent-bundle-mcp-harness.js";
 import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
@@ -3412,7 +3413,7 @@ describe("requester-scoped MCP connection resolution", () => {
       };
       const getRuntime = () =>
         entrypoint === "requester-only"
-          ? manager.getOrCreateRequesterScoped(params)
+          ? manager.getOrCreateRequesterScoped(params).then((handle) => handle?.runtime)
           : manager.getOrCreate(params);
       try {
         await getRuntime();
@@ -4707,7 +4708,7 @@ describe("requester-scoped MCP connection resolution", () => {
     const scoped = await manager.getOrCreateRequesterScoped(
       makeRequesterParams(sessionId, cfg as never, "sender-a", { sessionKey }),
     );
-    expect(scoped?.requesterScope?.requesterSenderId).toBe("sender-a");
+    expect(scoped?.runtime.requesterScope?.requesterSenderId).toBe("sender-a");
     await vi.waitFor(() =>
       expect(testing.getBookkeepingSizes(manager).requesterWorkChains).toBe(0),
     );
@@ -4791,10 +4792,10 @@ describe("requester-scoped MCP connection resolution", () => {
     const fullRuntimeKey = manager.listRuntimeKeys().find((key) => key.startsWith("{"));
     const requesterOnly = await manager.getOrCreateRequesterScoped(params);
     const requesterOnlyRuntimeKey = manager.listRuntimeKeys().find((key) => key.startsWith("{"));
-    expect(requesterOnly).toBe(full);
+    expect(requesterOnly?.runtime).toBe(full);
     expect(resolveCount).toBe(1);
     expect(requesterOnlyRuntimeKey).toBe(fullRuntimeKey);
-    expect(requesterOnly?.configFingerprint).toBe(full.configFingerprint);
+    expect(requesterOnly?.runtime.configFingerprint).toBe(full.configFingerprint);
     expect(manager.listRuntimeKeys()).toHaveLength(2);
 
     await manager.disposeAll();
@@ -4826,8 +4827,8 @@ describe("requester-scoped MCP connection resolution", () => {
       makeRequesterParams("session-adv", cfg as never, "authed"),
     );
     expect(authed).toBeDefined();
-    const catalog = await authed!.getCatalog();
-    manager.rememberAdvertisedScopedCatalog("session-adv", catalog);
+    const catalog = await authed!.runtime.getCatalog();
+    manager.rememberAdvertisedScopedCatalog(authed!, catalog);
 
     const advertised = manager.getAdvertisedScopedCatalog("session-adv");
     expect(advertised?.tools.map((tool) => tool.toolName)).toEqual(["inbox"]);
@@ -4849,6 +4850,274 @@ describe("requester-scoped MCP connection resolution", () => {
     await manager.disposeSession("session-adv");
     expect(manager.getAdvertisedScopedCatalog("session-adv")).toBeNull();
   });
+
+  it("clears advertised scoped catalog when its MCP config changes", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/authed" }),
+      },
+    ]);
+    const createRuntime: RuntimeFactory = (params) =>
+      makeManagedRuntime(params, [{ toolName: "inbox", description: "read inbox" }], "user-mail");
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfgA = {
+      mcp: {
+        servers: {
+          "user-mail": { transport: "streamable-http", toolFilter: { include: ["read*"] } },
+        },
+      },
+    };
+    const cfgB = {
+      mcp: {
+        servers: {
+          "user-mail": { transport: "streamable-http", toolFilter: { include: ["send*"] } },
+        },
+      },
+    };
+
+    const runtime = await manager.getOrCreateRequesterScoped(
+      makeRequesterParams("session-adv-config", cfgA as never, "authed"),
+    );
+    manager.rememberAdvertisedScopedCatalog(runtime!, await runtime!.runtime.getCatalog());
+    expect(manager.getAdvertisedScopedCatalog("session-adv-config")?.tools).toHaveLength(1);
+
+    await manager.getOrCreateRequesterScoped(
+      makeRequesterParams("session-adv-config", cfgB as never, "authed"),
+    );
+    expect(manager.getAdvertisedScopedCatalog("session-adv-config")).toBeNull();
+  });
+
+  it("clears advertised scoped catalog when the last scoped server is removed", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/authed" }),
+      },
+    ]);
+    const createRuntime: RuntimeFactory = (params) =>
+      makeManagedRuntime(params, [{ toolName: "inbox", description: "read inbox" }], "user-mail");
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const scopedConfig = {
+      mcp: {
+        servers: {
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+    const staticConfig = {
+      mcp: {
+        servers: {
+          shared: { command: "true" },
+        },
+      },
+    };
+
+    const runtime = await manager.getOrCreateRequesterScoped(
+      makeRequesterParams("session-adv-removal", scopedConfig as never, "authed"),
+    );
+    manager.rememberAdvertisedScopedCatalog(runtime!, await runtime!.runtime.getCatalog());
+    expect(manager.getAdvertisedScopedCatalog("session-adv-removal")?.tools).toHaveLength(1);
+
+    await expect(
+      manager.getOrCreateRequesterScoped(
+        makeRequesterParams("session-adv-removal", staticConfig as never, "guest"),
+      ),
+    ).resolves.toBeUndefined();
+    expect(manager.getAdvertisedScopedCatalog("session-adv-removal")).toBeNull();
+  });
+
+  it("reconciles cached scoped catalog before a senderless turn", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/authed" }),
+      },
+    ]);
+    const createRuntime: RuntimeFactory = (params) =>
+      makeManagedRuntime(params, [{ toolName: "inbox", description: "read inbox" }], "user-mail");
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const scopedConfig = {
+      mcp: { servers: { "user-mail": { transport: "streamable-http" } } },
+    };
+    const staticConfig = {
+      mcp: { servers: { shared: { command: "true" } } },
+    };
+
+    const runtime = await manager.getOrCreateRequesterScoped(
+      makeRequesterParams("session-adv-senderless", scopedConfig as never, "authed"),
+    );
+    manager.rememberAdvertisedScopedCatalog(runtime!, await runtime!.runtime.getCatalog());
+
+    await expect(
+      manager.getOrCreateRequesterScoped(
+        makeRequesterParams("session-adv-senderless", staticConfig as never, "", {
+          requesterSenderId: undefined,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    expect(manager.getAdvertisedScopedCatalog("session-adv-senderless")).toBeNull();
+  });
+
+  it("rejects a late catalog publication from an older configuration", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    let releaseOldResolve!: () => void;
+    const oldResolve = new Promise<void>((resolve) => {
+      releaseOldResolve = resolve;
+    });
+    let markOldStarted!: () => void;
+    const oldStarted = new Promise<void>((resolve) => {
+      markOldStarted = resolve;
+    });
+    let resolveCount = 0;
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => {
+          resolveCount += 1;
+          if (resolveCount === 1) {
+            markOldStarted();
+            await oldResolve;
+          }
+          return { url: "https://mcp.example.test/authed" };
+        },
+      },
+    ]);
+    const createRuntime: RuntimeFactory = (params) =>
+      makeManagedRuntime(params, [{ toolName: "inbox", description: "read inbox" }], "user-mail");
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const oldConfig = {
+      mcp: {
+        servers: {
+          "user-mail": { transport: "streamable-http" },
+          shared: { command: "first" },
+        },
+      },
+    };
+    const newConfig = {
+      mcp: {
+        servers: {
+          "user-mail": { transport: "streamable-http" },
+          shared: { command: "second" },
+        },
+      },
+    };
+
+    const oldRequest = manager.getOrCreateRequesterScoped(
+      makeRequesterParams("session-adv-race", oldConfig as never, "same-requester"),
+    );
+    await oldStarted;
+    const newRequest = manager.getOrCreateRequesterScoped(
+      makeRequesterParams("session-adv-race", newConfig as never, "same-requester"),
+    );
+    releaseOldResolve();
+    const oldRuntime = await oldRequest;
+    const newRuntime = await newRequest;
+    expect(newRuntime!.runtime).toBe(oldRuntime!.runtime);
+    manager.rememberAdvertisedScopedCatalog(oldRuntime!, await oldRuntime!.runtime.getCatalog());
+    expect(manager.getAdvertisedScopedCatalog("session-adv-race")).toBeNull();
+  });
+
+  it(
+    "clears removed scoped catalog through the harness after a real MCP transport run",
+    { timeout: 15_000 },
+    async () => {
+      const server = http.createServer((request, response) => {
+        if (request.method === "DELETE") {
+          response.writeHead(204).end();
+          return;
+        }
+        if (request.method !== "POST") {
+          response.writeHead(405).end();
+          return;
+        }
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          const message = JSON.parse(body) as { id?: string | number; method?: string };
+          if (message.method === "notifications/initialized") {
+            response.writeHead(202).end();
+            return;
+          }
+          response.setHeader("content-type", "application/json");
+          response.setHeader("mcp-session-id", "session-proof");
+          response.writeHead(200).end(
+            JSON.stringify(
+              message.method === "initialize"
+                ? {
+                    jsonrpc: "2.0",
+                    id: message.id,
+                    result: {
+                      protocolVersion: "2025-03-26",
+                      capabilities: { tools: {} },
+                      serverInfo: { name: "catalog-proof-server", version: "1.0.0" },
+                    },
+                  }
+                : {
+                    jsonrpc: "2.0",
+                    id: message.id,
+                    result: {
+                      tools: [
+                        {
+                          name: "inbox",
+                          description: "read inbox",
+                          inputSchema: { type: "object", properties: {} },
+                        },
+                      ],
+                    },
+                  },
+            ),
+          );
+        });
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address() as { port: number };
+      const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+      resolverTesting.setMcpServerConnectionResolversForTest([
+        {
+          serverName: "user-mail",
+          resolve: async () => ({ url: `http://127.0.0.1:${address.port}/mcp` }),
+        },
+      ]);
+      const scopedConfig = {
+        mcp: { servers: { "user-mail": { transport: "streamable-http" } } },
+      };
+      const staticConfig = {
+        mcp: { servers: { shared: { command: "true" } } },
+      };
+
+      try {
+        const first = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+          sessionId: "session-harness-removal",
+          workspaceDir: "/workspace",
+          cfg: scopedConfig as never,
+          requesterSenderId: "authed",
+        });
+        expect(first?.advertisedTools.map((tool) => tool.name)).toEqual(["user-mail__inbox"]);
+        await first?.dispose();
+
+        const afterRemoval = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+          sessionId: "session-harness-removal",
+          workspaceDir: "/workspace",
+          cfg: staticConfig as never,
+          requesterSenderId: "guest",
+        });
+        expect(afterRemoval).toBeUndefined();
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 });
 
 describe("disposeSession timeout", () => {

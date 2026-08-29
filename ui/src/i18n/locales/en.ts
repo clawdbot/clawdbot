@@ -1538,7 +1538,6 @@ export const en: TranslationMap = {
     structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
     defaultValue: "Default: {value}",
     usingDefault: "Using default: {value}",
-    resetToDefault: "Reset to default",
     select: "Select...",
     enumOn: "On",
     enumOff: "Off",
@@ -4994,6 +4993,7 @@ export const en: TranslationMap = {
     },
     export: {
       label: "Export",
+      changed: "Session context changed while preparing the export. Refresh usage and try again.",
       sessionsCsv: "Sessions CSV",
       dailyCsv: "Daily CSV",
       json: "JSON",
@@ -5301,6 +5301,10 @@ export const en: TranslationMap = {
       chooseTitle: "Choose a session",
       multipleMatches: "More than one session matches {shortId}.",
       additionalMatches: "Search results remain. Use a longer id prefix.",
+      notFoundTitle: "Session not found",
+      notFoundExplanation: "The session may have been removed, or the link may be incorrect.",
+      goToMain: "Go to main session",
+      viewSessions: "View sessions",
     },
     commandResults: {
       startingNewThread: "Starting new session...",
@@ -5797,6 +5801,7 @@ export const en: TranslationMap = {
       moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
+        queued: "Queued",
         applyingSettings: "Applying chat settings",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
@@ -5912,7 +5917,9 @@ export const en: TranslationMap = {
       volume: "Volume",
       download: "Download {filename}",
       preparing: "Preparing playback…",
-      videoUnavailable: "Can't play this format — download instead.",
+      openVideo: "Expand {filename} in the media overlay",
+      videoPreview: "Video preview: {title}",
+      closeVideoPreview: "Close video preview",
     },
     modelControls: {
       default: "Default",
@@ -6262,7 +6269,11 @@ export const en: TranslationMap = {
       showInTextField: "Show in text field",
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
-      checking: "Checking...",
+      failureDeliveryFailed: "Delivery failed. Try sending this file again.",
+      failureFileNotFound: "File not found. Check the path and try again.",
+      failureUnsupportedFormat:
+        "Rejected by the local attachment allowlist. Send a supported file type.",
+      notSent: "Not sent",
       video: "Video",
     },
     voice: {

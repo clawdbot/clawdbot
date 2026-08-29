@@ -118,7 +118,6 @@ export async function handleToolExecutionEnd(
   }
   const { toolName: rawToolName, toolCallId, isError, result } = evt;
   const toolName = normalizeToolPolicyName(rawToolName);
-  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   ctx.state.liveEditDiffStateById.delete(toolCallId);
   if (toolName === "ask_user") {
     cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey, ctx.params.runId);
@@ -179,17 +178,14 @@ export async function handleToolExecutionEnd(
     initialCallSummary?.ownerKey,
     structuredReplaySafe,
   );
-  // A racing observer can consume the active wrapper boundary. Settled and
-  // custom producers use their terminal fact, while policy blocks override it.
+  // Settled/custom producers use their terminal fact; policy blocks override racing wrappers.
   const executionStarted =
     (trackedExecutionStarted ?? evt.executionStarted ?? true) && !executionPrevented;
   const attemptedPotentialSideEffect = !callSummary.replaySafe && executionStarted;
   const meta = callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
-  // A Code Mode exec that returns "waiting" parked a run the model resumes via
-  // `wait`; record that here so recovery can tell parked nested work apart
-  // from any other still-active lifecycle item.
+  // A "waiting" Code Mode exec remains parked until the model resumes it via `wait`.
   const codeModeSuspended =
     !isToolError &&
     ctx.params.codeModeExecToolNames?.has(toolName) === true &&
@@ -237,6 +233,7 @@ export async function handleToolExecutionEnd(
     arguments: startArgs,
     ...(meta ? { meta } : {}),
     executionStarted,
+    replaySafe: callSummary.replaySafe,
     outcome: isToolError ? "failure" : "success",
     ...(callSummary.ownerKey
       ? {
@@ -271,7 +268,6 @@ export async function handleToolExecutionEnd(
     });
   }
 
-  // Commit messaging tool evidence on success, discard on error.
   const messagingArgs = applyCurrentMessageProvider(toolName, startArgs, ctx.params.messageChannel);
   const isMessagingInvocation = isMessagingTool(toolName);
   const isMessagingSend = isMessagingInvocation && isMessagingToolSendAction(toolName, startArgs);
@@ -446,7 +442,7 @@ export async function handleToolExecutionEnd(
       commandBearing: callSummary.commandBearing,
       result: eventResult,
       ...(toolErrorSummary ? { toolErrorSummary } : {}),
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+      ...(evt.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
     },
   });
   const endedAt = Date.now();
@@ -463,7 +459,7 @@ export async function handleToolExecutionEnd(
     toolCallId,
     startedAt: startData?.startTime,
     endedAt,
-    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+    ...(evt.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
     ...(callSummary.commandBearing && !isExecToolName(toolName)
       ? { suppressChannelProgress: true }
       : {}),
@@ -482,7 +478,7 @@ export async function handleToolExecutionEnd(
       isError: isToolError,
       commandBearing: callSummary.commandBearing,
       ...(toolErrorSummary ? { toolErrorSummary } : {}),
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+      ...(evt.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
     },
   });
 
@@ -698,7 +694,6 @@ export async function handleToolExecutionEnd(
   if (!isCurrentDeliveryGeneration()) {
     return { status: "stale" };
   }
-
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
   if (!isCurrentDeliveryGeneration()) {
     return { status: "stale" };
@@ -714,5 +709,6 @@ export async function handleToolExecutionEnd(
     toolCallId,
     runId,
   });
-  return { status: "completed", executionStarted: terminal.executionStarted };
+  const { executionStarted: terminalExecutionStarted, effectReceipt } = terminal;
+  return { status: "completed", executionStarted: terminalExecutionStarted, effectReceipt };
 }

@@ -27,6 +27,7 @@ import {
   hasAssistantVisibleReply,
   hasReplyDirectiveMetadataResult,
   hasReplyTargetOnlyTerminalEvidence,
+  resolveManagedStreamMediaUrls,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
   buildAssistantStreamData,
@@ -238,6 +239,7 @@ export function handleMessageEnd(
   })();
   const cleanedText = parsedText?.text ?? "";
   const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
+  const managedMediaUrls = resolveManagedStreamMediaUrls(ctx.state, mediaUrls);
 
   const finalizeMessageEnd = () => {
     resetMessageEndStreamingState(ctx);
@@ -269,6 +271,7 @@ export function handleMessageEnd(
       delta: finalStreamDelta,
       replace: shouldReplaceFinalStream,
       mediaUrls,
+      managedMediaUrls,
       phase: assistantPhase,
     });
     ctx.emitAssistantStreamData(data);

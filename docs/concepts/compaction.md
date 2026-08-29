@@ -16,6 +16,8 @@ Every model has a context window: the maximum number of tokens it can process. W
 
 OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries when it picks a compaction split point. If the point lands inside a tool block, OpenClaw moves the boundary so the pair stays together and the current unsummarized tail is preserved.
 
+The built-in summarizer accounts for Chinese, Japanese, and Korean (CJK) characters in both message text and tool arguments when estimating chunk sizes. These budgets are approximate; a tool call and its results stay together even when that group exceeds a chunk target.
+
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
 <Note>

@@ -707,6 +707,15 @@ function redactTranscriptStructuredValue(
     next ??= { ...source };
     next[key] = redacted;
   }
+  // Redacted source facts no longer identify the producer's sender. Keep display
+  // redaction, but never qualify the replacement bytes as a person or remote actor.
+  if (
+    fieldKey === "__openclaw" &&
+    next &&
+    (next.senderIdentity !== source.senderIdentity || next.senderId !== source.senderId)
+  ) {
+    delete next.senderIdentity;
+  }
   seen.delete(value);
   return next ?? value;
 }

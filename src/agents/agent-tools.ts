@@ -32,7 +32,10 @@ import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
-import { bindAssembledAgentToolActionDescriptor } from "./agent-tool-metadata.js";
+import {
+  bindAssembledAgentToolActionDescriptor,
+  copyAgentToolMetadata,
+} from "./agent-tool-metadata.js";
 import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
@@ -65,6 +68,7 @@ import { createCoreCodingTools } from "./core-coding-tools.js";
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import { bindActiveCronCreatorAuthorityResolver } from "./cron-creator-authority-context.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
+import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
@@ -591,6 +595,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   options?.recordToolPrepStage?.("workspace-policy");
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
   const effectiveExecPolicy = applyExecPolicyLayer(execConfig, options?.exec);
+  // A scheduled cap narrows the rebuilt exec tool to its captured policy.
+  // Its approval floor outranks a reused full session; the wrapper below
+  // prevents caller arguments from weakening either restriction.
+  const scheduledExecTarget = options?.scheduledToolPolicy?.execTarget;
   const processToolAvailabilityRef: NonNullable<ExecToolDefaults["processToolAvailabilityRef"]> =
     {};
   const coreTools = createCoreCodingTools({
@@ -620,11 +628,12 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     applyPatchWorkspaceOnly,
     execDefaults: {
       ...execDefaults,
-      bypassHostApprovalFloors: sessionCoreToolPolicy?.bypassHostApprovalFloors,
-      host: options?.exec?.host ?? execConfig.host,
+      bypassHostApprovalFloors:
+        scheduledExecTarget?.ask !== "always" && sessionCoreToolPolicy?.bypassHostApprovalFloors,
+      host: scheduledExecTarget?.host ?? options?.exec?.host ?? execConfig.host,
       mode: effectiveExecPolicy.mode,
       security: effectiveExecPolicy.security,
-      ask: effectiveExecPolicy.ask,
+      ask: scheduledExecTarget?.ask ?? effectiveExecPolicy.ask,
       config: execRuntimeConfig,
       preparedRunEnvironment,
       reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
@@ -788,8 +797,15 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           executeTool: options?.toolSearchCatalogExecutor,
         })
       : [];
+  const scheduledCoreTools = scheduledExecTarget
+    ? coreTools.map((tool) =>
+        tool.name === "exec"
+          ? copyAgentToolMetadata(tool, pinExecToolTarget(tool, scheduledExecTarget))
+          : tool,
+      )
+    : coreTools;
   const tools: AnyAgentTool[] = [
-    ...coreTools,
+    ...scheduledCoreTools,
     // Channel docking: include channel-defined agent tools (login, etc.).
     ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),
     ...(includeOpenClawTools

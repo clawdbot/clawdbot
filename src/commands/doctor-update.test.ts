@@ -543,25 +543,60 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     },
   );
 
-  it.each([{ kind: "foreign" as const }, { kind: "unresolved" as const, fingerprint: "opaque" }])(
-    "does not stop, repair or activate a $kind service",
-    async (verdict) => {
+  const nonActivatingServices: Array<
+    Parameters<typeof mockManagedService>[0] & {
+      name: string;
+      policy: { allowGatewayServiceRepair: boolean; allowGatewayActivation: boolean };
+    }
+  > = [
+    {
+      name: "foreign service",
+      verdict: { kind: "foreign" },
+      running: true,
+      policy: { allowGatewayServiceRepair: false, allowGatewayActivation: false },
+    },
+    {
+      name: "unresolved service",
+      verdict: { kind: "unresolved", fingerprint: "opaque" },
+      running: true,
+      policy: { allowGatewayServiceRepair: false, allowGatewayActivation: false },
+    },
+    {
+      name: "stopped owned service permitting definition repair",
+      verdict: { kind: "owned", refreshDefinition: true, fingerprint: "opaque" },
+      running: false,
+      policy: { allowGatewayServiceRepair: true, allowGatewayActivation: false },
+    },
+    {
+      name: "unavailable inspection with a visible skip",
+      verdict: {
+        kind: "unavailable",
+        message:
+          "Gateway service management skipped; inspect service access before restarting manually.",
+      },
+      running: true,
+      policy: { allowGatewayServiceRepair: false, allowGatewayActivation: false },
+    },
+  ];
+  it.each(nonActivatingServices)(
+    "updates without stopping or activating a $name",
+    async ({ verdict, running, policy }) => {
       mockGitCheckout();
-      mockManagedService({ verdict });
+      mockManagedService({ verdict, running });
       mockUpdateResult({ status: "ok", mode: "git", root: "/repo/link" });
 
       await expect(runOffer({ confirm: vi.fn().mockResolvedValue(true) })).resolves.toEqual({
         updated: true,
         handled: true,
       });
-      expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          allowGatewayServiceRepair: false,
-          allowGatewayActivation: false,
-        }),
-      );
+      expect(mocks.runGatewayUpdate).toHaveBeenCalledOnce();
+      expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(expect.objectContaining(policy));
+      expect(mocks.gitMutationPolicy).toHaveBeenCalledWith(policy);
       expect(mocks.stopGatewayService).not.toHaveBeenCalled();
       expect(mocks.restartUpdatedGateway).not.toHaveBeenCalled();
+      if (verdict.kind === "unavailable") {
+        expect(mocks.note).toHaveBeenCalledWith(verdict.message, "Update");
+      }
     },
   );
 
@@ -614,50 +649,6 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       }
     },
   );
-
-  it("repairs without activating a stopped gateway owned by this checkout", async () => {
-    mockGitCheckout();
-    mockManagedService({
-      verdict: { kind: "owned", refreshDefinition: true, fingerprint: "opaque" },
-      running: false,
-    });
-    mockUpdateResult({ status: "ok", mode: "git", root: "/repo/link" });
-
-    await expect(runOffer({ confirm: vi.fn().mockResolvedValue(true) })).resolves.toEqual({
-      updated: true,
-      handled: true,
-    });
-
-    expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowGatewayServiceRepair: true,
-        allowGatewayActivation: false,
-      }),
-    );
-    expect(mocks.restartUpdatedGateway).not.toHaveBeenCalled();
-  });
-
-  it("updates with a visible skip when service inspection is unavailable", async () => {
-    const message =
-      "Gateway service management skipped; inspect service access before restarting manually.";
-    mockGitCheckout();
-    mockManagedService({ verdict: { kind: "unavailable", message } });
-    mockUpdateResult({ status: "ok", mode: "git", root: "/repo/link" });
-
-    await expect(runOffer({ confirm: vi.fn().mockResolvedValue(true) })).resolves.toEqual({
-      updated: true,
-      handled: true,
-    });
-
-    expect(mocks.note).toHaveBeenCalledWith(message, "Update");
-    expect(mocks.runGatewayUpdate).toHaveBeenCalledOnce();
-    expect(mocks.gitMutationPolicy).toHaveBeenCalledWith({
-      allowGatewayServiceRepair: false,
-      allowGatewayActivation: false,
-    });
-    expect(mocks.stopGatewayService).not.toHaveBeenCalled();
-    expect(mocks.restartUpdatedGateway).not.toHaveBeenCalled();
-  });
 
   it("leaves the stopped gateway down when a git mutation throws without recovery proof", async () => {
     mockGitCheckout();

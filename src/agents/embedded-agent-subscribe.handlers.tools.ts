@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
 import { handleToolExecutionUpdate } from "./embedded-agent-subscribe.handlers.tools.progress.js";
 import {
@@ -12,10 +13,8 @@ import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.typ
  * telemetry.
  */
 import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js";
-import {
-  consumeTrustedToolNoStartError,
-  registerTrustedToolNoStartError,
-} from "./tool-result-error.js";
+import { registerToolEffectReceipt } from "./tool-effect-receipt.js";
+import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 
 export function createEmbeddedToolLifecycle(ctx: ToolHandlerContext) {
   return async <T>(toolParams: {
@@ -41,7 +40,7 @@ export function createEmbeddedToolLifecycle(ctx: ToolHandlerContext) {
     };
     try {
       const result = await toolParams.execute(onImplementationStart);
-      await handleToolExecutionEnd(ctx, {
+      const terminal = await handleToolExecutionEnd(ctx, {
         type: "tool_execution_end",
         toolName: toolParams.toolName,
         toolCallId: toolParams.toolCallId,
@@ -50,10 +49,13 @@ export function createEmbeddedToolLifecycle(ctx: ToolHandlerContext) {
         result,
         hideFromChannelProgress: toolParams.hideFromChannelProgress,
       });
-      return result;
+      return registerToolEffectReceipt(
+        result,
+        expectDefined(terminal.effectReceipt, "nested tool lifecycle effect receipt"),
+      );
     } catch (error) {
       const trustedNoStart = consumeTrustedToolNoStartError(error);
-      await handleToolExecutionEnd(ctx, {
+      const terminal = await handleToolExecutionEnd(ctx, {
         type: "tool_execution_end",
         toolName: toolParams.toolName,
         toolCallId: toolParams.toolCallId,
@@ -62,12 +64,10 @@ export function createEmbeddedToolLifecycle(ctx: ToolHandlerContext) {
         result: buildToolLifecycleErrorResult(error),
         hideFromChannelProgress: toolParams.hideFromChannelProgress,
       });
-      // Operation-owned no-start proof survives generic implementation entry.
-      // Only relay the same error after completion succeeds; replacements cannot inherit it.
-      if (trustedNoStart) {
-        registerTrustedToolNoStartError(error);
-      }
-      throw error;
+      const receipt = trustedNoStart
+        ? ({ state: "not_started" } as const)
+        : expectDefined(terminal.effectReceipt, "nested tool lifecycle effect receipt");
+      throw registerToolEffectReceipt(error, receipt);
     }
   };
 }

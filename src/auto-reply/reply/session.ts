@@ -84,10 +84,8 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import {
-  prepareChannelParticipantObservation,
-  recordAcceptedSessionParticipantInput,
-} from "../../sessions/session-participant-input.js";
+import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
+import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import {
   recordSessionCreated,
   classifySessionStateActor,

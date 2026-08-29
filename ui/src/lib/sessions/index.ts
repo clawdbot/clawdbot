@@ -32,6 +32,7 @@ import { SwarmActivityTracker } from "./swarm-activity.ts";
 export {
   buildSessionUsageDateParams,
   requestSessionUsage,
+  requestSessionUsageContextWeight,
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
 } from "./usage.ts";

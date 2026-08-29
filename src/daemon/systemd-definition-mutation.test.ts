@@ -123,6 +123,24 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     });
   }
 
+  function afterUnitTemporaryWrite(fault: () => void | Promise<void>) {
+    const writeFile = fs.writeFile.bind(fs);
+    vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      await writeFile(...args);
+      if (
+        typeof args[0] === "string" &&
+        args[0].startsWith(`${unitPath}.`) &&
+        args[0].endsWith(".tmp")
+      ) {
+        await fault();
+      }
+    });
+  }
+
+  async function expectNoTemporaryFiles(directory: string) {
+    expect((await fs.readdir(directory)).filter((file) => file.endsWith(".tmp"))).toEqual([]);
+  }
+
   it.each(["unit", "state", "ancestor"])(
     "publishes a first unit through a %s directory alias discovered by the manager",
     async (alias) => {
@@ -410,7 +428,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       }
       expect(await fs.readFile(shared, "utf8")).toContain("30s");
       for (const directory of [path.dirname(unitPath), stateDir]) {
-        expect((await fs.readdir(directory)).filter((file) => file.endsWith(".tmp"))).toEqual([]);
+        await expectNoTemporaryFiles(directory);
       }
     },
   );
@@ -510,16 +528,8 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
         await mutation.publish(unitPath, "managed definition", 0o644);
         await mutation.restore(extra, null);
         expect(await fs.readFile(extra, "utf8")).toContain("OWNER=first");
-        const writeFile = fs.writeFile.bind(fs);
-        vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-          await writeFile(...args);
-          if (
-            typeof args[0] === "string" &&
-            args[0].startsWith(`${unitPath}.`) &&
-            args[0].endsWith(".tmp")
-          ) {
-            await writeFile(extra, "[Service]\nEnvironment=OWNER=second\n");
-          }
+        afterUnitTemporaryWrite(async () => {
+          await fs.writeFile(extra, "[Service]\nEnvironment=OWNER=second\n");
         });
         await expect(mutation.publish(unitPath, "must not publish", 0o644)).rejects.toThrow(
           "changed during publication",
@@ -528,9 +538,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       expect(await fs.readFile(unitPath, "utf8")).toBe("managed definition");
       expect(await fs.readFile(extra, "utf8")).toContain("OWNER=second");
       expect(await fs.readFile(environmentPath, "utf8")).toBe("OPERATOR=preserved\n");
-      expect(
-        (await fs.readdir(path.dirname(unitPath))).filter((file) => file.endsWith(".tmp")),
-      ).toEqual([]);
+      await expectNoTemporaryFiles(path.dirname(unitPath));
     },
   );
 
@@ -568,9 +576,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       );
     });
     expect(await fs.readFile(target, "utf8")).toBe("operator edit");
-    expect(
-      (await fs.readdir(path.dirname(target))).filter((file) => file.endsWith(".tmp")),
-    ).toEqual([]);
+    await expectNoTemporaryFiles(path.dirname(target));
   });
 
   it.each(
@@ -608,9 +614,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
         await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
       }
       expect(await fs.readFile(extra, "utf8")).toContain("OWNER=second");
-      expect(
-        (await fs.readdir(path.dirname(target))).filter((file) => file.endsWith(".tmp")),
-      ).toEqual([]);
+      await expectNoTemporaryFiles(path.dirname(target));
     },
   );
 
@@ -653,7 +657,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
         }
       }
       for (const directory of [path.dirname(unitPath), stateDir]) {
-        expect((await fs.readdir(directory)).filter((file) => file.endsWith(".tmp"))).toEqual([]);
+        await expectNoTemporaryFiles(directory);
       }
     },
   );
@@ -706,16 +710,8 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
 
   it("cleans unpublished temporary files after a write failure", async () => {
     await fs.writeFile(unitPath, "previous definition");
-    const writeFile = fs.writeFile.bind(fs);
-    vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-      await writeFile(...args);
-      if (
-        typeof args[0] === "string" &&
-        args[0].startsWith(`${unitPath}.`) &&
-        args[0].endsWith(".tmp")
-      ) {
-        throw new Error("write failed");
-      }
+    afterUnitTemporaryWrite(() => {
+      throw new Error("write failed");
     });
     await expect(
       withSystemdDefinitionMutation(env, env, (mutation) =>
@@ -723,9 +719,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       ),
     ).rejects.toThrow("write failed");
     expect(await fs.readFile(unitPath, "utf8")).toBe("previous definition");
-    expect(
-      (await fs.readdir(path.dirname(unitPath))).filter((file) => file.endsWith(".tmp")),
-    ).toEqual([]);
+    await expectNoTemporaryFiles(path.dirname(unitPath));
   });
 
   it("rejects manager definition path changes during publication", async () => {
@@ -738,16 +732,8 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
 
     await expect(
       withSystemdDefinitionMutation(env, env, async (mutation) => {
-        const writeFile = fs.writeFile.bind(fs);
-        vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-          await writeFile(...args);
-          if (
-            typeof args[0] === "string" &&
-            args[0].startsWith(`${unitPath}.`) &&
-            args[0].endsWith(".tmp")
-          ) {
-            managerDefinition(unitPath, [second]);
-          }
+        afterUnitTemporaryWrite(() => {
+          managerDefinition(unitPath, [second]);
         });
         await mutation.publish(unitPath, "must not publish", 0o644);
       }),

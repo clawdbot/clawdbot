@@ -64,6 +64,80 @@ async function rawDraftRecords(page: Page, scopes: readonly TestDraftScope[], ex
 }
 
 suite.define(() => {
+  it("does not reuse a cached composer owner while reconnect authentication is unresolved", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const storeHandle = await page.evaluateHandle<
+        typeof import("../lib/chat/composer-draft-store.runtime.ts")
+      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+      const composerHandle = await page.evaluateHandle<
+        typeof import("../pages/chat/composer-persistence.ts")
+      >('import("/src/pages/chat/composer-persistence.ts")');
+      const result = await page.evaluate(
+        async ({ draftStore, composer }) => {
+          const client = { recoveryScope: "credential-a", recoveryScopeReady: true };
+          const state = {
+            settings: { gatewayUrl: "owner-fence-gateway" },
+            sessionKey: "agent:main:owner-fence",
+            chatMessage: "",
+            chatAttachments: [],
+            chatQueue: [],
+            client,
+            connected: true,
+            selectedChatSessionIncognito: false,
+          };
+          const scope = {
+            gatewayOwner: state.settings.gatewayUrl,
+            recoveryScope: client.recoveryScope,
+            scopeKey: composer.storedChatOutboxScopeKey(
+              composer.resolveStoredChatOutboxScope(state, state.sessionKey),
+            ),
+          };
+          const persistence = new composer.ChatComposerPersistence(() => state);
+          persistence.start();
+          state.connected = false;
+          client.recoveryScopeReady = false;
+          state.chatMessage = "authenticated offline draft";
+          persistence.persistChangedState();
+          let offlineStored = false;
+          for (let attempt = 0; attempt < 100; attempt += 1) {
+            const stored = await draftStore.readDurableComposerDraft(scope);
+            if (stored.status === "found" && stored.draft.text === state.chatMessage) {
+              offlineStored = true;
+              break;
+            }
+            await new Promise((resolve) => {
+              setTimeout(resolve, 10);
+            });
+          }
+          if (!offlineStored) {
+            throw new Error("offline composer draft did not settle");
+          }
+
+          state.connected = true;
+          state.chatMessage = "unresolved reconnect draft";
+          persistence.persistChangedState();
+          // Let a wrongly admitted fire-and-forget write open its transaction,
+          // then commit a later transaction in the same object store as a barrier.
+          await Promise.resolve();
+          await draftStore.writeDurableComposerDraft(
+            { ...scope, recoveryScope: "credential-b", scopeKey: "reconnect-barrier" },
+            { revision: 1, text: "barrier", attachments: [] },
+            { expectedRevision: 0, writeId: "reconnect-barrier" },
+          );
+          return draftStore.readDurableComposerDraft(scope);
+        },
+        { draftStore: storeHandle, composer: composerHandle },
+      );
+
+      expect(result).toMatchObject({
+        status: "found",
+        draft: { text: "authenticated offline draft" },
+      });
+    });
+  });
+
   it("reads the requested draft before global expiry maintenance settles", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block" },
