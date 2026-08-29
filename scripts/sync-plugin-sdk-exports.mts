@@ -61,11 +61,11 @@ function syncRootPackageMetadata() {
   const pendingExclusions = new Set(
     listUnpackagedPrivatePluginSdkDistArtifacts().map((artifact) => `!${artifact}`),
   );
-  // Own only canonical flat JS/declaration exclusions; nested paths, globs and
+  // Own literal flat JS/declaration exclusions, including retired names; nested paths, globs and
   // other package rules stay owner-managed. Retain existing order for npm matching.
   const nextFiles = packageJson.files.filter(
     (file) =>
-      !/^!dist\/plugin-sdk\/[a-z0-9-]+\.(?:js|d\.ts)$/u.test(file) ||
+      !/^!dist\/plugin-sdk\/[^/\\*?[\]{}()]*\.(?:js|d\.ts)$/u.test(file) ||
       pendingExclusions.delete(file),
   );
   nextFiles.push(...pendingExclusions);
