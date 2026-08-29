@@ -10,6 +10,7 @@ import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as mediaStore from "openclaw/plugin-sdk/media-store";
 import { describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
@@ -517,6 +518,48 @@ describe("runCodexAppServerAttempt turn watches", () => {
       replayInvalid: true,
       livenessState: "abandoned",
     });
+  });
+
+  it("joins queued image projection when timeout aborts the turn", async () => {
+    const harness = createStartedThreadHarness();
+    const projection = createDeferred<void>();
+    const mediaPath = path.join(tempDir, "queued-image.png");
+    const saveMedia = vi.spyOn(mediaStore, "saveMediaBuffer").mockImplementation(async () => {
+      await projection.promise;
+      return { id: "queued-image", path: mediaPath, size: 1, contentType: "image/png" };
+    });
+    const settled = vi.fn();
+    const run = runCodexAppServerAttempt(makeTestParams({ timeoutMs: 60_000 }), {
+      turnCompletionIdleTimeoutMs: 1_000,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    void run.then(settled);
+    try {
+      await harness.waitForMethod("turn/start");
+      vi.useFakeTimers();
+      void harness.notify(
+        rawItemCompleted({
+          id: "queued-image",
+          type: "image_generation_call",
+          status: "generating",
+          result: tinyPngBase64,
+        }),
+      );
+      await vi.waitFor(() => expect(saveMedia).toHaveBeenCalledOnce(), fastWait);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await harness.waitForMethod("thread/unsubscribe");
+      await vi.advanceTimersByTimeAsync(1);
+
+      projection.resolve();
+      vi.useRealTimers();
+      await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+      const result = await run;
+      expect(readAttemptTerminal(result).timedOut).toBe(true);
+      expect(result.toolMediaUrls).toEqual([mediaPath]);
+    } finally {
+      projection.resolve();
+      vi.useRealTimers();
+    }
   });
 
   it("marks executed dynamic-tool completion-idle timeouts as replay-invalid", async () => {
@@ -2490,7 +2533,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
   });
 
-  it("does not idle-timeout when terminal completion queues behind projection", async () => {
+  it("does not idle-timeout when terminal completion queues behind projection within the settlement window", async () => {
     const harness = createStartedThreadHarness();
     const params = makeTestParams({ timeoutMs: 120 });
     const turnStartProgressEvents: DiagnosticEventPayload[] = [];
@@ -2515,7 +2558,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
     let settled = false;
     const run = runCodexAppServerAttempt(params, {
       turnCompletionIdleTimeoutMs: 5,
-      turnTerminalIdleTimeoutMs: 5,
+      // A queued terminal now settles within a bounded window instead of
+      // waiting forever; keep that window far beyond this test's drain time so
+      // it still proves a briefly blocked projection is not aborted early.
+      turnTerminalIdleTimeoutMs: 60_000,
     }).finally(() => {
       settled = true;
     });

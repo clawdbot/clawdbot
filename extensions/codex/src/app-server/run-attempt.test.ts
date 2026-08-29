@@ -38,7 +38,7 @@ import {
   prependCodexOpenClawPromptContext,
 } from "./attempt-context.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import { withCodexStartupTimeout } from "./attempt-timeouts.js";
+import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS, withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-bridge.js";
 import {
@@ -5334,6 +5334,7 @@ describe("runCodexAppServerAttempt", () => {
           abortController.abort("cancelled");
         }
         await vi.advanceTimersByTimeAsync(2 * 60_000);
+        await vi.advanceTimersByTimeAsync(TURN_FINALIZE_DRAIN_ABORT_GRACE_MS + 1);
         vi.useRealTimers();
         await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), { timeout: 1_000 });
         const result = await run;

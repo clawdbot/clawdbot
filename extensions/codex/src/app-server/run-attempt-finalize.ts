@@ -14,6 +14,7 @@ import {
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
 import { buildCodexContinuityCalibration } from "./context-engine-projection.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
@@ -96,14 +97,23 @@ export async function finalizeCodexAttempt(
   } = activeTurn;
   await completion;
   await state.abortCleanup;
-  // Normal completion joins projection work; Stop must also escape a blocked
-  // handler while the interrupted route is still reserved.
-  const aborted = createDeferred<void>();
-  const abortListener = addAbortListener(runAbortController.signal, () => aborted.resolve());
+  // Timeout and Stop still join queued projections within the abort grace;
+  // normal completion awaits the full drain.
+  const drain = drainNotificationQueue();
+  const abortGraceElapsed = createDeferred<void>();
+  let abortGraceTimer: ReturnType<typeof setTimeout> | undefined;
+  const abortListener = addAbortListener(runAbortController.signal, () => {
+    abortGraceTimer = setTimeout(
+      () => abortGraceElapsed.resolve(),
+      TURN_FINALIZE_DRAIN_ABORT_GRACE_MS,
+    );
+    abortGraceTimer.unref?.();
+  });
   try {
-    await Promise.race([drainNotificationQueue(), aborted.promise]);
+    await Promise.race([drain, abortGraceElapsed.promise]);
   } finally {
     abortListener[Symbol.dispose]();
+    clearTimeout(abortGraceTimer);
   }
   const hasQuiescentCompletedAssistant =
     activeProjector.hasCompletedTerminalAssistantText() &&
