@@ -428,7 +428,7 @@ export function createClient(repository, dependencies = {}) {
     },
     rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
     rerunParent: (runId) => rerun(runId, "rerun"),
-    async verify(runId, plan, operationDeadline = createOperationDeadline()) {
+    async verify(runId, plan, operationDeadline, expectedRunAttempts) {
       const sourceSha = plan.trustedWorkflow?.sha;
       return execute(
         process.execPath,
@@ -448,10 +448,16 @@ export function createClient(repository, dependencies = {}) {
           sourceSha,
           "--verifier-source-file",
           "scripts/release-ci-summary.mjs",
+          ...(expectedRunAttempts === undefined
+            ? []
+            : ["--expected-run-attempts-json", JSON.stringify(expectedRunAttempts)]),
           "--json",
         ],
         {
-          timeoutMs: remainingOperationTime(operationDeadline, "FRV verification"),
+          timeoutMs: remainingOperationTime(
+            operationDeadline ?? createOperationDeadline(),
+            "FRV verification",
+          ),
         },
       );
     },
@@ -671,11 +677,32 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
     ownedAttempts.set(rootRunId, minimumAttempts.get(rootRunId));
     await waitForTerminal([rootRunId], client, operationDeadline, minimumAttempts);
   }
-  if ((await client.getRun(rootRunId)).conclusion !== "success") {
-    throw new Error(`final parent rerun failed: ${rootRunId}`);
-  }
   await waitForTerminal([...ownedAttempts.keys()], client, operationDeadline, ownedAttempts);
-  await client.verify(rootRunId, plan, operationDeadline);
+  const expectedRunAttempts = new Map(
+    status.children.map((child) => [child.runId, child.effectiveRunAttempt]),
+  );
+  // Reuse verification rereads its root and selected parent manifests too.
+  const parentRunIds = new Set([
+    rootRunId,
+    ...(plan.evidenceReuse?.requested
+      ? [plan.evidenceReuse.rootRunId, plan.evidenceReuse.selectedRunId]
+      : []),
+  ]);
+  for (const parentRunId of parentRunIds) {
+    const run = await client.getRun(parentRunId);
+    if (String(run.id) !== parentRunId) {
+      throw new Error(`verification parent run identity changed: ${parentRunId}`);
+    }
+    const terminal = parentRunId === rootRunId ? exactTerminalRunState(run, rootRunId) : undefined;
+    if (terminal && terminal.conclusion !== "success") {
+      throw new Error(`final parent rerun failed: ${rootRunId}`);
+    }
+    expectedRunAttempts.set(
+      parentRunId,
+      terminal?.runAttempt ?? positiveInteger(run.run_attempt, `${parentRunId} run attempt`),
+    );
+  }
+  await client.verify(rootRunId, plan, operationDeadline, Object.fromEntries(expectedRunAttempts));
   return {
     action: ownedAttempts.has(rootRunId) ? "reran-parent" : "verified-parent",
     finalRunId: rootRunId,

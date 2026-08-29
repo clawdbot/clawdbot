@@ -73,8 +73,13 @@ function plan(children = requiredChildren()) {
   };
 }
 
-function executionPlanArtifact() {
-  const children = requiredChildren();
+function executionPlanArtifact({
+  children = requiredChildren(),
+  evidenceReuse = { requested: false },
+}: {
+  children?: ReturnType<typeof requiredChildren>;
+  evidenceReuse?: Record<string, unknown>;
+} = {}) {
   const built = buildReleaseExecutionPlan({
     children: Object.fromEntries(
       children.map((entry) => [
@@ -88,6 +93,7 @@ function executionPlanArtifact() {
       ]),
     ),
     dockerPreflightResult: "success",
+    evidenceReuse: evidenceReuse.requested === true,
     parentRunAttempt: 1,
     parentRunId: "77",
     candidateBindingResult: "success",
@@ -109,11 +115,24 @@ function executionPlanArtifact() {
     allowUnreleasedChangelog: false,
     sharedImagePolicy: "no-push-artifact",
   });
+  const selectedKeys = new Set(children.map((entry) => entry.key));
   return buildReleaseExecutionPlanArtifact({
     attemptEvidenceVersion: 2,
     candidate: null,
-    children: built.children,
-    evidenceReuse: { requested: false },
+    children: built.children.map((entry) =>
+      selectedKeys.has(entry.key)
+        ? entry
+        : {
+            ...entry,
+            required: false,
+            result: "skipped",
+            runAttempt: null,
+            runId: "",
+            selected: false,
+            url: "",
+          },
+    ),
+    evidenceReuse,
     expected: {
       candidateRequest,
       parentRunAttempt: 1,
@@ -714,6 +733,50 @@ describe("FRV same-parent recovery", () => {
     expect(scenario.counters.verifies).toBe(0);
   });
 
+  it("freezes every selected and reused parent attempt for final verification", async () => {
+    const scenario = rerunScenario({ childSource: [1, "success"] });
+    const reusedPlan = validateReleaseExecutionPlanArtifact(
+      executionPlanArtifact({
+        children: [scenario.selected],
+        evidenceReuse: {
+          changedPaths: [],
+          evidenceSha: TARGET_SHA,
+          policy: "exact-target-full-validation-v1",
+          requested: true,
+          rootRunId: "88",
+          runUrl: `https://github.com/${REPOSITORY}/actions/runs/88`,
+          selectedRunId: "88",
+          sourceManifest: { runAttempt: 3, runId: "88", targetSha: TARGET_SHA },
+        },
+      }),
+    );
+    const getRun = scenario.client.getRun;
+    let expectedRunAttempts: Record<string, number> | undefined;
+    const client = {
+      ...scenario.client,
+      getRun: async (runId: string) => {
+        if (runId === "88") {
+          return { ...rootRun(3, "success"), id: Number(runId) };
+        }
+        return getRun(runId);
+      },
+      verify: async (
+        _runId: string,
+        _plan: Record<string, unknown>,
+        _deadline?: number,
+        attempts?: Record<string, number>,
+      ) => {
+        expectedRunAttempts = attempts;
+        return "{}";
+      },
+    };
+
+    await expect(continueFailed(reusedPlan, "77", client)).resolves.toMatchObject({
+      action: "verified-parent",
+    });
+    expect(expectedRunAttempts).toEqual({ "77": 1, "88": 3, "101": 1 });
+  });
+
   it("fails closed without another POST when provenance changes during reconciliation", async () => {
     const scenario = rerunScenario({
       childAfter: [[1, "failure", undefined, undefined, undefined, "f".repeat(40)]],
@@ -784,13 +847,18 @@ describe("FRV strict verifier", () => {
         return "{}";
       },
     });
-    await expect(client.verify("77", executionPlanArtifact(), Date.now() + 30_000)).resolves.toBe(
-      "{}",
-    );
+    await expect(
+      client.verify("77", executionPlanArtifact(), Date.now() + 30_000, {
+        "77": 2,
+        "101": 2,
+      }),
+    ).resolves.toBe("{}");
     expect(args).toEqual(
       expect.arrayContaining([
         "--validate-run",
         "77",
+        "--expected-run-attempts-json",
+        '{"77":2,"101":2}',
         "--trusted-workflow-sha",
         SHA,
         "--verifier-source-sha",

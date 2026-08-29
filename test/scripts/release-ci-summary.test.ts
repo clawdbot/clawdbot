@@ -870,6 +870,25 @@ describe("release CI summary child correlation", () => {
       args: ["--validate-run", "29071366025", "--verifier-source-file", "/tmp/verifier.mjs"],
       message: "requires --verifier-source-sha",
     },
+    {
+      args: ["--validate-run", "29071366025", "--expected-run-attempts-json", "[]"],
+      message: "requires a JSON object",
+    },
+    {
+      args: ["--validate-run", "29071366025", "--expected-run-attempts-json", '{"29071366025":0}'],
+      message: "must be a positive integer",
+    },
+    {
+      args: [
+        "--validate-run",
+        "29071366025",
+        "--expected-run-attempts-json",
+        JSON.stringify(
+          Object.fromEntries(Array.from({ length: 10 }, (_, index) => [index + 1, 1])),
+        ),
+      ],
+      message: "must contain 1-9 run IDs",
+    },
     { args: ["--unknown"], message: "unknown or incomplete argument" },
   ])("rejects invalid CLI arguments before GitHub access: $message", ({ args, message }) => {
     const result = spawnSync(process.execPath, [resolve(SCRIPT), ...args], {
@@ -1364,15 +1383,18 @@ describe("release CI summary child correlation", () => {
       ].join("\n");
     };
 
-    const evidence = validateReleaseRunEvidence(
-      {
-        repository: "openclaw/openclaw",
-        runId: fixture.runId,
-        verifierSourceContent: readFileSync(SCRIPT),
-        verifierSourceSha: "c".repeat(40),
-      },
-      fixture.client,
-    );
+    const validate = (expectedRunAttempts?: Record<string, number>) =>
+      validateReleaseRunEvidence(
+        {
+          expectedRunAttempts,
+          repository: "openclaw/openclaw",
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      );
+    const evidence = validate();
     expect(evidence.children).toEqual([
       expect.objectContaining({
         compositeJobsSha256: releaseChecksEvidence.compositeJobsSha256,
@@ -1381,32 +1403,21 @@ describe("release CI summary child correlation", () => {
       }),
     ]);
 
+    for (const [expectedRunAttempts, message] of [
+      [{ [fixture.runId]: 1, [String(fixture.childRun.id)]: 2 }, "parent run attempt changed"],
+      [{ [fixture.runId]: 2, [String(fixture.childRun.id)]: 1 }, "child run attempt changed"],
+      [{ [fixture.runId]: 2 }, "expected run attempts omitted"],
+      [{ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2, "999": 1 }, "unvalidated run IDs"],
+    ] as const) {
+      expect(() => validate(expectedRunAttempts)).toThrow(message);
+    }
+
     releaseChecksEvidence.jobs[0]!.conclusion = "failure";
-    expect(() =>
-      validateReleaseRunEvidence(
-        {
-          repository: "openclaw/openclaw",
-          runId: fixture.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        fixture.client,
-      ),
-    ).toThrow("composite digest is invalid");
+    expect(() => validate()).toThrow("composite digest is invalid");
 
     releaseChecksEvidence.jobs[0]!.conclusion = "success";
     fixture.childRun.actor = { login: "release-operator" };
-    expect(() =>
-      validateReleaseRunEvidence(
-        {
-          repository: "openclaw/openclaw",
-          runId: fixture.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        fixture.client,
-      ),
-    ).toThrow("execution plan child dispatch tuple mismatch");
+    expect(() => validate()).toThrow("execution plan child dispatch tuple mismatch");
   });
 
   it("rejects a parent recovery that reruns a sealed child dispatch slot", () => {

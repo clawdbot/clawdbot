@@ -26,6 +26,7 @@ export interface FrvClient {
     runId: string,
     plan: Record<string, unknown>,
     operationDeadline?: number,
+    expectedRunAttempts?: Record<string, number>,
   ) => Promise<unknown>;
 }
 
