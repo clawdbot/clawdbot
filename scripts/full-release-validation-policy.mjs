@@ -4,6 +4,18 @@ import {
   validateFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
 
+// Full profiles carry over 500 job records. Keep complete evidence under one
+// shared wire budget instead of letting producers exceed smaller reader limits.
+export const MAX_RELEASE_ARTIFACT_BYTES = 1024 * 1024;
+
+export function serializeReleaseArtifact(payload) {
+  const json = `${JSON.stringify(payload)}\n`;
+  if (Buffer.byteLength(json, "utf8") > MAX_RELEASE_ARTIFACT_BYTES) {
+    throw new Error("release artifact exceeds the size limit");
+  }
+  return json;
+}
+
 const SUCCESSFUL_JOB_CONCLUSIONS = new Set(["neutral", "skipped", "success"]);
 const MAX_REPORTED_ISSUES = 25;
 const MAX_SUMMARY_ISSUES = 5;

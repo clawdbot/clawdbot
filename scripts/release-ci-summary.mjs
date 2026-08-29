@@ -17,6 +17,7 @@ import {
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
+  MAX_RELEASE_ARTIFACT_BYTES,
   releaseCompositeJobsSha256,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
@@ -36,11 +37,8 @@ const RELEASE_EVIDENCE_SCRIPT = "scripts/release-ci-summary.mjs";
 const RELEASE_EVIDENCE_FILE = fileURLToPath(import.meta.url);
 const RELEASE_EVIDENCE_REPO_ROOT = resolve(dirname(RELEASE_EVIDENCE_FILE), "..");
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
-const MAX_MANIFEST_ARTIFACT_ZIP_BYTES = 256 * 1024;
-const MAX_MANIFEST_JSON_BYTES = 128 * 1024;
 const MAX_MANIFEST_ENTRY_LIST_BYTES = 8 * 1024;
-const MAX_RELEASE_STATE_BYTES = 128 * 1024;
-const MAX_EXECUTION_PLAN_BYTES = 128 * 1024;
+const MAX_MANIFEST_ARTIFACT_ZIP_BYTES = MAX_RELEASE_ARTIFACT_BYTES + MAX_MANIFEST_ENTRY_LIST_BYTES;
 // Release evidence lookups run during full release validation, so keep enough
 // headroom for GitHub latency while preventing one stalled read from consuming
 // the workflow budget.
@@ -292,7 +290,7 @@ function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
     if (!statSync(path, { throwIfNoEntry: false })) {
       throw new Error(`release execution plan artifact ${artifactName} omitted its manifest`);
     }
-    if (statSync(path).size > MAX_EXECUTION_PLAN_BYTES) {
+    if (statSync(path).size > MAX_RELEASE_ARTIFACT_BYTES) {
       throw new Error(`release execution plan artifact ${artifactName} exceeds the size limit`);
     }
     return JSON.parse(readFileSync(path, "utf8"));
@@ -1456,13 +1454,13 @@ export function readManifestArtifactArchive(archivePath, expectedDigest) {
   let manifestBytes;
   try {
     manifestBytes = execFileSync("unzip", ["-p", archivePath, MANIFEST_ARTIFACT_ENTRY], {
-      maxBuffer: MAX_MANIFEST_JSON_BYTES + 1,
+      maxBuffer: MAX_RELEASE_ARTIFACT_BYTES + 1,
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
     throw new Error("release validation manifest artifact entry could not be read safely");
   }
-  if (manifestBytes.byteLength < 1 || manifestBytes.byteLength > MAX_MANIFEST_JSON_BYTES) {
+  if (manifestBytes.byteLength < 1 || manifestBytes.byteLength > MAX_RELEASE_ARTIFACT_BYTES) {
     throw new Error("release validation manifest artifact entry size is invalid");
   }
   return JSON.parse(manifestBytes.toString("utf8"));
@@ -2427,7 +2425,7 @@ export function tryReadReleaseDecisionArtifact(
     if (!statSync(path, { throwIfNoEntry: false })) {
       throw new Error(`release decision artifact ${artifactName} omitted its manifest`);
     }
-    if (statSync(path).size > MAX_RELEASE_STATE_BYTES) {
+    if (statSync(path).size > MAX_RELEASE_ARTIFACT_BYTES) {
       throw new Error(`release decision artifact ${artifactName} exceeds the size limit`);
     }
     return validateReleaseStateArtifact(

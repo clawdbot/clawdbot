@@ -603,7 +603,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(buildDistStep.env).toEqual({ NODE_OPTIONS: "--max-old-space-size=8192" });
     expect(staticShard).toEqual({
       if: "needs.preflight.outputs.run_plugin_prerelease_static == 'true'",
-      name: "${{ matrix.check_name }}",
+      name: "${{ matrix.check_name || 'plugin-prerelease-static-shard' }}",
       needs: ["preflight"],
       permissions: {
         contents: "read",

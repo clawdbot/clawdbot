@@ -10,6 +10,7 @@ import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-can
 import {
   buildReleaseExecutionPlanArtifact,
   composeReleaseAttemptJobs,
+  MAX_RELEASE_ARTIFACT_BYTES,
   releaseCompositeJobsSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
@@ -1059,7 +1060,7 @@ describe("release CI summary child correlation", () => {
       const root = mkdtempSync(join(tmpdir(), "release-manifest-artifact-"));
       try {
         const archivePath = join(root, "manifest.zip");
-        const manifest = { runAttempt: 1, runId: "29071366025" };
+        const manifest = { runAttempt: 1, runId: "29071366025", evidence: "x".repeat(128 * 1024) };
         const archive = makeStoredZip({
           [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(manifest),
         });
@@ -1079,14 +1080,14 @@ describe("release CI summary child correlation", () => {
         ).toThrow(`must contain only ${MANIFEST_ARTIFACT_ENTRY}`);
 
         const oversizedManifestArchive = makeStoredZip({
-          [MANIFEST_ARTIFACT_ENTRY]: "x".repeat(128 * 1024 + 1),
+          [MANIFEST_ARTIFACT_ENTRY]: "x".repeat(MAX_RELEASE_ARTIFACT_BYTES + 1),
         });
         writeFileSync(archivePath, oversizedManifestArchive);
         expect(() =>
           readManifestArtifactArchive(archivePath, artifactDigest(oversizedManifestArchive)),
         ).toThrow("artifact entry size is invalid");
 
-        const oversizedArchive = Buffer.alloc(256 * 1024 + 1);
+        const oversizedArchive = Buffer.alloc(MAX_RELEASE_ARTIFACT_BYTES + 8 * 1024 + 1);
         writeFileSync(archivePath, oversizedArchive);
         expect(() =>
           readManifestArtifactArchive(archivePath, artifactDigest(oversizedArchive)),

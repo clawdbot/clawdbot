@@ -10,6 +10,7 @@ import {
   classifyReleaseGhTransportError,
   composeReleaseChildAttemptEvidence,
   isReleaseGhArtifactMissingError,
+  MAX_RELEASE_ARTIFACT_BYTES,
   releaseChildSpec,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
@@ -193,7 +194,7 @@ async function downloadExecutionPlan(repository, runId) {
     }
     const path = join(directory, PLAN_FILENAME);
     const size = statSync(path, { throwIfNoEntry: false })?.size ?? 0;
-    if (size < 1 || size > 128 * 1024) {
+    if (size < 1 || size > MAX_RELEASE_ARTIFACT_BYTES) {
       throw new Error("immutable execution plan artifact is missing or oversized");
     }
     return JSON.parse(readFileSync(path, "utf8"));
