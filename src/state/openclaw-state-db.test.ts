@@ -1640,7 +1640,10 @@ describe("openclaw state database", () => {
       });
       if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: ["Migrated cloud worker placements to execution modes"],
+          changes: [
+            "Migrated cloud worker placements to execution modes",
+            "Qualified historical cron creator attribution as unknown (v14)",
+          ],
           warnings: [],
         });
       }
@@ -1738,6 +1741,7 @@ describe("openclaw state database", () => {
           "Migrated agent database registry paths to state-relative storage (2 relativized, 1 re-anchored, 1 removed)",
           `Re-anchored agent database registry path ${copiedForeignPath} to the current state directory`,
           `Removed duplicate agent database registry path ${dualForeignPath}`,
+          "Qualified historical cron creator attribution as unknown (v14)",
         ],
         warnings: [],
       });
@@ -1803,7 +1807,10 @@ describe("openclaw state database", () => {
       });
       if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: ["Retired six dead shared-state tables (v10)"],
+          changes: [
+            "Retired six dead shared-state tables (v10)",
+            "Qualified historical cron creator attribution as unknown (v14)",
+          ],
           warnings: [],
         });
       }
@@ -1884,6 +1891,7 @@ describe("openclaw state database", () => {
           changes: [
             "Retired legacy skill curator lifecycle and proposal origin-run tables",
             "Folded singleton state tables into config_machine_state (v12)",
+            "Qualified historical cron creator attribution as unknown (v14)",
           ],
           warnings: [],
         });
@@ -1999,7 +2007,10 @@ describe("openclaw state database", () => {
       });
       if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: ["Folded singleton state tables into config_machine_state (v12)"],
+          changes: [
+            "Folded singleton state tables into config_machine_state (v12)",
+            "Qualified historical cron creator attribution as unknown (v14)",
+          ],
           warnings: [],
         });
       }
@@ -2274,13 +2285,16 @@ describe("openclaw state database", () => {
       });
       if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: ["Consolidated shared state tables (v13)"],
+          changes: [
+            "Consolidated shared state tables (v13)",
+            "Qualified historical cron creator attribution as unknown (v14)",
+          ],
           warnings: [],
         });
       }
 
       const migrated = openOpenClawStateDatabase(options);
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(13);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(14);
       expect(collectSqliteSchemaShape(migrated.db).gateway_origin_device_tokens).toEqual(
         createInitialStateSchemaShape().gateway_origin_device_tokens,
       );
@@ -2611,7 +2625,7 @@ describe("openclaw state database", () => {
       });
       closeOpenClawStateDatabaseForTest();
       expect(readSqliteNumberPragma(openOpenClawStateDatabase(options).db, "user_version")).toBe(
-        13,
+        14,
       );
     },
   );
@@ -2879,7 +2893,7 @@ describe("openclaw state database", () => {
             }).db,
             "user_version",
           ),
-        ).toBe(13);
+        ).toBe(14);
       },
     );
   });
@@ -2915,7 +2929,7 @@ describe("openclaw state database", () => {
         db.prepare("UPDATE cron_jobs SET state_json = '[]'").run();
         expect(() => db.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL)).toThrow(/CHECK constraint/);
         db.exec("ROLLBACK");
-        expect(readSqliteNumberPragma(db, "user_version")).toBe(13);
+        expect(readSqliteNumberPragma(db, "user_version")).toBe(14);
         expect(db.prepare("SELECT state_json FROM cron_jobs").get()).toEqual({ state_json: "[]" });
         db.close();
       },
@@ -2943,7 +2957,7 @@ describe("openclaw state database", () => {
     legacy.close();
 
     const migrated = openOpenClawStateDatabase(options);
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(13);
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(14);
     expect(
       migrated.db
         .prepare(
@@ -2979,6 +2993,7 @@ describe("openclaw state database", () => {
           changes: [
             "Discarded retired shared-state commitments rows, table, and indexes",
             "Migrated cloud worker placements to execution modes",
+            "Qualified historical cron creator attribution as unknown (v14)",
           ],
           warnings: [],
         });
@@ -3273,6 +3288,7 @@ describe("openclaw state database", () => {
       { kind: "state-table-retirement-v11", path: fixture.databasePath },
       { kind: "singleton-state-foldin-v12", path: fixture.databasePath },
       { kind: "state-consolidation-v13", path: fixture.databasePath },
+      { kind: "creator-namespace-v14", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -3289,6 +3305,7 @@ describe("openclaw state database", () => {
         "Folded singleton state tables into config_machine_state (v12)",
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
         "Consolidated shared state tables (v13)",
+        "Qualified historical cron creator attribution as unknown (v14)",
         "Migrated shared state tables to SQLite STRICT typing (48)",
       ],
       warnings: [],
@@ -3949,6 +3966,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     legacy.close();
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
+      { kind: "creator-namespace-v14", path: databasePath },
       { kind: "strict-tables-v3", path: databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: databasePath },
     ]);
@@ -3956,6 +3974,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       changes: [
         "Migrated cloud worker placements to execution modes",
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
+        "Qualified historical cron creator attribution as unknown (v14)",
         "Migrated shared state tables to SQLite STRICT typing (1)",
       ],
       warnings: [],
@@ -3983,12 +4002,14 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const seeded = seedLegacySessionWatchCursorSchema(stateDir);
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
+      { kind: "creator-namespace-v14", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
         "Migrated cloud worker placements to execution modes",
         "Migrated shared state session watch cursors → provenance column (2 ambient, 5 sentinels removed)",
+        "Qualified historical cron creator attribution as unknown (v14)",
       ],
       warnings: [],
     });

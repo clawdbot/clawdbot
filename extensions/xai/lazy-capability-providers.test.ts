@@ -5,6 +5,10 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => {
+  throw new Error("Lazy capability metadata must not load the broad agent runtime");
+});
+
 const runtimeMocks = vi.hoisted(() => {
   const generateImage = vi.fn();
   const transcribeAudio = vi.fn();

@@ -92,7 +92,7 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
     contextTokens: 100_000,
     contextTokensSource: "runtime",
     createdVia: "operator",
-    createdActor: { type: "human", id: "profile-1" },
+    createdActor: { type: "human", source: "profile", id: "profile-1" },
     createdAt: 1_000,
     delivery: normalizeSessionDeliveryState({
       context: { channel: "telegram", to: "chat-123" },
@@ -499,7 +499,7 @@ describe("SQLite session message cuts", () => {
       contextTokens: undefined,
       contextTokensSource: undefined,
       createdVia: "operator",
-      createdActor: { type: "human", id: "profile-1" },
+      createdActor: { type: "human", source: "profile", id: "profile-1" },
       createdAt: 1_000,
       forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
       previousSessionId: "message-cut-source",

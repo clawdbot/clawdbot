@@ -409,7 +409,7 @@ describe("runReplyAgent runtime config", () => {
         replyParams.sessionStore = { [sessionKey]: sessionEntry };
         replyParams.sessionCtx.SessionCreation = {
           via: "operator",
-          actor: { type: "human", id: "profile-creator" },
+          actor: { type: "human", source: "profile", id: "profile-creator" },
         };
         if (identity) {
           prepareSessionParticipantInput(replyParams.sessionCtx, identity, 1);

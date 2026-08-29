@@ -90,7 +90,7 @@ Configure compaction under `agents.defaults.compaction` in your `openclaw.json`.
 
 ### Using a different model
 
-By default, compaction uses the agent's primary model. Set `agents.defaults.compaction.model` to delegate summarization to a more capable or specialized model. The override accepts a `provider/model-id` string or a bare alias configured under `agents.defaults.models`:
+The built-in OpenClaw runtime starts compaction with the active session model. Set `agents.defaults.compaction.model` to select a different summarization model. The override accepts a `provider/model-id` string or a bare alias configured under `agents.defaults.models`:
 
 ```json
 {
@@ -121,6 +121,8 @@ This works with local models too, for example a second Ollama model dedicated to
 ```
 
 When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
+
+In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain. Caller cancellation and failed safeguard quality checks do not trigger a model switch.
 
 ### Identifier preservation
 
@@ -214,7 +216,7 @@ summarization. Configured provider output keeps the provider's existing
 validation semantics.
 
 <Note>
-If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization.
+If the provider fails or returns an empty result, OpenClaw falls back through the built-in safeguard summarizer and its configured quality checks. Provider-local timeouts do not bypass those checks; cancellation of the compaction request is still respected.
 </Note>
 
 ## Compaction vs pruning

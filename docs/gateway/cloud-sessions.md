@@ -64,6 +64,12 @@ With warm images enabled, repeat sessions for the same repository can also avoid
 
 Suspension never interrupts work: sessions with an active turn, queued messages, or unreconciled results are skipped and re-checked on the next sweep. See the profile fields in [Cloud Workers](/gateway/cloud-workers#configuration) for costs, capture boundaries, and prerequisites.
 
+## Images and PDFs
+
+Attach images and PDFs through the normal chat composer, including on later turns in an existing cloud session. The Gateway prepares image input, including rendered pages from scanned PDFs, before sending it to an OpenClaw worker. Codex receives image input through its Gateway-side app-server.
+
+Original attachments are copied into the placed session's remote workspace before execution. The turn includes the remote paths so file tools can inspect the originals without using Gateway-local filenames. These managed input copies stay readable on the worker but are excluded from workspace synchronization; they do not become project edits. Attachment transfer does not replace the remote workspace or overwrite existing work. Model credentials remain on the Gateway.
+
 ## What stays with the Gateway
 
 Placement is disposable; the session is not. The transcript, the last-reconciled workspace files, placement history, and every provider credential live with the Gateway in all placements. A dead cloud machine or an idle suspension resolves automatically: the session remains in your sidebar, and the next message provisions a replacement — warm when an image exists, cold otherwise. An offline paired device is different by design: the placement stays active and waits for the device to reconnect, and **Continue on Gateway…** is an explicit action that can lose unsynced device files. Workspace changes made after the last reconciliation are the only loss window, and clean stops (including auto-suspension) reconcile before releasing the machine.

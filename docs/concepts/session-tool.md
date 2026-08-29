@@ -132,7 +132,7 @@ See [Session state awareness](/concepts/session-state) for the full model: event
 
 ## Spawning sub-agents
 
-`sessions_spawn` creates a separate session for a background task. Non-thread spawns start with isolated context by default; thread-bound spawns follow the configured context policy described below. It is always non-blocking; it returns immediately with a `runId` and `childSessionKey`. Native sub-agent runs receive their delegated task in a `[Subagent Task]` message appended after any forked history; inherited task envelopes are context, not the current child's assignment. The system prompt carries only sub-agent runtime rules and routing context.
+`sessions_spawn` creates a separate session for a background task. Non-thread spawns start with isolated context by default; thread-bound spawns follow the configured context policy described below. It returns a `runId` and `childSessionKey` when startup is accepted, without waiting for the child task to finish. Spawns from an OpenClaw cloud worker can first wait for child provisioning and node enrollment. Native sub-agent runs receive their delegated task in a `[Subagent Task]` message appended after any forked history; inherited task envelopes are context, not the current child's assignment. The system prompt carries only sub-agent runtime rules and routing context.
 
 Key options:
 

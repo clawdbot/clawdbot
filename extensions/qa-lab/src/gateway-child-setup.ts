@@ -111,6 +111,23 @@ function createQaPackagedMockApiKey(): string {
   return `${prefix}-${["qa", "mock", randomUUID().replaceAll("-", "")].join("-")}`;
 }
 
+async function runQaPackagedBootstrap(
+  failureMessage: string,
+  operation: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await operation();
+  } catch (error) {
+    const details = sliceUtf16Safe(
+      redactQaGatewayDebugText(toErrorObject(error, failureMessage).message),
+      0,
+      QA_PACKAGE_BOOTSTRAP_FAILURE_MAX_CHARS,
+    );
+    // oxlint-disable-next-line preserve-caught-error -- Candidate CLI output can contain credentials; only the bounded redacted message crosses this boundary, never its raw cause.
+    throw new Error(`${failureMessage}: ${details}`);
+  }
+}
+
 async function stageQaPackagedMockAuthProfiles(params: {
   command: QaGatewayChildCommand;
   configPath: string;
@@ -119,35 +136,28 @@ async function stageQaPackagedMockAuthProfiles(params: {
   providers: readonly string[];
 }): Promise<void> {
   for (const provider of uniqueStrings(params.providers)) {
-    try {
-      await runQaGatewayCliCommand({
-        executablePath: params.command.executablePath,
-        argsPrefix: params.command.argsPrefix ?? [],
-        args: [
-          "models",
-          "auth",
-          "--agent",
-          "qa",
-          "paste-api-key",
-          "--provider",
-          provider,
-          "--profile-id",
-          buildQaMockProfileId(provider),
-        ],
-        cwd: params.command.cwd ?? params.cwd,
-        env: { ...params.env, OPENCLAW_CONFIG_PATH: params.configPath },
-        stdin: `${createQaPackagedMockApiKey()}\n`,
-      });
-    } catch (error) {
-      const errorMessage = toErrorObject(error, "installed package auth command failed").message;
-      const details = sliceUtf16Safe(
-        redactQaGatewayDebugText(errorMessage),
-        0,
-        QA_PACKAGE_BOOTSTRAP_FAILURE_MAX_CHARS,
-      );
-      // oxlint-disable-next-line preserve-caught-error -- Candidate CLI errors can contain the submitted API key; only the redacted message crosses this boundary.
-      throw new Error(`installed package mock auth bootstrap failed for ${provider}: ${details}`);
-    }
+    await runQaPackagedBootstrap(
+      `installed package mock auth bootstrap failed for ${provider}`,
+      () =>
+        runQaGatewayCliCommand({
+          executablePath: params.command.executablePath,
+          argsPrefix: params.command.argsPrefix ?? [],
+          args: [
+            "models",
+            "auth",
+            "--agent",
+            "qa",
+            "paste-api-key",
+            "--provider",
+            provider,
+            "--profile-id",
+            buildQaMockProfileId(provider),
+          ],
+          cwd: params.command.cwd ?? params.cwd,
+          env: { ...params.env, OPENCLAW_CONFIG_PATH: params.configPath },
+          stdin: `${createQaPackagedMockApiKey()}\n`,
+        }),
+    );
   }
 }
 
@@ -426,16 +436,16 @@ export async function prepareQaGatewayChild(
           packagedMockAuthStaged = true;
         }
         if (usesPackagedCandidate && gatewayCommand) {
-          try {
+          const command = {
+            executablePath: gatewayCommand.executablePath,
+            argsPrefix: gatewayCommand.argsPrefix ?? [],
+            cwd: gatewayCwd,
+            env,
+          };
+          await runQaPackagedBootstrap("installed package plugin setup failed", async () => {
             // The separate onboarding smoke cannot prepare this child's state.
             // Converge every freshly written config; a new-port retry can otherwise
             // restore plugin entries the candidate removed before verify-only startup.
-            const command = {
-              executablePath: gatewayCommand.executablePath,
-              argsPrefix: gatewayCommand.argsPrefix ?? [],
-              cwd: gatewayCwd,
-              env,
-            };
             // Published candidates such as 2026.7.1-2 predate capability consent.
             const help = await runQaGatewayCliCommand({
               ...command,
@@ -448,15 +458,7 @@ export async function prepareQaGatewayChild(
               ...command,
               args: ["update", "repair", ...consentArgs, "--yes", "--no-restart", "--json"],
             });
-          } catch (error) {
-            const details = sliceUtf16Safe(
-              redactQaGatewayDebugText(toErrorObject(error, "plugin setup failed").message),
-              0,
-              QA_PACKAGE_BOOTSTRAP_FAILURE_MAX_CHARS,
-            );
-            // oxlint-disable-next-line preserve-caught-error -- Candidate output can include credentials; retain only the bounded redacted diagnostic.
-            throw new Error(`installed package plugin setup failed: ${details}`);
-          }
+          });
         }
       }
       if (!env) {

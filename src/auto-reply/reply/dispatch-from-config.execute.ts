@@ -686,6 +686,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   onReplyStart: params.replyOptions?.onReplyStart,
                   onAgentRunStart: params.replyOptions?.onAgentRunStart,
                   userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
+                  prepareAssistantTranscriptMessage:
+                    params.replyOptions?.prepareAssistantTranscriptMessage,
                   recordProcessed: state.recordProcessed,
                   markIdle: state.markIdle,
                 },

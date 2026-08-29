@@ -1,5 +1,5 @@
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   listMemoryCorpusSupplements,
   type MemoryCorpusSearchResult,
@@ -19,17 +19,31 @@ type MemorySupplementReadResult = Omit<MemorySupplementGetResult, "content"> & {
   text: string;
 };
 
+export type MemoryCorpusFailure = { error: string; code?: string };
+type UnavailableMemoryCorpus<T> = {
+  corpus: MemoryCorpus;
+  outcome: "unavailable";
+  value: T;
+} & MemoryCorpusFailure;
+
 export type MemoryCorpusAttempt<T> =
   | { corpus: MemoryCorpus; outcome: "ok"; value: T }
-  | { corpus: MemoryCorpus; outcome: "unavailable"; value: T; error: string }
+  | UnavailableMemoryCorpus<T>
   | { corpus: MemoryCorpus; outcome: "not-registered" };
 
 export function unavailableMemoryCorpus<T>(
   corpus: MemoryCorpus,
   value: T,
   error: unknown,
-): MemoryCorpusAttempt<T> {
-  return { corpus, outcome: "unavailable", value, error: formatErrorMessage(error) };
+): UnavailableMemoryCorpus<T> {
+  const code = extractErrorCode(error);
+  return {
+    corpus,
+    outcome: "unavailable",
+    value,
+    error: formatErrorMessage(error),
+    ...(code ? { code } : {}),
+  };
 }
 
 async function raceMemoryCorpusSignal<T>(signal: AbortSignal, task: Promise<T>): Promise<T> {

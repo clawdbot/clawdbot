@@ -1,7 +1,6 @@
-import { EventEmitter, once } from "node:events";
+import { EventEmitter } from "node:events";
 // Gateway extension relay upgrade handler: auth + routing decisions.
-import http, { type IncomingMessage } from "node:http";
-import net from "node:net";
+import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -282,50 +281,23 @@ describe("handleGatewayExtensionUpgrade", () => {
   });
 
   it("rejects oversized direct-Gateway upgrade-head data before ws auth or lazy startup", async () => {
-    const server = http.createServer();
-    server.on("upgrade", (request, socket, head) => {
-      void handleGatewayExtensionUpgrade(request, socket, head);
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected direct-Gateway test port");
-    }
-    const socket = net.createConnection({ host: "127.0.0.1", port: address.port });
-    socket.on("error", () => {});
-    await once(socket, "connect");
-    const response: Buffer[] = [];
-    socket.on("data", (chunk) => response.push(Buffer.from(chunk)));
-    const closed = once(socket, "close");
-    const request = Buffer.from(
-      [
-        "GET /browser/extension HTTP/1.1",
-        "Host: 127.0.0.1",
-        "Connection: Upgrade",
-        "Upgrade: websocket",
-        "Sec-WebSocket-Version: 13",
-        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-        "Sec-WebSocket-Protocol: openclaw-extension-relay.v2",
-        "Origin: chrome-extension://relay-auth-v2-test",
-        "",
-        "",
-      ].join("\r\n"),
+    const { socket, writes, isDestroyed } = fakeSocket();
+    const handled = await handleGatewayExtensionUpgrade(
+      v2Req(),
+      socket,
+      oversizedMaskedTextFrame(),
     );
-    socket.write(Buffer.concat([request, oversizedMaskedTextFrame()]));
-    await closed;
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
 
-    const text = Buffer.concat(response).toString("utf8");
-    expect(text).not.toContain("auth.challenge");
-    expect(text).not.toContain("auth.ok");
-    expect(authenticateExtensionWebSocketMock).not.toHaveBeenCalled();
-    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
-    expect(ensureExtensionRelayForProfileMock).not.toHaveBeenCalled();
-    expect(attachExtensionWebSocketMock).not.toHaveBeenCalled();
+    const response = writes.join("");
+    expect(handled).toBe(true);
+    expect(response.startsWith("HTTP/1.1 400 Bad Request\r\n")).toBe(true);
+    expect(isDestroyed()).toBe(true);
+    expect(response.includes("auth.challenge")).toBe(false);
+    expect(response.includes("auth.ok")).toBe(false);
+    expect(authenticateExtensionWebSocketMock.mock.calls.length).toBe(0);
+    expect(startBrowserControlServiceFromConfigMock.mock.calls.length).toBe(0);
+    expect(ensureExtensionRelayForProfileMock.mock.calls.length).toBe(0);
+    expect(attachExtensionWebSocketMock.mock.calls.length).toBe(0);
   });
 
   it("binds v2 to the exact profile resource and refuses mixed-protocol downgrade", async () => {

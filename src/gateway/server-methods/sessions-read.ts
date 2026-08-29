@@ -43,7 +43,7 @@ import {
   canAccessIncognitoSession,
   createSessionListEntryFilter,
   isGatewayAdmin,
-  resolveSessionSharingRole,
+  prepareSessionSharing,
   resolveSessionSharingTarget,
   resolveSessionVisibility,
 } from "../session-sharing.js";
@@ -276,7 +276,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             loaded = { ...loadedStore, modelCatalogByAgent: preparedModelCatalogByAgent };
           }
           const { durableStorePath, durableTargets, modelCatalogByAgent, storePath } = loaded;
-          const visibilityFilter = createSessionListEntryFilter({ client, cfg });
+          const visibilityFilter = prepareSessionSharing({ client, cfg }).entryFilter;
           const entryFilter =
             visibilityFilter || options.excludedKeys?.size
               ? (key: string, entry: SessionEntry) =>
@@ -385,6 +385,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           const projectPlacement = createSessionPlacementBatchProjector(context, result.sessions);
           const trackedActiveRuns = collectTrackedActiveSessionRuns(context);
           const projectedAgentRunIndex = buildProjectedAgentRunIndex();
+          // Row building and sharing resolution yielded; publication owns fresh caller facts.
+          const sharing = prepareSessionSharing({ client, cfg });
           const sessions = measureDiagnosticsTimelineSpanSync(
             "gateway.sessions.list.active_run_flags",
             () => {
@@ -407,14 +409,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   visibility,
                   ...(sharingTarget
                     ? {
-                        sharingRole: resolveSessionSharingRole({
-                          client,
-                          cfg,
-                          target: sharingTarget,
-                          isMember: membershipKeys.has(
+                        sharingRole: sharing.roleForTarget(
+                          sharingTarget,
+                          membershipKeys.has(
                             `${sharingTarget.agentId}\0${sharingTarget.storePath}\0${sharingTarget.storeKey}`,
                           ),
-                        }),
+                        ),
                       }
                     : {}),
                   hasActiveRun: activeRunState.active,
@@ -438,7 +438,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           );
           // Reapply the canonical policy to freshly resolved rows after awaits:
           // visibility, ownership, membership, and operator roles may all drift.
-          const currentVisibilityFilter = createSessionListEntryFilter({ client, cfg });
+          const currentVisibilityFilter = sharing.entryFilter;
           const visibleSessions = currentVisibilityFilter
             ? sessions.filter((_, index) => {
                 const target = sharingTargets[index];

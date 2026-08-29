@@ -119,10 +119,10 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 3,
   "plugin-entry": 1,
   routing: 1,
-  // +2: the shipped default-agent resolvers remain available through
+  // +4: shipped default/session-agent resolvers remain available through
   // compatibility barrels while callers migrate to explicit/sole selection.
   health: 1,
-  "agent-scope-runtime": 2,
+  "agent-scope-runtime": 4,
   // +1: shipped channel setup state-migration declaration during its migration window.
   "channel-entry-contract": 1,
   "approval-gateway-runtime": 1,
@@ -143,8 +143,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.
   "reply-payload": 2,
-  "agent-runtime": 3,
-  "memory-host-core": 1,
+  "agent-runtime": 4,
+  "memory-host-core": 2,
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
   // deprecated while external harnesses migrate to required-capability V2 contracts.
@@ -327,7 +327,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared bounded HTTP rejection transport replaces plugin-local close policies.
       // +1: prepared model-provider builder preserves the stable builder's return contract.
       // +1: canonical SecretRef default-alias predicate for plugin binding parity.
-      4353,
+      // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
+      4355,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -431,7 +432,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared bounded HTTP rejection transport replaces plugin-local close policies.
       // +1: prepared model-provider builder preserves the stable builder's return contract.
       // +1: canonical SecretRef default-alias predicate for plugin binding parity.
-      2589,
+      // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
+      2591,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

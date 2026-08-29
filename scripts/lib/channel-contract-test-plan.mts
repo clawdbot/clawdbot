@@ -1,6 +1,7 @@
 // Builds balanced Vitest shard plans for channel plugin contract tests.
 import { relative } from "node:path";
 import { listTrackedTestFiles } from "./list-test-files.mts";
+import { assignWeightedTestFiles } from "./weighted-test-shards.mts";
 
 function listContractTestFiles(rootDir = "src/channels/plugins/contracts") {
   return listTrackedTestFiles(rootDir);
@@ -42,16 +43,6 @@ export function createChannelContractTestShards() {
     includePatterns: new Array<string>(),
     weight: 0,
   }));
-  const pushBalanced = (file: string) => {
-    const target = groups.toSorted(
-      (a, b) => a.weight - b.weight || a.checkName.localeCompare(b.checkName),
-    )[0];
-    if (!target) {
-      throw new Error("channel contract shard groups must not be empty");
-    }
-    target.includePatterns.push(file);
-    target.weight += resolveContractFileWeight(file);
-  };
 
   const coreFiles = new Array<string>();
   const registryFiles = new Array<string>();
@@ -63,16 +54,8 @@ export function createChannelContractTestShards() {
     ).push(file);
   }
 
-  const byDescendingWeight = (left: string, right: string) => {
-    const delta = resolveContractFileWeight(right) - resolveContractFileWeight(left);
-    return delta === 0 ? left.localeCompare(right) : delta;
-  };
-  for (const file of registryFiles.toSorted(byDescendingWeight)) {
-    pushBalanced(file);
-  }
-  for (const file of coreFiles.toSorted(byDescendingWeight)) {
-    pushBalanced(file);
-  }
+  assignWeightedTestFiles(groups, registryFiles, resolveContractFileWeight);
+  assignWeightedTestFiles(groups, coreFiles, resolveContractFileWeight);
 
   return groups.map(({ checkName, includePatterns }) => ({
     checkName,

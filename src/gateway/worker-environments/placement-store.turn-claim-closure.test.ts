@@ -3,17 +3,25 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import {
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { projectSessionMessagePayload } from "../session-transcript-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
@@ -26,6 +34,8 @@ import {
   getWorkerTurnExecutionIdentityCapability,
   runWorkerTurnAdmissionContinuation,
 } from "./placement-turn-claim-events.js";
+import { createWorkerTranscriptCommitStore } from "./transcript-commit-store.js";
+import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement-claim-close",
@@ -305,3 +315,133 @@ it("lets an unaudited admitted worker complete the exact turn that closes its ow
     rootAdmission.release();
   }
 });
+
+it.each([
+  "root admission",
+  "no root admission",
+  "released claim",
+  "released run",
+  "replaced claim",
+  "wrong environment",
+  "wrong generation",
+] as const)(
+  "prepares worker transcript publication only for its live owner: %s",
+  async (scenario) => {
+    const active = advanceToActive();
+    const claim = store.claimTurn({
+      ...SESSION,
+      owner: placementTurnOwner(active),
+      claimId: "claim-media-publication",
+      runId: "run-media-publication",
+    });
+    const instance = createOperationalRunInstanceRef(claim.runId);
+    const authority = claimAgentRunDelegatedAuthority(instance);
+    const identity: WorkerConnectionIdentity = {
+      environmentId: active.environmentId,
+      credentialHash: "worker-media-publication",
+      bundleHash: "a".repeat(64),
+      sessionId: claim.sessionId,
+      runId: claim.runId,
+      turnClaim: claim,
+      ownerEpoch: active.activeOwnerEpoch,
+      rpcSetVersion: 1,
+      protocolFeatures: [],
+      credentialExpiresAtMs: Date.now() + 60_000,
+    };
+    const text = "Prepared\nMEDIA:./owned.png\nMEDIA:./unowned.png";
+    const prepare = vi.fn(
+      (message: ReturnType<typeof makeAgentAssistantMessage>, sourceText: string | undefined) => {
+        expect(sourceText).toBe(text);
+        return applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./owned.png"] });
+      },
+    );
+    const admission =
+      scenario === "root admission" ? tryBeginGatewayRootWorkAdmission() : undefined;
+    const target = { ...SESSION, storePath: path.join(root, "sessions.json") };
+    const published: unknown[] = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => {
+      if (update.sessionId === SESSION.sessionId) {
+        published.push(
+          projectSessionMessagePayload({
+            ...update,
+            message: update.message,
+            sessionKey: SESSION.sessionKey,
+          }).payload,
+        );
+      }
+    });
+    let replacement: typeof claim | undefined;
+    try {
+      const bind = () => bindWorkerTurnAdmissionContinuation(store, claim, instance, prepare);
+      if (scenario === "root admission") {
+        if (!admission) {
+          throw new Error("expected root admission");
+        }
+        await admission.run(async () => bind());
+      } else {
+        bind();
+      }
+      if (scenario === "released claim" || scenario === "replaced claim") {
+        store.releaseTurn(claim);
+        if (scenario === "replaced claim") {
+          replacement = store.claimTurn({
+            ...SESSION,
+            owner: placementTurnOwner(active),
+            claimId: "claim-replacement",
+            runId: claim.runId,
+          });
+        }
+      } else if (scenario === "released run") {
+        releaseAgentRunDelegatedAuthority(authority);
+      } else if (scenario === "wrong environment") {
+        identity.environmentId = "different-environment";
+      } else if (scenario === "wrong generation") {
+        identity.turnClaim = { ...claim, placementGeneration: claim.placementGeneration + 1 };
+      }
+      await upsertSessionEntryCore(target, { sessionId: SESSION.sessionId, updatedAt: 1 });
+      const committer = createWorkerTranscriptCommitter({
+        getConfig: () => ({ session: { store: target.storePath } }),
+        store: createWorkerTranscriptCommitStore({ database }),
+      });
+      const userText = "Keep this example\nMEDIA:./user.png";
+      const result = await committer.commit({
+        identity,
+        request: {
+          runEpoch: identity.ownerEpoch,
+          seq: 1,
+          baseLeafId: null,
+          messages: [
+            { role: "user", content: [{ type: "text", text: userText }], timestamp: 1 },
+            makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp: 2 }),
+          ],
+        },
+      });
+      expect(result.ok).toBe(true);
+      expect(published).toHaveLength(2);
+      expect(published[0]).toMatchObject({
+        message: { content: [{ type: "text", text: userText }] },
+      });
+      const current = scenario === "root admission" || scenario === "no root admission";
+      expect(published[1]).toMatchObject({
+        message: {
+          content: [{ type: "text", text: current ? "Prepared\nMEDIA:./unowned.png" : text }],
+        },
+      });
+      expect(prepare).toHaveBeenCalledTimes(current ? 1 : 0);
+      const rows = await loadTranscriptEvents(target);
+      expect(rows.at(-1)).toMatchObject({
+        message: {
+          content: [{ type: "text", text }],
+          ...(current ? { openclawDelivery: { mediaUrls: ["./owned.png"] } } : {}),
+        },
+      });
+    } finally {
+      unsubscribe();
+      if (store.validateTurnClaim(replacement ?? claim)) {
+        store.releaseTurn(replacement ?? claim);
+      }
+      releaseAgentRunDelegatedAuthority(authority);
+      admission?.release();
+    }
+  },
+);

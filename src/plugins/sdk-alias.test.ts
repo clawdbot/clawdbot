@@ -1719,6 +1719,21 @@ describe("plugin sdk alias helpers", () => {
     ).toBe(fs.realpathSync(distChannelRuntimePath));
   });
 
+  it.each(["dist", "dist-runtime"])(
+    "keeps compiled %s plugin SDK aliases on the built module graph in test mode",
+    (outputDir) => {
+      const { fixture, distChannelRuntimePath } = createPluginSdkAliasTargetFixture();
+      const pluginEntry = writePluginEntry(
+        fixture.root,
+        path.join(outputDir, "extensions", "demo", "index.js"),
+      );
+
+      const aliases = withEnv({ NODE_ENV: "test" }, () => buildPluginLoaderAliasMap(pluginEntry));
+
+      expectPluginSdkAliasTargets(aliases, { channelRuntimePath: distChannelRuntimePath });
+    },
+  );
+
   it("loads source runtime shims through the non-native module loading boundary", async () => {
     const copiedExtensionRoot = path.join(makeTempDir(), bundledPluginRoot("discord"));
     const copiedSourceDir = path.join(copiedExtensionRoot, "src");
@@ -1780,6 +1795,13 @@ export const syntheticRuntimeMarker = {
     {
       name: "prefers dist plugin runtime module when loader runs from dist",
       modulePath: (root: string) => path.join(root, "dist", "plugins", "loader.js"),
+      expected: "dist" as const,
+    },
+    {
+      name: "prefers dist plugin runtime module for dist-runtime plugins in test mode",
+      modulePath: (root: string) =>
+        path.join(root, "dist-runtime", "extensions", "demo", "index.js"),
+      env: { NODE_ENV: "test" },
       expected: "dist" as const,
     },
     {

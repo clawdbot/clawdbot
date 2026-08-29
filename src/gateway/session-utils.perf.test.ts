@@ -276,7 +276,10 @@ describe("listSessionsFromStore resolver cache", () => {
           sessionId,
           updatedAt: 1_000 - index,
           ...(ownerId && index >= scenario.count - scenario.owned
-            ? { createdVia: "operator", createdActor: { type: "human", id: ownerId } }
+            ? {
+                createdVia: "operator",
+                createdActor: { type: "human", source: "profile", id: ownerId },
+              }
             : {}),
         };
         store[sessionKey] = entry;

@@ -399,6 +399,9 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   ) {
     migrations.push({ kind: "state-consolidation-v13", path: pathname });
   }
+  if (userVersion < 14 && tableExists(db, "cron_jobs")) {
+    migrations.push({ kind: "creator-namespace-v14", path: pathname });
+  }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
   }

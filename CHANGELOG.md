@@ -69,6 +69,13 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/subagents: keep plugin completion turns bound to the owning Gateway runtime so successful native subagents can finish delivery without losing the published reply runtime.
+- **Upgrade config repair:** retain plugin-owned channel configuration migrations alongside core schemas so `doctor --fix` can repair older settings before an external plugin is installed or granted capabilities, while preserving installed-plugin ownership and state-migration boundaries.
+
+- **xAI startup:** keep voice capability metadata and plugin-version reads off the full agent runtime import path so the first Grok request does not stall during provider loading.
+
+- **WebChat attachments:** keep managed `MEDIA:` directives out of the first assistant transcript event while attachments are prepared, preserving raw transcript references, user text, and attachment failure warnings.
+
 - **Control UI tool progress:** keep error-shaped partial output running until the tool returns its result, with consistent status in collapsed rows, expanded cards, and side-panel details.
 
 - MCP Apps: let standalone operations finish across catalog refreshes within per-request server budgets, propagate App cancellation without cancelling shared catalog work, and reload restored history views without replaying interrupted operations. Thanks @tzy-17. (#119388)
@@ -92,6 +99,7 @@ Docs: https://docs.openclaw.ai
 - **Plugin setup diagnostics:** stop treating metadata-only provider setup descriptors as missing runtime registrations while retaining undeclared runtime and CLI drift warnings. Fixes #125506. Thanks @shakkernerd.
 - **Onboarding model browsing:** keep preferred-provider model discovery scoped to the selected provider, preserve route variants, and avoid loading unrelated provider setup surfaces. Fixes #125363. Thanks @shakkernerd.
 - **Codex subagent fan-out:** settle successful terminal yields immediately and preserve requester ownership so completed children reliably resume their parent.
+- **Session controls:** keep thinking levels aligned with the selected agent's prepared model and provider policy, including native Ultra.
 - **Control UI session companion:** load bounded visible session context before answering, keep unavailable questions retryable, and prevent private companion reference wrappers from appearing as answers. Fixes #120746. Thanks @shakkernerd.
 - **Telegram live locations:** expose initial, moving, and stopped live-location updates through the channel-neutral `message_received` hook without starting agent turns for edits.
 - **Telegram send acceptance:** keep accepted-message bookkeeping failures out of transport fallback and chunk rejection handling, preventing duplicate replies or continued sends after an accepted delivery fails to record; preserve inline buttons when native rich quotes fall back to ordinary replies. (#130643)

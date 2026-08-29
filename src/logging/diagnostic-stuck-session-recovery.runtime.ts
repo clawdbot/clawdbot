@@ -11,6 +11,7 @@ import {
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
 } from "../agents/embedded-agent-runner/runs.js";
 import { recoverTerminalSessionPlacementTurn } from "../agents/session-placement-admission.js";
+import { prepareStaleFollowupDrainRetirement } from "../auto-reply/reply/queue/drain.js";
 import {
   getCommandLaneActiveTaskIds,
   getCommandLaneSnapshot,
@@ -187,6 +188,7 @@ export async function recoverStuckDiagnosticSession(
         fileActiveWorkSessionId ??
         params.sessionId)
       : (fileActiveWorkSessionId ?? params.sessionId);
+    const retireStaleFollowupDrain = prepareStaleFollowupDrainRetirement(key);
     const sessionLane = key ? resolveEmbeddedSessionLane(key) : null;
     const preAbortActiveTaskIds = new Set(
       sessionLane ? getCommandLaneActiveTaskIds(sessionLane) : [],
@@ -335,6 +337,7 @@ export async function recoverStuckDiagnosticSession(
         // after the ownerless-lane window and only if no fresh task appeared.
         if (!laneStartedFreshTask && params.ageMs >= staleActiveLaneTaskReleaseMs) {
           const released = resetCommandLane(sessionLane);
+          retireStaleFollowupDrain?.();
           return reportRecoveryOutcome({
             status: "released",
             action: "release_lane",
@@ -378,6 +381,7 @@ export async function recoverStuckDiagnosticSession(
     const clearStaleSession = !aborted && released === 0 && !activeSessionId;
 
     if (aborted || forceCleared || released > 0 || clearStaleSession) {
+      retireStaleFollowupDrain?.();
       const action = aborted || forceCleared ? "abort_embedded_run" : "release_lane";
       const stoppedFields = formatStoppedCronSessionDiagnosticFields(
         resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),

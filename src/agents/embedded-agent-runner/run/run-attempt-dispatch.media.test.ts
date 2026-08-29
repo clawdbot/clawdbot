@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { readRuntimePromptImageFactIndexes } from "../../../media/runtime-prompt-image-provenance.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
-import { prepareEmbeddedAttemptPromptExecution } from "./attempt-prompt-submit.js";
+import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
 async function preparePluginHarnessPromptImages(params: {
   runParams: Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0]["attempt"];

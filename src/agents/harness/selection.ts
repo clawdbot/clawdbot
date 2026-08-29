@@ -59,7 +59,6 @@ import {
 import type { AgentHarness, AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/harness");
-export { resolveAgentHarnessPolicy } from "./policy.js";
 export { resolveAvailableAgentHarnessPolicy } from "./availability.js";
 
 type AgentHarnessSelectionParams = {

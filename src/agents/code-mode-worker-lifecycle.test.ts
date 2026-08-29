@@ -3,34 +3,34 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { BroadcastChannel, Worker } from "node:worker_threads";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as workerUrls from "../infra/runtime-worker-url.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import {
   activeRuns,
   createCodeModeBridgeDispatchState,
+  createCodeModeRunOwner,
   disposeAllCodeModeRuns,
-  disposeCodeModeRun,
   reserveActiveRunSlot,
-  resumingRunIds,
   storeSnapshotState,
   type PendingBridgeState,
 } from "./code-mode-state.js";
 import { runCodeModeWorker } from "./code-mode-worker.js";
+import { applyCodeModeCatalog } from "./code-mode.js";
+import { createCodeModeHarness, resultDetails } from "./code-mode.test-support.js";
 import {
   createToolSearchCatalogRef,
+  clearToolSearchCatalog,
   registerHeadlessToolSearchCatalog,
   ToolSearchRuntime,
 } from "./tool-search.js";
 
-const EXPIRING_RUN_ID = "cm_worker_lifecycle_expiry";
-const CAPACITY_RUN_PREFIX = "cm_worker_lifecycle_capacity_";
-
-function parkExpiringRun(
-  method: "callValue" | "agentWait",
-  runId = EXPIRING_RUN_ID,
-): ReturnType<typeof vi.fn> {
+function parkExpiringRun(method: "callValue" | "agentWait") {
   const rawConfig = {
     tools: { codeMode: { enabled: true, snapshotTtlSeconds: 1 } },
   } as never;
@@ -48,8 +48,9 @@ function parkExpiringRun(
     cancel,
   };
 
+  const owner = createCodeModeRunOwner(ctx);
   storeSnapshotState({
-    runId,
+    owner,
     replayId: "cm_replay_lifecycle",
     pending: [pending],
     replaySafe: false,
@@ -64,20 +65,100 @@ function parkExpiringRun(
     output: [],
     bridgeDispatch: createCodeModeBridgeDispatchState(),
   });
-  return cancel;
+  return { cancel, runId: owner.runId };
 }
 
 afterEach(() => {
-  disposeCodeModeRun(EXPIRING_RUN_ID);
-  for (const runId of activeRuns.keys()) {
-    if (runId.startsWith(CAPACITY_RUN_PREFIX)) {
-      disposeCodeModeRun(runId);
-    }
-  }
+  disposeAllCodeModeRuns();
   vi.useRealTimers();
 });
 
 describe("Code Mode worker lifecycle", () => {
+  it.each(["exec", "resume"] as const)(
+    "terminates a real CPU-active %s worker when its catalog closes",
+    async (phase) => {
+      // Finish hooks unwind in reverse order: stop workers before restoring their
+      // loader spies and releasing the channel and files, including on setup failure.
+      const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
+      const dir = tempDirs.make("code-mode-catalog-cpu-");
+      const channelName = `catalog-cpu-${phase}-${crypto.randomUUID()}`;
+      const channel = new BroadcastChannel(channelName);
+      onTestFinished(() => channel.close());
+      const executing = createDeferred();
+      channel.addEventListener("message", () => executing.resolve(), { once: true });
+      const h = createCodeModeHarness();
+      onTestFinished(() => clearToolSearchCatalog(h.ctx));
+      applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
+      const exec = h.tools.find((tool) => tool.name === "exec");
+      const wait = h.tools.find((tool) => tool.name === "wait");
+      if (!exec || !wait) {
+        throw new Error("Expected Code Mode control tools");
+      }
+      let runId: unknown;
+      if (phase === "resume") {
+        const parked = resultDetails(
+          await exec.execute("park-cpu", {
+            code: "await yield_control(); while (true) {}",
+          }),
+        );
+        expect(parked.status).toBe("waiting");
+        runId = parked.runId;
+      }
+      const quickJsUrl = pathToFileURL(createRequire(import.meta.url).resolve("quickjs-wasi"));
+      const workerPath = path.join(dir, "observed-worker.ts");
+      await writeFile(path.join(dir, "package.json"), '{"type":"module"}');
+      // Observe the real QuickJS interrupt callback, not merely thread startup.
+      await writeFile(
+        workerPath,
+        `
+        import { BroadcastChannel } from "node:worker_threads";
+        const channel = new BroadcastChannel(${JSON.stringify(channelName)});
+        const { QuickJS } = await import(${JSON.stringify(quickJsUrl.href)});
+        for (const method of ["create", "restore"]) {
+          const original = QuickJS[method];
+          QuickJS[method] = function (...args) {
+            const index = method === "create" ? 0 : 1;
+            const options = args[index];
+            const interrupt = options.interruptHandler;
+            let observed = false;
+            args[index] = { ...options, interruptHandler: () => {
+              if (!observed) { observed = true; channel.postMessage("executing"); }
+              return interrupt();
+            } };
+            return original.apply(this, args);
+          };
+        }
+        await import(${JSON.stringify(new URL("./code-mode.worker.ts", import.meta.url).href)});
+      `,
+      );
+      const resolveWorker = vi
+        .spyOn(workerUrls, "resolveRuntimeWorkerUrl")
+        .mockReturnValue(pathToFileURL(workerPath));
+      onTestFinished(() => resolveWorker.mockRestore());
+      const terminate = vi.spyOn(Worker.prototype, "terminate");
+      onTestFinished(() => terminate.mockRestore());
+      const execution =
+        phase === "exec"
+          ? exec.execute("cpu", { code: "while (true) {}" })
+          : wait.execute("resume-cpu", { runId });
+      onTestFinished(async () => {
+        clearToolSearchCatalog(h.ctx);
+        await execution;
+      });
+      await executing.promise;
+      clearToolSearchCatalog(h.ctx);
+      expect(resultDetails(await execution)).toMatchObject({ status: "failed", code: "aborted" });
+      expect(terminate).toHaveBeenCalledOnce();
+      const worker = terminate.mock.contexts[0];
+      if (!(worker instanceof Worker)) {
+        throw new Error("Expected a terminated real worker");
+      }
+      expect(worker.threadId).toBe(-1);
+      expect(activeRuns.size).toBe(0);
+      expect(h.catalogRef.onDispose).toBeUndefined();
+    },
+  );
+
   it.each(
     (["exec", "resume"] as const).flatMap((kind) =>
       [1, -1].map((clockDirection) => ({ kind, clockDirection })),
@@ -158,75 +239,6 @@ describe("Code Mode worker lifecycle", () => {
       }
     },
   );
-
-  it("cancels every suspended run, releases capacity, and clears its expiry timer", () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const firstRunId = `${CAPACITY_RUN_PREFIX}shutdown_first`;
-    const secondRunId = `${CAPACITY_RUN_PREFIX}shutdown_second`;
-    const firstCancel = parkExpiringRun("callValue", firstRunId);
-    const secondCancel = parkExpiringRun("agentWait", secondRunId);
-    const firstRun = activeRuns.get(firstRunId);
-    if (!firstRun) {
-      throw new Error("expected a parked Code Mode shutdown run");
-    }
-    resumingRunIds.add(firstRunId);
-    resumingRunIds.add(secondRunId);
-    for (let index = 0; index < 62; index += 1) {
-      const runId = `${CAPACITY_RUN_PREFIX}shutdown_${index}`;
-      activeRuns.set(runId, { ...firstRun, runId, pending: [] });
-    }
-
-    expect(activeRuns.size).toBe(64);
-    expect(() => reserveActiveRunSlot()).toThrow("too many suspended code mode runs");
-    expect(vi.getTimerCount()).toBe(1);
-
-    const clearExpiryTimer = vi.spyOn(globalThis, "clearTimeout");
-    disposeAllCodeModeRuns();
-    disposeAllCodeModeRuns();
-
-    expect(firstCancel).toHaveBeenCalledOnce();
-    expect(secondCancel).toHaveBeenCalledOnce();
-    expect(clearExpiryTimer).toHaveBeenCalledOnce();
-    expect(activeRuns.size).toBe(0);
-    expect(resumingRunIds.has(firstRunId)).toBe(false);
-    expect(resumingRunIds.has(secondRunId)).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
-    clearExpiryTimer.mockRestore();
-
-    const releaseFreedSlot = reserveActiveRunSlot();
-    releaseFreedSlot();
-  });
-
-  it("transfers a resumed run's slot atomically at the suspended-run limit", () => {
-    parkExpiringRun("callValue");
-    const ownedState = activeRuns.get(EXPIRING_RUN_ID);
-    expect(ownedState).toBeDefined();
-    if (!ownedState) {
-      throw new Error("expected a parked Code Mode run");
-    }
-    for (let index = 0; index < 63; index += 1) {
-      const runId = `${CAPACITY_RUN_PREFIX}${index}`;
-      activeRuns.set(runId, { ...ownedState, runId, pending: [] });
-    }
-
-    const release = reserveActiveRunSlot(EXPIRING_RUN_ID);
-    try {
-      expect(activeRuns.has(EXPIRING_RUN_ID)).toBe(false);
-      expect(activeRuns.size).toBe(63);
-      expect(() => reserveActiveRunSlot()).toThrow("too many suspended code mode runs");
-
-      activeRuns.set(EXPIRING_RUN_ID, ownedState);
-    } finally {
-      release();
-    }
-
-    expect(activeRuns.size).toBe(64);
-    expect(() => reserveActiveRunSlot()).toThrow("too many suspended code mode runs");
-
-    disposeCodeModeRun(`${CAPACITY_RUN_PREFIX}0`);
-    const releaseFreedSlot = reserveActiveRunSlot();
-    releaseFreedSlot();
-  });
 
   it("rejects an unavailable run without leaking a capacity reservation", () => {
     expect(() => reserveActiveRunSlot("cm_missing_lifecycle_owner")).toThrow(
@@ -354,25 +366,25 @@ describe("Code Mode worker lifecycle", () => {
 
   it("expires an idle suspended snapshot and aborts its outstanding tool", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const cancel = parkExpiringRun("callValue");
+    const { cancel, runId } = parkExpiringRun("callValue");
 
-    expect(activeRuns.has(EXPIRING_RUN_ID)).toBe(true);
+    expect(activeRuns.has(runId)).toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(activeRuns.has(EXPIRING_RUN_ID)).toBe(false);
+    expect(activeRuns.has(runId)).toBe(false);
     expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("retains an active collector only within its bounded snapshot TTL windows", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const cancel = parkExpiringRun("agentWait");
+    const { cancel, runId } = parkExpiringRun("agentWait");
 
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(activeRuns.has(EXPIRING_RUN_ID)).toBe(true);
+    expect(activeRuns.has(runId)).toBe(true);
     expect(cancel).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(3_000);
-    expect(activeRuns.has(EXPIRING_RUN_ID)).toBe(false);
+    expect(activeRuns.has(runId)).toBe(false);
     expect(cancel).toHaveBeenCalledOnce();
   });
 });

@@ -381,23 +381,14 @@ function migrateAgentDatabase(params: {
       });
       userVersion = readSqliteUserVersion(database);
     }
-    if (
-      userVersion !== PREVIOUS_MEDIA_SCHEMA_VERSION &&
-      userVersion !== AGENT_MEDIA_SCHEMA_VERSION &&
-      userVersion !== OPENCLAW_AGENT_SCHEMA_VERSION
-    ) {
-      throw new Error(
-        `${params.pathname} uses schema version ${userVersion}; expected ${PREVIOUS_MEDIA_SCHEMA_VERSION} or ${OPENCLAW_AGENT_SCHEMA_VERSION}`,
-      );
-    }
     if (metadata.schemaVersion !== userVersion) {
       throw new Error(
         `${params.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${userVersion}`,
       );
     }
     if (userVersion >= AGENT_MEDIA_SCHEMA_VERSION) {
-      // Doctor can encounter a current-version database before newly additive schema exists.
-      // Converge it through the canonical agent-schema owner before media validation.
+      // The canonical owner admits supported versions and converges additive schema;
+      // media must not enumerate later schema revisions independently.
       ensureOpenClawAgentDatabaseSchema(database, {
         agentId: params.agentId,
         path: params.pathname,

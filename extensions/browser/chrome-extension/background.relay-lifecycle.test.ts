@@ -1,0 +1,459 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanupBackgroundHarnesses,
+  loadBackground,
+  sendRuntimeMessage,
+  TEST_RELAY_KEY,
+} from "./background.test-harness.js";
+import { FakeWebSocket } from "./background.test-support.js";
+
+const tabId = 7;
+const flush = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+const frames = (socket: FakeWebSocket): Array<Record<string, unknown>> =>
+  socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
+
+async function reply(socket: FakeWebSocket, seq: number, message: Record<string, unknown>) {
+  const before = frames(socket).length;
+  socket.receive({ seq, ...message });
+  return await vi.waitFor(() => {
+    const result = frames(socket)
+      .slice(before)
+      .find((frame) => (message.type === "ping" ? frame.type === "pong" : frame.seq === seq));
+    expect(result).toBeDefined();
+    return result!;
+  });
+}
+
+async function fixture() {
+  const h = await loadBackground({
+    deferSocketClose: true,
+    storedConfig: {
+      relayUrl: "ws://127.0.0.1:18797/extension",
+      token: TEST_RELAY_KEY,
+      authVersion: 2,
+      accessMode: "all",
+    },
+    initialTabs: [{ id: tabId, url: "https://example.com/live", groupId: -1, incognito: false }],
+  });
+  const attached = new Map<number, { runtimeEnabled: boolean }>();
+  h.debuggerAttach.mockImplementation(async ({ tabId: id }) => {
+    if (attached.has(id)) {
+      throw new Error(`Another debugger is already attached to the tab with id: ${id}.`);
+    }
+    attached.set(id, { runtimeEnabled: false });
+  });
+  h.debuggerDetach.mockImplementation(async ({ tabId: id }) => {
+    if (!attached.delete(id)) {
+      throw new Error(`Debugger is not attached to the tab with id: ${id}.`);
+    }
+    // Native programmatic detach does not emit the user onDetach event.
+  });
+  h.debuggerGetTargets.mockImplementation(async () =>
+    [...attached.keys()].map((id) => ({ id: `target-${id}`, tabId: id, attached: true })),
+  );
+  h.debuggerSendCommand.mockImplementation(async (source, method) => {
+    const session = attached.get(source.tabId);
+    if (!session) {
+      throw new Error("Debugger is not attached");
+    }
+    if (method === "Runtime.enable" && !session.runtimeEnabled) {
+      session.runtimeEnabled = true;
+      h.debuggerEventListener?.(source, "Runtime.executionContextCreated", {
+        context: { id: 3, auxData: { isDefault: true } },
+      });
+    }
+    return {};
+  });
+  const old = h.relaySockets[0]!;
+  await h.authenticate(old);
+  async function replacement() {
+    h.alarmListener({ name: "openclaw-relay-watchdog" });
+    await vi.waitFor(() => expect(h.relaySockets).toHaveLength(2));
+    const socket = h.relaySockets[1]!;
+    await h.authenticate(socket);
+    return socket;
+  }
+  async function attach(socket: FakeWebSocket, seq = 1) {
+    expect(await reply(socket, seq, { type: "attach", tabId })).toMatchObject({
+      type: "result",
+      result: { targetId: `target-${tabId}` },
+    });
+  }
+  return { h, old, attached, replacement, attach };
+}
+
+beforeEach(() => vi.resetModules());
+afterEach(async () => {
+  await cleanupBackgroundHarnesses();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("authenticated relay debugger lifetime", () => {
+  it.each(["close", "closing replacement", "closed replacement", "auth failure", "explicit pair"])(
+    "starts a fresh Runtime after %s without changing grants",
+    async (ending) => {
+      const f = await fixture();
+      await f.attach(f.old);
+      await reply(f.old, 2, { type: "cdp", tabId, method: "Runtime.enable" });
+      // An unrelated extension debugger target is not owned by this transport.
+      f.attached.set(99, { runtimeEnabled: true });
+      if (ending === "close") {
+        f.old.finishClose();
+      }
+      if (ending === "closing replacement") {
+        f.old.close();
+      }
+      if (ending === "closed replacement") {
+        f.old.readyState = FakeWebSocket.CLOSED;
+      }
+      if (ending === "auth failure") {
+        f.old.receive({ type: "auth.invalid" });
+        await vi.waitFor(() => expect(f.old.close).toHaveBeenCalled());
+      }
+      if (ending === "explicit pair") {
+        expect(
+          await sendRuntimeMessage(f.h, {
+            type: "pair",
+            pairingString: `ws://127.0.0.1:18797/extension#${TEST_RELAY_KEY}`,
+            accessMode: "all",
+          }),
+        ).toMatchObject({ ok: true });
+      }
+      const next = await f.replacement();
+      await f.attach(next);
+      await reply(next, 2, { type: "cdp", tabId, method: "Runtime.enable" });
+      expect(
+        frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
+      ).toHaveLength(1);
+      expect(f.h.debuggerDetach).toHaveBeenCalledWith({ tabId });
+      expect(f.h.debuggerDetach).not.toHaveBeenCalledWith({ tabId: 99 });
+      expect(f.h.debuggerAttach).toHaveBeenCalledTimes(2);
+      expect(f.h.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
+      expect(await sendRuntimeMessage(f.h, { type: "getTabAccess", tabId })).toMatchObject({
+        accessible: true,
+        denied: false,
+      });
+    },
+  );
+
+  it.each(["attach", "target lookup"])(
+    "drains a delayed old %s and detach before replacement attachment",
+    async (phase) => {
+      const f = await fixture();
+      const gate = createDeferred<void>();
+      const detachGate = createDeferred<void>();
+      const attachImpl = f.h.debuggerAttach.getMockImplementation()!;
+      const targetsImpl = f.h.debuggerGetTargets.getMockImplementation()!;
+      if (phase === "attach") {
+        f.h.debuggerAttach.mockImplementationOnce(async (...args) => {
+          await gate.promise;
+          await attachImpl(...args);
+        });
+      } else {
+        f.h.debuggerGetTargets.mockImplementationOnce(async () => {
+          await gate.promise;
+          return targetsImpl();
+        });
+      }
+      const detachImpl = f.h.debuggerDetach.getMockImplementation()!;
+      f.h.debuggerDetach.mockImplementationOnce(async (source) => {
+        await detachGate.promise;
+        await detachImpl(source);
+      });
+      try {
+        f.old.receive({ type: "attach", seq: 44, tabId });
+        await vi.waitFor(() =>
+          expect(
+            phase === "attach" ? f.h.debuggerAttach : f.h.debuggerGetTargets,
+          ).toHaveBeenCalled(),
+        );
+        f.old.close();
+        const next = await f.replacement();
+        next.receive({ type: "attach", seq: 1, tabId });
+        await reply(next, 2, { type: "ping" });
+        expect(f.h.debuggerAttach).toHaveBeenCalledTimes(1);
+        expect(frames(next).some((frame) => frame.seq === 1)).toBe(false);
+        gate.resolve();
+        await vi.waitFor(() => expect(f.h.debuggerDetach).toHaveBeenCalledWith({ tabId }));
+        expect(f.h.debuggerAttach).toHaveBeenCalledTimes(1);
+        detachGate.resolve();
+        await vi.waitFor(() =>
+          expect(frames(next)).toContainEqual({
+            type: "result",
+            seq: 1,
+            result: { targetId: "target-7" },
+          }),
+        );
+        expect(f.h.debuggerAttach).toHaveBeenCalledTimes(2);
+        const detaches = f.h.debuggerDetach.mock.calls.length;
+        f.old.finishClose();
+        await reply(next, 3, { type: "cdp", tabId, method: "Runtime.enable" });
+        expect(f.h.debuggerDetach).toHaveBeenCalledTimes(detaches);
+        expect(frames(next).some((frame) => frame.seq === 44)).toBe(false);
+        expect(
+          frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
+        ).toHaveLength(1);
+      } finally {
+        gate.resolve();
+        detachGate.resolve();
+        await flush();
+      }
+    },
+  );
+
+  it("detaches without waiting for old evaluation and never delivers its reply on a colliding new seq", async () => {
+    const f = await fixture();
+    await f.attach(f.old);
+    const gate = createDeferred<Record<string, unknown>>();
+    f.h.debuggerSendCommand.mockImplementationOnce(async () => await gate.promise);
+    try {
+      f.old.receive({ type: "cdp", seq: 9, tabId, method: "Runtime.evaluate" });
+      await vi.waitFor(() => expect(f.h.debuggerSendCommand).toHaveBeenCalled());
+      f.old.finishClose();
+      const next = await f.replacement();
+      await f.attach(next);
+      expect(f.h.debuggerDetach).toHaveBeenCalledWith({ tabId });
+      await reply(next, 9, { type: "cdp", tabId, method: "Runtime.enable" });
+      gate.resolve({ stale: true });
+      await flush();
+      await reply(next, 10, { type: "ping" });
+      expect(frames(next).filter((frame) => frame.seq === 9)).toEqual([
+        { type: "result", seq: 9, result: {} },
+      ]);
+      expect(frames(f.old).some((frame) => frame.seq === 9)).toBe(false);
+    } finally {
+      gate.resolve({});
+      await flush();
+    }
+  });
+
+  it.each(["attach", "cdp", "activateTab", "closeTab", "createTab"])(
+    "fences %s paused over a tab lookup before any subsequent Chrome operation",
+    async (type) => {
+      const f = await fixture();
+      await f.attach(f.old);
+      const gate = createDeferred<void>();
+      const getTab = f.h.tabsGet.getMockImplementation()!;
+      f.h.tabsGet.mockClear();
+      f.h.tabsGet.mockImplementationOnce(async (id) => {
+        await gate.promise;
+        return getTab(id);
+      });
+      try {
+        f.old.receive({
+          type,
+          seq: 8,
+          tabId,
+          method: "Runtime.evaluate",
+          url: "https://example.com/new",
+        });
+        await vi.waitFor(() => expect(f.h.tabsGet).toHaveBeenCalled());
+        f.old.finishClose();
+        const next = await f.replacement();
+        gate.resolve();
+        await flush();
+        await f.attach(next);
+        expect(f.h.debuggerSendCommand).not.toHaveBeenCalled();
+        expect(f.h.tabsUpdate).not.toHaveBeenCalled();
+        expect(f.h.windowsUpdate).not.toHaveBeenCalled();
+        // Atomic creation retains guarded pre-handoff rollback on connection loss.
+        expect(f.h.tabsRemove.mock.calls).toEqual(type === "createTab" ? [[8]] : []);
+        expect(f.h.tabsGroup).not.toHaveBeenCalled();
+        expect(frames(next).some((frame) => frame.seq === 8)).toBe(false);
+      } finally {
+        gate.resolve();
+        await flush();
+      }
+    },
+  );
+
+  it("never admits replacement CDP work into the retiring physical session", async () => {
+    const f = await fixture();
+    await f.attach(f.old);
+    const gate = createDeferred<void>();
+    const detach = f.h.debuggerDetach.getMockImplementation()!;
+    f.h.debuggerDetach.mockImplementationOnce(async (source) => {
+      await gate.promise;
+      await detach(source);
+    });
+    try {
+      f.old.finishClose();
+      const next = await f.replacement();
+      next.receive({ type: "cdp", seq: 9, tabId, method: "Runtime.evaluate" });
+      await reply(next, 10, { type: "ping" });
+      expect(f.h.debuggerSendCommand).not.toHaveBeenCalled();
+      gate.resolve();
+      await vi.waitFor(() =>
+        expect(frames(next)).toContainEqual({
+          type: "error",
+          seq: 9,
+          message: expect.stringContaining("not attached"),
+        }),
+      );
+      await f.attach(next);
+      await reply(next, 11, { type: "cdp", tabId, method: "Runtime.enable" });
+      expect(
+        frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
+      ).toHaveLength(1);
+    } finally {
+      gate.resolve();
+      await flush();
+    }
+  });
+
+  it("keeps retirement fenced through an opening deadline and delayed stale close", async () => {
+    const f = await fixture();
+    await f.attach(f.old);
+    const gate = createDeferred<void>();
+    const detach = f.h.debuggerDetach.getMockImplementation()!;
+    f.h.debuggerDetach.mockImplementationOnce(async (source) => {
+      await gate.promise;
+      await detach(source);
+    });
+    try {
+      f.old.close();
+      f.h.alarmListener({ name: "openclaw-relay-watchdog" });
+      await vi.waitFor(() => expect(f.h.relaySockets).toHaveLength(2));
+      const expired = f.h.relaySockets[1]!;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10_001);
+      f.h.alarmListener({ name: "openclaw-relay-opening-deadline" });
+      clock.mockRestore();
+      expect(expired.close).toHaveBeenCalledWith(4001, "relay authentication timed out");
+      f.h.alarmListener({ name: "openclaw-relay-watchdog" });
+      await vi.waitFor(() => expect(f.h.relaySockets).toHaveLength(3));
+      const next = f.h.relaySockets[2]!;
+      await f.h.authenticate(next);
+      next.receive({ type: "attach", seq: 1, tabId });
+      await reply(next, 2, { type: "ping" });
+      expect(frames(next).some((frame) => frame.seq === 1)).toBe(false);
+      f.old.finishClose();
+      expired.finishClose();
+      gate.resolve();
+      await vi.waitFor(() =>
+        expect(frames(next)).toContainEqual({
+          type: "result",
+          seq: 1,
+          result: { targetId: "target-7" },
+        }),
+      );
+      await reply(next, 3, { type: "cdp", tabId, method: "Runtime.enable" });
+      expect(
+        frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
+      ).toHaveLength(1);
+    } finally {
+      gate.resolve();
+      await flush();
+    }
+  });
+
+  it("keeps independent live commands concurrent", async () => {
+    const f = await fixture();
+    await f.attach(f.old);
+    const gate = createDeferred<Record<string, unknown>>();
+    f.h.debuggerSendCommand.mockImplementationOnce(async () => await gate.promise);
+    try {
+      f.old.receive({ type: "cdp", seq: 2, tabId, method: "Runtime.evaluate" });
+      await vi.waitFor(() => expect(f.h.debuggerSendCommand).toHaveBeenCalled());
+      expect(
+        await reply(f.old, 3, { type: "cdp", tabId, method: "Page.getFrameTree" }),
+      ).toMatchObject({ type: "result" });
+      expect(frames(f.old).some((frame) => frame.seq === 2)).toBe(false);
+    } finally {
+      gate.resolve({});
+      await flush();
+    }
+  });
+
+  it("fails closed when physical retirement cannot prove detach", async () => {
+    const f = await fixture();
+    await f.attach(f.old);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    f.h.debuggerDetach.mockRejectedValueOnce(new Error("native detach refused"));
+    f.old.finishClose();
+    const next = await f.replacement();
+    expect(await reply(next, 1, { type: "attach", tabId })).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("native detach refused"),
+    });
+    expect(f.h.debuggerAttach).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not adopt or retire an attachment when Chrome rejects ownership", async () => {
+    const f = await fixture();
+    f.attached.set(tabId, { runtimeEnabled: true });
+    expect(await reply(f.old, 1, { type: "attach", tabId })).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("Another debugger is already attached"),
+    });
+    f.old.finishClose();
+    const next = await f.replacement();
+    expect(await reply(next, 1, { type: "attach", tabId })).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("Another debugger is already attached"),
+    });
+    expect(f.h.debuggerDetach).not.toHaveBeenCalled();
+    expect(f.attached.get(tabId)).toEqual({ runtimeEnabled: true });
+  });
+
+  it.each(["Debugger is not attached to the tab with id: 7.", "No tab with given id 7."])(
+    "accepts Chrome's terminal detach evidence: %s",
+    async (message) => {
+      const f = await fixture();
+      await f.attach(f.old);
+      f.attached.delete(tabId);
+      f.h.debuggerDetach.mockRejectedValueOnce(new Error(message));
+      f.old.finishClose();
+      const next = await f.replacement();
+      await f.attach(next);
+      await reply(next, 2, { type: "cdp", tabId, method: "Runtime.enable" });
+      expect(
+        frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("keeps renewed navigation authority after reconnect without forwarding retired-owner events", async () => {
+    const f = await fixture();
+    await f.attach(f.old);
+    f.old.finishClose();
+    f.h.debuggerEventListener?.({ tabId }, "Runtime.executionContextCreated", {
+      context: { id: 8 },
+    });
+    const next = await f.replacement();
+    await f.attach(next);
+    const gate = createDeferred<void>();
+    const getTab = f.h.tabsGet.getMockImplementation()!;
+    f.h.tabsGet.mockImplementationOnce(async (id) => {
+      await gate.promise;
+      return getTab(id);
+    });
+    try {
+      f.h.tabsUpdatedListener(
+        tabId,
+        { url: "https://example.com/next" },
+        { id: tabId, url: "https://example.com/next", groupId: -1, incognito: false },
+      );
+      f.h.debuggerEventListener?.({ tabId }, "Runtime.executionContextCreated", {
+        context: { id: 9 },
+      });
+      expect(
+        frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
+      ).toEqual([
+        {
+          type: "cdpEvent",
+          tabId,
+          method: "Runtime.executionContextCreated",
+          params: { context: { id: 9 } },
+        },
+      ]);
+    } finally {
+      gate.resolve();
+      await flush();
+    }
+  });
+});

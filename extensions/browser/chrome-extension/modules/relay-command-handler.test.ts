@@ -17,19 +17,22 @@ function createHarness() {
   vi.stubGlobal("chrome", chromeMock);
   const handler = createRelayCommandHandler({
     send,
+    isCurrent: () => true,
     attachDebugger: vi.fn(),
     detachDebugger: vi.fn(async () => undefined),
     createTab: vi.fn(),
-    focusWindowForTab,
     scheduleTabsSync: vi.fn(),
+    focusWindowForTab,
     captureAccess: vi.fn(() => epoch),
+    navigateTab: vi.fn(),
     requireAccessibleTab,
+    requireNavigatedTab: requireAccessibleTab,
   });
   return {
     chromeMock,
     epoch,
     focusWindowForTab,
-    handler: (message: Record<string, unknown>) => handler(message, () => true),
+    handler: (message: Record<string, unknown>) => handler(message),
     requireAccessibleTab,
     send,
   };
@@ -59,10 +62,7 @@ describe("relay authority rechecks", () => {
   it("checks access immediately before close and reports the successful removal", async () => {
     const harness = createHarness();
     await harness.handler({ type: "closeTab", seq: 3, tabId: 7 });
-    expect(harness.requireAccessibleTab.mock.calls).toEqual([
-      [7, harness.epoch],
-      [7, harness.epoch],
-    ]);
+    expect(harness.requireAccessibleTab).toHaveBeenCalledExactlyOnceWith(7, harness.epoch);
     expect(harness.chromeMock.tabs.remove).toHaveBeenCalledWith(7);
     expect(harness.send).toHaveBeenCalledWith({ type: "result", seq: 3, result: {} });
   });

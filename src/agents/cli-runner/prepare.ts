@@ -817,7 +817,7 @@ export async function prepareCliRunContext(
     requestedContextModelId,
     ...(normalizedContextModelId !== requestedContextModelId ? [normalizedContextModelId] : []),
   ];
-  const resolveContextModelTokens = (contextModelId: string, allowUnscopedModelLookup: boolean) =>
+  const resolveContextModelTokens = (contextModelId: string) =>
     resolveContextTokensForModel({
       cfg: params.config,
       provider: params.provider,
@@ -826,26 +826,17 @@ export async function prepareCliRunContext(
       modelContextWindow: params.modelContextWindow,
       modelContextTokens: params.modelContextTokens,
       allowAsyncLoad: false,
-      allowUnscopedModelLookup,
+      // A same-name API model may have a different native window from this CLI runtime.
+      allowUnscopedModelLookup: false,
     });
   let modelContextTokens: number | undefined;
   for (const contextModelId of contextModelIds) {
-    const candidateContextTokens = resolveContextModelTokens(contextModelId, false);
+    const candidateContextTokens = resolveContextModelTokens(contextModelId);
     if (candidateContextTokens !== undefined) {
       modelContextTokens =
         modelContextTokens === undefined
           ? candidateContextTokens
           : Math.min(modelContextTokens, candidateContextTokens);
-    }
-  }
-  // A process-wide bare-model cache has no provider provenance. If neither id
-  // has owned metadata, prefer the actual CLI target over the requested alias.
-  if (modelContextTokens === undefined) {
-    for (const contextModelId of contextModelIds.toReversed()) {
-      modelContextTokens = resolveContextModelTokens(contextModelId, true);
-      if (modelContextTokens !== undefined) {
-        break;
-      }
     }
   }
   modelContextTokens ??= DEFAULT_CONTEXT_TOKENS;

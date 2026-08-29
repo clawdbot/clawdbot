@@ -72,17 +72,6 @@ export type ToolSearchCatalogToolExecutor = (params: {
   ) => Promise<AgentToolResult<unknown>>;
 }) => Promise<AgentToolResult<unknown>>;
 
-/** Transcript projection for target tool calls made through Tool Search. */
-export type ToolSearchTargetTranscriptProjection = {
-  parentToolCallId?: string;
-  toolCallId: string;
-  toolName: string;
-  input: unknown;
-  result: AgentToolResult<unknown>;
-  isError: boolean;
-  timestamp?: number;
-};
-
 /** Resolved Tool Search config after defaults, limits, and runtime support checks. */
 export type ToolSearchConfig = {
   enabled: boolean;

@@ -199,7 +199,7 @@ describe("production lint suppressions", () => {
         "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
         // Oxlint 1.78 checks AggregateError cause options at the wrong argument position.
         "extensions/qa-lab/src/gateway-child-lifecycle.ts|preserve-caught-error|1",
-        "extensions/qa-lab/src/gateway-child-setup.ts|preserve-caught-error|2",
+        "extensions/qa-lab/src/gateway-child-setup.ts|preserve-caught-error|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",

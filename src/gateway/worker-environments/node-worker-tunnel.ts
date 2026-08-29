@@ -188,6 +188,12 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     entry: NodeTunnelEntry,
     command: WorkerWorkspaceCommand & { resetWorkspace?: boolean },
   ): Promise<NodeWorkerWorkspaceExecResult> => {
+    const assertCurrent = () => {
+      if (!isEnvironmentOwner(entry)) {
+        throw new Error("node worker workspace authority closed");
+      }
+      command.assertCurrent?.();
+    };
     const commandTimeoutMs = command.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
     // Keep the subprocess deadline authoritative while allowing its terminal result to cross the
     // node transport. Equal deadlines turn an ordinary process timeout into a transport failure.
@@ -212,9 +218,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       ...(command.seed === undefined ? {} : { seed: command.seed }),
     };
     while (true) {
-      if (!isEnvironmentOwner(entry)) {
-        throw new Error("node worker workspace authority closed");
-      }
+      assertCurrent();
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0 || signal.aborted) {
         throw signal.reason ?? new Error("node worker workspace command timed out");
@@ -222,15 +226,20 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       let result: Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>;
       try {
         const { node, transport } = await findNode(entry, signal);
+        assertCurrent();
         result = await transport.invoke({
           node,
           command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
           params: input,
           timeoutMs: remainingMs,
           signal,
-          isDispatchAuthorized: () => isEnvironmentOwner(entry),
+          isDispatchAuthorized: () => {
+            assertCurrent();
+            return true;
+          },
         });
       } catch (error) {
+        assertCurrent();
         if (
           command.transportRetry !== "idempotent" ||
           signal.aborted ||

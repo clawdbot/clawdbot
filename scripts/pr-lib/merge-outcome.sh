@@ -115,10 +115,28 @@ merge_outcome_read_remote() {
 }
 
 merge_outcome_observe() {
-  local pr="$1" oid
+  local pr="$1" oid attempt reread
   MERGE_OBSERVATION=$(merge_outcome_read_remote "$pr") || {
     merge_outcome_stop "authoritative PR/main metadata unavailable or invalid"; return 1;
   }
+  # GitHub calculates open-PR mergeability asynchronously. Match the metadata
+  # reader's three-attempt budget; only unresolved calculation fields may settle.
+  for attempt in 1 2 3; do
+    if printf '%s\n' "$MERGE_OBSERVATION" | jq -e '
+      .pr.state != "OPEN" or (.pr.mergeable != "UNKNOWN" and .pr.mergeStateStatus != "UNKNOWN")
+    ' >/dev/null; then break; fi
+    [ "$attempt" -lt 3 ] || { merge_outcome_stop "mergeability remained unknown after 3 observations"; return 1; }
+    sleep "$attempt"
+    reread=$(merge_outcome_read_remote "$pr") || return 1
+    if ! printf '%s\n' "$reread" | jq -e --argjson previous "$MERGE_OBSERVATION" '
+      del(.pr.mergeable,.pr.mergeStateStatus) == ($previous | del(.pr.mergeable,.pr.mergeStateStatus)) and
+      ($previous.pr.mergeable == "UNKNOWN" or .pr.mergeable == $previous.pr.mergeable) and
+      ($previous.pr.mergeStateStatus == "UNKNOWN" or .pr.mergeStateStatus == $previous.pr.mergeStateStatus)
+    ' >/dev/null; then
+      merge_outcome_stop "PR or main changed while mergeability was settling"; return 1
+    fi
+    MERGE_OBSERVATION="$reread"
+  done
   # Fetch immutable objects only. Do not replace a pinned observation with the
   # moving origin/main tracking ref or FETCH_HEAD.
   oid=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)

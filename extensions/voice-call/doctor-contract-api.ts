@@ -152,6 +152,8 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "singleton state tables -> shared configuration state";
     case "state-consolidation-v13":
       return "cron jobs and subagent runs -> canonical JSON storage";
+    case "creator-namespace-v14":
+      return "cron creators -> explicit principal namespaces";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements -> execution-mode claims";
     case "operator-approvals-system-agent":

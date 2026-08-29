@@ -5,7 +5,15 @@ import type {
   SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { CompactionProvider } from "../../plugins/compaction-provider.js";
+import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
+import {
+  getCompactionSafeguardRuntime,
+  setCompactionSafeguardRuntime,
+} from "../agent-hooks/compaction-safeguard-runtime.js";
+import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import { subscribeEmbeddedAgentSession } from "../embedded-agent-subscribe.js";
 import { agentSessionSetContextReplacementHook } from "./agent-session-compaction.js";
 import {
@@ -23,6 +31,8 @@ import {
   createResourceLoader,
 } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
+import { createEventBus } from "./event-bus.js";
+import { loadExtensionFromFactory } from "./extensions/loader.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
@@ -68,6 +78,165 @@ function collectCompactionEnds(session: Awaited<ReturnType<typeof createTestSess
 }
 
 describe("AgentSession compaction", () => {
+  it.each([
+    { name: "provider timeout", errorName: "TimeoutError", cancelCaller: false, recovers: false },
+    {
+      name: "provider timeout recovery",
+      errorName: "TimeoutError",
+      cancelCaller: false,
+      recovers: true,
+    },
+    { name: "ordinary provider failure", errorName: "Error", cancelCaller: false, recovers: false },
+    { name: "provider-side abort", errorName: "AbortError", cancelCaller: false, recovers: true },
+    { name: "caller cancellation", errorName: "AbortError", cancelCaller: true, recovers: false },
+  ])(
+    "preserves the safeguard boundary after $name",
+    async ({ errorName, cancelCaller, recovers }) => {
+      // A synthetic API plus the registered stream keep both real summarizers offline.
+      const model = {
+        ...testModel,
+        api: "compaction-test-api",
+        contextWindow: 4_096,
+        maxTokens: 128,
+      };
+      const summary = recovers
+        ? [
+            "## Decisions",
+            "The old prompt was answered.",
+            "## Open TODOs",
+            "None.",
+            "## Constraints/Rules",
+            "Preserve the session history.",
+            "## Pending user asks",
+            "None.",
+            "## Exact identifiers",
+            "None.",
+          ].join("\n")
+        : "Core summary without required safeguard headings";
+      const sessionManager = SessionManager.inMemory();
+      sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
+      sessionManager.appendMessage({
+        ...createAssistant(model, [{ type: "text", text: "old answer" }]),
+        timestamp: 2,
+      });
+      sessionManager.appendMessage({ role: "user", content: "latest prompt", timestamp: 3 });
+      const providerStarted = createDeferred();
+      const releaseProvider = createDeferred();
+      const summarize = vi.fn<CompactionProvider["summarize"]>(async () => {
+        providerStarted.resolve();
+        await releaseProvider.promise;
+        throw Object.assign(new Error("synthetic custom-provider failure"), { name: errorName });
+      });
+      const registration = {
+        provider: { id: "session-compaction-test", label: "Session compaction test", summarize },
+      };
+      const registry = requireActivePluginRegistry();
+      registry.compactionProviders.push(registration);
+      setCompactionSafeguardRuntime(sessionManager, {
+        provider: registration.provider.id,
+        model,
+        recentTurnsPreserve: 0,
+        qualityGuardEnabled: true,
+        qualityGuardMaxRetries: 0,
+      });
+      const network = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("Unexpected network request in compaction test"));
+      const eventBus = createEventBus();
+      try {
+        const resourceLoader = createResourceLoader();
+        const extensions = resourceLoader.getExtensions();
+        extensions.extensions.push(
+          await loadExtensionFromFactory(
+            compactionSafeguardExtension,
+            sessionManager.getCwd(),
+            eventBus,
+            extensions.runtime,
+          ),
+        );
+        streamMocks.streamSimple.mockImplementation(
+          (activeModel: Model, _context: Context, options?: SimpleStreamOptions) =>
+            createAssistantResultStream(
+              createAssistant(
+                activeModel,
+                [{ type: "text", text: summary }],
+                options?.signal?.aborted ? "aborted" : "stop",
+              ),
+            ),
+        );
+        const { session } = await createTestSession({
+          model,
+          sessionManager,
+          resourceLoader,
+          settingsManager: SettingsManager.inMemory({
+            compaction: { enabled: false, reserveTokens: 64, keepRecentTokens: 1 },
+            retry: { enabled: false },
+          }),
+        });
+        const entriesBefore = structuredClone(sessionManager.getEntries());
+        const messagesBefore = structuredClone(session.messages);
+        const compactionEnds = collectCompactionEnds(session);
+        const compaction = session.compact().then(
+          (result) => ({ status: "resolved", summary: result.summary }),
+          (error: unknown) => ({
+            status: "rejected",
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        // Cancel through the public session API while the custom provider is in flight.
+        await Promise.race([providerStarted.promise, compaction]);
+        const callerSignal = summarize.mock.calls[0]?.[0].signal;
+        const callerAbortedAtProviderEntry = callerSignal?.aborted;
+        if (cancelCaller) {
+          session.abortCompaction();
+        }
+        releaseProvider.resolve();
+        const result = await compaction;
+        const appended = sessionManager
+          .getEntries()
+          .filter((entry) => entry.type === "compaction")
+          .map(({ summary: text, fromHook }) => ({ summary: text, fromHook }));
+
+        const observation = {
+          providerCalls: summarize.mock.calls.length,
+          callerAbortedAtProviderEntry,
+          callerAborted: callerSignal?.aborted,
+          result,
+          outcomes: compactionEnds.map((event) => event.outcome.status),
+          appended,
+        };
+        expect.soft(observation).toMatchObject({
+          providerCalls: 1,
+          callerAbortedAtProviderEntry: false,
+          callerAborted: cancelCaller,
+          result: recovers ? { status: "resolved", summary } : { status: "rejected" },
+          outcomes: [recovers ? "completed" : "aborted"],
+          appended: recovers ? [{ summary, fromHook: true }] : [],
+        });
+        // The guarded pipeline may chunk the history; do not pin its request count.
+        if (!cancelCaller) {
+          expect(streamMocks.streamSimple).toHaveBeenCalled();
+        }
+        if (!recovers) {
+          expect.soft(sessionManager.getEntries()).toEqual(entriesBefore);
+          expect.soft(session.messages).toEqual(messagesBefore);
+        }
+        if (!cancelCaller && !recovers) {
+          expect(getCompactionSafeguardRuntime(sessionManager)?.cancellation?.reason).toContain(
+            "failed quality checks",
+          );
+        }
+        expect(network.mock.calls.length).toBe(0);
+      } finally {
+        releaseProvider.resolve();
+        setCompactionSafeguardRuntime(sessionManager, null);
+        registry.compactionProviders.splice(registry.compactionProviders.indexOf(registration), 1);
+        eventBus.clear();
+        network.mockRestore();
+      }
+    },
+  );
+
   it("preserves the automatic authentication failure as a reasoned skip", async () => {
     const { session, modelRegistry } = await createTestSession({
       settingsManager: createAutoCompactionSettings(),

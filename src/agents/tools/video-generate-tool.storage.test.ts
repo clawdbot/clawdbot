@@ -1,17 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { PreparedModelRuntimeSnapshot } from "../../../../src/agents/prepared-model-runtime.js";
-import { createVideoGenerateTool } from "../../../../src/agents/tools/video-generate-tool.js";
-import type { OpenClawConfig } from "../../../../src/config/types.js";
-import { withEnvAsync } from "../../../../src/test-utils/env.js";
-import { resolveVideoGenerationModeCapabilities } from "../../../../src/video-generation/capabilities.js";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../../config/types.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { resolveVideoGenerationModeCapabilities } from "../../video-generation/capabilities.js";
 import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
-} from "../../../../src/video-generation/types.js";
-import { createSolidPngBuffer } from "../../../helpers/image-fixtures.js";
-import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+} from "../../video-generation/types.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
+import { createVideoGenerateTool } from "./video-generate-tool.js";
 
 function createMp4Fixture(): Buffer {
   return Buffer.from([
@@ -188,6 +188,71 @@ describe("video generation invocation QA", () => {
           mimeType: "video/mp4",
           sizeBytes: generatedVideo.byteLength,
         }),
+      ]);
+    });
+  });
+
+  it("preserves provider order through managed storage and URL fallback", async () => {
+    const root = tempDirs.make("openclaw-qa-video-output-order-");
+    const savedVideo = createMp4Fixture();
+    const oversizedVideo = Buffer.concat([savedVideo, Buffer.from([0x00])]);
+    const provider: VideoGenerationProvider = {
+      id: "qa-ordered-video",
+      defaultModel: "ordered-v1",
+      models: ["ordered-v1"],
+      isConfigured: () => true,
+      capabilities: {},
+      generateVideo: async () => ({
+        videos: [
+          {
+            url: "https://media.example/first.mp4",
+            mimeType: "video/mp4",
+            fileName: "first.mp4",
+          },
+          {
+            buffer: savedVideo,
+            mimeType: "video/mp4",
+            fileName: "middle.mp4",
+          },
+          {
+            buffer: oversizedVideo,
+            url: "https://media.example/last.mp4",
+            mimeType: "video/mp4",
+            fileName: "last.mp4",
+          },
+        ],
+      }),
+    };
+    const config = createConfig("qa-ordered-video/ordered-v1", []);
+    config.agents!.defaults!.mediaMaxMb = savedVideo.byteLength / (1024 * 1024);
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(root, "state") }, async () => {
+      const tool = requireVideoTool(
+        createVideoGenerateTool({
+          config,
+          agentDir: path.join(root, "agent"),
+          workspaceDir: root,
+          preparedModelRuntime: createPreparedRuntime([provider]),
+        }),
+      );
+      const result = await tool.execute("qa-video-output-order", {
+        prompt: "Generate three ordered QA clips.",
+      });
+      const details = requireDetails(result);
+      const paths = details.paths as string[];
+
+      expect(paths).toHaveLength(3);
+      expect(paths[0]).toBe("https://media.example/first.mp4");
+      expect(paths[2]).toBe("https://media.example/last.mp4");
+      const savedPath = paths[1];
+      if (!savedPath) {
+        throw new Error("expected managed middle video path");
+      }
+      await expect(fs.readFile(savedPath)).resolves.toEqual(savedVideo);
+      expect(details.attachments).toMatchObject([
+        { url: paths[0], name: "first.mp4" },
+        { path: savedPath },
+        { url: paths[2], name: "last.mp4" },
       ]);
     });
   });

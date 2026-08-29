@@ -48,7 +48,7 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 
 # dist, dist-runtime, and .artifacts/tsgo-cache are wholly disposable build
-# outputs: every update deletes and regenerates them, tracked or not — never
+# outputs: build and check tooling regenerates them, tracked or not — never
 # store anything there. Untracked files elsewhere are kept and only warned
 # about (servers accumulate harmless scratch files). Accepted tradeoff: an
 # untracked file a build tool happens to read stays in effect, same as before
@@ -93,7 +93,8 @@ for build_path in dist dist-runtime .artifacts; do
     exit 1
   fi
 done
-rm -rf dist dist-runtime .artifacts/tsgo-cache
+# The build owns cleanup under its checkout-local artifact lock. Deleting here
+# would race declaration writers and readers before that ownership is acquired.
 pnpm build
 
 restart_cmd="${OPENCLAW_UPDATE_RESTART_CMD-openclaw gateway restart}"

@@ -127,7 +127,7 @@ jobs:
       run_format_check: ${{ steps.manifest.outputs.run_format_check }}
       compatibility_target: ${{ steps.manifest.outputs.compatibility_target }}
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
-      strict_control_ui_i18n: ${{ steps.changed_scope.outputs.strict_control_ui_i18n }}
+      strict_control_ui_i18n: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.strict_control_ui_i18n }}
       run_ui_tests: ${{ steps.manifest.outputs.run_ui_tests }}
       ui_e2e_matrix: ${{ steps.manifest.outputs.ui_e2e_matrix }}
       run_native_i18n: ${{ steps.manifest.outputs.run_native_i18n }}
@@ -1656,7 +1656,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .artifacts/build-all-cache
-          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mts', 'scripts/runtime-postbuild.mjs', 'scripts/runtime-postbuild.mts', 'scripts/lib/tsx-cli-shim.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
+          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mts', 'scripts/runtime-postbuild.mjs', 'scripts/runtime-postbuild.mts', 'scripts/lib/tsx-cli-shim.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'tsconfig.json', 'scripts/lib/build-artifact-cache.mts', 'scripts/lib/declaration-stage.mts', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
           restore-keys: |
             ${{ runner.os }}-build-all-v4-
 
@@ -2317,8 +2317,8 @@ jobs:
           fi
 
       - name: Check Control UI locale parity
-        # Source-only drift stays advisory because the post-merge bot owns
-        # repair. Generated locale changes and full release CI remain strict.
+        # Automatic source-only drift stays advisory because the post-merge bot owns
+        # repair. Generated locale changes and ordinary manual/release CI stay strict.
         continue-on-error: ${{ needs.preflight.outputs.strict_control_ui_i18n != 'true' }}
         run: pnpm ui:i18n:check
 
@@ -2994,7 +2994,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f scripts/prepare-extension-package-boundary-artifacts.mts ]]; then
-            fingerprint="$(node --import tsx scripts/prepare-extension-package-boundary-artifacts.mts --print-input-fingerprint)"
+            fingerprint="$(git rev-parse HEAD)"
             echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
@@ -3008,13 +3008,13 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            dist/plugin-sdk
             packages/plugin-sdk/dist
-            extensions/*/dist/.boundary-tsc.tsbuildinfo
-            extensions/*/dist/.boundary-tsc.stamp
-          key: ${{ runner.os }}-extension-package-boundary-v2-${{ steps.extension-boundary-inputs.outputs.fingerprint }}
+            .artifacts/extension-package-boundary/plugins
+            .artifacts/extension-package-boundary/*.json
+            .artifacts/extension-package-boundary/compile
+          key: ${{ runner.os }}-extension-package-boundary-v4-${{ steps.extension-boundary-inputs.outputs.fingerprint }}
           restore-keys: |
-            ${{ runner.os }}-extension-package-boundary-v2-
+            ${{ runner.os }}-extension-package-boundary-v4-
 
       # check-lint's shard runner rebuilds the same plugin-sdk boundary
       # artifacts the boundary lane snapshots (~72s cold); restore them from
@@ -3043,14 +3043,14 @@ jobs:
             echo "boundary artifact snapshot not seeded yet; lint prepares cold"
             exit 0
           fi
-          # The same canonical fingerprint keys the hosted cache and boundary
-          # lane, so no consumer can restore a snapshot from stale SDK inputs.
+          # The commit keys transport reuse only. The preparer validates each
+          # owner against its consumed input bytes and complete native inventory.
           current_fingerprint="${{ steps.extension-boundary-inputs.outputs.fingerprint }}"
           if [ ! -f "$sticky_root/.source-fingerprint" ] || [ "$current_fingerprint" != "$(cat "$sticky_root/.source-fingerprint")" ]; then
             echo "boundary source trees changed since snapshot; lint prepares cold"
             exit 0
           fi
-          for payload in dist packages extensions; do
+          for payload in packages .artifacts; do
             if [ -d "$sticky_root/$payload" ]; then
               rsync -a "$sticky_root/$payload/" "$payload/"
             fi
@@ -3472,7 +3472,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f scripts/prepare-extension-package-boundary-artifacts.mts ]]; then
-            fingerprint="$(node --import tsx scripts/prepare-extension-package-boundary-artifacts.mts --print-input-fingerprint)"
+            fingerprint="$(git rev-parse HEAD)"
             echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
@@ -3517,18 +3517,15 @@ jobs:
             echo "restored=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Restore only when the canonical generative-input fingerprint
-          # matches the snapshotting run.
-          # Restored artifacts are valid by construction: no clock-skew mtime
-          # race can false-skip a rebuild, and deleted/renamed sources or a
-          # toolchain bump build cold.
+          # Restore an exact-commit transport snapshot here. The preparer still
+          # validates per-owner content, topology, toolchain and output inventories.
           current_fingerprint="${{ steps.extension-boundary-inputs.outputs.fingerprint }}"
           if [ ! -f "$sticky_root/.source-fingerprint" ] || [ "$current_fingerprint" != "$(cat "$sticky_root/.source-fingerprint")" ]; then
             echo "boundary source trees changed since snapshot; building cold"
             echo "restored=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          for payload in dist packages extensions; do
+          for payload in packages .artifacts; do
             if [ -d "$sticky_root/$payload" ]; then
               rsync -a "$sticky_root/$payload/" "$payload/"
             fi
@@ -3541,37 +3538,13 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            dist/plugin-sdk
             packages/plugin-sdk/dist
-            extensions/*/dist/.boundary-tsc.tsbuildinfo
-            extensions/*/dist/.boundary-tsc.stamp
-          key: ${{ runner.os }}-extension-package-boundary-v2-${{ steps.extension-boundary-inputs.outputs.fingerprint }}
+            .artifacts/extension-package-boundary/plugins
+            .artifacts/extension-package-boundary/*.json
+            .artifacts/extension-package-boundary/compile
+          key: ${{ runner.os }}-extension-package-boundary-v4-${{ steps.extension-boundary-inputs.outputs.fingerprint }}
           restore-keys: |
-            ${{ runner.os }}-extension-package-boundary-v2-
-
-      - name: Preserve extension package boundary cache hit
-        if: matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true' && steps.extension-package-boundary-cache.outputs.cache-hit == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          find extensions \
-            -path '*/dist' -prune -o \
-            -path '*/node_modules' -prune -o \
-            -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
-            -exec touch -t 200001010000 {} +
-          find src \
-            -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
-            -exec touch -t 200001010000 {} +
-          if [ -d packages/llm-core/src ]; then
-            find packages/llm-core/src \
-              -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
-              -exec touch -t 200001010000 {} +
-          fi
-          if [ -d packages/model-catalog-core/src ]; then
-            find packages/model-catalog-core/src \
-              -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
-              -exec touch -t 200001010000 {} +
-          fi
+            ${{ runner.os }}-extension-package-boundary-v4-
 
       - name: Run additional check shard
         env:
@@ -3717,15 +3690,9 @@ jobs:
           sticky_root=/var/tmp/openclaw-ext-boundary
           # A stale marker must not survive a mid-seed failure: drop readiness
           # first so a partial payload can never be restored as valid.
-          rm -rf "$sticky_root/.snapshot-ready" "$sticky_root/.source-trees" "$sticky_root/.source-fingerprint" "$sticky_root/dist" "$sticky_root/packages" "$sticky_root/extensions"
-          if [ -d dist/plugin-sdk ]; then
-            rsync -aR dist/plugin-sdk "$sticky_root/"
-          fi
-          if [ -d packages/plugin-sdk/dist ]; then
-            rsync -aR packages/plugin-sdk/dist "$sticky_root/"
-          fi
-          find extensions -maxdepth 3 \( -name '.boundary-tsc.tsbuildinfo' -o -name '.boundary-tsc.stamp' \) \
-            -exec rsync -aR {} "$sticky_root/" \;
+          rm -rf "$sticky_root/.snapshot-ready" "$sticky_root/.source-trees" "$sticky_root/.source-fingerprint" "$sticky_root/dist" "$sticky_root/packages" "$sticky_root/extensions" "$sticky_root/.artifacts"
+          rsync -aR packages/plugin-sdk/dist "$sticky_root/"
+          rsync -aR --exclude='*.lock*' .artifacts/extension-package-boundary "$sticky_root/"
           echo "${{ steps.extension-boundary-inputs.outputs.fingerprint }}" > "$sticky_root/.source-fingerprint"
           touch "$sticky_root/.snapshot-ready"
 
@@ -3971,6 +3938,14 @@ jobs:
     steps:
       - *platform_checkout_step
 
+      - name: Setup Node.js for native test tooling
+        env:
+          REQUESTED_NODE_VERSION: ${{ env.NODE_VERSION }}
+        run: |
+          set -euo pipefail
+          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
+
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: |
           if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
@@ -4170,7 +4145,17 @@ jobs:
           else
             swift_test_args+=(--no-parallel)
           fi
-          swift test "${swift_test_args[@]}"
+          if [[ -f scripts/test-macos-native.mts ]]; then
+            node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip AppStateIsolationTests
+            node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter AppStateIsolationTests
+          elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+            # Frozen release targets predate the resource-owner script and its tests.
+            # Their original suite still runs only on this disposable macOS worker.
+            swift test "${swift_test_args[@]}"
+          else
+            echo "Current CI targets must provide scripts/test-macos-native.mts." >&2
+            exit 1
+          fi
 
       - name: Render isolated macOS health fixtures
         id: health-render

@@ -1,10 +1,5 @@
 import { REMOTE_WORKSPACE_MUTATION_LOCK_JS } from "./workspace-mutation-lock-remote-script.js";
-import {
-  DERIVED_WORKSPACE_DIRECTORY_NAMES,
-  DERIVED_WORKSPACE_FILE_NAMES,
-  DERIVED_WORKSPACE_FILE_SUFFIXES,
-  isDerivedWorkspacePath,
-} from "./workspace-path-exclusions.js";
+import { WORKSPACE_PATH_EXCLUSIONS_JS } from "./workspace-path-exclusions.js";
 
 export const REMOTE_WORKSPACE_MUTATION_CONTEXT_JS = String.raw`const mutationActions = [
   "begin", "apply", "rollback", "recover", "commit", "settle", "receiver", "reset",
@@ -152,10 +147,7 @@ const action = "reset";
 ${REMOTE_WORKSPACE_MUTATION_CONTEXT_JS}
 const lockOwnerPid = process.pid;
 ${REMOTE_WORKSPACE_MUTATION_LOCK_JS}
-const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIRECTORY_NAMES)};
-const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
-const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
-const isDerivedWorkspacePath = ${isDerivedWorkspacePath.toString()};
+${WORKSPACE_PATH_EXCLUSIONS_JS}
 function clean(directory, relativeDirectory) {
   const originalMode = fs.lstatSync(directory).mode & 0o7777;
   fs.chmodSync(directory, originalMode | 0o700);

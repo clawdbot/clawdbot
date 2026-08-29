@@ -1,4 +1,5 @@
 // Live Docker Stage tests cover live docker stage script behavior.
+import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +12,48 @@ const stageScriptPath = path.join(repoRoot, "scripts/lib/live-docker-stage.sh");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("live Docker state staging", () => {
+  it.each([
+    { geminiKey: "test-gemini-key", googleKey: "", expectedType: "gemini-api-key" },
+    { geminiKey: "", googleKey: "test-google-key", expectedType: "vertex-ai" },
+    { geminiKey: "", googleKey: "", expectedType: "oauth-personal" },
+  ])("selects $expectedType from the supplied Gemini credentials", (testCase) => {
+    const home = tempDirs.make("openclaw-live-stage-gemini-");
+    const settingsPath = path.join(home, ".gemini", "settings.json");
+    mkdirSync(path.dirname(settingsPath));
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        security: { auth: { selectedType: "oauth-personal" } },
+        privacy: { usageStatisticsEnabled: false },
+      }),
+    );
+
+    const result = spawnSync(
+      "bash",
+      ["-c", 'source "$1"; openclaw_live_stage_gemini_auth', "bash", stageScriptPath],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: home,
+          GEMINI_API_KEY: testCase.geminiKey,
+          GOOGLE_API_KEY: testCase.googleKey,
+          GOOGLE_GENAI_USE_VERTEXAI: "",
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    expect(settings.security.auth.selectedType).toBe(testCase.expectedType);
+    expect(settings.security.auth.enforcedType).toBe(
+      testCase.geminiKey || testCase.googleKey ? testCase.expectedType : undefined,
+    );
+    expect(settings.privacy).toEqual({ usageStatisticsEnabled: false });
+    expect(readFileSync(settingsPath, "utf8")).not.toContain("test-gemini-key");
+    expect(readFileSync(settingsPath, "utf8")).not.toContain("test-google-key");
+  });
+
   it("keeps repo-local generated artifacts out of the source copy", () => {
     const script = readFileSync(stageScriptPath, "utf8");
 

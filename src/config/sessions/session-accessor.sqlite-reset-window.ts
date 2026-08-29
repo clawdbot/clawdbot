@@ -36,6 +36,7 @@ type VisibleMessagePositions = {
 
 type ResetWindowMessageEvent = {
   event: TranscriptEvent;
+  eventSeq: number;
   seq: number;
 };
 
@@ -73,6 +74,7 @@ function getResetWindowKysely(database: OpenClawAgentDatabase) {
 }
 
 function parseMessageEventRow(row: {
+  event_seq: number;
   event_json: string;
   message_position: number | null;
 }): ResetWindowMessageEvent {
@@ -81,6 +83,7 @@ function parseMessageEventRow(row: {
   }
   return {
     event: JSON.parse(row.event_json) as TranscriptEvent,
+    eventSeq: row.event_seq,
     seq: row.message_position + 1,
   };
 }
@@ -103,7 +106,7 @@ function readMessageRange(
           .onRef("event.session_id", "=", "active.session_id")
           .onRef("event.seq", "=", "active.event_seq"),
       )
-      .select(["active.message_position", "event.event_json"])
+      .select(["active.event_seq", "active.message_position", "event.event_json"])
       .where("active.session_id", "=", projection.resolved.sessionId)
       .where("active.message_position", "is not", null)
       .where("active.message_position", ">=", start)
@@ -252,6 +255,7 @@ function findLatestResetMessageWindow(
           .where("active.active_position", ">=", firstKept.active_position)
           .where("active.active_position", "<", latestBoundary.active_position)
           .where("active.message_position", "is not", null)
+          .$if(scope === "context", (query) => query.where("active.context_eligible", "=", 1))
           .orderBy("active.active_position", "asc"),
       ).rows.flatMap((row) => {
         try {
@@ -415,7 +419,8 @@ export function readVisibleTranscriptStats(projection: ResetWindowProjection): {
       sql<number>`COALESCE(SUM(OCTET_LENGTH(event.event_json)), 0)
         + COUNT(*)`.as("size_bytes"),
     ])
-    .where("active.session_id", "=", projection.resolved.sessionId);
+    .where("active.session_id", "=", projection.resolved.sessionId)
+    .where("active.context_eligible", "=", 1);
   const row = executeSqliteQueryTakeFirstSync(
     projection.database.db,
     window ? base.where("active.active_position", ">", window.boundaryActivePosition) : base,

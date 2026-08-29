@@ -27,7 +27,7 @@ import {
 import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
-let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acp-runtime.js").tryDispatchAcpReplyHook;
+let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acpx.js").tryDispatchAcpReplyHook;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
@@ -154,7 +154,7 @@ function createMockAcpSessionManager() {
 describe("dispatchReplyFromConfig ACP abort", () => {
   beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
-    ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acp-runtime.js"));
+    ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acpx.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
     ({ replyRunRegistry, getActiveReplyRunCount, createReplyOperation } =
       await import("./reply-run-registry.js"));

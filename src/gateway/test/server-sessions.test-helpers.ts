@@ -719,7 +719,7 @@ export async function directSessionReq<TPayload = unknown>(
       dedupe: new Map(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
       loadGatewayModelCatalog,
-      readPreparedGatewayModelCatalog: loadGatewayModelCatalog,
+      readPreparedGatewayModelCatalog: async () => ({ entries: await loadGatewayModelCatalog() }),
       getRuntimeConfig,
       ...opts?.context,
     } as never,

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import {
   GATEWAY_CLIENT_IDS,
@@ -17,6 +18,7 @@ import {
   WorkerTranscriptMessageSchema,
   type WorkerTranscriptCommitParams,
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
+  WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceModelRef,
@@ -26,9 +28,11 @@ import {
   WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
   WorkerInferenceModelRefSchema,
   WorkerInferenceOptionsSchema,
+  WorkerInferenceImageContentSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import type { ImageContent } from "../llm/types.js";
 import { isWorkerToolName, type WorkerToolAuthority } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import {
@@ -37,6 +41,10 @@ import {
 } from "./worker-connection-endpoint.js";
 
 const LAUNCH_VERSION = 4;
+const WorkerPromptImagesSchema = Type.Array(WorkerInferenceImageContentSchema, {
+  minItems: 1,
+  maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS - 1,
+});
 
 export type WorkerBrowserLaunchDescriptor = {
   cdpUrl: string;
@@ -56,6 +64,7 @@ type WorkerLaunchAssignment = WorkerLaunchPermissionContext & {
   runId: string;
   turnId: string;
   prompt: string;
+  images?: ImageContent[];
   suppressPromptTranscript: boolean;
   workspaceDir: string;
   modelRef: WorkerInferenceModelRef;
@@ -188,7 +197,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
         "liveEvents",
         "toolAuthority",
       ],
-      ["systemPrompt", "browser", "permissionMode", "workerContainmentRoot"],
+      ["systemPrompt", "images", "browser", "permissionMode", "workerContainmentRoot"],
     )
   ) {
     return undefined;
@@ -216,6 +225,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
     value.agentRuntimeIdentityToken.length > 16_384 ||
     !isIdentifier(value.turnId) ||
     typeof value.prompt !== "string" ||
+    (value.images !== undefined && !Value.Check(WorkerPromptImagesSchema, value.images)) ||
     typeof value.suppressPromptTranscript !== "boolean" ||
     !isIdentifier(value.workspaceDir) ||
     !isAbsoluteHostPath(value.workspaceDir) ||
@@ -302,7 +312,12 @@ function validateWorkerLaunchPlan(candidate: WorkerLaunchPlan): WorkerLaunchPlan
     candidate.admission.ownerEpoch < 1 ||
     !isWorkerTranscriptMessageFrameSafe({
       role: "user",
-      content: [{ type: "text", text: candidate.assignment.prompt }],
+      content: [
+        { type: "text", text: candidate.assignment.prompt },
+        ...(candidate.assignment.suppressPromptTranscript
+          ? []
+          : (candidate.assignment.images ?? [])),
+      ],
       timestamp: Number.MAX_SAFE_INTEGER,
     })
   ) {

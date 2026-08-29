@@ -11,23 +11,21 @@ import {
 } from "../agents/cli-backends.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getCliLiveSessionGeneration } from "../agents/cli-runner/cli-live-session-registry.js";
+import { loadCliSessionHistoryMessages } from "../agents/cli-runner/session-history.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
+import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import {
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
   CLI_CACHE_AUTH_PROFILE_ID,
-  createMcpSchemaProbePlugin,
+  CLI_BACKEND_PROBE_PLUGIN_ID,
+  createCliBackendProbePlugin,
   initializeCacheProbeGitWorkspace,
   logCliCacheUsage,
-  MCP_SCHEMA_PROBE_PLUGIN_ID,
   MCP_SCHEMA_PROBE_TOOL_NAME,
   prepareClaudeCacheProbeBackend,
   type RuntimeBackendEntry,
@@ -45,7 +43,6 @@ import {
   resolveCliBackendLiveArgs,
   resolveCliBackendLiveModelSelection,
   resolveCliBackendLiveProviderSkipDecision,
-  resolveImportedClaudeCliSessionId,
   resolveCliModelSwitchProbeTarget,
   restoreCliBackendLiveEnv,
   shouldAllowCliBackendLiveProviderSkip,
@@ -80,8 +77,6 @@ const CLI_MCP_SCHEMA_PROBE = isTruthyEnvValue(
 );
 const CLI_ALLOW_PROVIDER_SKIP = shouldAllowCliBackendLiveProviderSkip();
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
-
-const CLI_CONTINUITY_PROBE_PLUGIN_ID = "cli-continuity-probe";
 
 function createRuntimeBackendEntry(
   backend: ResolvedCliBackend,
@@ -387,12 +382,23 @@ describeLive("gateway live (cli backend)", () => {
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-cli-"));
       const stateDir = path.join(tempDir, "state");
       await fs.mkdir(stateDir, { recursive: true });
-      const schemaProbePlugin =
-        CLI_MCP_SCHEMA_PROBE || CLI_CACHE_PROBE
-          ? await createMcpSchemaProbePlugin(tempDir)
+      const enableMcpSchemaProbe = CLI_MCP_SCHEMA_PROBE || CLI_CACHE_PROBE;
+      // Load the continuity hook before startup so admitted generations own the fixture.
+      const probePlugin =
+        enableMcpSchemaProbe || resumeContinuityProbe
+          ? await createCliBackendProbePlugin(tempDir, {
+              mcpSchema: enableMcpSchemaProbe,
+              continuity: resumeContinuityProbe
+                ? {
+                    sessionKey,
+                    firstTurnMarker: resumeContinuityProbe.firstTurnMarker,
+                    injectedContext: resumeContinuityProbe.injectedContext,
+                  }
+                : undefined,
+            })
           : undefined;
-      const schemaProbePluginPath = schemaProbePlugin?.pluginPath;
-      const useMinimalToolsProfile = providerId === "codex-cli" && !schemaProbePluginPath;
+      const probePluginPath = probePlugin?.pluginPath;
+      const useMinimalToolsProfile = providerId === "codex-cli" && !enableMcpSchemaProbe;
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       const bundleMcp = backendResolved.bundleMcp;
       const bootstrapWorkspace = await createBootstrapWorkspace(tempDir);
@@ -450,7 +456,7 @@ describeLive("gateway live (cli backend)", () => {
               },
             }
           : {}),
-        ...(schemaProbePluginPath || CLI_CACHE_PROBE
+        ...(probePluginPath || CLI_CACHE_PROBE
           ? {
               plugins: {
                 ...cfg.plugins,
@@ -462,18 +468,25 @@ describeLive("gateway live (cli backend)", () => {
                       slots: { memory: "none" },
                     }
                   : {}),
-                ...(schemaProbePluginPath
+                ...(probePluginPath
                   ? {
                       load: {
                         ...cfg.plugins?.load,
-                        paths: [...(cfg.plugins?.load?.paths ?? []), schemaProbePluginPath],
+                        paths: [...(cfg.plugins?.load?.paths ?? []), probePluginPath],
                       },
                     }
                   : {}),
                 entries: {
                   ...cfg.plugins?.entries,
-                  ...(schemaProbePluginPath
-                    ? { [MCP_SCHEMA_PROBE_PLUGIN_ID]: { enabled: true } }
+                  ...(probePluginPath
+                    ? {
+                        [CLI_BACKEND_PROBE_PLUGIN_ID]: {
+                          enabled: true,
+                          ...(resumeContinuityProbe
+                            ? { hooks: { allowConversationAccess: true } }
+                            : {}),
+                        },
+                      }
                     : {}),
                   ...(CLI_CACHE_PROBE ? { anthropic: { enabled: true } } : {}),
                 },
@@ -563,37 +576,6 @@ describeLive("gateway live (cli backend)", () => {
           cliBackendsTesting.setDepsForTest({
             resolvePluginSetupCliBackend: () => undefined,
             resolveRuntimeCliBackends: () => [cacheProbeBackend],
-          });
-        }
-        if (resumeContinuityProbe) {
-          const continuityHookRegistry = createMockPluginRegistry([
-            {
-              pluginId: CLI_CONTINUITY_PROBE_PLUGIN_ID,
-              hookName: "before_prompt_build",
-              handler: async (event: unknown, ctx: unknown) => {
-                const prompt = (event as { prompt?: unknown }).prompt;
-                const hookSessionKey = (ctx as { sessionKey?: unknown }).sessionKey;
-                if (
-                  hookSessionKey !== sessionKey ||
-                  typeof prompt !== "string" ||
-                  !prompt.includes(resumeContinuityProbe.firstTurnMarker)
-                ) {
-                  return undefined;
-                }
-                return { prependContext: resumeContinuityProbe.injectedContext };
-              },
-            },
-          ]);
-          initializeGlobalHookRunner(continuityHookRegistry);
-          // Keep bundled MCP capture enabled: the generation check below must cover the same
-          // delivery-capture process lifetime used by production Claude sessions.
-          cliBackendsTesting.setDepsForTest({
-            resolveRuntimeCliBackends: () => [
-              {
-                ...liveBackend,
-                pluginId: liveBackend.pluginId ?? CLI_CONTINUITY_PROBE_PLUGIN_ID,
-              },
-            ],
           });
         }
         client = await connectTestGatewayClient({
@@ -741,19 +723,26 @@ describeLive("gateway live (cli backend)", () => {
           let expectedLiveSessionGeneration: string | undefined;
           if (resumeContinuityProbe) {
             const nativeHistory = await activeClient.request<{
-              messages?: unknown[];
               sessionId?: string;
             }>("chat.history", { sessionKey });
-            const cliSessionId = resolveImportedClaudeCliSessionId(nativeHistory.messages ?? []);
-            // Hook-only runtime context belongs to the provider session, not the operator-visible
-            // transcript. The resumed reply below proves that the live provider retained it.
-            expect(JSON.stringify(nativeHistory.messages ?? [])).not.toContain(memoryToken);
-            expect(cliSessionId).toBeTruthy();
             const continuitySessionId = nativeHistory.sessionId;
             expect(continuitySessionId).toBeTruthy();
             if (!continuitySessionId) {
               throw new Error("Claude CLI continuity probe could not resolve its OpenClaw session");
             }
+            // chat.history also displays native CLI imports. Check the canonical replay
+            // source so recall cannot pass by reseeding the hook-only context from SQLite.
+            const canonicalHistory = JSON.stringify(
+              await loadCliSessionHistoryMessages({
+                sessionTarget: await resolveSessionTranscriptRuntimeTarget({
+                  agentId: "dev",
+                  sessionId: continuitySessionId,
+                  sessionKey,
+                }),
+              }),
+            );
+            expect(canonicalHistory).toContain(resumeContinuityProbe.expectedFirstReply);
+            expect(canonicalHistory).not.toContain(memoryToken);
             continuityOwner = {
               backendId: providerId,
               agentId: "dev",
@@ -799,7 +788,7 @@ describeLive("gateway live (cli backend)", () => {
           }
           const resumeText = extractPayloadText(resumePayload?.result);
           if (CLI_CACHE_PROBE) {
-            expect(resumeText).toContain(schemaProbePlugin?.resultToken);
+            expect(resumeText).toContain(probePlugin?.resultToken);
           } else if (providerId === "codex-cli") {
             expect(resumeText).toContain(`CLI-RESUME-${resumeNonce}`);
           } else if (resumeContinuityProbe) {
@@ -854,8 +843,6 @@ describeLive("gateway live (cli backend)", () => {
             if (settleHitRate === undefined) {
               return;
             }
-            // The first turn advertises one bootstrap-only tool. Allow the no-tool settle turn to
-            // run hot or cold, then capture the steady process after any valid schema rotation.
             cacheProbeSteadyGeneration = getCliLiveSessionGeneration(cacheProbeOwner!);
             expect(cacheProbeSteadyGeneration).toBeTruthy();
 
@@ -937,10 +924,8 @@ describeLive("gateway live (cli backend)", () => {
           });
           await verifyCliCronMcpLoopbackPreflight({
             sessionKey,
-            port,
-            token,
             env: process.env,
-            expectedSchemaProbeToolName: schemaProbePluginPath
+            expectedSchemaProbeToolName: enableMcpSchemaProbe
               ? MCP_SCHEMA_PROBE_TOOL_NAME
               : undefined,
           });

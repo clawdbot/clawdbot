@@ -27,7 +27,6 @@ import type {
   SessionLifecycleArtifactCleanupResult,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  runPreparedSqliteSessionWrite,
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
@@ -38,9 +37,7 @@ import {
 import {
   assertLifecycleTargetUnchanged,
   deleteLifecycleTargetRows,
-  deleteLegacySessionEntryRows,
   readLifecycleTargetSnapshot,
-  rehomeSessionWindows,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
@@ -54,6 +51,7 @@ import {
   readSessionGenerationIdsForKeys,
   planSessionStateAfterEntryRemoval,
   readReferencedSessionIdsAfterTargetMutation,
+  shouldRemoveSessionEntry,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
@@ -197,94 +195,75 @@ export async function resetSessionEntryLifecycle(
   // Retained reset history is the store's growth event; give the throttled
   // budget pass a chance to extract-and-evict once we finish.
   try {
-    return await runPreparedSqliteSessionWrite(resolved, async () => {
+    return await runExclusiveSqliteSessionWrite(resolved, async () => {
       const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
       const targetSnapshot = readLifecycleTargetSnapshot(database, params.target);
-      const current = targetSnapshot.primary;
+      const current = targetSnapshot[0];
       const nextEntry = await params.buildNextEntry({
         currentEntry: current ? cloneSessionEntry(current.entry) : undefined,
         primaryKey: params.target.canonicalKey,
       });
-      const deletedOwners = targetSnapshot.rows.filter(
-        ({ sessionKey }) => sessionKey !== params.target.canonicalKey,
-      );
-      return {
-        deletedEntries: deletedOwners,
-        commit: async () => {
-          const shouldAppendResetBoundary =
-            params.resetBoundary &&
-            current?.entry.sessionId &&
-            !sqliteSessionEntriesEqual(current.entry, nextEntry);
-          const mutation: ResetSessionEntryLifecycleMutation = {
-            nextEntry: cloneSessionEntry(nextEntry),
-            ...(current ? { previousEntry: cloneSessionEntry(current.entry) } : {}),
-            ...(current?.entry.sessionId ? { previousSessionId: current.entry.sessionId } : {}),
-          };
-          runOpenClawAgentWriteTransaction((transactionDb) => {
-            assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
-            if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundary) {
-              const event = buildSessionResetBoundaryEvent({
-                events: loadTranscriptEventsFromDatabase(transactionDb, current.entry.sessionId),
-                ...params.resetBoundary,
-              });
-              const appended = appendTranscriptEventsInTransaction(
-                transactionDb,
-                {
-                  ...resolved,
-                  sessionId: current.entry.sessionId,
-                  sessionKey: current.key,
-                },
-                [event],
-              );
-              if (appended !== 1) {
-                throw new Error(`Failed to append reset boundary for ${current.key}`);
-              }
-            }
-            writeSessionEntry(transactionDb, params.target.canonicalKey, nextEntry, {
-              previousEntry: current?.entry ?? null,
-            });
-            rehomeSessionWindows(
-              transactionDb,
-              params.target.canonicalKey,
-              params.target.storeKeys,
-            );
-            deleteLegacySessionEntryRows(
-              transactionDb,
-              params.target.storeKeys,
-              params.target.canonicalKey,
-              { rehomeMembers: current?.entry.sessionId === nextEntry.sessionId },
-            );
-            // Reset only advances the live entry and route. Historical rows stay searchable;
-            // disk-budget cleanup owns durable extraction before reclaiming them.
-          }, toDatabaseOptions(resolved));
-          if (current) {
-            emitSessionIdentityMutation({
-              kind: "reset",
-              previous: {
-                ...(current.entry.sessionId ? { sessionId: current.entry.sessionId } : {}),
-                sessionKeys: targetSnapshot.rows.map((row) => row.sessionKey),
-              },
-              current: {
-                ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
-                sessionKeys: [params.target.canonicalKey],
-              },
-            });
-          } else {
-            emitSessionIdentityMutation({
-              kind: "create",
-              previous: { sessionKeys: [] },
-              current: {
-                ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
-                sessionKeys: [params.target.canonicalKey],
-              },
-            });
+      const shouldAppendResetBoundary =
+        params.resetBoundary &&
+        current?.entry.sessionId &&
+        !sqliteSessionEntriesEqual(current.entry, nextEntry);
+      const mutation: ResetSessionEntryLifecycleMutation = {
+        nextEntry: cloneSessionEntry(nextEntry),
+        ...(current ? { previousEntry: cloneSessionEntry(current.entry) } : {}),
+        ...(current?.entry.sessionId ? { previousSessionId: current.entry.sessionId } : {}),
+      };
+      runOpenClawAgentWriteTransaction((transactionDb) => {
+        assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
+        if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundary) {
+          const event = buildSessionResetBoundaryEvent({
+            events: loadTranscriptEventsFromDatabase(transactionDb, current.entry.sessionId),
+            ...params.resetBoundary,
+          });
+          const appended = appendTranscriptEventsInTransaction(
+            transactionDb,
+            {
+              ...resolved,
+              sessionId: current.entry.sessionId,
+              sessionKey: current.sessionKey,
+            },
+            [event],
+          );
+          if (appended !== 1) {
+            throw new Error(`Failed to append reset boundary for ${current.sessionKey}`);
           }
-          await params.afterEntryMutation?.(mutation);
-          return {
-            ...mutation,
-            archivedTranscripts: [],
-          };
-        },
+        }
+        writeSessionEntry(transactionDb, params.target.canonicalKey, nextEntry, {
+          previousEntry: current?.entry ?? null,
+        });
+        // Reset only advances the live entry and route. Historical rows stay searchable;
+        // disk-budget cleanup owns durable extraction before reclaiming them.
+      }, toDatabaseOptions(resolved));
+      if (current) {
+        emitSessionIdentityMutation({
+          kind: "reset",
+          previous: {
+            ...(current.entry.sessionId ? { sessionId: current.entry.sessionId } : {}),
+            sessionKeys: targetSnapshot.map((row) => row.sessionKey),
+          },
+          current: {
+            ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
+            sessionKeys: [params.target.canonicalKey],
+          },
+        });
+      } else {
+        emitSessionIdentityMutation({
+          kind: "create",
+          previous: { sessionKeys: [] },
+          current: {
+            ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
+            sessionKeys: [params.target.canonicalKey],
+          },
+        });
+      }
+      await params.afterEntryMutation?.(mutation);
+      return {
+        ...mutation,
+        archivedTranscripts: [],
       };
     });
   } finally {
@@ -336,7 +315,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
   const prepared = await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const targetSnapshot = readLifecycleTargetSnapshot(database, params.target);
-    const current = targetSnapshot.primary;
+    const current = targetSnapshot[0];
     if (!current) {
       return null;
     }
@@ -348,7 +327,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
     }
     if (
       expectedPluginOwnerId &&
-      targetSnapshot.rows.some(
+      targetSnapshot.some(
         ({ entry, sessionKey }) =>
           isAgentHarnessSessionKey(sessionKey) ||
           entry.agentHarnessId !== undefined ||
@@ -368,7 +347,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
     // marker. Materialization dedupes aliases that share the same state owner.
     const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(resolved);
     const entryPlans = deleteTranscriptState
-      ? targetSnapshot.rows.flatMap(({ entry }) =>
+      ? targetSnapshot.flatMap(({ entry }) =>
           planSessionStateAfterEntryRemoval({
             archiveDirectory,
             archiveTranscript: params.archiveTranscript,
@@ -386,7 +365,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       ? readSessionGenerationIdsForKeys(database, [
           params.target.canonicalKey,
           ...params.target.storeKeys,
-          ...targetSnapshot.rows.map((row) => row.sessionKey),
+          ...targetSnapshot.map((row) => row.sessionKey),
         ]).filter((sessionId) => !entryPlanIds.has(sessionId))
       : [];
     // Historical generations are reclaimed BEFORE the entry-removing
@@ -421,7 +400,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
 
   return await withSqliteSessionDeletions(
     resolved,
-    prepared.targetSnapshot.rows,
+    prepared.targetSnapshot,
     async (assertCurrent) => {
       const historicalArchivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
       for (const sessionId of prepared.historicalGenerationIds) {
@@ -430,11 +409,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
           const targetSnapshot = readLifecycleTargetSnapshot(database, params.target);
           if (
             !sqliteLifecycleTargetSnapshotsEqual(prepared.targetSnapshot, targetSnapshot) ||
-            !shouldDeleteSqliteSessionEntryLifecycle(
-              database,
-              targetSnapshot.primary?.entry,
-              params,
-            )
+            !shouldDeleteSqliteSessionEntryLifecycle(database, targetSnapshot[0]?.entry, params)
           ) {
             return DELETE_EXPECTED_ENTRY_MISMATCH;
           }
@@ -478,7 +453,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               !sqliteLifecycleTargetSnapshotsEqual(prepared.targetSnapshot, targetSnapshot) ||
               !shouldDeleteSqliteSessionEntryLifecycle(
                 transactionDb,
-                targetSnapshot.primary?.entry,
+                targetSnapshot[0]?.entry,
                 params,
               )
             ) {
@@ -514,7 +489,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         runOpenClawAgentWriteTransaction<DeleteSessionEntryLifecycleResult>((transactionDb) => {
           assertCurrent();
           const transactionSnapshot = readLifecycleTargetSnapshot(transactionDb, params.target);
-          const transactionEntry = transactionSnapshot.primary?.entry;
+          const transactionEntry = transactionSnapshot[0]?.entry;
           if (
             !sqliteLifecycleTargetSnapshotsEqual(prepared.targetSnapshot, transactionSnapshot) ||
             !shouldDeleteSqliteSessionEntryLifecycle(transactionDb, transactionEntry, params)
@@ -528,20 +503,20 @@ async function deleteSqliteSessionEntryLifecycleLocked(
             new Set([
               params.target.canonicalKey,
               ...params.target.storeKeys,
-              ...transactionSnapshot.rows.map((row) => row.sessionKey),
+              ...transactionSnapshot.map((row) => row.sessionKey),
             ]),
           );
           deleteLifecycleTargetRows(transactionDb, params.target);
           if (params.deleteDeliveryArtifacts === true) {
             deleteSessionDeliveryArtifacts(transactionDb, params.target.canonicalKey, [
               ...params.target.storeKeys,
-              ...transactionSnapshot.rows.map((row) => row.sessionKey),
+              ...transactionSnapshot.map((row) => row.sessionKey),
             ]);
           }
           deleteSessionBoardRows(transactionDb, [
             params.target.canonicalKey,
             ...params.target.storeKeys,
-            ...transactionSnapshot.rows.map((row) => row.sessionKey),
+            ...transactionSnapshot.map((row) => row.sessionKey),
           ]);
           return {
             archivedTranscripts,
@@ -560,7 +535,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
             ...(prepared.current.entry.sessionId
               ? { sessionId: prepared.current.entry.sessionId }
               : {}),
-            sessionKeys: prepared.targetSnapshot.rows.map((row) => row.sessionKey),
+            sessionKeys: prepared.targetSnapshot.map((row) => row.sessionKey),
           },
         });
       }
@@ -633,38 +608,13 @@ export async function rollbackPluginOwnedSessionEntryLifecycle(
   return await deleteSqliteSessionEntryLifecycleInternal(params, true, expectedPluginOwner);
 }
 
-/** Applies prepared full-row replacements in one validated SQLite transaction. */
-
 function shouldDeleteSqliteSessionEntryLifecycle(
   database: OpenClawAgentDatabase,
   entry: SessionEntry | undefined,
   params: DeleteSessionEntryLifecycleParams,
 ): entry is SessionEntry {
   params.commitGuard?.();
-  if (!entry) {
-    return false;
-  }
-  if (
-    params.expectedEntry !== undefined &&
-    !sqliteSessionEntriesEqual(entry, params.expectedEntry)
-  ) {
-    return false;
-  }
-  if (
-    params.expectedSessionId !== undefined &&
-    (params.expectedSessionId === null
-      ? entry.sessionId !== undefined
-      : entry.sessionId !== params.expectedSessionId)
-  ) {
-    return false;
-  }
-  if (
-    params.expectedLifecycleRevision !== undefined &&
-    entry.lifecycleRevision !== params.expectedLifecycleRevision
-  ) {
-    return false;
-  }
-  if (params.expectedUpdatedAt !== undefined && entry.updatedAt !== params.expectedUpdatedAt) {
+  if (!shouldRemoveSessionEntry(entry, params)) {
     return false;
   }
   if (params.expectedTranscript) {

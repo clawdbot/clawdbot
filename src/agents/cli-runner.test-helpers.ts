@@ -397,7 +397,7 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
         now: Date.parse(entry.timestamp),
         message: entry.message,
       });
-      if (!appended) {
+      if (!appended.ok || !appended.value) {
         throw new Error("Could not append CLI fixture transcript message");
       }
     },

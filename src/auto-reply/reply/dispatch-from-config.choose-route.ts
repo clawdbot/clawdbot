@@ -653,6 +653,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   onReplyStart: params.replyOptions?.onReplyStart,
                   onAgentRunStart: params.replyOptions?.onAgentRunStart,
                   userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
+                  prepareAssistantTranscriptMessage:
+                    params.replyOptions?.prepareAssistantTranscriptMessage,
                   recordProcessed,
                   markIdle,
                 },

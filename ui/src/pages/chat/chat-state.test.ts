@@ -1310,70 +1310,118 @@ describe("canonical session message recovery", () => {
     }
   });
 
-  it("continues terminal recovery when history backfills another run", async () => {
-    vi.useFakeTimers();
-    try {
-      const runId = "run-after-history-backfill";
-      const historicalRunId = "older-run-from-history";
-      const prompt = {
-        role: "user",
-        content: [{ type: "text", text: "Finish after loading older history" }],
-        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 2 },
-      };
-      const historicalReply = {
-        role: "assistant",
-        content: [{ type: "text", text: "An older durable reply." }],
-        __openclaw: { id: "historical-reply", runId: historicalRunId, seq: 1 },
-      };
-      const persistedReply = {
-        role: "assistant",
-        content: [{ type: "text", text: "The current reply is now durable." }],
-        stopReason: "stop",
-        __openclaw: { id: "current-reply", runId, seq: 3 },
-      };
-      const sessionInfo = {
-        key: "agent:main:main",
-        kind: "direct" as const,
-        updatedAt: 3,
-        hasActiveRun: false,
-        activeRunIds: [],
-        status: "done" as const,
-      };
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce({
-          messages: [historicalReply, prompt],
-          sessionId: "selected-session",
-          sessionInfo,
-        })
-        .mockResolvedValueOnce({
-          messages: [historicalReply, prompt, persistedReply],
-          sessionId: "selected-session",
-          sessionInfo,
+  it.each(["another-run", "nested-tool-only"] as const)(
+    "continues terminal recovery when history backfills %s",
+    async (historyKind) => {
+      vi.useFakeTimers();
+      try {
+        const runId = "run-after-history-backfill";
+        const historicalRunId = "older-run-from-history";
+        const prompt = {
+          role: "user",
+          content: [{ type: "text", text: "Finish after loading older history" }],
+          __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 2 },
+        };
+        const historicalReply = {
+          role: "assistant",
+          content: [{ type: "text", text: "An older durable reply." }],
+          __openclaw: { id: "historical-reply", runId: historicalRunId, seq: 1 },
+        };
+        // Public history projects tool blocks, not the stored empty-content activity fact.
+        const nestedActivity = {
+          role: "custom",
+          customType: "openclaw.nested-tool.v1",
+          display: true,
+          excludeFromContext: true,
+          runId,
+          timestamp: 2,
+          content: [
+            {
+              type: "toolCall",
+              id: "nested-read",
+              runId,
+              name: "read",
+              arguments: { path: "note.txt" },
+              parentToolCallId: "outer-exec",
+              timestamp: 2,
+            },
+            {
+              type: "toolResult",
+              role: "toolResult",
+              runId,
+              scopeId: "attempt-1",
+              afterEntryId: "prompt-1",
+              startOrder: 0,
+              parentToolCallId: "outer-exec",
+              toolCallId: "nested-read",
+              toolName: "read",
+              isError: false,
+              startedAt: 2,
+              timestamp: 3,
+              content: [{ type: "text", text: "Nested read completed." }],
+            },
+          ],
+          __openclaw: { id: "nested-activity-1", seq: 3 },
+        };
+        const precedingRow = historyKind === "another-run" ? historicalReply : nestedActivity;
+        const beforeFinal =
+          historyKind === "another-run" ? [historicalReply, prompt] : [prompt, nestedActivity];
+        const replyText = "The current reply is now durable.";
+        const persistedReply = {
+          role: "assistant",
+          content: [{ type: "text", text: replyText }],
+          stopReason: "stop",
+          __openclaw: { id: "current-reply", runId, seq: historyKind === "another-run" ? 3 : 4 },
+        };
+        const sessionInfo = {
+          key: "agent:main:main",
+          kind: "direct" as const,
+          updatedAt: 3,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done" as const,
+        };
+        const request = vi
+          .fn()
+          .mockResolvedValueOnce({
+            messages: beforeFinal,
+            sessionId: "selected-session",
+            sessionInfo,
+          })
+          .mockResolvedValueOnce({
+            messages: [...beforeFinal, persistedReply],
+            sessionId: "selected-session",
+            sessionInfo,
+          });
+        const { state } = createSessionEventState({
+          chatMessages: [prompt],
+          chatHistoryPagination: { hasMore: false },
+          chatRunId: runId,
+          client: { request } as unknown as GatewayBrowserClient,
         });
-      const { state } = createSessionEventState({
-        chatMessages: [prompt],
-        chatHistoryPagination: { hasMore: false },
-        chatRunId: runId,
-        client: { request } as unknown as GatewayBrowserClient,
-      });
 
-      handlePageGatewayEvent(state, {
-        type: "event",
-        event: "chat",
-        payload: { sessionKey: state.sessionKey, runId, state: "final" },
-      });
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "chat",
+          payload: { sessionKey: state.sessionKey, runId, state: "final" },
+        });
 
-      await vi.advanceTimersByTimeAsync(0);
-      expect(request).toHaveBeenCalledTimes(1);
-      expect(state.chatMessages).toContainEqual(historicalReply);
-      await vi.advanceTimersByTimeAsync(100);
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(state.chatMessages).toContainEqual(persistedReply);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(state.chatMessages).toContainEqual(precedingRow);
+        expect(state.chatMessages).not.toContainEqual(persistedReply);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(state.chatMessages.filter((message) => extractText(message) === replyText)).toEqual([
+          persistedReply,
+        ]);
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(request).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     { name: "without a pending session-message reload", pendingReload: false },

@@ -204,11 +204,15 @@ EOF
 cat >"$HEALTH_OVERRIDE_PATH" <<'EOF'
 services:
   openclaw-gateway:
+    # The E2E runner defaults to appuser; documented Compose uses the node home.
+    user: node
     healthcheck:
       interval: 1s
       timeout: 5s
       retries: 3
       start_period: 5s
+  openclaw-cli:
+    user: node
 EOF
 
 export OPENCLAW_IMAGE="$IMAGE_NAME"

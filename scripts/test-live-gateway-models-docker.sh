@@ -38,7 +38,10 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export COREPACK_HOME="${COREPACK_HOME:-$XDG_CACHE_HOME/node/corepack}"
 export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$XDG_CACHE_HOME/npm}"
 export npm_config_cache="$NPM_CONFIG_CACHE"
-mkdir -p "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
+export NPM_CONFIG_PREFIX="$HOME/.npm-global"
+export npm_config_prefix="$NPM_CONFIG_PREFIX"
+export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 tmp_dir="$(mktemp -d)"
 trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
@@ -50,6 +53,13 @@ openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
+docker_packages="$(node --import tsx scripts/print-cli-backend-live-metadata.ts \
+  --docker-packages "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}")"
+while IFS= read -r docker_package; do
+  [ -n "$docker_package" ] || continue
+  openclaw_live_run_setup_command 180 "live CLI backend setup" npm install -g "$docker_package"
+done <<<"$docker_packages"
+openclaw_live_stage_gemini_auth
 if [[ -f scripts/test-live.mjs ]]; then
   node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts
 else

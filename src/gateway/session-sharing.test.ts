@@ -97,7 +97,12 @@ function target(createdActor?: { type: "human"; id: string; label?: string }): S
       sessionId: "session-main",
       updatedAt: 1,
       visibility: "draft",
-      ...(createdActor ? { createdActor } : {}),
+      ...(createdActor
+        ? {
+            createdVia: "operator" as const,
+            createdActor: { ...createdActor, source: "profile" as const },
+          }
+        : {}),
     },
     storeKey: "agent:main:main",
     storeKeys: ["agent:main:main"],
@@ -159,7 +164,7 @@ describe("session sharing policy", () => {
           sessionId: "existing-maintainer-session",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: owner.id },
+          createdActor: { type: "human", source: "profile", id: owner.id },
         },
       );
 
@@ -218,7 +223,7 @@ describe("session sharing policy", () => {
           sessionId: "session-team-shared",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: ownerId! },
+          createdActor: { type: "human", source: "profile", id: ownerId! },
         },
       );
       const sharedTarget = resolveSessionSharingTarget({ cfg, sessionKey });
@@ -360,7 +365,7 @@ describe("session sharing policy", () => {
             updatedAt: 1,
             visibility: visibility === "draft" ? "draft" : "shared",
             ...(visibility === "incognito" ? { incognito: true as const } : {}),
-            createdActor: { type: "human", id: owner.id },
+            createdActor: { type: "human", source: "profile", id: owner.id },
           },
         );
         const restricted = resolveSessionSharingTarget({ cfg, sessionKey });
@@ -397,7 +402,7 @@ describe("session sharing policy", () => {
         sessionId: "session-cron-run",
         updatedAt: 1,
         createdVia: "cron" as const,
-        createdActor: { type: "human" as const, id: creatorId },
+        createdActor: { type: "human" as const, source: "profile" as const, id: creatorId },
       };
       await upsertSessionEntryCore({ agentId: "main", sessionKey: foreignKey }, foreignEntry);
       await upsertSessionEntryCore(
@@ -406,7 +411,7 @@ describe("session sharing policy", () => {
           sessionId: "session-team-own",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: restrictedId },
+          createdActor: { type: "human", source: "profile", id: restrictedId },
         },
       );
       addSessionMember(
@@ -422,7 +427,7 @@ describe("session sharing policy", () => {
         entryFilter?.(ownKey, {
           sessionId: "session-team-own",
           updatedAt: 1,
-          createdActor: { type: "human", id: restrictedId },
+          createdActor: { type: "human", source: "profile", id: restrictedId },
         }),
       ).toBe(true);
       expect(
@@ -564,7 +569,7 @@ describe("session sharing policy", () => {
           updatedAt: 1,
           visibility: "read-only",
           category: "Personal",
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
 
@@ -590,7 +595,7 @@ describe("session sharing policy", () => {
           sessionId: "session-message-cut-target",
           updatedAt: 1,
           visibility: "read-only",
-          createdActor: { type: "human", id: "owner" },
+          createdActor: { type: "human", source: "profile", id: "owner" },
         },
       );
       const context = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
@@ -639,7 +644,7 @@ describe("session sharing policy", () => {
           updatedAt: 1,
           visibility: "read-only",
           category: "Race",
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
 
@@ -670,7 +675,7 @@ describe("session sharing policy", () => {
           updatedAt: 1,
           visibility: "read-only",
           category: "Projects",
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
       const viewer = client({ user: "viewer@example.com" });
@@ -777,12 +782,7 @@ describe("session sharing policy", () => {
   it("uses the landed createdActor contract and hides drafts from other identified operators", () => {
     const owner = client({ user: "owner@example.com" });
     const viewer = client({ user: "viewer@example.com" });
-    const entry = {
-      sessionId: "session-main",
-      updatedAt: 1,
-      visibility: "draft" as const,
-      createdActor: { type: "human" as const, id: "owner@example.com", label: "Owner" },
-    };
+    const entry = target({ type: "human", id: "owner@example.com", label: "Owner" }).entry;
     expect(isListed(owner, "main", entry)).toBe(true);
     expect(isListed(viewer, "main", entry)).toBe(false);
   });
@@ -792,11 +792,10 @@ describe("session sharing policy", () => {
       const sessionKey = "agent:main:dashboard:incognito-private";
       const sessionAlias = "dashboard:incognito-private";
       const entry = {
+        ...target({ type: "human", id: "owner@example.com" }).entry,
         sessionId: "session-incognito",
-        updatedAt: 1,
         visibility: "shared" as const,
         incognito: true as const,
-        createdActor: { type: "human" as const, id: "owner@example.com" },
       };
       await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
       const owner = client({ user: "owner@example.com" });
@@ -884,7 +883,7 @@ describe("session sharing policy", () => {
           sessionId: "session-work-global",
           updatedAt: 1,
           visibility: "read-only",
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
       await upsertSessionEntryCore(
@@ -965,7 +964,7 @@ describe("session sharing policy", () => {
         {
           sessionId: "session-suggestions",
           updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
+          createdActor: { type: "human", source: "profile", id: "owner" },
           visibility: "suggest",
         },
       );
@@ -1010,7 +1009,7 @@ describe("session sharing policy", () => {
         {
           sessionId: "session-draft",
           updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
+          createdActor: { type: "human", source: "profile", id: "owner" },
           visibility: "draft",
         },
       );

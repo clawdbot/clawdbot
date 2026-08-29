@@ -537,7 +537,7 @@ function buildSessionsListResult(params: {
   // the requested agent when scoped, otherwise the legacy compatibility agent.
   // Legacy plain-array catalogs (direct listSessionsFromStore callers) pass through
   // unchanged; per-agent maps resolve by the same identity.
-  const defaultsCatalog =
+  const preparedDefaultsCatalog =
     params.modelCatalog instanceof Map
       ? params.modelCatalog.get(
           params.agentId
@@ -546,7 +546,9 @@ function buildSessionsListResult(params: {
                 tryResolveLegacyCompatibilityAgentId(params.cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
               ),
         )
-      : params.modelCatalog;
+      : undefined;
+  const defaultsCatalog =
+    params.modelCatalog instanceof Map ? preparedDefaultsCatalog?.entries : params.modelCatalog;
   return {
     ts: list.now,
     path: list.storePath,
@@ -568,6 +570,7 @@ function buildSessionsListResult(params: {
     defaults: getSessionDefaults(params.cfg, defaultsCatalog, {
       ...(params.agentId ? { agentId: params.agentId } : {}),
       allowPluginNormalization: false,
+      providerPolicySource: preparedDefaultsCatalog?.pluginRegistry,
     }),
     sessions,
   };

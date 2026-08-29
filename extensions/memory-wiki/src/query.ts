@@ -2,9 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/api.js";
+import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { resolveDefaultAgentId, resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { getActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -942,7 +943,7 @@ function createWikiPageVisibilityFilter(params: {
   const scopedAgentId = normalizeLowercaseStringOrEmpty(
     params.agentId?.trim() ||
       (params.appConfig && sessionKey
-        ? resolveSessionAgentId({ sessionKey, config: params.appConfig })
+        ? resolveSessionAgentIdStrict({ sessionKey, config: params.appConfig })
         : undefined),
   );
   return (page) =>
@@ -1009,7 +1010,7 @@ function resolveActiveMemoryAgentId(params: {
     return params.agentId.trim();
   }
   if (params.agentSessionKey?.trim()) {
-    return resolveSessionAgentId({
+    return resolveSessionAgentIdStrict({
       sessionKey: params.agentSessionKey,
       config: params.appConfig,
     });
