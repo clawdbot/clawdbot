@@ -3222,10 +3222,64 @@ describe("scripts/crabbox-wrapper", () => {
     }
   });
 
+  it.each([
+    ["run", "--help"],
+    ["warmup", "--help"],
+    ["actions", "hydrate", "--help"],
+  ])("prints help without provider checks or sparse checkout preparation: %j", (...args) => {
+    const logPath = makeInvocationLog();
+    writeFileSync(logPath, "");
+    const syncRoot = path.join(path.dirname(logPath), "sync");
+    const result = runDefaultWrapper(args, {
+      ...cleanSparseSyncOptions,
+      configJson: managedBrokerConfig("aws"),
+      env: {
+        OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot,
+        OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: logPath,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    if (args[0] === "run") {
+      expect(result.stdout).toBe(`${defaultProviderHelp}${fakeRunValueOptionHelp}`);
+    } else {
+      expect(parseFakeCrabboxOutput(result).args).toEqual(args);
+    }
+    expect(existsSync(syncRoot)).toBe(false);
+    expect(
+      readInvocations(logPath).filter(([command]) => command === "config" || command === "doctor"),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["--label", "--help", "--", "echo ok"],
+    ["--", "--help"],
+    ["node", "--help"],
+  ])("keeps provider gates when help belongs to the run payload: %j", (...payload) => {
+    const result = runDefaultWrapper(["run", "--provider", "aws", ...payload], {
+      configJson: directBrokerConfig("aws"),
+      env: { OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS: "aws" },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=aws failed readiness for OpenClaw proof");
+  });
+
   it("keeps unsupported provider selections rejected", () => {
     const result = runDefaultWrapper(["run", "--provider", "bogus", "--", "echo ok"]);
 
     expect(result.status).toBe(2);
+    expect(result.stderr).toContain("selected binary does not advertise provider bogus");
+  });
+
+  it("does not bypass preparation for a help alias containing a remote payload", () => {
+    const result = runDefaultWrapper(["help", "run", "--", "echo ok"], {
+      configJson: managedBrokerConfig("bogus"),
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
     expect(result.stderr).toContain("selected binary does not advertise provider bogus");
   });
 

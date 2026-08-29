@@ -3840,6 +3840,31 @@ if (
   process.exit(2);
 }
 
+// Help must not acquire provider state or materialize a sparse checkout. Only
+// run's parsed option prefix counts; remote arguments and flag values stay gated.
+// Upstream's `help <command> ...` alias appends --help, so extra payload is not safe.
+const helpFlags = new Set(["--help", "-h"]);
+const runOptions = args[0] === "run" ? parseRunInvocation(help.text, args).options : null;
+if (
+  helpFlags.has(args[0] ?? "") ||
+  helpFlags.has(args[userArgStart] ?? "") ||
+  (args[0] === "help" && args.length <= 2) ||
+  (["run", "warmup"].includes(args[0] ?? "") && args[1] === "help") ||
+  runOptions?.has("help") ||
+  runOptions?.has("h")
+) {
+  const invocation = spawnInvocation(binary, args, process.env, process.platform);
+  const result = spawnSync(invocation.command, invocation.args, {
+    cwd: repoRoot,
+    stdio: "inherit",
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  });
+  if (result.error) {
+    console.error(`[crabbox] ${result.error.message}`);
+  }
+  process.exit(result.status ?? 1);
+}
+
 const providerSelection = selectedProvider(args, providers, version.text);
 if (providerSelection.error) {
   console.error(`[crabbox] ${providerSelection.error}`);
