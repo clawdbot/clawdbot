@@ -23,7 +23,7 @@ openclaw doctor
     openclaw doctor --yes
     ```
 
-    Accept defaults without prompting (including restart/service/sandbox repair steps when applicable).
+    Accept default non-service repairs without prompting. Gateway service definition rewrites still require interactive confirmation.
 
   </Tab>
   <Tab title="--fix">
@@ -31,7 +31,7 @@ openclaw doctor
     openclaw doctor --fix
     ```
 
-    Apply recommended repairs without prompting (`--repair` is an alias).
+    Apply recommended non-service repairs without prompting (`--repair` is an alias). Gateway service definition rewrites still require interactive confirmation.
 
   </Tab>
   <Tab title="--lint">
