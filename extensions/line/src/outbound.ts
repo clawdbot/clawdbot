@@ -1,5 +1,8 @@
 import type { messagingApi } from "@line/bot-sdk";
-import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 // Line plugin module implements outbound behavior.
 import {
   defineChannelMessageAdapter,
@@ -73,7 +76,9 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       try {
         result = await resultPromise;
       } catch (error) {
-        const retryable = resolveLineNonDispatchRetryable(error);
+        const retryable = isChannelPartialDeliveryError(error)
+          ? undefined
+          : resolveLineNonDispatchRetryable(error);
         // Nothing has been accepted yet for this payload, so a LINE client error
         // proves the whole delivery was rejected rather than left ambiguous.
         // Once a send has landed the failure is partial and keeps its own shape.

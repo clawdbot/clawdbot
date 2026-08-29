@@ -1,7 +1,10 @@
 // Line tests cover channel.sendPayload plugin behavior.
 import { HTTPFetchError } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
@@ -894,6 +897,32 @@ describe("line outbound sendPayload", () => {
       retryable,
       cause: rejection,
     });
+  });
+
+  it("preserves partial delivery evidence with a nested LINE rejection", async () => {
+    const { runtime, mocks } = createRuntime();
+    const rejection = new HTTPFetchError("400 - provider rejection", {
+      status: 400,
+      statusText: "provider rejection",
+      headers: new Headers(),
+      body: "provider rejection",
+    });
+    const partial = createChannelPartialDeliveryError(rejection, {
+      messageIds: ["accepted-first"],
+      visibleReplySent: true,
+    });
+    mocks.pushMessageLine.mockRejectedValueOnce(partial);
+    setLineRuntime(runtime);
+
+    await expect(
+      lineOutboundAdapter.sendPayload!({
+        to: "line:user:U123",
+        text: "hello",
+        payload: { text: "hello" },
+        accountId: "default",
+        cfg: { channels: { line: {} } } as OpenClawConfig,
+      }),
+    ).rejects.toBe(partial);
   });
 
   it("rejects insecure generic media before quick-reply batch sends", async () => {
