@@ -65,7 +65,9 @@ async function createStartupFailureFixture(
       'const stillContended = mode === "contention" && Date.now() - Number(fs.readFileSync(startedAtPath, "utf8")) < 750;',
       'if (mode === "persistent" || (mode === "transient" && attempt === 1) || stillContended) {',
       "  console.error(`Error: failed to initialize sqlite state runtime under ${codexHome}: failed to initialize state runtime at ${codexHome}`);",
-      '  if (mode === "persistent") setTimeout(() => { process.exitCode = 1; }, 50);',
+      // Keep the persistent fixture alive through process registration so this
+      // case reaches the retry owner; immediate-exit registration is covered above.
+      '  if (mode === "persistent") setTimeout(() => { process.exitCode = 1; }, 1_000);',
       "  else process.exitCode = 1;",
       "} else {",
       "  const lines = readline.createInterface({ input: process.stdin });",
