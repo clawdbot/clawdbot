@@ -5,9 +5,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import { clearLiveCatalogCacheForTests } from "../plugin-sdk/provider-catalog-shared.js";
+import { loadBundledPluginPublicSurface } from "../plugin-sdk/test-helpers/public-surface-loader.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { OpenClawPluginDefinition, ProviderPlugin } from "../plugins/types.js";
-import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
@@ -27,13 +27,9 @@ vi.mock("../plugins/provider-discovery.runtime.js", () => ({
 describe("registered Ollama catalog SecretRef ownership", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeAll(async () => {
-    const { default: plugin } = (await import(
-      resolveRelativeBundledPluginPublicModuleId({
-        fromModuleUrl: import.meta.url,
-        pluginId: "ollama",
-        artifactBasename: "index.js",
-      })
-    )) as { default: OpenClawPluginDefinition };
+    const { default: plugin } = await loadBundledPluginPublicSurface<{
+      default: OpenClawPluginDefinition;
+    }>({ pluginId: "ollama", artifactBasename: "index.js" });
     expectDefined(
       plugin.register,
       "Ollama public register",
