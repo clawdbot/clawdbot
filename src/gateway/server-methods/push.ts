@@ -31,8 +31,9 @@ import {
   resolveEffectiveWebPushPreferences,
 } from "../../infra/push-web-preferences.js";
 import {
+  WebPushSubscriptionBindingError,
   broadcastWebPush,
-  clearWebPushSubscriptionByEndpoint,
+  clearBoundWebPushSubscription,
   findBoundWebPushSubscriptionByEndpoint,
   registerWebPushSubscription,
   resolveVapidKeys,
@@ -41,7 +42,7 @@ import {
 import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
 import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { respondUnavailableOnThrow } from "./nodes.helpers.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers, GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function hasValidWebPushQuietHoursTimeZone(preferences: {
@@ -57,6 +58,41 @@ function hasValidWebPushQuietHoursTimeZone(preferences: {
   } catch {
     return false;
   }
+}
+
+function authorizeWebPushSubscription(
+  endpoint: string,
+  { client, respond }: Pick<GatewayRequestHandlerOptions, "client" | "respond">,
+) {
+  const deviceId = normalizeOptionalString(client?.connect.device?.id);
+  const subscription = findBoundWebPushSubscriptionByEndpoint({ endpoint });
+  if (!deviceId || !subscription || subscription.deviceId !== deviceId) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this device"),
+    );
+    return undefined;
+  }
+  const currentProfileId = client?.authenticatedUserProfile?.profileId
+    ? resolveUserProfileId(client.authenticatedUserProfile.profileId)
+    : undefined;
+  const subscriptionProfileId = subscription.userProfileId
+    ? resolveUserProfileId(subscription.userProfileId)
+    : undefined;
+  if (
+    (subscription.userProfileId && !subscriptionProfileId) ||
+    (client?.authenticatedUserProfile?.profileId && !currentProfileId) ||
+    (subscriptionProfileId ?? null) !== (currentProfileId ?? null)
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this user"),
+    );
+    return undefined;
+  }
+  return { subscription, currentProfileId };
 }
 
 export const pushHandlers: GatewayRequestHandlers = {
@@ -197,16 +233,23 @@ export const pushHandlers: GatewayRequestHandlers = {
     }
 
     await respondUnavailableOnThrow(respond, async () => {
-      const subscription = await registerWebPushSubscription({
-        endpoint: params.endpoint,
-        keys: params.keys,
-        binding: { deviceId, userProfileId: userProfileId ?? null },
-      });
-      respond(true, { subscriptionId: subscription.subscriptionId }, undefined);
+      try {
+        const subscription = await registerWebPushSubscription({
+          endpoint: params.endpoint,
+          keys: params.keys,
+          binding: { deviceId, userProfileId: userProfileId ?? null },
+        });
+        respond(true, { subscriptionId: subscription.subscriptionId }, undefined);
+      } catch (error) {
+        if (!(error instanceof WebPushSubscriptionBindingError)) {
+          throw error;
+        }
+        respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+      }
     });
   },
 
-  "push.web.unsubscribe": async ({ params, respond }) => {
+  "push.web.unsubscribe": async ({ params, respond, client }) => {
     if (
       !assertValidParams(params, validateWebPushUnsubscribeParams, "push.web.unsubscribe", respond)
     ) {
@@ -214,7 +257,20 @@ export const pushHandlers: GatewayRequestHandlers = {
     }
 
     await respondUnavailableOnThrow(respond, async () => {
-      const removed = await clearWebPushSubscriptionByEndpoint(params.endpoint);
+      const authorized = authorizeWebPushSubscription(params.endpoint, { client, respond });
+      if (!authorized) {
+        return;
+      }
+      const { subscription } = authorized;
+      const removed = await clearBoundWebPushSubscription({
+        endpoint: params.endpoint,
+        expectedDeviceId: subscription.deviceId,
+        expectedUserProfileId: subscription.userProfileId,
+      });
+      if (!removed) {
+        respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, "subscription binding changed"));
+        return;
+      }
       respond(true, { removed }, undefined);
     });
   },
@@ -230,30 +286,11 @@ export const pushHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const deviceId = normalizeOptionalString(client?.connect.device?.id);
-    const subscription = findBoundWebPushSubscriptionByEndpoint({ endpoint: params.endpoint });
-    if (!deviceId || !subscription || subscription.deviceId !== deviceId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this device"),
-      );
+    const authorized = authorizeWebPushSubscription(params.endpoint, { client, respond });
+    if (!authorized) {
       return;
     }
-    const currentProfileId = client?.authenticatedUserProfile?.profileId
-      ? resolveUserProfileId(client.authenticatedUserProfile.profileId)
-      : undefined;
-    const subscriptionProfileId = subscription.userProfileId
-      ? resolveUserProfileId(subscription.userProfileId)
-      : undefined;
-    if ((subscriptionProfileId ?? null) !== (currentProfileId ?? null)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this user"),
-      );
-      return;
-    }
+    const { subscription, currentProfileId } = authorized;
     const storedUser = currentProfileId
       ? getUserPreferences(currentProfileId, [WEB_PUSH_USER_PREFERENCES_KEY])[
           WEB_PUSH_USER_PREFERENCES_KEY
@@ -286,30 +323,11 @@ export const pushHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const deviceId = normalizeOptionalString(client?.connect.device?.id);
-    const subscription = findBoundWebPushSubscriptionByEndpoint({ endpoint: params.endpoint });
-    if (!deviceId || !subscription || subscription.deviceId !== deviceId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this device"),
-      );
+    const authorized = authorizeWebPushSubscription(params.endpoint, { client, respond });
+    if (!authorized) {
       return;
     }
-    const currentProfileId = client?.authenticatedUserProfile?.profileId
-      ? resolveUserProfileId(client.authenticatedUserProfile.profileId)
-      : undefined;
-    const subscriptionProfileId = subscription.userProfileId
-      ? resolveUserProfileId(subscription.userProfileId)
-      : undefined;
-    if ((subscriptionProfileId ?? null) !== (currentProfileId ?? null)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this user"),
-      );
-      return;
-    }
+    const { subscription, currentProfileId } = authorized;
     if (!hasValidWebPushQuietHoursTimeZone(params.preferences)) {
       respond(
         false,
@@ -362,7 +380,7 @@ export const pushHandlers: GatewayRequestHandlers = {
     const updated = setWebPushSubscriptionPreferences({
       endpoint: params.endpoint,
       preferences,
-      expectedDeviceId: deviceId,
+      expectedDeviceId: subscription.deviceId,
       expectedUserProfileId: subscription.userProfileId,
     });
     if (!updated) {

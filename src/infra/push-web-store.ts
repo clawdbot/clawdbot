@@ -490,6 +490,8 @@ export function listTerminalWebPushApprovalDeliveryIds(params: {
   };
 }
 
+export class WebPushSubscriptionBindingError extends Error {}
+
 /** Reread the endpoint row inside the write transaction before creating or updating it. */
 export function upsertWebPushSubscription(params: {
   endpointHash: string;
@@ -532,6 +534,17 @@ export function upsertWebPushSubscription(params: {
       (existingRow.device_id !== row.device_id ||
         existingRow.user_profile_id !== row.user_profile_id),
     );
+    // Reconnect/profile handoff may rebind the same browser subscription, but
+    // knowing its endpoint alone must not permit replacing its owner or keys.
+    if (
+      bindingChanged &&
+      existingRow &&
+      (existingRow.p256dh !== params.keys.p256dh || existingRow.auth !== params.keys.auth)
+    ) {
+      throw new WebPushSubscriptionBindingError(
+        "existing browser subscription keys required; reconnect from the owning browser",
+      );
+    }
     executeSqliteQuerySync(
       db,
       stateDb
@@ -554,9 +567,11 @@ export function upsertWebPushSubscription(params: {
   }, webPushStateDatabaseOptions(params.stateDir));
 }
 
-export function deleteWebPushSubscriptionByEndpoint(params: {
+export function deleteBoundWebPushSubscription(params: {
   endpointHash: string;
   endpoint: string;
+  expectedDeviceId: string;
+  expectedUserProfileId: string | null;
   stateDir?: string;
 }): boolean {
   ensureWebPushSubscriptionBindingSchema(params.stateDir);
@@ -566,7 +581,13 @@ export function deleteWebPushSubscriptionByEndpoint(params: {
       getNodeSqliteKysely<WebPushDatabase>(db)
         .deleteFrom("web_push_subscriptions")
         .where("endpoint_hash", "=", params.endpointHash)
-        .where("endpoint", "=", params.endpoint),
+        .where("endpoint", "=", params.endpoint)
+        .where("device_id", "=", params.expectedDeviceId)
+        .where(
+          "user_profile_id",
+          params.expectedUserProfileId === null ? "is" : "=",
+          params.expectedUserProfileId,
+        ),
     );
     return Number(result.numAffectedRows ?? 0) > 0;
   }, webPushStateDatabaseOptions(params.stateDir));

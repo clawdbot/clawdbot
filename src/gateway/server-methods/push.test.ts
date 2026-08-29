@@ -4,6 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { pushHandlers } from "./push.js";
 
 const mocks = vi.hoisted(() => ({
@@ -25,8 +26,9 @@ vi.mock("../../infra/push-apns.js", () => ({
 }));
 
 vi.mock("../../infra/push-web.js", () => ({
+  WebPushSubscriptionBindingError: class extends Error {},
   broadcastWebPush: vi.fn(),
-  clearWebPushSubscriptionByEndpoint: vi.fn(),
+  clearBoundWebPushSubscription: vi.fn(),
   findBoundWebPushSubscriptionByEndpoint: vi.fn(),
   registerWebPushSubscription: vi.fn(),
   resolveVapidKeys: vi.fn(),
@@ -54,6 +56,7 @@ import {
 } from "../../infra/push-apns.js";
 import {
   broadcastWebPush,
+  clearBoundWebPushSubscription,
   findBoundWebPushSubscriptionByEndpoint,
   registerWebPushSubscription,
   setWebPushSubscriptionPreferences,
@@ -196,10 +199,10 @@ function createWebPushSubscribeInvokeParams(options?: {
   };
 }
 
-function createWebPushPreferencesInvokeParams(
-  method: "push.web.preferences.get" | "push.web.preferences.set",
+function createBoundWebPushInvokeParams(
+  method: "push.web.preferences.get" | "push.web.preferences.set" | "push.web.unsubscribe",
   params: Record<string, unknown>,
-  options: { userProfileId?: string } = {},
+  options: { deviceId?: string; userProfileId?: string } = {},
 ) {
   const respond = vi.fn();
   return {
@@ -213,7 +216,7 @@ function createWebPushPreferencesInvokeParams(
         respond: respond as never,
         context: { broadcastToConnIds: vi.fn() } as never,
         client: {
-          connect: { device: { id: "browser-device" } },
+          connect: { device: { id: options.deviceId ?? "browser-device" } },
           ...(options.userProfileId
             ? { authenticatedUserProfile: { profileId: options.userProfileId } }
             : {}),
@@ -564,8 +567,11 @@ describe("push.web.subscribe handler", () => {
   });
 });
 
-describe("push.web.preferences handlers", () => {
+describe("bound Web Push handlers", () => {
   beforeEach(() => {
+    vi.mocked(resolveUserProfileId).mockImplementation((profileId) => profileId);
+    vi.mocked(clearBoundWebPushSubscription).mockReset();
+    vi.mocked(clearBoundWebPushSubscription).mockResolvedValue(true);
     vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReset();
     vi.mocked(setWebPushSubscriptionPreferences).mockReset();
     vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReturnValue({
@@ -581,9 +587,53 @@ describe("push.web.preferences handlers", () => {
     vi.mocked(setWebPushSubscriptionPreferences).mockReturnValue(true);
   });
 
+  it.each([
+    "push.web.preferences.get",
+    "push.web.preferences.set",
+    "push.web.unsubscribe",
+  ] as const)(
+    "%s rejects a deleted profile instead of treating it as profileless",
+    async (method) => {
+      const subscription = findBoundWebPushSubscriptionByEndpoint({
+        endpoint: "https://push.example.test/subscription",
+      });
+      vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReturnValue({
+        ...expectDefined(subscription, "bound subscription fixture"),
+        userProfileId: "deleted-profile",
+      });
+      vi.mocked(resolveUserProfileId).mockReturnValue(undefined);
+      const { respond, invoke } = createBoundWebPushInvokeParams(method, {
+        endpoint: "https://push.example.test/subscription",
+        ...(method === "push.web.preferences.set"
+          ? { scope: "device", preferences: { enabled: true, label: "" } }
+          : {}),
+      });
+      await invoke();
+      expect(firstRespondCall(respond)?.[0]).toBe(false);
+      expect(firstRespondCall(respond)?.[2]?.code).toBe(ErrorCodes.FORBIDDEN);
+    },
+  );
+
+  it.each([{ deviceId: "other-device" }, { deviceId: "" }, { userProfileId: "other-profile" }])(
+    "rejects unsubscribe from a different owner: %j",
+    async (options) => {
+      const { respond, invoke } = createBoundWebPushInvokeParams(
+        "push.web.unsubscribe",
+        { endpoint: "https://push.example.test/subscription" },
+        options,
+      );
+
+      await invoke();
+
+      expect(firstRespondCall(respond)?.[0]).toBe(false);
+      expect(firstRespondCall(respond)?.[2]?.code).toBe(ErrorCodes.FORBIDDEN);
+      expect(clearBoundWebPushSubscription).not.toHaveBeenCalled();
+    },
+  );
+
   it("updates device preferences only while the subscription binding matches", async () => {
     const preferences = { enabled: false, label: "phone" };
-    const { respond, invoke } = createWebPushPreferencesInvokeParams("push.web.preferences.set", {
+    const { respond, invoke } = createBoundWebPushInvokeParams("push.web.preferences.set", {
       endpoint: "https://push.example.test/subscription",
       scope: "device",
       preferences,
@@ -602,7 +652,7 @@ describe("push.web.preferences handlers", () => {
 
   it("fails closed when the subscription binding changes during the update", async () => {
     vi.mocked(setWebPushSubscriptionPreferences).mockReturnValue(false);
-    const { respond, invoke } = createWebPushPreferencesInvokeParams("push.web.preferences.set", {
+    const { respond, invoke } = createBoundWebPushInvokeParams("push.web.preferences.set", {
       endpoint: "https://push.example.test/subscription",
       scope: "device",
       preferences: { enabled: true, label: "" },
@@ -656,7 +706,7 @@ describe("push.web.preferences handlers", () => {
                 timeZone: "Not/A_Time_Zone",
               },
             };
-      const { respond, invoke } = createWebPushPreferencesInvokeParams(
+      const { respond, invoke } = createBoundWebPushInvokeParams(
         "push.web.preferences.set",
         {
           endpoint: "https://push.example.test/subscription",

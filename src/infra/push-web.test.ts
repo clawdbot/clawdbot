@@ -30,7 +30,7 @@ import {
 } from "./push-web-store.js";
 import {
   broadcastWebPush,
-  clearWebPushSubscriptionByEndpoint,
+  clearBoundWebPushSubscription,
   prepareWebPushNotificationSender,
   registerWebPushSubscription,
   resolveVapidKeys,
@@ -366,7 +366,7 @@ describe("subscription CRUD", () => {
 
     await registerWebPushSubscription({
       endpoint,
-      keys: { p256dh: "rebound-p256dh", auth: "rebound-auth" },
+      keys: { p256dh: "refreshed-p256dh", auth: "refreshed-auth" },
       binding: { deviceId: "other-device", userProfileId: "profile-2" },
       baseDir: tmpDir,
     });
@@ -399,9 +399,73 @@ describe("subscription CRUD", () => {
   });
 
   it("clears only the matching endpoint", async () => {
-    await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
-    await expect(clearWebPushSubscriptionByEndpoint(endpoint, tmpDir)).resolves.toBe(true);
-    await expect(clearWebPushSubscriptionByEndpoint(endpoint, tmpDir)).resolves.toBe(false);
+    await registerWebPushSubscription({
+      endpoint,
+      keys,
+      binding: { deviceId: "browser-device", userProfileId: null },
+      baseDir: tmpDir,
+    });
+    const target = {
+      endpoint,
+      expectedDeviceId: "browser-device",
+      expectedUserProfileId: null,
+      baseDir: tmpDir,
+    };
+    await expect(clearBoundWebPushSubscription(target)).resolves.toBe(true);
+    await expect(clearBoundWebPushSubscription(target)).resolves.toBe(false);
+  });
+
+  it("rejects an endpoint-only ownership takeover without changing the subscription", async () => {
+    const original = await registerWebPushSubscription({
+      endpoint,
+      keys,
+      binding: { deviceId: "owner-device", userProfileId: "owner-profile" },
+      baseDir: tmpDir,
+    });
+    await expect(
+      registerWebPushSubscription({
+        endpoint,
+        keys: { p256dh: "forged-p256dh", auth: "forged-auth" },
+        binding: { deviceId: "other-device", userProfileId: "other-profile" },
+        baseDir: tmpDir,
+      }),
+    ).rejects.toThrow("existing browser subscription keys required");
+    expect(listWebPushSubscriptions(tmpDir)).toEqual([original]);
+  });
+
+  it.each([
+    { deviceId: "other-device", userProfileId: "owner-profile" },
+    { deviceId: "owner-device", userProfileId: "other-profile" },
+    { deviceId: "owner-device", userProfileId: null },
+  ])("fences a stale unsubscribe after rebinding to %j", async (binding) => {
+    await registerWebPushSubscription({
+      endpoint,
+      keys,
+      binding: { deviceId: "owner-device", userProfileId: "owner-profile" },
+      baseDir: tmpDir,
+    });
+    const observed = findBoundWebPushSubscriptionByEndpoint({ endpoint, stateDir: tmpDir });
+    expect(observed).not.toBeNull();
+    await registerWebPushSubscription({ endpoint, keys, binding, baseDir: tmpDir });
+    await expect(
+      clearBoundWebPushSubscription({
+        endpoint,
+        expectedDeviceId: "owner-device",
+        expectedUserProfileId: "owner-profile",
+        baseDir: tmpDir,
+      }),
+    ).resolves.toBe(false);
+    expect(findBoundWebPushSubscriptionByEndpoint({ endpoint, stateDir: tmpDir })).toMatchObject(
+      binding,
+    );
+    await expect(
+      clearBoundWebPushSubscription({
+        endpoint,
+        expectedDeviceId: binding.deviceId,
+        expectedUserProfileId: binding.userProfileId,
+        baseDir: tmpDir,
+      }),
+    ).resolves.toBe(true);
   });
 
   it("rejects invalid registration data", async () => {
@@ -454,9 +518,14 @@ describe("subscription CRUD", () => {
     await fs.mkdir(pushDir, { recursive: true });
     await fs.writeFile(claimPath, "{}", "utf8");
 
-    await expect(clearWebPushSubscriptionByEndpoint(endpoint, tmpDir)).rejects.toThrow(
-      "openclaw doctor --fix",
-    );
+    await expect(
+      clearBoundWebPushSubscription({
+        endpoint,
+        expectedDeviceId: "browser-device",
+        expectedUserProfileId: null,
+        baseDir: tmpDir,
+      }),
+    ).rejects.toThrow("openclaw doctor --fix");
     await expect(
       registerWebPushSubscription({
         endpoint: "https://push.example.com/new",
@@ -583,9 +652,14 @@ describe("approval delivery target persistence", () => {
       }),
     ).toBe(true);
 
-    await expect(clearWebPushSubscriptionByEndpoint(subscription.endpoint, tmpDir)).resolves.toBe(
-      true,
-    );
+    await expect(
+      clearBoundWebPushSubscription({
+        endpoint: subscription.endpoint,
+        expectedDeviceId: "device-removed",
+        expectedUserProfileId: "profile-removed",
+        baseDir: tmpDir,
+      }),
+    ).resolves.toBe(true);
     expect(listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).toEqual([]);
   });
 
@@ -626,7 +700,7 @@ describe("approval delivery target persistence", () => {
 
     const rebound = await registerWebPushSubscription({
       endpoint: original.endpoint,
-      keys: { p256dh: "rebound-p256dh", auth: "rebound-auth" },
+      keys: original.keys,
       binding: { deviceId: "device-rebound", userProfileId: "profile-rebound" },
       baseDir: tmpDir,
     });

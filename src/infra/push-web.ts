@@ -6,8 +6,9 @@ import { expectDefined, normalizeOptionalString } from "@openclaw/normalization-
 import { resolveStateDir } from "../config/paths.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
+  WebPushSubscriptionBindingError,
   createWebPushVapidKeyPair,
-  deleteWebPushSubscriptionByEndpoint,
+  deleteBoundWebPushSubscription,
   deleteWebPushSubscriptionIfCurrent,
   hashWebPushEndpoint,
   insertVapidKeyPairIfAbsent,
@@ -45,6 +46,7 @@ type WebPushDeliveryOptions = Pick<
 >;
 
 export {
+  WebPushSubscriptionBindingError,
   findBoundWebPushSubscriptionByEndpoint,
   listBoundWebPushSubscriptions,
   setWebPushSubscriptionPreferences,
@@ -175,15 +177,17 @@ export async function registerWebPushSubscription(
   });
 }
 
-export async function clearWebPushSubscriptionByEndpoint(
-  endpoint: string,
-  baseDir?: string,
-): Promise<boolean> {
-  assertLegacyWebPushMigrationComplete(baseDir);
-  return deleteWebPushSubscriptionByEndpoint({
-    endpointHash: hashWebPushEndpoint(endpoint),
-    endpoint,
-    stateDir: baseDir,
+export async function clearBoundWebPushSubscription(params: {
+  endpoint: string;
+  expectedDeviceId: string;
+  expectedUserProfileId: string | null;
+  baseDir?: string;
+}): Promise<boolean> {
+  assertLegacyWebPushMigrationComplete(params.baseDir);
+  return deleteBoundWebPushSubscription({
+    ...params,
+    endpointHash: hashWebPushEndpoint(params.endpoint),
+    stateDir: params.baseDir,
   });
 }
 

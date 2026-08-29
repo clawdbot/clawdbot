@@ -56,7 +56,7 @@ The detail levels are:
 
 On iPhone and iPad, Web Push is available only after installing the Control UI with **Share → Add to Home Screen** and opening that installed app. A normal Safari tab remains usable for the Control UI, but the Notifications page reports the install requirement and does not attempt to dereference an unavailable `PushManager`.
 
-**Send test** asks the Gateway to push a test message to every registered browser subscription. Tests intentionally verify transport only; approval requests are targeted to authorized device bindings. **Unsubscribe** removes the current browser's endpoint from the Gateway, then unsubscribes locally.
+**Send test** asks the Gateway to push a test message to every registered browser subscription. Tests intentionally verify transport only; approval requests are targeted to authorized device bindings. **Unsubscribe** removes the current browser's endpoint from the Gateway only when its paired device and user profile still own the subscription, then unsubscribes locally. Reconnecting under another profile can transfer the browser subscription only with its existing subscription keys; knowing an endpoint alone cannot change its owner or remove it.
 
 The Gateway sends Web Push directly to the browser vendor's push service. This works with a self-hosted Gateway and does not use the OpenClaw-hosted iOS relay.
 
