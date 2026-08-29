@@ -20,6 +20,7 @@ type WorkflowStep = {
 };
 
 type PluginPrereleaseMatrixRow = {
+  check_name: string;
   extensions_csv: string;
   includePatterns: string[];
   task: string;
@@ -40,7 +41,7 @@ function listTelegramRunnableTestFiles() {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function runPluginPrereleaseManifest() {
+function runPluginPrereleaseManifest(cwd = process.cwd()) {
   const workflow = readPluginPrereleaseWorkflow();
   const manifestStep = workflow.jobs.preflight.steps.find(
     (step: WorkflowStep) => step.name === "Build plugin prerelease manifest",
@@ -66,7 +67,7 @@ function runPluginPrereleaseManifest() {
     };
     delete env.OPENCLAW_VITEST_INCLUDE_FILE;
     const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module"], {
-      cwd: process.cwd(),
+      cwd,
       encoding: "utf8",
       env,
       input: source,
@@ -90,6 +91,24 @@ function runPluginPrereleaseManifest() {
 }
 
 describe("plugin prerelease Telegram extension shards", () => {
+  it("preserves target-native batches when a frozen planner has no job splitter", () => {
+    const fixtureRoot = path.resolve("test/fixtures/plugin-prerelease-frozen-target");
+    const matrix = runPluginPrereleaseManifest(fixtureRoot);
+    const batchRows = matrix.include.filter((row) => row.task === "extensions-batch");
+
+    expect(matrix.include.every((row) => row.task !== "extension-file-shard")).toBe(true);
+    expect(batchRows.map((row) => row.check_name)).toEqual([
+      "checks-node-extensions-shard-1",
+      "checks-node-extensions-shard-2",
+    ]);
+    expect(batchRows.map((row) => row.extensions_csv)).toEqual(["alpha,telegram", "zeta"]);
+    expect(
+      batchRows
+        .flatMap((row) => row.extensions_csv.split(","))
+        .filter((extensionId) => extensionId === "telegram"),
+    ).toEqual(["telegram"]);
+  });
+
   it("keeps Telegram out of balanced batches and covers every extension exactly once", () => {
     const allShards = createExtensionTestShards({
       cwd: process.cwd(),
