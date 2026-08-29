@@ -1,3 +1,4 @@
+import assertStrict from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 // Assertions for upgrade-survivor E2E scenarios.
@@ -107,14 +108,6 @@ function readUpdateJson(file, observationRoot) {
 
 function isCapabilityConsentReason(value) {
   return typeof value === "string" && value.includes("requires capability consent");
-}
-
-function isPostPluginValidationWarning(warning) {
-  return (
-    warning?.reason === "Config remained invalid after updated plugin migrations." &&
-    warning?.message ===
-      "Post-update plugin migration did not produce a valid config; refusing to restart."
-  );
 }
 
 function resolveHomePath(value) {
@@ -1176,23 +1169,9 @@ function assertPluginArtifactConsent(
   }
 }
 
-function assertRecoveredPluginInstalls([file, expectedVersion, observationRoot]) {
-  assertRecoverableUpdateJson([file, expectedVersion, observationRoot]);
-  const plugins = readUpdateJson(file, observationRoot).postUpdate.plugins;
-  const ids = new Set(
-    plugins.npm.outcomes
-      .filter((outcome) => outcome.status === "error")
-      .map((outcome) => outcome.pluginId),
-  );
-  for (const reason of [
-    ...plugins.warnings.map((warning) => warning.reason).filter(isCapabilityConsentReason),
-    ...plugins.sync.errors,
-  ]) {
-    const match = /^Plugin "([^"\n]+)" requires capability consent\./u.exec(reason);
-    assert(match, "capability consent report omitted its plugin identity");
-    ids.add(match[1]);
-  }
-  assert(ids.size > 0, "recovered update reported no plugin identities");
+function assertRecoveredPluginInstalls(args) {
+  const [, expectedVersion] = args;
+  const ids = assertRecoverableUpdateJson(args);
   const records = readInstalledPluginIndex().installRecords ?? {};
   for (const pluginId of ids) {
     const record = records[pluginId];
@@ -1255,86 +1234,75 @@ function assertStatusJson([file]) {
   assert(/running|connected|ok|ready/u.test(text), "gateway status did not report a healthy state");
 }
 
-function assertRecoverableUpdateJson([file, expectedVersion, observationRoot]) {
-  assert(file && expectedVersion, "assert-recoverable-update-json requires a path and version");
+function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, baselineVersion]) {
   const result = readUpdateJson(file, observationRoot);
-  const steps = result?.steps;
-  const plugins = result?.postUpdate?.plugins;
-  const warningOnly = result?.status === "ok" && plugins?.status === "warning";
-  assert(
-    warningOnly || result?.status === "error",
-    "recoverable update did not report consent failure",
-  );
-  assert(result?.mode === "npm", `recoverable update mode changed: ${String(result?.mode)}`);
-  assert(
-    warningOnly ? result?.reason === undefined : result?.reason === "post-update-plugins",
-    `update failed before plugin convergence: ${String(result?.reason)}`,
-  );
-  assert(
-    result?.after?.version === expectedVersion,
-    `candidate version was not installed: ${String(result?.after?.version)}`,
-  );
-  assert(Array.isArray(steps) && steps.length > 0, "recoverable update reported no steps");
-  for (const stepName of warningOnly
+  assertStrict.ok(baselineVersion, "Expected baseline version is required.");
+  assertStrict.ok(result.status === "error" || result.status === "ok");
+  assertStrict.equal(result.mode, "npm");
+  assertStrict.equal(result.reason, result.status === "error" ? "post-update-plugins" : undefined);
+  assertStrict.equal(result.before?.version, baselineVersion);
+  assertStrict.equal(result.after?.version, expectedVersion);
+  assertStrict.ok(result.steps?.length > 0);
+  assertStrict.ok(result.steps.every((step) => step.exitCode === 0));
+  // April warning-only updaters predate the separately reported install swap.
+  for (const name of result.status === "ok"
     ? ["global update"]
     : ["global update", "global install swap"]) {
-    const step = steps.find((entry) => entry?.name === stepName);
-    assert(step?.exitCode === 0, `${stepName} did not complete successfully`);
+    assertStrict.ok(result.steps.some((step) => step.name === name));
   }
-  assert(
-    steps.every((step) => step?.exitCode === 0),
-    "recoverable update contained a failed core step",
+  const plugins = result.postUpdate?.plugins;
+  assertStrict.equal(plugins?.status, result.status === "error" ? "error" : "warning");
+  assertStrict.equal(
+    plugins?.reason,
+    result.status === "error" ? "post-plugin-doctor-invalid-config" : undefined,
   );
-  assert(
-    warningOnly || plugins?.status === "error",
-    "recoverable update did not fail plugin convergence",
-  );
-  assert(
-    warningOnly
-      ? plugins?.reason === undefined
-      : plugins?.reason === "post-plugin-doctor-invalid-config",
-    `unexpected plugin convergence failure: ${String(plugins?.reason)}`,
-  );
-  const syncErrors = plugins?.sync?.errors;
-  const npmOutcomes = plugins?.npm?.outcomes;
-  const integrityDrifts = plugins?.integrityDrifts;
-  assert(
-    Array.isArray(plugins?.warnings) &&
-      // The validation owner adds this warning to a stranded consent update.
-      // This admits doctor only; run.sh proves migrated config/state before consent.
-      plugins.warnings.every(
-        (warning) =>
-          isCapabilityConsentReason(warning?.reason) ||
-          (!warningOnly && isPostPluginValidationWarning(warning)),
-      ),
-    "recoverable update contained a non-consent plugin warning",
-  );
-  assert(
-    Array.isArray(syncErrors) && syncErrors.every(isCapabilityConsentReason),
-    "recoverable update contained a non-consent plugin synchronization error",
-  );
-  assert(
-    Array.isArray(npmOutcomes) &&
-      npmOutcomes.every(
-        (outcome) =>
-          outcome?.status !== "error" || outcome?.code === "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
-      ),
-    "recoverable update contained a non-consent failed plugin update",
-  );
-  assert(
-    Array.isArray(integrityDrifts) && integrityDrifts.length === 0,
-    "recoverable update contained a plugin integrity drift",
-  );
-  assert(
-    (Array.isArray(plugins?.warnings) &&
-      plugins.warnings.some((warning) => isCapabilityConsentReason(warning?.reason))) ||
-      syncErrors.some(isCapabilityConsentReason) ||
-      npmOutcomes.some(
-        (outcome) =>
-          outcome?.status === "error" && outcome?.code === "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
-      ),
-    "plugin convergence failure did not require capability consent",
-  );
+  assertStrict.deepEqual(plugins.integrityDrifts, []);
+  // These are the reviewed packages in the base and configured-plugin recipes.
+  // Any other plugin or failure needs investigation before accepting it.
+  const reviewed = new Set(["codex", "discord", "whatsapp", "matrix", "brave"]);
+  const denied = new Set();
+  assertStrict.ok(Array.isArray(plugins.npm?.outcomes));
+  for (const outcome of plugins.npm.outcomes) {
+    assertStrict.ok(reviewed.has(outcome.pluginId), "Unexpected plugin update outcome.");
+    if (outcome.status === "error") {
+      assertStrict.equal(outcome.code, "PLUGIN_CAPABILITY_CONSENT_REQUIRED");
+      denied.add(outcome.pluginId);
+    } else {
+      assertStrict.ok(outcome.status === "updated" || outcome.status === "unchanged");
+      assertStrict.equal(outcome.nextVersion, expectedVersion);
+    }
+  }
+  assertStrict.ok(Array.isArray(plugins.sync?.errors));
+  assertStrict.ok(Array.isArray(plugins.warnings));
+  for (const warning of [
+    ...plugins.warnings,
+    ...plugins.sync.errors.map((reason) => ({ reason, message: reason })),
+  ]) {
+    if (warning.reason === "Config remained invalid after updated plugin migrations.") {
+      assertStrict.equal(result.status, "error");
+      assertStrict.equal(
+        warning.message,
+        "Post-update plugin migration did not produce a valid config; refusing to restart.",
+      );
+      continue;
+    }
+    const reason = warning.reason.replace(
+      /^Kept installed plugin "([^"]+)"; replacement deferred\. (?=Plugin "\1")/,
+      "",
+    );
+    const match =
+      /^Plugin "([^"]+)" requires capability consent(?:\. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry\.|; rerun with --accept-capabilities\.)$/.exec(
+        reason,
+      );
+    assertStrict.ok(match && reviewed.has(match[1]), "Unexpected plugin convergence failure.");
+    assertStrict.ok(
+      warning.message.includes(warning.reason),
+      "Unexpected plugin convergence message.",
+    );
+    denied.add(match[1]);
+  }
+  assertStrict.ok(denied.size > 0, "No reviewed plugin requested capability consent.");
+  return denied;
 }
 
 function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {

@@ -1096,7 +1096,9 @@ update_candidate() {
     -u OPENCLAW_GATEWAY_PASSWORD
     -u OPENCLAW_ALLOW_ROOT
   )
-  if [ "$UPDATE_RESTART_MODE" = "manual" ]; then
+  # Historical updaters can restart before reporting denied capabilities.
+  # Prove migrations first; only the current updater performs the auth restart.
+  if [ "$after_repair" != "1" ] || [ "$UPDATE_RESTART_MODE" = "manual" ]; then
     update_args+=(--no-restart)
   else
     update_start="$(node -e "process.stdout.write(String(Date.now()))")"
@@ -1111,20 +1113,19 @@ update_candidate() {
   local update_status=0
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$update_json" 2>"$update_err" || update_status=$?
   if [ "$after_repair" != "1" ] && [ "$update_status" -le 1 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-    assert-recoverable-update-json "$update_json" "$candidate_version" "$observation_root" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
+    assert-recoverable-update-json "$update_json" "$candidate_version" "$observation_root" "$baseline_version" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
     update_repair_required="1"
   elif [ "$update_status" -eq 0 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-successful-update-json "$update_json" "$candidate_version" "$observation_root"; then
-    if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    if [ "$after_repair" = "1" ] && [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
       update_end="$(node -e "process.stdout.write(String(Date.now()))")"
       update_restart_seconds=$(((update_end - update_start + 999) / 1000))
-      if [ "$after_repair" = "1" ]; then
-        # A successful code update may intentionally skip an unverifiable service.
-        # Require this invocation's actual replacement before claiming restart proof.
-        assert_update_restart_service_replaced "$previous_service_pid" "$previous_systemctl_lines" || return 1
+      # A successful code update may intentionally skip an unverifiable service.
+      # Require this invocation's actual replacement before claiming restart proof.
+      assert_update_restart_service_replaced "$previous_service_pid" "$previous_systemctl_lines" || return 1
+      update_restart_source="candidate-update"
+      if [ "$update_repair_required" = "1" ]; then
         update_restart_source="candidate-after-repair"
-      else
-        update_restart_source="baseline-update"
       fi
     fi
   else
@@ -1180,27 +1181,41 @@ run_doctor() {
 }
 
 repair_fixture_plugin_consent() {
-  [ "$update_repair_required" = "1" ] || return 0
-  # Migration assertions run first: explicit fixture consent must not conceal a
-  # broken doctor migration. The candidate owns staged-artifact acceptance.
-  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair \
-    --accept-capabilities --yes --no-restart --json >"$REPAIR_JSON" 2>"$ARTIFACT_ROOT/repair.err"; then
-    echo "openclaw update repair failed" >&2
-    openclaw_e2e_print_log "$ARTIFACT_ROOT/repair.err" >&2
-    openclaw_e2e_print_log "$REPAIR_JSON" >&2
-    return 1
+  if [ "$update_repair_required" = "1" ]; then
+    # Migration assertions run first: explicit fixture consent must not conceal a
+    # broken doctor migration. The candidate owns staged-artifact acceptance.
+    if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair \
+      --accept-capabilities --yes --no-restart --json >"$REPAIR_JSON" 2>"$ARTIFACT_ROOT/repair.err"; then
+      echo "openclaw update repair failed" >&2
+      openclaw_e2e_print_log "$ARTIFACT_ROOT/repair.err" >&2
+      openclaw_e2e_print_log "$REPAIR_JSON" >&2
+      return 1
+    fi
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-repair-json "$REPAIR_JSON"
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+      assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
+    assert_survival
   fi
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-repair-json "$REPAIR_JSON"
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-    assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root"
-  assert_survival
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     # Repair never restarts. Prove the candidate's automatic update handoff
     # separately; a manual service restart cannot substitute for that proof.
     phase recovery-update-restart update_candidate 1
     assert_survival
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-      assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root"
+    if [ "$update_repair_required" = "1" ]; then
+      node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+        assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
+    fi
+  fi
+  if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
+    local attempts=1
+    if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+      attempts=complete
+    elif [ "$update_repair_required" = "1" ]; then
+      attempts=2
+    fi
+    phase assert-prepublish-recovery-requests node \
+      "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
+      assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version" "$clawhub_security_mode" "$attempts"
   fi
 }
 
@@ -1386,9 +1401,13 @@ if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
   if configured_plugin_installs_enabled; then
     prepublish_package="@openclaw/matrix"
   fi
+  clawhub_request_attempts=1
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    clawhub_request_attempts=complete
+  fi
   phase assert-prepublish-requests node \
     "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
-    assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version" "$clawhub_security_mode"
+    assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version" "$clawhub_security_mode" "$clawhub_request_attempts"
 fi
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor

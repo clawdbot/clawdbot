@@ -17,6 +17,7 @@ const RECOVERABLE_UPDATE = {
   status: "error",
   mode: "npm",
   reason: "post-update-plugins",
+  before: { version: "2026.7.1-2" },
   after: { version: "2026.8.1" },
   steps: [
     { name: "global update", exitCode: 0 },
@@ -29,7 +30,12 @@ const RECOVERABLE_UPDATE = {
       changed: false,
       reason: "post-plugin-doctor-invalid-config",
       warnings: [
-        { reason: 'Plugin "discord" requires capability consent.' },
+        {
+          reason:
+            'Plugin "discord" requires capability consent. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry.',
+          message:
+            'Plugin "discord" requires capability consent. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry.',
+        },
         {
           reason: "Config remained invalid after updated plugin migrations.",
           message:
@@ -51,9 +57,19 @@ function runJsonTextAssertion(command: string, contents: string, ...args: string
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-json-"));
   const file = join(root, "result.json");
   writeFileSync(file, contents);
-  const result = spawnSync(process.execPath, [ASSERTIONS_PATH, command, file, ...args], {
-    encoding: "utf8",
-  });
+  const result = spawnSync(
+    process.execPath,
+    [
+      ASSERTIONS_PATH,
+      command,
+      file,
+      ...args,
+      ...(command === "assert-recoverable-update-json" ? ["", "2026.7.1-2"] : []),
+    ],
+    {
+      encoding: "utf8",
+    },
+  );
   rmSync(root, { force: true, recursive: true });
   return result;
 }
@@ -78,6 +94,7 @@ describe("upgrade recovery result assertions", () => {
     const core = {
       status: "ok",
       mode: "npm",
+      before: { version: "2026.7.1-2" },
       after: { version: "2026.8.1" },
       steps: [
         { name: "global update", exitCode: 0 },
@@ -117,7 +134,7 @@ describe("upgrade recovery result assertions", () => {
       writeJson(join(observationRoot, "diagnostics", "post-core.json"), value);
       return spawnSync(
         process.execPath,
-        [ASSERTIONS_PATH, command, resultFile, "2026.8.1", observationRoot],
+        [ASSERTIONS_PATH, command, resultFile, "2026.8.1", observationRoot, "2026.7.1-2"],
         { encoding: "utf8" },
       );
     };
@@ -223,7 +240,8 @@ describe("upgrade recovery result assertions", () => {
       runPrefixedJsonAssertion("assert-recoverable-update-json", RECOVERABLE_UPDATE, "2026.8.1")
         .status,
     ).toBe(0);
-    const consentError = 'Plugin "discord" requires capability consent.';
+    const consentError =
+      'Plugin "discord" requires capability consent. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry.';
     const consentOutcome = {
       pluginId: "discord",
       status: "error",
@@ -672,7 +690,8 @@ function assertCompanionPluginRecords(
           plugins: {
             ...RECOVERABLE_UPDATE.postUpdate.plugins,
             warnings: recoveryPluginIds.map((pluginId) => ({
-              reason: `Plugin "${pluginId}" requires capability consent.`,
+              reason: `Plugin "${pluginId}" requires capability consent. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry.`,
+              message: `Plugin "${pluginId}" requires capability consent. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry.`,
             })),
           },
         },
@@ -683,7 +702,7 @@ function assertCompanionPluginRecords(
       [
         ASSERTIONS_PATH,
         ...(recoveryPluginIds
-          ? ["assert-recovered-plugin-installs", updateFile, version]
+          ? ["assert-recovered-plugin-installs", updateFile, version, "", "2026.7.1-2"]
           : ["assert-companion-installs", version, capabilityConsentSupported ? "1" : "0"]),
       ],
       {
