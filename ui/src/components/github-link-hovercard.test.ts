@@ -141,6 +141,41 @@ describe("openclaw-github-link-hovercard-provider", () => {
     );
   });
 
+  it("counts a co-author whose avatar failed to inline into the overflow", async () => {
+    const avatar =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
+    const request = vi.fn().mockResolvedValue({
+      createdAt: "2026-07-04T05:03:47Z",
+      coAuthorCount: 5,
+      coAuthors: [
+        { login: "steipete", avatarDataUrl: avatar },
+        { login: "ada", avatarDataUrl: avatar },
+        // Avatar inlining is optional and can fail for one person.
+        { login: "mira" },
+      ],
+      kind: "pull",
+      login: "roboclaw-bot",
+      number: 131442,
+      owner: "OpenClaw",
+      repo: "OpenClaw",
+      state: "open",
+      title: "fix(ui): one row",
+      updatedAt: "2026-07-05T09:55:00Z",
+    });
+    const { anchor, provider } = createLink(
+      "https://github.com/openclaw/openclaw/pull/131442",
+      "#131442",
+    );
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+
+    const stack = document.querySelector<HTMLElement>(".github-link-hovercard__coauthors");
+    expect(stack?.querySelectorAll("img")).toHaveLength(2);
+    // Two faces plus "+3" accounts for all five; "+2" would drop the faceless one.
+    expect(stack?.querySelector(".github-link-hovercard__coauthors-more")?.textContent).toBe("+3");
+  });
+
   it("omits the co-author stack when a pull request has none", async () => {
     const request = vi.fn().mockResolvedValue({
       createdAt: "2026-07-04T05:03:47Z",

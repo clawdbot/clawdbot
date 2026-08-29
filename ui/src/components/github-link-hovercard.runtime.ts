@@ -163,12 +163,16 @@ function appendCoAuthors(author: HTMLElement, preview: GitHubPreview): void {
   }
   const stack = document.createElement("span");
   stack.className = "github-link-hovercard__coauthors";
+  let faces = 0;
   for (const coAuthor of coAuthors) {
     if (coAuthor.avatarDataUrl) {
       stack.append(coAuthorAvatarElement(coAuthor.avatarDataUrl));
+      faces += 1;
     }
   }
-  const hidden = Math.max(0, total - coAuthors.length);
+  // Counted from rendered faces, not fetched people: avatar inlining is optional,
+  // and a co-author with no face must fall into "+N" rather than disappear.
+  const hidden = Math.max(0, total - faces);
   if (hidden > 0) {
     const more = document.createElement("span");
     more.className = "github-link-hovercard__coauthors-more";
