@@ -160,6 +160,35 @@ describe("compileMemoryWikiVault", () => {
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toBe(indexBefore);
   });
 
+  it("serves an unchanged compiled cache without reading the vault", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "stable.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          sourceType: "chatgpt-export",
+          title: "Stable",
+        },
+        body: "# Stable\n\n## Auto Digest\n- First user line: cached\n",
+      }),
+      "utf8",
+    );
+    await compileMemoryWikiVault(config);
+    const readFile = vi.spyOn(fs, "readFile");
+
+    const result = await refreshMemoryWikiIndexesAfterImport({
+      config,
+      syncResult: { importedCount: 0, updatedCount: 0, removedCount: 0 },
+    });
+
+    expect(result).toMatchObject({ refreshed: false, reason: "no-import-changes" });
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
   it("preserves source page bytes while rebuilding derived artifacts", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),

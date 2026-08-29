@@ -1460,7 +1460,6 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
   config: ResolvedMemoryWikiConfig;
   syncResult: { importedCount: number; updatedCount: number; removedCount: number };
 }): Promise<RefreshMemoryWikiIndexesResult> {
-  await initializeMemoryWikiVault(params.config);
   const importChanged =
     params.syncResult.importedCount > 0 ||
     params.syncResult.updatedCount > 0 ||
@@ -1474,6 +1473,7 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
         reason: "auto-compile-disabled",
       };
     }
+    await initializeMemoryWikiVault(params.config);
     // This mode disables generated index writes, not the dashboard snapshot
     // that read RPCs need after source sync or a cache-format upgrade.
     const compile = await compileMemoryWikiVault(params.config, {
@@ -1493,6 +1493,7 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
       reason: "no-import-changes",
     };
   }
+  await initializeMemoryWikiVault(params.config);
   const compile = await compileMemoryWikiVault(params.config);
   return {
     refreshed: true,
