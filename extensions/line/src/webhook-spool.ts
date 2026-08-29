@@ -186,6 +186,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       let turnEvents: readonly webhook.Event[] = [event];
       let turnLifecycles: readonly (typeof lifecycle)[] = [lifecycle];
       let finishSet: (() => void) | undefined;
+      let releaseLane: (() => void) | undefined;
       if (imageSet) {
         if (!acceptsDeferredClaims) {
           // Shutting down: a claim parked in the buffer would never flush, so hand
@@ -214,7 +215,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         // Hold the lane until this delivery is done, or a message sent after the
         // images overtakes them while this turn is still fetching their media.
         finishSet = set.finish;
-      } else if (imageSets.isPending(laneKey)) {
+      } else if (imageSets.isBusy(laneKey)) {
         if (!acceptsDeferredClaims) {
           await lifecycle.onAbandoned();
           return undefined;
@@ -223,7 +224,10 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         // owner, and the remaining parts of the set it is waiting for could then
         // never be claimed - the set would time out partial and split in two.
         lifecycle.onDeferred();
-        await imageSets.awaitLane(laneKey);
+        // Queue behind the set and behind anything else already released on this
+        // lane. Deferring gave up the drain's serialization, so without this the
+        // messages freed together would race each other into delivery.
+        releaseLane = await imageSets.enterLane(laneKey);
       }
       // One ownership lifecycle spanning every durable claim this turn consumed.
       const fannedIn = fanInChannelIngressLifecycles(turnLifecycles);
@@ -275,6 +279,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       } finally {
         activeDeliveries.delete(delivery);
         finishSet?.();
+        releaseLane?.();
       }
       if (!handedOff && !stopTask) {
         // A gated or deliberately skipped turn still consumed every source claim.

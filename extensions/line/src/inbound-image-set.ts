@@ -76,8 +76,14 @@ function orderedParts<TEvent, TLifecycle>(
  * admission, so a set that never completes would never be delivered at all.
  */
 export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
-  /** Whether a set is still forming on this lane, checked before deferring. */
-  isPending: (laneKey: string) => boolean;
+  /** Whether anything already bypassed drain serialization on this lane. */
+  isBusy: (laneKey: string) => boolean;
+  /**
+   * Takes a place in the lane's queue, resolving when it is this event's turn.
+   * Deferring frees the drain's lane, so this is the only thing keeping events
+   * released behind a set from racing each other into delivery.
+   */
+  enterLane: (laneKey: string) => Promise<() => void>;
   admit: (input: {
     laneKey: string;
     setId: string;
@@ -91,6 +97,27 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
   awaitLane: (laneKey: string) => Promise<void>;
 } {
   const pendingByLane = new Map<string, PendingImageSet<TEvent, TLifecycle>>();
+  // Tail of each lane's queue: everything that deferred waits behind it in turn.
+  const laneChain = new Map<string, Promise<void>>();
+
+  const enterLane = async (laneKey: string): Promise<() => void> => {
+    const prior = laneChain.get(laneKey) ?? Promise.resolve();
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const mine = prior.then(async () => await held);
+    laneChain.set(laneKey, mine);
+    await prior;
+    // A set forming when this event arrived still owns the turn ahead of it.
+    await awaitLane(laneKey);
+    return () => {
+      release();
+      if (laneChain.get(laneKey) === mine) {
+        laneChain.delete(laneKey);
+      }
+    };
+  };
 
   // Releasing the ingress lane is what lets the rest of a set arrive, but it also
   // lets anything the sender sent afterwards overtake the set. Everything else on
@@ -180,5 +207,10 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     };
   };
 
-  return { admit, awaitLane, isPending: (laneKey) => pendingByLane.has(laneKey) };
+  return {
+    admit,
+    awaitLane,
+    enterLane,
+    isBusy: (laneKey) => pendingByLane.has(laneKey) || laneChain.has(laneKey),
+  };
 }

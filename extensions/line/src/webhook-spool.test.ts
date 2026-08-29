@@ -931,4 +931,70 @@ describe("LINE webhook spool", () => {
       }
     });
   });
+
+  it("delivers two messages queued behind an image set in arrival order", async () => {
+    await withQueue(async (queue) => {
+      const order: string[] = [];
+      let inFlight = 0;
+      let overlapped = false;
+      const deliver = vi.fn(
+        async (
+          events: readonly webhook.Event[],
+          _destination: string,
+          control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+        ) => {
+          inFlight += 1;
+          overlapped ||= inFlight > 1;
+          const message = (events[0] as webhook.MessageEvent).message;
+          const label = message.type === "text" ? message.text : message.type;
+          // The first queued message prepares slowly. Released together, the
+          // second would reach the agent first and reorder the conversation.
+          const delayMs = label === "first" ? 200 : 0;
+          if (delayMs > 0) {
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, delayMs);
+            });
+          }
+          order.push(label);
+          inFlight -= 1;
+          await control.turnAdoptionLifecycle.onAdopted();
+        },
+      );
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver,
+      });
+
+      spool.start();
+      try {
+        await spool.accept(
+          callback(
+            createEvent({
+              webhookEventId: "event-set-queue",
+              userId: "user-queue",
+              imageSet: { id: "set-queue", index: 1, total: 3 },
+            }),
+          ),
+        );
+        await spool.accept(
+          callback(
+            createEvent({ webhookEventId: "event-first", userId: "user-queue", text: "first" }),
+          ),
+        );
+        await spool.accept(
+          callback(
+            createEvent({ webhookEventId: "event-second", userId: "user-queue", text: "second" }),
+          ),
+        );
+
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(3), { timeout: 20_000 });
+        expect(order).toEqual(["image", "first", "second"]);
+        expect(overlapped).toBe(false);
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
 });
