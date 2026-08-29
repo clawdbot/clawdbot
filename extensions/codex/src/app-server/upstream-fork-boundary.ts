@@ -181,6 +181,8 @@ export async function listCodexUpstreamTurns(
   const seenCursors = new Set<string>();
   let cursor: string | undefined;
   for (;;) {
+    // Codex hydrates full turn items for both history modes; boundary validation
+    // needs their recorded message identities, not the native storage layout.
     const page = await control.listTurnPage({
       threadId,
       limit: TURN_PAGE_LIMIT,
@@ -211,15 +213,6 @@ export async function resolveCodexUpstreamForkBoundary(params: {
   control: CodexSessionCatalogControl;
 }): Promise<CodexUpstreamForkBoundaryResult> {
   try {
-    // Paginated-history threads reject itemsView "full" turn reads (thread/items/list
-    // is required); fork support for them is future work — fail closed with intent.
-    const thread = await params.control.readThread(params.threadId, false);
-    if (thread.historyMode === "paginated") {
-      return failure(
-        "upstream-unavailable",
-        "This Codex thread uses paginated history, which cannot be forked from OpenClaw yet.",
-      );
-    }
     const entries = await readVisibleSessionTranscriptMessageEntries({
       agentId: params.agentId,
       sessionId: params.sessionId,
