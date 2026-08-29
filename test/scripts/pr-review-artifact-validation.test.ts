@@ -10,6 +10,7 @@ import {
   writeReviewArtifacts,
   type ReviewArtifactFixtureOptions,
 } from "./pr-review-artifact-fixture.js";
+import { PR_RIPGREP_COMMAND } from "./pr-ripgrep.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const reviewScript = join(process.cwd(), "scripts/pr-lib/review.sh");
@@ -18,16 +19,7 @@ const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 const REVIEWED_IDENTITY_LINE = `Review artifact for PR #${REVIEWED_PR} at ${REVIEWED_HEAD}`;
-const REVIEW_SHELL_COMMAND_SURFACE = [
-  "rg() {",
-  '  if [ "${1-}" = "-F" ]; then',
-  "    shift",
-  '    command grep -F "$@"',
-  "  else",
-  '    command grep -E "$@"',
-  "  fi",
-  "}",
-].join("\n");
+const REVIEW_SHELL_COMMAND_SURFACE = `rg() {\n${PR_RIPGREP_COMMAND}\n}`;
 
 function validReadyReview() {
   const review = validReview();
@@ -57,7 +49,6 @@ function runValidation(
         'fixture_root="$2"',
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',
-        'rg() { case " $* " in *" -F "*) grep "$@";; *) grep -E "$@";; esac; }',
         options.guardFailure
           ? "review_guard() { REVIEW_MODE=pr; echo 'review head guard failed'; return 1; }"
           : `review_guard() { enter_worktree 42 || return 1; REVIEW_MODE=${options.mode ?? "pr"}; }`,
@@ -84,7 +75,6 @@ function runReviewShellFunction(fixtureRoot: string, invocation: string) {
         'fixture_root="$2"',
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',
-        'rg() { case " $* " in *" -F "*) grep "$@";; *) grep -E "$@";; esac; }',
         "mark_pr_operation_side_effects_started() { :; }",
         invocation,
       ].join("\n"),
@@ -163,14 +153,20 @@ describePosix("scripts/pr review artifact validation", () => {
   it("supplies direct review.sh consumers with the ripgrep command surface", () => {
     const fixtureRoot = tempDirs.make("openclaw-pr-review-rg-surface-");
     const target = join(fixtureRoot, "target.txt");
-    writeFileSync(target, `prefix ${REVIEWED_HEAD} suffix\n`);
+    writeFileSync(target, `prefix ${REVIEWED_HEAD} suffix\nliteral [x.y]\n`);
 
     const result = runReviewShellFunction(
       fixtureRoot,
       [
         'test "$(type -t rg)" = "function"',
         `printf '%s\\n' '${REVIEWED_HEAD}' | rg -q '^[0-9a-f]{40}$'`,
+        "! printf '%s\\n' 'not-a-sha' | rg -q '^[0-9a-f]{40}$'",
+        "printf '%s\\n' 'Thanks @fixture' | rg -qi 'thanks @'",
+        "! printf '%s\\n' 'test: reviewed change' | rg -qi 'thanks @'",
         `rg -F -q '${REVIEWED_HEAD}' '${target}'`,
+        `rg -F -q 'literal [x.y]' '${target}'`,
+        `! rg -F -q 'literal xay' '${target}'`,
+        `test "$(printf '%s\\n' clean ERROR | rg -n -i 'error|fatal')" = '2:ERROR'`,
       ].join("\n"),
     );
 

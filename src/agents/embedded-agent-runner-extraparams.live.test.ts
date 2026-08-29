@@ -50,7 +50,7 @@ describeLive("embedded agent extra params (live)", () => {
 
     applyExtraParamsToAgent(agent, cfg, "openai", model.id);
 
-    const stream = agent.streamFn(
+    const stream = await agent.streamFn(
       model,
       {
         messages: [
