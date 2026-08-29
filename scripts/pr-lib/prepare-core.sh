@@ -123,7 +123,7 @@ prepare_init() {
   review_validate_artifacts "$pr" || return 1
   require_ready_review_recommendation || return 1
   mark_pr_operation_side_effects_started
-  enter_worktree "$pr" true
+  enter_worktree "$pr" true || return 1
 
   require_artifact .local/pr-meta.env
   require_artifact .local/review.md
@@ -172,7 +172,6 @@ prepare_init() {
     exit 1
   fi
   git checkout -B "pr-$pr-prep" "$reviewed_head_sha"
-  git fetch origin main
 
   # Security: shell-escape values to prevent command injection via malicious branch names.
   printf '%s=%q\n' \
@@ -204,7 +203,7 @@ EOF_PREP
 
 prepare_validate_commit() {
   local pr="$1"
-  enter_worktree "$pr" false
+  enter_worktree "$pr" false || return 1
   require_artifact .local/pr-meta.env
 
   mark_pr_operation_side_effects_started
@@ -232,7 +231,8 @@ prepare_validate_commit() {
 
 prepare_push() {
   local pr="$1"
-  enter_worktree "$pr" false
+  PR_MAIN_SHA=""
+  enter_worktree "$pr" false || return 1
 
   require_artifact .local/pr-meta.env
   require_artifact .local/prep-context.env
@@ -245,6 +245,7 @@ prepare_push() {
     echo "Prep branch was refreshed for reviewed head drift; rerunning prepare gates before push."
     prepare_gates "$pr"
     checkout_prep_branch "$pr"
+    refresh_main_snapshot || return 1
   fi
   require_artifact .local/gates.env
 
@@ -274,7 +275,7 @@ prepare_push() {
   prep_head_sha="$PUSH_PREP_HEAD_SHA"
   local_prep_head_sha="$PUSH_LOCAL_PREP_HEAD_SHA"
   local mainline_base_sha
-  mainline_base_sha=$(git merge-base "$local_prep_head_sha" origin/main) || {
+  mainline_base_sha=$(git merge-base "$local_prep_head_sha" "$PR_MAIN_SHA") || {
     echo "Unable to resolve the prepared mainline base."
     exit 1
   }
@@ -334,7 +335,7 @@ EOF_PREP
 
 prepare_sync_head() {
   local pr="$1"
-  enter_worktree "$pr" false
+  enter_worktree "$pr" false || return 1
 
   require_artifact .local/pr-meta.env
   require_artifact .local/prep-context.env
@@ -349,8 +350,6 @@ prepare_sync_head() {
 
   # merge-verify owns relevance-aware mainline drift. Keep the hosted PR head
   # as the publication parent so fork updates contain only reviewed fixups.
-  git fetch origin main
-
   local prep_head_sha
   prep_head_sha=$(git rev-parse HEAD)
   local local_prep_head_sha
@@ -367,7 +366,7 @@ prepare_sync_head() {
   prep_head_sha="$PUSH_PREP_HEAD_SHA"
   local_prep_head_sha="$PUSH_LOCAL_PREP_HEAD_SHA"
   local mainline_base_sha
-  mainline_base_sha=$(git merge-base "$local_prep_head_sha" origin/main) || {
+  mainline_base_sha=$(git merge-base "$local_prep_head_sha" "$PR_MAIN_SHA") || {
     echo "Unable to resolve the prepared mainline base."
     exit 1
   }

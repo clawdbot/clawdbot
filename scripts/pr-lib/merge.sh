@@ -114,7 +114,7 @@ mainline_drift_requires_sync() {
   # Compare only mainline commits since the prepared lineage base. The remote
   # GraphQL commit has a different parent but its verified tree shares this
   # lineage, so its PR files must not look like incoming mainline drift.
-  git diff --name-only "${mainline_base}..origin/main" | sed '/^$/d' | sort -u > "$delta_file"
+  git diff --name-only "${mainline_base}..${PR_MAIN_SHA}" | sed '/^$/d' | sort -u > "$delta_file"
   git diff --name-only "${mainline_base}..${prepared_head_sha}" | sed '/^$/d' | sort -u > "$prepared_files_file"
   comm -12 "$delta_file" "$prepared_files_file" > "$overlap_file" || true
 
@@ -156,7 +156,7 @@ mainline_drift_requires_sync() {
 merge_verify() {
   local pr="$1"
   MERGE_USE_CRABBOX_ADMIN_BYPASS=false
-  enter_worktree "$pr" false
+  enter_worktree "$pr" false || return 1
 
   require_artifact .local/prep.env
   # shellcheck disable=SC1091
@@ -254,9 +254,9 @@ merge_verify() {
     MERGE_USE_CRABBOX_ADMIN_BYPASS=true
   fi
 
-  git fetch origin main
+  refresh_main_snapshot || return 1
   git fetch origin "pull/$pr/head:pr-$pr" --force
-  if ! git merge-base --is-ancestor origin/main "pr-$pr"; then
+  if ! git merge-base --is-ancestor "$PR_MAIN_SHA" "refs/heads/pr-$pr"; then
     echo "PR branch is behind main."
     if mainline_drift_requires_sync \
       "${PREP_MAINLINE_BASE_SHA:-${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}}" \
@@ -282,13 +282,12 @@ merge_verify() {
 
 prepare_squash_merge_body() {
   local pr="$1" source_head="${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}"
-  local main_sha source_trailers
-  main_sha=$(git rev-parse --verify refs/remotes/origin/main) || return 1
+  local source_trailers
   # GraphQL publication can collapse local fixups. Preserve their reviewed
   # trailers, excluding main's ancestry, rather than inspecting current HEAD.
   source_trailers=$(git -c trailer.separators=: -c trailer.co-authored-by.key=Co-authored-by log --reverse \
     --no-show-signature --no-notes --no-color --no-decorate --encoding=UTF-8 \
-    --format='%(trailers:key=Co-authored-by,only,unfold)' "$main_sha..$source_head") || return 1
+    --format='%(trailers:key=Co-authored-by,only,unfold)' "$PR_MAIN_SHA..$source_head") || return 1
   [ -n "$source_trailers" ] || return 0
 
   local repo_nwo preview
@@ -356,7 +355,7 @@ merge_run() {
     merge_outcome_resume "$pr"
     return
   fi
-  enter_worktree "$pr" false
+  enter_worktree "$pr" false || return 1
   # Earlier wrappers captured output at dispatch without recording intent. Even
   # an empty capture may represent a submitted request; never overwrite that evidence.
   if [ -e .local/merge-output.log ]; then

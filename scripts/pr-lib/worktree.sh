@@ -1,3 +1,7 @@
+# Shell-local operation state, never inherited freshness from the environment.
+unset PR_MAIN_SHA
+PR_MAIN_SHA=""
+
 repo_root() {
   # Resolve canonical repository root from git common-dir so wrappers work
   # the same from main checkout or any linked worktree.
@@ -215,6 +219,26 @@ checkout_pr_worktree_target() {
   recover_review_transition "$pr"
 }
 
+fetch_canonical_main() {
+  local root source git_dir
+  root=$(repo_root) || return 1
+  source=$(git -C "$root" remote get-url origin) || return 1
+  git_dir=$(git rev-parse --absolute-git-dir) || return 1
+  # Resolve relative URLs at the canonical root; ignore worktree origin/refmaps.
+  git -C "$root" --git-dir="$git_dir" fetch --no-tags --refmap= "$source" \
+    +refs/heads/main:refs/remotes/origin/main
+}
+
+refresh_main_snapshot() {
+  # The PR lock owns this worktree's FETCH_HEAD, not the shared origin/main ref.
+  # Capture immediately: subsequent PR-head fetches overwrite FETCH_HEAD.
+  PR_MAIN_SHA=""
+  local sha
+  fetch_canonical_main || return 1
+  sha=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || return 1
+  PR_MAIN_SHA="$sha"
+}
+
 enter_worktree() {
   # OR-list callers disable errexit throughout this function; guard required steps explicitly.
   local pr="$1"
@@ -229,16 +253,15 @@ enter_worktree() {
   fi
 
   cd "$root" || return 1
-  ensure_gh_api_auth || return 1
+  ensure_gh_api_auth || { PR_MAIN_SHA=""; return 1; }
   # Fetch can launch helpers and mutate Git state even when it fails; leave validation first.
   mark_pr_operation_side_effects_started || return 1
-  git -C "$root" fetch origin main || return 1
 
   # Resolve through the parent, never through the leaf: a missing directory has
   # no real path of its own, and resolving a leaf symlink would silently adopt
   # whichever worktree it aliases.
   local dir="$root/.worktrees/pr-$pr"
-  local resolved_parent resolved_dir=""
+  local resolved_parent resolved_dir="" initialized_sha=""
   resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")" 2>/dev/null || true)
   [ -z "$resolved_parent" ] || resolved_dir="$resolved_parent/pr-$pr"
 
@@ -246,15 +269,21 @@ enter_worktree() {
     if [ -e "$dir" ] || { [ -n "$resolved_dir" ] && worktree_is_registered "$resolved_dir"; }; then
       echo "Pruning stale worktree registration for .worktrees/pr-$pr"
       git -C "$root" worktree prune || return 1
-      remove_worktree_if_present "$dir"
+      remove_worktree_if_present "$dir" || return 1
       [ ! -e "$dir" ] || {
         echo "Refusing scripts/pr operation for PR #$pr: $dir is not a registered worktree and could not be cleared; scripts/pr refuses to mutate the shared canonical checkout." >&2
         return 1
       }
     fi
-    # Per-PR locking makes resetting this script-owned branch namespace safe.
-    git -C "$root" worktree add "$dir" -B "temp/pr-$pr" origin/main || return 1
-    resolved_dir="$(resolve_existing_dir_path "$(dirname "$dir")")/pr-$pr" || return 1
+    # Cold bootstrap needs one extra fetch before private FETCH_HEAD exists.
+    # Initialize fully before the next network wait so interruption is retryable.
+    # This shared main ref is only a seed, never the operation's snapshot.
+    PR_MAIN_SHA=""
+    fetch_canonical_main || return 1
+    git -C "$root" worktree add -B "temp/pr-$pr" "$dir" refs/remotes/origin/main || return 1
+    resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")") || return 1
+    resolved_dir="$resolved_parent/pr-$pr"
+    initialized_sha=$(git -C "$dir" rev-parse --verify HEAD) || return 1
   fi
 
   cd "$resolved_dir" || return 1
@@ -270,12 +299,14 @@ enter_worktree() {
     return 1
   fi
 
-  # Fetch before replaying a journal or changing the tracked tree.
-  git fetch origin main || return 1
+  [ -n "$PR_MAIN_SHA" ] || refresh_main_snapshot || return 1
   recover_review_transition "$pr" || return 1
   ensure_full_pr_worktree_checkout || return 1
-  if [ "$reset_to_main" = "true" ]; then
-    checkout_pr_worktree_target "$pr" origin/main "temp/pr-$pr" || return 1
+  # Explicit resets still validate foreign state, even when the seed matches.
+  # Otherwise a new temp branch needs a transition only if main moved.
+  if [ "$reset_to_main" = true ] ||
+    { [ -n "$initialized_sha" ] && [ "$initialized_sha" != "$PR_MAIN_SHA" ]; }; then
+    checkout_pr_worktree_target "$pr" "$PR_MAIN_SHA" "temp/pr-$pr" || return 1
   fi
   mkdir -p .local
 }

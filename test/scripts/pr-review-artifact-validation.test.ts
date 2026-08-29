@@ -144,6 +144,7 @@ function runMergeVerification(checks: "api-error" | "invalid-json" | "no-require
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',
         "verify_prep_branch_matches_prepared_head() { :; }",
+        `refresh_main_snapshot() { PR_MAIN_SHA=${"b".repeat(40)}; }`,
         "mark_pr_operation_side_effects_started() { :; }",
         "git() { :; }",
         "node() { :; }",

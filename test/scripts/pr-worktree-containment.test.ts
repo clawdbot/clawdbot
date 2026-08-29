@@ -186,21 +186,15 @@ describePosix("scripts/pr worktree containment", () => {
   for (const caller of ["enter_worktree 42 true || exit $?", "review_init 42"] as const) {
     it.each([
       {
-        name: "first fetch interrupted",
-        failure: '[ "$*" = "git -C $fixture_root fetch origin main" ]',
+        name: "private fetch interrupted",
+        failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root/.worktrees/pr-42" ]',
         code: 130,
       },
       {
-        name: "first fetch Git error",
-        failure: '[ "$*" = "git -C $fixture_root fetch origin main" ]',
+        name: "private fetch Git error",
+        failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root/.worktrees/pr-42" ]',
         code: 128,
       },
-      {
-        name: "second fetch interrupted",
-        failure: '[ "$*" = "git fetch origin main" ]',
-        code: 143,
-      },
-      { name: "second fetch Git error", failure: '[ "$*" = "git fetch origin main" ]', code: 73 },
       { name: "GitHub auth failure", failure: '[ "$1" = gh_plain ]', code: 1 },
     ])(`stops on $name without replaying a pending transition (${caller})`, ({ failure, code }) => {
       const fixture = createReviewFixture();
@@ -227,10 +221,14 @@ describePosix("scripts/pr worktree containment", () => {
   it.each([
     {
       name: "first fetch",
-      failure: '[ "$*" = "git -C $fixture_root fetch origin main" ]',
+      failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root" ]',
       provisioned: false,
     },
-    { name: "second fetch", failure: '[ "$*" = "git fetch origin main" ]', provisioned: true },
+    {
+      name: "second fetch",
+      failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root/.worktrees/pr-42" ]',
+      provisioned: true,
+    },
     { name: "auth", failure: '[ "$1" = gh_plain ]', provisioned: false },
   ])(
     "stops cold entry on $name failure, retaining only completed provisioning",

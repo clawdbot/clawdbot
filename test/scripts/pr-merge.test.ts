@@ -104,6 +104,7 @@ git() {
   if [ "$BODY_READ_ERROR" = true ] && [[ " $* " = *" log "* ]]; then return 1; fi
   if [[ " $* " = *" interpret-trailers "* ]]; then command git "$@"; else command git -C "$BODY_SOURCE_REPO" "$@"; fi
 }
+PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main)
 gh_plain() { [ "$BODY_PREVIEW_ERROR" = false ] || return 1; printf '%s\\n' "$BODY_PREVIEW"; }
 gh() { printf 'fixture/repo\\n'; }
 mktemp() { [ "$BODY_WRITE_ERROR" = false ] || return 1; command mktemp "$@"; }

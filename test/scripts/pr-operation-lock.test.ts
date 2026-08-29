@@ -720,10 +720,12 @@ const describePosix = process.platform === "win32" ? describe.skip : describe;
 describePosix("scripts/pr per-PR operation lock", () => {
   it.each([
     ...(["healthy", "first", "second"] as const).flatMap((failure) =>
-      [false, true].map((existing) => ({ command: "review-init" as const, failure, existing })),
+      [false, true]
+        .filter((existing) => !existing || failure !== "second")
+        .map((existing) => ({ command: "review-init" as const, failure, existing })),
     ),
     ...(["review-validate-artifacts", "review-guard", "review-tests"] as const).flatMap((command) =>
-      (["healthy", "first", "second", "auth"] as const).map((failure) => ({
+      (["healthy", "first", "auth"] as const).map((failure) => ({
         command,
         failure,
         existing: true,
@@ -896,10 +898,12 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "set -euo pipefail",
         'original=("$@")',
         'if [ "${1-}" = -C ]; then shift 2; fi',
+        'case "${1-}" in --git-dir=*) shift ;; esac',
         'if [ "${1-}" = fetch ]; then',
+        '  target="${3-}"; [[ " $* " != *" +refs/heads/main:refs/remotes/origin/main "* ]] || target=main',
         '  result=0; "$OPENCLAW_TEST_REAL_GIT" "${original[@]}" || result=$?',
-        '  printf "fetch:%s:%s\\n" "${3-}" "$result" >> "$OPENCLAW_TEST_EVENTS"',
-        '  if [ "${3-}" = main ] && [ "$result" -eq 0 ] && [ "$OPENCLAW_TEST_FAILURE" = second ] && [ ! -e "$OPENCLAW_TEST_FIRST_MAIN" ]; then',
+        '  printf "fetch:%s:%s\\n" "$target" "$result" >> "$OPENCLAW_TEST_EVENTS"',
+        '  if [ "$target" = main ] && [ "$result" -eq 0 ] && [ "$OPENCLAW_TEST_FAILURE" = second ] && [ ! -e "$OPENCLAW_TEST_FIRST_MAIN" ]; then',
         '    "$OPENCLAW_TEST_REAL_GIT" -C "$OPENCLAW_TEST_REPO" rev-parse refs/remotes/origin/main > "$OPENCLAW_TEST_FIRST_MAIN"',
         '    "$OPENCLAW_TEST_REAL_GIT" --git-dir="$OPENCLAW_TEST_ORIGIN" update-ref -d refs/heads/main',
         "  fi",
@@ -968,9 +972,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
           // Authentication fails before fetch can launch helpers or mutate Git.
           // Once fetching starts, later failure retains the native exact-owner lock.
           const retained =
-            failure === "first" ||
-            failure === "second" ||
-            (command === "review-tests" && failure === "healthy");
+            failure === "first" || (command === "review-tests" && failure === "healthy");
           expect.soft(refExists(repoDir, lockRef, childEnv), output).toBe(retained);
           if (retained && refExists(repoDir, lockRef, childEnv)) {
             expect(output).toContain(
@@ -987,20 +989,15 @@ describePosix("scripts/pr per-PR operation lock", () => {
               expect.soft(fetches, output).toEqual([]);
               expect.soft(output).toContain("GitHub CLI auth is not usable");
             } else {
-              expect
-                .soft(fetches, output)
-                .toEqual(
-                  failure === "first" ? ["fetch:main:128"] : ["fetch:main:0", "fetch:main:128"],
-                );
-              expect.soft(output).toContain("couldn't find remote ref main");
+              expect.soft(fetches, output).toEqual(["fetch:main:128"]);
+              expect.soft(output).toContain("couldn't find remote ref refs/heads/main");
               const failedFetch = events.indexOf("fetch:main:128");
               expect.soft(events.slice(failedFetch + 1), output).toEqual([]);
             }
             return;
           }
-          // Exactly one initializer: a missed fault with four successful fetches
-          // is not accepted as the intentional two-fetch canonical path.
-          expect.soft(fetches, output).toEqual(["fetch:main:0", "fetch:main:0"]);
+          // Nested validation shares the same captured main snapshot.
+          expect.soft(fetches, output).toEqual(["fetch:main:0"]);
           expect.soft(git("rev-parse", "refs/remotes/origin/main")).toBe(remoteMain);
           expect.soft(output).toContain("review guard passed");
           if (command === "review-tests") {
@@ -1031,8 +1028,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
             "REVIEW_MODE=main",
           );
           expect(events.filter((event) => event.startsWith("fetch:"))).toEqual([
-            "fetch:main:0",
-            "fetch:main:0",
+            ...Array.from({ length: existing ? 1 : 2 }, () => "fetch:main:0"),
             "fetch:pull/42/head:pr-42:0",
           ]);
           expect(refExists(repoDir, lockRef, childEnv), output).toBe(false);
@@ -1042,7 +1038,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         expect.soft(failedFetch, output).toBeGreaterThanOrEqual(0);
         expect.soft(events.slice(failedFetch + 1), output).toEqual([]);
         expect.soft(controller.exitCode, output).toBe(1);
-        expect.soft(output).toContain("couldn't find remote ref main");
+        expect.soft(output).toContain("couldn't find remote ref refs/heads/main");
         expect.soft(output).not.toContain("wrote=.local/pr-meta.json");
         expect.soft(git("rev-parse", "refs/heads/pr-42")).toBe(cachedMain);
         expect
@@ -1618,15 +1614,15 @@ describePosix("scripts/pr per-PR operation lock", () => {
       { invocation, failure: "auth", code: 1, fetches: 0, retained: false },
       { invocation, failure: "fetch-1", code: 130, fetches: 1, retained: true },
       { invocation, failure: "fetch-1", code: 73, fetches: 1, retained: true },
-      { invocation, failure: "fetch-2", code: 143, fetches: 2, retained: true },
-      { invocation, failure: "fetch-2", code: 128, fetches: 2, retained: true },
-      { invocation, failure: "none", code: 0, fetches: 2, retained: false },
+      { invocation, failure: "fetch-1", code: 143, fetches: 1, retained: true },
+      { invocation, failure: "fetch-1", code: 128, fetches: 1, retained: true },
+      { invocation, failure: "none", code: 0, fetches: 1, retained: false },
     ]),
     {
       invocation: "review_validate_artifacts",
       failure: "artifact",
       code: 1,
-      fetches: 2,
+      fetches: 1,
       retained: true,
     },
     { invocation: "enter_worktree", failure: "notification", code: 1, fetches: 0, retained: true },
@@ -1679,9 +1675,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect.soft(result.status, `${result.stdout}\n${result.stderr}`).toBe(code === 0 ? 0 : 1);
       const commands = readFileSync(traceFile, "utf8").trim().split("\n");
       expect.soft(commands.filter((command) => command === "auth")).toHaveLength(1);
-      expect
-        .soft(commands.filter((command) => command.includes(" fetch origin main")))
-        .toHaveLength(fetches);
+      expect.soft(commands.filter((command) => command.includes(" fetch "))).toHaveLength(fetches);
       if (failure.startsWith("fetch-")) {
         const failedAt = commands.indexOf("failed-fetch");
         expect(failedAt).toBeGreaterThanOrEqual(0);
@@ -1748,7 +1742,11 @@ describePosix("scripts/pr per-PR operation lock", () => {
       git("add", "scripts", ".github");
       git("commit", "-qm", "test: native cleanup fixture");
       const preparedHead = git("rev-parse", "HEAD");
-      git("update-ref", "refs/remotes/origin/main", preparedHead);
+      const origin = tempDirs.make("openclaw-pr-cleanup-origin-");
+      git("init", "--bare", "-q", origin);
+      git("remote", "add", "origin", origin);
+      git("push", "-q", "origin", `${preparedHead}:refs/heads/main`);
+      git("fetch", "-q", "origin", "refs/heads/main:refs/remotes/origin/main");
       git("worktree", "add", "-q", "-b", "temp/pr-42", worktreeDir);
       if (wrapper === "linked") {
         // origin/main still names the linked wrapper; canonical code must not
@@ -1802,7 +1800,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         'case "$*" in',
-        '  "fetch "*|"-C "*" fetch "*) exit 0 ;;',
         '  "worktree remove "*)',
         '    "$OPENCLAW_TEST_REAL_GIT" "$@"',
         '    printf "removed\\n" >> "$OPENCLAW_TEST_LIFECYCLE"',
@@ -1844,7 +1841,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(existsSync(lifecycle), output).toBe(true);
       const events = readFileSync(lifecycle, "utf8");
       expect(git("rev-parse", "HEAD")).toBe(canonicalHead);
-      expect(existsSync(worktreeDir)).toBe(failure === "merge");
+      expect(existsSync(worktreeDir), output).toBe(failure === "merge");
       if (failure === "merge") {
         expect(result.status, output).toBe(1);
         expect(output).toContain("fixture merge failed");
