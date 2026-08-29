@@ -339,46 +339,40 @@ export class SessionMenuActions {
                   disabledReason: state.actionDisabledReasons["assign-owner"],
                 })}
             ${state.compact
-              ? renderCompactSessionMenuNavigationItem({
+              ? // One drill-down row for icon + color keeps the mobile More menu inside
+                // its viewport height budget (mobile-chat-session-menu e2e).
+                renderCompactSessionMenuNavigationItem({
                   view: "icon",
-                  label: t("sessionsView.setIconMenu"),
+                  label: t("sessionsView.setIconColorMenu"),
                   icon: icons.star,
                   disabled: this.actionDisabled("set-icon"),
                   title: state.actionDisabledReasons["set-icon"],
                 })
               : html`<wa-dropdown-item
-                  class="session-menu__item"
-                  data-shortcut="i"
-                  aria-keyshortcuts="I"
-                  ?disabled=${this.actionDisabled("set-icon")}
-                  title=${this.actionTitle("set-icon")}
-                  @submenu-opening=${this.focusIconGridOnOpen}
-                >
-                  <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                    >${icons.star}</span
+                    class="session-menu__item"
+                    data-shortcut="i"
+                    aria-keyshortcuts="I"
+                    ?disabled=${this.actionDisabled("set-icon")}
+                    title=${this.actionTitle("set-icon")}
+                    @submenu-opening=${this.focusIconGridOnOpen}
                   >
-                  <span class="session-menu__text">${t("sessionsView.setIconMenu")}</span>
-                  ${menuShortcutHint("i")} ${this.renderIconSubmenu()}
-                </wa-dropdown-item>`}
-            ${state.compact
-              ? renderCompactSessionMenuNavigationItem({
-                  view: "color",
-                  label: t("sessionsView.setColorMenu"),
-                  icon: icons.palette,
-                  disabled: this.actionDisabled("set-color"),
-                  title: state.actionDisabledReasons["set-color"],
-                })
-              : html`<wa-dropdown-item
-                  class="session-menu__item"
-                  ?disabled=${this.actionDisabled("set-color")}
-                  title=${this.actionTitle("set-color")}
-                >
-                  <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                    >${icons.palette}</span
+                    <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                      >${icons.star}</span
+                    >
+                    <span class="session-menu__text">${t("sessionsView.setIconMenu")}</span>
+                    ${menuShortcutHint("i")} ${this.renderIconSubmenu()}
+                  </wa-dropdown-item>
+                  <wa-dropdown-item
+                    class="session-menu__item"
+                    ?disabled=${this.actionDisabled("set-color")}
+                    title=${this.actionTitle("set-color")}
                   >
-                  <span class="session-menu__text">${t("sessionsView.setColorMenu")}</span>
-                  ${this.renderColorSubmenu()}
-                </wa-dropdown-item>`}
+                    <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                      >${icons.palette}</span
+                    >
+                    <span class="session-menu__text">${t("sessionsView.setColorMenu")}</span>
+                    ${this.renderColorSubmenu()}
+                  </wa-dropdown-item>`}
             <wa-dropdown-item
               class="session-menu__item"
               value="fork"
@@ -505,8 +499,10 @@ export class SessionMenuActions {
       assignOwnerDisabled: this.actionDisabled("assign-owner"),
       assignOwnerDisabledReason: state.actionDisabledReasons["assign-owner"],
       renderOpenIn: () => this.renderEditorSubmenu(true),
-      renderIcon: () => this.renderIconSubmenu(true),
-      renderColor: () => this.renderColorSubmenu(true),
+      renderIcon: () =>
+        html`${this.renderIconSubmenu(true)}
+          <div class="session-menu__separator" role="separator"></div>
+          ${this.renderColorSubmenu(true)}`,
       renderGroup: () => this.renderGroupSubmenu(true),
     });
   }

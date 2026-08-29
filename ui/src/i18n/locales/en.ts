@@ -1187,6 +1187,7 @@ export const en: TranslationMap = {
     renameSessionMenu: "Rename…",
     setIconMenu: "Set icon",
     setColorMenu: "Color",
+    setIconColorMenu: "Icon & color",
     sessionColor: "Session color: {color}",
     colors: {
       red: "Red",

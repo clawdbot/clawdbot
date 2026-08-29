@@ -251,7 +251,7 @@ describe("session menu", () => {
     expect(menu.querySelector("[slot='submenu']")).toBeNull();
     expect(menuItemLabels(menu)).toContain("Open in");
     expect(menuItemLabels(menu)).toContain("Assign to…");
-    expect(menuItemLabels(menu)).toContain("Set icon");
+    expect(menuItemLabels(menu)).toContain("Icon & color");
     expect(menuItemLabels(menu)).toContain("Move to group");
 
     selectMenuValue(menu, "compact:open-open-in");
@@ -268,7 +268,19 @@ describe("session menu", () => {
     await menu.updateComplete;
     selectMenuValue(menu, "compact:open-icon");
     await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual(["Back"]);
+    // The combined drill-down lists the color radio rows below the unlabeled icon grid.
+    expect(menuItemLabels(menu)).toEqual([
+      "Back",
+      "Default",
+      "Red",
+      "Blue",
+      "Green",
+      "Yellow",
+      "Purple",
+      "Orange",
+      "Pink",
+      "Cyan",
+    ]);
     expect(menu.querySelector(".session-menu__icon-picker")?.getAttribute("slot")).toBeNull();
 
     selectMenuValue(menu, "compact:back");
@@ -452,7 +464,8 @@ describe("session menu", () => {
     const onAction = vi.fn<(action: SessionMenuAction) => void>();
     const menu = await mountMenu({ compact, session: { color: "blue" }, onAction });
     if (compact) {
-      selectMenuValue(menu, "compact:open-color");
+      // Mobile reaches the swatches through the combined "Icon & color" drill-down.
+      selectMenuValue(menu, "compact:open-icon");
       await menu.updateComplete;
     } else {
       (menuItem(menu, "Color") as SessionMenuItem & { submenuOpen: boolean }).submenuOpen = true;
