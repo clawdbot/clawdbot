@@ -282,6 +282,111 @@ describe("barnacle-auto-response", () => {
     ]);
   });
 
+  it("classifies only an added bundled skill for the ClawHub close", () => {
+    for (const filename of [
+      "src/skills/loading/plugin-skills.test.ts",
+      "src/skills/workspace.ts",
+      "skills/weather/SKILL.md",
+    ]) {
+      expect(
+        classifyPullRequestCandidateLabels(pr("Fix linked skill behavior", "Fixes #127931"), [
+          file(filename),
+        ]),
+      ).not.toContain("r: skill");
+    }
+
+    expect(
+      classifyPullRequestCandidateLabels(pr("Add weather helper skill"), [
+        file("skills/weather-helper/SKILL.md", "added"),
+      ]),
+    ).toContain("r: skill");
+  });
+
+  it("removes a stale automated skill close label from a core test-only PR", async () => {
+    const { calls, github } = barnacleGithub([file("src/skills/loading/plugin-skills.test.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          title: "Fix Windows symlink typing",
+          body: "Fixes #127931",
+        },
+        ["r: skill"],
+        {
+          action: "labeled",
+          label: { name: "r: skill" },
+          sender: { login: "openclaw-barnacle[bot]", type: "Bot" },
+        },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toContainEqual(expectedRemoveLabel(123, "r: skill"));
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
+  });
+
+  it("closes a newly added bundled skill deterministically", async () => {
+    const { calls, github } = barnacleGithub([file("skills/weather-helper/SKILL.md", "added")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext({ title: "Add weather helper skill" }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.addLabels.flatMap((call) => call.labels)).toContain("r: skill");
+    expect(calls.createComment).toHaveLength(1);
+    expect(calls.createComment[0]?.body).toContain("ClawHub");
+    expect(calls.update).toStrictEqual([expectedIssueUpdate(123, "closed")]);
+  });
+
+  it("does not duplicate the close for its own skill label event", async () => {
+    const { calls, github } = barnacleGithub([file("skills/weather-helper/SKILL.md", "added")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext({}, ["r: skill"], {
+        action: "labeled",
+        label: { name: "r: skill" },
+        sender: { login: "openclaw-barnacle[bot]", type: "Bot" },
+      }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
+  });
+
+  it("honors a maintainer-applied skill close label", async () => {
+    const { calls, github } = barnacleGithub([file("src/skills/workspace.ts")], {
+      maintainerLogins: ["maintainer"],
+    });
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext({}, ["r: skill"], {
+        action: "labeled",
+        label: { name: "r: skill" },
+        sender: { login: "maintainer", type: "User" },
+      }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).not.toContainEqual(expectedRemoveLabel(123, "r: skill"));
+    expect(calls.createComment).toHaveLength(1);
+    expect(calls.update).toStrictEqual([expectedIssueUpdate(123, "closed")]);
+  });
+
   it("uses the latest case-insensitive context sections after template boilerplate", () => {
     const body = [
       blankTemplateBody,
