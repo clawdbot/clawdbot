@@ -35,6 +35,136 @@ afterEach(() => {
 });
 
 describe("tool-card extraction", () => {
+  const browserDetails = {
+    browserTab: { profile: "managed", target: "host", targetId: "tab-origin" },
+  };
+
+  it.each(["read", "browser.open", "mcp__other__browser", undefined])(
+    "keeps browser-shaped results from %s as ordinary tool cards",
+    (name) => {
+      for (const message of [
+        { role: "toolResult", toolName: name, details: browserDetails, content: "ordinary output" },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_result", name, text: "ordinary output", details: browserDetails },
+          ],
+        },
+        {
+          role: "assistant",
+          toolCallId: "live-origin",
+          __openclawToolStreamLive: true,
+          __openclawToolStreamResultReceived: true,
+          content: [
+            { type: "toolcall", name, arguments: {} },
+            { type: "toolresult", name, text: "ordinary output", details: browserDetails },
+          ],
+        },
+      ]) {
+        const cards = extractToolCards(message);
+        expect(cards).toHaveLength(1);
+        expect(cards[0]?.outputText).toBe("ordinary output");
+        expect(cards[0]?.preview).toBeUndefined();
+      }
+    },
+  );
+
+  it.each([
+    ["browser", undefined, true],
+    ["browser", "read", true],
+    ["read", "browser", false],
+    [undefined, "browser", false],
+  ] as const)(
+    "uses the paired call origin %s instead of the result name %s",
+    (callName, resultName, browserOrigin) => {
+      const cards = extractToolCards({
+        role: "assistant",
+        content: [
+          { type: "toolcall", id: "origin-call", name: callName, arguments: {} },
+          {
+            type: "tool_result",
+            tool_use_id: "origin-call",
+            name: resultName,
+            text: "paired output",
+            details: browserDetails,
+          },
+        ],
+      });
+      expect(cards).toHaveLength(1);
+      expect(cards[0]).toMatchObject({ name: callName ?? "tool", outputText: "paired output" });
+      expect(cards[0]?.preview).toEqual(
+        browserOrigin ? { kind: "browser-tab", ...browserDetails.browserTab } : undefined,
+      );
+    },
+  );
+
+  it("does not borrow browser origin from a call with a different ID", () => {
+    const cards = extractToolCards({
+      role: "assistant",
+      content: [
+        { type: "toolcall", id: "browser-call", name: "browser", arguments: {} },
+        {
+          type: "tool_result",
+          id: "unknown-call",
+          text: "unpaired output",
+          details: browserDetails,
+        },
+      ],
+    });
+    expect(cards).toHaveLength(2);
+    expect(cards[1]?.outputText).toBe("unpaired output");
+    expect(cards[1]?.preview).toBeUndefined();
+  });
+
+  it.each(["read", "browser.open", "mcp__other__browser", undefined])(
+    "does not let nested content claim browser origin inside a %s tool envelope",
+    (toolName) => {
+      for (const nameField of ["toolName", "tool_name"]) {
+        const [card] = extractToolCards({
+          role: "toolResult",
+          [nameField]: toolName,
+          content: [
+            {
+              type: "tool_result",
+              name: "browser",
+              text: "nested output",
+              details: browserDetails,
+            },
+          ],
+        });
+        expect(card?.name).toBe("browser");
+        expect(card?.outputText).toBe("nested output");
+        expect(card?.preview).toBeUndefined();
+        const [paired] = extractToolCards({
+          role: "toolResult",
+          [nameField]: toolName,
+          content: [
+            { type: "toolcall", id: "nested-browser", name: "browser", arguments: {} },
+            {
+              type: "tool_result",
+              id: "nested-browser",
+              name: "browser",
+              text: "nested paired output",
+              details: browserDetails,
+            },
+          ],
+        });
+        expect(paired?.outputText).toBe("nested paired output");
+        expect(paired?.preview).toBeUndefined();
+      }
+    },
+  );
+
+  it.each(["toolName", "tool_name"])("retains browser envelope origin from %s", (nameField) => {
+    const [card] = extractToolCards({
+      role: "toolResult",
+      [nameField]: "browser",
+      content: [{ type: "tool_result", text: "browser output", details: browserDetails }],
+    });
+    expect(card?.preview).toEqual({ kind: "browser-tab", ...browserDetails.browserTab });
+    expect(card?.outputText).toBe("browser output");
+  });
+
   it.each(["standalone", "block", "live"])("extracts browser tabs from %s results", (shape) => {
     const details = {
       browserTab: {
@@ -92,7 +222,9 @@ describe("tool-card extraction", () => {
     { targetId: "t1", profile: "p".repeat(129), target: "host" },
     { targetId: "t1", profile: "managed", target: "node", node: "n".repeat(257) },
   ])("ignores malformed browser tabs (%j)", (browserTab) => {
-    expect(extractToolCards({ role: "tool", details: { browserTab } })[0]?.preview).toBeUndefined();
+    expect(
+      extractToolCards({ role: "tool", toolName: "browser", details: { browserTab } })[0]?.preview,
+    ).toBeUndefined();
   });
 
   it("retains exact bounded node identities without provider metadata", () => {
@@ -104,6 +236,7 @@ describe("tool-card extraction", () => {
     };
     const [card] = extractToolCards({
       role: "toolResult",
+      toolName: "browser",
       details: {
         browserTab: {
           ...browserTab,
@@ -123,7 +256,9 @@ describe("tool-card extraction", () => {
       url: 42,
       title: [],
     };
-    expect(extractToolCards({ role: "tool", details: { browserTab } })[0]?.preview).toEqual({
+    expect(
+      extractToolCards({ role: "tool", toolName: "browser", details: { browserTab } })[0]?.preview,
+    ).toEqual({
       kind: "browser-tab",
       profile: "managed",
       target: "host",
@@ -137,6 +272,7 @@ describe("tool-card extraction", () => {
     };
     for (const message of [
       { role: "tool", details: { browserTab, mcpAppPreview: canvas } },
+      { role: "tool", toolName: "browser", details: { browserTab, mcpAppPreview: canvas } },
       {
         role: "tool",
         toolName: "canvas_render",

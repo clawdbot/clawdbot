@@ -57,6 +57,10 @@ node. Pass the profile in `query.profile`. Explicit routes do not fall back to
 another host; omitting them keeps the configured automatic routing. These
 routing fields do not grant access or change browser policy.
 
+Browser previews require a result from the `browser` tool with a known route.
+Browser-shaped metadata from other tools does not trigger screenshots or change
+the panel's selection; those results remain ordinary tool output.
+
 When URL validation fails during tab listing, the tab keeps its identity and
 title but returns `url: ""` and `urlUnavailableReason`:
 
