@@ -1,186 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { GatewaySessionMessageSubscriptionCoordinator } from "../browser.js";
 import {
-  ControlModelCommandError,
-  createControlModel,
-  type ControlModelConnectionSnapshot,
-  type ControlModelGatewayBinding,
-  type ControlModelGatewayEventFrame,
-  type ControlModelRequestOptions,
-} from "./index.js";
-
-type RequestCall = {
-  method: string;
-  params: Record<string, unknown>;
-  options?: ControlModelRequestOptions;
-};
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve(value: T): void;
-  reject(error: unknown): void;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
-function message(sequence: number, content = `message-${sequence}`) {
-  return {
-    role: sequence % 2 ? "user" : "assistant",
-    content,
-    __openclaw: { id: `message-${sequence}`, seq: sequence },
-  };
-}
-
-function messageIds(
-  snapshot: ReturnType<ReturnType<typeof createControlModel>["conversation"]>["getSnapshot"],
-) {
-  return snapshot.messages.map((entry) =>
-    String((entry.raw as { __openclaw?: { id?: string } }).__openclaw?.id),
-  );
-}
-
-function createHarness(
-  initial: ControlModelConnectionSnapshot = { status: "disconnected", epoch: 0 },
-  options: {
-    questions?: unknown[];
-    approvalReplay?: unknown;
-    history?: unknown;
-  } = {},
-) {
-  let connection = initial;
-  const connectionListeners = new Set<() => void>();
-  const eventListeners = new Set<(frame: ControlModelGatewayEventFrame) => void>();
-  const calls: RequestCall[] = [];
-  const responses = new Map<string, unknown[]>();
-  const histories = new Map<number, unknown[]>();
-  const defaultHistory = options.history ?? {
-    messages: [],
-    completeSnapshot: true,
-    totalMessages: 0,
-  };
-
-  const take = (method: string) => responses.get(method)?.shift();
-  const request = vi.fn(
-    async (
-      method: string,
-      params: Record<string, unknown>,
-      requestOptions?: ControlModelRequestOptions,
-    ) => {
-      calls.push({ method, params, options: requestOptions });
-      const queued = take(method);
-      if (queued !== undefined) {
-        if (queued instanceof Error) throw queued;
-        return await queued;
-      }
-      if (method === "sessions.list") return { sessions: [] };
-      if (method === "sessions.messages.subscribe")
-        return {
-          key: params.key,
-          ...(params.includeApprovals ? { approvalReplay: options.approvalReplay } : {}),
-        };
-      if (method === "sessions.messages.unsubscribe") return {};
-      if (method === "question.list") return { questions: options.questions ?? [] };
-      if (method === "chat.history") {
-        const offset = typeof params.offset === "number" ? params.offset : 0;
-        return await (histories.get(offset)?.shift() ?? defaultHistory);
-      }
-      if (method === "chat.send") return { runId: "run-default", status: "accepted" };
-      if (method === "chat.abort")
-        return { aborted: true, runIds: typeof params.runId === "string" ? [params.runId] : [] };
-      if (method === "approval.resolve") return { applied: true };
-      if (method === "question.resolve") return { status: "answered" };
-      return {};
-    },
-  );
-  let coordinator: GatewaySessionMessageSubscriptionCoordinator;
-  const gateway: ControlModelGatewayBinding = {
-    getConnectionSnapshot: () => connection,
-    subscribeConnection(listener) {
-      connectionListeners.add(listener);
-      return () => connectionListeners.delete(listener);
-    },
-    subscribeSessionCatalogInvalidations() {
-      return () => undefined;
-    },
-    subscribeEvents(listener) {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
-    getMessageSubscriptionCoordinator() {
-      return coordinator;
-    },
-    request,
-  };
-  coordinator = new GatewaySessionMessageSubscriptionCoordinator(gateway);
-
-  return {
-    gateway,
-    calls,
-    request,
-    queue(method: string, value: unknown) {
-      const queue = responses.get(method) ?? [];
-      queue.push(value);
-      responses.set(method, queue);
-    },
-    defer(method: string) {
-      const pending = deferred<unknown>();
-      const queue = responses.get(method) ?? [];
-      queue.push(pending.promise);
-      responses.set(method, queue);
-      return pending;
-    },
-    setHistory(offset: number, ...values: unknown[]) {
-      const queue = histories.get(offset) ?? [];
-      queue.push(...values);
-      histories.set(offset, queue);
-    },
-    callsFor(method: string) {
-      return calls.filter((call) => call.method === method);
-    },
-    setConnection(next: ControlModelConnectionSnapshot, times = 1) {
-      connection = next;
-      for (let index = 0; index < times; index += 1)
-        for (const listener of connectionListeners) listener();
-    },
-    pingConnection(times = 1) {
-      for (let index = 0; index < times; index += 1)
-        for (const listener of connectionListeners) listener();
-    },
-    emit(
-      frame: Omit<ControlModelGatewayEventFrame, "connectionEpoch"> & { connectionEpoch?: number },
-    ) {
-      const next = { ...frame, connectionEpoch: frame.connectionEpoch ?? connection.epoch };
-      for (const listener of eventListeners) listener(next);
-    },
-  };
-}
-
-async function flush() {
-  for (let index = 0; index < 8; index += 1) await Promise.resolve();
-}
-
-async function activatedConversation(
-  harness = createHarness({ status: "connected", epoch: 1 }),
-  bounds?: Parameters<typeof createControlModel>[0]["bounds"],
-) {
-  const model = createControlModel({
-    gateway: harness.gateway,
-    bounds,
-    generateId: (prefix) => `${prefix}-fixed`,
-  });
-  model.start();
-  const conversation = model.conversation("agent:main:one");
-  await vi.waitFor(() => expect(harness.callsFor("chat.history")).toHaveLength(1));
-  return { harness, model, conversation };
-}
+  activatedConversation,
+  createHarness,
+  flush,
+  message,
+  messageIds,
+} from "./conversation.test-support.js";
+import { ControlModelCommandError, createControlModel } from "./index.js";
 
 describe("Control Model conversations", () => {
   it("activates exactly once per epoch and retires/release leases safely", async () => {
@@ -238,6 +64,51 @@ describe("Control Model conversations", () => {
     await vi.waitFor(() => expect(harness.callsFor("sessions.messages.subscribe")).toHaveLength(3));
     expect(harness.callsFor("chat.history")).toHaveLength(1);
     model.dispose();
+  });
+
+  it("does not let a retired activation overwrite the current epoch", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    harness.queue("sessions.messages.subscribe", { key: "agent:main:one" });
+    const retiredApprovals = harness.defer("sessions.messages.subscribe");
+    const model = createControlModel({ gateway: harness.gateway });
+    model.start();
+    const conversation = model.conversation("agent:main:one");
+    await vi.waitFor(() => expect(harness.callsFor("sessions.messages.subscribe")).toHaveLength(2));
+
+    harness.setConnection({ status: "connected", epoch: 2 });
+    await vi.waitFor(() => expect(conversation.getSnapshot().status).toBe("ready"));
+    retiredApprovals.reject(Object.assign(new Error("retired"), { code: "UNAVAILABLE" }));
+    await flush();
+    expect(conversation.getSnapshot().status).toBe("ready");
+    expect(conversation.getSnapshot().partialReasons).not.toContain("approvals-unavailable");
+    model.dispose();
+  });
+
+  it("uses the host coordinator and accepts its acknowledged canonical session key", async () => {
+    const harness = createHarness(
+      { status: "connected", epoch: 1 },
+      {
+        keysEquivalent: (left, right) =>
+          left.replace("agent:main:main", "main") === right.replace("agent:main:main", "main"),
+      },
+    );
+    const hostLease = await harness.coordinator.acquire("agent:main:main");
+    const model = createControlModel({ gateway: harness.gateway });
+    model.start();
+    const conversation = model.conversation("main");
+    await vi.waitFor(() => expect(harness.callsFor("chat.history")).toHaveLength(1));
+
+    harness.emitProtocol({
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "agent:main:main", message: message(1) },
+    });
+    await flush();
+
+    expect(harness.callsFor("sessions.messages.subscribe")).toHaveLength(2);
+    expect(messageIds(conversation.getSnapshot())).toEqual(["message-1"]);
+    model.dispose();
+    await harness.coordinator.release(hostLease);
   });
 
   it("bounds only inactive handles, pins subscriptions, and enforces subscriber limits", () => {
@@ -304,6 +175,31 @@ describe("Control Model conversations", () => {
     model.dispose();
   });
 
+  it("preserves overflow evidence when authoritative history retains a live entry", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    const history = harness.defer("chat.history");
+    const { model, conversation } = await activatedConversation(harness, {
+      maxConversationMessages: 2,
+    });
+    harness.emit({
+      event: "session.message",
+      payload: { sessionKey: "agent:main:one", message: message(3) },
+    });
+    history.resolve({
+      messages: [message(1), message(2)],
+      completeSnapshot: true,
+      totalMessages: 2,
+    });
+    await vi.waitFor(() => expect(conversation.getSnapshot().history.status).toBe("ready"));
+    expect(messageIds(conversation.getSnapshot())).toEqual(["message-2", "message-3"]);
+    expect(conversation.getSnapshot().history).toMatchObject({
+      truncatedBefore: true,
+      completeSnapshot: false,
+    });
+    expect(conversation.getSnapshot().partialReasons).toContain("messages-truncated");
+    model.dispose();
+  });
+
   it("keeps a bounded observable older history window and restores the newest tail", async () => {
     const harness = createHarness({ status: "connected", epoch: 1 });
     const tail = {
@@ -336,7 +232,6 @@ describe("Control Model conversations", () => {
       event: "session.message",
       payload: { sessionKey: "agent:main:one", message: message(4) },
     });
-
     await conversation.loadMoreHistory();
     expect(messageIds(conversation.getSnapshot())).toEqual(["message-1", "message-2"]);
     expect(conversation.getSnapshot().history).toMatchObject({
@@ -390,6 +285,7 @@ describe("Control Model conversations", () => {
     expect(conversation.getSnapshot().partialReasons).toContain("transport-gap");
     authoritative.resolve({ messages: [message(2)], completeSnapshot: true, totalMessages: 1 });
     await vi.waitFor(() => expect(conversation.getSnapshot().history.status).toBe("ready"));
+    expect(conversation.getSnapshot().partialReasons).toContain("transport-gap");
 
     const oldHistory = harness.defer("chat.history");
     harness.emit({
@@ -476,7 +372,35 @@ describe("Control Model conversations", () => {
       [Object.assign(new Error("forbidden"), { code: "FORBIDDEN" }), "forbidden"],
       [Object.assign(new Error("conflict"), { code: "CONFLICT" }), "conflict"],
       [Object.assign(new Error("timeout"), { code: "TIMEOUT" }), "timeout"],
-      [Object.assign(new Error("cancelled"), { name: "AbortError" }), "aborted"],
+      [
+        Object.assign(new Error("opaque failure"), {
+          code: "UNAVAILABLE",
+          details: { reason: "maintenance" },
+        }),
+        "retryable",
+      ],
+      [
+        Object.assign(new Error("opaque failure"), {
+          code: "AUTH_UNAUTHORIZED",
+          details: { reason: "token expired" },
+        }),
+        "forbidden",
+      ],
+      [
+        Object.assign(new Error("opaque failure"), {
+          code: "DEADLINE_EXCEEDED",
+          details: { reason: "upstream busy" },
+        }),
+        "timeout",
+      ],
+      [
+        Object.assign(new Error("opaque failure"), {
+          code: "GATEWAY_ERROR",
+          details: { reason: "unavailable" },
+        }),
+        "retryable",
+      ],
+      [Object.assign(new Error("opaque failure"), { name: "AbortError" }), "aborted"],
     ] as const) {
       harness.queue("chat.send", error);
       await expect(conversation.send("test")).rejects.toMatchObject({ category });
@@ -589,11 +513,12 @@ describe("Control Model conversations", () => {
     const { harness, model, conversation } = await activatedConversation(undefined, {
       maxConversationMessages: 3,
     });
-    for (let sequence = 1; sequence <= 10; sequence += 1)
+    for (let sequence = 1; sequence <= 10; sequence += 1) {
       harness.emit({
         event: "session.message",
         payload: { sessionKey: "agent:main:one", message: message(sequence) },
       });
+    }
     expect(messageIds(conversation.getSnapshot())).toEqual([
       "message-8",
       "message-9",
@@ -601,6 +526,27 @@ describe("Control Model conversations", () => {
     ]);
     expect(conversation.getSnapshot().bounds.messagesTruncated).toBe(true);
     expect(conversation.getSnapshot().partialReasons).toContain("messages-truncated");
+    model.dispose();
+  });
+
+  it("retains an active run ahead of newer terminal diagnostics", async () => {
+    const { harness, model, conversation } = await activatedConversation(undefined, {
+      maxConversationRuns: 1,
+    });
+    harness.emit({
+      event: "chat",
+      payload: { sessionKey: "agent:main:one", runId: "run-active", state: "delta" },
+    });
+    harness.emit({
+      event: "chat",
+      payload: { sessionKey: "agent:main:one", runId: "run-terminal", state: "final" },
+    });
+
+    expect(conversation.getSnapshot().runs).toEqual([
+      expect.objectContaining({ runId: "run-active", status: "streaming" }),
+    ]);
+    expect(conversation.getSnapshot().activeRun?.runId).toBe("run-active");
+    expect(conversation.getSnapshot().commandAvailability.abort).toBe(true);
     model.dispose();
   });
 
@@ -886,6 +832,52 @@ describe("Control Model conversations", () => {
     model.dispose();
   });
 
+  it("starts fresh question hydration when reconnect retires a pending epoch", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    const retired = harness.defer("question.list");
+    const { model, conversation } = await activatedConversation(harness);
+    harness.queue("question.list", { questions: [] });
+    harness.setConnection({ status: "connected", epoch: 2 });
+    await vi.waitFor(() => expect(harness.callsFor("question.list")).toHaveLength(2));
+    await vi.waitFor(() => expect(conversation.getSnapshot().status).toBe("ready"));
+    expect(conversation.getSnapshot().questions).toEqual([]);
+    retired.resolve({
+      questions: [{ id: "stale", status: "pending", sessionKey: "agent:main:one" }],
+    });
+    await flush();
+    expect(conversation.getSnapshot().questions).toEqual([]);
+    model.dispose();
+  });
+
+  it("reports partial status when question hydration fails", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    harness.queue(
+      "question.list",
+      Object.assign(new Error("questions unavailable"), { code: "UNAVAILABLE" }),
+    );
+    const { model, conversation } = await activatedConversation(harness);
+    await vi.waitFor(() =>
+      expect(conversation.getSnapshot().partialReasons).toContain("questions-unavailable"),
+    );
+    expect(conversation.getSnapshot().status).toBe("partial");
+    model.dispose();
+  });
+
+  it("keeps an initial authoritative history failure in error status", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    harness.queue(
+      "chat.history",
+      Object.assign(new Error("history unavailable"), {
+        code: "UNAVAILABLE",
+        details: { reason: "gateway restarting" },
+      }),
+    );
+    const { model, conversation } = await activatedConversation(harness);
+    await vi.waitFor(() => expect(conversation.getSnapshot().history.status).toBe("error"));
+    expect(conversation.getSnapshot().status).toBe("error");
+    model.dispose();
+  });
+
   it("deep-freezes snapshots and stops copied subscriber delivery after disposal", async () => {
     const { harness, model, conversation } = await activatedConversation();
     const later = vi.fn();
@@ -900,7 +892,8 @@ describe("Control Model conversations", () => {
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(Object.isFrozen(snapshot.messages)).toBe(true);
     expect(Object.isFrozen(snapshot.messages[0]?.raw)).toBe(true);
-    expect(Object.isFrozen((snapshot.messages[0]?.raw as { nested?: unknown }).nested)).toBe(true);
+    const raw = snapshot.messages[0]?.raw as { nested?: unknown } | undefined;
+    expect(Object.isFrozen(raw?.nested)).toBe(true);
     expect(later).not.toHaveBeenCalled();
     model.dispose();
   });

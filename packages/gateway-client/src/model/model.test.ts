@@ -55,7 +55,9 @@ function createGatewayHarness(
       return pending.promise;
     },
   );
-  let coordinator: GatewaySessionMessageSubscriptionCoordinator;
+  // SAFETY: the mock implements the gateway request shape; tests resolve the typed session result.
+  const gatewayRequest = request as ControlModelGatewayBinding["request"];
+  const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request: gatewayRequest });
   const gateway: ControlModelGatewayBinding = {
     getConnectionSnapshot: () => connection,
     subscribeConnection(listener) {
@@ -70,9 +72,8 @@ function createGatewayHarness(
     getMessageSubscriptionCoordinator() {
       return coordinator;
     },
-    request,
+    request: gatewayRequest,
   };
-  coordinator = new GatewaySessionMessageSubscriptionCoordinator(gateway);
   return {
     gateway,
     request,
@@ -98,8 +99,9 @@ function createGatewayHarness(
       seq?: number;
       gap?: boolean;
     }) {
-      for (const listener of eventListeners)
-        listener({ connectionEpoch: connection.epoch, ...frame });
+      for (const listener of eventListeners) {
+        listener({ type: "event", connectionEpoch: connection.epoch, ...frame });
+      }
     },
   };
 }
