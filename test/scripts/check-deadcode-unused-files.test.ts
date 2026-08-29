@@ -223,7 +223,6 @@ Delete the files or model their real entrypoints in Knip.`,
       expect(calls[0]).toMatchObject({
         args: [
           pnpmExecPath,
-          "--config.minimum-release-age=0",
           "dlx",
           "--package",
           "knip@6.32.2",
@@ -278,7 +277,6 @@ Delete the files or model their real entrypoints in Knip.`,
     expect(path.basename(call.command)).toBe("pnpm");
     expect(call).toMatchObject({
       args: [
-        "--config.minimum-release-age=0",
         "dlx",
         "--package",
         "knip@6.32.2",
