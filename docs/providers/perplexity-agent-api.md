@@ -131,7 +131,7 @@ See Perplexity's [OpenClaw integration guide](https://docs.perplexity.ai/docs/ge
     providers: {
       perplexity: {
         baseUrl: "https://api.perplexity.ai/v1",
-        apiKey: "${PERPLEXITY_API_KEY}",
+        apiKey: "${CUSTOM_API_KEY}",
         api: "openai-responses",
         models: [
           {
