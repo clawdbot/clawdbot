@@ -228,7 +228,7 @@ describe("LINE webhook spool", () => {
       let lateLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
       const firstDeliver = vi.fn(
         async (
-          _event: webhook.Event,
+          _events: readonly webhook.Event[],
           _destination: string,
           control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
         ) => {
@@ -750,6 +750,36 @@ describe("LINE webhook spool", () => {
       } finally {
         await spool.stop();
       }
+    });
+  });
+
+  // A part that arrives while the spool is stopping must not be parked in a buffer
+  // that will never flush; it goes back so a restart redelivers the whole set.
+  it("hands an image-set part back instead of buffering it while stopping", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn(async () => {});
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver,
+      });
+
+      spool.start();
+      await spool.stop();
+      await spool.accept(
+        callback(
+          createEvent({
+            webhookEventId: "event-stopping-set",
+            userId: "user-stopping",
+            imageSet: { id: "set-stopping", index: 1, total: 3 },
+          }),
+        ),
+      );
+
+      // Still queued for a later process rather than consumed by a dead buffer.
+      expect(await queue.listPending()).toHaveLength(1);
+      expect(deliver).not.toHaveBeenCalled();
     });
   });
 

@@ -176,7 +176,7 @@ vi.mock("./send.js", () => ({
 }));
 
 const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted(() => ({
-  buildLineMessageContextMock: vi.fn(async () => ({
+  buildLineMessageContextMock: vi.fn(async (_params: { allMedia?: unknown[] }) => ({
     ctxPayload: { From: "line:group:group-1" },
     replyToken: "reply-token",
     route: { agentId: "default" },

@@ -186,6 +186,12 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       let turnEvents: readonly webhook.Event[] = [event];
       let turnLifecycles: readonly (typeof lifecycle)[] = [lifecycle];
       if (imageSet) {
+        if (!acceptsDeferredClaims) {
+          // Shutting down: a claim parked in the buffer would never flush, so hand
+          // this part back and let a restart redeliver the whole set instead.
+          await lifecycle.onAbandoned();
+          return undefined;
+        }
         // Hold this claim while the rest of the set arrives. Deferring frees the
         // lane, which is the only way the later parts can be claimed at all.
         lifecycle.onDeferred();

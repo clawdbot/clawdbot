@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type DeliverFn = (
-  event: webhook.Event,
+  events: readonly webhook.Event[],
   destination: string,
   control: Record<string, unknown>,
 ) => Promise<void>;
