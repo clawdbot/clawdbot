@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
@@ -521,9 +522,9 @@ describe("agent exec command composition", () => {
           runtime,
           {
             runAgent: vi.fn(async (invocation) => {
-              const config = getRuntimeConfigSnapshot();
-              expect(config?.tools?.codeMode).toEqual(codeMode);
-              expect(config?.agents?.defaults?.experimental?.localModelLean).toBe(true);
+              const config = expectDefined(getRuntimeConfigSnapshot(), "isolated run config");
+              expect(config.tools?.codeMode).toEqual(codeMode);
+              expect(config.agents?.defaults?.experimental?.localModelLean).toBe(true);
               const surface = createAgentHarnessToolSurfaceRuntimeCore({
                 config,
                 agentId: "main",

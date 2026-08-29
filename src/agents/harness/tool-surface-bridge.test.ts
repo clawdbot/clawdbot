@@ -36,6 +36,11 @@ function createRuntime(config: OpenClawConfig) {
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
   it("executes a model opt-in while the global default is off", async () => {
+    const markerTool = createStubTool("read_marker");
+    markerTool.execute = async () => ({
+      content: [{ type: "text", text: "MODEL_OVERRIDE" }],
+      details: { marker: "MODEL_OVERRIDE" },
+    });
     const runtime = createAgentHarnessToolSurfaceRuntime({
       config: {
         tools: { codeMode: false },
@@ -44,18 +49,10 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       modelProvider: "test",
       modelId: "model-a",
       modelToolsEnabled: true,
-      executeTool: async ({ tool, toolCallId, input }) => tool.execute(toolCallId, input),
+      executeTool: async ({ toolCallId, input }) => markerTool.execute(toolCallId, input),
     });
     try {
-      const surface = runtime.compactTools([
-        {
-          ...createStubTool("read_marker"),
-          execute: async () => ({
-            content: [{ type: "text", text: "MODEL_OVERRIDE" }],
-            details: { marker: "MODEL_OVERRIDE" },
-          }),
-        },
-      ]);
+      const surface = runtime.compactTools([markerTool]);
       expect(surface.tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
       const exec = expectDefined(
         surface.tools.find((tool) => tool.name === "exec"),
