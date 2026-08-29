@@ -48,9 +48,13 @@ struct AppStateIsolationTests {
             let home = try #require(OpenClawEnv.path("HOME"))
             #expect(OpenClawEnv.path("CFFIXED_USER_HOME") == home)
             let root = URL(fileURLWithPath: home).deletingLastPathComponent()
-            #expect(fm.homeDirectoryForCurrentUser.resolvingSymlinksInPath().path == home)
-            #expect(fm.temporaryDirectory.resolvingSymlinksInPath().path ==
-                root.appendingPathComponent("tmp").path)
+            #expect(fm.homeDirectoryForCurrentUser.resolvingSymlinksInPath().path ==
+                URL(fileURLWithPath: home).resolvingSymlinksInPath().path)
+            // Foundation uses Darwin's per-user temp directory independently of TMPDIR.
+            // Fixtures there remain test-owned on the disposable worker.
+            let tmp = try #require(OpenClawEnv.path("TMPDIR"))
+            #expect(URL(fileURLWithPath: tmp).resolvingSymlinksInPath().path ==
+                root.appendingPathComponent("tmp").resolvingSymlinksInPath().path)
             #expect(OpenClawPaths.stateDirURL == root.appendingPathComponent("state", isDirectory: true))
             #expect(OpenClawPaths.configURL == OpenClawPaths.stateDirURL.appendingPathComponent("openclaw.json"))
             return OpenClawPaths.stateDirURL

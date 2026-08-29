@@ -30,7 +30,8 @@ await runWithFailedTrailer("macos-native", async () => {
     );
   }
 
-  // Keep Unix socket fixture paths short, independently of RUNNER_TEMP's length.
+  // Keep paths short for tools honoring TMPDIR, independently of RUNNER_TEMP's length.
+  // Foundation's Darwin temp directory belongs to the disposable OS worker instead.
   const root = fs.realpathSync(fs.mkdtempSync("/tmp/oc-test-"));
   let canRemove = true;
   try {

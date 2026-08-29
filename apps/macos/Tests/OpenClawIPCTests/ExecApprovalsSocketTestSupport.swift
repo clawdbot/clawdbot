@@ -12,7 +12,7 @@ enum ExecApprovalsSocketTestSupport {
         guard longestSocketPath.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path) else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENAMETOOLONG), userInfo: [
                 NSLocalizedDescriptionKey:
-                    "Native socket fixtures need a shorter test-owned TMPDIR in the disposable runner.",
+                    "Native socket fixtures need a shorter per-user temporary directory in the disposable runner.",
             ])
         }
         var bytes = Array(template.utf8CString)

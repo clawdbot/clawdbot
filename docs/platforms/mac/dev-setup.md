@@ -80,7 +80,9 @@ The `macos-swift` GitHub CI job builds the tests with the runner's normal
 SwiftPM caches, then runs the built suite through `scripts/test-macos-native.mts`.
 Each invocation selects private `HOME` and `CFFIXED_USER_HOME`,
 `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, and short `TMPDIR` before any test
-bundle loads. The full suite explicitly selects the default profile, preserving
+bundle loads. Tools honoring `TMPDIR` use that launcher-owned directory;
+Foundation uses Darwin's per-user temp directory, owned and discarded by the
+disposable OS worker. The full suite explicitly selects the default profile, preserving
 its local Gateway lifecycle contracts. AppState isolation tests run separately
 with a unique named profile; no test is run twice. The child environment excludes
 inherited app settings and credentials while retaining toolchain and runtime
@@ -124,14 +126,15 @@ macOS environment instead.
 Tests should own their resources: unique defaults suites with cleanup,
 nonpersistent WebKit data stores, ephemeral loopback fixture endpoints, and
 temporary files rooted in `FileManager.temporaryDirectory`. Unix-domain socket
-fixtures require a short test-owned `TMPDIR`; an overlong path fails rather than
-silently writing outside that directory. The cooperative `TestIsolation` helper
+fixtures require a short test-owned path there; an overlong path fails rather
+than silently writing outside that directory. The cooperative `TestIsolation` helper
 serializes and restores participating tests' environment and selected defaults
 mutations. Config-only scopes also own a temporary state directory for config
 health/audit writes and remove it when the async body finishes, including errors.
 Callers still own their config fixture files and must join any async work before
-leaving the scope. Unscoped temporary files are removed with the launcher's
-process resources. Never change `OPENCLAW_PROFILE` inside a test: `AppProfile`
+leaving the scope. These unique fixture directories are cleaned by their owners;
+remaining Foundation temporary files are discarded with the worker, not the
+launcher's root. Never change `OPENCLAW_PROFILE` inside a test: `AppProfile`
 and `AppDefaults` freeze their identity for the process. Tests needing another
 singleton identity require a fresh process. The cooperative helper does not
 isolate unrelated tests or the process from the host.

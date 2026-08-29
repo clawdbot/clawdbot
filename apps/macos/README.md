@@ -65,8 +65,11 @@ as test-owned resources. See [native test safety](https://docs.openclaw.ai/platf
 The `macos-swift` CI job builds tests once, then runs them through
 `scripts/test-macos-native.mts`. The full suite retains default-profile behavior;
 named-profile AppState isolation tests run separately. Each process gets private
-home, config/state paths, and a short temporary directory before the test bundle
-loads. The launcher also creates an unlocked, disposable Keychain in that home
+home, config/state paths, and a short `TMPDIR` for tools that honor it before the
+test bundle loads. Foundation uses Darwin's per-user temp directory instead;
+`TestIsolation` fixtures own and clean unique directories there, and the
+disposable OS worker owns and discards the surrounding directory. The launcher
+also creates an unlocked, disposable Keychain in that home
 and selects it as the user-domain default and search list, so catalog migration
 can save without prompting to create a login Keychain. It disables automatic
 locking only for that test resource and deletes it after the test process group
