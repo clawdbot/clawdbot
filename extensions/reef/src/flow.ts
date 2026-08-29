@@ -130,6 +130,9 @@ export function isPermanentReefOutboundRejection(error: unknown): boolean {
 
 export class ReefMessageFlow {
   private legacyDeliveryIndex?: Promise<Map<string, LegacyDeliveryCandidate>>;
+  // Entry ids whose last processing outcome parked (pending review, guard
+  // outage): their re-polls skip the duplicate durable read observation.
+  private readonly parkedReadIds = new Set<string>();
 
   constructor(
     readonly options: {
@@ -222,10 +225,12 @@ export class ReefMessageFlow {
       return [];
     }
     const rejections: ReefDeliveryRejection[] = [];
-    await appendInboxRead(
-      this.options.audit,
-      entries.map((entry) => entry.id),
-    );
+    // A parked entry is re-polled every reconcile interval; one durable read
+    // observation per park keeps the audit chain from filling with retries.
+    const unreadIds = entries.map((entry) => entry.id).filter((id) => !this.parkedReadIds.has(id));
+    if (unreadIds.length > 0) {
+      await appendInboxRead(this.options.audit, unreadIds);
+    }
     for (const entry of entries) {
       if (entry.kind === "receipt") {
         const rejection = await this.processReceipt(entry);
@@ -235,7 +240,15 @@ export class ReefMessageFlow {
         continue;
       }
       if (entry.envelope) {
-        await this.processEnvelope(entry.peer, entry.envelope);
+        try {
+          await this.processEnvelope(entry.peer, entry.envelope);
+        } catch (error) {
+          if (error instanceof ReefInboxEntryParkedError) {
+            this.parkedReadIds.add(entry.id);
+          }
+          throw error;
+        }
+        this.parkedReadIds.delete(entry.id);
       }
     }
     return rejections;

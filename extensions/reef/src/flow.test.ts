@@ -117,13 +117,14 @@ describe("ReefMessageFlow inbound", () => {
     // A stochastic classifier would roll "allow" on the second call; the
     // recorded pending review must own redelivery instead.
     const classifier = guard(review, allow);
+    const audit = new MemoryAuditStore(new Uint8Array(32).fill(11));
     const flow = new ReefMessageFlow({
       config: config(),
       trust: trust({ alice: peerTrust(alice) }).store,
       keys: bob,
       transport: relay as unknown as ReefTransportClient,
       guard: classifier,
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(11)),
+      audit,
       replay: new MemoryReplayStore(),
       ...stores,
       onIngress,
@@ -157,6 +158,10 @@ describe("ReefMessageFlow inbound", () => {
     expect(relay.acknowledge).toHaveBeenCalledOnce();
     // One post-approval classification, never a per-redelivery re-roll.
     expect(classifier.classify).toHaveBeenCalledTimes(2);
+    // One durable read observation for the whole park lifecycle — a 30s
+    // re-poll cadence must not fill the audit chain with retries.
+    const readEvents = (await audit.entries()).filter((entry) => entry.event.type === "read");
+    expect(readEvents).toHaveLength(1);
   });
 
   it("acks a signed accepted receipt and delivers duplicate redelivery once, keyed by envelope id", async () => {
