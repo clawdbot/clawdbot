@@ -52,12 +52,10 @@ describe("cross-OS npm diagnostic capture", () => {
           `0 verbose title npm install https://user:${secret}@registry.test/package.tgz`,
           `1 http fetch GET 200 https://registry.test/?token=${secret} 123ms (cache miss)`,
           "2 http cache https://registry.test/public 5ms (cache hit)",
-          "3 timing reify:unpack Completed in 200ms",
-          `4 timing reifyNode:${secret} Completed in 999ms`,
           `5 error ${secret}`,
           "6 verbose exit 0",
-          "7 timing reify:build Completed in 999999999999999999ms",
-          "8 timing reify:trash Completed in -1ms",
+          "7 http fetch GET 200 https://registry.test/public 999999999999999999ms",
+          "8 http fetch GET 200 https://registry.test/public -1ms",
           `9 error code ${secret}`,
           `10 verbose title npm ${secret}`,
         ].join("\n"),
@@ -73,7 +71,6 @@ describe("cross-OS npm diagnostic capture", () => {
           command: "install",
           exitCode: 0,
           fetch: { count: 2, cacheHits: 1, cacheMisses: 1, durationMs: 128, maxDurationMs: 123 },
-          timings: { "reify:unpack": 200 },
         },
       ],
     });
@@ -81,8 +78,6 @@ describe("cross-OS npm diagnostic capture", () => {
     expect(output).not.toContain(secret);
     expect(output).not.toContain("registry.test");
     expect(output).not.toContain(params.logsDir);
-    expect(output).not.toContain("reifyNode");
-    expect(diagnostics(params.logPath).logs[0].timings).toEqual({ "reify:unpack": 200 });
   });
 
   it("captures a failed command without replacing its error or copying raw diagnostic text", async () => {

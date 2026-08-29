@@ -438,23 +438,6 @@ export async function installPackageSpec(params: {
 }
 
 const NPM_DIAGNOSTIC_LOG_LIMIT = 8;
-const NPM_DIAGNOSTIC_TIMERS = new Set([
-  "npm",
-  "command:install",
-  "idealTree",
-  "idealTree:init",
-  "idealTree:buildDeps",
-  "reify",
-  "reify:loadTrees",
-  "reify:diffTrees",
-  "reify:retireShallow",
-  "reify:createSparse",
-  "reify:loadBundles",
-  "reify:unpack",
-  "reify:build",
-  "reify:trash",
-  "reify:save",
-]);
 const NPM_DIAGNOSTIC_ERROR_CODES = new Set([
   "EACCES",
   "EBADENGINE",
@@ -524,7 +507,6 @@ export async function withNpmDiagnostics<T>(
 
 function projectNpmDebugLog(text: string) {
   const fetch = { count: 0, cacheHits: 0, cacheMisses: 0, durationMs: 0, maxDurationMs: 0 };
-  const timings: Record<string, number> = {};
   const errorCodes = new Set<string>();
   let command: string | null = null;
   let exitCode: number | null = null;
@@ -546,10 +528,6 @@ function projectNpmDebugLog(text: string) {
     if (code && NPM_DIAGNOSTIC_ERROR_CODES.has(code)) {
       errorCodes.add(code);
     }
-    const timing = line.match(/^\d+ timing (\S+) Completed in (\d+)ms$/u);
-    if (timing && NPM_DIAGNOSTIC_TIMERS.has(timing[1]!) && isNpmTiming(Number(timing[2]))) {
-      timings[timing[1]!] = Number(timing[2]);
-    }
     // npm-registry-fetch emits both network and cache reads; summed durations
     // describe this bounded tail and may overlap, so they are not wall time.
     const request = line.match(
@@ -564,7 +542,7 @@ function projectNpmDebugLog(text: string) {
       fetch.maxDurationMs = Math.max(fetch.maxDurationMs, durationMs);
     }
   }
-  return { command, exitCode, lastActivity, errorCodes: [...errorCodes], fetch, timings };
+  return { command, exitCode, lastActivity, errorCodes: [...errorCodes], fetch };
 }
 
 function isNpmTiming(value: number) {
