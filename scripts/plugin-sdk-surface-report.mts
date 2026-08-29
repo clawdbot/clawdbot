@@ -329,7 +329,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      4353,
+      // +3: SDK-owned command-status projection types for plugin status consumers (#76759).
+      4356,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
