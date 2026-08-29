@@ -231,6 +231,8 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers, canonical Gateway browser-origin acceptance via `resolveAcceptedBrowserOrigin`, and `runDetachedWebhookWork` for tracked post-ack processing |
   </Accordion>
 
+For structured SecretRefs, `resolveReadOnlyEnvSecretRef` returns `blocked` when the ref cannot be used, including an allowed env ref whose value is missing or empty. Callers may apply their existing fallback only for `missing`; a blocked ref must not borrow ambient or auth-profile credentials. Its provider check follows source-specific default aliases and explicit env allowlists.
+
 Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It accepts `localhost`, IPv4 loopback literals across `127.0.0.0/8`, `::1`, bracketed IPv6, and IPv4-mapped IPv6 loopback literals. It parses IP literals rather than matching text prefixes, so a DNS name such as `127.0.0.1.evil.com` is not loopback. Use `isPrivateOrLoopbackHost(host)` only when private-network hosts such as RFC 1918 addresses are also valid.
 
   <Accordion title="Runtime and storage subpaths">
