@@ -45,13 +45,19 @@ it("builds the package-derived Git fixture with its own checkout identity", asyn
   const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
     scripts: { build: string };
   };
-  expect(await collectGitRuntimeErrors({ root, sha })).not.toEqual([]);
-  execSync(manifest.scripts.build, { cwd: root });
-  expect(await collectGitRuntimeErrors({ root, sha })).toEqual([]);
-  expect(JSON.parse(readFileSync(join(root, "dist/build-info.json"), "utf8"))).toEqual({
-    commit: sha,
-    version: "2026.8.1",
-  });
-  expect(readFileSync(join(root, "dist/entry.js"), "utf8")).toBe(runtimeEntry);
-  expect(git(["status", "--porcelain"])).toBe("");
+  const preflight = tempDirs.make("update-channel-preflight-");
+  execFileSync("git", ["clone", "--quiet", root, preflight]);
+  for (const checkout of [preflight, root]) {
+    expect(await collectGitRuntimeErrors({ root: checkout, sha })).not.toEqual([]);
+    execSync(manifest.scripts.build, { cwd: checkout });
+    expect(await collectGitRuntimeErrors({ root: checkout, sha })).toEqual([]);
+    expect(JSON.parse(readFileSync(join(checkout, "dist/build-info.json"), "utf8"))).toEqual({
+      commit: sha,
+      version: "2026.8.1",
+    });
+    expect(readFileSync(join(checkout, "dist/entry.js"), "utf8")).toBe(runtimeEntry);
+    expect(
+      execFileSync("git", ["status", "--porcelain"], { cwd: checkout, encoding: "utf8" }),
+    ).toBe("");
+  }
 });

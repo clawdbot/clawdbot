@@ -7,7 +7,8 @@ assert(
   fs.existsSync("dist/entry.js") || fs.existsSync("dist/entry.mjs"),
   "package-derived Git fixture is missing its runtime entry",
 );
-const buildInfo = JSON.parse(fs.readFileSync("dist/build-info.json", "utf8"));
+// Keep a committed input so update preflight's fresh checkout can rebuild metadata.
+const buildInfo = JSON.parse(fs.readFileSync(".openclaw-fixture/build-info.json", "utf8"));
 const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 fs.writeFileSync("dist/build-info.json", `${JSON.stringify({ ...buildInfo, commit: head })}\n`);
 fs.writeFileSync("dist/.buildstamp", `${JSON.stringify({ builtAt: Date.now(), head })}\n`);

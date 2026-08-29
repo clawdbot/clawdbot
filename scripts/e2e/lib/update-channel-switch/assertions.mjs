@@ -149,6 +149,10 @@ function prepareGitFixture(root) {
   const fixtureBuildPath = path.join(root, ".openclaw-fixture", "build.mjs");
   fs.mkdirSync(path.dirname(fixtureBuildPath), { recursive: true });
   fs.copyFileSync(new URL("./build.mjs", import.meta.url), fixtureBuildPath);
+  fs.copyFileSync(
+    path.join(root, "dist", "build-info.json"),
+    path.join(root, ".openclaw-fixture", "build-info.json"),
+  );
   // The tarball omits source .gitignore rules; build metadata must remain generated.
   fs.appendFileSync(
     path.join(root, ".gitignore"),
