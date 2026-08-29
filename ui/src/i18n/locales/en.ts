@@ -1878,7 +1878,7 @@ export const en: TranslationMap = {
     notifications: {
       title: "Push notifications",
       nativeTitle: "Notifications",
-      unavailableHint: "Not available in this browser.",
+      unavailableHint: "Browser unsupported.",
       unavailable: "Unavailable",
       checking: "Checking...",
       granted: "Granted",
@@ -1903,12 +1903,9 @@ export const en: TranslationMap = {
       subscribing: "Subscribing...",
       enable: "Enable notifications",
       openSystemSettings: "Open System Settings",
-      blockedHint:
-        "Notifications are blocked. Update your browser site permissions to allow notifications.",
-      nativeBlockedHint:
-        "Notifications are disabled for OpenClaw in macOS. Allow them in System Settings > Notifications.",
-      iosInstallRequired:
-        "To receive notifications on iPhone or iPad, use Share > Add to Home Screen, then open the installed OpenClaw app.",
+      blockedHint: "Allow notifications in this site's browser permissions.",
+      nativeBlockedHint: "Allow OpenClaw in macOS System Settings > Notifications.",
+      iosInstallRequired: "On iPhone or iPad, use Share > Add to Home Screen, then open OpenClaw.",
       accountDefaults: "Account defaults",
       installedApp: "This browser or app",
       deliverDevice: "Deliver to this browser or app",
