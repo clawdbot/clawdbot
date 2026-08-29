@@ -83,6 +83,9 @@ async function drainStoreWriterQueue(queues: StoreWriterQueues, storePath: strin
     return;
   }
   queue.drainPromise = (async () => {
+    // Publish the active drain before invoking a task's synchronous prologue.
+    // A nested enqueue must observe this promise instead of starting a second drain.
+    await Promise.resolve();
     try {
       while (queue.pending.length > 0) {
         const task = queue.pending.shift();
