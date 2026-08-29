@@ -30,6 +30,10 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  ComputerUseCapabilityDescriptorSchema,
+  type ComputerUseCapabilityDescriptor,
+} from "../plugins/computer-use-contract.js";
 import { isWorkerToolName, type WorkerToolAuthority } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import {
@@ -42,6 +46,11 @@ const LAUNCH_VERSION = 4;
 export type WorkerBrowserLaunchDescriptor = {
   cdpUrl: string;
   launcherPath: string;
+};
+
+export type WorkerComputerLaunchDescriptor = {
+  nodeId: string;
+  computerUse: ComputerUseCapabilityDescriptor;
 };
 
 type WorkerLaunchPermissionContext =
@@ -73,6 +82,7 @@ type WorkerLaunchAssignment = WorkerLaunchPermissionContext & {
   };
   toolAuthority: WorkerToolAuthority;
   browser?: WorkerBrowserLaunchDescriptor;
+  computer?: WorkerComputerLaunchDescriptor;
 };
 
 type WorkerLaunchAdmission = Omit<WorkerConnectParams["admission"], "runId"> & {
@@ -189,7 +199,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
         "liveEvents",
         "toolAuthority",
       ],
-      ["systemPrompt", "browser", "permissionMode", "workerContainmentRoot"],
+      ["systemPrompt", "browser", "computer", "permissionMode", "workerContainmentRoot"],
     )
   ) {
     return undefined;
@@ -241,6 +251,16 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   const browser =
     value.browser === undefined ? undefined : parseBrowserLaunchDescriptor(value.browser);
   if (value.browser !== undefined && !browser) {
+    return undefined;
+  }
+  if (
+    toolAuthority.allowedToolNames.includes("computer") !== (value.computer !== undefined) ||
+    (value.computer !== undefined &&
+      (!isRecord(value.computer) ||
+        !hasExactKeys(value.computer, ["nodeId", "computerUse"]) ||
+        !isIdentifier(value.computer.nodeId) ||
+        !Value.Check(ComputerUseCapabilityDescriptorSchema, value.computer.computerUse)))
+  ) {
     return undefined;
   }
   if (

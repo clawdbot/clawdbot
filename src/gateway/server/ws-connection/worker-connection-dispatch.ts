@@ -1,4 +1,6 @@
 import {
+  type WorkerComputerParams,
+  type WorkerComputerResult,
   type RequestFrame,
   type WorkerConnectParams,
   type WorkerErrorShape,
@@ -18,12 +20,14 @@ import {
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitResult,
   WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
+  WORKER_COMPUTER_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_METHODS,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   validateWorkerGitHubPublishParams,
+  validateWorkerComputerParams,
   validateWorkerHeartbeatParams,
   validateWorkerLiveEventParams,
   validateWorkerPortalParams,
@@ -79,6 +83,16 @@ export type WorkerConnectionService = {
   validateWorkerConnection: (
     identity: WorkerConnectionIdentity,
   ) => WorkerProtocolCloseReason | null;
+  executeComputer?: (
+    identity: WorkerConnectionIdentity,
+    request: WorkerComputerParams,
+    signal?: AbortSignal,
+  ) => Promise<
+    WorkerServiceResult<
+      WorkerComputerResult,
+      { reason: WorkerProtocolCloseReason; message?: string }
+    >
+  >;
   executeSessionTool?: (
     identity: WorkerConnectionIdentity,
     toolName: "sessions_spawn" | "sessions_send" | "github_publish" | "portal",
@@ -249,6 +263,36 @@ export async function dispatchWorkerRequest(params: {
       return;
     }
     params.respond(false, undefined, workerLiveEventError(outcome.details));
+    return;
+  }
+  if (params.request.method === "worker.computer") {
+    if (
+      !params.identity.protocolFeatures.includes(WORKER_COMPUTER_PROTOCOL_FEATURE) ||
+      !service.executeComputer
+    ) {
+      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
+      return;
+    }
+    if (!validateWorkerComputerParams(params.request.params)) {
+      rejectWorkerRequest({ ...params, reason: "invalid-frame" });
+      return;
+    }
+    const outcome = await service.executeComputer(
+      params.identity,
+      params.request.params,
+      params.signal,
+    );
+    if (outcome.ok) {
+      params.respond(true, outcome.result);
+    } else if ("closeReason" in outcome) {
+      rejectWorkerRequest({ ...params, reason: outcome.closeReason });
+    } else {
+      params.respond(
+        false,
+        undefined,
+        workerProtocolError(outcome.reason, { message: outcome.message }),
+      );
+    }
     return;
   }
   if (

@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createCuaComputerProvider } from "./commands.js";
 import {
@@ -19,6 +20,24 @@ import {
 } from "./driver-client.js";
 
 describe("cua-computer provider", () => {
+  it("settles the native driver during node preparation without opening a computer execution", async () => {
+    const { session, getDesktopState } = driver();
+    const ready = createDeferred<void>();
+    let available = false;
+    session.isAvailable = () => available;
+    session.prepareAvailability = async () => {
+      await ready.promise;
+      available = true;
+    };
+    const provider = createCuaComputerProvider({ platform: "linux", driver: session });
+    const preparing = provider.prepare?.({ config: {}, env: {} });
+    expect(provider.isAvailable()).toBe(false);
+    ready.resolve();
+    await preparing;
+    expect(provider.isAvailable()).toBe(true);
+    expect(getDesktopState).not.toHaveBeenCalled();
+  });
+
   it("advertises the implemented Linux v2 capability", () => {
     const { session } = driver();
     const descriptor = createCuaComputerProvider({

@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, X509Certificate } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -57,7 +57,7 @@ if (args[0] === "--version") {
   fs.appendFileSync(path.join(state, "enabled"), args[2] + "\\n");
 } else {
   process.title = "openclaw-connect";
-  fs.writeFileSync(path.join(state, "launch.json"), JSON.stringify({ build: ${JSON.stringify(build)}, args, cli: process.argv[1], token: process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN, setupCode: process.env.CRABBOX_WORKER_SETUP_CODE }));
+  fs.writeFileSync(path.join(state, "launch.json"), JSON.stringify({ build: ${JSON.stringify(build)}, args, cli: process.argv[1], token: process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN, setupCode: process.env.CRABBOX_WORKER_SETUP_CODE, environment: { DISPLAY: process.env.DISPLAY, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR }, enabledPlugins: fs.readFileSync(path.join(state, "enabled"), "utf8").trim().split("\\n") }));
   setInterval(() => {}, 60000);
 }
 `,
@@ -148,9 +148,49 @@ async function serveArtifact(archive: Buffer, options: { tls?: boolean; redirect
   return { nodeBootstrap, authorizations };
 }
 
-async function enroll(home: string, nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"]) {
+type DesktopFixture = {
+  enabled: boolean;
+  display?: string;
+  dbus?: string;
+  runtimeDir?: string;
+};
+
+async function enroll(
+  home: string,
+  nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"],
+  desktop?: DesktopFixture,
+) {
+  const bin = path.join(home, "bin");
+  const proc = path.join(home, "proc");
+  if (desktop) {
+    fs.mkdirSync(bin);
+    fs.mkdirSync(path.join(proc, "123"), { recursive: true });
+    fs.writeFileSync(path.join(home, "desktop.env"), "CRABBOX_DESKTOP_ENV=xfce\nDISPLAY=:99\n");
+    fs.writeFileSync(
+      path.join(proc, "123", "environ"),
+      [
+        `DISPLAY=${desktop.display ?? ":99"}`,
+        `DBUS_SESSION_BUS_ADDRESS=${desktop.dbus ?? "unix:path=/run/fixture/bus"}`,
+        `XDG_RUNTIME_DIR=${desktop.runtimeDir ?? "/run/fixture"}`,
+        "UNRELATED_DESKTOP_VALUE=do-not-export",
+        "",
+      ].join("\0"),
+    );
+    fs.writeFileSync(
+      path.join(bin, "pgrep"),
+      `#!/bin/sh
+set -eu
+[ "$*" = "-u $(id -u) -x xfce4-session" ]
+[ -z "\${CRABBOX_WORKER_BOOTSTRAP_TOKEN-}" ]
+[ -z "\${CRABBOX_WORKER_SETUP_CODE-}" ]
+echo 123
+`,
+      { mode: 0o700 },
+    );
+  }
   const setup = createCrabboxNodeEnrollmentSetup({
     leaseId,
+    desktop: desktop?.enabled,
     enrollment: {
       mode: "connect",
       setupCode,
@@ -166,7 +206,14 @@ async function enroll(home: string, nodeBootstrap: CrabboxWorkerNodeEnrollment["
   const child = spawn("/bin/sh", [], {
     env: {
       HOME: home,
-      PATH: process.env.PATH,
+      PATH: desktop ? `${bin}:${process.env.PATH}` : process.env.PATH,
+      ...(desktop
+        ? {
+            DISPLAY: ":0",
+            DBUS_SESSION_BUS_ADDRESS: "wrong-login-session",
+            XDG_RUNTIME_DIR: "/run/wrong",
+          }
+        : {}),
       ...setup.forwardedEnv,
       // Exercise the installer overriding an inherited package-manager default.
       NPM_CONFIG_IGNORE_SCRIPTS: "true",
@@ -176,7 +223,12 @@ async function enroll(home: string, nodeBootstrap: CrabboxWorkerNodeEnrollment["
   const output: Buffer[] = [];
   child.stdout.on("data", (chunk: Buffer) => output.push(chunk));
   child.stderr.on("data", (chunk: Buffer) => output.push(chunk));
-  child.stdin.end(setup.command);
+  // Replace only OS fixture roots; the generated bootstrap and credential flow execute unchanged.
+  child.stdin.end(
+    setup.command
+      .replaceAll("/var/lib/crabbox/desktop.env", path.join(home, "desktop.env"))
+      .replaceAll("/proc/$process_pid/environ", `${proc}/$process_pid/environ`),
+  );
   const [code] = await once(child, "close");
   return { code, output: Buffer.concat(output).toString("utf8") };
 }
@@ -190,6 +242,8 @@ async function readLaunch(stateDir: string) {
     args: string[];
     token?: string;
     setupCode?: string;
+    environment: Record<string, string>;
+    enabledPlugins: string[];
   };
 }
 
@@ -301,4 +355,54 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     expect((await readLaunch(stateDir)).build).toBe("tls");
     expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
   }, 30_000);
+});
+
+// The remote owner is Linux Bash; macOS's bundled Bash 3 cannot execute mapfile.
+const hasBashMapfile = spawnSync("bash", ["-c", "type mapfile"], { encoding: "utf8" }).status === 0;
+
+describe.runIf(hasBashMapfile)("Crabbox desktop node bootstrap", () => {
+  it.each([true, false])(
+    "binds only desktop=%s nodes to the exact XFCE session",
+    async (enabled) => {
+      const { home, stateDir } = testHome();
+      const { nodeBootstrap } = await serveArtifact(await packageFixture("desktop"));
+      await expect(enroll(home, nodeBootstrap, { enabled })).resolves.toEqual({
+        code: 0,
+        output: "",
+      });
+      const launch = await readLaunch(stateDir);
+      expect(launch.enabledPlugins).toEqual(enabled ? ["demo", "cua-computer"] : ["demo"]);
+      expect(launch.environment).toEqual(
+        enabled
+          ? {
+              DISPLAY: ":99",
+              DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/fixture/bus",
+              XDG_RUNTIME_DIR: "/run/fixture",
+            }
+          : {
+              DISPLAY: ":0",
+              DBUS_SESSION_BUS_ADDRESS: "wrong-login-session",
+              XDG_RUNTIME_DIR: "/run/wrong",
+            },
+      );
+      expect(launch).not.toHaveProperty("token");
+      expect(launch).not.toHaveProperty("setupCode");
+    },
+    30_000,
+  );
+
+  it.each([{ display: ":0" }, { dbus: "" }, { runtimeDir: "relative-directory" }])(
+    "refuses an invalid XFCE binding before artifact download or node launch: %j",
+    async (invalid) => {
+      const { home, stateDir } = testHome();
+      const { nodeBootstrap, authorizations } = await serveArtifact(
+        await packageFixture("invalid-desktop"),
+      );
+      const result = await enroll(home, nodeBootstrap, { enabled: true, ...invalid });
+      expect(result.code).toBe(1);
+      expect(result.output).toContain("XFCE session");
+      expect(authorizations).toEqual([]);
+      expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
+    },
+  );
 });

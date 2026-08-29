@@ -67,6 +67,11 @@ const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) 
   new WorkerEnvironmentServiceError(code, message);
 
 type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
+  prepareComputer?: (
+    claim: import("./placement-store.js").WorkerSessionTurnClaim,
+  ) => Promise<import("./computer-transport.js").PreparedWorkerComputer | undefined>;
+  executeComputer?: import("./worker-turn-computer-rpc.js").WorkerComputerExecutor;
+  closeComputers?: () => Promise<void>;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
   nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
@@ -339,6 +344,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     liveEvents: options.liveEvents,
     placementStore: options.placementStore,
     executeSessionTool: options.executeSessionTool,
+    executeComputer: options.executeComputer,
     inference,
     isStopping: () => stopping,
     now,
@@ -475,6 +481,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     // Shutdown owns the guard handoff: stop new admission and drain admitted recovery before
     // inference or tunnel teardown can invalidate its closure-bound placement authority.
     await closeReconcileEnvironmentGuard();
+    await options
+      .closeComputers?.()
+      .catch(() => warn("Session computer cleanup failed during Gateway shutdown"));
     await inference.stop();
     credentialBroker.clear();
     options.liveEvents?.clear();
@@ -588,6 +597,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     commitTranscript: turnRpc.commitTranscript,
     pushLiveEvent: turnRpc.pushLiveEvent,
     executeSessionTool: turnRpc.executeSessionTool,
+    executeComputer: turnRpc.executeComputer,
+    prepareComputer: options.prepareComputer,
     startInference: turnRpc.startInference,
     cancelInference: turnRpc.cancelInference,
     cancelInferenceForSession: turnRpc.cancelInferenceForSession,

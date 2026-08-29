@@ -540,7 +540,6 @@ export function createCrabboxWorkerProvider(
       const binary = resolveBinary(parsed.binary);
       const context = { binary, provider: parsed.provider };
       const leaseId = allocation.leaseId;
-      const slug = operationSlug(operationId);
       if (parsed.desktop && parsed.provider === "hetzner") {
         await assertHetznerDesktopHasManagedCoordinator({ binary, runCommand });
       }
@@ -563,7 +562,7 @@ export function createCrabboxWorkerProvider(
         ...context,
         id: leaseId,
         profile: parsed,
-        slug,
+        slug: operationSlug(operationId),
         timeoutMs: () => remainingProvisionTimeout(deadline, warmupTimeoutMs),
       });
       let inspected: InspectCommandResult;
@@ -637,7 +636,11 @@ export function createCrabboxWorkerProvider(
         }
         return await failProvisionAfterCleanup({ ...inspectedParams, id: leaseId }, error);
       }
-      const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({ enrollment, leaseId });
+      const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({
+        enrollment,
+        desktop: parsed.desktop,
+        leaseId,
+      });
       inspectedParams.inspect = await runProvisionSetupAndWaitReady({
         ...inspectedParams,
         phase: "node enrollment setup",
