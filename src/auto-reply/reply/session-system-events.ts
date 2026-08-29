@@ -43,8 +43,9 @@ import { acknowledgeSessionStateNotices } from "../../sessions/session-state-eve
 import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
 import { resolveContinuationRuntimeConfig } from "../continuation/config.js";
 import {
-  createPreparedSystemEventAuthorityResolver,
+  createPreparedSystemEventAuthorityOwner,
   readAdoptedSystemEventDeliveryIds,
+  readPreparedSystemEventAuthorityKey,
   resolveFinalSystemEventAdoption,
   settleStaleSystemEventAuthority,
   type PreparedFormattedSystemEvents,
@@ -236,7 +237,6 @@ export async function prepareFormattedSystemEvents(params: {
       selected = selected.filter((event) => !stale.has(event));
     }
   };
-  await removeStaleAuthorityEvents();
   // Adoption-scoped events settle only after the turn is durably adopted, so a
   // crash between the transcript write and the queue ack leaves an ack id that
   // IS already adopted but whose row is still pending. Both kinds must consult
@@ -258,7 +258,10 @@ export async function prepareFormattedSystemEvents(params: {
         )
       : new Set<string>();
   await removeStaleAuthorityEvents();
-  const resolvePreparedAuthority = createPreparedSystemEventAuthorityResolver(authorityScope);
+  const authorityOwner = createPreparedSystemEventAuthorityOwner({
+    scope: authorityScope,
+    events: selected,
+  });
   const runtime = resolveContinuationRuntimeConfig(params.cfg);
   const deferredManagedEvents = new Set<SystemEvent>();
   const pendingManagedKeys = new Set<string>();
@@ -480,13 +483,13 @@ export async function prepareFormattedSystemEvents(params: {
       excludedAdoptedAckIds.add(id);
       continue;
     }
-    const authority = resolvePreparedAuthority(event);
+    const authorityKey = readPreparedSystemEventAuthorityKey(event);
     adoptionScopedDeliveries.push({
       id,
       acknowledge: async () => {
         await ackSessionDelivery(id, stateDir);
       },
-      ...(authority ? { authority } : {}),
+      ...(authorityKey ? { authorityKey } : {}),
     });
   }
   for (const ack of alreadyAdoptedAckIds) {
@@ -579,13 +582,13 @@ export async function prepareFormattedSystemEvents(params: {
     // Inbound text is deliberately not rewritten to neutralize look-alike `System:` lines.
     // Role separation plus external-content wrapping is the boundary.
     // This is an explicit product decision.
-    const authority = resolvePreparedAuthority(event);
+    const authorityKey = readPreparedSystemEventAuthorityKey(event);
     blocks.push({
       ...(event.sessionDeliveryAckId
         ? { key: `session-delivery:${event.sessionDeliveryAckId}` }
         : {}),
       text: lines.join("\n"),
-      ...(authority ? { authority } : {}),
+      ...(authorityKey ? { authorityKey } : {}),
     });
   }
   if (params.isMainSession && params.isNewSession) {
@@ -601,15 +604,18 @@ export async function prepareFormattedSystemEvents(params: {
   if (summaryLines.length > 0) {
     blocks.unshift({ key: "session-summary", text: summaryLines.join("\n") });
   }
+  const pendingManagedDeliveries = pendingManagedSettlements.map((settlement) => {
+    const authorityKey = readPreparedSystemEventAuthorityKey(settlement.event);
+    return {
+      id: settlement.id,
+      acknowledge: () => settleManagedDelivery(params.sessionKey, settlement),
+      ...(authorityKey ? { authorityKey } : {}),
+    };
+  });
   return {
     blocks,
-    managedDeliveries: [
-      ...pendingManagedSettlements.map((settlement) => ({
-        id: settlement.id,
-        acknowledge: () => settleManagedDelivery(params.sessionKey, settlement),
-      })),
-      ...adoptionScopedDeliveries,
-    ],
+    managedDeliveries: [...pendingManagedDeliveries, ...adoptionScopedDeliveries],
+    ...(authorityOwner ? { authorityOwner } : {}),
   };
 }
 

@@ -140,6 +140,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
   const preparedSystemEvents: PreparedFormattedSystemEvents[] = [];
+  const suppliedUserTurnTranscriptRecorder = opts?.userTurnTranscriptRecorder;
   let systemEventsPrepared = false;
   const drainSystemEventBlocks = async () => {
     if (useFastReplyRuntime) {
@@ -197,7 +198,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     const adoption = resolveFinalSystemEventAdoption({
       prepared: preparedSystemEvents,
       replaceDeliveryIds: systemEventsPrepared
-        ? opts?.userTurnTranscriptRecorder?.replaceSessionDeliveryAckIds
+        ? suppliedUserTurnTranscriptRecorder
+          ? (deliveryIds) =>
+              suppliedUserTurnTranscriptRecorder.replaceSessionDeliveryAckIds?.(deliveryIds) ===
+              true
+          : undefined
         : undefined,
     });
     if (adoption.kind === "settle-stale") {

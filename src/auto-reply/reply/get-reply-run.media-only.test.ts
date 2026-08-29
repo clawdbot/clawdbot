@@ -240,8 +240,10 @@ const sessionSystemEventsMocks = vi.hoisted(() => {
 });
 const loadSessionEntryMock = vi.hoisted(() => vi.fn());
 const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+const recipientAuthorityCurrentMock = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
+  isSessionRecipientAuthorityCurrent: recipientAuthorityCurrentMock,
   listSessionEntriesCore: vi.fn().mockReturnValue([]),
   loadSessionEntry: loadSessionEntryMock,
   patchSessionEntryCore: vi.fn(),
@@ -588,6 +590,7 @@ describe("runPreparedReply media-only handling", () => {
     preparedReplyMockState.unexpectedCalls.length = 0;
     loadSessionEntryMock.mockReset();
     updateAmbientTranscriptWatermarkMock.mockClear();
+    recipientAuthorityCurrentMock.mockReset().mockReturnValue(true);
     sessionSystemEventsMocks.state.prepared = undefined;
     sessionSystemEventsMocks.state.preparedQueue.length = 0;
     vi.clearAllMocks();
@@ -648,20 +651,79 @@ describe("runPreparedReply media-only handling", () => {
     expect(requireRunReplyAgentCall().opts?.turnAdoptionLifecycle).toBeUndefined();
   });
 
-  it("removes an authority-bound event revoked during current-turn image resolution", async () => {
-    let authorityStatus: "current" | "stale" | "settled" = "current";
-    const authority = {
-      status: () => authorityStatus,
-      settleStale: vi.fn(async () => {
-        authorityStatus = "settled";
-      }),
+  it("defers managed events when a supplied recorder cannot replace delivery receipts", async () => {
+    sessionSystemEventsMocks.state.prepared = {
+      blocks: [
+        {
+          key: "session-delivery:delivery-1",
+          text: "System: managed delegate artifact",
+        },
+      ],
+      managedDeliveries: [{ id: "delivery-1", acknowledge: vi.fn().mockResolvedValue(undefined) }],
     };
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "retry" },
+      target: {
+        sessionId: "session-id",
+        sessionKey: "session-key",
+        sessionEntry: undefined,
+        agentId: "default",
+      },
+    });
+    Reflect.deleteProperty(recorder, "replaceSessionDeliveryAckIds");
+
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "retry",
+          RawBody: "retry",
+          CommandBody: "retry",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+        opts: { userTurnTranscriptRecorder: recorder },
+      }),
+    );
+
+    expect(requireRunReplyAgentCall().followupRun.prompt).not.toContain(
+      "managed delegate artifact",
+    );
+    expect(requireRunReplyAgentCall().opts?.turnAdoptionLifecycle).toBeUndefined();
+  });
+
+  it("removes an authority-bound event revoked during current-turn image resolution", async () => {
+    const recipientAuthority = {
+      state: "bound" as const,
+      epoch: "11111111-1111-4111-8111-111111111111",
+    };
+    const authorityOwner = {
+      scope: {
+        agentId: "default",
+        sessionKey: "session-key",
+        storePath: "/tmp/sessions.json",
+      },
+      pending: new Map([
+        [
+          "event-stale",
+          {
+            authority: recipientAuthority,
+            event: {
+              id: "event-stale",
+              text: "stale delegate result",
+              ts: 1,
+              recipientAuthority,
+            },
+          },
+        ],
+      ]),
+    } satisfies NonNullable<PreparedFormattedSystemEvents["authorityOwner"]>;
     sessionSystemEventsMocks.state.prepared = {
       blocks: [
         {
           key: "session-delivery:delivery-stale",
           text: "System: stale delegate result",
-          authority,
+          authorityKey: "event-stale",
         },
         { text: "System: unbound sibling event" },
         {
@@ -673,16 +735,17 @@ describe("runPreparedReply media-only handling", () => {
         {
           id: "delivery-stale",
           acknowledge: vi.fn().mockResolvedValue(undefined),
-          authority,
+          authorityKey: "event-stale",
         },
         {
           id: "delivery-managed",
           acknowledge: vi.fn().mockResolvedValue(undefined),
         },
       ],
+      authorityOwner,
     };
     resolveCurrentTurnImagesMock.mockImplementationOnce(async () => {
-      authorityStatus = "stale";
+      recipientAuthorityCurrentMock.mockReturnValue(false);
       return {};
     });
 
@@ -695,29 +758,51 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
       __openclaw: { sessionDeliveryAckIds: ["delivery-managed"] },
     });
-    expect(authority.settleStale).toHaveBeenCalledOnce();
+    expect(authorityOwner.pending.size).toBe(0);
   });
 
   it("preserves an authority-bound event through final prompt adoption while it remains current", async () => {
-    const authority = {
-      status: () => "current" as const,
-      settleStale: vi.fn(async () => undefined),
+    const recipientAuthority = {
+      state: "bound" as const,
+      epoch: "11111111-1111-4111-8111-111111111111",
     };
+    const authorityOwner = {
+      scope: {
+        agentId: "default",
+        sessionKey: "session-key",
+        storePath: "/tmp/sessions.json",
+      },
+      pending: new Map([
+        [
+          "event-current",
+          {
+            authority: recipientAuthority,
+            event: {
+              id: "event-current",
+              text: "accepted delegate result",
+              ts: 1,
+              recipientAuthority,
+            },
+          },
+        ],
+      ]),
+    } satisfies NonNullable<PreparedFormattedSystemEvents["authorityOwner"]>;
     sessionSystemEventsMocks.state.prepared = {
       blocks: [
         {
           key: "session-delivery:delivery-current",
           text: "System: accepted delegate result",
-          authority,
+          authorityKey: "event-current",
         },
       ],
       managedDeliveries: [
         {
           id: "delivery-current",
           acknowledge: vi.fn().mockResolvedValue(undefined),
-          authority,
+          authorityKey: "event-current",
         },
       ],
+      authorityOwner,
     };
 
     await runPrepared();
@@ -727,7 +812,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
       __openclaw: { sessionDeliveryAckIds: ["delivery-current"] },
     });
-    expect(authority.settleStale).not.toHaveBeenCalled();
+    expect(authorityOwner.pending.size).toBe(1);
   });
 
   it("passes approved elevated defaults to the runner", async () => {

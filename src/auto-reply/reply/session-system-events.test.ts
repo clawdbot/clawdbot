@@ -74,8 +74,11 @@ vi.mock("../../runtime.js", () => ({
 
 const { drainFormattedSystemEvents, prepareFormattedSystemEvents } =
   await import("./session-system-events.js");
-const { acknowledgePersistedManagedSystemEvents, settleManagedSystemEventsAfterTurnAdoption } =
-  await import("./session-system-event-adoption.js");
+const {
+  acknowledgePersistedManagedSystemEvents,
+  resolveFinalSystemEventAdoption,
+  settleManagedSystemEventsAfterTurnAdoption,
+} = await import("./session-system-event-adoption.js");
 
 describe("drainFormattedSystemEvents trace context", () => {
   beforeEach(() => {
@@ -473,6 +476,81 @@ describe("drainFormattedSystemEvents trace context", () => {
     });
     expect(mocks.ackSessionDelivery).toHaveBeenCalledWith("delivery-1", undefined);
     expect(mocks.consumeSelectedSystemEventEntries).toHaveBeenCalledWith("main", [event]);
+  });
+
+  it("binds a replayed managed delivery and its block to the same recipient authority", async () => {
+    const receipt = {
+      kind: "delegate-artifact" as const,
+      dispatchId: "dispatch-authority",
+      recipientSessionKey: "main",
+      recipientSessionId: "current-session",
+    };
+    const projection = {
+      artifacts: [],
+      arrivalContext: {
+        deliveryClass: "delegate result" as const,
+        deliveryMode: "announced" as const,
+        dispatchId: "dispatch-authority",
+        producer: { sessionKey: "child", runId: "run-authority" },
+        completionId: "completion-authority",
+        binding: {
+          recipientSessionKey: "main",
+          recipientSessionId: "current-session",
+        },
+        dispatchAcceptedAt: 1,
+        completedAt: 2,
+        deliveredAt: 3,
+        policyVersion: 1 as const,
+        availability: "available" as const,
+      },
+    };
+    const event: SystemEvent = {
+      id: "event-authority",
+      text: "stored managed return",
+      ts: 1,
+      expectedSessionId: "current-session",
+      sessionDeliveryAckId: "delivery-authority",
+      recipientAuthority: {
+        state: "bound",
+        epoch: RECIPIENT_AUTHORITY_EPOCH,
+      },
+      delegateArtifactReceipt: receipt,
+    };
+    mocks.peekSystemEventEntries.mockReturnValue([event]);
+    mocks.consumeSelectedSystemEventEntries.mockReturnValue([]);
+    mocks.loadPendingSessionDelivery.mockResolvedValue({
+      kind: "systemEvent",
+      managedDelegateArtifactDelivery: { receipt, projection },
+    });
+    mocks.prepareDelegateArtifactDelivery.mockReturnValue({
+      status: "ready",
+      projection,
+    });
+    mocks.replaceManagedDelegateReturnInPrompt.mockReturnValue("refreshed managed return");
+
+    const prepared = await prepareFormattedSystemEvents({
+      cfg: {},
+      agentId: "main",
+      sessionKey: "main",
+      isMainSession: false,
+      isNewSession: false,
+    });
+    expect(prepared.blocks[0]?.authorityKey).toBe("event-authority");
+    expect(prepared.managedDeliveries[0]?.authorityKey).toBe("event-authority");
+
+    mocks.isSessionRecipientAuthorityCurrent.mockReturnValue(false);
+    const stale = resolveFinalSystemEventAdoption({ prepared: [prepared] });
+    expect(stale.kind).toBe("settle-stale");
+    if (stale.kind !== "settle-stale") {
+      throw new Error("expected stale recipient settlement");
+    }
+    await stale.settle();
+    expect(resolveFinalSystemEventAdoption({ prepared: [prepared] })).toMatchObject({
+      kind: "adopted",
+      blocks: [],
+      managedDeliveries: new Map(),
+    });
+    expect(mocks.ackSessionDelivery).toHaveBeenCalledWith("delivery-authority", undefined);
   });
 
   it("acknowledges only deliveries evidenced by the persisted recipient turn", async () => {

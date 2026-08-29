@@ -1,30 +1,37 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isSessionRecipientAuthorityCurrent } from "../../config/sessions/session-accessor.js";
+import type { SessionRecipientAuthority } from "../../config/sessions/session-recipient-authority-types.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { ackSessionDelivery } from "../../infra/session-delivery-queue-storage.js";
 import { consumeSelectedSystemEventEntries, type SystemEvent } from "../../infra/system-events.js";
 
-export type PreparedSystemEventAuthority = {
-  status: () => "current" | "stale" | "settled";
-  settleStale: () => Promise<void>;
+type PreparedAuthorityScope = { agentId: string; sessionKey: string; storePath: string };
+type PreparedAuthorityBinding = {
+  authority: SessionRecipientAuthority;
+  event: SystemEvent;
+};
+export type PreparedSystemEventAuthorityOwner = {
+  scope: PreparedAuthorityScope;
+  pending: Map<string, PreparedAuthorityBinding>;
 };
 
 export type PreparedSystemEventBlock = {
   key?: string;
   text: string;
-  authority?: PreparedSystemEventAuthority;
+  authorityKey?: string;
 };
 
 export type PreparedManagedSystemEventDelivery = {
   id: string;
   acknowledge: () => Promise<void>;
-  authority?: PreparedSystemEventAuthority;
+  authorityKey?: string;
 };
 
 export type PreparedFormattedSystemEvents = {
   blocks: PreparedSystemEventBlock[];
   managedDeliveries: PreparedManagedSystemEventDelivery[];
+  authorityOwner?: PreparedSystemEventAuthorityOwner;
 };
 
 const MESSAGE_METADATA_KEY = "__openclaw";
@@ -104,84 +111,76 @@ export async function settleStaleSystemEventAuthority(params: {
   consumeSelectedSystemEventEntries(params.sessionKey, [params.event]);
 }
 
-export function createPreparedSystemEventAuthorityResolver(scope: {
-  agentId: string;
-  sessionKey: string;
-  storePath: string;
-}): (event: SystemEvent) => PreparedSystemEventAuthority | undefined {
-  const byId = new Map<string, PreparedSystemEventAuthority>();
-  const byEvent = new WeakMap<SystemEvent, PreparedSystemEventAuthority>();
-  return (event) => {
-    const authority = event.recipientAuthority;
-    if (!authority) {
-      return undefined;
+export function readPreparedSystemEventAuthorityKey(event: SystemEvent): string | undefined {
+  const key = event.recipientAuthority ? (event.id ?? event.sessionDeliveryAckId) : undefined;
+  if (event.recipientAuthority && !key) {
+    throw new Error("authority-bound system event is missing queue identity");
+  }
+  return key;
+}
+
+export function createPreparedSystemEventAuthorityOwner(params: {
+  scope: PreparedAuthorityScope;
+  events: readonly SystemEvent[];
+}): PreparedSystemEventAuthorityOwner | undefined {
+  const pending = new Map<string, PreparedAuthorityBinding>();
+  for (const event of params.events) {
+    const authorityKey = readPreparedSystemEventAuthorityKey(event);
+    if (authorityKey && event.recipientAuthority) {
+      pending.set(authorityKey, {
+        authority: event.recipientAuthority,
+        event,
+      });
     }
-    const existing = event.id ? byId.get(event.id) : byEvent.get(event);
-    if (existing) {
-      return existing;
-    }
-    let settled = false;
-    let settlement: Promise<void> | undefined;
-    const created: PreparedSystemEventAuthority = {
-      status: () =>
-        settled
-          ? "settled"
-          : isSessionRecipientAuthorityCurrent(scope, authority)
-            ? "current"
-            : "stale",
-      settleStale: () => {
-        // Bind the exact store scope and queue occurrence; a later session
-        // incarnation cannot redirect settlement.
-        settlement ??= settleStaleSystemEventAuthority({
-          event,
-          sessionKey: scope.sessionKey,
-        }).then(() => {
-          settled = true;
-        });
-        return settlement;
-      },
-    };
-    if (event.id) {
-      byId.set(event.id, created);
-    } else {
-      byEvent.set(event, created);
-    }
-    return created;
-  };
+  }
+  return pending.size > 0 ? { scope: params.scope, pending } : undefined;
 }
 
 export function resolveFinalSystemEventAdoption(params: {
   prepared: readonly PreparedFormattedSystemEvents[];
   replaceDeliveryIds?: (deliveryIds: readonly string[]) => boolean;
 }) {
-  const blocks = params.prepared.flatMap((entry) => entry.blocks);
-  const deliveries = params.prepared.flatMap((entry) => entry.managedDeliveries);
-  const authorities = new Set(
-    [...blocks, ...deliveries].flatMap((entry) => (entry.authority ? [entry.authority] : [])),
-  );
-  const statusByAuthority = new Map(
-    [...authorities].map((authority) => [authority, authority.status()] as const),
-  );
-  const staleAuthorities = [...statusByAuthority].flatMap(([authority, status]) =>
-    status === "stale" ? [authority] : [],
-  );
-  if (staleAuthorities.length > 0) {
+  const stale: Array<{
+    authorityKey: string;
+    binding: PreparedAuthorityBinding;
+    owner: PreparedSystemEventAuthorityOwner;
+  }> = [];
+  for (const prepared of params.prepared) {
+    const owner = prepared.authorityOwner;
+    if (!owner) {
+      continue;
+    }
+    for (const [authorityKey, binding] of owner.pending) {
+      if (!isSessionRecipientAuthorityCurrent(owner.scope, binding.authority)) {
+        stale.push({ authorityKey, binding, owner });
+      }
+    }
+  }
+  if (stale.length > 0) {
     return {
       kind: "settle-stale" as const,
       settle: async () => {
-        for (const authority of staleAuthorities) {
-          await authority.settleStale();
+        for (const entry of stale) {
+          // Settlement stays bound to the owner that selected this exact queue
+          // event; a replacement session cannot redirect it.
+          await settleStaleSystemEventAuthority({
+            event: entry.binding.event,
+            sessionKey: entry.owner.scope.sessionKey,
+          });
+          entry.owner.pending.delete(entry.authorityKey);
         }
       },
     };
   }
 
-  const isAdoptable = (authority: PreparedSystemEventAuthority | undefined) =>
-    !authority || statusByAuthority.get(authority) === "current";
+  const isAdoptable = (prepared: PreparedFormattedSystemEvents, authorityKey: string | undefined) =>
+    !authorityKey || prepared.authorityOwner?.pending.has(authorityKey);
   const adoptedDeliveries = new Map(
-    deliveries
-      .filter((delivery) => isAdoptable(delivery.authority))
-      .map((delivery) => [delivery.id, delivery]),
+    params.prepared.flatMap((prepared) =>
+      prepared.managedDeliveries
+        .filter((delivery) => isAdoptable(prepared, delivery.authorityKey))
+        .map((delivery) => [delivery.id, delivery] as const),
+    ),
   );
   const deliveryIds = [...adoptedDeliveries.keys()];
   const recorderAccepted = params.replaceDeliveryIds?.(deliveryIds) ?? true;
@@ -191,8 +190,11 @@ export function resolveFinalSystemEventAdoption(params: {
 
   return {
     kind: "adopted" as const,
-    blocks: blocks.filter(
-      (block) => isAdoptable(block.authority) && !deferredBlockKeys?.has(block.key ?? ""),
+    blocks: params.prepared.flatMap((prepared) =>
+      prepared.blocks.filter(
+        (block) =>
+          isAdoptable(prepared, block.authorityKey) && !deferredBlockKeys?.has(block.key ?? ""),
+      ),
     ),
     managedDeliveries: recorderAccepted
       ? adoptedDeliveries

@@ -84,11 +84,11 @@ async function applyInvalidation(params: {
   });
 }
 
-async function resolveFinalAdoption(prepared: PreparedFormattedSystemEvents) {
-  let adoption = resolveFinalSystemEventAdoption({ prepared: [prepared] });
+async function resolveFinalAdoption(...prepared: PreparedFormattedSystemEvents[]) {
+  let adoption = resolveFinalSystemEventAdoption({ prepared });
   while (adoption.kind === "settle-stale") {
     await adoption.settle();
-    adoption = resolveFinalSystemEventAdoption({ prepared: [prepared] });
+    adoption = resolveFinalSystemEventAdoption({ prepared });
   }
   return adoption;
 }
@@ -288,4 +288,69 @@ describe("recipient authority prompt-adoption fence", () => {
       });
     },
   );
+
+  it("keeps route and current-session authority scoped to their own prepared batches", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", state.env.OPENCLAW_STATE_DIR);
+      const prepareBatch = async (agentId: string, sessionKey: string) => {
+        const scope = { agentId, env: state.env, sessionKey };
+        await sessionAccessor.upsertSessionEntryCore(scope, {
+          sessionId: `${agentId}-session`,
+          updatedAt: 1,
+          createdActor: ownerA,
+        });
+        const authority = sessionAccessor.captureSessionRecipientAuthority(scope);
+        const delivery = await enqueueContinuationReturnDeliveries({
+          targetSessionKeys: [sessionKey],
+          text: `${agentId} delegate result`,
+          idempotencyKeyBase: `multi-batch-${agentId}`,
+          recipientAuthorities: new Map([[sessionKey, authority]]),
+          stateDir: state.env.OPENCLAW_STATE_DIR,
+        });
+        const deliveryId = delivery.deliveryIds[0];
+        expect(deliveryId).toBeDefined();
+        const prepared = await prepareFormattedSystemEvents({
+          cfg: {},
+          agentId: "main",
+          sessionKey,
+          isMainSession: false,
+          isNewSession: false,
+        });
+        return { authority, deliveryId: deliveryId!, prepared, scope };
+      };
+      const route = await prepareBatch("ops", "agent:ops:routed-events");
+      const current = await prepareBatch("main", "agent:main:current-events");
+
+      expect(
+        sessionAccessor.assignSessionOwner(route.scope, {
+          owner: { type: "human", id: "owner-b" },
+          assignedBy: ownerA,
+          assignedAt: 2,
+        }),
+      ).not.toBeNull();
+      const adoption = await resolveFinalAdoption(route.prepared, current.prepared);
+
+      expect(sessionAccessor.isSessionRecipientAuthorityCurrent(route.scope, route.authority)).toBe(
+        false,
+      );
+      expect(
+        sessionAccessor.isSessionRecipientAuthorityCurrent(current.scope, current.authority),
+      ).toBe(true);
+      const prompt = adoption.blocks.map((block) => block.text).join("\n");
+      expect(prompt).not.toContain("ops delegate result");
+      expect(prompt).toContain("main delegate result");
+      expect([...adoption.managedDeliveries.keys()]).toEqual([current.deliveryId]);
+      expect(
+        await loadPendingSessionDelivery(route.deliveryId, state.env.OPENCLAW_STATE_DIR),
+      ).toBeNull();
+      expect(
+        await loadPendingSessionDelivery(current.deliveryId, state.env.OPENCLAW_STATE_DIR),
+      ).not.toBeNull();
+
+      await adoption.managedDeliveries.get(current.deliveryId)?.acknowledge();
+      expect(
+        await loadPendingSessionDelivery(current.deliveryId, state.env.OPENCLAW_STATE_DIR),
+      ).toBeNull();
+    });
+  });
 });
