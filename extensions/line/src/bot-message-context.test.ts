@@ -277,6 +277,59 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker]");
   });
 
+  it("drops the bot's own mention from the command body while the agent still reads the message as sent", async () => {
+    // LINE group chats require the mention before a message reaches the bot,
+    // and LINE writes it as the channel display name in plain text.
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" }, {
+      message: {
+        id: "m-mention",
+        type: "text",
+        text: "@openclaw3 /status",
+        quoteToken: "quote-token",
+        mention: {
+          mentionees: [{ type: "user", index: 0, length: 10, userId: "Ubot", isSelf: true }],
+        },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.CommandBody).toBe("/status");
+    expect(context?.ctxPayload.BodyForCommands).toBe("/status");
+    expect(context?.ctxPayload.RawBody).toBe("@openclaw3 /status");
+    expect(context?.ctxPayload.BodyForAgent).toBe("@openclaw3 /status");
+  });
+
+  it("keeps the command body when a message carries only another member's mention", async () => {
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" }, {
+      message: {
+        id: "m-member-mention",
+        type: "text",
+        text: "@Alice look at /status",
+        quoteToken: "quote-token",
+        mention: {
+          mentionees: [{ type: "user", index: 0, length: 6, userId: "Ualice", isSelf: false }],
+        },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.CommandBody).toBe("@Alice look at /status");
+  });
+
   it("skips media metadata projection for text-only messages", async () => {
     const event = createMessageEvent({ type: "user", userId: "user-1" });
 

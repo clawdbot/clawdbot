@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
-import { isQaPosixProcessGroupAlive } from "./posix-process-group.js";
+import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
 import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import { runQaFlowSuiteStandard } from "./suite-run-standard.js";
 import type { QaSuiteResolvedRunContext } from "./suite-types.js";
@@ -320,11 +320,9 @@ async function reproduce(denyGroupSignals: boolean) {
       const identity = readIdentity(root);
       if (identity && alive(-identity.pgid)) {
         record("diagnostic-force-kill", snapshot());
-        realKill(-identity.pgid, "SIGKILL");
+        expect(signalQaPosixProcessGroup(identity.pgid, "SIGKILL")).toBeUndefined();
       }
       const deadline = Date.now() + 5_000;
-      // Retain the settled observation: a later Linux probe may see no /proc
-      // members during reaping and conservatively report an unknown group alive.
       cleaned = snapshot();
       while (cleaned.groupAlive && Date.now() < deadline) {
         await sleep(25);

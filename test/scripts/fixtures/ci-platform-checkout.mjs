@@ -33,14 +33,40 @@ function records() {
     .map((file) => JSON.parse(fs.readFileSync(path.join(recordsDir, file), "utf8")));
 }
 
-function boundary(name) {
+function liveRecords() {
   const owned = records();
+  if (process.platform === "win32") {
+    return owned.filter((entry) => isPidAlive(entry.pid));
+  }
+  // PID existence includes macOS zombies; observe active writers in one POSIX snapshot.
+  const result = spawnSync("/bin/ps", ["-axo", "pid=,stat="], {
+    encoding: "utf8",
+    timeout: 1_000,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error(`Fixture process census failed (${result.error?.code ?? result.status})`);
+  }
+  const alive = new Set();
+  for (const line of result.stdout.trim().split("\n")) {
+    const [pid, state] = line.trim().split(/\s+/u);
+    if (!Number.isInteger(Number(pid)) || !state) {
+      throw new Error("Fixture process census returned an invalid row");
+    }
+    if (!state.startsWith("Z")) {
+      alive.add(Number(pid));
+    }
+  }
+  return owned.filter((entry) => alive.has(entry.pid));
+}
+
+function boundary(name) {
+  const alive = liveRecords();
   fs.appendFileSync(
     eventsFile,
     `${JSON.stringify({
       name,
-      alive: owned.filter((entry) => entry.attempt > 0 && isPidAlive(entry.pid)),
-      sentinelAlive: owned.some((entry) => entry.role === "sentinel" && isPidAlive(entry.pid)),
+      alive: alive.filter((entry) => entry.attempt > 0),
+      sentinelAlive: alive.some((entry) => entry.role === "sentinel"),
     })}\n`,
   );
 }
@@ -105,6 +131,11 @@ async function command() {
     process.on("SIGTERM", () => {});
     record(process.pid, mode, attempt);
     if (mode === "child") {
+      // Startup faults belong to the caller, not every consumer of this shared fixture.
+      const startDelay = path.join(root, `tree-start-delay-${attempt}.json`);
+      if (fs.existsSync(startDelay)) {
+        await delay(JSON.parse(fs.readFileSync(startDelay, "utf8")));
+      }
       launch("grandchild", attempt);
     } else {
       publish(`ready-${attempt}.json`, attempt);
@@ -161,6 +192,12 @@ async function command() {
     }
     if (scenario === "git-exit-124") {
       process.exit(124);
+    }
+    // Expire the two-second fetch budget only after the full tree is ready.
+    // Immutable ticks avoid replacing a clock file held open by Windows readers.
+    // Cancellation scenarios instead wait for the supervisor's actual signal.
+    if (!scenario.startsWith("cancel-")) {
+      publish(`fetch-tick-${attempt}.json`, attempt);
     }
     return;
   } else if (operation === "checkout") {
@@ -255,11 +292,11 @@ async function supervise() {
         }
       }
       try {
-        await until(() => records().every((entry) => !isPidAlive(entry.pid)), "fixture cleanup");
+        await until(() => liveRecords().length === 0, "fixture cleanup");
       } catch (err) {
         report.error ??= String(err);
       }
-      report.cleanupRemaining = records().filter((entry) => isPidAlive(entry.pid));
+      report.cleanupRemaining = liveRecords();
       report.ownedProcesses = records();
       report.boundaries = fs
         .readFileSync(eventsFile, "utf8")

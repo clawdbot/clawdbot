@@ -90,6 +90,7 @@ function invalid(message: string): { ok: false; error: ErrorShape } {
 
 export function resolveSessionPatchModelSelection(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   catalog: ModelCatalogEntry[];
   raw: string;
   defaultProvider: string;
@@ -101,6 +102,7 @@ export function resolveSessionPatchModelSelection(params: {
   const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
   const resolved = resolveAllowedModelRef({
     cfg: params.cfg,
+    agentId: params.agentId,
     catalog: params.catalog,
     raw: modelWithoutProfile,
     defaultProvider: params.defaultProvider,
@@ -619,6 +621,7 @@ export async function projectSessionsPatchEntry(params: {
       }
       const resolved = resolveSessionPatchModelSelection({
         cfg,
+        agentId: sessionAgentId,
         catalog,
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,

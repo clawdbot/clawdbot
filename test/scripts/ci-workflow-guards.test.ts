@@ -28,6 +28,7 @@ import {
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
 import { visitModuleSpecifiers } from "../../scripts/lib/guard-inventory-utils.mjs";
+import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -109,6 +110,7 @@ function evaluateWorkflowExpression(
     dispatchId?: string;
     eventName: "pull_request" | "push" | "workflow_dispatch";
     frozenTarget?: boolean;
+    fileHashes?: Record<string, string>;
     headRepository?: string;
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
@@ -139,6 +141,7 @@ function evaluateWorkflowExpression(
         ? haystack.includes(needle)
         : String(haystack).includes(String(needle)),
     fromJSON: (value: string) => JSON.parse(value) as unknown,
+    hashFiles: (file: string) => context.fileHashes?.[file] ?? "",
     startsWith: (value: unknown, prefix: unknown) => String(value).startsWith(String(prefix)),
     github: {
       event_name: context.eventName,
@@ -3189,8 +3192,10 @@ NODE
         label,
       ).toEqual(expectedWindowsMatrix);
     }
-    expect(runStep.run).toContain("test-1)\n    pnpm test:windows:ci:1");
-    expect(runStep.run).toContain("test-2)\n    pnpm test:windows:ci:2");
+    expect(runStep.run).toContain('scripts?.["test:windows:ci:1"]');
+    expect(runStep.run).toContain('scripts?.["test:windows:ci:2"]');
+    expect(runStep.run).toContain("pnpm test:windows:ci");
+    expect(runStep.run).toContain("target's combined Windows suite ran in test-1");
     expect(runStep.run).not.toContain("pnpm test:windows:ci:3");
   });
 
@@ -4304,7 +4309,7 @@ NODE
     expect(setupPnpm.with?.["cache-mode"]).toContain("'restore' || 'off'");
     expect(actionSteps.indexOf(restore)).toBeLessThan(actionSteps.indexOf(setupPnpm));
 
-    expect(installScript).toContain("install_args+=(--package-import-method=hardlink)");
+    expect(installScript).toContain("export PNPM_CONFIG_PACKAGE_IMPORT_METHOD=hardlink");
     expect(installScript).toContain("run_pnpm_install --offline");
     expect(installScript).toContain("run_pnpm_install --prefer-offline");
     expect(installScript).toContain('[ "$DEPENDENCY_CACHE_HIT" = "true" ]');
@@ -4468,7 +4473,7 @@ NODE
         spawnSync(pnpm.command, [...pnpm.args, ...args], {
           cwd,
           encoding: "utf8",
-          env: { ...process.env, CI: "true" },
+          env: { ...process.env, CI: "true", PNPM_CONFIG_PACKAGE_IMPORT_METHOD: "hardlink" },
         });
       const version = runPnpm(["--version"], source);
       expect(version.status, version.stderr).toBe(0);
@@ -4552,10 +4557,14 @@ server.listen(0, "127.0.0.1", () => {
             }),
           );
         writeConsumerManifest("1.0.0");
+        // The fixture owns the same pinned toolchain as CI; its registry serves dependencies only.
+        const { environment } = pnpmLockfileDocuments(readFileSync("pnpm-lock.yaml", "utf8"));
+        if (environment !== null) {
+          writeFileSync(path.join(workspace, "pnpm-lock.yaml"), `---\n${environment}\n---\n`);
+        }
         const installArgs = [
           "install",
           `--store-dir=${store}`,
-          "--package-import-method=hardlink",
           "--ignore-scripts",
           "--config.engine-strict=false",
         ];
@@ -4616,10 +4625,16 @@ server.listen(0, "127.0.0.1", () => {
 
         registryServer.kill("SIGTERM");
         rmSync(registry, { force: true, recursive: true });
+        const cachedIdentity = statSync(restoredPackageFile);
+        const cachedLockfile = readFileSync(path.join(workspace, "pnpm-lock.yaml"), "utf8");
         const offlineArgs = [...installArgs, "--offline", "--frozen-lockfile"];
         const reconciliation = runPnpm(offlineArgs, workspace);
         expect(reconciliation.status, `${reconciliation.stdout}${reconciliation.stderr}`).toBe(0);
-        expect(reconciliation.stdout).toContain("Already up to date");
+        expect(statSync(restoredPackageFile)).toMatchObject({
+          dev: cachedIdentity.dev,
+          ino: cachedIdentity.ino,
+        });
+        expect(readFileSync(path.join(workspace, "pnpm-lock.yaml"), "utf8")).toBe(cachedLockfile);
         expect(
           readFileSync(path.join(consumer, "node_modules", "cache-proof-dep", "index.js"), "utf8"),
         ).toBe('module.exports = "cache-proof-v1";\n');
@@ -4627,7 +4642,10 @@ server.listen(0, "127.0.0.1", () => {
         const drift = runPnpm(offlineArgs, workspace);
         expect(drift.status).toBe(1);
         expect(`${drift.stdout}${drift.stderr}`).toContain('Cannot install with "frozen-lockfile"');
-        expect(`${drift.stdout}${drift.stderr}`).toContain("packages/consumer/package.json");
+        expect(`${drift.stdout}${drift.stderr}`).toContain('in importers["packages/consumer"]');
+        expect(`${drift.stdout}${drift.stderr}`).toContain(
+          "cache-proof-dep (lockfile: 1.0.0, manifest: 2.0.0)",
+        );
       } finally {
         registryServer.kill("SIGTERM");
       }
@@ -5296,7 +5314,10 @@ server.listen(0, "127.0.0.1", () => {
       expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
     }
     expect(hostedLintCache.if).toBe(
-      "needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid')",
+      "needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && steps.extension-boundary-inputs.outputs.enabled == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid')",
+    );
+    expect(boundaryCache.if).toBe(
+      "needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true'",
     );
     expect(hostedLintCache.uses).toBe(CACHE_V5);
     expect(hostedLintCache.with).toEqual(boundaryCache.with);
@@ -5317,6 +5338,7 @@ server.listen(0, "127.0.0.1", () => {
       expect(step.run).toContain(
         "scripts/prepare-extension-package-boundary-artifacts.mts --print-input-fingerprint",
       );
+      expect(step.run).toContain('echo "enabled=false" >> "$GITHUB_OUTPUT"');
     }
     expect(fingerprintSteps[0]?.run).toBe(fingerprintSteps[1]?.run);
     // Single semantic writer: protected pushes commit explicitly (not
@@ -8637,6 +8659,119 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
+  it.each([
+    { frozen: false, present: true, expected: true },
+    { frozen: false, present: false, expected: true },
+    { frozen: true, present: true, expected: true },
+    { frozen: true, present: false, expected: false },
+  ])(
+    "gates browser native-host proof (frozen=$frozen, present=$present)",
+    ({ frozen, present, expected }) => {
+      const step = readCiWorkflow().jobs["build-artifacts"].steps.find(
+        (entry: WorkflowStep) => entry.name === "Verify built browser native host",
+      );
+      const file = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
+      expect(
+        step.if === undefined ||
+          evaluateWorkflowExpression(step.if, {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            frozenTarget: frozen,
+            fileHashes: present ? { [file]: "fixture-hash" } : {},
+          }),
+      ).toBe(expected);
+    },
+  );
+
+  it.each([
+    "passed",
+    "skipped",
+    "pending",
+    "todo",
+    "absent",
+    "wrong-name",
+    "wrong-file",
+    "failed",
+    "suite-failed",
+    "duplicate",
+    "malformed",
+    "missing-report",
+  ])("validates browser native-host proof report: %s", (state) => {
+    const steps = readCiWorkflow().jobs["build-artifacts"].steps;
+    const step = steps.find(
+      (entry: WorkflowStep) => entry.name === "Verify built browser native host",
+    );
+    expect(steps.indexOf(step)).toBeGreaterThan(
+      steps.findIndex((entry: WorkflowStep) => entry.name === "Build dist"),
+    );
+    expect(step["continue-on-error"]).not.toBe(true);
+    const root = tempDirs.make("openclaw-browser-proof-report-");
+    const file = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
+    const fullName =
+      "native host registration launches with the exact custom installation context when Chrome has no selectors";
+    const assertion = {
+      fullName: state === "wrong-name" ? "another test" : fullName,
+      status: ["skipped", "pending", "todo", "failed"].includes(state) ? state : "passed",
+    };
+    const assertions =
+      state === "absent" ? [] : state === "duplicate" ? [assertion, assertion] : [assertion];
+    const report = {
+      success: state !== "failed" && state !== "suite-failed",
+      numFailedTestSuites: state === "suite-failed" ? 1 : 0,
+      numPendingTestSuites: 0,
+      numTotalTests: assertions.length,
+      numPassedTests: assertions.filter((entry) => entry.status === "passed").length,
+      numFailedTests: state === "failed" ? 1 : 0,
+      numPendingTests: ["skipped", "pending"].includes(state) ? 1 : 0,
+      numTodoTests: state === "todo" ? 1 : 0,
+      testResults: [
+        {
+          name: path.join(root, state === "wrong-file" ? "other.test.ts" : file),
+          status: state === "suite-failed" ? "failed" : "passed",
+          assertionResults: assertions,
+        },
+      ],
+    };
+    mkdirSync(path.join(root, "scripts"));
+    // A previous successful report must not satisfy a run that emits no report.
+    writeFileSync(path.join(root, "browser-native-host.json"), JSON.stringify(report));
+    // Execute the workflow's shell and validator; replace only the expensive
+    // Vitest process with a controlled reporter at its external boundary.
+    writeFileSync(
+      path.join(root, "scripts/run-vitest.mjs"),
+      `
+      import fs from 'node:fs';
+      const args = process.argv.slice(2);
+      fs.writeFileSync('invocation.json', JSON.stringify({ args, prebuilt: process.env.OPENCLAW_E2E_USE_PREBUILT_DIST }));
+      const outputIndex = args.indexOf('--outputFile.json');
+      if (outputIndex >= 0 && ${JSON.stringify(state)} !== 'missing-report') {
+        fs.writeFileSync(args[outputIndex + 1], ${JSON.stringify(state === "malformed" ? "{" : JSON.stringify(report))});
+      }
+    `,
+    );
+    const result = runWorkflowShellScript(step.run, {
+      cwd: root,
+      env: { ...process.env, ...step.env, RUNNER_TEMP: root },
+    });
+    expect(result.status, result.stderr).toBe(state === "passed" ? 0 : 1);
+    if (state === "passed") {
+      expect(JSON.parse(readFileSync(path.join(root, "invocation.json"), "utf8"))).toEqual({
+        prebuilt: "1",
+        args: [
+          "run",
+          "--config",
+          "test/vitest/vitest.e2e.config.ts",
+          file,
+          "--reporter=default",
+          "--reporter=json",
+          "--outputFile.json",
+          path.join(root, "browser-native-host.json"),
+        ],
+      });
+    }
+  });
+
   it("runs the scoped SQLite lifecycle proof against the exact built artifact", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];
@@ -8886,7 +9021,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         OPENCLAW_BUILD_PRIVATE_QA: "${{ matrix.pretest_build_mode == 'private-qa' && '1' || '0' }}",
         VITEST: "1",
       },
-      run: "pnpm build",
+      run: "pnpm build:ci-artifacts",
     });
     expect(nodeTestJob.steps.indexOf(buildRuntimeStep)).toBeLessThan(
       nodeTestJob.steps.indexOf(runStep),
@@ -8946,6 +9081,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     expect(buildChecks.run).toContain("pnpm test:gateway:watch-regression -- --skip-build");
     expect(buildChecks.run).not.toContain("scripts/check-gateway-watch-regression.mts");
+    expect(buildChecks.run).toContain(
+      "startup_builder=(node --import tsx scripts/ensure-cli-startup-build.mts)",
+    );
+    expect(buildChecks.run).toContain(
+      "startup_builder=(node scripts/ensure-cli-startup-build.mjs)",
+    );
     expect(qaBuild.run.match(/pnpm build qaRuntime/gu)).toHaveLength(1);
     expect(qaBuild.run).not.toContain("package-openclaw-for-docker");
     expect(additionalChecks.run).toContain(
@@ -8960,6 +9101,26 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(additionalChecks.run).not.toContain(
       "if [ ! -f scripts/check-session-transcript-reader-boundary.mts ]",
     );
+    const checkLint = workflow.jobs["check-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run check shard",
+    );
+    const hostedCoreLint = workflow.jobs["check-lint-hosted-core-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run hosted core lint stripe",
+    );
+    const lintBoundaryFingerprint = workflow.jobs["check-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Compute extension boundary input fingerprint",
+    );
+    const additionalBoundaryFingerprint = workflow.jobs["check-additional-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Compute extension boundary input fingerprint",
+    );
+
+    // The frozen candidate owns the older full lint and boundary builders;
+    // current-only stripe and cache mechanics must not replace that coverage.
+    expect(checkLint.run).toContain("if [[ ! -f scripts/run-oxlint-shards.mts ]]; then");
+    expect(checkLint.run).toContain("pnpm lint");
+    expect(hostedCoreLint.run).toContain("target does not support core lint stripes");
+    expect(lintBoundaryFingerprint.run).toContain("enabled=false");
+    expect(additionalBoundaryFingerprint.run).toContain("enabled=false");
   });
 
   it("emits one final CI gate after every selected lane", () => {
@@ -9614,7 +9775,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       );
       for (const installFlag of [
         "--frozen-lockfile",
-        "--ignore-scripts=false",
+        "--config.ignore-scripts=false",
         "--config.engine-strict=false",
         "--config.enable-pre-post-scripts=true",
         "--config.side-effects-cache=true",

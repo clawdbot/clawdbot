@@ -56,6 +56,7 @@
     "!dist/plugin-sdk/approval-reaction-runtime.d.ts",
     "!dist/plugin-sdk/approval-reference-runtime.d.ts",
     "!dist/plugin-sdk/async-lock-runtime.d.ts",
+    "!dist/plugin-sdk/browser-cdp.d.ts",
     "!dist/plugin-sdk/browser-config.d.ts",
     "!dist/plugin-sdk/bundled-channel-config-schema.d.ts",
     "!dist/plugin-sdk/channel-activity-runtime.d.ts",
@@ -909,6 +910,9 @@
     "./plugin-sdk/allowlist-config-edit": {
       "types": "./dist/plugin-sdk/allowlist-config-edit.d.ts",
       "default": "./dist/plugin-sdk/allowlist-config-edit.js"
+    },
+    "./plugin-sdk/browser-cdp": {
+      "default": "./dist/plugin-sdk/browser-cdp.js"
     },
     "./plugin-sdk/browser-config": {
       "default": "./dist/plugin-sdk/browser-config.js"
@@ -2161,5 +2165,5 @@
   "engines": {
     "node": ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0"
   },
-  "packageManager": "pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621"
+  "packageManager": "pnpm@12.0.0+sha512.9e2e3dc3911995868dc94b8175c217c27e95408fa03b4a22749778f2b34f773b77cdd3b39ede8171b22fcd53be6a35342e9fac9948a68ef58df6488ce89a7e67"
 }

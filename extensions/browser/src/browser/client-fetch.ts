@@ -4,7 +4,7 @@
  * Sends requests to either an absolute HTTP browser-control URL or the local
  * in-process dispatcher, adding loopback auth and operator-facing diagnostics.
  */
-import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
+import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-cdp";
 import {
   extractErrorCode,
   formatErrorMessage,

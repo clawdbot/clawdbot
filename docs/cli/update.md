@@ -298,7 +298,7 @@ returns the latest sentinel.
     Rebases onto the selected commit (dev only).
   </Step>
   <Step title="Install dependencies">
-    Uses the repo package manager. For pnpm checkouts, the updater bootstraps `pnpm` on demand (via `corepack` first, then a temporary `npm install pnpm@11` fallback) instead of running `npm run build` inside a pnpm workspace. If pnpm bootstrap still fails, the updater stops early with a package-manager-specific error instead of trying `npm run build` in the checkout.
+    Uses the repo package manager. For pnpm checkouts, the updater bootstraps `pnpm` on demand (via `corepack` first, then a temporary npm installation of the target checkout’s exact pnpm version) instead of running `npm run build` inside a pnpm workspace. If pnpm bootstrap still fails, the updater stops early with a package-manager-specific error instead of trying `npm run build` in the checkout.
   </Step>
   <Step title="Build checkout">
     Builds the gateway and Control UI once in the final checkout. The updater runs the standalone Control UI build only when a target build omitted those assets or doctor later removes them.

@@ -645,7 +645,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     static func isTrustedLinkSource(_ sourceURL: URL?, dashboardURL: URL) -> Bool {
         guard let sourceURL, sameOrigin(sourceURL, dashboardURL) else { return false }
         let allowedPath = Self.allowedPath(for: dashboardURL)
-        return allowedPath == "/" || sourceURL.path.hasPrefix(allowedPath)
+        return allowedPath == "/" || sourceURL.path(percentEncoded: true).hasPrefix(allowedPath)
     }
 
     static func shouldAllowEditorURLLaunch(
@@ -894,7 +894,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     static func allowedPath(for url: URL) -> String {
-        let path = url.path.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Match location.pathname; URL.path decodes escapes and removes the mount's trailing slash.
+        let path = url.path(percentEncoded: true).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else { return "/" }
         return path.hasSuffix("/") ? path : path + "/"
     }
@@ -936,9 +937,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return false
         }
         let components = url.path.split(separator: "/", omittingEmptySubsequences: true)
-        return components.count == 4 &&
+        return url.path(percentEncoded: true) == "/mcp-app-sandbox" || (components.count == 4 &&
             components[0] == "embed" &&
-            (components[1] == "channel" || components[1] == "thread")
+            (components[1] == "channel" || components[1] == "thread"))
     }
 
     static func shouldAllowBrowserNavigation(to url: URL, isMainFrame: Bool) -> Bool {

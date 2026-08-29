@@ -32,6 +32,7 @@ const ordinaryQa = "extensions/qa-lab/src/gateway-child.test.ts";
 const patternFiles = createPatternFileHelper("plugin-build-selection-");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const e2eTarget = "test/openclaw-launcher-version.e2e.test.ts";
+const nativeHostTarget = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
 const e2eConfig = "test/vitest/vitest.e2e.config.ts";
 let originalArgv: string[];
 let originalExitCode: typeof process.exitCode;
@@ -336,12 +337,46 @@ describe("test-projects build admission", () => {
     expect(process.exitCode).toBe(failure === "throw" ? 1 : 7);
   });
 
-  it("starts unrelated tests without runtime preparation", async () => {
-    await start([modelTarget]);
-    expect(await terminal.promise).toMatch(/^\[test\] passed 1 Vitest shard/u);
-    expect(commands.prepare).not.toHaveBeenCalled();
-    expect(commands.reader).toHaveBeenCalledOnce();
-  });
+  it.each([modelTarget, "extensions/browser/src/browser/extension-install.test.ts"])(
+    "starts %s without runtime preparation",
+    async (target) => {
+      await start([target]);
+      expect(await terminal.promise).toMatch(/^\[test\] passed 1 Vitest shard/u);
+      expect(commands.prepare).not.toHaveBeenCalled();
+      expect(commands.prepareE2e).not.toHaveBeenCalled();
+      expect(commands.reader).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["build", "failed build", "prebuilt"])(
+    "admits the built native-host integration after %s",
+    async (mode) => {
+      if (mode === "prebuilt") vi.stubEnv("OPENCLAW_E2E_USE_PREBUILT_DIST", "1");
+      const preparation = createDeferred();
+      commands.prepareE2e.mockReturnValue(preparation.promise);
+      await start([nativeHostTarget]);
+      if (mode !== "prebuilt") {
+        expect(commands.reader).not.toHaveBeenCalled();
+        expect(commands.prepareE2e).toHaveBeenCalledOnce();
+        if (mode === "failed build") preparation.reject(new Error("build failed"));
+        else preparation.resolve();
+      }
+      await terminal.promise;
+      expect(commands.prepare).not.toHaveBeenCalled();
+      expect(commands.prepareE2e).toHaveBeenCalledTimes(mode === "prebuilt" ? 0 : 1);
+      expect(commands.reader).toHaveBeenCalledTimes(mode === "failed build" ? 0 : 1);
+      if (mode === "failed build") {
+        expect(process.exitCode).toBe(1);
+      } else {
+        expect(commands.reader).toHaveBeenCalledWith(
+          expect.objectContaining({
+            pnpmArgs: expect.arrayContaining(["--config", e2eConfig]),
+            env: expect.objectContaining({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" }),
+          }),
+        );
+      }
+    },
+  );
 
   it.each(["", "OPENCLAW_E2E_SKIP_BUILD", "OPENCLAW_E2E_USE_PREBUILT_DIST"])(
     "prepares an ordinary runtime reader independently of E2E flag %s",

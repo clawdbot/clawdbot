@@ -8,6 +8,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getContextWindowCaches } from "../agents/context-cache.js";
+import {
+  applyDiscoveredContextWindows,
+  resetContextWindowCacheForTest,
+} from "../agents/context.js";
 import { findGitCheckoutRoot } from "../agents/worktrees/git.js";
 import {
   findLiveRegistryWorktreeByOwner,
@@ -5603,16 +5608,61 @@ test("sessions.create rejects forkFrom without fork", async () => {
   });
 });
 
-test("sessions.create rejects fork when the parent exceeds the fork size cap", async () => {
+test("sessions.create retains the 100K fallback when only another provider has model capacity", async () => {
   const { dir } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };
+  resetContextWindowCacheForTest();
+  applyDiscoveredContextWindows({
+    cache: getContextWindowCaches().discoveredTokenCache,
+    models: [{ id: "unresolved-model", provider: "other-provider", contextTokens: 300_000 }],
+  });
   const parent = await createCheckpointFixture(dir);
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(parent.sessionId, {
         sessionFile: parent.sessionFile,
+        providerOverride: "unresolved-provider",
+        modelOverride: "unresolved-model",
+        modelOverrideSource: "user",
         // Fresh persisted usage above DEFAULT_PARENT_FORK_MAX_TOKENS (100K).
         totalTokens: 200_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      }),
+    },
+  });
+
+  try {
+    const created = await directSessionReq("sessions.create", {
+      agentId: "main",
+      parentSessionKey: "main",
+      fork: true,
+    });
+
+    expect(created.ok).toBe(false);
+    expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
+      "200000/100000 tokens",
+    );
+  } finally {
+    resetContextWindowCacheForTest();
+    testState.sessionConfig = undefined;
+  }
+});
+
+test("sessions.create admits an explicit fork within the child model context window", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.sessionConfig = { scope: "per-sender" };
+  agentDiscoveryMock.models = [
+    { id: "gpt-large", name: "Large", provider: "openai", contextWindow: 922_000 },
+  ];
+  const parent = await createCheckpointFixture(dir);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(parent.sessionId, {
+        sessionFile: parent.sessionFile,
+        providerOverride: "openai",
+        modelOverride: "gpt-large",
+        totalTokens: 391_869,
         totalTokensFresh: true,
         totalTokensVersion: 1,
       }),
@@ -5625,8 +5675,100 @@ test("sessions.create rejects fork when the parent exceeds the fork size cap", a
     fork: true,
   });
 
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  agentDiscoveryMock.models = [];
+  testState.sessionConfig = undefined;
+});
+
+test("sessions.create rejects an explicit fork above the selected child model window", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.sessionConfig = { scope: "per-sender" };
+  agentDiscoveryMock.models = [
+    { id: "gpt-small", name: "Small", provider: "openai", contextWindow: 128_000 },
+  ];
+  const parent = await createCheckpointFixture(dir);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(parent.sessionId, {
+        sessionFile: parent.sessionFile,
+        totalTokens: 150_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      }),
+    },
+  });
+
+  const created = await directSessionReq("sessions.create", {
+    agentId: "main",
+    model: "openai/gpt-small",
+    parentSessionKey: "main",
+    fork: true,
+  });
+
   expect(created.ok).toBe(false);
-  expect((created.error as { message?: string } | undefined)?.message ?? "").toContain("too large");
+  expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
+    "150000/128000 tokens",
+  );
+  agentDiscoveryMock.models = [];
+  testState.sessionConfig = undefined;
+});
+
+test("sessions.create clamps configured capacity to the selected child model window", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.sessionConfig = { scope: "per-sender" };
+  agentDiscoveryMock.models = [
+    {
+      id: "gpt-selectable",
+      name: "Selectable",
+      provider: "openai",
+      contextWindows: [
+        { id: "200k", label: "200K", contextWindow: 200_000 },
+        { id: "1m", label: "1M", contextWindow: 1_000_000 },
+      ],
+      contextWindowDefault: "1m",
+    },
+  ];
+  const parent = await createCheckpointFixture(dir);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(parent.sessionId, {
+        sessionFile: parent.sessionFile,
+        totalTokens: 300_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      }),
+    },
+  });
+  const cfg = getRuntimeConfig();
+
+  const created = await directSessionReq(
+    "sessions.create",
+    {
+      agentId: "main",
+      contextWindow: "200k",
+      fork: true,
+      model: "openai/gpt-selectable",
+      parentSessionKey: "main",
+    },
+    {
+      context: {
+        getRuntimeConfig: () => ({
+          ...cfg,
+          models: {
+            providers: {
+              openai: { models: [{ id: "gpt-selectable", contextTokens: 1_000_000 }] },
+            },
+          },
+        }),
+      },
+    },
+  );
+
+  expect(created.ok).toBe(false);
+  expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
+    "300000/200000 tokens",
+  );
+  agentDiscoveryMock.models = [];
   testState.sessionConfig = undefined;
 });
 

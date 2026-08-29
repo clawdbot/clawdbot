@@ -77,7 +77,7 @@ export async function runConsentScenario(entry, coreTarball) {
         descendants(child, seen);
       }
     } catch (error) {
-      if (error.code !== "ENOENT" && error.code !== "ESRCH") {
+      if (error.code !== "ENOENT" && error.code !== "ESRCH" && error.code !== "EACCES") {
         throw error;
       }
     }

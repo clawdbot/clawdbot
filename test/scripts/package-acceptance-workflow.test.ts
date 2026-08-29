@@ -2749,7 +2749,7 @@ describe("package acceptance workflow", () => {
     );
     expect(hydrateWindowsPnpm.run).not.toContain("PNPM_CONFIG_PACKAGE_IMPORT_METHOD");
     expect(hydrateWindowsPnpm.run).toContain("--config.side-effects-cache=false");
-    expect(hydrateWindowsPnpm.run).toContain("--ignore-scripts=true");
+    expect(hydrateWindowsPnpm.run).toContain('"--ignore-scripts"');
     expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_CHILD_CONCURRENCY = "4"');
     expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_NETWORK_CONCURRENCY = "8"');
     expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"');
@@ -9048,6 +9048,7 @@ esac
 
   it("keeps release history checks blobless", () => {
     const fullHistoryCheckouts: Array<[string, string, string]> = [
+      [LIVE_E2E_WORKFLOW, "validate_selected_ref", "Checkout workflow repository"],
       [RELEASE_PUBLISH_WORKFLOW, "resolve_release_target", "Checkout release tag"],
       [
         RELEASE_CHECKS_WORKFLOW,
@@ -9078,6 +9079,7 @@ esac
     }
 
     const metadataOnlyCheckouts: Array<[string, string, string]> = [
+      [LIVE_E2E_WORKFLOW, "validate_selected_ref", "Checkout workflow repository"],
       [RELEASE_PUBLISH_WORKFLOW, "resolve_release_target", "Checkout release tag"],
       [
         RELEASE_CHECKS_WORKFLOW,

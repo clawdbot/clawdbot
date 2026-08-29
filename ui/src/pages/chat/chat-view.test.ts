@@ -1371,7 +1371,7 @@ describe("chat history pagination", () => {
     expect(container.querySelector(".chat-history-sentinel")).toBeNull();
   });
 
-  it("renders the auto-load sentinel and a structural skeleton while older history loads", () => {
+  it("keeps the auto-load sentinel visually empty while older history loads", () => {
     const container = renderChatView({
       historyPagination: {
         hasMore: true,
@@ -1383,12 +1383,9 @@ describe("chat history pagination", () => {
     const sentinel = requireElement(container, ".chat-history-sentinel", "history sentinel");
 
     expect(threadInner.firstElementChild).toBe(sentinel);
-    const skeleton = sentinel.querySelector("openclaw-panel-loading-skeleton");
-    expect(skeleton).not.toBeNull();
-    expect(skeleton?.getAttribute("aria-label")).toBe(t("common.loading"));
-    expect(skeleton?.getAttribute("aria-busy")).toBe("true");
-    expect(skeleton?.compact).toBe(true);
-    expect(sentinel.querySelector("button")).toBeNull();
+    // The sentinel overlays virtualized rows; content here would paint over
+    // real messages. The floating pill owns the loading affordance.
+    expect(sentinel.childElementCount).toBe(0);
   });
 
   it("loads older history from upward wheel and keyboard intent without a button", () => {

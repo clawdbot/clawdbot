@@ -237,11 +237,14 @@ release predates pnpm 11's isolated global-package layout, so its updater can
 mistake another npm installation for the running CLI. Later releases retain
 pnpm ownership and follow the replacement package root during updates. They
 also use the owning manager's reported global bin directory and stop before
-mutation when the available pnpm command reports another global root or major,
+mutation when the available pnpm command reports another global root,
 or when the invoking package is orphaned or not the only active OpenClaw
 install there.
 
-If OpenClaw shares a pnpm 11 global install group with another package, the
+pnpm 12 retains the `global/v11` layout; the layout number does not need to match
+the pnpm CLI major version.
+
+If OpenClaw shares a pnpm global install group with another package, the
 automatic updater stops before changing the group. Update the original
 comma-separated group manually so its sibling packages and build policy stay
 intact.

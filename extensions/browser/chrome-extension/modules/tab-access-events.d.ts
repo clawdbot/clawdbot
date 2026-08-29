@@ -18,13 +18,13 @@ export type TabAccessEventsChromeApi = {
     onUpdated: ChromeEvent<
       (
         tabId: number,
-        changeInfo: { groupId?: number; url?: string },
+        changeInfo: { groupId?: number; url?: string; status?: string },
         tab: BrowserTabSnapshot,
       ) => void
     >;
   };
   tabGroups: {
-    onUpdated: ChromeEvent<() => void>;
+    onUpdated: ChromeEvent<(group?: { id: number; title?: string }) => void>;
     onRemoved: ChromeEvent<() => void>;
   };
 };
@@ -36,12 +36,18 @@ export type TabAccessEventPolicy = {
   capture(tabId: number): TabAccessEpoch;
   epochIsCurrent(tabId: number, epoch: TabAccessEpoch): boolean;
   invalidateTab(tabId: number): void;
+  retireTab(tabId: number): void;
   renewTabAccess(
     tabId: number,
     attachedEpoch: TabAccessEpoch | undefined,
     tab: BrowserTabSnapshot | undefined,
   ): TabAccessEpoch | undefined;
-  invalidateAll(): void;
+  invalidateAll(group?: { id: number; title?: string }): void;
+  observeTabUpdate(
+    tabId: number,
+    change: { groupId?: number; url?: string; status?: string },
+    tab?: BrowserTabSnapshot,
+  ): boolean;
   inspectTab(tabId: number, epoch: TabAccessEpoch): Promise<{ accessible: boolean }>;
   listAccessibleTabs(): Promise<Array<{ id: number }>>;
   forgetTab(tabId: number): Promise<void>;

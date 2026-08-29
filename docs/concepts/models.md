@@ -180,6 +180,12 @@ openclaw config set agents.defaults.modelPolicy.allow '["openai/gpt-5.4","anthro
 
 ## Choose a model for a session
 
+Gateway `sessions.create` and `sessions.patch` resolve model aliases and
+`modelPolicy.allow` in the target session's agent scope. An explicit per-agent
+allowlist replaces the shared default, including `[]` to allow any model.
+Policy permission does not supply provider credentials or guarantee that the
+selected model is available to its runtime.
+
 Choose the model when you create a session whenever possible. The Control UI's
 **New Chat** composer includes the model picker for this reason: a fresh session
 gives the selected model a clean conversation boundary.

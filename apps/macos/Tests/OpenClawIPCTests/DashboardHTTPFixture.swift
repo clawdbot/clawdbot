@@ -13,11 +13,15 @@ final class DashboardHTTPFixture {
     }
 
     private let listener: NWListener
+    private let responseHTML: String
+    private let contentSecurityPolicy: String
     private var clients: [UUID: Client] = [:]
     private var stopped = false
     nonisolated let port: UInt16
 
-    private init(listener: NWListener, port: UInt16) {
+    private init(listener: NWListener, port: UInt16, html: String, contentSecurityPolicy: String) {
+        self.responseHTML = html
+        self.contentSecurityPolicy = contentSecurityPolicy
         self.listener = listener
         self.port = port
         self.listener.newConnectionHandler = { [weak self] connection in
@@ -31,7 +35,10 @@ final class DashboardHTTPFixture {
         }
     }
 
-    static func start() async throws -> DashboardHTTPFixture {
+    static func start(
+        html: String = DashboardHTTPFixture.html,
+        contentSecurityPolicy: String = "default-src 'none'") async throws -> DashboardHTTPFixture
+    {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: parameters, on: .any)
@@ -46,7 +53,11 @@ final class DashboardHTTPFixture {
                     guard let port = listener.port, port.rawValue != 0 else {
                         throw URLError(.cannotFindHost)
                     }
-                    return DashboardHTTPFixture(listener: listener, port: port.rawValue)
+                    return DashboardHTTPFixture(
+                        listener: listener,
+                        port: port.rawValue,
+                        html: html,
+                        contentSecurityPolicy: contentSecurityPolicy)
                 case let .failed(error):
                     throw error
                 case .cancelled:
@@ -117,15 +128,15 @@ final class DashboardHTTPFixture {
 
     private func respond(_ id: UUID) {
         guard let client = self.clients[id] else { return }
-        let body = Data(Self.html.utf8)
-        // No scripts, subresources, redirects, cookies, or gateway RPCs. The CSP
-        // also fences accidental page resource additions to this inert fixture.
+        let body = Data(self.responseHTML.utf8)
+        // Existing callers stay inert; navigation tests explicitly opt into
+        // their own scripts and loopback-only frame origins.
         let headers = [
             "HTTP/1.1 200 OK",
             "Content-Type: text/html; charset=utf-8",
             "Content-Length: \(body.count)",
             "Cache-Control: no-store",
-            "Content-Security-Policy: default-src 'none'",
+            "Content-Security-Policy: \(self.contentSecurityPolicy)",
             "Connection: close",
         ].joined(separator: "\r\n") + "\r\n\r\n"
         client.connection.send(content: Data(headers.utf8) + body, completion: .contentProcessed { [weak self] _ in

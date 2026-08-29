@@ -76,6 +76,7 @@ export async function forkSessionTranscriptFromParent(
         params.commitGuard?.();
         result = forkSqliteParentTranscriptInTransaction(database, resolved, {
           enforceTokenLimit: params.enforceTokenLimit,
+          maxTokens: params.maxTokens,
           parentEntry: params.parentEntry,
           parentSessionKey: params.parentSessionKey,
           forkFrom: params.forkFrom,
@@ -385,6 +386,7 @@ function forkSqliteParentTranscriptInTransaction(
   resolved: ResolvedSqliteScope,
   params: {
     enforceTokenLimit?: boolean;
+    maxTokens?: number;
     parentEntry: SessionEntry;
     parentSessionKey: string;
     forkFrom?: "last-completed";
@@ -434,7 +436,7 @@ function forkSqliteParentTranscriptInTransaction(
 function resolveParentForkLimitDecision(
   params: Pick<
     ForkSessionFromParentTranscriptParams,
-    "enforceTokenLimit" | "forkFrom" | "parentEntry"
+    "enforceTokenLimit" | "forkFrom" | "maxTokens" | "parentEntry"
   >,
   source: ParentForkSourceTranscript,
 ): Extract<SessionParentForkDecision, { status: "skip" }> | undefined {
@@ -444,7 +446,10 @@ function resolveParentForkLimitDecision(
   const decision = planParentForkDecision(
     params.parentEntry,
     estimateTranscriptPromptTokens(source.branchEntries),
-    { preferTranscriptEstimate: params.forkFrom === "last-completed" },
+    {
+      maxTokens: params.maxTokens,
+      preferTranscriptEstimate: params.forkFrom === "last-completed",
+    },
   );
   return decision.status === "skip" ? decision : undefined;
 }

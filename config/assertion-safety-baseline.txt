@@ -430,7 +430,6 @@ extensions/discord/src/send.shared.ts	4
 extensions/discord/src/send.webhook.ts	1
 extensions/discord/src/setup-account-state.ts	1
 extensions/discord/src/setup-core.ts	1
-extensions/discord/src/shared.ts	1
 extensions/discord/src/status-issues.ts	1
 extensions/discord/src/target-parsing.ts	1
 extensions/discord/src/token.ts	2
@@ -610,7 +609,7 @@ extensions/kimi-coding/stream.ts	11
 extensions/line/src/accounts.ts	3
 extensions/line/src/actions.ts	4
 extensions/line/src/auto-reply-delivery.ts	1
-extensions/line/src/bot-handlers.ts	2
+extensions/line/src/bot-handlers.ts	1
 extensions/line/src/bot-message-context.ts	1
 extensions/line/src/card-command.ts	3
 extensions/line/src/flex-templates/basic-cards.ts	19
@@ -1208,7 +1207,6 @@ extensions/slack/src/security-audit.ts	6
 extensions/slack/src/send.ts	6
 extensions/slack/src/setup-core.ts	7
 extensions/slack/src/setup-surface.ts	1
-extensions/slack/src/shared.ts	1
 extensions/slack/src/streaming.ts	3
 extensions/slack/src/target-parsing.ts	1
 extensions/sms/src/accounts.ts	1
@@ -3294,7 +3292,6 @@ src/infra/update-check-package-target.ts	3
 src/infra/update-doctor-result.ts	2
 src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
-src/infra/update-runner-git-recovery.ts	1
 src/infra/update-runner-install-surface.ts	1
 src/infra/voicewake-routing.ts	4
 src/infra/warning-filter.ts	4

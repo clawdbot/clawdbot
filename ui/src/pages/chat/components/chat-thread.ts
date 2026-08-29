@@ -63,14 +63,6 @@ function markdownTableOwnerRef(
   return callback;
 }
 
-function renderHistorySentinel(loading: boolean) {
-  return html`
-    <div class="chat-history-sentinel">
-      ${loading ? renderPanelLoadingSkeleton("chat", t("common.loading"), true) : nothing}
-    </div>
-  `;
-}
-
 export function renderChatThread(
   props: ChatThreadProps,
   transcript: ChatTranscriptController,
@@ -85,8 +77,12 @@ function renderTranscriptShell(
   transcript: ChatTranscriptSession,
 ): TemplateResult {
   const projection = projectChatTranscript(props, transcript);
-  const historySentinel =
-    props.historyLoading === undefined ? nothing : renderHistorySentinel(props.historyLoading);
+  // The sentinel is an out-of-flow IntersectionObserver target pinned over the
+  // virtualized rows; any content here paints on top of real messages. The
+  // floating "Show earlier" pill owns the loading affordance.
+  const historySentinel = props.historySentinel
+    ? html`<div class="chat-history-sentinel"></div>`
+    : nothing;
   const transcriptContents =
     projection.showLoadingSkeleton || projection.isEmpty
       ? html`

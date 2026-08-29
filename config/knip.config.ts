@@ -68,6 +68,9 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/systemd-sealed-service-definition/file-mount.mjs!",
   "scripts/e2e/lib/systemd-sealed-service-definition/paired-mounts.mjs!",
   "scripts/e2e/lib/upgrade-survivor/config-parking.mjs!",
+  // Capture runs in the container; sanitization runs only on the trusted host.
+  "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs!",
+  "scripts/upgrade-survivor-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
   "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
@@ -77,7 +80,6 @@ const repositoryScriptEntries = [
   "scripts/ios-release-plan.ts!",
   "scripts/ios-release-signing.mts!",
   "scripts/lib/docker-plugin-selection.mjs!",
-  "scripts/list-prod-store-packages.mjs!",
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
   "scripts/live-docker-normalize-config.ts!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",

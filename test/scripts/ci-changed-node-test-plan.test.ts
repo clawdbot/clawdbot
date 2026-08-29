@@ -242,6 +242,14 @@ describe("CI changed Node test plan", () => {
     expect(hasQaSmokeAffectingChange([".github/workflows/labeler.yml"])).toBe(false);
   });
 
+  it.each([
+    "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+    "extensions/browser/src/browser/extension-install.test-support.ts",
+    "extensions/browser/chrome-extension/relay-key.test-support.ts",
+  ])("keeps the built native-host proof selected when only %s changes", (changedPath) => {
+    expect(hasBuildArtifactAffectingChange([changedPath])).toBe(true);
+  });
+
   it("classifies prompt-snapshot impact by surface and generator import graph", () => {
     // Inside the generator's import graph -> regenerated output can change.
     expect(hasPromptSnapshotAffectingChange(["src/auto-reply/reply/prompt-prelude.ts"])).toBe(true);

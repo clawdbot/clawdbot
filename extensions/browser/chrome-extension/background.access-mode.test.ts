@@ -876,7 +876,11 @@ describe("relay command authorization", () => {
     await vi.waitFor(() => {
       expect(harness.tabsGroup).toHaveBeenCalledWith({ tabIds: [42] });
       const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
-      expect(frames).toContainEqual({ type: "result", seq: 6, result: { tabId: 42 } });
+      expect(frames).toContainEqual({
+        type: "result",
+        seq: 6,
+        result: { tabId: 42, targetId: "tab-42" },
+      });
     });
   });
 
