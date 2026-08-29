@@ -32,7 +32,7 @@ scenario:
   execution:
     kind: script
     path: scripts/e2e/qa-cli-onboarding.mjs
-    dockerCandidateLane: onboard
+    dockerLane: onboard
     summary: Runs the executable onboarding Docker lane with only the guided, Gateway-storage, remote, reset, and skills cases selected.
     timeoutMs: 1800000
     args:

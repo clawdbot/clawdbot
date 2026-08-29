@@ -1340,7 +1340,7 @@ async function runUnifiedQaSuite(params: {
   const concurrentPartitionResults = await runPartitionTasks(concurrentPartitionTasks, concurrency);
   const concurrentFailed = failFast && concurrentPartitionResults.some(partitionFailed);
   let scriptPreparationFailure: QaUnifiedPartitionResult | undefined;
-  if (!concurrentFailed && scriptScenarios?.some(dockerBatch.dockerCandidateLaneName)) {
+  if (!concurrentFailed && scriptScenarios?.some(dockerBatch.dockerLaneName)) {
     try {
       preparedScriptEnv = await dockerBatch.prepareDockerE2eEnvironment({
         env: process.env,

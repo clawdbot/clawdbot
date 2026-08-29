@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  dockerCandidateLaneName,
+  dockerLaneName,
   dockerE2eLaneName,
   prepareDockerE2eEnvironment,
 } from "./test-file-scenario-docker-batch.js";
@@ -33,9 +33,9 @@ it("prepares declared candidates for scripts that own their Docker invocation", 
     throw new Error("expected script scenario");
   }
   expect(
-    dockerCandidateLaneName({
+    dockerLaneName({
       ...scenario,
-      execution: { ...scenario.execution, dockerCandidateLane: "onboard" },
+      execution: { ...scenario.execution, dockerLane: "onboard" },
     }),
   ).toBe("onboard");
 });
@@ -107,7 +107,7 @@ it("prepares the exact Docker lane union in a sanitized bound environment", asyn
       makeDockerE2eScenario("two", "openai-chat-tools"),
       {
         ...onboardingScenario,
-        execution: { ...onboardingScenario.execution, dockerCandidateLane: "onboard" },
+        execution: { ...onboardingScenario.execution, dockerLane: "onboard" },
       },
     ],
   });

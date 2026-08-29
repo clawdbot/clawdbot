@@ -120,7 +120,7 @@ const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
     kind: z.literal("script"),
     allowBlockedEvidence: z.boolean().optional(),
     args: z.array(z.string()).optional(),
-    dockerCandidateLane: z.string().trim().min(1).optional(),
+    dockerLane: z.string().trim().min(1).optional(),
     parallelSafe: z.boolean().optional(),
     timeoutMs: z.number().int().positive().optional(),
   }),
