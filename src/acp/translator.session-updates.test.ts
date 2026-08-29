@@ -102,6 +102,37 @@ describe("AcpTranslatorSessionUpdates", () => {
     expect(ledger.recordUpdate).not.toHaveBeenCalled();
   });
 
+  it("settles the ledger record before propagating a delivery failure", async () => {
+    const ledger = createLedger();
+    let recordSettled = false;
+    vi.mocked(ledger.recordUpdate).mockImplementation(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      recordSettled = true;
+    });
+    const updates = createUpdates({
+      ledger,
+      sessionUpdate: vi.fn(async () => {
+        throw new Error("client gone");
+      }),
+    });
+
+    await expect(
+      updates.emit({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        record: true,
+        update,
+      }),
+    ).rejects.toThrow("client gone");
+
+    // The delivery error must still propagate, but only after the ledger write
+    // settled — replay readers rely on every emitted update being recorded.
+    expect(ledger.recordUpdate).toHaveBeenCalledTimes(1);
+    expect(recordSettled).toBe(true);
+  });
+
   it("preserves ledger order without waiting for ACP delivery", async () => {
     let releaseFirstDelivery!: () => void;
     const firstDelivery = new Promise<void>((resolve) => {

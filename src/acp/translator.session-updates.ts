@@ -157,14 +157,22 @@ export class AcpTranslatorSessionUpdates {
             update: params.update,
           })
         : undefined;
-    if (params.waitForDelivery === false) {
-      void delivery.catch((err: unknown) => {
-        this.options.log(`session update delivery failed for ${params.sessionId}: ${String(err)}`);
-      });
-    } else {
-      await delivery;
+    try {
+      if (params.waitForDelivery === false) {
+        void delivery.catch((err: unknown) => {
+          this.options.log(
+            `session update delivery failed for ${params.sessionId}: ${String(err)}`,
+          );
+        });
+      } else {
+        await delivery;
+      }
+    } finally {
+      // The ledger write must settle even when delivery rejects: callers absorb
+      // delivery errors (e.g. finishPrompt) and still rely on the replay ledger
+      // reflecting every emitted update before the turn settles.
+      await recording;
     }
-    await recording;
   }
 
   async sendAvailableCommands(
