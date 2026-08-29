@@ -8,6 +8,7 @@ import {
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
+import { workerCapacityPresentation } from "../../components/worker-capacity.ts";
 import { t } from "../../i18n/index.ts";
 import { formatList, formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import type { DeviceTokenSummary, InventoryRemovalRequest } from "../../lib/nodes/index.ts";
@@ -237,14 +238,6 @@ function entryMetaLine(entry: DeviceInventoryEntry): string {
   if (entry.node?.workerBundle?.status === "installed") {
     parts.push(t("devices.inventory.workerVersion", { version: entry.node.workerBundle.version }));
   }
-  if (entry.node?.workerSlots) {
-    parts.push(
-      t("devices.inventory.workerSlots", {
-        available: String(entry.node.workerSlots.available),
-        total: String(entry.node.workerSlots.total),
-      }),
-    );
-  }
   if (entry.connected && entry.presence?.lastInputSeconds != null) {
     parts.push(formatInputRecency(entry.presence.lastInputSeconds));
   } else if (!entry.connected && entry.lastSeenAtMs) {
@@ -309,6 +302,12 @@ function renderEntryDetails(entry: DeviceInventoryEntry, props: DevicesProps) {
 }
 
 function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) {
+  const capacity = workerCapacityPresentation({
+    workerSlots: entry.node?.workerSlots,
+    capabilities: entry.node?.caps,
+    commands: entry.node?.commands,
+    unavailable: entry.node?.connected !== true || !isApprovedNodeEntry(entry),
+  });
   const pendingRequestId =
     entry.node?.approvalState === "pending-approval" ||
     entry.node?.approvalState === "pending-reapproval"
@@ -319,7 +318,7 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
       ? nothing
       : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.offline") });
   return html`
-    <div class="settings-row device-entry">
+    <div class="settings-row device-entry" title=${capacity?.label ?? nothing}>
       ${renderDeviceTile(deviceIcon(entry))}
       <div class="settings-row__text">
         <span class="settings-row__title">${entry.name}</span>
@@ -327,7 +326,8 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
         ${renderEntryDetails(entry, props)}
       </div>
       <div class="settings-row__control">
-        ${connectionStatus} ${entryWarnStatuses(entry, props.gatewayVersion)}
+        ${capacity?.meter ?? nothing} ${connectionStatus}
+        ${entryWarnStatuses(entry, props.gatewayVersion)}
         ${pendingRequestId
           ? html`
               <button

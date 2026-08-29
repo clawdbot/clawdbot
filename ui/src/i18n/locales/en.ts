@@ -3,6 +3,11 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap = {
+  capacityMeter: {
+    workerSlots: "{used} of {total} slots busy",
+    unavailable: "Slot utilization unavailable",
+    execHost: "Codex exec",
+  },
   common: {
     health: "Health",
     ok: "OK",
@@ -732,7 +737,6 @@ export const en: TranslationMap = {
       versionDriftTitle:
         "Device {nodeVersion}; Gateway {gatewayVersion}. Update the older component to align the fleet.",
       workerVersion: "Worker {version}",
-      workerSlots: "Worker slots {available}/{total}",
       workerMissing: "worker missing",
       workerMissingTitle:
         "The Gateway-managed worker bundle is missing. Start a new session on this device to reinstall it.",
@@ -904,7 +908,6 @@ export const en: TranslationMap = {
     deviceCapacityUnavailable:
       "Worker capacity is unavailable. Restart the device session host and try again.",
     deviceNoSlots: "No worker slots are available. Wait for a slot or pick another device.",
-    workerSlots: "Worker slots {available}/{total}",
     nodeUpdateRequired:
       "Update required: run {updateCommand}, then reconnect. For a headless node, run {restartCommand}.",
     capabilityCamera: "Camera",
