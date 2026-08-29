@@ -469,7 +469,7 @@ describe("sessions page lifecycle", () => {
     const page = await createRenderedPage(createContext(gateway, sessions), result);
     page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
     await page.updateComplete;
-    const menu = page.querySelector("openclaw-session-menu");
+    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
     await menu?.updateComplete;
     const item = menu?.querySelector<HTMLElement>(`[value="set-color:${color ?? ""}"]`);
     expect(item).not.toBeNull();
