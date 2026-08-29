@@ -14,7 +14,7 @@ vi.mock("./doctor-auth-flat-profiles.js", () => ({
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
     detected: [],
     changes: [],
-    migrationApplied: false,
+    configOwnerMigrationApplied: false,
     warnings: [],
   }),
   maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => ({

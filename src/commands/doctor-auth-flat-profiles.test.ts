@@ -1296,6 +1296,65 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     expectNoMigratedArchive(authPath);
   });
 
+  it("does not commit config when its migration fails before a later agent succeeds", async () => {
+    const state = await makeTestState();
+    const configAuthPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "config-access",
+          refresh: "config-refresh",
+          expires: 1_900_000_000_000,
+        },
+      },
+    });
+    const laterAuthPath = await writeLegacyAuthProfilesJson(
+      state,
+      {
+        version: 1,
+        profiles: {
+          "openai-codex:later": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "later-access",
+            refresh: "later-refresh",
+            expires: 1_900_000_000_000,
+          },
+        },
+      },
+      "later",
+    );
+    const cfg = {
+      auth: {
+        profiles: {
+          "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg,
+      prompter: makePrompter(true),
+      env: state.env,
+      deps: {
+        loadPersistedAuthProfileStore: (agentDir, options) =>
+          agentDir === undefined
+            ? { version: 1, profiles: {} }
+            : loadPersistedAuthProfileStore(agentDir, options),
+      },
+    });
+
+    expect(result.configOwnerMigrationApplied).toBe(false);
+    expect(result.warnings).toEqual([expect.stringContaining("SQLite verification failed")]);
+    expect(fs.existsSync(configAuthPath)).toBe(true);
+    expect(fs.existsSync(laterAuthPath)).toBe(false);
+    expect(loadPersistedAuthProfileStore(state.agentDir("later"))?.profiles).toHaveProperty(
+      "openai:later",
+    );
+  });
+
   it("keeps legacy JSON when the SQLite target changes before the migration transaction", async () => {
     const state = await makeTestState();
     const authPath = await writeLegacyAuthProfilesJson(state, {

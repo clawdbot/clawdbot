@@ -121,7 +121,7 @@ type LegacyFlatAuthProfileRepairResult = {
   detected: string[];
   changes: string[];
   configChanged?: boolean;
-  migrationApplied?: boolean;
+  configOwnerMigrationApplied: boolean;
   warnings: string[];
 };
 
@@ -942,6 +942,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       ...(hasLegacyOAuth ? [oauthPath] : []),
     ],
     changes: resumedChanges,
+    configOwnerMigrationApplied: false,
     warnings: resumeWarning ? [resumeWarning] : [],
   };
   if (resumeWarning) {
@@ -979,6 +980,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
     params.openAICodexAuthProfileIdMap ??
     collectOpenAICodexAuthProfileStoreIdMap({ cfg: params.cfg, env });
   for (const candidate of detected) {
+    const configOwnerCandidate = isDefaultAgentCandidate(candidate, params.cfg, env);
     let releaseSources: (() => void) | undefined;
     try {
       const candidateSourcePaths = [candidate.authPath, candidate.statePath, candidate.legacyPath];
@@ -1068,8 +1070,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       const canonicalStore = hasImportableAuthProfileStore(maybeCanonicalStore)
         ? maybeCanonicalStore
         : null;
-      const configCanonicalStore =
-        configStore && isDefaultAgentCandidate(candidate, params.cfg, env) ? configStore : null;
+      const configCanonicalStore = configStore && configOwnerCandidate ? configStore : null;
       const legacyStore = coerceLegacyAuthStore(
         parseAuthProfileMigrationSource(receiptByPath.get(path.resolve(candidate.legacyPath))),
       );
@@ -1304,7 +1305,9 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       result.changes.push(
         `Migrated auth profile JSON for ${shortenHomePath(candidate.authPath)} into SQLite (${archiveText}).`,
       );
-      result.migrationApplied = true;
+      if (configOwnerCandidate) {
+        result.configOwnerMigrationApplied = true;
+      }
       if (unresolvedSidecarWarning) {
         result.warnings.push(unresolvedSidecarWarning);
       }

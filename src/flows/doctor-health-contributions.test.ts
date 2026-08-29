@@ -40,7 +40,7 @@ const mocks = vi.hoisted(() => ({
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
     detected: [],
     changes: [],
-    migrationApplied: false,
+    configOwnerMigrationApplied: false,
     warnings: [],
   }),
   collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map<string, string>()),
@@ -674,9 +674,12 @@ describe("doctor health contributions", () => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
     mocks.registerBundledHealthChecks.mockReset();
     mocks.runDoctorHealthRepairs.mockReset();
-    mocks.maybeMigrateAuthProfileJsonStoresToSqlite
-      .mockClear()
-      .mockResolvedValue({ detected: [], changes: [], migrationApplied: false, warnings: [] });
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockClear().mockResolvedValue({
+      detected: [],
+      changes: [],
+      configOwnerMigrationApplied: false,
+      warnings: [],
+    });
     mocks.collectOpenAICodexAuthProfileStoreIdMap.mockReset().mockReturnValue(new Map());
     mocks.maybeRepairOpenAICodexAuthConfig.mockReset().mockImplementation((cfg: unknown) => ({
       config: cfg,

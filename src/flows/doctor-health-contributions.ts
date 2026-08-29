@@ -93,7 +93,7 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     openAICodexAuthProfileIdMap,
     ...(ctx.env ? { env: ctx.env } : {}),
   });
-  if (authProfileMigration.migrationApplied) {
+  if (authProfileMigration.configOwnerMigrationApplied) {
     // The candidate is safe only after the migration verifies and archives its source.
     ctx.cfg = authConfigCandidate;
   }
