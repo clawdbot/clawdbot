@@ -2910,10 +2910,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       "codex",
     );
     fs.mkdirSync(installDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(installDir, "package.json"),
-      JSON.stringify({ name: "@openclaw/codex" }),
-    );
+    const stagedArtifactDir = tempDirs.make("openclaw-plugin-staged-repair-");
+    for (const rootDir of [installDir, stagedArtifactDir]) {
+      createColdPluginFixture({
+        rootDir,
+        pluginId: "codex",
+        packageName: "@openclaw/codex",
+        packageVersion: "2026.5.6",
+      });
+    }
     const records = {
       codex: {
         source: "npm" as const,
@@ -2958,7 +2963,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     mocks.installPluginFromNpmSpec.mockImplementationOnce(async (params) => {
       await params.onBeforePluginArtifactCommit({
         pluginId: "codex",
-        stagedArtifactDir: installDir,
+        stagedArtifactDir,
         mode: "update",
       });
       return successfulInstall({
@@ -2980,7 +2985,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         },
       },
       env: {},
-      onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
     });
 
     const updateArg = expectRecordFields(mockCallArg(mocks.updateNpmInstalledPlugins), {
