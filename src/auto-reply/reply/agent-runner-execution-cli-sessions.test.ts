@@ -141,6 +141,7 @@ describe("executeAgentTurn: CLI session routing", () => {
         runId: run.runId,
         workspaceDir: run.workspaceDir,
         config: run.config,
+        sessionEntry: run.sessionEntry,
         backend,
       });
       prepared.params = {

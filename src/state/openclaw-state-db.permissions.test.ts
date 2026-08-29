@@ -13,12 +13,22 @@ const chmodFailHook = vi.hoisted(() => ({
   error: undefined as Error | undefined,
   calls: 0,
   failProbe: true,
+  removeTargetSuffix: undefined as string | undefined,
+  targets: [] as string[],
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const chmodSync: typeof actual.chmodSync = ((target: unknown, mode: unknown) => {
     chmodFailHook.calls += 1;
+    chmodFailHook.targets.push(String(target));
+    if (
+      chmodFailHook.removeTargetSuffix &&
+      String(target).endsWith(chmodFailHook.removeTargetSuffix)
+    ) {
+      // Remove the file after existsSync reaches chmod to reproduce the exact race.
+      actual.unlinkSync(String(target));
+    }
     const isProbe = String(target).includes(".openclaw-chmod-probe-");
     if (chmodFailHook.error && (chmodFailHook.failProbe || !isProbe)) {
       throw chmodFailHook.error;
@@ -53,6 +63,8 @@ describe("state database permission hardening without chmod support", () => {
     chmodFailHook.error = undefined;
     chmodFailHook.calls = 0;
     chmodFailHook.failProbe = true;
+    chmodFailHook.removeTargetSuffix = undefined;
+    chmodFailHook.targets = [];
     closeOpenClawStateDatabaseForTest();
     if (stateDir) {
       fs.rmSync(stateDir, { recursive: true, force: true });
@@ -133,6 +145,40 @@ describe("state database permission hardening without chmod support", () => {
     expect(() => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })).toThrow(
       /EACCES/,
     );
+  });
+
+  it.each(["-wal", "-shm", "-journal"])(
+    "opens when the %s sidecar disappears before chmod",
+    (suffix) => {
+      stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      openOpenClawStateDatabase(options);
+      closeOpenClawStateDatabaseForTest();
+      const sidecarPath = join(stateDir, "state", `openclaw.sqlite${suffix}`);
+      fs.writeFileSync(sidecarPath, "");
+      chmodFailHook.removeTargetSuffix = suffix;
+
+      const database = openOpenClawStateDatabase(options);
+
+      expect(database.db.isOpen).toBe(true);
+      expect(fs.existsSync(sidecarPath)).toBe(false);
+      expect(chmodFailHook.targets).toContain(sidecarPath);
+    },
+  );
+
+  it("rethrows when the main database vanishes between the existence check and the chmod", () => {
+    // resolveSqliteDatabaseFilePaths lists the unsuffixed database first. Losing
+    // it must stay fatal: swallowing that ENOENT would fall through to a SQLite
+    // open that creates a fresh empty database instead of surfacing the loss.
+    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+    chmodFailHook.removeTargetSuffix = "openclaw.sqlite";
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(/ENOENT/);
+    // Guards against a vacuous pass if the main file were skipped before chmod.
+    expect(chmodFailHook.targets.some((target) => target.endsWith("openclaw.sqlite"))).toBe(true);
   });
 
   it("repairs the schema when chmodSync throws ENOTSUP", () => {

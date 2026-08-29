@@ -125,6 +125,11 @@ Claude Code subprocess. A changed model, system prompt, or tool policy starts a
 new query; persisted Claude session IDs still provide
 conversation continuity when the gateway or subprocess restarts.
 
+For local SDK-backed turns, prompt-build hook context stays private: Claude
+receives it as a native hook attachment, while OpenClaw history preserves the original user message. The
+native session retains the context for resume; imported visible history and
+cross-provider fallback preludes do not copy private hook attachments.
+
 Keep Claude Code updated, especially if the SDK reports an incompatible
 installed executable:
 

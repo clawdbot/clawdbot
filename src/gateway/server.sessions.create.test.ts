@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
 import {
@@ -163,13 +163,14 @@ vi.mock("./session-transcript-readers.js", async (importOriginal) => {
   return { ...actual, readSessionMessageCountAsync: sessionTranscriptReaderMocks.readCount };
 });
 
+let gitWorkspaceTemplate: string;
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
-  setupGatewaySessionsTestHarness();
+  setupGatewaySessionsTestHarness(async (makeTempDir) => {
+    gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
+  });
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
-let gitWorkspaceTemplateRoot: string;
-let gitWorkspaceTemplate: string;
 
 async function waitForCreatedSessionRun(
   context: { chatAbortControllers: Map<string, ChatAbortControllerEntry> },
@@ -194,17 +195,6 @@ async function waitForCreatedSessionRun(
   }
   return removed;
 }
-
-beforeAll(async () => {
-  gitWorkspaceTemplateRoot = await fs.realpath(
-    await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-session-git-template-")),
-  );
-  gitWorkspaceTemplate = await createGitWorkspace(gitWorkspaceTemplateRoot);
-});
-
-afterAll(async () => {
-  await fs.rm(gitWorkspaceTemplateRoot, { recursive: true, force: true });
-});
 
 // Read the real implementations back here rather than capturing them inside the
 // mock factories: Vitest runs a factory on first import of the mocked module, and

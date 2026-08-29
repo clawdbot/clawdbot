@@ -554,6 +554,7 @@ function assertConfig(params: {
   config: unknown;
   scenario: string;
   stage?: "baseline" | "survival";
+  updateChannel?: string;
 }): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-config-"));
   try {
@@ -572,6 +573,7 @@ function assertConfig(params: {
         OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: params.scenario,
         OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: params.stage ?? "survival",
+        OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL: params.updateChannel ?? "",
       },
       stdio: "pipe",
     });
@@ -827,16 +829,18 @@ describe("upgrade survivor assertions", () => {
   });
 
   it.each([
-    ["base", "stable", "beta"],
-    ["prerelease-plugin-registry", "beta", "stable"],
+    ["base", undefined, "stable", "beta"],
+    ["base", "beta", "beta", "stable"],
+    ["prerelease-plugin-registry", undefined, "beta", "stable"],
   ])(
-    "requires the %s scenario to preserve the %s update channel",
-    (scenario, expectedChannel, wrongChannel) => {
+    "requires the %s scenario with override %s to preserve the %s update channel",
+    (scenario, updateChannel, expectedChannel, wrongChannel) => {
       const run = (channel: string) =>
         assertConfig({
           acceptedIntents: ["update"],
           config: { update: { channel } },
           scenario,
+          updateChannel,
         });
       expect(() => run(expectedChannel)).not.toThrow();
       expect(() => run(wrongChannel)).toThrow(/update.channel/);

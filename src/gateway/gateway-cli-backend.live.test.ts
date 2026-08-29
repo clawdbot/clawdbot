@@ -725,6 +725,7 @@ describeLive("gateway live (cli backend)", () => {
           let expectedLiveSessionGeneration: string | undefined;
           if (resumeContinuityProbe) {
             const nativeHistory = await activeClient.request<{
+              messages?: unknown[];
               sessionId?: string;
             }>("chat.history", { sessionKey });
             // Imported history can be fully deduplicated against local rows; the persisted
@@ -732,6 +733,17 @@ describeLive("gateway live (cli backend)", () => {
             const { entry: continuityEntry } = loadGatewaySessionEntryReadOnly(sessionKey);
             expectedCliSessionId = continuityEntry?.cliSessionBindings?.[providerId]?.sessionId;
             expect(expectedCliSessionId).toBeTruthy();
+            // Native imports must keep private runtime context out of the visible transcript,
+            // while preserving the operator's ordinary user message.
+            expect(JSON.stringify(nativeHistory.messages ?? [])).not.toContain(memoryToken);
+            expect(nativeHistory.messages).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  role: "user",
+                  content: resumeContinuityProbe.firstTurnPrompt,
+                }),
+              ]),
+            );
             const continuitySessionId = nativeHistory.sessionId;
             expect(continuitySessionId).toBeTruthy();
             expect(continuityEntry?.sessionId).toBe(continuitySessionId);
