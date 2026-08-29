@@ -2984,7 +2984,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         path.join(targetDir, "package.json"),
         JSON.stringify({ name: "@openclaw/codex", version: compatibilityHostVersion }),
       );
-      if (shouldRepair || recordVersion !== payloadVersion) {
+      if (shouldRepair) {
         mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
           successfulInstall({
             pluginId: "codex",
