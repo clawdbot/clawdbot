@@ -267,9 +267,9 @@ as untrusted.
   out of order. They are held briefly, ordered, and answered as a single turn
   carrying every image, so the agent can reason about the set. A set that never
   completes is delivered with whatever arrived after a few seconds rather than
-  being held indefinitely. Anything else that sender writes while a set is still
-  arriving waits for it, so a message sent after the images is still answered
-  after them.
+  being held indefinitely. Everything else that sender sends meanwhile - a
+  message, or another set of images - waits its turn, so their conversation is
+  answered in the order they sent it.
 
 ## Structured rich messages
 
