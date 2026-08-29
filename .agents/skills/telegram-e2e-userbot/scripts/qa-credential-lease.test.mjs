@@ -15,6 +15,11 @@ test("runs the declared installed Convex CLI without a package runner", async (t
   t.after(() => rm(checkoutDir, { recursive: true, force: true }));
   const cliDir = path.join(checkoutDir, "qa", "convex-credential-broker", "node_modules", ".bin");
   await mkdir(cliDir, { recursive: true });
+  await writeFile(
+    path.join(checkoutDir, "qa", "convex-credential-broker", "package.json"),
+    '{"name":"test-convex-broker","private":true}',
+    "utf8",
+  );
   const cliPath = path.join(cliDir, "convex");
   await writeFile(cliPath, "#!/bin/sh\nprintf 'installed-cli-secret\\n'\n", "utf8");
   await chmod(cliPath, 0o755);

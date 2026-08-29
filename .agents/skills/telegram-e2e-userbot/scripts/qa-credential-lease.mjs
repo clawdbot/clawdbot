@@ -62,13 +62,7 @@ function parseBrokerConfig({ siteUrl, secret, allowInsecureHttp }) {
 }
 
 async function defaultRunConvexCli(args, { cwd }) {
-  const executable = path.join(
-    cwd,
-    "node_modules",
-    ".bin",
-    process.platform === "win32" ? "convex.cmd" : "convex",
-  );
-  const { stdout } = await execFile(executable, args, {
+  const { stdout } = await execFile("pnpm", ["--silent", "--dir", cwd, "exec", "convex", ...args], {
     cwd,
     encoding: "utf8",
     maxBuffer: 1024 * 1024,
@@ -104,7 +98,7 @@ async function resolveBrokerConfig({ env, cwd, runConvexCliImpl, convexProjectDi
     return parseBrokerConfig({ siteUrl: CONVEX_BROKER_SITE_URL, secret: cliSecret });
   } catch (error) {
     throw new Error(
-      "Could not load the QA broker through the installed Convex CLI. Install qa/convex-credential-broker dependencies, log in to Convex, and request access to the OpenClaw broker project.",
+      "Could not load the QA broker through the installed Convex CLI. Run pnpm install, log in to Convex, and request access to the OpenClaw broker project.",
       { cause: error },
     );
   }
