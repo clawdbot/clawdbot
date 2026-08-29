@@ -355,7 +355,7 @@ const POLICY_OWNED_DENIED_REASONS = new Set<SystemRunDeniedReason>([
  * freeform ones (cancelled prompt, unavailable approval store, permission
  * prompts) are suppressed.
  */
-const MAC_HOST_POLICY_OWNED_REASONS = new Set(["security=deny", "allowlist-miss"]);
+const MAC_HOST_POLICY_OWNED_REASONS = new Set(["security=deny", "allowlist-miss", "ask=always"]);
 
 function deniedMessageWithEscalationHint(params: {
   reason: SystemRunDeniedReason;

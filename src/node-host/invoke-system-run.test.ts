@@ -837,6 +837,25 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       "SYSTEM_RUN_DENIED: command not on the allowlist — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
       true,
     );
+
+    // ask=always is the third structured verdict from the same evaluator:
+    // auto-review can never bypass it, so an identical retry is guaranteed
+    // to be denied and the hint must survive here too.
+    const askAlways = await runMacSystemInvoke({
+      runViaMacAppExecHost: async () => ({
+        ok: false as const,
+        error: {
+          code: "POLICY",
+          message: "SYSTEM_RUN_DENIED: auto-review cannot bypass ask=always",
+          reason: "ask=always",
+        },
+      }),
+    });
+    expectInvokeErrorMessage(
+      askAlways.sendInvokeResult,
+      "SYSTEM_RUN_DENIED: auto-review cannot bypass ask=always — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+      true,
+    );
   });
 
   it("gives mac binding-integrity denials renewal guidance, not policy relaxation", async () => {
