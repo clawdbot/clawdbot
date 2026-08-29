@@ -69,11 +69,27 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
     includePaths = manifestPaths;
   }
   const actual = await readActualWorkspaceManifest({ root, baseCommit, includePaths });
-  let packPath: string | undefined;
+  const packPath = await prepareNodeWorkspaceTransferPack({ ...params, root, baseCommit });
+  return {
+    ...actual,
+    rawManifest: serializeWorkerWorkspaceManifest(actual.manifest),
+    root,
+    ...(packPath ? { packPath } : {}),
+  };
+}
+
+export async function prepareNodeWorkspaceTransferPack(params: {
+  root: string;
+  baseCommit: string | null;
+  temporaryRoot: string;
+  signal?: AbortSignal;
+}): Promise<string | undefined> {
+  const { baseCommit, root } = params;
   if (baseCommit) {
+    const temporaryRoot = await fsp.mkdtemp(path.join(params.temporaryRoot, "pack-"));
     const signal = params.signal ?? AbortSignal.timeout(TRANSFER_TIMEOUT_MS);
-    const objectListPath = path.join(params.temporaryRoot, "base-objects");
-    packPath = path.join(params.temporaryRoot, "base.pack");
+    const objectListPath = path.join(temporaryRoot, "base-objects");
+    const packPath = path.join(temporaryRoot, "base.pack");
     await runWorkspaceInventoryCommandToFile({
       argv: [
         "git",
@@ -97,11 +113,7 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
       timeoutMs: TRANSFER_TIMEOUT_MS,
       maxOutputBytes: MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
     });
+    return packPath;
   }
-  return {
-    ...actual,
-    rawManifest: serializeWorkerWorkspaceManifest(actual.manifest),
-    root,
-    ...(packPath ? { packPath } : {}),
-  };
+  return undefined;
 }

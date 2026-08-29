@@ -7,6 +7,7 @@ import { isPathInside } from "../../infra/fs-safe.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { NodeWorkspaceTransferHttpRoute } from "./node-workspace-transfer-http-contract.js";
 import {
+  prepareNodeWorkspaceTransferPack,
   prepareNodeWorkspaceTransferSnapshot,
   type NodeWorkspaceTransferSnapshot,
 } from "./node-workspace-transfer-snapshot.js";
@@ -20,6 +21,7 @@ import {
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_TOTAL_BYTES,
   parseWorkerWorkspaceManifest,
+  serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
@@ -69,7 +71,7 @@ type DownloadCapability = {
   ownerEpoch: number;
   sessionId: string;
   generation: number;
-  manifestRef: string;
+  snapshot: NodeWorkspaceTransferSnapshot;
   expiresAtMs: number;
 };
 
@@ -93,8 +95,7 @@ type TransferContext = {
   generation: number;
   localPath: string;
   temporaryRoot: string;
-  currentManifestRef: string;
-  snapshots: Map<string, NodeWorkspaceTransferSnapshot>;
+  snapshot?: NodeWorkspaceTransferSnapshot;
   downloads: Map<string, DownloadCapability>;
   upload?: UploadOperation;
   abortController: AbortController;
@@ -314,7 +315,10 @@ export function createNodeWorkspaceTransferService(options: {
       }
     });
 
-  const mintDownload = (context: TransferContext, manifestRef: string): string => {
+  const mintDownload = (
+    context: TransferContext,
+    snapshot: NodeWorkspaceTransferSnapshot,
+  ): string => {
     const credential = currentOwner(context)?.credential;
     const nowMs = now();
     if (!credential) {
@@ -325,6 +329,7 @@ export function createNodeWorkspaceTransferService(options: {
       throw new Error("Worker workspace transfer credential is expired");
     }
     const token = mintNodeWorkspaceTransferToken();
+    context.snapshot = snapshot;
     context.downloads.set(token, {
       direction: "download",
       token,
@@ -332,22 +337,10 @@ export function createNodeWorkspaceTransferService(options: {
       ownerEpoch: context.ownerEpoch,
       sessionId: context.sessionId,
       generation: context.generation,
-      manifestRef,
+      snapshot,
       expiresAtMs,
     });
     return token;
-  };
-
-  const pruneSnapshots = (context: TransferContext): void => {
-    const retained = new Set([
-      context.currentManifestRef,
-      ...[...context.downloads.values()].map((download) => download.manifestRef),
-    ]);
-    for (const manifestRef of context.snapshots.keys()) {
-      if (!retained.has(manifestRef)) {
-        context.snapshots.delete(manifestRef);
-      }
-    }
   };
 
   const authorizationCurrent = (authorization: TransferAuthorization): boolean => {
@@ -380,22 +373,18 @@ export function createNodeWorkspaceTransferService(options: {
       return false;
     }
     if (route.kind === "manifest" || route.kind === "pack") {
-      return route.manifestRef === capability.manifestRef;
+      return route.manifestRef === capability.snapshot.manifestRef;
     }
     if (route.kind !== "blob") {
       return false;
     }
-    return Boolean(
-      context.snapshots
-        .get(capability.manifestRef)
-        ?.manifest.entries.some((entry) => entry.type === "file" && entry.sha256 === route.sha256),
+    return capability.snapshot.manifest.entries.some(
+      (entry) => entry.type === "file" && entry.sha256 === route.sha256,
     );
   };
 
-  return {
-    initialize: ensureTemporaryRoot,
-
-    async prepareSync(params: {
+  const withNewContext = async <T>(
+    params: {
       environmentId: string;
       ownerEpoch: number;
       sessionId: string;
@@ -403,49 +392,66 @@ export function createNodeWorkspaceTransferService(options: {
       localPath: string;
       isAuthorized: () => boolean;
       signal?: AbortSignal;
-    }) {
-      return await contextOperations.enqueue(params.environmentId, async () => {
-        const previous = contexts.get(params.environmentId);
-        if (previous) {
-          await closeContext(previous);
+    },
+    prepare: (context: TransferContext) => Promise<T>,
+  ): Promise<T> =>
+    await contextOperations.enqueue(params.environmentId, async () => {
+      const previous = contexts.get(params.environmentId);
+      if (previous) {
+        await closeContext(previous);
+      }
+      await ensureTemporaryRoot();
+      const abortController = new AbortController();
+      const context: TransferContext = {
+        ...params,
+        localPath: await fsp.realpath(params.localPath),
+        temporaryRoot: await fsp.mkdtemp(path.join(temporaryBaseRoot, "context-")),
+        downloads: new Map(),
+        abortController,
+      };
+      if (params.signal) {
+        const abortFromOwner = () => abortController.abort(params.signal!.reason);
+        params.signal.addEventListener("abort", abortFromOwner, { once: true });
+        context.stopWatchingOwnerSignal = () =>
+          params.signal?.removeEventListener("abort", abortFromOwner);
+        if (params.signal.aborted) {
+          abortFromOwner();
         }
-        await ensureTemporaryRoot();
-        const abortController = new AbortController();
-        const context: TransferContext = {
-          ...params,
-          localPath: await fsp.realpath(params.localPath),
-          temporaryRoot: await fsp.mkdtemp(path.join(temporaryBaseRoot, "context-")),
-          currentManifestRef: "",
-          snapshots: new Map(),
-          downloads: new Map(),
-          abortController,
-        };
-        if (params.signal) {
-          const abortFromOwner = () => abortController.abort(params.signal!.reason);
-          params.signal.addEventListener("abort", abortFromOwner, { once: true });
-          context.stopWatchingOwnerSignal = () =>
-            params.signal?.removeEventListener("abort", abortFromOwner);
-          if (params.signal.aborted) {
-            abortFromOwner();
-          }
+      }
+      contexts.set(context.environmentId, context);
+      try {
+        if (!isCurrentContext(context)) {
+          throw new Error("Node workspace transfer owner is no longer current");
         }
-        try {
-          const snapshot = await prepareNodeWorkspaceTransferSnapshot({
-            localPath: context.localPath,
-            temporaryRoot: context.temporaryRoot,
-            signal: AbortSignal.any([
-              context.abortController.signal,
-              AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
-            ]),
-          });
-          context.snapshots.set(snapshot.manifestRef, snapshot);
-          context.currentManifestRef = snapshot.manifestRef;
-          contexts.set(context.environmentId, context);
-          return { snapshot, token: mintDownload(context, snapshot.manifestRef) };
-        } catch (error) {
-          await closeContext(context);
-          throw error;
+        const result = await prepare(context);
+        if (!isCurrentContext(context)) {
+          throw new Error("Node workspace transfer owner is no longer current");
         }
+        return result;
+      } catch (error) {
+        await closeContext(context);
+        throw error;
+      }
+    });
+
+  return {
+    initialize: ensureTemporaryRoot,
+
+    async restore(params: Parameters<typeof withNewContext>[0]): Promise<void> {
+      await withNewContext(params, async () => {});
+    },
+
+    async prepareSync(params: Parameters<typeof withNewContext>[0]) {
+      return await withNewContext(params, async (context) => {
+        const snapshot = await prepareNodeWorkspaceTransferSnapshot({
+          localPath: context.localPath,
+          temporaryRoot: context.temporaryRoot,
+          signal: AbortSignal.any([
+            context.abortController.signal,
+            AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+          ]),
+        });
+        return { snapshot, token: mintDownload(context, snapshot) };
       });
     },
 
@@ -495,30 +501,39 @@ export function createNodeWorkspaceTransferService(options: {
       return operation.uploaded;
     },
 
-    getSnapshot(
+    async publishSnapshot(
       environmentId: string,
-      manifestRef: string,
-    ): NodeWorkspaceTransferSnapshot | undefined {
-      return contexts.get(environmentId)?.snapshots.get(manifestRef);
-    },
-
-    publishSnapshot(environmentId: string, snapshot: NodeWorkspaceTransferSnapshot): string {
+      snapshot: Pick<NodeWorkspaceTransferSnapshot, "manifest" | "manifestRef">,
+    ): Promise<string> {
       const context = contexts.get(environmentId);
       if (!context || !isCurrentContext(context)) {
         throw new Error("Node workspace transfer context is unavailable");
       }
-      context.snapshots.set(snapshot.manifestRef, snapshot);
-      context.currentManifestRef = snapshot.manifestRef;
-      pruneSnapshots(context);
-      return mintDownload(context, snapshot.manifestRef);
+      // Reuse packs by immutable base commit, not mutable worktree manifest. Recovery
+      // rebuilds the authenticated base pack even when the Gateway HEAD has advanced.
+      const packPath =
+        context.snapshot?.manifest.baseCommit === snapshot.manifest.baseCommit
+          ? context.snapshot.packPath
+          : await prepareNodeWorkspaceTransferPack({
+              root: context.localPath,
+              baseCommit: snapshot.manifest.baseCommit,
+              temporaryRoot: context.temporaryRoot,
+              signal: AbortSignal.any([
+                context.abortController.signal,
+                AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+              ]),
+            });
+      return mintDownload(context, {
+        ...snapshot,
+        rawManifest: serializeWorkerWorkspaceManifest(snapshot.manifest),
+        root: context.localPath,
+        packPath,
+      });
     },
 
     revoke(environmentId: string, token: string): void {
       const context = contexts.get(environmentId);
       context?.downloads.delete(token);
-      if (context) {
-        pruneSnapshots(context);
-      }
       if (context?.upload?.token === token && context.upload.state === "ready") {
         context.upload = undefined;
       }
@@ -575,7 +590,7 @@ export function createNodeWorkspaceTransferService(options: {
       ) {
         return undefined;
       }
-      return authorization.context.snapshots.get(authorization.capability.manifestRef);
+      return authorization.capability.snapshot;
     },
 
     blob(
@@ -588,12 +603,12 @@ export function createNodeWorkspaceTransferService(options: {
       ) {
         return undefined;
       }
-      const snapshot = authorization.context.snapshots.get(authorization.capability.manifestRef);
+      const snapshot = authorization.capability.snapshot;
       const sha256 = authorization.route.sha256;
-      const entry = snapshot?.manifest.entries.find(
+      const entry = snapshot.manifest.entries.find(
         (candidate) => candidate.type === "file" && candidate.sha256 === sha256,
       );
-      return snapshot && entry?.type === "file"
+      return entry?.type === "file"
         ? { path: entryPath(snapshot.root, entry.path), size: entry.size, sha256: entry.sha256 }
         : undefined;
     },

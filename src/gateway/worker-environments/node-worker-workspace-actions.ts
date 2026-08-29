@@ -14,7 +14,6 @@ import {
   type WorkspaceHashMemo,
   type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
-import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 import {
   applyStagedWorkerWorkspace,
@@ -33,7 +32,7 @@ export type NodeWorkerWorkspaceBinding = {
 type NodeWorkerWorkspaceActions = Pick<
   WorkerWorkspaceTunnelHandle,
   "runWorkspaceCommand" | "syncWorkspace" | "quiesceWorkspace" | "reconcileWorkspace"
-> & { validateRestoredWorkspace: () => Promise<void> };
+> & { restoreWorkspace: () => Promise<void> };
 
 export function createNodeWorkerWorkspaceActions(params: {
   environmentId: string;
@@ -61,39 +60,16 @@ export function createNodeWorkerWorkspaceActions(params: {
     sharedHost: true,
     runWorkspaceCommand: exec,
   });
-  const validateRestoredWorkspace = async (): Promise<void> => {
-    if (!restoredWorkspace) {
-      return;
-    }
-    const prepared = await params.workspaceTransfer.prepareSync({
-      environmentId: params.environmentId,
-      ownerEpoch: params.ownerEpoch,
-      sessionId: params.sessionId,
-      generation: params.ownerEpoch,
-      localPath: restoredWorkspace.localPath,
-      // The transfer service re-reads the durable environment and credential together.
-      // This closure fences the exact in-memory tunnel instance without duplicating that read.
-      isAuthorized: params.isOwnerCurrent,
-      signal: params.ownerSignal,
-    });
-    params.workspaceTransfer.revoke(params.environmentId, prepared.token);
-    if (prepared.snapshot.manifestRef !== restoredWorkspace.manifestRef) {
-      throw new Error("Gateway workspace changed before node tunnel recovery");
-    }
-    const quiescence = await quiesceWorkspace(restoredWorkspace.remoteWorkspaceDir);
-    try {
-      const remoteManifestRef = await workspace.captureManifest(
-        restoredWorkspace.remoteWorkspaceDir,
-        prepared.snapshot.manifest.baseCommit,
-        restoredWorkspace.manifestRef,
-      );
-      if (remoteManifestRef !== restoredWorkspace.manifestRef) {
-        throw new Error("Node workspace changed before tunnel recovery");
-      }
-    } finally {
-      await quiescence.resume();
-    }
-  };
+  const transferOwner = (localPath: string) => ({
+    environmentId: params.environmentId,
+    ownerEpoch: params.ownerEpoch,
+    sessionId: params.sessionId,
+    generation: params.ownerEpoch,
+    localPath,
+    // Durable transfer ownership and the exact tunnel instance must both remain live.
+    isAuthorized: params.isOwnerCurrent,
+    signal: params.ownerSignal,
+  });
   // Same placement-lifetime memo contract as the SSH tunnel owner: stat-identity
   // keys self-invalidate on change, and without this owner every turn re-hashes
   // the full managed worktree during prepare/apply/verify.
@@ -163,17 +139,10 @@ export function createNodeWorkerWorkspaceActions(params: {
         if (accepted.manifestRef === expectedRemoteRef) {
           return;
         }
-        const baseSnapshot = params.workspaceTransfer.getSnapshot(
+        const token = await params.workspaceTransfer.publishSnapshot(
           params.environmentId,
-          request.baseManifestRef,
+          accepted,
         );
-        const token = params.workspaceTransfer.publishSnapshot(params.environmentId, {
-          manifest: accepted.manifest,
-          manifestRef: accepted.manifestRef,
-          rawManifest: serializeWorkerWorkspaceManifest(accepted.manifest),
-          root: await fsp.realpath(request.localPath),
-          ...(baseSnapshot?.packPath ? { packPath: baseSnapshot.packPath } : {}),
-        });
         try {
           const published = await exec({
             argv: ["openclaw-internal-workspace-transfer"],
@@ -256,21 +225,20 @@ export function createNodeWorkerWorkspaceActions(params: {
     }
   };
   return {
-    validateRestoredWorkspace,
+    restoreWorkspace: async () => {
+      if (restoredWorkspace) {
+        // Recovery collects deltas against the authenticated uploaded base; neither
+        // workspace must still equal that base when this transfer owner is restored.
+        await params.workspaceTransfer.restore(transferOwner(restoredWorkspace.localPath));
+      }
+    },
     runWorkspaceCommand: exec,
     syncWorkspace: async (request) => {
       workspaceReady = true;
       try {
-        const prepared = await params.workspaceTransfer.prepareSync({
-          environmentId: params.environmentId,
-          ownerEpoch: params.ownerEpoch,
-          sessionId: params.sessionId,
-          generation: params.ownerEpoch,
-          localPath: request.localPath,
-          // Durable owner state is revalidated by the transfer service after every awaited I/O.
-          isAuthorized: params.isOwnerCurrent,
-          signal: params.ownerSignal,
-        });
+        const prepared = await params.workspaceTransfer.prepareSync(
+          transferOwner(request.localPath),
+        );
         try {
           const originStartedAt = performance.now();
           const origin = await workspace.trySyncWorkspace(request, prepared.snapshot.manifestRef);
