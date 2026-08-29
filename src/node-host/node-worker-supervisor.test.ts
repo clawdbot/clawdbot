@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
 import { NODE_WORKER_CAPACITY_MAX } from "../infra/node-runner-inventory.js";
-import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import * as secretRegistry from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import * as processTree from "../process/kill-tree.js";
 import {
@@ -54,6 +54,19 @@ function launchInput(workspaceDir: string, launchId: string, prompt = "success")
   input.descriptor.admission.environmentId = `environment-${launchId}`;
   input.descriptor.admission.sessionId = `session-${launchId}`;
   return input;
+}
+
+function evictWorkerCredentialsOnRegistration() {
+  const { registerSecretValueForRedaction } = secretRegistry;
+  // Both launch paths register before sending a turn. Evict every registration so a
+  // later launch cannot restore the global secret and hide a missing worker scrubber.
+  return vi.spyOn(secretRegistry, "registerSecretValueForRedaction").mockImplementation((value) => {
+    registerSecretValueForRedaction(value);
+    for (let index = 0; index < 600; index += 1) {
+      registerSecretValueForRedaction(`eviction-secret-${index}`);
+    }
+    expect(secretRegistry.isSecretValueRegisteredForRedaction(value)).toBe(false);
+  });
 }
 
 describe("node worker supervisor", () => {
@@ -532,12 +545,12 @@ describe("node worker supervisor", () => {
     const failureInput = launchInput(workspaceDir, "failure-launch", "secret-fail");
     const overflowInput = launchInput(workspaceDir, "overflow-launch", "overflow");
 
+    const registrations = evictWorkerCredentialsOnRegistration();
     await supervisor.launch(successInput, TEST_WORKER_ENDPOINT);
     await supervisor.launch(failureInput, TEST_WORKER_ENDPOINT);
     await supervisor.launch(overflowInput, TEST_WORKER_ENDPOINT);
-    for (let index = 0; index < 600; index += 1) {
-      registerSecretValueForRedaction(`eviction-secret-${index}`);
-    }
+    expect(registrations).toHaveBeenCalledTimes(3);
+    expect(registrations).toHaveBeenCalledWith(TEST_WORKER_CREDENTIAL);
     const success = await waitForTerminal(supervisor, successInput.launchId);
     const failure = await waitForTerminal(supervisor, failureInput.launchId);
     const overflow = await waitForTerminal(supervisor, overflowInput.launchId);
@@ -596,12 +609,11 @@ describe("node worker supervisor", () => {
     try {
       const original = await supervisor.launch(first, TEST_WORKER_ENDPOINT);
       await waitForTerminal(supervisor, first.launchId);
+      const registrations = evictWorkerCredentialsOnRegistration();
       expect(await supervisor.launch(second, TEST_WORKER_ENDPOINT)).toMatchObject({
         worker: original.worker,
       });
-      for (let index = 0; index < 600; index += 1) {
-        registerSecretValueForRedaction(`rotated-eviction-secret-${index}`);
-      }
+      expect(registrations).toHaveBeenCalledWith(second.descriptor.admission.credential);
       const completed = await waitForTerminal(supervisor, second.launchId);
       expect(JSON.parse(completed.resultJson ?? "null")).toEqual({
         status: "completed",
@@ -609,6 +621,7 @@ describe("node worker supervisor", () => {
         transcriptNextSeq: 2,
       });
 
+      registrations.mockRestore();
       await supervisor.launch(last, TEST_WORKER_ENDPOINT);
       const failed = await waitForTerminal(supervisor, last.launchId);
       expect(failed).toMatchObject({
