@@ -1,6 +1,7 @@
 // Package OpenClaw For Docker tests cover QA Lab package artifact evidence.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -755,18 +756,29 @@ describe("package-openclaw-for-docker", () => {
 
       const entryModes = new Map<string, number>();
       const files: Array<{ path: string; size: number; mode: number }> = [];
-      await tar.t({
-        file: tarball,
-        onentry: (entry) => {
+      const extendedAttributeHeaders: string[] = [];
+      const parser = new tar.Parser({
+        onReadEntry: (entry) => {
           const mode = (entry.mode ?? 0) & 0o777;
           entryModes.set(entry.path, mode);
           files.push({ path: entry.path.replace(/^package\//u, ""), size: entry.size, mode });
+          entry.resume();
         },
       });
+      // ReadEntry drops unknown PAX fields, so inspect the raw header keys.
+      parser.on("meta", (metadata: string) => {
+        extendedAttributeHeaders.push(
+          ...(metadata.match(/(?:LIBARCHIVE|SCHILY)\.xattr\.[^=\n]+(?==)/gu) ?? []),
+        );
+      });
+      const parsed = once(parser, "end");
+      const bytes = fs.readFileSync(tarball);
+      parser.end(bytes);
+      await parsed;
+      expect(extendedAttributeHeaders).toEqual([]);
       expect(entryModes.get("package/dist/index.js")).toBe(0o644);
       expect(entryModes.get("package/openclaw.mjs")).toBe(0o755);
       expect(entryModes.get("package/package.json")).toBe(0o644);
-      const bytes = fs.readFileSync(tarball);
       const receipt = JSON.parse(fs.readFileSync(path.join(outputDir, "pack.json"), "utf8"));
       expect(receipt).toEqual([
         expect.objectContaining({
