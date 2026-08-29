@@ -50,7 +50,7 @@ vi.mock("./setup.model-auth.js", () => ({
   runSetupModelAuthStep: async ({ config }: { config: OpenClawConfig }) => ({
     config,
     authProfiles: [],
-    persistAuthProfiles: async () => {},
+    persistAuthProfiles: async () => ({ rollback() {} }),
   }),
 }));
 

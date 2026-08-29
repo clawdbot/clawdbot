@@ -7,6 +7,21 @@ import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
 
+export async function publishSetupModelAuthCandidate(
+  candidate: SetupModelAuthCandidate,
+  config: OpenClawConfig,
+  writeConfig: (config: OpenClawConfig) => Promise<OpenClawConfig>,
+  authProfiles?: SetupModelAuthCandidate["authProfiles"],
+): Promise<OpenClawConfig> {
+  const persistence = await candidate.persistAuthProfiles(authProfiles);
+  try {
+    return await writeConfig(config);
+  } catch (error) {
+    persistence.rollback();
+    throw error;
+  }
+}
+
 export async function offerLiveModelVerification(params: {
   config: OpenClawConfig;
   initialCandidate?: SetupModelAuthCandidate;
@@ -92,7 +107,7 @@ export async function offerLiveModelVerification(params: {
     ({
       config: params.config,
       authProfiles: [],
-      persistAuthProfiles: async () => {},
+      persistAuthProfiles: async () => ({ rollback() {} }),
     } satisfies SetupModelAuthCandidate);
   let shouldPersistCandidate = params.initialCandidate !== undefined;
   while (true) {
@@ -107,8 +122,12 @@ export async function offerLiveModelVerification(params: {
           modelRef: result.modelRef,
         };
       }
-      await candidate.persistAuthProfiles(result.authProfiles);
-      const config = await params.writeConfig(candidate.config);
+      const config = await publishSetupModelAuthCandidate(
+        candidate,
+        candidate.config,
+        params.writeConfig,
+        result.authProfiles,
+      );
       return {
         config,
         attempted: true,

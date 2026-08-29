@@ -321,7 +321,7 @@ describe("agents add command", () => {
         auth: { profiles: { "openai:primary": { provider: "openai", mode: "api_key" } } },
       },
       authProfiles: profiles,
-      persistAuthProfiles: async () => {},
+      persistAuthProfiles: async () => ({ rollback() {} }),
     }));
   }
 

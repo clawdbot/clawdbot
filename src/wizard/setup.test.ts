@@ -11,6 +11,7 @@ import {
   removeOAuthTestTempRoot,
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
+import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { ConfigMutationConflictError } from "../config/config.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -54,7 +55,7 @@ const prepareAuthChoice = vi.hoisted(() =>
   vi.fn<PrepareAuthChoice>(async (args) => ({
     ...(await applyAuthChoice(args)),
     authProfiles: [],
-    persistAuthProfiles: async () => {},
+    persistAuthProfiles: async () => ({ rollback() {} }),
   })),
 );
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "demo-provider"));
@@ -265,7 +266,7 @@ function prepareMockAuthProfilesIn(
       return {
         ...result,
         authProfiles: [],
-        persistAuthProfiles: async () => {},
+        persistAuthProfiles: async () => ({ rollback() {} }),
       };
     }
     const profile = stagedOpenAiProfile(apiKey);
@@ -274,12 +275,7 @@ function prepareMockAuthProfilesIn(
       authProfiles: [profile],
       persistAuthProfiles: async (profiles) => {
         persistCalls.push(profiles);
-        for (const candidate of profiles ?? [profile]) {
-          const updated = await upsertAuthProfileWithLock({ ...candidate, agentDir });
-          if (!updated) {
-            throw new Error("test auth profile write failed");
-          }
-        }
+        return await persistAuthProfileBatch({ profiles: profiles ?? [profile], agentDir });
       },
     };
   });
@@ -636,7 +632,7 @@ describe("runSetupWizard", () => {
     prepareAuthChoice.mockImplementation(async (args) => ({
       ...(await applyAuthChoice(args)),
       authProfiles: [],
-      persistAuthProfiles: async () => {},
+      persistAuthProfiles: async () => ({ rollback() {} }),
     }));
     setupChannels.mockReset();
     setupChannels.mockImplementation(async (cfg) => cfg);
@@ -3117,6 +3113,80 @@ describe("runSetupWizard", () => {
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(persistCalls).toEqual([]);
     await expect(fs.access(agentDir)).rejects.toThrow();
+  });
+
+  it("rolls noninteractive auth persistence back when the first config write fails", async () => {
+    const stateDir = await makeCaseDir("auth-config-write-rollback-");
+    const agentDir = path.join(stateDir, "agent");
+    prepareMockAuthProfilesIn(agentDir);
+    applyAuthChoice.mockResolvedValueOnce({
+      config: modelConfigWithApiKey("test-rollback-key"),
+    });
+    replaceConfigFile.mockRejectedValueOnce(new Error("injected config publication failure"));
+
+    try {
+      await expect(
+        runSetupWizard(
+          {
+            acceptRisk: true,
+            flow: "quickstart",
+            authChoice: "demo-provider",
+            nonInteractive: true,
+            installDaemon: false,
+            skipChannels: true,
+            skipSkills: true,
+            skipSearch: true,
+            skipHealth: true,
+            skipUi: true,
+          },
+          createRuntime(),
+          buildWizardPrompter({}),
+        ),
+      ).rejects.toThrow("injected config publication failure");
+
+      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toBeUndefined();
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("retains noninteractive auth persistence when a later config write fails", async () => {
+    const stateDir = await makeCaseDir("auth-later-config-write-failure-");
+    const agentDir = path.join(stateDir, "agent");
+    prepareMockAuthProfilesIn(agentDir);
+    applyAuthChoice.mockResolvedValueOnce({
+      config: modelConfigWithApiKey("test-retained-key"),
+    });
+    replaceConfigFile
+      .mockResolvedValueOnce({ config: modelConfigWithApiKey("test-retained-key") })
+      .mockRejectedValueOnce(new Error("injected later config publication failure"));
+
+    try {
+      await expect(
+        runSetupWizard(
+          {
+            acceptRisk: true,
+            flow: "quickstart",
+            authChoice: "demo-provider",
+            nonInteractive: true,
+            installDaemon: false,
+            skipChannels: true,
+            skipSkills: true,
+            skipSearch: true,
+            skipHealth: true,
+            skipUi: true,
+          },
+          createRuntime(),
+          buildWizardPrompter({}),
+        ),
+      ).rejects.toThrow("injected later config publication failure");
+
+      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
+        stagedOpenAiProfile("test-retained-key").credential,
+      );
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
   });
 
   it("keeps failed model/auth fixes in the verification loop without persisting them", async () => {

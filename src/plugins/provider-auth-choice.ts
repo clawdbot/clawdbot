@@ -5,7 +5,10 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { persistAuthProfileBatch } from "../agents/auth-profiles.js";
+import {
+  persistAuthProfileBatch,
+  type AuthProfilePersistenceReceipt,
+} from "../agents/auth-profiles.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
@@ -58,7 +61,9 @@ type ApplyProviderAuthChoiceResult = {
 
 type PreparedApplyProviderAuthChoiceResult = ApplyProviderAuthChoiceResult & {
   authProfiles: ProviderAuthResult["profiles"];
-  persistAuthProfiles: (profiles?: ProviderAuthResult["profiles"]) => Promise<void>;
+  persistAuthProfiles: (
+    profiles?: ProviderAuthResult["profiles"],
+  ) => Promise<AuthProfilePersistenceReceipt>;
 };
 
 function preparedWithoutAuthProfiles(
@@ -67,7 +72,7 @@ function preparedWithoutAuthProfiles(
   return {
     ...result,
     authProfiles: [],
-    persistAuthProfiles: async () => {},
+    persistAuthProfiles: async () => ({ rollback() {} }),
   };
 }
 
@@ -342,7 +347,9 @@ async function prepareProviderPluginAuthMethod(
   config: OpenClawConfig;
   defaultModel?: string;
   authProfiles: ProviderAuthResult["profiles"];
-  persistAuthProfiles: (profiles?: ProviderAuthResult["profiles"]) => Promise<void>;
+  persistAuthProfiles: (
+    profiles?: ProviderAuthResult["profiles"],
+  ) => Promise<AuthProfilePersistenceReceipt>;
 }> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
@@ -377,18 +384,18 @@ async function prepareProviderPluginAuthMethod(
     ? normalizeAgentModelRefForConfig(result.defaultModel)
     : undefined;
 
-  let profilesPersisted = false;
+  let persistenceReceipt: AuthProfilePersistenceReceipt | undefined;
   const persistAuthProfiles = async (profiles = result.profiles) => {
-    if (profilesPersisted) {
-      return;
+    if (persistenceReceipt) {
+      return persistenceReceipt;
     }
     await params.beforePersistentEffect?.();
-    await persistAuthProfileBatch({
+    persistenceReceipt = await persistAuthProfileBatch({
       profiles,
       agentDir,
       stateDir: params.env?.OPENCLAW_STATE_DIR,
     });
-    profilesPersisted = true;
+    return persistenceReceipt;
   };
 
   return {

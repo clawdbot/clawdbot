@@ -32,10 +32,14 @@ type PersistAuthProfileBatchParams = {
   stateDir?: string;
 };
 
+export type AuthProfilePersistenceReceipt = {
+  rollback: () => void;
+};
+
 /** Atomically persists a batch and returns conditional attempt-scoped compensation. */
 export async function persistAuthProfileBatch(
   params: PersistAuthProfileBatchParams,
-): Promise<{ rollback: () => void }> {
+): Promise<AuthProfilePersistenceReceipt> {
   const profiles = new Map(
     params.profiles.map(({ profileId, credential, replaceExisting }) => [
       profileId,

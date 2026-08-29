@@ -105,7 +105,7 @@ describe("offerLiveModelVerification", () => {
         },
       },
     };
-    const persistAuthProfiles = vi.fn(async () => {});
+    const persistAuthProfiles = vi.fn(async () => ({ rollback() {} }));
     const writeConfig = vi.fn(async () => repairedConfig);
     mocks.verify
       .mockResolvedValueOnce({ ok: false, status: "auth", error: "credential expired" })
@@ -144,5 +144,47 @@ describe("offerLiveModelVerification", () => {
     });
     expect(persistAuthProfiles).toHaveBeenCalledOnce();
     expect(writeConfig).toHaveBeenCalledOnce();
+  });
+
+  it("rolls verified auth persistence back when config publication fails", async () => {
+    const publicationError = new Error("injected config publication failure");
+    const rollback = vi.fn();
+    const persistAuthProfiles = vi.fn(async () => ({ rollback }));
+    mocks.verify.mockResolvedValue({
+      ok: true,
+      modelRef: "openai/gpt-5.6",
+      latencyMs: 10,
+    });
+    const prompter = {
+      intro: vi.fn(),
+      outro: vi.fn(),
+      note: vi.fn(),
+      confirm: vi.fn(async () => true),
+      select: vi.fn(),
+      multiselect: vi.fn(),
+      text: vi.fn(),
+      progress: vi.fn(() => ({ stop: vi.fn(), update: vi.fn() })),
+    } as unknown as WizardPrompter;
+
+    await expect(
+      offerLiveModelVerification({
+        config: { agents: { entries: { main: { default: true } } } },
+        initialCandidate: {
+          config: { agents: { entries: { main: { default: true } } } },
+          authProfiles: [],
+          persistAuthProfiles,
+        },
+        opts: {},
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
+        workspaceDir: "/tmp/openclaw-test-workspace",
+        writeConfig: vi.fn(async () => {
+          throw publicationError;
+        }),
+      }),
+    ).rejects.toBe(publicationError);
+
+    expect(persistAuthProfiles).toHaveBeenCalledOnce();
+    expect(rollback).toHaveBeenCalledOnce();
   });
 });

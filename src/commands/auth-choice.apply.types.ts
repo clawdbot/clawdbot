@@ -1,4 +1,5 @@
 // Shared types for applying auth-choice selections during onboarding and agent setup.
+import type { AuthProfilePersistenceReceipt } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -27,5 +28,7 @@ export type ApplyAuthChoiceResult = {
 
 export type PreparedAuthChoiceResult = ApplyAuthChoiceResult & {
   authProfiles: ProviderAuthResult["profiles"];
-  persistAuthProfiles: (profiles?: ProviderAuthResult["profiles"]) => Promise<void>;
+  persistAuthProfiles: (
+    profiles?: ProviderAuthResult["profiles"],
+  ) => Promise<AuthProfilePersistenceReceipt>;
 };

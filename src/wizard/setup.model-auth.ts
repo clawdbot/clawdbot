@@ -138,7 +138,7 @@ export async function runSetupModelAuthStep(params: {
   let authProfiles: PreparedAuthChoiceResult["authProfiles"] =
     params.stagedCandidate?.authProfiles ?? [];
   let persistAuthProfiles: PreparedAuthChoiceResult["persistAuthProfiles"] =
-    params.stagedCandidate?.persistAuthProfiles ?? (async () => {});
+    params.stagedCandidate?.persistAuthProfiles ?? (async () => ({ rollback() {} }));
   const authChoiceFromPrompt = opts.authChoice === undefined;
   let authChoice: AuthChoice | undefined = opts.authChoice;
   let authStore:
@@ -199,7 +199,7 @@ export async function runSetupModelAuthStep(params: {
     // A new auth choice replaces the rejected candidate instead of layering onto it.
     nextConfig = replacementBaseConfig;
     authProfiles = [];
-    persistAuthProfiles = async () => {};
+    persistAuthProfiles = async () => ({ rollback() {} });
 
     if (authChoice === "custom-api-key") {
       const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
