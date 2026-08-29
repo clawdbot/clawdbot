@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { SessionStateActorType } from "../../sessions/session-state-events.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
@@ -111,6 +112,7 @@ export function buildUpdatedSessionGoalStatus(
   options: {
     status: Extract<SessionGoalStatus, "active" | "paused" | "blocked" | "complete">;
     note?: string;
+    actor?: { type: SessionStateActorType; id?: string };
   },
   now: number,
 ): SessionGoal {
@@ -120,6 +122,35 @@ export function buildUpdatedSessionGoalStatus(
   }
   if (TERMINAL_GOAL_STATUSES.has(accounted.status) && accounted.status !== options.status) {
     throw new SessionGoalTransitionError(`goal is already ${accounted.status}`);
+  }
+  const isAgent = options.actor?.type === "agent";
+  // Agents may only resume a goal they explicitly paused; they cannot clear a
+  // user/system budget limit or retract a blocked state, since those are
+  // operator/platform-owned recovery transitions. Humans keep full resume.
+  if (options.status === "active" && isAgent && accounted.status !== "paused") {
+    throw new SessionGoalTransitionError(
+      `agents can only resume a paused goal; goal is ${accounted.status}`,
+    );
+  }
+  // Agents may only pause an active goal. Allowing pause from blocked or a limited
+  // state would let the agent chain paused -> active and bypass the recovery boundary.
+  if (options.status === "paused" && isAgent && accounted.status !== "active") {
+    throw new SessionGoalTransitionError(
+      `agents can only pause an active goal; goal is ${accounted.status}`,
+    );
+  }
+  // An agent may not resume a paused goal whose token budget is already exhausted;
+  // doing so would reset tokensUsed and grant a fresh budget window the operator set.
+  // A human resume still resets the window.
+  if (
+    options.status === "active" &&
+    isAgent &&
+    accounted.tokenBudget !== undefined &&
+    accounted.tokensUsed >= accounted.tokenBudget
+  ) {
+    throw new SessionGoalTransitionError(
+      "agents cannot resume a goal whose token budget is exhausted",
+    );
   }
   const resetsBudgetWindow =
     options.status === "active" &&

@@ -188,7 +188,6 @@ export async function updateSessionGoalStatus(
       updated = buildUpdatedSessionGoalStatus(entry, options, now);
       return { goal: updated };
     },
-    },
   );
   if (!result || !updated) {
     throw new Error(foundSession ? "goal not found" : "session not found");

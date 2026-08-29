@@ -399,5 +399,65 @@ describe("goal tools", () => {
       });
       expect(goal.status).toBe("paused");
     });
+
+    it("rejects an agent resuming a paused goal with an exhausted budget", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "paused", {
+        tokenBudget: 20,
+        tokensUsed: 25,
+        pausedAt: 1,
+      });
+
+      await expect(
+        updateSessionGoalStatus({
+          ...baseScope,
+          storePath,
+          actor: { type: "agent", id: "global" },
+          status: "active",
+        }),
+      ).rejects.toThrow(/agents cannot resume a goal whose token budget is exhausted/);
+      const goal = getSessionEntry({ storePath, sessionKey: "global" })?.goal;
+      expect(goal?.status).toBe("paused");
+      expect(goal?.tokensUsed).toBe(25);
+    });
+
+    it("allows an agent to resume a paused goal under its budget", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "paused", {
+        tokenBudget: 20,
+        tokensUsed: 5,
+        pausedAt: 1,
+      });
+
+      const goal = await updateSessionGoalStatus({
+        ...baseScope,
+        storePath,
+        actor: { type: "agent", id: "global" },
+        status: "active",
+      });
+      expect(goal.status).toBe("active");
+      expect(goal.tokensUsed).toBe(5);
+    });
+
+    it("allows a human to resume a paused goal with an exhausted budget (resets the window)", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "paused", {
+        tokenBudget: 20,
+        tokensUsed: 25,
+        pausedAt: 1,
+      });
+
+      const goal = await updateSessionGoalStatus({
+        ...baseScope,
+        storePath,
+        actor: { type: "human" },
+        status: "active",
+      });
+      expect(goal.status).toBe("active");
+      expect(goal.tokensUsed).toBe(0);
+    });
   });
 });
