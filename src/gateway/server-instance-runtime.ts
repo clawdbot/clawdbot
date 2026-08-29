@@ -13,10 +13,8 @@ import type {
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import {
-  createInternalAgentTurnFacade,
-  type InternalAgentTurnPrincipalOptions,
-} from "./agent-turn/internal-facade.js";
+import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
+import type { InternalAgentTurnPrincipalOptions } from "./agent-turn/internal-facade.types.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";

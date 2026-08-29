@@ -21,36 +21,17 @@ import type { GatewayRequestOptions } from "../server-methods/types.js";
 import { validateGatewayMethodParams } from "../server-methods/validation.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
+import type {
+  InternalAgentTurnDispatchOptions,
+  InternalAgentTurnFacade,
+  InternalAgentTurnPrincipalOptions,
+} from "./internal-facade.types.js";
 import { captureAgentTurnPrincipal, resolveAgentTurnRunObserver } from "./principal.js";
 import type { AgentTurnIo } from "./types.js";
 
-type InternalAgentTurnFacadeOptions = {
-  // Authorization can await; the lifecycle owner must still be current before dispatch.
-  assertContextCurrent?: () => void;
-  client: NonNullable<GatewayRequestOptions["client"]>;
+type InternalAgentTurnFacadeOptions = InternalAgentTurnPrincipalOptions & {
   getContext: () => GatewayRequestOptions["context"];
   getMethodRegistry?: () => GatewayMethodRegistry;
-  isWebchatConnect?: GatewayRequestOptions["isWebchatConnect"];
-};
-
-export type InternalAgentTurnPrincipalOptions = Omit<
-  InternalAgentTurnFacadeOptions,
-  "getContext" | "getMethodRegistry"
->;
-
-export type InternalAgentTurnFacadeFactory = (
-  principal: InternalAgentTurnPrincipalOptions,
-) =>
-  | ReturnType<typeof createInternalAgentTurnFacade>
-  | Promise<ReturnType<typeof createInternalAgentTurnFacade>>;
-
-type InternalAgentTurnDispatchOptions = {
-  expectFinal?: boolean;
-  onAccepted?: (payload: unknown) => void;
-  onExecutionStarted?: () => void;
-  onSignalAbort?: () => Promise<void> | void;
-  signal?: AbortSignal;
-  timeoutMs?: number;
 };
 
 function throwEnvelopeRejection(method: string, error: ErrorShape): never {
@@ -61,7 +42,9 @@ function throwEnvelopeRejection(method: string, error: ErrorShape): never {
 }
 
 /** Typed, frame-free access to agent turns owned by the running Gateway instance. */
-export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOptions) {
+export function createInternalAgentTurnFacade(
+  options: InternalAgentTurnFacadeOptions,
+): InternalAgentTurnFacade {
   const isWebchatConnect = options.isWebchatConnect ?? (() => false);
   const getMethodRegistry = options.getMethodRegistry ?? createRequestGatewayMethodRegistry;
 
