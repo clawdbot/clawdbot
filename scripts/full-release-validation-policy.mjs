@@ -368,6 +368,11 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
     const names = new Set();
     for (const rawJob of attempt.jobs) {
       const job = normalizedAttemptJob(rawJob, expectedAttempt);
+      // Completed skipped jobs never executed, so they cannot contribute attempt
+      // evidence. Drop them before identity checks because placeholders may collide.
+      if (job.status === "completed" && job.conclusion === "skipped") {
+        continue;
+      }
       if (names.has(job.name)) {
         throw new Error(
           `release child attempt ${expectedAttempt} contains duplicate job identity: ${job.name}`,

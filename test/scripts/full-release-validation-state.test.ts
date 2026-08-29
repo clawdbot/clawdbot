@@ -630,6 +630,41 @@ describe("release child attempt composition", () => {
     ]);
   });
 
+  it("ignores terminal skipped jobs before duplicate identity checks", () => {
+    const matrixPlaceholder = job("matrix.check_name", "skipped");
+    const skippedJob = job("disabled-check", "skipped");
+    const result = composeReleaseAttemptJobs(
+      [
+        {
+          jobs: [
+            matrixPlaceholder,
+            matrixPlaceholder,
+            skippedJob,
+            skippedJob,
+            job("test", "success"),
+          ],
+          runAttempt: 1,
+        },
+      ],
+      { effectiveRunAttempt: 1, plannedRunAttempt: 1 },
+    );
+    expect(result.jobs).toEqual([
+      expect.objectContaining({ acceptedRunAttempt: 1, conclusion: "success", name: "test" }),
+    ]);
+  });
+
+  it.each([
+    ["nonterminal", { ...job("matrix.check_name", "skipped"), status: "queued" }],
+    ["nonskipped", job("disabled-check", "success")],
+  ])("still rejects duplicate %s jobs", (_label, retainedJob) => {
+    expect(() =>
+      composeReleaseAttemptJobs([{ jobs: [retainedJob, retainedJob], runAttempt: 1 }], {
+        effectiveRunAttempt: 1,
+        plannedRunAttempt: 1,
+      }),
+    ).toThrow("duplicate job identity");
+  });
+
   it("rejects duplicate logical jobs and gapped attempts", () => {
     expect(() =>
       composeReleaseAttemptJobs(
