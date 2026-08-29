@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { build } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -87,6 +87,132 @@ if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep)
 `;
 
 describe("tsdown config", () => {
+  it("builds retained config repairs without plugin runtime or state migration closures", async () => {
+    const selected = configs.find((config) => config.outDir === "dist/config-doctor");
+    expect(selected?.name).toBe(TSDOWN_UNIFIED_CONFIG_GROUP);
+    const entries = selected?.entry ?? {};
+    expect(Object.keys(entries)).toContain("discord");
+    const root = fs.realpathSync(createTempDir("openclaw-retained-config-doctors-"));
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+    const bundles = await build({
+      ...selected,
+      config: false,
+      outDir: root,
+      dts: false,
+      logLevel: "silent",
+    });
+    try {
+      const chunks = new Map(
+        bundles.flatMap((bundle) =>
+          bundle.chunks
+            .filter((chunk) => chunk.type === "chunk")
+            .map((chunk) => [chunk.fileName, chunk] as const),
+        ),
+      );
+      const queue = Object.keys(entries).map((entry) => `${entry}.js`);
+      const visited = new Set<string>();
+      const dependencies = JSON.parse(fs.readFileSync("package.json", "utf8")).dependencies;
+      while (queue.length) {
+        const name = queue.pop()!;
+        if (visited.has(name)) {
+          continue;
+        }
+        visited.add(name);
+        const chunk = chunks.get(name);
+        if (!chunk) {
+          throw new Error(`Missing retained config chunk: ${name}`);
+        }
+        for (const specifier of chunk.imports) {
+          const target = specifier.startsWith(".")
+            ? path.posix.normalize(path.posix.join(path.posix.dirname(name), specifier))
+            : specifier;
+          if (chunks.has(target)) {
+            queue.push(target);
+            continue;
+          }
+          if (isBuiltin(specifier)) {
+            continue;
+          }
+          const packageName = specifier
+            .split("/")
+            .slice(0, specifier.startsWith("@") ? 2 : 1)
+            .join("/");
+          expect(Object.hasOwn(dependencies, packageName), specifier).toBe(true);
+          const destination = path.join(root, "node_modules", packageName);
+          if (!fs.existsSync(destination)) {
+            fs.mkdirSync(path.dirname(destination), { recursive: true });
+            fs.symlinkSync(
+              fs.realpathSync(path.join("node_modules", packageName)),
+              destination,
+              "dir",
+            );
+          }
+        }
+        expect(chunk.code).not.toMatch(
+          /migrateLegacyState|openPluginStateKeyedStore|openChannelIngressQueue/u,
+        );
+        const renderedModules = Object.entries(chunk.modules)
+          .filter(([, module]) => module.renderedLength > 0)
+          .map(([module]) => module.replaceAll("\\", "/"));
+        expect(
+          renderedModules.filter((module) =>
+            /\/extensions\/[^/]+\/(?:doctor-contract-api|runtime|index|channel-entry|setup-entry)\.[cm]?[jt]s$/u.test(
+              module,
+            ),
+          ),
+        ).toEqual([]);
+      }
+      const script = `
+        import assert from "node:assert/strict";
+        import path from "node:path";
+        import { pathToFileURL } from "node:url";
+        const [root, entriesJson] = process.argv.slice(1);
+        const modules = {};
+        for (const name of JSON.parse(entriesJson)) {
+          const mod = await import(pathToFileURL(path.join(root, name + ".js")).href);
+          assert.deepEqual(Object.keys(mod).sort(), name === "clickclack"
+            ? ["normalizeCompatibilityConfig"]
+            : ["legacyConfigRules", "normalizeCompatibilityConfig"]);
+          modules[name] = mod;
+        }
+        const cfg = { channels: { discord: { dm: { enabled: true, policy: "allowlist", allowFrom: ["123"] }, accounts: { work: { dm: { policy: "disabled", allowFrom: ["456"] } } } } }, plugins: { allow: [] } };
+        const before = structuredClone(cfg);
+        const migrated = modules.discord.normalizeCompatibilityConfig({ cfg }).config;
+        assert.deepEqual(cfg, before);
+        assert.deepEqual(migrated.channels.discord.dm, { enabled: true });
+        assert.equal(migrated.channels.discord.dmPolicy, "allowlist");
+        assert.deepEqual(migrated.channels.discord.allowFrom, ["123"]);
+        assert.equal(migrated.channels.discord.accounts.work.dmPolicy, "disabled");
+        assert.deepEqual(migrated.channels.discord.accounts.work.allowFrom, ["456"]);
+        assert.deepEqual(migrated.plugins, { allow: [] });
+        for (const name of ["imessage", "msteams"]) {
+          const result = modules[name].normalizeCompatibilityConfig({ cfg: { channels: { [name]: { blockStreaming: false } } } });
+          assert.equal(result.config.channels[name].streaming.block.enabled, false);
+          assert.equal(Object.hasOwn(result.config.channels[name], "blockStreaming"), false);
+        }
+        console.log("retained config APIs migrate without plugin installation or capability grants");
+      `;
+      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+        (resolve) => {
+          execFile(
+            process.execPath,
+            ["--input-type=module", "-e", script, root, JSON.stringify(Object.keys(entries))],
+            { cwd: root, timeout: 30_000 },
+            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+          );
+        },
+      );
+      expect(result.error, result.stderr).toBeNull();
+      expect(result.stdout.trim()).toBe(
+        "retained config APIs migrate without plugin installation or capability grants",
+      );
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
   it.each(["runtime", "worker"])(
     "preserves native fs-safe assets and policy in relocated %s output",
     async (target) => {
