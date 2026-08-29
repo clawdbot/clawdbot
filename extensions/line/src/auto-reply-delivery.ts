@@ -16,8 +16,9 @@ import type { FlexContainer } from "./flex-templates/types.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import { hasLineSpecificMediaOptions } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
+import { createLineQuickReply } from "./rich-messages.js";
 import { findLineHttpError, resolveLineNonDispatchRetryable } from "./send-retry.js";
-import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
+import type { LineChannelData, LineQuickReplyItem, LineTemplateMessagePayload } from "./types.js";
 
 type LineAutoReplyDeps = {
   buildTemplateMessageFromPayload: (
@@ -25,7 +26,6 @@ type LineAutoReplyDeps = {
   ) => messagingApi.TemplateMessage | null;
   processLineMessage: (text: string) => ProcessedLineMessage;
   chunkMarkdownText: (text: string, limit: number) => string[];
-  createQuickReplyItems: (labels: string[]) => messagingApi.QuickReply;
   pushMessagesLine: (
     to: string,
     messages: messagingApi.Message[],
@@ -217,7 +217,15 @@ export async function deliverLineAutoReply(params: {
   };
 
   const richMessages: messagingApi.Message[] = [];
-  const hasQuickReplies = Boolean(lineData.quickReplies?.length);
+  // The presentation renderer emits typed items; plain labels are the caller-authored carrier.
+  const quickReplyItems: LineQuickReplyItem[] = lineData.quickReplyItems?.length
+    ? lineData.quickReplyItems
+    : (lineData.quickReplies ?? []).map((label) => ({
+        label,
+        action: { type: "command", command: label },
+      }));
+  const quickReplyLabels = quickReplyItems.map((item) => item.label);
+  const hasQuickReplies = quickReplyItems.length > 0;
 
   if (lineData.flexMessage) {
     richMessages.push(
@@ -307,7 +315,7 @@ export async function deliverLineAutoReply(params: {
   if (hasQuickReplies && textMessages.length === 0 && richMediaMessages.length === 0) {
     textMessages.push({
       type: "text",
-      text: buildLineQuickReplyFallbackText(lineData.quickReplies),
+      text: buildLineQuickReplyFallbackText(quickReplyLabels),
     });
   }
   if (hasQuickReplies) {
@@ -320,7 +328,7 @@ export async function deliverLineAutoReply(params: {
     const target = expectDefined(targetMessages[lastIndex], "last LINE auto-reply message");
     targetMessages[lastIndex] = {
       ...target,
-      quickReply: deps.createQuickReplyItems(lineData.quickReplies!),
+      quickReply: createLineQuickReply(quickReplyItems),
     };
   }
 
@@ -354,8 +362,8 @@ export async function deliverLineAutoReply(params: {
           ? [
               {
                 type: "text" as const,
-                text: buildLineQuickReplyFallbackText(lineData.quickReplies),
-                quickReply: deps.createQuickReplyItems(lineData.quickReplies!),
+                text: buildLineQuickReplyFallbackText(quickReplyLabels),
+                quickReply: createLineQuickReply(quickReplyItems),
               },
             ]
           : [];
@@ -369,7 +377,7 @@ export async function deliverLineAutoReply(params: {
       // atomically. Retry its text/actions plus the tail that was never attempted.
       const lastRetryMessage = retryMessages.at(-1);
       if (quickRepliesNeedCarrier && lastRetryMessage && !lastRetryMessage.quickReply) {
-        lastRetryMessage.quickReply = deps.createQuickReplyItems(lineData.quickReplies!);
+        lastRetryMessage.quickReply = createLineQuickReply(quickReplyItems);
       }
       try {
         await sendLineMessages(retryMessages, false);

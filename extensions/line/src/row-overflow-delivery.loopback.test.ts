@@ -7,7 +7,7 @@ import { baseDeliveryParams, createDeps } from "./auto-reply-delivery.test-helpe
 import { processLineMessage } from "./markdown-to-line.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { setLineRuntime } from "./runtime.js";
-import { createQuickReplyItems, pushMessagesLine } from "./send.js";
+import { pushMessagesLine } from "./send.js";
 
 type WireMessage = { type: string; text?: string; altText?: string };
 
@@ -395,7 +395,6 @@ describe("Row-overflow table delivery through production outbound adapter over l
       processLineMessage,
       chunkMarkdownText,
       pushMessagesLine,
-      createQuickReplyItems,
     });
 
     const result = await deliverLineAutoReply({

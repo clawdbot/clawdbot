@@ -3,6 +3,9 @@ import type { messagingApi } from "@line/bot-sdk";
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
+  adaptMessagePresentationForChannel,
+  normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
   type MessagePresentation,
@@ -194,6 +197,40 @@ export function renderLinePresentation(
       ...payload.channelData,
       line: { ...lineData, ...(flexMessage ? { flexMessage } : {}), quickReplyItems },
     },
+  };
+}
+
+/**
+ * Resolve a reply's portable presentation into LINE-native controls.
+ *
+ * Core runs the presentation renderer inside the outbound send pipeline only, so
+ * replies the plugin delivers itself reach delivery with the controls still
+ * portable. Preparing them here keeps both LINE delivery paths on one rendering.
+ */
+export function prepareLineReplyPayload(payload: ReplyPayload): ReplyPayload {
+  const presentation = normalizeMessagePresentation(payload.presentation);
+  if (!presentation) {
+    return payload;
+  }
+  const { presentation: _presentation, presentationTextMode, ...rest } = payload;
+  // "fallback" text already renders these controls as prose; native ones replace it.
+  const usesFallbackText = presentationTextMode === "fallback";
+  const rendered = renderLinePresentation(
+    usesFallbackText ? { ...rest, text: undefined } : rest,
+    adaptMessagePresentationForChannel({
+      presentation,
+      capabilities: LINE_PRESENTATION_CAPABILITIES,
+    }),
+  );
+  if (rendered) {
+    return rendered;
+  }
+  // LINE renders these controls natively or not at all; keep their labels visible.
+  return {
+    ...rest,
+    text: usesFallbackText
+      ? (rest.text ?? renderMessagePresentationFallbackText({ presentation }))
+      : renderMessagePresentationFallbackText({ text: rest.text, presentation }),
   };
 }
 
