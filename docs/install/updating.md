@@ -124,13 +124,23 @@ including build outputs, fast-forwards `main` (or rebases a local server branch
 onto `origin/main`), installs dependencies with a frozen lockfile, builds clean,
 and restarts the gateway only after the build succeeds.
 
-This reference script requires usable **Corepack** before it changes Git state.
-Install a Corepack version compatible with the intended target's pnpm pin first.
-The script creates temporary Corepack shims without global activation. After Git
-selects the target, those shims resolve its pin; the same shim directory leads
-nested commands' `PATH`, and child workspace and lockfile roots are bound to the
-checkout. Bootstrap, install, or build failure prevents restart. The hosted
-[installers](/install/installer) also support npm-owned temporary provisioning
+This reference script requires **Corepack** and creates temporary shims without
+global activation before fetching. After fetching, it freezes the target commit
+and checks that its exact pnpm pin can run through those shims in a private probe
+workspace. The probe contains only package-manager metadata, not the target's
+dependencies, hooks, or configuration. Missing or invalid metadata, provisioning
+failure, or a version mismatch stops before checkout update or restart; repair
+the target pin or install a compatible Corepack, then retry.
+
+The same fetched commit is used for fast-forward or rebase. This is a fetched-target
+toolchain preflight, not a complete preflight of a rebased local branch or its
+build, and the script does not roll back later install or build failures. Local
+branch overrides remain in effect: install and build resolve the resulting
+checkout's pin, which may differ from the probed target pin. Operators must verify
+those overrides and maintain a recovery path. The same shim directory leads
+nested commands' `PATH`, and child workspace and lockfile roots follow each
+operation's directory. Bootstrap, install, or build failure prevents restart.
+The hosted [installers](/install/installer) also support npm-owned temporary provisioning
 when Corepack is unavailable; this server script deliberately requires Corepack.
 
 <Warning>
