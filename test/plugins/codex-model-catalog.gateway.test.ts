@@ -80,7 +80,9 @@ describe("models.list native account catalog", () => {
             let account: Record<string, unknown> | null = { type: "apiKey" };
             server.on("connection", (socket) => {
               socket.on("message", (data) => {
-                const encoded = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
+                const encoded = Array.isArray(data)
+                  ? Buffer.concat(data)
+                  : Buffer.from(data instanceof ArrayBuffer ? new Uint8Array(data) : data);
                 const request = JSON.parse(encoded.toString("utf8")) as {
                   id?: number;
                   method: string;
