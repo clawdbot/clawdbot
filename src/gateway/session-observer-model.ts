@@ -263,6 +263,17 @@ export function defaultReadSession(sessionKey: string, agentId: string): Session
   return loadSessionEntryReadOnly({ sessionKey, agentId });
 }
 
+// sessions.list cache fence input. Both production writers (live/preamble
+// persist via createSessionObserverDigestPersister and terminal-digest
+// synthesis via synthesizeSessionObserverTerminalDigest) route through this
+// shared mutator; without its own fence a list computed mid-write caches the
+// pre-update digest indefinitely.
+let sessionObserverDigestVersion = 0;
+
+export function readSessionObserverDigestVersion(): number {
+  return sessionObserverDigestVersion;
+}
+
 export async function defaultPersistDigest(params: {
   sessionKey: string;
   sessionId?: string;
@@ -292,6 +303,7 @@ export async function defaultPersistDigest(params: {
     { preserveActivity: true },
   );
   if (result) {
+    sessionObserverDigestVersion += 1;
     return true;
   }
   return missingEntry ? null : false;

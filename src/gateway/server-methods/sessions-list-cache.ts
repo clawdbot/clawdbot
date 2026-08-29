@@ -15,6 +15,7 @@ import { readUserProfileVersion } from "../../state/user-profile-events.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { readSessionAutomationVersion } from "../session-automation-index.js";
 import { readSessionLifecyclePersistenceVersion } from "../session-lifecycle-state.js";
+import { readSessionObserverDigestVersion } from "../session-observer-model.js";
 import { isGatewayAdmin } from "../session-sharing.js";
 import { readSessionTitleProjectionUnavailableVersion } from "../session-transcript-title-reader.js";
 import type { SessionListModelCatalog, SessionsListResult } from "../session-utils.types.js";
@@ -31,6 +32,7 @@ type SessionListFence = {
   sessionAutomationVersion: number;
   sessionIdentityMutationVersion: number;
   sessionLifecycleVersion: number;
+  sessionObserverDigestVersion: number;
   userProfileVersion: number;
   sessionsMutationVersion: number;
   sessionTranscriptUpdateVersion: number;
@@ -94,6 +96,7 @@ function readSessionListFence(
     sessionAutomationVersion: readSessionAutomationVersion(),
     sessionIdentityMutationVersion: readSessionIdentityMutationVersion(),
     sessionLifecycleVersion: readSessionLifecycleVersion(),
+    sessionObserverDigestVersion: readSessionObserverDigestVersion(),
     userProfileVersion: readUserProfileVersion(),
     sessionsMutationVersion: readSessionsMutationVersion(context),
     // Rows embed transcript-derived previews/titles; a committed transcript
@@ -116,6 +119,7 @@ function matchesSessionListFence(value: SessionListFence, fence: SessionListFenc
     value.sessionAutomationVersion === fence.sessionAutomationVersion &&
     value.sessionIdentityMutationVersion === fence.sessionIdentityMutationVersion &&
     value.sessionLifecycleVersion === fence.sessionLifecycleVersion &&
+    value.sessionObserverDigestVersion === fence.sessionObserverDigestVersion &&
     value.userProfileVersion === fence.userProfileVersion &&
     value.sessionsMutationVersion === fence.sessionsMutationVersion &&
     value.sessionTranscriptUpdateVersion === fence.sessionTranscriptUpdateVersion &&
