@@ -5,6 +5,7 @@ import {
   type OpenClawPluginApi,
 } from "openclaw/plugin-sdk/channel-entry-contract";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { LINE_CARD_COMMAND_METADATA } from "./src/card-command-metadata.js";
 
 type RegisteredLineCardCommand = OpenClawPluginCommandDefinition;
 
@@ -41,10 +42,7 @@ export default defineBundledChannelEntry({
   registerFull(api) {
     const loadLineCardCommand = createLineCardCommandLoader(api);
     api.registerCommand({
-      name: "card",
-      description: "Send a rich card message (LINE).",
-      acceptsArgs: true,
-      requireAuth: false,
+      ...LINE_CARD_COMMAND_METADATA,
       async handler(ctx) {
         const command = await loadLineCardCommand();
         return await command.handler(ctx);

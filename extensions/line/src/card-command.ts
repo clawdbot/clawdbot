@@ -3,6 +3,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { LINE_CARD_COMMAND_METADATA } from "./card-command-metadata.js";
 import {
   createActionCard,
   createImageCard,
@@ -189,10 +190,7 @@ function parseCardArgs(argsStrInput: string): {
 
 export function registerLineCardCommand(api: OpenClawPluginApi): void {
   api.registerCommand({
-    name: "card",
-    description: "Send a rich card message (LINE).",
-    acceptsArgs: true,
-    requireAuth: false,
+    ...LINE_CARD_COMMAND_METADATA,
     handler: async (ctx) => {
       const argsStr = ctx.args?.trim() ?? "";
       if (!argsStr) {
@@ -204,12 +202,6 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
 
       if (!type) {
         return { text: CARD_USAGE };
-      }
-
-      // Only LINE supports rich cards; fallback to text elsewhere.
-      if (ctx.channel !== "line") {
-        const fallbackText = args.join(" - ");
-        return { text: `[${type} card] ${fallbackText}`.trim() };
       }
 
       try {
