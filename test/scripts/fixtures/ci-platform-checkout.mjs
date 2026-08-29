@@ -1,6 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -59,9 +58,13 @@ function liveRecords() {
   const owned = records().filter(
     (entry) => !fs.existsSync(path.join(recordsDir, `${entry.instance}.dead`)),
   );
+  if (owned.length === 0) {
+    return [];
+  }
   const alive = new Set();
+  const pids = new Set(owned.map((entry) => entry.pid));
   if (process.platform === "win32") {
-    for (const { pid } of owned) {
+    for (const pid of pids) {
       try {
         process.kill(pid, 0);
         alive.add(pid);
@@ -74,21 +77,33 @@ function liveRecords() {
       }
     }
   } else {
-    // PID existence includes macOS zombies; observe active writers in one POSIX snapshot.
-    const result = spawnSync("/bin/ps", ["-axo", "pid=,stat="], {
-      encoding: "utf8",
-      timeout: 1_000,
-    });
-    if (result.error || result.status !== 0) {
-      throw new Error(`Fixture process census failed (${result.error?.code ?? result.status})`);
-    }
-    for (const line of result.stdout.trim().split("\n")) {
-      const [pid, state] = line.trim().split(/\s+/u);
-      if (!Number.isInteger(Number(pid)) || !state) {
+    // Apple ps uses KERN_PROC_ALL for multiple PIDs, including an observer anchor.
+    // Singleton queries avoid that host-wide scan and share one census budget.
+    const deadline = Date.now() + 1_000;
+    for (const pid of pids) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new Error("Fixture process census failed (ETIMEDOUT)");
+      }
+      const result = spawnSync("/bin/ps", ["-o", "pid=,stat=", "-p", String(pid)], {
+        encoding: "utf8",
+        timeout: remaining,
+      });
+      if (result.error || result.signal || result.stderr !== "" || Date.now() > deadline) {
+        throw new Error(
+          `Fixture process census failed (${result.error?.code ?? result.signal ?? "unverified"})`,
+        );
+      }
+      // Apple ps and procps exit 1 without output when the selected PID is absent.
+      if (result.status === 1 && result.stdout === "") {
+        continue;
+      }
+      const row = /^(\d+)\s+([RSDTtXZxKWPIU][<+NLlsEVWX]*)$/u.exec(result.stdout.trim());
+      if (result.status !== 0 || !row || Number(row[1]) !== pid) {
         throw new Error("Fixture process census returned an invalid row");
       }
-      if (!state.startsWith("Z")) {
-        alive.add(Number(pid));
+      if (!row[2].startsWith("Z")) {
+        alive.add(pid);
       }
     }
   }
@@ -282,6 +297,9 @@ async function command() {
         process.exit(0);
       }
       if (result === "hang") {
+        if (!options.cancelDuringCleanup) {
+          publish(`fetch-tick-${attempt}.json`, attempt);
+        }
         return;
       }
       if (result === 0) {
@@ -403,8 +421,22 @@ async function supervise() {
     fs.chmodSync(path.join(bin, scenario.slice("non-executable-".length)), 0o644);
   }
   const output = fs.openSync(path.join(root, "workflow.log"), "w");
+  let sentinel;
   let shell;
   let stopping;
+  const pendingChildren = new Set();
+  const track = (child) => {
+    pendingChildren.add(child);
+    // Spawn errors precede close; only close releases a direct child's ownership.
+    const closed = new Promise((resolve) => {
+      child.once("close", (code) => {
+        pendingChildren.delete(child);
+        resolve(code);
+      });
+    });
+    child.on("error", (error) => void stop(error));
+    return closed;
+  };
   const report = {
     code: null,
     cancelledDuringCleanup: false,
@@ -416,36 +448,54 @@ async function supervise() {
     output: "",
   };
   const stop = (error) => {
-    stopping ??= (async () => {
+    stopping ??= Promise.resolve().then(async () => {
       if (error) {
         report.error = String(error);
       }
-      fs.rmSync(lease, { force: true });
-      if (shell && shell.exitCode === null && shell.signalCode === null) {
-        // Only this fixture's still-owned detached shell group may be signaled.
-        if (process.platform === "win32") {
-          const taskkill = path.join(process.env.SystemRoot, "System32", "taskkill.exe");
-          spawnSync(taskkill, ["/PID", String(shell.pid), "/T", "/F"], {
-            stdio: "ignore",
-            timeout: 2_000,
-            killSignal: "SIGKILL",
-          });
-        } else {
-          try {
-            process.kill(-shell.pid, "SIGKILL");
-          } catch (err) {
-            if (err.code !== "ESRCH") {
-              throw err;
+      const deadline = Date.now() + 4_000;
+      try {
+        fs.rmSync(lease, { force: true });
+        sentinel?.kill("SIGKILL");
+        if (shell && shell.exitCode === null && shell.signalCode === null) {
+          // Only this fixture's still-owned detached shell group may be signaled.
+          if (process.platform === "win32") {
+            const taskkill = path.join(process.env.SystemRoot, "System32", "taskkill.exe");
+            spawnSync(taskkill, ["/PID", String(shell.pid), "/T", "/F"], {
+              stdio: "ignore",
+              timeout: 2_000,
+              killSignal: "SIGKILL",
+            });
+          } else {
+            try {
+              process.kill(-shell.pid, "SIGKILL");
+            } catch (err) {
+              if (err.code !== "ESRCH") {
+                throw err;
+              }
             }
           }
         }
-      }
-      try {
-        await until(() => liveRecords().length === 0, "fixture cleanup");
+        // Empty registration does not prove a spawned writer has closed.
+        await until(
+          () => pendingChildren.size === 0,
+          "direct child close",
+          Math.max(0, deadline - Date.now()),
+        );
+        await until(
+          () => {
+            report.cleanupRemaining = liveRecords();
+            return report.cleanupRemaining.length === 0;
+          },
+          "fixture cleanup",
+          Math.max(0, deadline - Date.now()),
+        );
       } catch (err) {
-        report.error ??= String(err);
+        // Only the completed report releases the namespace; exit alone does not.
+        const detail = err instanceof Error ? err.message : String(err);
+        console.error(`Fixture cleanup unverified; retaining ${root}: ${detail}`);
+        fs.closeSync(output);
+        process.exit(1);
       }
-      report.cleanupRemaining = liveRecords();
       report.ownedProcesses = records();
       report.boundaries = fs
         .readFileSync(eventsFile, "utf8")
@@ -468,7 +518,7 @@ async function supervise() {
       publish("report.json", report);
       fs.closeSync(output);
       process.exit(report.error ? 1 : 0);
-    })();
+    });
     return stopping;
   };
   process.once("disconnect", () => void stop("test parent disconnected"));
@@ -505,12 +555,16 @@ async function supervise() {
         throw new Error(`Fixture setup: mock command resolution failed: ${detail}`);
       }
     }
-    const sentinel = spawn(process.execPath, [fixture, "sentinel", root, policyScenario], {
-      detached: true,
+    sentinel = spawn(process.execPath, [fixture, "sentinel", root, policyScenario], {
+      // Parent teardown owns this group even before sentinel self-registration.
       stdio: "ignore",
     });
-    sentinel.on("error", (error) => void stop(error));
-    await until(() => records().some((entry) => entry.role === "sentinel"), "sentinel readiness");
+    // stop() joins the sentinel's actual close through pendingChildren before reporting.
+    void track(sentinel);
+    await until(
+      () => stopping || records().some((entry) => entry.role === "sentinel"),
+      "sentinel readiness",
+    );
     if (stopping) {
       return;
     }
@@ -551,10 +605,10 @@ async function supervise() {
         ...options.env,
       },
     });
+    const closed = track(shell);
     if (shell.pid) {
       record(shell.pid, "shell");
     }
-    const exited = once(shell, "exit");
     if (options.cancelDuringCleanup) {
       await until(
         () => fs.existsSync(path.join(root, "cleanup-started.json")),
@@ -574,7 +628,10 @@ async function supervise() {
       process.kill(owner.pid, "SIGTERM");
       report.cancelledDuringCleanup = true;
     }
-    const [code] = await exited;
+    const code = await closed;
+    if (stopping) {
+      return;
+    }
     report.code = code;
     boundary("exit");
     await stop();

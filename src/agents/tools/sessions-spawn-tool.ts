@@ -190,7 +190,7 @@ function createSessionsSpawnToolSchema(params: {
     cwd: Type.Optional(
       Type.String({
         description:
-          "Working directory for the child. With visible=true, paths outside configured agent workspaces require operator.admin; omit to use the target agent workspace.",
+          "Child working directory. Visible paths outside configured agent workspaces require operator.admin. Omitted with worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
       }),
     ),
     ...(params.threadAvailable
@@ -205,8 +205,8 @@ function createSessionsSpawnToolSchema(params: {
       : {}),
     mode: optionalStringEnum(spawnModes, {
       description: params.threadAvailable
-        ? '"run" one-shot; "session" persistent/thread-bound. Omit with visible=true.'
-        : '"run" one-shot. Omit with visible=true; visible sessions are persistent.',
+        ? '"run" one-shot; "session" persistent/thread-bound. Visible sessions accept only omitted/default "run" and remain persistent.'
+        : '"run" one-shot. Visible sessions accept omitted/default "run" and remain persistent.',
     }),
     cleanup: optionalStringEnum(["delete", "keep"] as const, {
       description: "Hidden session cleanup; visible=true always keeps the session.",
@@ -253,7 +253,10 @@ function createSessionsSpawnToolSchema(params: {
           encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
           mimeType: Type.Optional(Type.String()),
         }),
-        { maxItems: 50, description: "Inline snapshots; unavailable with visible=true." },
+        {
+          maxItems: 50,
+          description: "Inline snapshots; visible=true accepts only an empty array.",
+        },
       ),
     ),
     attachAs: Type.Optional(
@@ -263,7 +266,10 @@ function createSessionsSpawnToolSchema(params: {
           // Kept as a hint; implementation materializes into the child workspace.
           mountPath: Type.Optional(Type.String()),
         },
-        { description: "Attachment mount hint; unavailable with visible=true." },
+        {
+          description:
+            "Attachment mount hint; visible=true accepts only an omitted or blank mountPath.",
+        },
       ),
     ),
     ...(params.acpAvailable

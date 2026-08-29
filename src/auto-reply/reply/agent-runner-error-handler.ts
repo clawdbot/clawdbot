@@ -169,6 +169,7 @@ export async function handleAgentExecutionError(params: {
       params.state.pendingLifecycleTerminal = undefined;
       return { kind: "retry", liveModelSwitchError: err };
     }
+    const visibleReplyDelivered = await turn.resolveVisibleReplyDelivery?.();
     defaultRuntime.error(
       `Live model switch failed after ${MAX_LIVE_SWITCH_RETRIES} retries ` +
         `(${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}). The requested model may be unavailable.`,
@@ -189,6 +190,7 @@ export async function handleAgentExecutionError(params: {
       payload: markAgentRunFailureReplyPayload({
         text: resolveExternalRunFailureTextForConversation({
           text: switchErrorText,
+          visibleReplyDelivered,
           sessionCtx: turn.sessionCtx,
           isGenericRunnerFailure: !params.shouldSurfaceToControlUi,
           cfg: turn.followupRun.run.config,
@@ -505,6 +507,7 @@ export async function handleAgentExecutionError(params: {
                 : GENERIC_EXTERNAL_RUN_FAILURE_TEXT));
   const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
     text: fallbackText,
+    visibleReplyDelivered: await turn.resolveVisibleReplyDelivery?.(),
     sessionCtx: turn.sessionCtx,
     isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
     cfg: turn.followupRun.run.config,

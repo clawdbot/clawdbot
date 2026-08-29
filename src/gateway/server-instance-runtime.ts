@@ -14,6 +14,7 @@ import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-r
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
+import type { InternalAgentTurnPrincipalOptions } from "./agent-turn/internal-facade.types.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
@@ -62,6 +63,19 @@ export function createGatewayInstanceRuntime(
     }
   };
 
+  const createAgentTurnFacade = (principal: InternalAgentTurnPrincipalOptions) => {
+    const assertContextCurrent = () => {
+      assertDispatchAvailable("agent turn");
+      principal.assertContextCurrent?.();
+    };
+    return createInternalAgentTurnFacade({
+      ...principal,
+      assertContextCurrent,
+      getContext: options.getContext,
+      getMethodRegistry: options.getMethodRegistry,
+    });
+  };
+
   const dispatch = async <T>(params: {
     allowedMethods: ReadonlySet<string>;
     client: ReturnType<typeof createSyntheticPluginRuntimeClient>;
@@ -86,10 +100,8 @@ export function createGatewayInstanceRuntime(
     operatorRoleActor: { kind: "system" },
     scopes: [WRITE_SCOPE],
   });
-  const recoveryAgentTurns = createInternalAgentTurnFacade({
+  const recoveryAgentTurns = createAgentTurnFacade({
     client: recoveryClient,
-    getContext: options.getContext,
-    getMethodRegistry: options.getMethodRegistry,
   });
   const recoveryControlMethods = new Set(["chat.abort"]);
   const approvalClient = createSyntheticPluginRuntimeClient({
@@ -132,7 +144,7 @@ export function createGatewayInstanceRuntime(
         dispatchOptions.syntheticScopes,
       );
       const agentTurns = needsDedicatedPrincipal
-        ? createInternalAgentTurnFacade({
+        ? createAgentTurnFacade({
             client: createSyntheticPluginRuntimeClient({
               operatorRoleActor: { kind: "system" },
               allowModelOverride:
@@ -144,8 +156,6 @@ export function createGatewayInstanceRuntime(
               delegatedToolPolicyHandoffId,
               scopes: dispatchOptions.scopes ?? dispatchOptions.syntheticScopes,
             }),
-            getContext: options.getContext,
-            getMethodRegistry: options.getMethodRegistry,
           })
         : recoveryAgentTurns;
       try {
@@ -222,6 +232,7 @@ export function createGatewayInstanceRuntime(
   };
 
   return {
+    createAgentTurnFacade,
     approvalEvents: {
       publishRequested: (kind, request) =>
         publish(

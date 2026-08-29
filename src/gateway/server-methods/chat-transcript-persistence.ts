@@ -30,6 +30,8 @@ type TranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
+  /** Set when the commit predicate declined the append; not an error. */
+  skipped?: boolean;
   error?: string;
 };
 
@@ -280,7 +282,6 @@ export async function appendAssistantTranscriptMessage(params: {
   if (!params.createIfMissing && !(await transcriptExists(scope))) {
     return { ok: false, error: "transcript not found" };
   }
-
   const appended = await appendInjectedAssistantMessageToTranscript({
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,

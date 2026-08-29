@@ -1506,16 +1506,17 @@ export async function runMemoryFlushIfNeeded(params: {
           sessionEntry: activeSessionEntry,
           agentRuntime: sessionRuntimeOverride,
         });
-        const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
-          run: { ...params.followupRun.run, thinkLevel: candidateThinkLevel },
-          replyRoute: params.followupRun,
-          sessionCtx: params.sessionCtx,
-          hasRepliedRef: params.opts?.hasRepliedRef,
-          provider,
-          model,
-          runId: flushRunId,
-          allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
-        });
+        const { embeddedContext, senderContext, runBaseParams } =
+          await buildEmbeddedRunExecutionParams({
+            run: { ...params.followupRun.run, thinkLevel: candidateThinkLevel },
+            replyRoute: params.followupRun,
+            sessionCtx: params.sessionCtx,
+            hasRepliedRef: params.opts?.hasRepliedRef,
+            provider,
+            model,
+            runId: flushRunId,
+            allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
+          });
         const result = await memoryDeps.runEmbeddedAgent({
           preparedRunAdmission,
           ...embeddedContext,

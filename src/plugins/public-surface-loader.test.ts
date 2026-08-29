@@ -34,6 +34,7 @@ afterEach(() => {
   vi.doUnmock("./bundled-dir.js");
   vi.doUnmock("./native-module-require.js");
   vi.doUnmock("./public-surface-runtime.js");
+  vi.doUnmock("./sdk-alias.js");
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -47,6 +48,84 @@ afterEach(() => {
 });
 
 describe("bundled plugin public surface loader", () => {
+  it("loads bundled artifacts from each caller's environment without changing process.env", async () => {
+    const tempRoot = tempDirs.make("openclaw-public-surface-env-");
+    const createEnvironment = (marker: string) => {
+      const bundledPluginsDir = path.join(tempRoot, marker);
+      const pluginRoot = path.join(bundledPluginsDir, "demo");
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n');
+      fs.writeFileSync(
+        path.join(pluginRoot, "api.js"),
+        `module.exports = { marker: ${JSON.stringify(marker)} };\n`,
+      );
+      return {
+        VITEST: "true",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      };
+    };
+    const firstEnvironment = createEnvironment("first");
+    const secondEnvironment = createEnvironment("second");
+    const loader = await importFreshModule<typeof import("./public-surface-loader.js")>(
+      import.meta.url,
+      "./public-surface-loader.js?scope=caller-environment",
+    );
+    const load = (env: NodeJS.ProcessEnv) =>
+      loader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
+        dirName: "demo",
+        artifactBasename: "api.js",
+        env,
+      });
+
+    expect(load(firstEnvironment).marker).toBe("first");
+    expect(
+      loader.loadBundledPluginPublicArtifactModuleFromCandidatesSync<{ marker: string }>({
+        dirName: "demo",
+        artifactCandidates: ["missing.js", "api.js"],
+        env: secondEnvironment,
+      })?.marker,
+    ).toBe("second");
+    expect(load(firstEnvironment).marker).toBe("first");
+  });
+
+  it.each([false, true])(
+    "separates disabled and enabled fallback caches with disabledFirst=%s",
+    async (disabledFirst) => {
+      const tempRoot = tempDirs.make("openclaw-public-surface-env-cache-");
+      const pluginRoot = path.join(tempRoot, "extensions", "demo");
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n');
+      fs.writeFileSync(
+        path.join(pluginRoot, "api.js"),
+        'module.exports = { marker: "enabled" };\n',
+      );
+      // Both environments lack a discovered tree; only the package source fallback exists.
+      vi.doMock("./bundled-dir.js", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("./bundled-dir.js")>()),
+        resolveBundledPluginsDir: () => undefined,
+      }));
+      vi.doMock("./sdk-alias.js", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("./sdk-alias.js")>()),
+        resolveLoaderPackageRoot: () => tempRoot,
+      }));
+      const loader = await importFreshModule<typeof import("./public-surface-loader.js")>(
+        import.meta.url,
+        `./public-surface-loader.js?scope=disabled-cache-${disabledFirst}`,
+      );
+      const load = (disabled: boolean) =>
+        loader.loadBundledPluginPublicArtifactModuleFromCandidatesSync<{ marker: string }>({
+          dirName: "demo",
+          artifactCandidates: ["api.js"],
+          env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: disabled ? "1" : "0" },
+        });
+
+      expect(load(disabledFirst)?.marker ?? null).toBe(disabledFirst ? null : "enabled");
+      expect(load(!disabledFirst)?.marker ?? null).toBe(disabledFirst ? "enabled" : null);
+      expect(load(disabledFirst)?.marker ?? null).toBe(disabledFirst ? null : "enabled");
+    },
+  );
+
   it("keeps auto-resolved bundled roots on built public artifacts", async () => {
     // The non-isolated plugin shard may have already imported the native loader.
     vi.resetModules();

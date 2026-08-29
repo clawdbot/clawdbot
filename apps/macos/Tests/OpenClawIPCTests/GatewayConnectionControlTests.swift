@@ -1088,7 +1088,6 @@ private func assertConfigLookupCannotRecreateRoute(
         defer { try? FileManager.default.removeItem(at: isolatedState) }
 
         return try await TestIsolation.withEnvValues([
-            "OPENCLAW_PROFILE": "autoqa-185-tests",
             "OPENCLAW_CONFIG_PATH": configURL.path,
             "OPENCLAW_STATE_DIR": isolatedState.path,
         ]) {

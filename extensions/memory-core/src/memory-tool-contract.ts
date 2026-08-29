@@ -1,6 +1,6 @@
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   resolveMemorySearchConfig,
-  resolveSessionAgentIds,
   type MemoryPromptSectionBuilder,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -68,7 +68,7 @@ export function resolveMemoryToolContext(options: MemoryToolOptions) {
   if (!cfg) {
     return null;
   }
-  const { sessionAgentId: agentId } = resolveSessionAgentIds({
+  const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
     sessionKey: options.agentSessionKey,
     config: cfg,
     agentId: options.agentId,

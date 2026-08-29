@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createInstallGitCommitFixtureScript } from "./install-git-fixtures.js";
 import {
   writeNpmBeforePolicyFixture,
   writeNpmFreshnessConflictFixture,
@@ -1009,6 +1010,16 @@ describe("install-cli.sh", () => {
     expect(script).not.toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
   });
 
+  it.each(["bundle", "remote"] as const)("pins a full commit from a %s", (source) => {
+    const result = runInstallCliShell(createInstallGitCommitFixtureScript(source), {
+      OPENCLAW_INSTALLER_SCRIPT: SCRIPT_PATH,
+    });
+
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("kind=immutable");
+    expect(result.stdout).toContain("rejected=HEAD~1");
+  });
+
   it("prefers a release tag over a same-named branch", () => {
     const result = runInstallCliShell(`
       set -euo pipefail
@@ -1304,59 +1315,73 @@ HOOK
     expect(result.stdout).toContain(`result=${expected}`);
   });
 
-  it("uses repo pnpm 12 via Corepack when global pnpm 11 is already present", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-pnpm-version-"));
-    const bin = join(tmp, "bin");
-    const outer = join(tmp, "outer");
-    const repo = join(tmp, "repo");
-    mkdirSync(bin, { recursive: true });
-    mkdirSync(outer, { recursive: true });
-    mkdirSync(repo, { recursive: true });
-    writeFileSync(join(outer, "package.json"), '{\n  "packageManager": "yarn@4.5.0"\n}\n');
-    writeFileSync(
-      join(repo, "package.json"),
-      '{\n  "packageManager": "pnpm@12.0.0+sha512.test"\n}\n',
-    );
-    writeFileSync(
-      join(bin, "pnpm"),
-      ["#!/bin/bash", '[[ "${1:-}" == "--version" ]] && echo "11.8.0"', ""].join("\n"),
-    );
-    writeFileSync(
-      join(bin, "corepack"),
-      [
-        "#!/bin/bash",
-        'if [[ "${1:-}" == "prepare" ]]; then exit 0; fi',
-        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
-        '  if grep -q "pnpm@12.0.0" package.json 2>/dev/null; then echo "12.0.0"; else exit 1; fi',
-        "  exit 0",
-        "fi",
-        "exit 1",
-        "",
-      ].join("\n"),
-    );
-    chmodSync(join(bin, "pnpm"), 0o755);
-    chmodSync(join(bin, "corepack"), 0o755);
-
-    try {
-      const result = runInstallCliShell(
-        [
-          `cd ${JSON.stringify(process.cwd())}`,
-          `source ${JSON.stringify(SCRIPT_PATH)}`,
-          `cd ${JSON.stringify(outer)}`,
-          `ensure_pnpm ${JSON.stringify(repo)}`,
-          'printf "cmd=%s\\n" "${PNPM_CMD[*]}"',
-          `printf "run=%s\\n" "$(run_pnpm -C ${JSON.stringify(repo)} --version)"`,
-        ].join("\n"),
-        { PATH: `${bin}:${process.env.PATH ?? ""}` },
+  it.each(["standalone", "shim"] as const)(
+    "uses repo pnpm 12 when global pnpm is a %s",
+    (launcher) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-pnpm-version-"));
+      const bin = join(tmp, "bin");
+      const outer = join(tmp, "outer");
+      const repo = join(tmp, "repo");
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(outer, { recursive: true });
+      mkdirSync(repo, { recursive: true });
+      writeFileSync(
+        join(outer, "package.json"),
+        JSON.stringify({ packageManager: launcher === "shim" ? "pnpm@11.8.0" : "yarn@4.5.0" }),
       );
+      writeFileSync(
+        join(repo, "package.json"),
+        '{\n  "packageManager": "pnpm@12.0.0+sha512.test"\n}\n',
+      );
+      writeFileSync(
+        join(bin, "pnpm"),
+        [
+          "#!/bin/bash",
+          launcher === "shim"
+            ? 'if grep -q "pnpm@12.0.0" package.json 2>/dev/null; then echo "12.0.0"; else echo "11.8.0"; fi'
+            : '[[ "${1:-}" == "--version" ]] && echo "11.8.0"',
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join(bin, "corepack"),
+        [
+          "#!/bin/bash",
+          'if [[ "${1:-}" == "prepare" ]]; then exit 0; fi',
+          'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
+          '  if grep -q "pnpm@12.0.0" package.json 2>/dev/null; then echo "12.0.0"; else exit 1; fi',
+          "  exit 0",
+          "fi",
+          "exit 1",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(join(bin, "pnpm"), 0o755);
+      chmodSync(join(bin, "corepack"), 0o755);
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain(`cmd=${join(bin, "corepack")} pnpm`);
-      expect(result.stdout).toContain("run=12.0.0");
-    } finally {
-      rmSync(tmp, { force: true, recursive: true });
-    }
-  });
+      try {
+        const result = runInstallCliShell(
+          [
+            `cd ${JSON.stringify(process.cwd())}`,
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `cd ${JSON.stringify(outer)}`,
+            `ensure_pnpm ${JSON.stringify(repo)}`,
+            'printf "cmd=%s\\n" "${PNPM_CMD[*]}"',
+            `printf "run=%s\\n" "$(run_pnpm -C ${JSON.stringify(repo)} --version)"`,
+          ].join("\n"),
+          { PATH: `${bin}:${process.env.PATH ?? ""}` },
+        );
+
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain(
+          launcher === "shim" ? "cmd=pnpm" : `cmd=${join(bin, "corepack")} pnpm`,
+        );
+        expect(result.stdout).toContain("run=12.0.0");
+      } finally {
+        rmSync(tmp, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("links an existing usable Alpine/musl Node runtime without sudo", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-alpine-"));

@@ -104,6 +104,8 @@ export type SidebarRecentSession = {
   worktreeId?: string;
   execNode?: string;
   placementState?: SessionPlacementState;
+  placementProviderId?: string;
+  placementProfileId?: string;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
   cloudWorkerStopAction: CloudWorkerStopAction | null;
@@ -140,14 +142,18 @@ export type SidebarRecentSession = {
 
 export type SidebarSessionHovercardRow = Pick<
   SidebarRecentSession,
+  | "boardFace"
   | "createdActor"
   | "createdAt"
   | "channelAvatarUrl"
   | "endedAt"
+  | "hasAutomation"
   | "label"
   | "lastMessagePreview"
   | "participantCount"
   | "participants"
+  | "placementProviderId"
+  | "placementProfileId"
   | "status"
   | "startedAt"
   | "updatedAt"

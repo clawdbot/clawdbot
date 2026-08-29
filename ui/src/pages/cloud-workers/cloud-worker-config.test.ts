@@ -185,17 +185,23 @@ describe("cloud worker settings state", () => {
     });
   });
 
-  it("rejects an edit after its authoritative profile changes provider", () => {
-    const config = {
-      cloudWorkers: {
-        profiles: {
-          production: {
-            provider: "static-ssh",
-            settings: { host: "worker.example.test", user: "openclaw" },
-          },
-        },
+  it.each([
+    {
+      name: "changes provider",
+      replacement: {
+        provider: "static-ssh",
+        settings: { host: "worker.example.test", user: "openclaw" },
       },
-    };
+    },
+    {
+      name: "removes its class",
+      replacement: {
+        provider: "crabbox",
+        settings: { provider: "hetzner", ttl: "8h", idleTimeout: "45m", warmImage: false },
+      },
+    },
+  ])("rejects an edit after its authoritative profile $name", ({ replacement }) => {
+    const config = { cloudWorkers: { profiles: { production: replacement } } };
     const draft = createCloudWorkerDraft({
       id: "production",
       providerId: "crabbox",

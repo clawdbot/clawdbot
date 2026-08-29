@@ -729,11 +729,11 @@ vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
   };
 
   return {
-    resolveSingleAccountKeysToMove: resolveKeys,
     resolveSingleAccountPromotion: (params: {
       channelKey: string;
       channel: Record<string, unknown>;
     }) => ({
+      kind: "promote",
       keysToMove: resolveKeys(params),
       shouldDeferPromotion:
         !Object.hasOwn(declaredSingleAccountKeys, params.channelKey) &&
@@ -1518,13 +1518,6 @@ vi.mock("./doctor-config-analysis.js", () => {
     }),
   };
 });
-
-vi.mock("./doctor-state-migrations.js", () => ({
-  autoMigrateLegacyState: vi.fn(async () => ({ changes: [], warnings: [] })),
-  autoMigrateLegacyStateDir: vi.fn(async () => ({ changes: [], warnings: [] })),
-  autoMigrateLegacyTaskStateSidecars: vi.fn(async () => ({ changes: [], warnings: [] })),
-  migrateLegacyMediaPersistence: vi.fn(() => ({ changes: [], warnings: [] })),
-}));
 
 function resetTerminalNoteMock() {
   terminalNoteMock.mockClear();

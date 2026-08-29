@@ -660,6 +660,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/changed-path-facts.test.ts",
         "test/scripts/ci-changed-node-test-plan.test.ts",
         "test/scripts/full-release-validation-state.test.ts",
+        "test/scripts/macos-native-test-launch.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/pr-crabbox-merge-bypass.test.ts",
@@ -1717,6 +1718,19 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(
       ["scripts/lib/restart-mac-gateway.sh"],
       ["test/scripts/restart-mac.test.ts"],
+    );
+  });
+
+  it("routes the shared MCP scenario through its Docker and client owners", () => {
+    expectChangedTargets(
+      ["scripts/e2e/lib/mcp-code-mode/scenario.sh"],
+      [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/scripts/mcp-code-mode-gateway-client.test.ts",
+        "test/scripts/session-log-mentions.test.ts",
+      ],
     );
   });
 

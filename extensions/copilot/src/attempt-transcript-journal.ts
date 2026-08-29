@@ -182,6 +182,11 @@ export function createAttemptTranscriptJournal(params: {
       message: structuredClone(message) as TranscriptMessage,
       agentId: target.agentId,
       sessionKey: target.sessionKey,
+      // Tool-group narrative is replay state, not the dispatcher's terminal attachment reply.
+      prepareAssistantTranscriptMessage:
+        options.singleton && !hiddenTurn
+          ? params.attempt.prepareAssistantTranscriptMessage
+          : undefined,
     });
     if (!hooked) {
       return undefined;

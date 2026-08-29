@@ -78,7 +78,7 @@ extensions/browser/src/browser/extension-native-host.ts	1
 extensions/browser/src/browser/extension-native-protocol.ts	1
 extensions/browser/src/browser/extension-relay/auth-v2.ts	10
 extensions/browser/src/browser/extension-relay/relay-auth.ts	1
-extensions/browser/src/browser/extension-relay/relay-bridge.ts	12
+extensions/browser/src/browser/extension-relay/relay-bridge.ts	9
 extensions/browser/src/browser/extension-relay/relay-protocol.ts	4
 extensions/browser/src/browser/output-files.ts	1
 extensions/browser/src/browser/paths.ts	1
@@ -133,8 +133,6 @@ extensions/buzz/src/inbound.ts	1
 extensions/buzz/src/message-event.ts	2
 extensions/buzz/src/qa/adapter.runtime.ts	2
 extensions/buzz/src/room-membership.ts	2
-extensions/buzz/src/setup-core.ts	1
-extensions/buzz/src/setup-surface.ts	1
 extensions/buzz/src/setup-verify.ts	5
 extensions/buzz/src/types.ts	2
 extensions/byteplus/video-generation-provider.ts	1
@@ -563,7 +561,6 @@ extensions/googlechat/src/setup-core.ts	1
 extensions/groq/index.ts	2
 extensions/huggingface/index.ts	1
 extensions/huggingface/models.ts	2
-extensions/imessage/doctor-contract-api.ts	2
 extensions/imessage/src/accounts.ts	4
 extensions/imessage/src/actions-chat-guid.ts	1
 extensions/imessage/src/actions-contract.ts	1
@@ -1728,7 +1725,7 @@ src/agents/cli-runner/execute-node-claude.ts	5
 src/agents/cli-runner/execute.ts	3
 src/agents/cli-runner/helpers.ts	1
 src/agents/cli-runner/prepare.ts	5
-src/agents/cli-runner/session-history.ts	21
+src/agents/cli-runner/session-history.ts	3
 src/agents/code-mode-bridge.ts	1
 src/agents/code-mode-namespaces.ts	5
 src/agents/code-mode-runtime.ts	4
@@ -2061,7 +2058,7 @@ src/agents/tool-schema-hints.ts	1
 src/agents/tool-search-catalog.ts	4
 src/agents/tool-search-directory.ts	1
 src/agents/tool-search-runtime.ts	4
-src/agents/tool-search-transcript.ts	3
+src/agents/tool-search-transcript.ts	1
 src/agents/tool-search.ts	1
 src/agents/tools-effective-inventory-build.ts	2
 src/agents/tools-effective-inventory.ts	4
@@ -2092,7 +2089,7 @@ src/agents/tools/image-tool.ts	3
 src/agents/tools/in-process-gateway.ts	1
 src/agents/tools/media-generate-tool-actions-shared.ts	1
 src/agents/tools/message-tool-discovery.ts	3
-src/agents/tools/message-tool-execution.ts	4
+src/agents/tools/message-tool-execution.ts	3
 src/agents/tools/message-tool-visible-content.ts	9
 src/agents/tools/mobile-ui-tool.ts	5
 src/agents/tools/model-config.helpers.ts	1
@@ -2706,12 +2703,11 @@ src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	12
 src/config/sessions/session-accessor.sqlite-recovery.ts	1
 src/config/sessions/session-accessor.sqlite-reset-window.ts	3
-src/config/sessions/session-accessor.sqlite-session-row.ts	1
 src/config/sessions/session-accessor.sqlite-title-probes.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-store.ts	7
-src/config/sessions/session-accessor.sqlite-transcript-write.ts	7
+src/config/sessions/session-accessor.sqlite-transcript-write.ts	5
 src/config/sessions/session-accessor.sqlite-visible-cursor.ts	1
 src/config/sessions/session-accessor.transcript-range.ts	3
 src/config/sessions/session-accessor.transcript-turn.ts	1
@@ -2750,7 +2746,7 @@ src/config/zod-schema.channels-config.ts	3
 src/config/zod-schema.core.ts	1
 src/config/zod-schema.ts	2
 src/context-engine/delegate.ts	1
-src/context-engine/registry.ts	10
+src/context-engine/registry.ts	9
 src/context-engine/runtime-settings.ts	2
 src/cron/delivery-channel-validation.ts	2
 src/cron/delivery-context.ts	1
@@ -2854,8 +2850,8 @@ src/gateway/desktop/host-guidance.ts	1
 src/gateway/desktop/managed-linux.ts	1
 src/gateway/desktop/node-source-context.ts	1
 src/gateway/exec-approval-manager.ts	7
-src/gateway/gateway-cli-backend.live-helpers.ts	4
-src/gateway/gateway-cli-backend.live-probe-helpers.ts	7
+src/gateway/gateway-cli-backend.live-helpers.ts	2
+src/gateway/gateway-cli-backend.live-probe-helpers.ts	4
 src/gateway/health/collector.ts	3
 src/gateway/hooks-mapping.ts	2
 src/gateway/hooks.ts	1
@@ -2962,7 +2958,6 @@ src/gateway/server-methods/session-catalog.ts	5
 src/gateway/server-methods/session-create-initial-turn.ts	2
 src/gateway/server-methods/session-recovery-continuation.ts	1
 src/gateway/server-methods/sessions-abort.ts	3
-src/gateway/server-methods/sessions-archive-lifecycle.ts	3
 src/gateway/server-methods/sessions-compact.ts	1
 src/gateway/server-methods/sessions-create.ts	1
 src/gateway/server-methods/sessions-messaging.ts	11
@@ -3038,7 +3033,7 @@ src/gateway/session-transcript-title-reader.ts	1
 src/gateway/session-utils-core.ts	1
 src/gateway/session-utils-row.ts	1
 src/gateway/session-utils-search.ts	1
-src/gateway/session-utils.fs.ts	10
+src/gateway/session-utils.fs.ts	2
 src/gateway/sessions-history-http.ts	1
 src/gateway/stale-install.ts	1
 src/gateway/system-ca-warmup.ts	1
@@ -3057,7 +3052,6 @@ src/gateway/worker-environments/inference-runtime.ts	2
 src/gateway/worker-environments/inference-store.ts	1
 src/gateway/worker-environments/live-event-projection.ts	1
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
-src/gateway/worker-environments/node-workspace-transfer-service.ts	1
 src/gateway/worker-environments/placement-state.ts	3
 src/gateway/worker-environments/placement-store.ts	1
 src/gateway/worker-environments/provider-lifecycle.ts	1
@@ -3183,7 +3177,6 @@ src/infra/outbound/current-conversation-bindings.ts	1
 src/infra/outbound/deliver-channel.ts	4
 src/infra/outbound/deliver-payload.ts	1
 src/infra/outbound/deliver-prepare.ts	1
-src/infra/outbound/deliver-queue-execute.ts	2
 src/infra/outbound/deliver-queue-state.ts	1
 src/infra/outbound/delivery-queue-media-spool.ts	2
 src/infra/outbound/delivery-queue-media-staging.ts	2
@@ -3476,7 +3469,6 @@ src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
 src/plugins/clawhub.ts	10
 src/plugins/cli-gateway-nodes-runtime.ts	2
-src/plugins/cli.ts	1
 src/plugins/command-registration.ts	3
 src/plugins/computer-use-contract.ts	3
 src/plugins/config-normalization-shared.ts	20
@@ -3528,7 +3520,7 @@ src/plugins/loader-channel-setup.ts	17
 src/plugins/loader-cli-registry.ts	2
 src/plugins/loader-discovery.ts	1
 src/plugins/loader-load-context.ts	4
-src/plugins/loader-module-runtime.ts	13
+src/plugins/loader-module-runtime.ts	12
 src/plugins/loader-records.ts	1
 src/plugins/loader-runtime-candidate.ts	1
 src/plugins/loader-runtime-load.ts	2
@@ -3992,7 +3984,6 @@ ui/src/components/wizard-step-controls.ts	4
 ui/src/i18n/lib/registry.ts	2
 ui/src/i18n/lib/translate.ts	3
 ui/src/lib/agents/display.ts	6
-ui/src/lib/board/availability-controller.ts	1
 ui/src/lib/board/gateway-provider.ts	2
 ui/src/lib/board/widget-bridge.ts	3
 ui/src/lib/board/widget-sandbox-host.ts	1

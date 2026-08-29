@@ -318,6 +318,7 @@ function mcpCodeModeGatewayLane() {
     "mcp-code-mode-gateway",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:mcp-code-mode-gateway",
     {
+      prepublishPluginPackages: ["@openclaw/codex"],
       resources: ["npm"],
       stateScenario: "empty",
       weight: 3,
@@ -332,6 +333,7 @@ function liveMcpCodeModeGatewayLane() {
     {
       cacheKey: "mcp-code-mode-gateway",
       e2eImageKind: "functional",
+      prepublishPluginPackages: ["@openclaw/codex"],
       provider: "openai",
       resources: ["npm", "service"],
       stateScenario: "empty",
@@ -398,8 +400,7 @@ export const mainLanes: DockerE2eLane[] = [
     "live-gateway",
     liveDockerScriptCommand(
       "test-live-gateway-models-docker.sh",
-      "OPENCLAW_IMAGE=openclaw:local-live-gateway OPENCLAW_DOCKER_BUILD_EXTENSIONS=matrix OPENCLAW_LIVE_GATEWAY_PROVIDERS=claude-cli,google-gemini-cli",
-      { skipBuild: false },
+      "OPENCLAW_LIVE_GATEWAY_PROVIDERS=claude-cli,google-gemini-cli",
     ),
     {
       providers: ["claude-cli", "google-gemini-cli"],
@@ -456,6 +457,7 @@ export const mainLanes: DockerE2eLane[] = [
     "codex-media-path",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-media-path",
     {
+      prepublishPluginPackages: ["@openclaw/codex"],
       resources: ["npm"],
       stateScenario: "empty",
       weight: 3,

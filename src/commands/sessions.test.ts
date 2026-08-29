@@ -313,7 +313,12 @@ describe("sessionsCommand", () => {
           updatedAt: Date.now() - 60_000,
           model: "test:opus",
           visibility: "suggest",
-          createdActor: { type: "human", id: "profile-creator", label: "Creator" },
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: "profile-creator",
+            label: "Creator",
+          },
         },
       },
       "sessions-collaboration",

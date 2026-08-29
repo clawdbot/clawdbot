@@ -3,6 +3,8 @@
  *
  * Installs message-write hooks, input provenance handling, and pending tool-result flush behavior once per manager.
  */
+
+import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -41,7 +43,11 @@ type GuardedSessionManager = SessionManager & {
   /** Persist the next user message when an earlier canonical entry was removed. */
   clearNextUserMessagePersistenceSuppression?: () => void;
   /** Refresh the exact owning run when a caller reuses this guarded manager. */
-  setTranscriptRunId?: (runId: string | undefined) => void;
+  setTranscriptRunContext?: (
+    runId: string | undefined,
+    prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage | undefined,
+    skipBeforeMessageWriteHooks: boolean | undefined,
+  ) => void;
 };
 
 /**
@@ -53,6 +59,7 @@ export function guardSessionManager(
   opts?: {
     agentId?: string;
     runId?: string;
+    prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
     sessionKey?: string;
     config?: OpenClawConfig;
     contextWindowTokens?: number;
@@ -93,8 +100,15 @@ export function guardSessionManager(
   },
 ): GuardedSessionManager {
   const guardedSessionManager: GuardedSessionManager = sessionManager;
+  let prepareAssistantTranscriptMessage =
+    opts?.trigger === "memory" ? undefined : opts?.prepareAssistantTranscriptMessage;
+  let skipBeforeMessageWriteHooks = opts?.skipBeforeMessageWriteHooks;
   if (typeof guardedSessionManager.flushPendingToolResults === "function") {
-    guardedSessionManager.setTranscriptRunId?.(opts?.runId);
+    guardedSessionManager.setTranscriptRunContext?.(
+      opts?.runId,
+      prepareAssistantTranscriptMessage,
+      skipBeforeMessageWriteHooks,
+    );
     return guardedSessionManager;
   }
 
@@ -112,7 +126,10 @@ export function guardSessionManager(
     const runtimeUserMessage = runtimeUserMessageByPersistedMessage.get(event.message);
     let message = event.message;
     let changed = false;
-    if (!opts?.skipBeforeMessageWriteHooks && hookRunner?.hasHooks("before_message_write")) {
+    if (
+      (!skipBeforeMessageWriteHooks && hookRunner?.hasHooks("before_message_write")) ||
+      prepareAssistantTranscriptMessage
+    ) {
       const preparedMessage =
         message.role === "user"
           ? { ...message, __openclaw: { ...Reflect.get(message, "__openclaw") } }
@@ -121,6 +138,8 @@ export function guardSessionManager(
         message,
         agentId: opts?.agentId,
         sessionKey: opts?.sessionKey,
+        prepareAssistantTranscriptMessage,
+        skipBeforeMessageWriteHooks,
       });
       if (!next) {
         runtimeUserMessageByPersistedMessage.delete(event.message);
@@ -260,6 +279,10 @@ export function guardSessionManager(
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
   guardedSessionManager.clearNextUserMessagePersistenceSuppression =
     guard.clearNextUserMessagePersistenceSuppression;
-  guardedSessionManager.setTranscriptRunId = guard.setTranscriptRunId;
+  guardedSessionManager.setTranscriptRunContext = (runId, prepare, skipHooks) => {
+    guard.setTranscriptRunId(runId);
+    prepareAssistantTranscriptMessage = prepare;
+    skipBeforeMessageWriteHooks = skipHooks;
+  };
   return guardedSessionManager;
 }

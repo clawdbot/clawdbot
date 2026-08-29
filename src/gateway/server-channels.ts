@@ -256,6 +256,7 @@ export type ChannelAccountStartOutcome =
         | "ambient-suppressed"
         | "disabled"
         | "unconfigured"
+        | "secret-unavailable"
         | "unlinked"
         | "manual-stop";
     };
@@ -687,7 +688,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           // drift into a channel-specific environment or file fallback.
           const secretOwnerId = `${channelId}:${normalizeAccountId(id)}`;
           clearActiveCredentialDegradedOwner("account", secretOwnerId);
-          assertSecretOwnerAvailable("account", secretOwnerId);
+          try {
+            assertSecretOwnerAvailable("account", secretOwnerId);
+          } catch (error) {
+            if (!optsValue.skipUnavailableAccounts) {
+              throw error;
+            }
+            // Only this snapshot-owned assertion is an expected cold reload
+            // outcome; plugin startup and credential-file inspection still fail.
+            setStoppedRuntime(channelId, id, {
+              restartPending: false,
+              lastError: formatErrorMessage(error),
+            });
+            startOutcomes.set(id, { status: "skipped", reason: "secret-unavailable" });
+            return;
+          }
           const account = plugin.config.resolveAccount(cfg, id);
           const described = plugin.config.describeAccount?.(account, cfg);
           const enabled = plugin.config.isEnabled

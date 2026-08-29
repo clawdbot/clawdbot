@@ -58,7 +58,7 @@ export function readChatPaneMutationAccess(
   };
 }
 
-export function resolveChatModelCatalogState(
+function resolveChatModelCatalogState(
   state: Pick<
     ChatPageHost,
     "chatModelCatalog" | "chatModelCatalogError" | "chatModelsLoading" | "connected"

@@ -56,6 +56,9 @@ function createHarness(
       revision += 1;
       return undefined;
     }),
+    retireTabDocument: vi.fn(),
+    forwardDocumentEvent: vi.fn((event, emit) => emit(event)),
+    invalidateDocumentGroup: vi.fn(),
     invalidateAll: vi.fn(() => {
       revision += 1;
     }),

@@ -90,6 +90,8 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `channels.sms.accounts.*.authToken`
 - `channels.buzz.authTag`
 - `channels.buzz.privateKey`
+- `channels.buzz.accounts.*.authTag`
+- `channels.buzz.accounts.*.privateKey`
 - `channels.clickclack.token`
 - `channels.clickclack.accounts.*.token`
 - `channels.discord.token`

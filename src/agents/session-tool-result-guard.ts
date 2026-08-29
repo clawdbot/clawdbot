@@ -904,12 +904,15 @@ export function installSessionToolResultGuard(
     // synthetic results (e.g. OpenAI) accumulate stale pending state when a user message
     // interrupts in-flight tool calls, leaving orphaned tool_use blocks in the transcript
     // that cause API 400 errors on subsequent requests.
-    const transcriptOnlyAssistant =
-      nextRole === "assistant" &&
-      toolCalls.length === 0 &&
-      isTranscriptOnlyOpenClawAssistantMessage(nextMessage);
+    const transcriptOnly =
+      (nextRole === "custom" &&
+        "excludeFromContext" in nextMessage &&
+        nextMessage.excludeFromContext === true) ||
+      (nextRole === "assistant" &&
+        toolCalls.length === 0 &&
+        isTranscriptOnlyOpenClawAssistantMessage(nextMessage));
     if (
-      !transcriptOnlyAssistant &&
+      !transcriptOnly &&
       pendingState.shouldFlushBeforeNonToolResult(nextRole, toolCalls.length)
     ) {
       flushPendingToolResults();

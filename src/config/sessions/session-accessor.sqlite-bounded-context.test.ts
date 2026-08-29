@@ -8,10 +8,8 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import {
-  readSessionTranscriptActiveStats,
-  readSessionTranscriptBoundedActiveContextCore,
-} from "./session-accessor.sqlite-active-events.js";
+import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
+import { readSessionTranscriptActiveStats } from "./session-accessor.sqlite-active-events.js";
 import { importSqliteSessionRows } from "./session-accessor.sqlite-import.js";
 import {
   startSessionTranscriptIndexReconcile,
@@ -236,7 +234,8 @@ it("retains the latest compaction boundary before a truncated tail", async () =>
       "summary",
       "new",
     ]);
-    expect(context.events.at(-1)).toMatchObject({ parentId: "summary" });
+    expect(context.events.at(-1)).toMatchObject({ parentId: "middle" });
+    expect(context.opaqueParents.get("middle")).toBe("summary");
     expect(context.boundaryCount).toBe(1);
   });
 });

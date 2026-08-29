@@ -15,6 +15,7 @@ import {
   WorkerConnectRequestFrameSchema,
   type WorkerTranscriptMessage,
   WorkerTranscriptMessageSchema,
+  WorkerTranscriptUserMessageSchema,
   type WorkerTranscriptCommitParams,
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -55,7 +56,7 @@ type WorkerLaunchAssignment = WorkerLaunchPermissionContext & {
   agentRuntimeIdentityToken: string;
   runId: string;
   turnId: string;
-  prompt: string;
+  prompt: string | Extract<WorkerTranscriptMessage, { role: "user" }>["content"];
   suppressPromptTranscript: boolean;
   workspaceDir: string;
   modelRef: WorkerInferenceModelRef;
@@ -215,7 +216,14 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
     value.agentRuntimeIdentityToken.length < 1 ||
     value.agentRuntimeIdentityToken.length > 16_384 ||
     !isIdentifier(value.turnId) ||
-    typeof value.prompt !== "string" ||
+    !(
+      typeof value.prompt === "string" ||
+      Value.Check(WorkerTranscriptUserMessageSchema, {
+        role: "user",
+        content: value.prompt,
+        timestamp: 0,
+      })
+    ) ||
     typeof value.suppressPromptTranscript !== "boolean" ||
     !isIdentifier(value.workspaceDir) ||
     !isAbsoluteHostPath(value.workspaceDir) ||
@@ -302,7 +310,10 @@ function validateWorkerLaunchPlan(candidate: WorkerLaunchPlan): WorkerLaunchPlan
     candidate.admission.ownerEpoch < 1 ||
     !isWorkerTranscriptMessageFrameSafe({
       role: "user",
-      content: [{ type: "text", text: candidate.assignment.prompt }],
+      content:
+        typeof candidate.assignment.prompt === "string"
+          ? [{ type: "text", text: candidate.assignment.prompt }]
+          : candidate.assignment.prompt,
       timestamp: Number.MAX_SAFE_INTEGER,
     })
   ) {

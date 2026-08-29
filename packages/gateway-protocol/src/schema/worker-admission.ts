@@ -12,6 +12,7 @@ import {
   LiveSequenceSchema,
   LiveTextSchema,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  WORKER_PROTOCOL_MAX_TRANSCRIPT_PAYLOAD_BYTES,
   WorkerAdmissionFailureReasonSchema,
   WorkerErrorResponseFrameSchema,
   WorkerErrorShapeSchema,
@@ -281,7 +282,7 @@ const WorkerTranscriptThinkingContentSchema = closedObject({
 
 const WorkerTranscriptImageContentSchema = closedObject({
   type: Type.Literal("image"),
-  data: Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
+  data: Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_TRANSCRIPT_PAYLOAD_BYTES }),
   mimeType: Type.String({ minLength: 1, maxLength: 256 }),
 });
 
@@ -315,7 +316,7 @@ export const WorkerProviderReplayStateSchema = closedObject({
   authProfileHash: Type.Optional(WorkerReplayHashSchema),
 });
 
-const WorkerTranscriptUserMessageSchema = closedObject({
+export const WorkerTranscriptUserMessageSchema = closedObject({
   role: Type.Literal("user"),
   content: Type.Array(
     Type.Union([WorkerTranscriptTextContentSchema, WorkerTranscriptImageContentSchema]),

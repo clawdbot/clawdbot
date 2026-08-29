@@ -12,9 +12,11 @@ import {
   WORKER_PROTOCOL_METHODS,
   validateRequestFrame,
   validateWorkerConnectRequestFrame,
+  validateWorkerTranscriptCommitParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { WORKER_INFERENCE_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { GATEWAY_STARTUP_RETRY_AFTER_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
+import { isWorkerTranscriptFrameWithinBudget } from "../../../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { rawDataByteLength } from "../../../infra/ws.js";
 import {
   getGatewaySuspendAdmissionPhase,
@@ -279,7 +281,16 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     }
     if (
       frameBytes > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES &&
-      parsed.method !== WORKER_INFERENCE_METHODS[0]
+      parsed.method !== WORKER_INFERENCE_METHODS[0] &&
+      !(
+        parsed.method === "worker.transcript.commit" &&
+        validateWorkerTranscriptCommitParams(parsed.params) &&
+        isWorkerTranscriptFrameWithinBudget({
+          ...parsed,
+          method: "worker.transcript.commit",
+          params: parsed.params,
+        })
+      )
     ) {
       failFrame(1009, "invalid-frame");
       return;

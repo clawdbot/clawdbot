@@ -481,6 +481,59 @@ describe("GatewayBrowserClient", () => {
     vi.restoreAllMocks();
   });
 
+  it("does not publish hello when a response observer closes the browser socket", async () => {
+    useNodeFakeTimers();
+    const onHello = vi.fn();
+    const onClose = vi.fn();
+    const onConnectTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      onHello,
+      onClose,
+      onConnectTiming,
+      onRequestTiming: ({ method }) => {
+        if (method === "connect") {
+          client.forceReconnect("response observer closed");
+        }
+      },
+    });
+    try {
+      const { ws, connectFrame } = await startConnect(client);
+      ws.emitMessage({
+        type: "res",
+        id: connectFrame.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          auth: { role: "operator", deviceToken: "late-device-token", scopes: [] },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ws.lastClose).toEqual({ code: 4000, reason: "response observer closed" });
+      expect(onHello).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.token).toBe(
+        STORED_CRED,
+      );
+      expect(connectTimingPayloads(onConnectTiming).some(({ phase }) => phase === "hello")).toBe(
+        false,
+      );
+      ws.emitClose(4000, "response observer closed");
+      expect(onClose).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: 4000,
+          reason: "response observer closed",
+          willRetry: true,
+        }),
+      );
+      expect(connectTimingPayloads(onConnectTiming).at(-1)?.phase).toBe("failed");
+      await vi.advanceTimersByTimeAsync(800);
+      expect(getLatestWebSocket()).not.toBe(ws);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("requests full control ui operator scopes with explicit shared auth", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",

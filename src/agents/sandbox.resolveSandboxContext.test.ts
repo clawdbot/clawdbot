@@ -184,7 +184,7 @@ describe("resolveSandboxContext", () => {
       sessionId: "guest-session",
       updatedAt: 1,
       sandbox: "required" as const,
-      createdActor: { type: "human" as const, id: "guest-principal" },
+      createdActor: { type: "human" as const, source: "unknown" as const, id: "guest-principal" },
     };
     await replaceSessionEntry({ sessionKey, storePath }, entry);
     const backendFactory = vi.fn(async () => ({
@@ -480,7 +480,7 @@ describe("resolveSandboxContext", () => {
       sessionId: "guest-session",
       updatedAt: 1,
       sandbox: "required" as const,
-      createdActor: { type: "human" as const, id: "guest-principal" },
+      createdActor: { type: "human" as const, source: "unknown" as const, id: "guest-principal" },
     };
     await replaceSessionEntry({ sessionKey, storePath }, entry);
     const backendFailure = new Error("Required sandbox backend unavailable");

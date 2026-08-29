@@ -239,6 +239,7 @@ describe("session companion context", () => {
               parentId: null,
               message: { role: "user", content: "stable context", timestamp: 1 },
             },
+            eventSeq: 1,
             seq: 1,
           },
         ],

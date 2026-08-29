@@ -147,7 +147,6 @@ describe("outbound message progress companion", () => {
     expect(opened.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
-    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(13);
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
 

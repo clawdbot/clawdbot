@@ -74,36 +74,6 @@ function projectContextEngineHostParams(
   );
 }
 
-function wrapContextEngineHostParamProjection(
-  engine: ContextEngine,
-  metadata: ResolvedContextEngineMetadata,
-): ContextEngine {
-  const wrapped = new Proxy(
-    Object.create(engine, { info: { get: () => engine.info } }) as ContextEngine,
-    {
-      get(_target, property) {
-        if (property === "info") {
-          return engine.info;
-        }
-        const method = Reflect.get(engine, property, engine);
-        if (typeof method !== "function") {
-          return method;
-        }
-        if (!GUARDED_CONTEXT_ENGINE_METHODS.has(property)) {
-          return method.bind(engine);
-        }
-        return (params: Record<string, unknown>) =>
-          method.call(engine, projectContextEngineHostParams(engine, property, params));
-      },
-    },
-  );
-  resolvedEngineMetadata.set(wrapped, {
-    ...metadata,
-    sourceEngine: resolvedEngineMetadata.get(engine)?.sourceEngine ?? engine,
-  });
-  return wrapped;
-}
-
 function wrapResolvedContextEngine(
   engine: ContextEngine,
   metadata: ResolvedContextEngineMetadata & {
@@ -646,7 +616,7 @@ async function resolveRawContextEngineRef(
     );
     throw new Error(contractError);
   }
-  const projectedEngine = wrapContextEngineHostParamProjection(engine, {
+  const projectedEngine = wrapResolvedContextEngine(engine, {
     engineId,
     owner: entry.owner,
   });

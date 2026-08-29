@@ -137,7 +137,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           );
           scope.context.navigation.update({ sidebarEntries });
         },
-        replaceCurrentSession: (key) => this.onPaneSessionChange?.(this.paneId, key),
         selectSession: (key) => this.onPaneSessionChange?.(this.paneId, key),
         sidebarSessionStatusFilter: () => "active",
         knownSessionGroups: () =>

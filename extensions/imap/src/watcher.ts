@@ -295,7 +295,8 @@ export class ImapAccountWatcher {
       await this.recordSkip(message.uid, undefined, "message-source-missing");
       return true;
     }
-    const mail = await simpleParser(message.source, { skipImageLinks: true });
+    // Only consume plain text; avoid generating unused HTML and scanning untrusted links.
+    const mail = await simpleParser(message.source, { skipImageLinks: true, skipTextToHtml: true });
     const verdict = await evaluateImapSender({
       mail,
       raw: message.source,

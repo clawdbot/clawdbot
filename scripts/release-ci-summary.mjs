@@ -17,6 +17,7 @@ import {
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
+  MAX_RELEASE_ARTIFACT_BYTES,
   releaseCompositeJobsSha256,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
@@ -36,11 +37,8 @@ const RELEASE_EVIDENCE_SCRIPT = "scripts/release-ci-summary.mjs";
 const RELEASE_EVIDENCE_FILE = fileURLToPath(import.meta.url);
 const RELEASE_EVIDENCE_REPO_ROOT = resolve(dirname(RELEASE_EVIDENCE_FILE), "..");
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
-const MAX_MANIFEST_ARTIFACT_ZIP_BYTES = 256 * 1024;
-const MAX_MANIFEST_JSON_BYTES = 128 * 1024;
 const MAX_MANIFEST_ENTRY_LIST_BYTES = 8 * 1024;
-const MAX_RELEASE_STATE_BYTES = 128 * 1024;
-const MAX_EXECUTION_PLAN_BYTES = 128 * 1024;
+const MAX_MANIFEST_ARTIFACT_ZIP_BYTES = MAX_RELEASE_ARTIFACT_BYTES + MAX_MANIFEST_ENTRY_LIST_BYTES;
 // Release evidence lookups run during full release validation, so keep enough
 // headroom for GitHub latency while preventing one stalled read from consuming
 // the workflow budget.
@@ -131,6 +129,17 @@ const PHASED_CHILD_DISPATCHES = [
   LEGACY_CHILD_DISPATCHES.find((child) => child.manifestKey === "npmTelegram"),
   LEGACY_CHILD_DISPATCHES.find((child) => child.manifestKey === "productPerformance"),
 ];
+// One phased child set plus current and reused parents.
+const MAX_EXPECTED_RUN_ATTEMPTS = PHASED_CHILD_DISPATCHES.length + 2;
+const MAX_EXPECTED_RUN_ATTEMPTS_JSON_BYTES = 4 * 1024;
+
+class ReleaseEvidenceRefreshRequiredError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ReleaseEvidenceRefreshRequiredError";
+    this.refreshable = true;
+  }
+}
 
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
@@ -292,7 +301,7 @@ function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
     if (!statSync(path, { throwIfNoEntry: false })) {
       throw new Error(`release execution plan artifact ${artifactName} omitted its manifest`);
     }
-    if (statSync(path).size > MAX_EXECUTION_PLAN_BYTES) {
+    if (statSync(path).size > MAX_RELEASE_ARTIFACT_BYTES) {
       throw new Error(`release execution plan artifact ${artifactName} exceeds the size limit`);
     }
     return JSON.parse(readFileSync(path, "utf8"));
@@ -599,6 +608,43 @@ function normalizeJsonObject(value, label) {
     throw new Error(`${label} is invalid`);
   }
   return value;
+}
+
+function normalizeExpectedRunAttempts(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+  const entries = Object.entries(normalizeJsonObject(value, "expected run attempts"));
+  if (entries.length === 0 || entries.length > MAX_EXPECTED_RUN_ATTEMPTS) {
+    throw new Error(`expected run attempts must contain 1-${MAX_EXPECTED_RUN_ATTEMPTS} run IDs`);
+  }
+  return new Map(
+    entries.map(([runId, runAttempt]) => {
+      if (typeof runAttempt !== "number") {
+        throw new Error(`expected run ${runId} attempt must be a positive integer`);
+      }
+      return [
+        normalizeRequiredRunId(runId, "expected run ID"),
+        normalizePositiveInteger(runAttempt, `expected run ${runId} attempt`),
+      ];
+    }),
+  );
+}
+
+function consumeExpectedRunAttempt(expectedRunAttempts, runId, runAttempt, label) {
+  if (expectedRunAttempts === undefined) {
+    return;
+  }
+  const expected = expectedRunAttempts.get(runId);
+  if (expected === undefined) {
+    throw new Error(`expected run attempts omitted ${label} run ID: ${runId}`);
+  }
+  expectedRunAttempts.delete(runId);
+  if (runAttempt !== expected) {
+    throw new Error(
+      `${label} run attempt changed: ${runId} expected ${expected}, observed ${runAttempt}`,
+    );
+  }
 }
 
 function canonicalJson(value) {
@@ -1456,13 +1502,13 @@ export function readManifestArtifactArchive(archivePath, expectedDigest) {
   let manifestBytes;
   try {
     manifestBytes = execFileSync("unzip", ["-p", archivePath, MANIFEST_ARTIFACT_ENTRY], {
-      maxBuffer: MAX_MANIFEST_JSON_BYTES + 1,
+      maxBuffer: MAX_RELEASE_ARTIFACT_BYTES + 1,
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
     throw new Error("release validation manifest artifact entry could not be read safely");
   }
-  if (manifestBytes.byteLength < 1 || manifestBytes.byteLength > MAX_MANIFEST_JSON_BYTES) {
+  if (manifestBytes.byteLength < 1 || manifestBytes.byteLength > MAX_RELEASE_ARTIFACT_BYTES) {
     throw new Error("release validation manifest artifact entry size is invalid");
   }
   return JSON.parse(manifestBytes.toString("utf8"));
@@ -1604,14 +1650,27 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
   };
 }
 
-function loadValidatedParentEvidence({ client, manifestPath, repository, runId }) {
+function loadValidatedParentEvidence({
+  client,
+  expectedRunAttempts,
+  manifestPath,
+  repository,
+  runId,
+}) {
   const parentView = client.getRunView(runId);
   const parentRun = client.getRun(runId);
+  const parentRunAttempt = normalizePositiveInteger(
+    parentRun.run_attempt,
+    `full release parent ${runId} run attempt`,
+  );
+  consumeExpectedRunAttempt(expectedRunAttempts, runId, parentRunAttempt, "parent");
   validateCompletedParentRun(parentView, parentRun, repository, runId);
 
-  const manifestEvidence = client.loadManifest(runId, parentRun.run_attempt, manifestPath);
+  const manifestEvidence = client.loadManifest(runId, parentRunAttempt, manifestPath);
   if (!manifestEvidence) {
-    throw new Error(`successful parent run is missing its release validation manifest: ${runId}`);
+    throw new ReleaseEvidenceRefreshRequiredError(
+      `successful parent run is missing its release validation manifest: ${runId}`,
+    );
   }
   const manifest = validateParentManifest(manifestEvidence.manifest, {
     runAttempt: parentRun.run_attempt,
@@ -1847,12 +1906,14 @@ function validateStrictChildRun({
   releaseProfile,
   repository,
   runId,
+  expectedRunAttempts,
 }) {
   const run = client.getRun(runId);
   const effectiveRunAttempt = normalizePositiveInteger(
     run.run_attempt,
     `${child.name} run attempt`,
   );
+  consumeExpectedRunAttempt(expectedRunAttempts, runId, effectiveRunAttempt, "child");
   if (plannedChild) {
     try {
       validateReleaseChildRunProvenance(run, {
@@ -1894,8 +1955,11 @@ function validateStrictChildRun({
   let jobs;
   let composite;
   if (plannedChild && childEvidence) {
+    if (childEvidence.effectiveRunAttempt > effectiveRunAttempt) {
+      throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
+    }
     const attempts = Array.from(
-      { length: effectiveRunAttempt - plannedChild.runAttempt + 1 },
+      { length: childEvidence.effectiveRunAttempt - plannedChild.runAttempt + 1 },
       (_, index) => {
         const runAttempt = plannedChild.runAttempt + index;
         return {
@@ -1911,7 +1975,14 @@ function validateStrictChildRun({
         plannedRunAttempt: plannedChild.runAttempt,
         repository,
       },
-      run,
+      run:
+        childEvidence.effectiveRunAttempt === effectiveRunAttempt
+          ? run
+          : {
+              ...run,
+              run_attempt: childEvidence.effectiveRunAttempt,
+              triggering_actor: { login: childEvidence.triggeringActor },
+            },
     });
     const expectedEvidence = {
       ...evidence,
@@ -1921,6 +1992,11 @@ function validateStrictChildRun({
       JSON.stringify(canonicalJson(expectedEvidence))
     ) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
+    }
+    if (childEvidence.effectiveRunAttempt < effectiveRunAttempt) {
+      throw new ReleaseEvidenceRefreshRequiredError(
+        `successful parent manifest predates ${child.name} attempt ${effectiveRunAttempt}`,
+      );
     }
     composite = {
       effectiveRunAttempt: evidence.effectiveRunAttempt,
@@ -1998,6 +2074,7 @@ function validateStrictChildRun({
  *   expectedEvidencePolicy?: string,
  *   expectedEvidenceSha?: string,
  *   expectedRootRunId?: string,
+ *   expectedRunAttempts?: Record<string, number>,
  *   expectedSelectedRunId?: string,
  *   expectedTargetSha?: string,
  *   trustedWorkflowFullRef?: string,
@@ -2016,6 +2093,7 @@ export function validateReleaseRunEvidence(
     expectedEvidencePolicy,
     expectedEvidenceSha,
     expectedRootRunId,
+    expectedRunAttempts,
     expectedSelectedRunId,
     expectedTargetSha,
     trustedWorkflowFullRef,
@@ -2028,6 +2106,7 @@ export function validateReleaseRunEvidence(
 ) {
   const normalizedRepository = normalizeRepository(repository);
   const normalizedRunId = normalizeRequiredRunId(runId, "full release run ID");
+  const remainingExpectedRunAttempts = normalizeExpectedRunAttempts(expectedRunAttempts);
   const normalizedTrustedWorkflowRef = normalizeWorkflowRef(
     trustedWorkflowRef,
     "trusted workflow ref",
@@ -2041,6 +2120,7 @@ export function validateReleaseRunEvidence(
   const verifier = resolveVerifierIdentity(verifierSourceSha, verifierSourceContent);
   const currentEvidence = loadValidatedParentEvidence({
     client: evidenceClient,
+    expectedRunAttempts: remainingExpectedRunAttempts,
     manifestPath,
     repository: normalizedRepository,
     runId: normalizedRunId,
@@ -2073,6 +2153,7 @@ export function validateReleaseRunEvidence(
   if (reuse) {
     rootEvidence = loadValidatedParentEvidence({
       client: evidenceClient,
+      expectedRunAttempts: remainingExpectedRunAttempts,
       repository: normalizedRepository,
       runId: reuse.runId,
     });
@@ -2081,6 +2162,7 @@ export function validateReleaseRunEvidence(
         ? rootEvidence
         : loadValidatedParentEvidence({
             client: evidenceClient,
+            expectedRunAttempts: remainingExpectedRunAttempts,
             repository: normalizedRepository,
             runId: reuse.selectedRunId,
           });
@@ -2200,8 +2282,14 @@ export function validateReleaseRunEvidence(
       releaseProfile: rootEvidence.manifest.releaseProfile,
       repository: normalizedRepository,
       runId: childRunId,
+      expectedRunAttempts: remainingExpectedRunAttempts,
     }),
   );
+  if (remainingExpectedRunAttempts?.size) {
+    throw new Error(
+      `expected run attempts contain unvalidated run IDs: ${[...remainingExpectedRunAttempts.keys()].join(", ")}`,
+    );
+  }
 
   const current = normalizedParentTuple(
     currentEvidence,
@@ -2266,6 +2354,7 @@ function parseReleaseCiSummaryArgs(argv) {
     expectedEvidencePolicy: undefined,
     expectedEvidenceSha: undefined,
     expectedRootRunId: undefined,
+    expectedRunAttempts: undefined,
     expectedSelectedRunId: undefined,
     expectedTargetSha: undefined,
     json: false,
@@ -2307,6 +2396,20 @@ function parseReleaseCiSummaryArgs(argv) {
       options.expectedEvidenceSha = argv[++index];
     } else if (argument === "--expected-root-run-id") {
       options.expectedRootRunId = argv[++index];
+    } else if (argument === "--expected-run-attempts-json") {
+      const value = argv[++index];
+      if (!value || Buffer.byteLength(value, "utf8") > MAX_EXPECTED_RUN_ATTEMPTS_JSON_BYTES) {
+        throw new Error("--expected-run-attempts-json requires a bounded JSON object");
+      }
+      try {
+        options.expectedRunAttempts = JSON.parse(value);
+      } catch {
+        throw new Error("--expected-run-attempts-json requires a JSON object");
+      }
+      if (!options.expectedRunAttempts || Array.isArray(options.expectedRunAttempts)) {
+        throw new Error("--expected-run-attempts-json requires a JSON object");
+      }
+      normalizeExpectedRunAttempts(options.expectedRunAttempts);
     } else if (argument === "--expected-selected-run-id") {
       options.expectedSelectedRunId = argv[++index];
     } else if (argument === "--expected-changed-paths-json") {
@@ -2341,6 +2444,9 @@ function parseReleaseCiSummaryArgs(argv) {
   if (!options.validate && options.manifestPath) {
     throw new Error("--manifest requires --validate-run");
   }
+  if (!options.validate && options.expectedRunAttempts !== undefined) {
+    throw new Error("--expected-run-attempts-json requires --validate-run");
+  }
   if (options.validate && options.watch) {
     throw new Error("--watch cannot be combined with --validate-run");
   }
@@ -2358,7 +2464,7 @@ function printUsage() {
     [
       "usage: release-ci-summary.mjs <full-release-run-id>",
       "       release-ci-summary.mjs <full-release-run-id> --watch [--interval seconds]",
-      "       release-ci-summary.mjs --validate-run <id> [--repo owner/name] [--trusted-workflow-ref main --trusted-workflow-full-ref refs/heads/main] [--trusted-workflow-sha sha] [--manifest path] [--verifier-source-sha sha --verifier-source-file path] [--expected-target-sha sha --expected-evidence-sha sha --expected-evidence-policy policy --expected-root-run-id id --expected-selected-run-id id --expected-changed-paths-json json] --json",
+      "       release-ci-summary.mjs --validate-run <id> [--repo owner/name] [--trusted-workflow-ref main --trusted-workflow-full-ref refs/heads/main] [--trusted-workflow-sha sha] [--manifest path] [--verifier-source-sha sha --verifier-source-file path] [--expected-target-sha sha --expected-evidence-sha sha --expected-evidence-policy policy --expected-root-run-id id --expected-selected-run-id id --expected-changed-paths-json json] [--expected-run-attempts-json json] --json",
     ].join("\n"),
   );
 }
@@ -2427,7 +2533,7 @@ export function tryReadReleaseDecisionArtifact(
     if (!statSync(path, { throwIfNoEntry: false })) {
       throw new Error(`release decision artifact ${artifactName} omitted its manifest`);
     }
-    if (statSync(path).size > MAX_RELEASE_STATE_BYTES) {
+    if (statSync(path).size > MAX_RELEASE_ARTIFACT_BYTES) {
       throw new Error(`release decision artifact ${artifactName} exceeds the size limit`);
     }
     return validateReleaseStateArtifact(
@@ -2539,6 +2645,7 @@ async function main() {
         expectedEvidencePolicy: options.expectedEvidencePolicy,
         expectedEvidenceSha: options.expectedEvidenceSha,
         expectedRootRunId: options.expectedRootRunId,
+        expectedRunAttempts: options.expectedRunAttempts,
         expectedSelectedRunId: options.expectedSelectedRunId,
         expectedTargetSha: options.expectedTargetSha,
         manifestPath: options.manifestPath,
@@ -2556,6 +2663,7 @@ async function main() {
     } catch (error) {
       const failure = {
         error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof ReleaseEvidenceRefreshRequiredError ? { refreshable: true } : {}),
         schema: RELEASE_EVIDENCE_SCHEMA,
         valid: false,
       };

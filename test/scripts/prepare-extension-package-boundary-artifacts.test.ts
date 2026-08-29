@@ -7,19 +7,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import {
-  listPluginSdkDeclarationOutputs,
-  pluginSdkEntrypoints,
-} from "../../scripts/lib/plugin-sdk-entries.mjs";
-import {
-  computeArtifactInputsDigest,
   createPrefixedOutputWriter,
-  derivePluginSdkTypeInputsFromBuildInfo,
-  isArtifactSetFresh,
   parseMode,
-  resolveBoundaryEntryShimRequiredOutputs,
   resolveBoundaryRootShimsTimeoutMs,
-  resolveTsxImportSpecifier,
   runNodeStep,
   runNodeSteps,
   runNodeStepsInParallel,
@@ -91,67 +83,100 @@ async function waitForProcessExit(
 }
 
 describe("prepare-extension-package-boundary-artifacts", () => {
-  it("derives the historical SDK cache misses from TypeScript build inputs", () => {
-    const rootDir = makeTempDir(tempRoots, "openclaw-plugin-sdk-inputs-");
-    const buildInfoPath = path.join(rootDir, "dist", "plugin-sdk", ".tsbuildinfo");
-    fs.mkdirSync(path.dirname(buildInfoPath), { recursive: true });
-    fs.writeFileSync(
-      buildInfoPath,
+  it("prunes only obsolete native declarations after success and repairs a failed partial emit", async () => {
+    const root = fs.realpathSync(makeTempDir(tempRoots, "native-preparer-"));
+    const write = (file: string, text: string) => {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, text);
+    };
+    write("package.json", '{"name":"openclaw","type":"module"}');
+    write("pnpm-workspace.yaml", "packages: []\n");
+    write(
+      "tsconfig.json",
       JSON.stringify({
-        fileNames: [
-          "../../src/plugin-sdk/provider-auth.ts",
-          "../../src/agents/cli-credentials.ts",
-          "../../src/plugins/session-catalog.ts",
-          "../../src/agents/embedded-agent-runner/run/types.ts",
-        ],
-        packageJsons: ["../../package.json"],
+        compilerOptions: {
+          target: "es2023",
+          module: "nodenext",
+          skipLibCheck: true,
+        },
       }),
-      "utf8",
     );
-
-    const inputs = derivePluginSdkTypeInputsFromBuildInfo(buildInfoPath, rootDir);
-
-    for (const historicalMiss of [
-      "src/agents/cli-credentials.ts",
-      "src/plugins/session-catalog.ts",
-      "src/agents/embedded-agent-runner/run/types.ts",
-    ]) {
-      expect(
-        inputs.some((input) => historicalMiss === input || historicalMiss.startsWith(`${input}/`)),
-        historicalMiss,
-      ).toBe(true);
-      expect(inputs).not.toContain(historicalMiss);
-    }
-    expect(inputs).toContain("package.json");
-  });
-
-  it("resolves the tsx loader from the selected checkout toolchain", () => {
-    const tsxBinPath = "/primary/node_modules/.bin/tsx";
-    const loaderPath = "/primary/node_modules/tsx/dist/loader.mjs";
-
-    expect(
-      resolveTsxImportSpecifier({
-        resolveTool: (toolName) => {
-          expect(toolName).toBe("tsx");
-          return tsxBinPath;
-        },
-        ensureToolchain: (toolPath) => {
-          expect(toolPath).toBe(tsxBinPath);
-          return "/worktree/node_modules";
-        },
-        createRequireFrom: (filename) => {
-          expect(filename).toBe(tsxBinPath);
-          return {
-            resolve(packageName) {
-              expect(packageName).toBe("tsx");
-              return loaderPath;
-            },
-          };
-        },
+    write(
+      "packages/plugin-sdk/tsconfig.json",
+      JSON.stringify({
+        extends: "../../tsconfig.json",
+        include: ["../../src/**/*.ts"],
       }),
-    ).toBe(pathToFileURL(loaderPath).href);
-  });
-
+    );
+    write("src/plugin-sdk/core.ts", 'export { value } from "../nested.js";');
+    write("src/nested.ts", "export const value = 1;");
+    write("scripts/lib/plugin-sdk-entrypoints.json", '["core"]');
+    const copy = (file: string) => {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(path.resolve(file), target);
+    };
+    copy("scripts/prepare-extension-package-boundary-artifacts.mts");
+    copy("scripts/lib/plugin-sdk-entries.mts");
+    fs.cpSync(path.resolve("scripts/lib"), path.join(root, "scripts/lib"), { recursive: true });
+    write("scripts/lib/plugin-sdk-entrypoints.json", '["core"]');
+    for (const file of [
+      "scripts/run-tsgo.mjs",
+      "scripts/run-tsgo.mts",
+      "scripts/tsx.mjs",
+      "scripts/windows-cmd-helpers.mjs",
+    ]) {
+      copy(file);
+    }
+    for (const name of ["tsx", "typescript", "@typescript", "@openclaw/fs-safe", ".bin/tsgo"]) {
+      const target = path.join(root, "node_modules", name);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.symlinkSync(path.resolve("node_modules", name), target);
+    }
+    fs.symlinkSync(
+      path.resolve("packages/normalization-core"),
+      path.join(root, "packages/normalization-core"),
+      process.platform === "win32" ? "junction" : undefined,
+    );
+    const recordPath = path.join(root, ".artifacts/extension-package-boundary/plugin-sdk.json");
+    const output = "packages/plugin-sdk/dist";
+    const run = () =>
+      runNodeStep(
+        "native-fixture",
+        [
+          path.join(root, "scripts/prepare-extension-package-boundary-artifacts.mts"),
+          "--mode=package-boundary",
+        ],
+        30_000,
+      );
+    await run();
+    const first = readArtifactRecord(recordPath)!;
+    expect(first.outputs[`${output}/src/nested.d.ts`]).toBeDefined();
+    write("src/plugin-sdk/core.ts", 'export { value } from "../renamed.js";');
+    fs.renameSync(path.join(root, "src/nested.ts"), path.join(root, "src/renamed.ts"));
+    write("src/renamed.ts", 'export const value: number = "error";');
+    write(`${output}/orphan.d.ts`, "export {};");
+    write(`${output}/operator-note.txt`, "unowned");
+    await expect(run()).rejects.toThrow("failed with exit code 1");
+    expect(fs.existsSync(recordPath)).toBe(false);
+    expect(fs.existsSync(path.join(root, output, "src/renamed.d.ts"))).toBe(true);
+    expect(fs.existsSync(path.join(root, output, "src/nested.d.ts"))).toBe(true);
+    write("src/renamed.ts", "export const value = 2;");
+    await run();
+    const repaired = readArtifactRecord(recordPath)!;
+    expect(repaired.outputs[`${output}/src/renamed.d.ts`]).toBeDefined();
+    expect(repaired.outputs[`${output}/src/nested.d.ts`]).toBeUndefined();
+    expect(fs.existsSync(path.join(root, output, "src/nested.d.ts"))).toBe(false);
+    expect(fs.existsSync(path.join(root, output, "orphan.d.ts"))).toBe(false);
+    expect(fs.readFileSync(path.join(root, output, "operator-note.txt"), "utf8")).toBe("unowned");
+    fs.rmSync(path.join(root, output, "src/renamed.d.ts"));
+    await run();
+    expect(readArtifactRecord(recordPath)?.outputs).toEqual(repaired.outputs);
+    const unchanged = fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs;
+    await run();
+    expect(fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs).toBe(unchanged);
+  }, 30_000);
   it("prefixes each completed line and flushes the trailing partial line", () => {
     let output = "";
     const writer = createPrefixedOutputWriter("boundary", {
@@ -466,182 +491,6 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     ]);
 
     expect(fs.readFileSync(outputPath, "utf8")).toBe("passed");
-  });
-
-  it("treats artifacts as fresh only when outputs are newer than inputs", () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-prep-"));
-    tempRoots.add(rootDir);
-    const inputPath = path.join(rootDir, "src", "demo.ts");
-    const outputPath = path.join(rootDir, "dist", "demo.tsbuildinfo");
-    fs.mkdirSync(path.dirname(inputPath), { recursive: true });
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-    fs.writeFileSync(inputPath, "export const demo = 1;\n", "utf8");
-    fs.writeFileSync(outputPath, "ok\n", "utf8");
-
-    fs.utimesSync(inputPath, new Date(1_000), new Date(1_000));
-    fs.utimesSync(outputPath, new Date(2_000), new Date(2_000));
-
-    expect(
-      isArtifactSetFresh({
-        rootDir,
-        inputPaths: ["src"],
-        outputPaths: ["dist/demo.tsbuildinfo"],
-      }),
-    ).toBe(true);
-
-    fs.utimesSync(inputPath, new Date(3_000), new Date(3_000));
-
-    expect(
-      isArtifactSetFresh({
-        rootDir,
-        inputPaths: ["src"],
-        outputPaths: ["dist/demo.tsbuildinfo"],
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps mtime-stale artifacts fresh when the hash stamp matches the input digest", () => {
-    // Regression: fresh checkouts re-stamp every input mtime, so cache-restored
-    // artifacts must stay fresh by content identity, not build again per CI run.
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-hash-"));
-    tempRoots.add(rootDir);
-    const inputPath = path.join(rootDir, "src", "demo.ts");
-    const stampPath = path.join(rootDir, "dist", ".demo.stamp");
-    const outputPath = path.join(rootDir, "dist", "demo.d.ts");
-    fs.mkdirSync(path.dirname(inputPath), { recursive: true });
-    fs.mkdirSync(path.dirname(stampPath), { recursive: true });
-    fs.writeFileSync(inputPath, "export const demo = 1;\n", "utf8");
-    fs.writeFileSync(outputPath, "export declare const demo = 1;\n", "utf8");
-    fs.writeFileSync(
-      stampPath,
-      `${computeArtifactInputsDigest({ rootDir, inputPaths: ["src"] })}\n`,
-      "utf8",
-    );
-
-    // Simulate checkout: inputs newer than restored outputs, bytes unchanged.
-    fs.utimesSync(stampPath, new Date(1_000), new Date(1_000));
-    fs.utimesSync(outputPath, new Date(1_000), new Date(1_000));
-    const repairTimeMs = Date.now();
-    fs.utimesSync(inputPath, repairTimeMs / 1_000, (repairTimeMs + 0.5) / 1_000);
-    const freshParams = {
-      rootDir,
-      inputPaths: ["src"],
-      outputPaths: ["dist/.demo.stamp", "dist/demo.d.ts"],
-      hashStampPath: "dist/.demo.stamp",
-    };
-
-    vi.useFakeTimers();
-    vi.setSystemTime(repairTimeMs);
-    try {
-      expect(isArtifactSetFresh(freshParams)).toBe(true);
-      // The repaired output must clear the newest input by a whole millisecond.
-      // Matching it exactly leaves no headroom for sub-millisecond write
-      // rounding or lagging metadata, and a CI runner that lands even a
-      // fraction short puts every later invocation back on the full-hash path.
-      expect(fs.statSync(outputPath).mtimeMs).toBeGreaterThanOrEqual(
-        Math.ceil(fs.statSync(inputPath).mtimeMs) + 1,
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-
-    fs.appendFileSync(inputPath, "export const demoTwo = 2;\n", "utf8");
-    fs.utimesSync(outputPath, new Date(1_000), new Date(1_000));
-    expect(isArtifactSetFresh(freshParams)).toBe(false);
-
-    // Legacy timestamp stamps never satisfy the hash fallback.
-    fs.writeFileSync(stampPath, `${new Date(5_000).toISOString()}\n`, "utf8");
-    fs.utimesSync(stampPath, new Date(1_000), new Date(1_000));
-    expect(isArtifactSetFresh(freshParams)).toBe(false);
-  });
-
-  it("requires generated entry-shim outputs in addition to the freshness stamp", () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-entry-shims-"));
-    tempRoots.add(rootDir);
-    const inputPath = path.join(rootDir, "scripts", "write-plugin-sdk-entry-dts.ts");
-    const stampPath = path.join(rootDir, "dist", "plugin-sdk", ".boundary-entry-shims.stamp");
-    const rootDtsPath = path.join(rootDir, "dist", "plugin-sdk", "core.d.ts");
-    const packageDtsPath = path.join(
-      rootDir,
-      "packages",
-      "plugin-sdk",
-      "dist",
-      "src",
-      "plugin-sdk",
-      "core.d.ts",
-    );
-
-    fs.mkdirSync(path.dirname(inputPath), { recursive: true });
-    fs.mkdirSync(path.dirname(stampPath), { recursive: true });
-    fs.mkdirSync(path.dirname(rootDtsPath), { recursive: true });
-    fs.mkdirSync(path.dirname(packageDtsPath), { recursive: true });
-    fs.writeFileSync(inputPath, "export {};\n", "utf8");
-    fs.writeFileSync(stampPath, "ok\n", "utf8");
-    fs.writeFileSync(rootDtsPath, "export {};\n", "utf8");
-    fs.writeFileSync(packageDtsPath, "export {};\n", "utf8");
-
-    fs.utimesSync(inputPath, new Date(1_000), new Date(1_000));
-    fs.utimesSync(stampPath, new Date(2_000), new Date(2_000));
-    fs.utimesSync(rootDtsPath, new Date(2_000), new Date(2_000));
-    fs.utimesSync(packageDtsPath, new Date(2_000), new Date(2_000));
-
-    expect(
-      isArtifactSetFresh({
-        rootDir,
-        inputPaths: ["scripts/write-plugin-sdk-entry-dts.ts"],
-        outputPaths: [
-          "dist/plugin-sdk/.boundary-entry-shims.stamp",
-          "dist/plugin-sdk/core.d.ts",
-          "packages/plugin-sdk/dist/src/plugin-sdk/core.d.ts",
-        ],
-      }),
-    ).toBe(true);
-
-    fs.rmSync(packageDtsPath);
-
-    expect(
-      isArtifactSetFresh({
-        rootDir,
-        inputPaths: ["scripts/write-plugin-sdk-entry-dts.ts"],
-        outputPaths: [
-          "dist/plugin-sdk/.boundary-entry-shims.stamp",
-          "dist/plugin-sdk/core.d.ts",
-          "packages/plugin-sdk/dist/src/plugin-sdk/core.d.ts",
-        ],
-      }),
-    ).toBe(false);
-    expect(resolveBoundaryEntryShimRequiredOutputs({})).toContain("dist/plugin-sdk/core.d.ts");
-    expect(resolveBoundaryEntryShimRequiredOutputs({})).toContain(
-      "packages/plugin-sdk/dist/src/plugin-sdk/core.d.ts",
-    );
-  });
-
-  it("keeps bundled-private runtime shims in production while gating QA helpers", () => {
-    const productionOutputs = resolveBoundaryEntryShimRequiredOutputs({});
-    const privateQaOutputs = resolveBoundaryEntryShimRequiredOutputs({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-    });
-
-    expect(productionOutputs.filter((output) => output.startsWith("dist/plugin-sdk/"))).toEqual(
-      listPluginSdkDeclarationOutputs().toSorted((a, b) => a.localeCompare(b)),
-    );
-    expect(privateQaOutputs.filter((output) => output.startsWith("dist/plugin-sdk/"))).toEqual(
-      listPluginSdkDeclarationOutputs(pluginSdkEntrypoints).toSorted((a, b) => a.localeCompare(b)),
-    );
-
-    expect(productionOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
-    expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");
-    expect(privateQaOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
-    expect(privateQaOutputs).toContain("dist/plugin-sdk/test-fixtures.d.ts");
-    for (const entry of [
-      "channel-contract-testing",
-      "plugin-state-test-runtime",
-      "plugin-test-runtime",
-    ]) {
-      expect(productionOutputs).not.toContain(`dist/plugin-sdk/${entry}.d.ts`);
-      expect(privateQaOutputs).toContain(`dist/plugin-sdk/${entry}.d.ts`);
-      expect(privateQaOutputs).toContain(`packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`);
-    }
   });
 
   it("parses prep mode and rejects unknown values", () => {

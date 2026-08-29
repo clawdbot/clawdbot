@@ -1853,7 +1853,7 @@ jobs:
           if [[ "$EVIDENCE_REUSE" == "true" ]]; then
             # Inherit the evidence manifest (profile, soak, child runs) so future
             # reuse lookups and evidence consumers keep resolving the chain root.
-            jq \
+            jq -c \
               --arg runId "$GITHUB_RUN_ID" \
               --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
               --arg workflowRef "$GITHUB_REF_NAME" \
@@ -1898,7 +1898,7 @@ jobs:
               }' <<< "$EVIDENCE_MANIFEST" > "${manifest_dir}/full-release-validation-manifest.json"
             exit 0
           fi
-          jq -n \
+          jq -cn \
             --arg workflowName "Full Release Validation" \
             --arg runId "$GITHUB_RUN_ID" \
             --arg runAttempt "$GITHUB_RUN_ATTEMPT" \

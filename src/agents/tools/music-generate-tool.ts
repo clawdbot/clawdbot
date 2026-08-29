@@ -20,6 +20,7 @@ import type {
   MusicGenerationSourceImage,
 } from "../../music-generation/types.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
@@ -50,7 +51,6 @@ import {
   hasGenerationToolAvailability,
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
-  readBooleanToolParam,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveRemoteMediaSsrfPolicy,
@@ -599,7 +599,7 @@ export function createMusicGenerateTool(options?: {
       }
 
       const lyrics = readToolStringParam(args, "lyrics");
-      const instrumental = readBooleanToolParam(args, "instrumental");
+      const instrumental = readBooleanParam(args, "instrumental");
       const durationSeconds = readNumberParam(args, "durationSeconds", {
         positiveInteger: true,
         strict: true,

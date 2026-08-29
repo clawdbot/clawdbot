@@ -378,17 +378,20 @@ function createCronPromptExecutor(params: {
 
   const runPrompt = async (promptText: string) => {
     let candidateStarted = false;
+    const sessionTarget = {
+      agentId: params.agentId,
+      sessionId: params.cronSession.sessionEntry.sessionId,
+      sessionKey: params.runSessionKey,
+      storePath: params.cronSession.storePath,
+    };
     const userTurnTranscriptRecorder =
       pendingUserTurn?.promptText === promptText
         ? pendingUserTurn.recorder
         : createUserTurnTranscriptRecorder({
             input: { text: promptText },
             target: {
-              sessionId: params.cronSession.sessionEntry.sessionId,
-              agentId: params.agentId,
-              sessionKey: params.runSessionKey,
+              ...sessionTarget,
               sessionEntry: params.cronSession.sessionEntry,
-              storePath: params.cronSession.storePath,
               cwd: params.workspaceDir,
               config: params.cfgWithAgentDefaults,
             },
@@ -631,6 +634,7 @@ function createCronPromptExecutor(params: {
                 preparedRunAdmission,
                 sessionId: params.cronSession.sessionEntry.sessionId,
                 sessionKey: params.runSessionKey,
+                sessionTarget,
                 sessionEntry: params.cronSession.sessionEntry,
                 contextWindow: params.cronSession.sessionEntry.contextWindow,
                 agentId: params.agentId,
@@ -717,12 +721,7 @@ function createCronPromptExecutor(params: {
           preparedRunAdmission,
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
-          sessionTarget: {
-            agentId: params.agentId,
-            sessionId: params.cronSession.sessionEntry.sessionId,
-            sessionKey: params.runSessionKey,
-            storePath: params.cronSession.storePath,
-          },
+          sessionTarget,
           promptCacheKey,
           agentId: params.agentId,
           trigger: "cron",

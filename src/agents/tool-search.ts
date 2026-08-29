@@ -13,12 +13,7 @@ import {
   isDirectVisibleCatalogTool,
   resolveCatalog,
 } from "./tool-search-catalog.js";
-import {
-  appendToolSearchCodeStderrTail,
-  readToolSearchCode,
-  runCodeMode,
-  runCodeModeChild,
-} from "./tool-search-code-mode.js";
+import { readToolSearchCode, runCodeMode, runCodeModeChild } from "./tool-search-code-mode.js";
 import {
   isToolSearchCodeModeSupported,
   resolveToolSearchConfig,
@@ -71,7 +66,6 @@ export {
   resolveToolSearchCatalogTool,
 } from "./tool-search-directory.js";
 export { ToolSearchRuntime } from "./tool-search-runtime.js";
-export { projectToolSearchTargetTranscriptMessages } from "./tool-search-transcript.js";
 export {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -83,7 +77,6 @@ export type {
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,
   ToolSearchConfig,
-  ToolSearchTargetTranscriptProjection,
   ToolSearchToolContext,
 } from "./tool-search-types.js";
 
@@ -424,7 +417,6 @@ const testing = {
   setToolSearchMinCodeTimeoutMsForTest,
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,
-  appendToolSearchCodeStderrTail,
   runCodeModeChild,
 };
 

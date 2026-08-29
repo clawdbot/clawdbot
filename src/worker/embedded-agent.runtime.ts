@@ -35,7 +35,7 @@ import {
   toAgentMessage,
   toWorkerInferenceContext,
 } from "./embedded-agent-transcript.runtime.js";
-import type { WorkerBrowserLaunchDescriptor } from "./launch-descriptor.js";
+import type { WorkerBrowserLaunchDescriptor, WorkerLaunchPlan } from "./launch-descriptor.js";
 import {
   WORKER_LOCAL_TOOL_NAMES,
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
@@ -82,7 +82,7 @@ type RunWorkerEmbeddedTurnParams = {
   sessionId: string;
   sessionKey: string;
   runId: string;
-  prompt: string;
+  prompt: WorkerLaunchPlan["assignment"]["prompt"];
   modelRef: WorkerInferenceModelRef;
   inference: WorkerEmbeddedInferenceClient;
   transcript: WorkerEmbeddedTranscriptClient;
@@ -319,7 +319,8 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     }
     await session.agent.prompt({
       role: "user",
-      content: [{ type: "text", text: params.prompt }],
+      content:
+        typeof params.prompt === "string" ? [{ type: "text", text: params.prompt }] : params.prompt,
       timestamp: Date.now(),
     });
     await session.agent.waitForIdle();

@@ -516,6 +516,13 @@ Each client connection keeps its own per-client sequence number, so broadcasts
 stay monotonically ordered on that socket even when different clients see
 different scope-filtered subsets of the event stream.
 
+`hello-ok.features.capabilities` advertises additive wire contracts. Native clients
+send `sessionKey` in `chat.metadata` only when `session-scoped-chat-metadata` is present;
+otherwise they retain the agent-only request supported by stable `v2026.7.1-2`.
+That older response describes agent-wide availability, not a session's selected
+profile. Retire this negotiation only when the minimum supported Gateway contract
+guarantees session-scoped metadata. Method or event presence alone is insufficient.
+
 ## RPC method families
 
 `hello-ok.features.methods` is a conservative discovery list built from
@@ -807,7 +814,11 @@ count.
 - `sessions.changed`: session index or metadata changed. Active-run fields use the
   same aggregate and complete-exact semantics as `sessions.list`; `activeRunIds: null`
   clears cached exact identities to unavailable, omission leaves the cache unchanged,
-  and an array replaces it.
+  and an array replaces it. Delete notifications from `sessions.delete` and incognito
+  reset carry the removed generation's `sessionId`, without a current-row snapshot.
+  Clients must not delete a replacement with a different ID. A key-only delete event
+  or a rowless global notification invalidates the canonical session list; it does
+  not identify the current generation as deleted.
 - `presence`: system presence snapshot updates.
 - `tick`: periodic keepalive/liveness event.
 - `health`: gateway health snapshot update.

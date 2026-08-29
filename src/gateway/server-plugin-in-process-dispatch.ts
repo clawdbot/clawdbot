@@ -5,7 +5,6 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import {
@@ -32,10 +31,6 @@ import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
 } from "./subagent-completion-tool-handoff.js";
-
-const loadInternalAgentTurnFacade = createLazyRuntimeModule(
-  () => import("./agent-turn/internal-facade.runtime.js"),
-);
 
 type OperatorToolGatewayAuthority = {
   authenticatedUserProfile: NonNullable<
@@ -339,17 +334,15 @@ export async function dispatchGatewayMethodInProcess<T>(
 ): Promise<T> {
   if (method === "agent" || method === "agent.wait") {
     return await withInProcessGatewayDispatch(method, options, async (resolved) => {
-      const { createInternalAgentTurnFacade } = await loadInternalAgentTurnFacade();
-      const facade = createInternalAgentTurnFacade({
+      const createAgentTurnFacade = resolved.context.createAgentTurnFacade;
+      if (!createAgentTurnFacade) {
+        throw new Error(`Gateway instance agent turn facade unavailable for ${method}`);
+      }
+      // Plugins may load through another source/bundle graph. Only the captured host can
+      // create turns against its published runtime; a local import creates a second owner.
+      const facade = await createAgentTurnFacade({
         assertContextCurrent: resolved.assertContextCurrent,
         client: resolved.client,
-        getContext: () => {
-          resolved.assertContextCurrent();
-          return resolved.context;
-        },
-        ...(resolved.context.getGatewayMethodRegistry
-          ? { getMethodRegistry: resolved.context.getGatewayMethodRegistry }
-          : {}),
         isWebchatConnect: resolved.isWebchatConnect,
       });
       return method === "agent"

@@ -1,90 +1,14 @@
 // Extension relay bridge: CDP target synthesis and extension command routing.
 import { describe, expect, it, vi } from "vitest";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
-import type { ExtensionToRelayMessage, RelayToExtensionMessage } from "./relay-protocol.js";
-
-/** In-memory socket capturing every frame the bridge sends. */
-class FakeSocket {
-  readonly sent: unknown[] = [];
-  closed = false;
-  closeCode?: number;
-  closeReason?: string;
-  send(data: string): void {
-    this.sent.push(JSON.parse(data));
-  }
-  close(code?: number, reason?: string): void {
-    this.closed = true;
-    this.closeCode = code;
-    this.closeReason = reason;
-  }
-  /** Frames of a given method (client CDP responses/events). */
-  frames(): Array<Record<string, unknown>> {
-    return this.sent as Array<Record<string, unknown>>;
-  }
-}
-
-/**
- * Scripted extension: auto-answers relay commands so the bridge can complete
- * attach/CDP round-trips. Attach returns a deterministic targetId per tab.
- */
-function wireExtension(bridge: ExtensionRelayBridge) {
-  const socket = new FakeSocket();
-  const handlers = bridge.attachExtensionSocket(socket);
-  // Auto-reply to commands the bridge issues to the extension.
-  const originalSend = socket.send.bind(socket);
-  socket.send = (data: string) => {
-    originalSend(data);
-    const msg = JSON.parse(data) as RelayToExtensionMessage;
-    if (msg.type === "ping") {
-      return;
-    }
-    queueMicrotask(() => {
-      const reply = replyFor(msg);
-      if (reply) {
-        handlers.onMessage(JSON.stringify(reply));
-      }
-    });
-  };
-  return { socket, handlers };
-}
-
-function replyFor(msg: RelayToExtensionMessage): ExtensionToRelayMessage | null {
-  switch (msg.type) {
-    case "attach":
-      return { type: "result", seq: msg.seq, result: { targetId: `target-${msg.tabId}` } };
-    case "detach":
-    case "activateTab":
-    case "closeTab":
-      return { type: "result", seq: msg.seq, result: {} };
-    case "createTab":
-      return { type: "result", seq: msg.seq, result: { tabId: 999 } };
-    case "cdp":
-      return { type: "result", seq: msg.seq, result: { ok: true, echoed: msg.method } };
-    default:
-      return null;
-  }
-}
-
-function sendHello(handlers: { onMessage: (raw: string) => void }, tabs = defaultTabs()) {
-  handlers.onMessage(
-    JSON.stringify({
-      type: "hello",
-      userAgent: "Mozilla/5.0 Chrome/144.0.0.0",
-      browserVersion: "Chrome/144.0.0.0",
-      extensionVersion: "2.0.0",
-      tabs,
-    }),
-  );
-}
-
-function defaultTabs() {
-  return [{ tabId: 1, url: "https://example.com", title: "Example", active: true }];
-}
-
-const flush = () =>
-  new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
+import {
+  FakeSocket,
+  wireExtension,
+  sendHello,
+  defaultTabs,
+  flush,
+} from "./relay-bridge.test-support.js";
+import type { RelayToExtensionMessage } from "./relay-protocol.js";
 
 describe("ExtensionRelayBridge", () => {
   it("notifies connection waiters only after an authenticated valid hello", async () => {
@@ -378,6 +302,8 @@ describe("ExtensionRelayBridge", () => {
     ).toMatchObject({ tabId: 1, method: "Runtime.evaluate" });
     expect(client.frames().find((frame) => frame.id === 4)?.result).toMatchObject({ ok: true });
 
+    cdp.onMessage(JSON.stringify({ id: 6, sessionId: pageSessionId, method: "Runtime.enable" }));
+    await flush();
     handlers.onMessage(
       JSON.stringify({
         type: "cdpEvent",

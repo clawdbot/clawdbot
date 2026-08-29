@@ -244,11 +244,8 @@ export {
   type ToolResultFailureKind,
 } from "../agents/tool-result-error.js";
 export { normalizeUsage } from "../agents/usage.js";
-export {
-  resolveAgentDir,
-  resolveDefaultAgentDir,
-  resolveSessionAgentIds,
-} from "../agents/agent-scope.js";
+export { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+export { resolveSessionAgentIds } from "./agent-scope-runtime.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
 export { isAgentToolReplaySafe } from "../agents/tool-replay-safety.js";

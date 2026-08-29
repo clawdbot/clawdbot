@@ -5,12 +5,14 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import {
   fakeTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
 } from "../../code-mode.test-support.js";
 import { Agent, type AgentTool } from "../../runtime/index.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { jsonResult } from "../../tools/common.js";
 import {
   cleanupTempPaths,
@@ -84,6 +86,7 @@ describe("runEmbeddedAttempt Code Mode reconciliation boundary", () => {
   });
 
   it("settles a real partial bridge mutation before exposing only core read", async () => {
+    const sessionManager = SessionManager.inMemory();
     const appliedChanges: string[] = [];
     const read = fakeTool("read", "Inspect current file contents");
     const applyPatch = pluginToolWithExecute("apply_patch", "Apply a patch", async () => {
@@ -154,6 +157,7 @@ describe("runEmbeddedAttempt Code Mode reconciliation boundary", () => {
       tempPaths,
       attemptOverrides: {
         config: { tools: { codeMode: true } },
+        sessionManager,
         disableMessageTool: false,
         disableTools: false,
         model,
@@ -163,6 +167,21 @@ describe("runEmbeddedAttempt Code Mode reconciliation boundary", () => {
     expect(firstAttempt.codeModeReconciliationCandidate).toBe(true);
     expect(appliedChanges).toEqual(["first hunk applied"]);
     expect(applyPatch.execute).toHaveBeenCalledOnce();
+    const activities = sessionManager.getEntries().flatMap((entry) => {
+      const activity = entry.type === "message" && readNestedToolActivity(entry.message);
+      return activity ? [activity.details] : [];
+    });
+    expect(activities).toMatchObject([
+      {
+        parentToolCallId: "mutate",
+        toolName: "apply_patch",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "second hunk is ambiguous" }],
+          details: { status: "error", error: "second hunk is ambiguous" },
+        },
+      },
+    ]);
 
     const retryState = createEmbeddedRunTerminalRetryState();
     let recoveryPrompt: string | undefined;
@@ -186,6 +205,7 @@ describe("runEmbeddedAttempt Code Mode reconciliation boundary", () => {
       tempPaths,
       attemptOverrides: {
         config: { tools: { codeMode: true } },
+        sessionManager,
         disableMessageTool: false,
         disableTools: false,
         forceCodeModeReconciliationTools: retryState.forceCodeModeReconciliationTools,

@@ -129,11 +129,11 @@ describe("gateway chat.inject transcript writes", () => {
       const messageId = await appendHelloAndRequireId(fixture);
       const last = await readLastTranscriptRecord(fixture);
 
-      expect(existing).toBeDefined();
+      expect(existing).toMatchObject({ ok: true });
       expect(last.type).toBe("message");
       expect(last).toHaveProperty("id", messageId);
       expect(last).toHaveProperty("message");
-      expect(last).toHaveProperty("parentId", existing?.messageId);
+      expect(last).toHaveProperty("parentId", existing.ok ? existing.value?.messageId : undefined);
     } finally {
       await cleanupFixture(fixture);
     }

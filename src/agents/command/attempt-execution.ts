@@ -28,6 +28,7 @@ import {
   type SessionTranscriptRuntimeTarget,
   type TranscriptMessageAppendResult,
 } from "../../config/sessions/session-accessor.js";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -124,7 +125,7 @@ import type { AgentCommandOpts } from "./types.js";
 
 export {
   createAcpVisibleTextAccumulator,
-  sessionFileHasContent,
+  sessionTranscriptHasContent,
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -204,6 +205,7 @@ type TranscriptUsage = {
 };
 
 type PersistTextTurnTranscriptParams = {
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   body: string;
   transcriptBody?: string;
   userMessage?: PersistedUserTurnMessage;
@@ -375,6 +377,7 @@ async function persistTextTurnTranscript(
   }
 
   if (replyText) {
+    const prepareAssistantTranscriptMessage = params.prepareAssistantTranscriptMessage;
     messages.push({
       idempotencyLookup: "scan-assistant" as const,
       message: {
@@ -390,6 +393,16 @@ async function persistTextTurnTranscript(
         stopReason: "stop",
         timestamp: Date.now(),
       },
+      ...(prepareAssistantTranscriptMessage
+        ? {
+            prepareMessageAfterIdempotencyCheck: (message: unknown) =>
+              prepareAssistantTranscriptMessage(
+                // SAFETY: This append creates the assistant row above; the preparer cannot receive another row.
+                message as Parameters<PrepareAssistantTranscriptMessage>[0],
+                replyText,
+              ),
+          }
+        : {}),
     });
   }
 
@@ -457,6 +470,7 @@ function isClaudeCliProvider(provider: string): boolean {
 }
 
 export async function persistAcpTurnTranscript(params: {
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   body: string;
   transcriptBody?: string;
   userInput?: UserTurnInput;

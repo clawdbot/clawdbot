@@ -5,7 +5,6 @@ type ToolSearchTestApi = {
   maxToolSchemaDirectoryPromptChars: number;
   setToolSearchCodeModeSupportedForTest(value: boolean | undefined): void;
   setToolSearchMinCodeTimeoutMsForTest(value: number | undefined): void;
-  appendToolSearchCodeStderrTail(current: string, chunk: string): string;
   runCodeModeChild(params: {
     code: string;
     config: ToolSearchConfig;
@@ -30,7 +29,5 @@ export const testing: ToolSearchTestApi = {
     getTestApi().setToolSearchCodeModeSupportedForTest(value),
   setToolSearchMinCodeTimeoutMsForTest: (value) =>
     getTestApi().setToolSearchMinCodeTimeoutMsForTest(value),
-  appendToolSearchCodeStderrTail: (current, chunk) =>
-    getTestApi().appendToolSearchCodeStderrTail(current, chunk),
   runCodeModeChild: (params) => getTestApi().runCodeModeChild(params),
 };

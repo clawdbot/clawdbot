@@ -85,7 +85,10 @@ export function createChatSendLateReplyFinalizer(
 }
 
 async function finalizeChatSendAgentReplyPayloads(
-  params: FinalizeChatSendAgentRepliesBase & { payloads: readonly ReplyPayload[] },
+  params: FinalizeChatSendAgentRepliesBase & {
+    payloads: readonly ReplyPayload[];
+    suppressFinal?: boolean;
+  },
 ): Promise<ChatSendAgentReplyFinalization> {
   const { accountId, context, emitFirstAssistantServerTiming, session } = params;
   const { agentId, backingSessionId, cfg, clientRunId, sessionKey, sessionLoadOptions } = session;
@@ -298,16 +301,19 @@ async function finalizeChatSendAgentReplyPayloads(
     stopReason: "stop",
     usage: { input: 0, output: 0, totalTokens: 0 },
   };
-  if (hasVisibleAssistantFinalMessage(message)) {
-    emitFirstAssistantServerTiming();
+  // Failed turns retain source media/transcript finalization; chat.error carries no message.
+  if (!params.suppressFinal) {
+    if (hasVisibleAssistantFinalMessage(message)) {
+      emitFirstAssistantServerTiming();
+    }
+    broadcastChatFinal({
+      context,
+      runId: clientRunId,
+      sessionKey,
+      agentId,
+      message,
+    });
   }
-  broadcastChatFinal({
-    context,
-    runId: clientRunId,
-    sessionKey,
-    agentId,
-    message,
-  });
   return { kind: "delivered", hasSourceReplyTranscriptMirror };
 }
 
@@ -316,6 +322,7 @@ export async function finalizeChatSendSourceReplies(
   params: FinalizeChatSendAgentRepliesBase & {
     deliveredReplies: readonly DeliveredReply[];
     hasReturnedAgentErrorPayloads: boolean;
+    suppressFinal?: boolean;
   },
 ): Promise<boolean> {
   const result = await finalizeChatSendAgentReplyPayloads({
@@ -324,6 +331,7 @@ export async function finalizeChatSendSourceReplies(
     emitFirstAssistantServerTiming: params.emitFirstAssistantServerTiming,
     payloads: selectChatSendAgentReplyPayloads(params),
     session: params.session,
+    suppressFinal: params.suppressFinal,
   });
   return result.kind === "delivered" && result.hasSourceReplyTranscriptMirror;
 }

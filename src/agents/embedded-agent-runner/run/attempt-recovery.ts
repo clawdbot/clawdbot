@@ -361,6 +361,7 @@ export async function recoverEmbeddedRunAttempt(input: {
   ) {
     runInput.laneController.throwIfAborted();
     recoveryState.transportDropContinuations += 1;
+    sessionPromptState.markOwnedTranscriptRetry();
     sessionPromptState.continueFromCurrentTranscript();
     log.warn(
       `provider transport dropped after a settled tool batch; continuing from the transcript ` +

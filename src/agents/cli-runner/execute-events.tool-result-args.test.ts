@@ -33,6 +33,7 @@ function buildContext(runId: string): PreparedCliRunContext {
     workspaceDir: "/tmp",
     backendResolved: { id: "claude-cli", config: backend, bundleMcp: false },
     preparedBackend: { backend, env: {} },
+    executionTarget: { kind: "process" },
     reusableCliSession: { mode: "none" },
     hadSessionFile: false,
     contextEngineConfig: {},

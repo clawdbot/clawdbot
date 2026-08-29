@@ -23,7 +23,7 @@ openclaw doctor
     openclaw doctor --yes
     ```
 
-    Accept defaults without prompting (including restart/service/sandbox repair steps when applicable).
+    Accept default non-service repairs without prompting. Gateway service definition rewrites still require interactive confirmation.
 
   </Tab>
   <Tab title="--fix">
@@ -31,7 +31,7 @@ openclaw doctor
     openclaw doctor --fix
     ```
 
-    Apply recommended repairs without prompting (`--repair` is an alias).
+    Apply recommended non-service repairs without prompting (`--repair` is an alias). Gateway service definition rewrites still require interactive confirmation.
 
   </Tab>
   <Tab title="--lint">
@@ -606,12 +606,13 @@ That stages grounded durable candidates into the short-term dreaming store while
     Notes:
 
     - `openclaw doctor` prompts before rewriting supervisor config.
-    - `openclaw doctor --yes` accepts the default repair prompts.
-    - `openclaw doctor --fix` applies recommended fixes without prompts (`--repair` is an alias).
+    - `openclaw doctor --yes` accepts default non-service repair prompts; service definition rewrites still require interactive confirmation.
+    - `openclaw doctor --fix` applies recommended non-service fixes without prompts (`--repair` is an alias). Outside update repair mode, headless runs report service drift without rewriting the definition.
     - `openclaw doctor --fix --force` can overwrite the managed supervisor config; operator-owned systemd drop-ins remain unchanged.
     - `OPENCLAW_SERVICE_REPAIR_POLICY=external` keeps doctor read-only for gateway service lifecycle. It still reports service health and runs non-service repairs, but skips service install/start/restart/bootstrap, supervisor config rewrites, and legacy service cleanup because an external supervisor owns that lifecycle.
     - On macOS, a same-label system LaunchDaemon blocks user LaunchAgent install, start, restart, and bootstrap repair. Doctor reports the system owner and stops service recovery; `--force` does not bypass this ownership boundary. See [Existing system LaunchDaemons](/gateway#existing-system-launchdaemons).
     - On Linux, doctor does not rewrite command/entrypoint metadata while the matching systemd gateway unit is active. If a stopped unit's command or working directory is overridden by an operator-owned systemd drop-in, inspect it with `systemctl --user cat <unit>.service`, then update or remove the drop-in; rewriting the managed base cannot change the effective launcher. `Environment=` drop-ins remain supported. Doctor also ignores inactive non-legacy extra gateway-like units during the duplicate-service scan so companion service files do not create cleanup noise.
+    - On Linux, doctor checks authority over the installed and planned service files before persisting a recovered gateway token. If that check blocks service repair, the repair leaves config and token unchanged and reports how to restore inspection access or involve the deployment owner; `--force` cannot bypass it. Unrelated Doctor config repairs are unaffected.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, doctor service install/repair validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
     - Doctor detects managed `.env`/SecretRef-backed service environment values that older LaunchAgent, systemd, or Windows Scheduled Task installs embedded inline and rewrites the service metadata so those values load from the runtime source instead of the supervisor definition.
     - Doctor detects when the service command still pins an old `--port` after `gateway.port` changes and rewrites the service metadata to the current port.

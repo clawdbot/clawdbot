@@ -51,6 +51,12 @@ function inferUpdateFailureHints(result: UpdateRunResult): string[] {
   if (result.status !== "error") {
     return [];
   }
+  if (result.reason === "preflight-insufficient-space") {
+    return [
+      "Free space on the preflight staging and package-manager store filesystems, then rerun the update.",
+      "Preflight stopped because storage was exhausted; trying another commit would not repair it.",
+    ];
+  }
   if (result.reason === "pnpm-corepack-missing") {
     return [
       "This pnpm checkout could not auto-enable pnpm because corepack is missing.",

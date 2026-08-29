@@ -5761,7 +5761,7 @@ td.data-table-key-col {
   stroke-width: 1.6px;
 }
 
-/* Attribute badges (attached automation, approval, cloud placement):
+/* Attribute badges (approval, cloud placement):
    muted metadata grouped in the row's second-line endcap. */
 .session-row-badges {
   display: inline-flex;

@@ -294,6 +294,7 @@ export async function startBuzzBus(options: {
   });
   let directoryRelay: ReturnType<typeof startBuzzDirectoryRelay> | undefined;
   let stopPresenceHeartbeat = () => {};
+  let profileTask: Promise<void> | undefined;
   const bus: BuzzBus = {
     publicKey,
     directory,
@@ -340,6 +341,8 @@ export async function startBuzzBus(options: {
       directoryRelay?.close();
       replayGuard.clearMemory();
       relay.close();
+      // Relay close rejects pending publishes; join their profile continuation afterward.
+      await profileTask;
     },
   };
 
@@ -455,7 +458,7 @@ export async function startBuzzBus(options: {
       onFatalError: reportFatalError,
     });
     if (options.profileName?.trim()) {
-      void syncBuzzProfile({
+      profileTask = syncBuzzProfile({
         relay,
         secretKey,
         publicKey,
@@ -465,7 +468,7 @@ export async function startBuzzBus(options: {
         signal,
       })
         .then((result) => {
-          if (result.status === "published") {
+          if (!signal.aborted && result.status === "published") {
             options.onProfilePublished?.(result.eventId);
           }
         })

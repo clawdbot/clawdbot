@@ -259,7 +259,7 @@ Plugins register a compaction provider via `registerCompactionProvider()` on the
 - Providers receive the same compaction instructions and identifier-preservation policy as the built-in path, and the safeguard still preserves recent-turn and split-turn suffix context after provider output.
 - Built-in safeguard summarization re-distills prior summaries with new messages instead of preserving the full previous summary verbatim.
 - Safeguard mode enables built-in summary quality audits by default. After final budgeting, the retained generated body must contain the required headings, and the exact artifact to be persisted must retain pending asks and exact identifiers. Corrective attempts stay within `qualityGuard.maxRetries`; exhaustion or a corrective generation failure cancels before append and leaves the original transcript authoritative. Set `qualityGuard.enabled: false` to skip this behavior. Configured compaction-provider output remains outside the built-in audit loop.
-- If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically. Abort/timeout signals the caller explicitly triggered are re-thrown, not swallowed, so cancellation is always respected.
+- If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically. Provider-local failures, including timeouts, stay in that guarded fallback and use the built-in quality audit when enabled. Abort/timeout signals the caller explicitly triggered are re-thrown, not swallowed, so cancellation is always respected.
 
 Source: `src/plugins/compaction-provider.ts`, `src/agents/agent-hooks/compaction-safeguard.ts`.
 

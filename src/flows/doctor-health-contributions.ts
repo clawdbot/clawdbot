@@ -250,7 +250,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
 
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
-    await import("../commands/doctor-state-migrations.js");
+    await import("../infra/state-migrations.doctor.js");
   const { note } = await loadNoteModule();
   // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
   // legacy-state detect/migrate pair reads the config.

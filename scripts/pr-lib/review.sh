@@ -17,7 +17,6 @@ review_artifacts_helper_path() {
 
 review_claim() {
   local pr="$1"
-  mark_pr_operation_side_effects_started
   # Claim logs are per-PR review state: keeping them in the PR worktree leaves the
   # shared canonical checkout with no scripts/pr-owned .local, so a stray artifact
   # there can never be mistaken for this flow's output. Claiming still works on a
@@ -315,7 +314,6 @@ review_init() {
   # caller - enter_worktree still reports the real invocation cwd.
   json=$(cd "$root" && pr_meta_json "$pr") || return 1
 
-  mark_pr_operation_side_effects_started
   enter_worktree "$pr" true || return 1
   write_pr_meta_files "$json"
   pr_url=$(printf '%s\n' "$json" | jq -r .url)

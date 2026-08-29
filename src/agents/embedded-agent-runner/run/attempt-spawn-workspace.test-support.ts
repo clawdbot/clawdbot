@@ -30,6 +30,7 @@ import type {
 } from "../../embedded-agent-messaging.types.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
+import type { CreateAgentSessionOptions } from "../../sessions/index.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -85,7 +86,7 @@ type SessionManagerMocks = {
 };
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
-  createAgentSessionMock: UnknownMock;
+  createAgentSessionMock: Mock<(options: CreateAgentSessionOptions) => unknown>;
   applyExtraParamsToAgentMock: UnknownMock;
   sessionManagerOpenMock: UnknownMock;
   defaultResourceLoaderInitMock: UnknownMock;
@@ -173,7 +174,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   // Hoisted mocks must exist before the runner module graph is imported, because
   // runEmbeddedAttempt captures these dependencies at module load.
   const spawnSubagentDirectMock = vi.fn();
-  const createAgentSessionMock = vi.fn();
+  const createAgentSessionMock = vi.fn<(options: CreateAgentSessionOptions) => unknown>();
   const applyExtraParamsToAgentMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
   const defaultResourceLoaderInitMock = vi.fn();
@@ -405,7 +406,8 @@ vi.mock("../../sessions/index.js", () => {
 
   return {
     AuthStorage,
-    createAgentSession: (...args: unknown[]) => hoisted.createAgentSessionMock(...args),
+    createAgentSession: (options: CreateAgentSessionOptions = {}) =>
+      hoisted.createAgentSessionMock(options),
     estimateTokens,
     generateSummary: async () => "",
     ModelRegistry,
@@ -417,8 +419,8 @@ vi.mock("../../sessions/index.js", () => {
 });
 
 vi.mock("../../sessions/sdk.js", () => ({
-  createAgentSessionForEmbeddedRunner: (...args: unknown[]) =>
-    hoisted.createAgentSessionMock(...args),
+  createAgentSessionForEmbeddedRunner: (options: CreateAgentSessionOptions) =>
+    hoisted.createAgentSessionMock(options),
 }));
 
 vi.mock("../../subagents/spawn/subagent-spawn.js", () => ({
@@ -590,13 +592,6 @@ vi.mock("../tool-result-context-guard.js", async () => {
 vi.mock("../wait-for-idle-before-flush.js", () => ({
   flushPendingToolResultsAfterIdle: (...args: unknown[]) =>
     (hoisted.flushPendingToolResultsAfterIdleMock as (...args: unknown[]) => unknown)(...args),
-}));
-
-vi.mock("../runs.js", () => ({
-  setActiveEmbeddedRun: () => {},
-  clearActiveEmbeddedRun: () => {},
-  markActiveEmbeddedRunAbandoned: () => {},
-  updateActiveEmbeddedRunSnapshot: () => {},
 }));
 
 vi.mock("./images.js", () => ({
@@ -942,6 +937,7 @@ vi.mock("./history-image-prune.js", () => ({
 
 type MutableSession = {
   sessionId: string;
+  sessionManager?: CreateAgentSessionOptions["sessionManager"];
   messages: unknown[];
   isCompacting: boolean;
   isStreaming: boolean;
@@ -1354,13 +1350,15 @@ export async function createContextEngineAttemptRunner(params: {
   const modelRegistry = {};
   initializeModelRegistryRuntime(modelRegistry);
   const modelRuntime = getModelRegistryRuntime(modelRegistry).llmRuntime;
-  hoisted.createAgentSessionMock.mockImplementation(async () => {
+  hoisted.createAgentSessionMock.mockImplementation(async (options) => {
     const session =
       params.createSession?.() ??
       createDefaultEmbeddedSession({
         initialMessages: seedMessages,
         prompt: params.sessionPrompt,
       });
+    // Nested tool observations append through the same manager the runner prepared.
+    session.sessionManager = options.sessionManager;
     if (session.agent.streamFn) {
       bindStreamLlmRuntime(session.agent.streamFn, modelRuntime);
     }

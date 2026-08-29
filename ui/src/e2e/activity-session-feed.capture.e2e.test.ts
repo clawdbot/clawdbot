@@ -2,11 +2,13 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
+  controlUiBundledGatewayUrl,
   controlUiSessionUrl,
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { readThemedPopupPaint } from "./popup-theme.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session activity feed capture",
@@ -14,6 +16,7 @@ const suite = createControlUiE2eSuite({
 });
 
 const outputDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/session-activity-feed");
+const proofPhase = process.env.OPENCLAW_MENU_THEME_PROOF_PHASE;
 
 suite.define(() => {
   it("captures online, global activity, and person-filtered activity surfaces", async () => {
@@ -342,6 +345,18 @@ suite.define(() => {
           path: path.join(outputDir, "04-sidebar-online-user-expanded-dark.png"),
         });
 
+        await page.evaluate(
+          ({ gatewayUrl }) => {
+            localStorage.setItem(
+              `openclaw.control.settings.v1:${gatewayUrl}`,
+              JSON.stringify({ gatewayUrl, theme: "dash", themeMode: "dark" }),
+            );
+          },
+          { gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl) },
+        );
+        await page.reload();
+        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("dash");
+
         await page.evaluate(() => {
           const app = document.querySelector("openclaw-app") as HTMLElement & {
             runtime?: { context: { navigate: (routeId: string) => void } };
@@ -368,6 +383,15 @@ suite.define(() => {
               .count(),
           )
           .toBe(3);
+        const peoplePopover = activityPage.locator("wa-popover.activity-feed__people-popover");
+        const peoplePaint = await readThemedPopupPaint(peoplePopover, "body");
+        if (proofPhase) {
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(outputDir, `05-people-menu-${proofPhase}.png`),
+          });
+        }
+        expect(peoplePaint.actual).toEqual(peoplePaint.expected);
         await page.keyboard.press("Escape");
         const activityFeed = activityPage.locator(".activity-feed");
         const activitySession = (key: string) =>

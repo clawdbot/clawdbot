@@ -1,8 +1,6 @@
 /**
  * Browser-local SDK config bridge.
  */
-import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-
 export {
   getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
@@ -17,7 +15,4 @@ export {
   CONFIG_DIR,
   escapeRegExp,
   resolveUserPath,
-  shortenHomePath,
 } from "openclaw/plugin-sdk/text-utility-runtime";
-/** Parses common string booleans with optional custom truthy/falsy tokens. */
-export { parseBooleanValue };

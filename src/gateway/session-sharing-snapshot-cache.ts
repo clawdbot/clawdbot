@@ -1,9 +1,10 @@
 import type { SessionVisibility } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 
 const SNAPSHOT_CACHE_LIMIT = 2_048;
 
 export type SessionSharingSnapshot = {
-  creatorId?: string;
+  createdActor?: SessionCreatedActor;
   incognito: boolean;
   visibility: SessionVisibility;
 };

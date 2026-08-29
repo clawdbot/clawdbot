@@ -729,7 +729,12 @@ describe("session history HTTP endpoints", () => {
         storePath,
         input: {
           idempotencyKey: `session-history-profile:${id}`,
-          sender: { id: profile.id, name: senderName, username: "ada" },
+          sender: {
+            id: profile.id,
+            identity: { type: "profile", id: profile.id },
+            name: senderName,
+            username: "ada",
+          },
           text,
         },
       });

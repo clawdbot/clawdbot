@@ -107,6 +107,7 @@
   "secret-ref-runtime",
   "secret-file-runtime",
   "security-runtime",
+  "gateway-config-runtime",
   "gateway-method-runtime",
   "gateway-runtime",
   "cli-argv",

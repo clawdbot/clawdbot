@@ -240,13 +240,13 @@ describe("sessions.usage result cache", () => {
           "agent:main:first": {
             sessionId: "session-first",
             updatedAt: 200,
-            createdActor: { type: "human", id: firstProfile.id },
+            createdActor: { type: "human", source: "profile", id: firstProfile.id },
             visibility: "shared",
           },
           "agent:main:second": {
             sessionId: "session-second",
             updatedAt: 100,
-            createdActor: { type: "human", id: secondProfile.id },
+            createdActor: { type: "human", source: "profile", id: secondProfile.id },
             visibility: "shared",
           },
         },

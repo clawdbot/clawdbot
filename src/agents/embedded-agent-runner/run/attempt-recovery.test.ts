@@ -73,6 +73,7 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
     attempt,
     assistant: erroredAssistant,
   });
+  const markOwnedTranscriptRetry = vi.fn();
   const continueFromCurrentTranscript = vi.fn();
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   contextRecoveryState.transportDropContinuations = scenario.transportDropContinuations ?? 0;
@@ -121,7 +122,11 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
       canRestartForLiveSwitch: false,
     },
     runtimePlan: { auth: {} },
-    sessionPromptState: { sessionFile: "/tmp/session.jsonl", continueFromCurrentTranscript },
+    sessionPromptState: {
+      sessionFile: "/tmp/session.jsonl",
+      markOwnedTranscriptRetry,
+      continueFromCurrentTranscript,
+    },
     failoverRetryController,
     compactionRuntime: {},
     contextRecoveryState,
@@ -134,13 +139,20 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
     traceAttempts: [],
     sessionAgentId: "main",
   } as never);
-  return { recovery, continueFromCurrentTranscript, contextRecoveryState, failoverRetryController };
+  return {
+    recovery,
+    markOwnedTranscriptRetry,
+    continueFromCurrentTranscript,
+    contextRecoveryState,
+    failoverRetryController,
+  };
 }
 
 describe("recoverEmbeddedRunAttempt", () => {
   it("continues from the transcript after a transient transport drop on a settled exec batch", async () => {
     const {
       recovery,
+      markOwnedTranscriptRetry,
       continueFromCurrentTranscript,
       contextRecoveryState,
       failoverRetryController,
@@ -148,6 +160,7 @@ describe("recoverEmbeddedRunAttempt", () => {
 
     expect(recovery).toMatchObject({ action: "retry" });
     expect(contextRecoveryState.transportDropContinuations).toBe(1);
+    expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(1);
     expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
     expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
     expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
@@ -156,12 +169,14 @@ describe("recoverEmbeddedRunAttempt", () => {
   it.each([0, 1])(
     "continues a parked Code Mode run from its persisted waiting result with activeCount=%i",
     async (activeCount) => {
-      const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
-        codeModeSuspended: true,
-        activeCount,
-      });
+      const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
+        await recoverAfterTransportDrop({
+          codeModeSuspended: true,
+          activeCount,
+        });
 
       expect(recovery).toMatchObject({ action: "retry" });
+      expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(1);
       expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
     },
   );
@@ -182,9 +197,11 @@ describe("recoverEmbeddedRunAttempt", () => {
     ],
     ["the continuation budget is spent", { transportDropContinuations: 2 }],
   ])("keeps the replay gate closed when %s", async (_label, scenario) => {
-    const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop(scenario);
+    const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
+      await recoverAfterTransportDrop(scenario);
 
     expect(recovery).toEqual({ action: "proceed", shouldSurfaceCodexCompletionTimeout: false });
+    expect(markOwnedTranscriptRetry).not.toHaveBeenCalled();
     expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
   });
 

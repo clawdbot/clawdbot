@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   listAgentIds,
   resolveAgentDir,
-  resolveSessionAgentIds,
+  resolveSessionAgentIdsStrict,
 } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   canonicalPathFromExistingAncestor,
@@ -131,7 +131,7 @@ async function collectSessionSurfaces(params: MigrationEnvironment): Promise<Ses
     if (!entry.isDirectory() || entry.isSymbolicLink()) {
       continue;
     }
-    const agentId = resolveSessionAgentIds({
+    const agentId = resolveSessionAgentIdsStrict({
       agentId: entry.name,
       config: params.config,
     }).sessionAgentId;
@@ -430,7 +430,7 @@ function tryResolveLegacyBindingOwnerAgentId(params: {
   storeAgentIds?: Set<string>;
 }): string | undefined {
   if (params.sessionKey.trim().toLowerCase().startsWith("agent:")) {
-    return resolveSessionAgentIds({
+    return resolveSessionAgentIdsStrict({
       sessionKey: params.sessionKey,
       config: params.config,
     }).sessionAgentId;
@@ -445,7 +445,7 @@ function tryResolveLegacyBindingOwnerAgentId(params: {
       : [undefined];
   for (const fallbackAgentId of fallbackAgentIds) {
     try {
-      return resolveSessionAgentIds({
+      return resolveSessionAgentIdsStrict({
         sessionKey: params.sessionKey,
         config: params.config,
         ...(storeAgentId ? { agentId: storeAgentId } : fallbackAgentId ? { fallbackAgentId } : {}),
