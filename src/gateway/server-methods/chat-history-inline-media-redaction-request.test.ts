@@ -39,23 +39,25 @@ describe("chat history inline media redaction (real WS gateway)", () => {
           [SESSION_KEY]: { sessionId: SESSION_ID, updatedAt: Date.now() },
         },
       });
+      const appendResult = appendTranscriptMessageSync(
+        {
+          agentId: "main",
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          storePath: testState.sessionStorePath,
+        },
+        {
+          message: {
+            role: "assistant",
+            content: [{ type: "input_image", image_url: DATA_URL }],
+            timestamp: Date.now(),
+          },
+          now: Date.now(),
+        },
+      );
+      expect(appendResult.ok).toBe(true);
       const appended = expectDefined(
-        appendTranscriptMessageSync(
-          {
-            agentId: "main",
-            sessionId: SESSION_ID,
-            sessionKey: SESSION_KEY,
-            storePath: testState.sessionStorePath,
-          },
-          {
-            message: {
-              role: "assistant",
-              content: [{ type: "input_image", image_url: DATA_URL }],
-              timestamp: Date.now(),
-            },
-            now: Date.now(),
-          },
-        ),
+        appendResult.ok ? appendResult.value : undefined,
         "inline-media transcript append",
       );
 
