@@ -515,6 +515,11 @@ to a binding's `match` object when routing that bot to an agent. Set
 `channels.buzz.enabled: false` disables all Buzz accounts. Buzz does not yet
 support account disabling or deletion through `channels remove`.
 
+Editing an existing named account reloads only that account, leaving healthy
+sibling accounts connected. Changes to shared Buzz settings, `accounts.default`,
+or removed accounts reload the whole channel. Account shutdown waits for admitted
+message work and pending profile synchronization before starting a replacement.
+
 ### Bot key storage
 
 The default guided path reuses the current bot identity or generates a private

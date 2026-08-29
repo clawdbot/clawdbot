@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { buzzPlugin } from "./channel.js";
 
 describe("Buzz channel guidance", () => {
+  it("opts into isolated named-account reloads through the public plugin contract", () => {
+    expect(buzzPlugin.reload).toEqual({
+      configPrefixes: ["channels.buzz"],
+      accountScopedRestart: true,
+    });
+  });
+
   it.each([
     { mode: "off", automatic: true, flat: true },
     { mode: "all", automatic: true, flat: false },
