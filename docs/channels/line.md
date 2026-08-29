@@ -370,9 +370,9 @@ Generic media sends without LINE-specific options use the image route.
   re-enqueuing repeats the committed work — for example a second visible reply.
   `openclaw health` reports dead-letter counts and `openclaw doctor` names
   affected accounts.
-- **`handler-timeout` retries:** the delivery was claimed but never reached
-  agent-turn adoption or report deferred progress for 5 minutes. This is a stall
-  _before_ the turn starts —
+- **`handler-timeout` retries:** the delivery was claimed but neither reached
+  agent-turn adoption nor reported deferred progress for 5 minutes. This is a
+  stall _before_ the turn starts —
   adoption clears the watchdog, so a turn that is already running is never the
   cause and is never cut off by it. Look at the dispatch path instead: the
   delivery preparation that runs between claim and adoption, such as inbound
