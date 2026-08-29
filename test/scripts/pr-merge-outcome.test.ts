@@ -68,11 +68,14 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
     writeFileSync(join(worktree, ".local", name), "fixture\n");
   }
   const initial = {
+    // gh reports the REST database id (a number) while GraphQL reports the node id.
+    // The fixture models both so the merge path is exercised against real gh shapes.
     repo: {
-      id: "fixture-repo",
+      id: 1103012935 as string | number,
       url: "https://github.com/fixture/repo",
       nameWithOwner: "fixture/repo",
     },
+    repoNodeId: "R_kgDOQb6kRw" as string | null,
     pr: {
       id: "fixture-pr",
       number: 123,
@@ -196,7 +199,9 @@ else if(args[0]==="pr"&&args[1]==="view") {
     if(step?.unavailable) fail("metadata unavailable");
     if(step?.invalid) {save();out({data:{repository:{}}});process.exit(0);}
     const pr={...s.pr};if(s.drift&&s.reads%2===0) pr.baseRefName="changed";
-    out({data:{repository:{...s.repo,ref:{target:{oid:main()}},pullRequest:pr}}});
+    const repository={...s.repo,ref:{target:{oid:main()}},pullRequest:pr};
+    if(s.repoNodeId!==null) {repository.id=s.repoNodeId;repository.databaseId=s.repo.id;}
+    out({data:{repository}});
   }
 } else if(args.some(x=>x.includes("/comments"))) {
   if(args.includes("POST")) {
@@ -1243,5 +1248,23 @@ describePosix("merge_outcome_repo_identity", () => {
     });
     expect(run.status).not.toBe(0);
     expect(run.stdout).toBe("");
+  });
+});
+
+describePosix("repository identity across gh id representations", () => {
+  // The fixture's default state models current gh: a numeric CLI id and a GraphQL node
+  // id. This covers the other host shape, where gh reports the node id from both
+  // sources, so neither representation regresses.
+  it("merges when gh reports the node id from both sources", () => {
+    const f = fixture();
+    f.save({
+      ...f.state(),
+      repo: { ...f.state().repo, id: "R_kgDOQb6kRw" },
+      repoNodeId: null,
+    });
+    const run = f.run();
+    expect(run.status, run.output).toBe(0);
+    expect(f.record().phase).toBe("complete");
+    expect(f.state().mutations).toBe(1);
   });
 });
