@@ -44,7 +44,6 @@ describe("session row placement badges", () => {
   it("names the service and profile without losing conflict or disk attention", () => {
     render(
       renderSessionRowBadges({
-        hasAutomation: false,
         placementState: "active",
         placementProviderId: "machine0",
         placementProfileId: "team",
