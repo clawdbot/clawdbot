@@ -23,12 +23,9 @@ vi.mock("node:crypto", async () => {
   };
 });
 
-vi.mock("@mistralai/mistralai", async () => {
-  const actual =
-    await vi.importActual<typeof import("@mistralai/mistralai")>("@mistralai/mistralai");
+vi.mock("@mistralai/mistralai/sdk/chat", () => {
   return {
-    ...actual,
-    Mistral: class MockMistral {
+    Chat: class MockMistralChat {
       private readonly config: unknown;
 
       constructor(config: unknown) {
@@ -36,29 +33,27 @@ vi.mock("@mistralai/mistralai", async () => {
         mistralMockState.configs.push(config);
       }
 
-      chat = {
-        stream: vi.fn(async (payload: unknown, requestOptions: unknown) => {
-          mistralMockState.payloads.push(payload);
-          mistralMockState.requestOptions.push(requestOptions);
-          if (mistralMockState.requestThroughHttpClient) {
-            const httpClient = (
-              this.config as {
-                httpClient?: { request(request: Request): Promise<Response> };
-              }
-            ).httpClient;
-            const response = await httpClient?.request(new Request("https://api.mistral.ai/chat"));
-            if (response && !response.ok) {
-              throw Object.assign(new Error(`Mistral HTTP ${response.status}`), {
-                statusCode: response.status,
-              });
+      stream = vi.fn(async (payload: unknown, requestOptions: unknown) => {
+        mistralMockState.payloads.push(payload);
+        mistralMockState.requestOptions.push(requestOptions);
+        if (mistralMockState.requestThroughHttpClient) {
+          const httpClient = (
+            this.config as {
+              httpClient?: { request(request: Request): Promise<Response> };
             }
+          ).httpClient;
+          const response = await httpClient?.request(new Request("https://api.mistral.ai/chat"));
+          if (response && !response.ok) {
+            throw Object.assign(new Error(`Mistral HTTP ${response.status}`), {
+              statusCode: response.status,
+            });
           }
-          if (mistralMockState.streamResult !== undefined) {
-            return mistralMockState.streamResult;
-          }
-          throw mistralMockState.streamError;
-        }),
-      };
+        }
+        if (mistralMockState.streamResult !== undefined) {
+          return mistralMockState.streamResult;
+        }
+        throw mistralMockState.streamError;
+      });
     },
   };
 });
