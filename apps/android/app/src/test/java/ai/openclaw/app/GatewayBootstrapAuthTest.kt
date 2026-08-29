@@ -902,7 +902,14 @@ class GatewayBootstrapAuthTest {
         assertEquals("connect", frame["method"]?.jsonPrimitive?.content)
         val params = frame.getValue("params").jsonObject
         assertEquals("node", params["role"]?.jsonPrimitive?.content)
-        assertEquals("bootstrap", params.getValue("auth").jsonObject["bootstrapToken"]?.jsonPrimitive?.content)
+        assertEquals(
+          "bootstrap",
+          params
+            .getValue("auth")
+            .jsonObject["bootstrapToken"]
+            ?.jsonPrimitive
+            ?.content,
+        )
       } finally {
         releaseLock.complete(Unit)
         try {
