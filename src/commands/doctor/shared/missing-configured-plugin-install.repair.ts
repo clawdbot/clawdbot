@@ -190,28 +190,28 @@ async function repairMissingPluginInstallsWithLease(
     `Failed to converge version-bound configured plugin "${pluginId}" to the ${cohortDescription} release cohort. Existing install records were retained.`;
   const pinFailure = (pluginId: string) =>
     `Failed to preserve the exact npm selector for version-bound configured plugin "${pluginId}". Existing install records were retained.`;
-  const acceptVersionBoundRuntimeRecord = async (params: {
+  const acceptVersionBoundRuntimeRecord = async (input: {
     pluginId: string;
     previousRecord: PluginInstallRecord | undefined;
     repairedRecord: PluginInstallRecord | undefined;
   }): Promise<{ record: PluginInstallRecord } | { error: string }> => {
     if (
       !(await versionBoundRuntimeInstallRecordMatchesReleaseCohort({
-        record: params.repairedRecord,
+        record: input.repairedRecord,
         env,
         currentVersion: compatibilityHostVersion,
         updateChannel,
       }))
     ) {
-      return { error: cohortFailure(params.pluginId) };
+      return { error: cohortFailure(input.pluginId) };
     }
-    const record = params.repairedRecord
+    const record = input.repairedRecord
       ? preserveExactVersionBoundRuntimeSelector({
-          previousRecord: params.previousRecord,
-          repairedRecord: params.repairedRecord,
+          previousRecord: input.previousRecord,
+          repairedRecord: input.repairedRecord,
         })
       : undefined;
-    return record ? { record } : { error: pinFailure(params.pluginId) };
+    return record ? { record } : { error: pinFailure(input.pluginId) };
   };
   let nextRecords = records;
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
