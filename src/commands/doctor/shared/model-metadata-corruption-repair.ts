@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { ConfigAuditRecord } from "../../../config/io.audit.js";
 import { getRecord } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolveConfiguredModelCatalogIdentity } from "./legacy-config-migrations.runtime.models.catalog.js";
+import { resolveConfiguredModelCatalogOwnership } from "./legacy-config-migrations.runtime.models.catalog.js";
 
 export type ModelMetadataCorruptionRepair = {
   config: OpenClawConfig;
@@ -156,11 +156,17 @@ export function repairGeneratedModelMetadataCorruption(params: {
         modelIndex,
         modelId,
       });
-      const catalogRow = resolveConfiguredModelCatalogIdentity({ providerId, provider, model });
-      if (!catalogRow || !catalogDisagreesWithFallback(catalogRow)) {
+      const catalog = resolveConfiguredModelCatalogOwnership({ providerId, provider, model });
+      if (!catalog || !catalogDisagreesWithFallback(catalog.catalogRow)) {
         continue;
       }
       const modelPath = `models.providers.${providerId}.models[${modelIndex}]`;
+      if (!catalog.ownsRoute) {
+        warnings.push(
+          `${modelPath} matches the historical generated model-metadata fingerprint, but its configured API route is not owned by the shipped provider catalog. It was left unchanged.`,
+        );
+        continue;
+      }
       const auditProven = hasAuditProvenance({
         auditRecords: params.auditRecords,
         configPath: params.configPath,

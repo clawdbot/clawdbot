@@ -13,6 +13,7 @@ import { isModelThinkingFormat } from "../../../config/types.models.js";
 // Doctor intentionally reads shipped catalogs only; remote rows must not influence migrations.
 import { planManifestModelCatalogRows } from "../../../model-catalog/manifest-planner.js";
 import { listOpenClawPluginManifestMetadata } from "../../../plugins/manifest-metadata-scan.js";
+import { resolveProviderModelRoutes } from "../../../plugins/provider-model-routes.js";
 
 const STALE_CONTEXT_WINDOW_FIXES: Record<string, { stale: number; correct: number }> = {
   "deepseek/deepseek-v4-flash": { stale: 200_000, correct: 1_000_000 },
@@ -94,12 +95,12 @@ function buildConfiguredProviderCatalogRows(
   return rows;
 }
 
-/** Resolves an unambiguous shipped catalog identity without treating a configured route as proof. */
-export function resolveConfiguredModelCatalogIdentity(params: {
+/** Resolves one catalog identity and whether its configured route remains provider-owned. */
+export function resolveConfiguredModelCatalogOwnership(params: {
   providerId: string;
   provider: Record<string, unknown>;
   model: Record<string, unknown>;
-}): NormalizedModelCatalogRow | undefined {
+}): { catalogRow: NormalizedModelCatalogRow; ownsRoute: boolean } | undefined {
   const modelId = typeof params.model.id === "string" ? params.model.id : "";
   if (!modelId) {
     return undefined;
@@ -107,7 +108,24 @@ export function resolveConfiguredModelCatalogIdentity(params: {
   const rows = buildConfiguredProviderCatalogRows({ [params.providerId]: params.provider }).get(
     normalizedCatalogModelKey(params.providerId, modelId),
   );
-  return rows?.length === 1 ? rows[0] : undefined;
+  const catalogRow = rows?.length === 1 ? rows[0] : undefined;
+  if (!catalogRow) {
+    return undefined;
+  }
+  const configuredRoute = {
+    api: params.model.api ?? params.provider.api,
+    baseUrl: params.model.baseUrl ?? params.provider.baseUrl,
+  };
+  const exactCatalogRoute = modelTransportRoutesMatch(catalogRow, configuredRoute);
+  const providerRoutes = resolveProviderModelRoutes({
+    provider: params.providerId,
+    modelId,
+    env: {},
+  });
+  const providerOwnedRoute =
+    providerRoutes?.kind === "routes" &&
+    providerRoutes.routes.some((route) => modelTransportRoutesMatch(route, configuredRoute));
+  return { catalogRow, ownsRoute: exactCatalogRoute || providerOwnedRoute };
 }
 
 function inspectModelCompatOverrides(

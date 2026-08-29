@@ -186,6 +186,27 @@ describe("repairGeneratedModelMetadataCorruption", () => {
     expect(result).toEqual({ config, changes: [], warnings: [] });
   });
 
+  it("preserves an audit-matched override on a custom route", () => {
+    const config = corruptedConfig();
+    const provider = config.models?.providers?.openai;
+    if (!provider) {
+      throw new Error("missing provider fixture");
+    }
+    provider.api = "openai-responses";
+    provider.baseUrl = "https://proxy.example.test/v1";
+    const result = repairGeneratedModelMetadataCorruption({
+      config,
+      authoredRoot: structuredClone(config),
+      configPath,
+      currentHash: "current",
+      auditRecords: [writeRecord()],
+    });
+
+    expect(result.config).toEqual(config);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("configured API route is not owned");
+  });
+
   it("does not rewrite metadata that is not directly authored in the root config", () => {
     const config = corruptedConfig();
     const result = repairGeneratedModelMetadataCorruption({
