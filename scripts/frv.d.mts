@@ -28,10 +28,16 @@ export interface FrvClient {
     operationDeadline?: number,
     expectedRunAttempts?: Record<string, number>,
   ) => Promise<unknown>;
+  verifySeal?: (
+    runId: string,
+    plan: Record<string, unknown>,
+    operationDeadline: number,
+    expectedRunAttempts: Record<string, number>,
+  ) => Promise<boolean>;
 }
 
 export type FrvConcreteClient = FrvClient &
-  Required<Pick<FrvClient, "rerunFailed" | "rerunParent" | "verify">>;
+  Required<Pick<FrvClient, "rerunFailed" | "rerunParent" | "verify" | "verifySeal">>;
 
 export function inspectContinuation(
   plan: Record<string, unknown>,

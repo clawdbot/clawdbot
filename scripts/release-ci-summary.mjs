@@ -133,6 +133,14 @@ const PHASED_CHILD_DISPATCHES = [
 const MAX_EXPECTED_RUN_ATTEMPTS = PHASED_CHILD_DISPATCHES.length + 2;
 const MAX_EXPECTED_RUN_ATTEMPTS_JSON_BYTES = 4 * 1024;
 
+class ReleaseEvidenceRefreshRequiredError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ReleaseEvidenceRefreshRequiredError";
+    this.refreshable = true;
+  }
+}
+
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 const EVIDENCE_REUSE_POLICIES = new Set([
@@ -1660,7 +1668,9 @@ function loadValidatedParentEvidence({
 
   const manifestEvidence = client.loadManifest(runId, parentRunAttempt, manifestPath);
   if (!manifestEvidence) {
-    throw new Error(`successful parent run is missing its release validation manifest: ${runId}`);
+    throw new ReleaseEvidenceRefreshRequiredError(
+      `successful parent run is missing its release validation manifest: ${runId}`,
+    );
   }
   const manifest = validateParentManifest(manifestEvidence.manifest, {
     runAttempt: parentRun.run_attempt,
@@ -1945,8 +1955,11 @@ function validateStrictChildRun({
   let jobs;
   let composite;
   if (plannedChild && childEvidence) {
+    if (childEvidence.effectiveRunAttempt > effectiveRunAttempt) {
+      throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
+    }
     const attempts = Array.from(
-      { length: effectiveRunAttempt - plannedChild.runAttempt + 1 },
+      { length: childEvidence.effectiveRunAttempt - plannedChild.runAttempt + 1 },
       (_, index) => {
         const runAttempt = plannedChild.runAttempt + index;
         return {
@@ -1962,7 +1975,14 @@ function validateStrictChildRun({
         plannedRunAttempt: plannedChild.runAttempt,
         repository,
       },
-      run,
+      run:
+        childEvidence.effectiveRunAttempt === effectiveRunAttempt
+          ? run
+          : {
+              ...run,
+              run_attempt: childEvidence.effectiveRunAttempt,
+              triggering_actor: { login: childEvidence.triggeringActor },
+            },
     });
     const expectedEvidence = {
       ...evidence,
@@ -1972,6 +1992,11 @@ function validateStrictChildRun({
       JSON.stringify(canonicalJson(expectedEvidence))
     ) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
+    }
+    if (childEvidence.effectiveRunAttempt < effectiveRunAttempt) {
+      throw new ReleaseEvidenceRefreshRequiredError(
+        `successful parent manifest predates ${child.name} attempt ${effectiveRunAttempt}`,
+      );
     }
     composite = {
       effectiveRunAttempt: evidence.effectiveRunAttempt,
@@ -2638,6 +2663,7 @@ async function main() {
     } catch (error) {
       const failure = {
         error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof ReleaseEvidenceRefreshRequiredError ? { refreshable: true } : {}),
         schema: RELEASE_EVIDENCE_SCHEMA,
         valid: false,
       };

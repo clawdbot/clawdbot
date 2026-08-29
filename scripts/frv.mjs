@@ -128,6 +128,18 @@ function execGh(args, options = {}) {
   });
 }
 
+function verifierEvidenceNeedsRefresh(error) {
+  if (!error || typeof error !== "object" || typeof error.stdout !== "string") {
+    return false;
+  }
+  try {
+    const failure = JSON.parse(error.stdout);
+    return failure?.valid === false && failure.refreshable === true;
+  } catch {
+    return false;
+  }
+}
+
 async function sleep(milliseconds) {
   await new Promise((resolvePromise) => {
     setTimeout(resolvePromise, milliseconds);
@@ -400,6 +412,39 @@ export function createClient(repository, dependencies = {}) {
   const attemptJobs =
     dependencies.getAttemptJobs ??
     ((runId, runAttempt) => ghAttemptJobs(repository, runId, runAttempt));
+  const verify = async (runId, plan, operationDeadline, expectedRunAttempts) => {
+    const sourceSha = plan.trustedWorkflow?.sha;
+    return execute(
+      process.execPath,
+      [
+        "scripts/release-ci-summary.mjs",
+        "--validate-run",
+        runId,
+        "--repo",
+        repository,
+        "--trusted-workflow-ref",
+        plan.trustedWorkflow?.ref ?? "main",
+        "--trusted-workflow-full-ref",
+        plan.trustedWorkflow?.fullRef ?? "refs/heads/main",
+        "--trusted-workflow-sha",
+        sourceSha,
+        "--verifier-source-sha",
+        sourceSha,
+        "--verifier-source-file",
+        "scripts/release-ci-summary.mjs",
+        ...(expectedRunAttempts === undefined
+          ? []
+          : ["--expected-run-attempts-json", JSON.stringify(expectedRunAttempts)]),
+        "--json",
+      ],
+      {
+        timeoutMs: remainingOperationTime(
+          operationDeadline ?? createOperationDeadline(),
+          "FRV verification",
+        ),
+      },
+    );
+  };
   return {
     repository,
     getAttemptJobs(runId, runAttempt) {
@@ -428,38 +473,17 @@ export function createClient(repository, dependencies = {}) {
     },
     rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
     rerunParent: (runId) => rerun(runId, "rerun"),
-    async verify(runId, plan, operationDeadline, expectedRunAttempts) {
-      const sourceSha = plan.trustedWorkflow?.sha;
-      return execute(
-        process.execPath,
-        [
-          "scripts/release-ci-summary.mjs",
-          "--validate-run",
-          runId,
-          "--repo",
-          repository,
-          "--trusted-workflow-ref",
-          plan.trustedWorkflow?.ref ?? "main",
-          "--trusted-workflow-full-ref",
-          plan.trustedWorkflow?.fullRef ?? "refs/heads/main",
-          "--trusted-workflow-sha",
-          sourceSha,
-          "--verifier-source-sha",
-          sourceSha,
-          "--verifier-source-file",
-          "scripts/release-ci-summary.mjs",
-          ...(expectedRunAttempts === undefined
-            ? []
-            : ["--expected-run-attempts-json", JSON.stringify(expectedRunAttempts)]),
-          "--json",
-        ],
-        {
-          timeoutMs: remainingOperationTime(
-            operationDeadline ?? createOperationDeadline(),
-            "FRV verification",
-          ),
-        },
-      );
+    verify,
+    async verifySeal(runId, plan, operationDeadline, expectedRunAttempts) {
+      try {
+        await verify(runId, plan, operationDeadline, expectedRunAttempts);
+        return true;
+      } catch (error) {
+        if (verifierEvidenceNeedsRefresh(error)) {
+          return false;
+        }
+        throw error;
+      }
     },
   };
 }
@@ -535,24 +559,38 @@ async function reconcileAttemptStarts(
       }
     }
     if (pending.size > 0) {
+      const remainingReconcileTime = reconcileDeadline - Date.now();
+      if (remainingReconcileTime < 1) {
+        break;
+      }
       await sleep(
         Math.min(
           configuredTimeout("OPENCLAW_FRV_POLL_MS", DEFAULT_POLL_MS),
-          remainingOperationTime(operationDeadline),
-          reconcileDeadline - Date.now(),
+          remainingReconcileTime,
         ),
       );
     }
   }
-  remainingOperationTime(operationDeadline);
   if (pending.size > 0) {
+    const runIds = [...minimumAttempts.keys()];
+    const failures = [...pending].flatMap((runId) => {
+      const result = mutationResults[runIds.indexOf(runId)];
+      if (result?.status !== "rejected") {
+        return [];
+      }
+      const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      return [`${runId}: ${reason}`];
+    });
     throw new Error(
-      `rerun mutation did not produce an observable newer attempt for ${[...pending].join(", ")}`,
+      `rerun mutation did not produce an observable newer attempt for ${[...pending].join(
+        ", ",
+      )}${failures.length > 0 ? ` (${failures.join("; ")})` : ""}`,
     );
   }
   if (hardFailures[0]) {
     throw hardFailures[0].reason;
   }
+  remainingOperationTime(operationDeadline);
 }
 
 function runIdentity(run) {
@@ -578,6 +616,34 @@ function exactTerminalRunState(run, runId) {
     throw new Error(`rerun source ${runId} is no longer the exact terminal run`);
   }
   return state;
+}
+
+async function freezeVerificationAttempts(plan, rootRunId, status, client) {
+  const expectedRunAttempts = new Map(
+    status.children.map((child) => [child.runId, child.effectiveRunAttempt]),
+  );
+  // Reuse verification rereads its root and selected parent manifests too.
+  const parentRunIds = new Set([
+    rootRunId,
+    ...(plan.evidenceReuse?.requested
+      ? [plan.evidenceReuse.rootRunId, plan.evidenceReuse.selectedRunId]
+      : []),
+  ]);
+  for (const parentRunId of parentRunIds) {
+    const run = await client.getRun(parentRunId);
+    if (String(run.id) !== parentRunId) {
+      throw new Error(`verification parent run identity changed: ${parentRunId}`);
+    }
+    const terminal = parentRunId === rootRunId ? exactTerminalRunState(run, rootRunId) : undefined;
+    if (terminal && terminal.conclusion !== "success") {
+      throw new Error(`final parent rerun failed: ${rootRunId}`);
+    }
+    expectedRunAttempts.set(
+      parentRunId,
+      terminal?.runAttempt ?? positiveInteger(run.run_attempt, `${parentRunId} run attempt`),
+    );
+  }
+  return Object.fromEntries(expectedRunAttempts.entries());
 }
 
 export async function continueFailed(plan, rootRunId, client, options = {}) {
@@ -661,8 +727,31 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
   if (parent.status !== "completed") {
     await waitForTerminal([rootRunId], client, operationDeadline);
   }
-  const completedParent = await client.getRun(rootRunId);
-  if (completedParent.conclusion !== "success" || childEvidenceAdvanced) {
+  let completedParent = await client.getRun(rootRunId);
+  let verificationAttempts;
+  let parentSealed = false;
+  if (
+    completedParent.conclusion === "success" &&
+    childEvidenceAdvanced &&
+    client.verifySeal !== undefined
+  ) {
+    verificationAttempts = await freezeVerificationAttempts(plan, rootRunId, status, client);
+    parentSealed = await client.verifySeal(
+      rootRunId,
+      plan,
+      operationDeadline,
+      verificationAttempts,
+    );
+    if (!parentSealed) {
+      const verifiedParent = exactTerminalRunState(completedParent, rootRunId);
+      completedParent = await client.getRun(rootRunId);
+      const currentParent = exactTerminalRunState(completedParent, rootRunId);
+      if (JSON.stringify(currentParent) !== JSON.stringify(verifiedParent)) {
+        throw new Error(`verification parent run changed before rerun dispatch: ${rootRunId}`);
+      }
+    }
+  }
+  if (!parentSealed && (completedParent.conclusion !== "success" || childEvidenceAdvanced)) {
     const terminalParent = exactTerminalRunState(completedParent, rootRunId);
     const minimumAttempts = new Map([[rootRunId, terminalParent.runAttempt + 1]]);
     remainingOperationTime(operationDeadline);
@@ -677,32 +766,11 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
     ownedAttempts.set(rootRunId, minimumAttempts.get(rootRunId));
     await waitForTerminal([rootRunId], client, operationDeadline, minimumAttempts);
   }
-  await waitForTerminal([...ownedAttempts.keys()], client, operationDeadline, ownedAttempts);
-  const expectedRunAttempts = new Map(
-    status.children.map((child) => [child.runId, child.effectiveRunAttempt]),
-  );
-  // Reuse verification rereads its root and selected parent manifests too.
-  const parentRunIds = new Set([
-    rootRunId,
-    ...(plan.evidenceReuse?.requested
-      ? [plan.evidenceReuse.rootRunId, plan.evidenceReuse.selectedRunId]
-      : []),
-  ]);
-  for (const parentRunId of parentRunIds) {
-    const run = await client.getRun(parentRunId);
-    if (String(run.id) !== parentRunId) {
-      throw new Error(`verification parent run identity changed: ${parentRunId}`);
-    }
-    const terminal = parentRunId === rootRunId ? exactTerminalRunState(run, rootRunId) : undefined;
-    if (terminal && terminal.conclusion !== "success") {
-      throw new Error(`final parent rerun failed: ${rootRunId}`);
-    }
-    expectedRunAttempts.set(
-      parentRunId,
-      terminal?.runAttempt ?? positiveInteger(run.run_attempt, `${parentRunId} run attempt`),
-    );
+  if (!parentSealed) {
+    await waitForTerminal([...ownedAttempts.keys()], client, operationDeadline, ownedAttempts);
+    verificationAttempts = await freezeVerificationAttempts(plan, rootRunId, status, client);
+    await client.verify(rootRunId, plan, operationDeadline, verificationAttempts);
   }
-  await client.verify(rootRunId, plan, operationDeadline, Object.fromEntries(expectedRunAttempts));
   return {
     action: ownedAttempts.has(rootRunId) ? "reran-parent" : "verified-parent",
     finalRunId: rootRunId,

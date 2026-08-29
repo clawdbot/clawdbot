@@ -561,6 +561,50 @@ describe("FRV same-parent recovery", () => {
     expect(parentReruns).toBe(1);
   });
 
+  it("does not rerun a parent that already seals the recovered child attempt", async () => {
+    const selected = child("normalCi", "101");
+    const childRuns = new Map([["101", { attempt: 1, conclusion: "failure" as string | null }]]);
+    const parent = { attempt: 1, conclusion: "success" as string | null };
+    const posts = { child: 0, parent: 0 };
+    let sealedChildAttempt = 1;
+    const client = {
+      ...controllerClient([selected], childRuns, parent),
+      rerunFailed: async () => {
+        posts.child += 1;
+        childRuns.set("101", { attempt: 2, conclusion: "success" });
+      },
+      rerunParent: async () => {
+        posts.parent += 1;
+        parent.attempt += 1;
+        parent.conclusion = "success";
+        sealedChildAttempt = childRuns.get("101")!.attempt;
+      },
+      verifySeal: async (
+        _runId: string,
+        _plan: Record<string, unknown>,
+        _deadline: number,
+        attempts: Record<string, number>,
+      ) => attempts["101"] === sealedChildAttempt,
+      verify: async (
+        _runId: string,
+        _plan: Record<string, unknown>,
+        _deadline?: number,
+        attempts?: Record<string, number>,
+      ) => {
+        expect(attempts?.["101"]).toBe(sealedChildAttempt);
+        return "{}";
+      },
+    };
+
+    await expect(continueFailed(plan([selected]), "77", client)).resolves.toMatchObject({
+      action: "reran-parent",
+    });
+    await expect(continueFailed(plan([selected]), "77", client)).resolves.toMatchObject({
+      action: "verified-parent",
+    });
+    expect(posts).toEqual({ child: 1, parent: 1 });
+  });
+
   it.each(["child", "parent"])("reconciles a write-once %s rerun", async (target) => {
     const transportError = Object.assign(new Error("read ECONNRESET after dispatch"), {
       code: "ECONNRESET",
@@ -605,7 +649,7 @@ describe("FRV same-parent recovery", () => {
     await withFastPolling(
       () =>
         expect(continueFailed(plan([scenario.selected]), "77", scenario.client)).rejects.toThrow(
-          "rerun mutation did not produce an observable newer attempt for 101",
+          "rerun mutation did not produce an observable newer attempt for 101 (101: HTTP 502 after dispatch)",
         ),
       "5",
     );
@@ -881,5 +925,30 @@ describe("FRV strict verifier", () => {
       "FRV verification timed out",
     );
     expect(spawns).toBe(0);
+  });
+
+  it("treats only typed verifier refresh failures as rerunnable", async () => {
+    let refreshable = true;
+    const client = createClient(REPOSITORY, {
+      execCommand: async () => {
+        throw Object.assign(new Error("verification failed"), {
+          stdout: JSON.stringify({
+            error: refreshable ? "parent evidence is stale" : "producer identity is invalid",
+            ...(refreshable ? { refreshable: true } : {}),
+            valid: false,
+          }),
+        });
+      },
+    });
+    const attempts = { "77": 2, "101": 2 };
+
+    await expect(
+      client.verifySeal("77", executionPlanArtifact(), Date.now() + 30_000, attempts),
+    ).resolves.toBe(false);
+
+    refreshable = false;
+    await expect(
+      client.verifySeal("77", executionPlanArtifact(), Date.now() + 30_000, attempts),
+    ).rejects.toThrow("verification failed");
   });
 });

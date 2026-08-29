@@ -1412,8 +1412,60 @@ describe("release CI summary child correlation", () => {
       expect(() => validate(expectedRunAttempts)).toThrow(message);
     }
 
+    const staleJobs = [
+      {
+        acceptedRunAttempt: 1,
+        completedAt: firstAttemptJob.completed_at,
+        conclusion: firstAttemptJob.conclusion,
+        name: firstAttemptJob.name,
+        startedAt: firstAttemptJob.started_at,
+        status: firstAttemptJob.status,
+        url: firstAttemptJob.html_url,
+      },
+    ];
+    const staleEvidence = {
+      compositeJobsSha256: releaseCompositeJobsSha256({
+        effectiveRunAttempt: 1,
+        jobs: staleJobs,
+        plannedRunAttempt: 1,
+      }),
+      dispatchActor: "github-actions[bot]",
+      effectiveRunAttempt: 1,
+      jobs: staleJobs,
+      observedRunAttempts: [1],
+      plannedRunAttempt: 1,
+      repository: "openclaw/openclaw",
+      runId: String(fixture.childRun.id),
+      triggeringActor: "github-actions[bot]",
+    };
+    manifest.childEvidence.releaseChecks = staleEvidence;
+    expect(() => validate({ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2 })).toThrowError(
+      expect.objectContaining({
+        message: "successful parent manifest predates OpenClaw Release Checks attempt 2",
+        refreshable: true,
+      }),
+    );
+
+    manifest.childEvidence.releaseChecks = releaseChecksEvidence;
+    const loadManifest = client.loadManifest.bind(client);
+    client.loadManifest = () => undefined as never;
+    expect(() => validate({ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2 })).toThrowError(
+      expect.objectContaining({
+        message: `successful parent run is missing its release validation manifest: ${fixture.runId}`,
+        refreshable: true,
+      }),
+    );
+    client.loadManifest = loadManifest;
+
     releaseChecksEvidence.jobs[0]!.conclusion = "failure";
-    expect(() => validate()).toThrow("composite digest is invalid");
+    let malformedError: unknown;
+    try {
+      validate();
+    } catch (error) {
+      malformedError = error;
+    }
+    expect(malformedError).toMatchObject({ message: expect.stringContaining("digest is invalid") });
+    expect(malformedError).not.toHaveProperty("refreshable");
 
     releaseChecksEvidence.jobs[0]!.conclusion = "success";
     fixture.childRun.actor = { login: "release-operator" };
