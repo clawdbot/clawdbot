@@ -490,7 +490,12 @@ function buildParams(
   const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.thinking = reasoningEnabled
+    // Models that cannot disable thinking map "off" to a concrete level
+    // (e.g. GLM-5.x off -> low). Honor that mapping when no explicit effort
+    // was requested instead of emitting a disabled payload the provider
+    // rejects with a 400.
+    const zaiReasoningEnabled = reasoningEnabled || typeof offReasoningEffort === "string";
+    params.thinking = zaiReasoningEnabled
       ? { type: "enabled", clear_thinking: false }
       : { type: "disabled" };
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
