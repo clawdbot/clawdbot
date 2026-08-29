@@ -18,6 +18,7 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
 
 vi.mock("./config.js", () => ({
   DEFAULT_TAVILY_BASE_URL: "https://api.tavily.com",
+  TAVILY_API_KEY_CONFIG_PATH: "plugins.entries.tavily.config.webSearch.apiKey",
   resolveTavilyApiKey: () => "test-key",
   resolveTavilyBaseUrl: () => "https://api.tavily.com",
   resolveTavilySearchTimeoutSeconds: () => 30,

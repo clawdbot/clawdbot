@@ -1,9 +1,12 @@
 /** Tests runtime isolation for manifest-owned plugin secrets. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it } from "vitest";
+import tavilyPlugin from "../../extensions/tavily/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { assertSecretOwnerAvailable } from "./runtime-degraded-state.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   activateSecretsRuntimeSnapshotState,
   clearSecretsRuntimeSnapshotState,
@@ -79,6 +82,46 @@ function expectTavilyCold(
   ]);
 }
 
+function createTavilyTools(config: OpenClawConfig) {
+  const registered = new Map<string, Parameters<OpenClawPluginApi["registerTool"]>[0]>();
+  const api = createTestPluginApi({
+    config,
+    registerTool(tool, options) {
+      if (options?.name) {
+        registered.set(options.name, tool);
+      }
+    },
+  });
+  tavilyPlugin.register(api);
+  const create = (name: "tavily_extract" | "tavily_search") => {
+    const factory = registered.get(name);
+    if (typeof factory !== "function") {
+      throw new Error(`Expected ${name} tool factory`);
+    }
+    const tool = factory({ config, runtimeConfig: config, getRuntimeConfig: () => config });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error(`Expected one ${name} tool`);
+    }
+    return tool;
+  };
+  return { extract: create("tavily_extract"), search: create("tavily_search") };
+}
+
+async function expectTavilyToolsUnavailable(config: OpenClawConfig): Promise<void> {
+  const tools = createTavilyTools(config);
+  const expected = {
+    name: "SecretSurfaceUnavailableError",
+    ownerKind: "capability",
+    ownerId: TAVILY_TOOL_KEY_PATH,
+  };
+  await expect(tools.search.execute("search", { query: "openclaw" })).rejects.toMatchObject(
+    expected,
+  );
+  await expect(
+    tools.extract.execute("extract", { urls: ["https://example.com"] }),
+  ).rejects.toMatchObject(expected);
+}
+
 describe("plugin secret owners", () => {
   it("isolates Tavily tools when their exec provider fails at cold start", async () => {
     if (process.platform === "win32") {
@@ -97,6 +140,12 @@ describe("plugin secret owners", () => {
     });
 
     expectTavilyCold(snapshot);
+    activateSecretsRuntimeSnapshotState({
+      snapshot,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+    await expectTavilyToolsUnavailable(snapshot.config);
   });
 
   it("does not retain a stale Tavily key when its exec provider fails on reload", async () => {
@@ -138,8 +187,6 @@ describe("plugin secret owners", () => {
       refreshContext: null,
       refreshHandler: null,
     });
-    expect(() => assertSecretOwnerAvailable("capability", TAVILY_TOOL_KEY_PATH)).toThrow(
-      "configured but unavailable",
-    );
+    await expectTavilyToolsUnavailable(candidate.config);
   });
 });

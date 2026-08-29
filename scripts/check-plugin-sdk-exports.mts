@@ -49,6 +49,7 @@ const FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE = /\bdeclare\s+const\s+ProtocolSchem
 const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
 const requiredSubpathExports: Record<string, string[]> = {
   "secret-input-runtime": [
+    "assertPluginCapabilitySecretAvailable",
     "coerceSecretRef",
     "hasConfiguredSecretInput",
     "isSecretRef",
