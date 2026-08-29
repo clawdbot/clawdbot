@@ -69,7 +69,7 @@ Use a vision-capable model and a tool profile that permits `computer`. For the `
 
 Worker transcripts retain screenshots. To keep later model requests within the transport limit, OpenClaw can replace older, already processed images with a text marker in the model context while preserving the current computer frame and unprocessed images. Opaque provider replay remains unchanged; if its required context cannot fit, the turn fails with recovery guidance.
 
-Computer control stays bound to the admitted turn, placement, node connection, and provider. Stopping or replacing the machine invalidates old tool handles; an unavailable desktop never selects another connected computer. Disposable cloud desktops remain absent from the ordinary paired-computer picker. See [Computer use](/nodes/computer-use) for supported actions and [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive) for setup and viewing permissions.
+Computer control stays bound to the admitted turn, placement, node connection, and provider. If an OpenClaw worker disconnects, its computer execution closes even between tool calls; start a new turn to regain computer control after reconnecting. Other durable session operations can still finish. Stopping or replacing the machine invalidates old tool handles; an unavailable desktop never selects another connected computer. Disposable cloud desktops remain absent from the ordinary paired-computer picker. See [Computer use](/nodes/computer-use) for supported actions and [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive) for setup and viewing permissions.
 
 ## Automatic load balancing across devices
 

@@ -202,7 +202,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
       input.operation === "close" ? input.executionId : input.params.executionId,
     );
     await state.afterDispatch?.();
-    return { ok: true, payload: { ok: true, node: invocation.node.nodeId } };
+    return { ok: true, payload: { ok: true } };
   });
   const nodeTransport = {
     listCurrentNodes: vi.fn(async () => [proof]),

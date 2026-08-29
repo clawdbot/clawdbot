@@ -486,25 +486,42 @@ export function createWorkerComputerService(
   },
 ) {
   const create = createWorkerComputerTransportOwner(options);
-  const owners = new Map<string, Promise<PreparedWorkerComputer | undefined>>();
-  const transports = new Map<string, WorkerComputerTransport>();
-  const closeClaim = async (claimId: string, reason: string) => {
-    const pending = owners.get(claimId);
-    transports.delete(claimId);
-    try {
-      // Claim closure revokes input immediately; retain cleanup custody so a
-      // concurrent Gateway stop still waits for the captured native close.
-      await (await pending)?.close(reason);
-    } finally {
-      if (owners.get(claimId) === pending) {
-        owners.delete(claimId);
-      }
+  type Owner = {
+    claimId: string;
+    prepared: Promise<PreparedWorkerComputer | undefined>;
+    transport?: WorkerComputerTransport;
+    connection?: { signal: AbortSignal; abort: () => void };
+    closeComputer?: PreparedWorkerComputer["close"];
+    closing?: Promise<void>;
+  };
+  const owners = new Map<string, Owner>();
+  const closeOwner = (owner: Owner, reason: string) => {
+    if (owner.closing) {
+      return owner.closing;
     }
+    owner.transport = undefined;
+    owner.connection?.signal.removeEventListener("abort", owner.connection.abort);
+    // Fence this exact owner immediately, but retain cleanup custody until the
+    // native ACK so concurrent claim closure or Gateway stop joins the same close.
+    owner.closing = (async () => {
+      try {
+        await owner.prepared;
+        await owner.closeComputer?.(reason);
+      } finally {
+        if (owners.get(owner.claimId) === owner) {
+          owners.delete(owner.claimId);
+        }
+      }
+    })();
+    return owner.closing;
   };
   const unregister = options.placements.registerTurnClaimClosedHandler((claim) => {
-    void closeClaim(claim.claimId, "turn-closed").catch(() =>
-      options.warn("Session computer cleanup failed after turn closure."),
-    );
+    const owner = owners.get(claim.claimId);
+    if (owner) {
+      void closeOwner(owner, "turn-closed").catch(() =>
+        options.warn("Session computer cleanup failed after turn closure."),
+      );
+    }
   });
   let stopped = false;
   return {
@@ -514,14 +531,15 @@ export function createWorkerComputerService(
       }
       const prior = owners.get(claim.claimId);
       if (prior) {
-        return prior;
+        return prior.prepared;
       }
       const prepared = create(claim).then((computer) => {
         if (!computer) {
           return undefined;
         }
+        owner.closeComputer = (reason) => computer.close(reason);
         const assertOwner = () => {
-          if (stopped || owners.get(claim.claimId) !== prepared) {
+          if (stopped || owner.closing || owners.get(claim.claimId) !== owner) {
             throw new Error("Session computer owner replaced");
           }
         };
@@ -548,25 +566,45 @@ export function createWorkerComputerService(
                 return result;
               },
             };
-            transports.set(claim.claimId, bound);
+            owner.transport = bound;
             return bound;
           },
+          close: (reason: string) => closeOwner(owner, reason),
         };
       });
-      owners.set(claim.claimId, prepared);
+      const owner: Owner = { claimId: claim.claimId, prepared };
+      owners.set(claim.claimId, owner);
       return prepared;
     },
     execute: (async ({ identity, request, signal, assertCurrent }) => {
       assertCurrent();
       const claim = identity.turnClaim;
-      const pending = claim ? owners.get(claim.claimId) : undefined;
-      const computer = await pending;
+      const owner = claim ? owners.get(claim.claimId) : undefined;
+      const computer = await owner?.prepared;
       assertCurrent();
-      const transport = claim ? transports.get(claim.claimId) : undefined;
-      if (!computer || !transport || (claim && owners.get(claim.claimId) !== pending)) {
-        throw new Error("Session computer was not prepared for this turn");
+      if (
+        !computer ||
+        !owner?.transport ||
+        owner.closing ||
+        owners.get(owner.claimId) !== owner ||
+        !signal ||
+        (owner.connection && owner.connection.signal !== signal)
+      ) {
+        throw new Error("Session computer connection is unavailable; start a new turn");
       }
-      const result = await transport.invoke(
+      signal.throwIfAborted();
+      if (!owner.connection) {
+        // The worker socket owns input between requests too. Reconnects cannot
+        // adopt this execution; Codex's local prepare/bind path has no socket owner.
+        const abort = () => {
+          void closeOwner(owner, "worker-disconnect").catch(() =>
+            options.warn("Session computer cleanup failed after worker disconnect."),
+          );
+        };
+        owner.connection = { signal, abort };
+        signal.addEventListener("abort", abort, { once: true });
+      }
+      const result = await owner.transport.invoke(
         {
           nodeId: computer.descriptor.nodeId,
           command: request.command,
@@ -584,7 +622,7 @@ export function createWorkerComputerService(
       stopped = true;
       unregister();
       const results = await Promise.allSettled(
-        [...owners.keys()].map((claimId) => closeClaim(claimId, "gateway-stop")),
+        [...owners.values()].map((owner) => closeOwner(owner, "gateway-stop")),
       );
       const failures = results.filter((result) => result.status === "rejected");
       if (failures.length) {

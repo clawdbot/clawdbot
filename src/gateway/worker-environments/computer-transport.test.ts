@@ -342,12 +342,14 @@ describe("session computer transport", () => {
         execute: service.execute,
         validate: () => (granted ? { ok: true } : { ok: false, closeReason: "method-not-allowed" }),
       });
+      const connection = new AbortController();
       const invoke = (action: "snapshot" | "type") => {
         const input = request(action);
-        return rpc(identity, {
-          command: input.command,
-          paramsJson: JSON.stringify(input.commandParams),
-        });
+        return rpc(
+          identity,
+          { command: input.command, paramsJson: JSON.stringify(input.commandParams) },
+          connection.signal,
+        );
       };
       await expect(invoke("snapshot")).resolves.toMatchObject({ ok: true });
       const physicalId = h.nativeExecutionIds[0];
@@ -405,13 +407,14 @@ describe("session computer transport", () => {
         execute: service.execute,
         validate: () => ({ ok: true }),
       });
+      const connection = new AbortController();
       const cleanups: Array<(reason: string) => Promise<void>> = [];
       const tool = createWorkerComputerTool({
         descriptor: prepared.descriptor,
         runId: h.claim.runId,
         registerRunCleanup: (cleanup) => cleanups.push(cleanup),
         requestComputer: async (input) => {
-          const result = await rpc(connectionIdentity(h), input);
+          const result = await rpc(connectionIdentity(h), input, connection.signal);
           return result.ok
             ? { type: "res", id: "computer", ok: true, payload: result.result }
             : {
@@ -724,6 +727,90 @@ describe("session computer transport", () => {
       });
       await service.close();
       expect(h.privateInvoke).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["same claim", "new claim"])(
+    "keeps computer ownership on one connection and permits a fresh %s after cleanup",
+    async (renewal) => {
+      const h = createHarness();
+      const service = createWorkerComputerService(h.options);
+      const first = await service.prepare(h.claim);
+      if (!first) {
+        throw new Error("Expected session computer");
+      }
+      const retained = first.bind(h.run);
+      const rpc = createWorkerComputerRpc({
+        execute: service.execute,
+        validate: () => ({ ok: true }),
+      });
+      const identity = connectionIdentity(h);
+      const original = new AbortController();
+      const replacement = new AbortController();
+      const input = request("type");
+      const frame = { command: input.command, paramsJson: JSON.stringify(input.commandParams) };
+      try {
+        await expect(rpc(identity, frame)).resolves.toMatchObject({
+          ok: false,
+          message: expect.stringContaining("start a new turn"),
+        });
+        expect(h.nativeExecutionIds).toEqual([]);
+        await expect(rpc(identity, frame, original.signal)).resolves.toMatchObject({ ok: true });
+        const physicalId = h.nativeExecutionIds[0];
+        await expect(rpc(identity, frame, replacement.signal)).resolves.toMatchObject({
+          ok: false,
+          message: expect.stringContaining("start a new turn"),
+        });
+        expect(h.nativeExecutionIds).toEqual([physicalId]);
+        await first.close("completion");
+        expect(h.nativeExecutionIds).toEqual([physicalId, physicalId]);
+
+        const nextClaim =
+          renewal === "new claim" ? { ...h.claim, claimId: "claim-2", runId: "run-2" } : h.claim;
+        if (h.state.placement.state !== "active") {
+          throw new Error("Expected active placement");
+        }
+        h.state.placement = {
+          ...h.state.placement,
+          turnClaim: {
+            owner: "worker",
+            claimId: nextClaim.claimId,
+            runId: nextClaim.runId,
+            generation: nextClaim.placementGeneration,
+            ownerEpoch: 7,
+          },
+        };
+        const nextRun = createOperationalRunInstanceRef(nextClaim.runId);
+        claimAgentRunDelegatedAuthority(nextRun);
+        const next = await service.prepare(nextClaim);
+        if (!next) {
+          throw new Error("Expected replacement session computer");
+        }
+        next.bind(nextRun);
+        const nextIdentity = { ...identity, turnClaim: nextClaim, runId: nextClaim.runId };
+        await expect(rpc(nextIdentity, frame, replacement.signal)).resolves.toMatchObject({
+          ok: true,
+        });
+        const nextPhysicalId = h.nativeExecutionIds.at(-1);
+        expect(nextPhysicalId).not.toBe(physicalId);
+        original.abort();
+        await expect(retained.invoke(request("type"))).rejects.toThrow(/closed|replaced/);
+        await expect(rpc(identity, frame, original.signal)).resolves.toMatchObject({ ok: false });
+        await expect(rpc(nextIdentity, frame, replacement.signal)).resolves.toMatchObject({
+          ok: true,
+        });
+        expect(h.nativeExecutionIds).toEqual([
+          physicalId,
+          physicalId,
+          nextPhysicalId,
+          nextPhysicalId,
+        ]);
+        await next.close("completion");
+        expect(h.nativeExecutionIds.at(-1)).toBe(nextPhysicalId);
+        expect(h.nativeExecutionIds).toHaveLength(5);
+      } finally {
+        await service.close();
+      }
     },
   );
 });

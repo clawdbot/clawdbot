@@ -66,8 +66,8 @@ describe("worker computer connection lifetime", () => {
     expect(requestComputer).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["policy", "pairing"])(
-    "fences timed-out desktop input across $0 and reconnect, while durable work survives",
+  it.each(["policy", "pairing", "completed"])(
+    "fences desktop input across $0 disconnect and reconnect, while durable work survives",
     async (boundary) => {
       const h = createHarness();
       const service = createWorkerComputerService(h.options);
@@ -204,21 +204,41 @@ describe("worker computer connection lifetime", () => {
           entered.resolve();
           await resume.promise;
         };
-        if (boundary === "policy") {
-          h.state.beforePolicy = pause;
+        if (boundary === "completed") {
+          await tool.execute("completed", { action: "type", text: "allowed" });
+          expect(h.nativeExecutionIds).toHaveLength(2);
+          // No computer request remains pending. Socket closure must still release
+          // the captured execution, and shutdown must join its eventual close ACK.
+          h.state.afterDispatch = pause;
+          for (const socket of server.clients) {
+            socket.close(1000);
+          }
+          await disconnected.promise;
+          await vi.waitFor(() => {
+            expect(h.privateInvoke.mock.calls.at(-1)?.[0].params).toMatchObject({
+              operation: "close",
+              executionId: h.nativeExecutionIds[0],
+            });
+          });
         } else {
-          h.state.beforeDispatch = pause;
+          if (boundary === "policy") {
+            h.state.beforePolicy = pause;
+          } else {
+            h.state.beforeDispatch = pause;
+          }
+          const failed = tool
+            .execute("deadline", { action: "type", text: "must not type" })
+            .catch((error: unknown) => error);
+          await entered.promise;
+          expect(await failed).toMatchObject({ message: "worker computer response timed out" });
+          await disconnected.promise;
         }
-        const failed = tool
-          .execute("deadline", { action: "type", text: "must not type" })
-          .catch((error: unknown) => error);
-        await entered.promise;
-        expect(await failed).toMatchObject({ message: "worker computer response timed out" });
-        await disconnected.promise;
         expect(h.options.placements.validateTurnClaim(h.claim)).toBe(true);
         expect(validateAgentRunDelegatedAuthority(h.authority)).toBe(true);
-        resume.resolve();
-        await pendingComputer;
+        if (boundary !== "completed") {
+          resume.resolve();
+          await pendingComputer;
+        }
         h.state.beforePolicy = undefined;
         h.state.beforeDispatch = undefined;
         await connection.waitForReady();
@@ -230,10 +250,24 @@ describe("worker computer connection lifetime", () => {
         expect(await durable).toMatchObject({ ok: true });
         expect(durableSignal).toBeUndefined();
         expect(retained).toBeInstanceOf(Error);
+        if (boundary !== "completed") {
+          await service.close();
+        }
         expect({ computerRequests, nativeExecutions: h.nativeExecutionIds.length }).toEqual({
-          computerRequests: 1,
-          nativeExecutions: 0,
+          computerRequests: boundary === "completed" ? 3 : 1,
+          nativeExecutions: boundary === "completed" ? 3 : 1,
         });
+        if (boundary === "completed") {
+          expect(retained).toMatchObject({ message: expect.stringContaining("start a new turn") });
+          const stopping = service.close();
+          const stopped = vi.fn();
+          void stopping.then(stopped, stopped);
+          await Promise.resolve();
+          await Promise.resolve();
+          expect(stopped).not.toHaveBeenCalled();
+          resume.resolve();
+          await stopping;
+        }
       } finally {
         resume.resolve();
         durableResume.resolve();
@@ -247,7 +281,7 @@ describe("worker computer connection lifetime", () => {
           server.close((error) => (error ? reject(error) : resolve()));
         });
       }
-      expect(h.nativeExecutionIds).toHaveLength(1);
+      expect(h.nativeExecutionIds).toHaveLength(boundary === "completed" ? 3 : 1);
       expect(h.privateInvoke.mock.calls.at(-1)?.[0].params).toMatchObject({ operation: "close" });
     },
   );
