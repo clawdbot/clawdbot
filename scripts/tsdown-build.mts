@@ -287,6 +287,26 @@ function listExistingDeclarationOutputPaths(cwd: string, fsImpl: typeof fs, root
 
 function listExistingPreservedOutputPaths(cwd: string, env: NodeJS.ProcessEnv, fsImpl: typeof fs) {
   const protectedPaths = new Set<string>();
+  // Mac packaging owns replacement of signed bundles. Rebuilding its JS must
+  // leave the previous app (including its private runtime) usable on failure.
+  const pendingDirectories = [path.join(cwd, "dist")];
+  while (pendingDirectories.length > 0) {
+    const directory = pendingDirectories.pop()!;
+    if (!fsImpl.existsSync(directory)) {
+      continue;
+    }
+    for (const entry of fsImpl.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const child = path.join(directory, entry.name);
+      if (entry.name.endsWith(".app")) {
+        protectedPaths.add(child);
+      } else {
+        pendingDirectories.push(child);
+      }
+    }
+  }
   if (env[PRESERVE_CLI_STARTUP_METADATA_ENV] !== "1") {
     return protectedPaths;
   }

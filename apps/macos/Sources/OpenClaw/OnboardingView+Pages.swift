@@ -803,14 +803,8 @@ extension OnboardingView {
     }
 
     func cliPage() -> some View {
-        let remoteMode = self.state.connectionMode == .remote
-        let setupDetail = if remoteMode {
-            "OpenClaw is installing the matching runtime for this Mac node. " +
-                "It will connect to your selected Gateway without starting another one here."
-        } else {
-            "OpenClaw is setting up its background service on this Mac."
-        }
-        let detail = setupDetail + " Published Stable and Beta installs are usually quick. " +
+        let detail = "OpenClaw is setting up its Gateway background service on this Mac. " +
+            "Published Stable and Beta installs are usually quick. " +
             "Dev (Git main) downloads and builds OpenClaw from source, so allow several minutes " +
             "and several gigabytes of free space. No administrator password is required."
         return onboardingPage {
@@ -832,16 +826,12 @@ extension OnboardingView {
                     state: self.installStepStateForInstall,
                     monospacedDetail: self.cliInstalled && self.cliInstallLocation != nil)
                 self.installStepRow(
-                    title: remoteMode ? "Prepare the Mac node" : "Start the background service",
-                    detail: remoteMode
-                        ? "Runs inside the app and uses its macOS permissions."
-                        : "Runs quietly and starts again after a restart.",
+                    title: "Start the background service",
+                    detail: "Runs quietly and starts again after a restart.",
                     state: self.installStepStateForService)
                 self.installStepRow(
                     title: "Ready for the next step",
-                    detail: remoteMode
-                        ? "Once ready, this Mac connects to your selected Gateway."
-                        : "Once the service answers, you’ll connect your AI.",
+                    detail: "Once the service answers, you’ll connect your AI.",
                     state: self.cliInstalled ? .done : .pending)
 
                 if self.installFailed {

@@ -31,6 +31,87 @@ private func makeOnboardingResumeDefaults() throws -> (UserDefaults, String) {
 @Suite(.serialized)
 @MainActor
 struct OnboardingViewSmokeTests {
+    @Test(arguments: [
+        "remote",
+        "attach-only",
+        "external-attachment",
+        "paused-external-attachment",
+        "managed-attachment",
+        "paused-managed-attachment",
+        "external-service",
+        "unreadable",
+        "fresh",
+        "fresh-recommended",
+    ])
+    func `onboarding installs only for an app-managed local Gateway`(_ scenario: String) async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await TestIsolation.withIsolatedState(env: ["HOME": root.path, "CFFIXED_USER_HOME": root.path]) {
+            try #require(FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL == root
+                .standardizedFileURL)
+            let marker = root.appendingPathComponent("disable-launchagent")
+            if scenario == "attach-only" {
+                try Data().write(to: marker)
+            }
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            let manager = GatewayProcessManager.shared
+            let previousStatus = manager.status
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                manager.setTestingStatus(previousStatus)
+            }
+            let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: root, profile: AppProfile(environment: [:]))
+            let managedAttachment = scenario.hasSuffix("managed-attachment")
+            if managedAttachment || ["external-service", "unreadable"].contains(scenario) {
+                try FileManager.default.createDirectory(
+                    at: plist.deletingLastPathComponent(),
+                    withIntermediateDirectories: true)
+                let executable = managedAttachment
+                    ? CLIInstaller.managedExecutableLocation()
+                    : "/opt/openclaw/bin/openclaw"
+                let data = scenario == "unreadable" ? Data("not a plist".utf8) : try PropertyListSerialization.data(
+                    fromPropertyList: ["ProgramArguments": [executable, "gateway"]], format: .xml, options: 0)
+                try data.write(to: plist)
+            }
+            manager.setTestingStatus(scenario.contains("attachment") ? .attachedExisting(details: nil) : .stopped)
+            if scenario.hasPrefix("paused-") {
+                manager.stop()
+                _ = await manager._testAttachExistingGatewayAfterPendingDisable(port: 0)
+                #expect(manager.status == .stopped)
+                if managedAttachment {
+                    // The real CLI uninstall removes this ownership record.
+                    try FileManager.default.moveItem(at: plist, to: root.appendingPathComponent("uninstalled.plist"))
+                }
+            }
+            let state = AppState(preview: true)
+            state.onboardingSeen = false
+            state.connectionMode = switch scenario {
+            case "remote": .remote
+            case "fresh-recommended": .unconfigured
+            default: .local
+            }
+            let view = OnboardingView(state: state)
+            let requiresSetup = managedAttachment || ["unreadable", "fresh", "fresh-recommended"].contains(scenario)
+
+            #expect(!view.cliInstalled)
+            try #require(view.pageOrder == (requiresSetup ? [0, 1, 2, 3] : [0, 1, 3]))
+            #expect(view.activePageIndex(for: 2) == (requiresSetup ? view.cliPageIndex : view.aiPageIndex))
+            if scenario == "fresh-recommended" {
+                #expect(view.selectedConnectionMode == .local)
+                #expect(view.isConnectionSelectionBlocking)
+                #expect(state.connectionMode == .unconfigured)
+            }
+            if !requiresSetup {
+                await view.runCLIInstall()
+                #expect(OnboardingController.shared.busyReason == nil)
+                #expect(!FileManager.default.fileExists(atPath: CLIInstaller.managedExecutableLocation()))
+            }
+        }
+    }
+
     @Test func `discovered gateway summary uses localized runtime strings`() {
         #expect(
             OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 1) ==
@@ -110,7 +191,7 @@ struct OnboardingViewSmokeTests {
             requiresCLIInstall: false) == [0, 1, 3])
         #expect(OnboardingView.pageOrder(
             for: .remote,
-            requiresCLIInstall: true) == [0, 1, 2, 3])
+            requiresCLIInstall: true) == [0, 1, 3])
         #expect(OnboardingView.pageOrder(
             for: .remote,
             requiresCLIInstall: false) == [0, 1, 3])
@@ -122,21 +203,21 @@ struct OnboardingViewSmokeTests {
             requiresCLIInstall: false) == [0, 1, 9])
     }
 
-    @Test func `CLI install activates only a local gateway`() {
-        #expect(!OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .remote))
-        #expect(OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .local))
+    @Test func `fresh local setup installs CLI before inference setup`() {
+        let order = OnboardingView.pageOrder(
+            for: .local,
+            requiresCLIInstall: true)
+
+        #expect(order.firstIndex(of: 2) == 2)
+        #expect(order.firstIndex(of: 3) == 3)
     }
 
-    @Test func `fresh onboarding defaults to this Mac`() {
-        let state = AppState(preview: true)
-        state.onboardingSeen = false
-        state.connectionMode = .unconfigured
-        let view = OnboardingView(state: state)
+    @Test func `configured local setup skips CLI install page`() {
+        let order = OnboardingView.pageOrder(
+            for: .local,
+            requiresCLIInstall: false)
 
-        #expect(view.selectedConnectionMode == .local)
-        #expect(view.isConnectionSelectionBlocking)
-        #expect(view.pageOrder == [0, 1, 2, 3])
-        #expect(state.connectionMode == .unconfigured)
+        #expect(!order.contains(2))
     }
 
     @Test func `reopened onboarding preserves configure later selection`() {
@@ -207,30 +288,6 @@ struct OnboardingViewSmokeTests {
             executableReady: true,
             installed: false,
             installing: false))
-    }
-
-    @Test func `detected CLI follows the selected onboarding connection mode`() {
-        #expect(OnboardingView.existingCLISetupMode(
-            connectionMode: .remote,
-            executableReady: true,
-            installing: false) == .remote)
-        #expect(OnboardingView.existingCLISetupMode(
-            connectionMode: .local,
-            executableReady: true,
-            installing: false) == .local)
-        #expect(OnboardingView.existingCLISetupMode(
-            connectionMode: .unconfigured,
-            executableReady: true,
-            installing: false) == nil)
-        #expect(OnboardingView.existingCLISetupMode(
-            connectionMode: .local,
-            executableReady: true,
-            installing: true) == nil)
-        #expect(OnboardingView.existingCLISetupMode(
-            connectionMode: .remote,
-            executableReady: false,
-            installing: false) == nil)
-        #expect(!OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .remote))
     }
 
     @Test func `paused gateway keeps CLI setup and recovery visible after every install path`() {
@@ -400,13 +457,10 @@ struct OnboardingViewSmokeTests {
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
             .appendingPathComponent("openclaw.json")
             .path
-        let previousGatewayPreference = captureOnboardingGatewayPreference()
         let (defaults, suiteName) = try makeOnboardingResumeDefaults()
         defer {
-            restoreOnboardingGatewayPreference(previousGatewayPreference)
             defaults.removePersistentDomain(forName: suiteName)
         }
-        GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
         OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:id:gateway-a",
             defaults: defaults)
@@ -414,6 +468,9 @@ struct OnboardingViewSmokeTests {
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             let state = AppState(preview: true)
             state.connectionMode = .remote
+            let previousGatewayPreference = captureOnboardingGatewayPreference()
+            defer { restoreOnboardingGatewayPreference(previousGatewayPreference) }
+            GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
             let view = OnboardingView(
                 state: state,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
@@ -506,13 +563,10 @@ struct OnboardingViewSmokeTests {
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
             .appendingPathComponent("openclaw.json")
             .path
-        let previousGatewayPreference = captureOnboardingGatewayPreference()
         let (defaults, suiteName) = try makeOnboardingResumeDefaults()
         defer {
-            restoreOnboardingGatewayPreference(previousGatewayPreference)
             defaults.removePersistentDomain(forName: suiteName)
         }
-        GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
         OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:id:gateway-a",
             defaults: defaults)
@@ -520,6 +574,9 @@ struct OnboardingViewSmokeTests {
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             let state = AppState(preview: true)
             state.connectionMode = .remote
+            let previousGatewayPreference = captureOnboardingGatewayPreference()
+            defer { restoreOnboardingGatewayPreference(previousGatewayPreference) }
+            GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
             let view = OnboardingView(
                 state: state,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),

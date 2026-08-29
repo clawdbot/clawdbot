@@ -4272,7 +4272,7 @@ class NodeRuntime private constructor(
         operatorStatusText = "Connecting…"
         operatorConnectionProblem = null
       }
-      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint), reconnect = true)
+      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
     }
   }
 
@@ -4280,7 +4280,7 @@ class NodeRuntime private constructor(
     launchGatewayLifecycle {
       if (preferredGatewayReconnectSuppressed) return@launchGatewayLifecycle
       val endpoint = connectedEndpoint ?: return@launchGatewayLifecycle
-      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint), reconnect = true)
+      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
     }
   }
 
@@ -4302,10 +4302,11 @@ class NodeRuntime private constructor(
     }
   }
 
+  // connect() already replaces each role's socket. A later reconnect() can
+  // retire a replacement that published hello while the other role was starting.
   private fun connectWithAuth(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
-    reconnect: Boolean = false,
     beforeConnect: () -> Unit = {},
   ): Boolean =
     runGatewayConnectOperation {
@@ -4354,12 +4355,6 @@ class NodeRuntime private constructor(
         nodeConnectOptions,
         tls,
       )
-      if (reconnect && operatorAuth != null) {
-        operatorSession.reconnect()
-      }
-      if (reconnect) {
-        nodeSession.reconnect()
-      }
     }
 
   // Auth reset waits for claimed connection starts before disconnecting. Session calls stay outside

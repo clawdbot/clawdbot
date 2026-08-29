@@ -229,10 +229,11 @@ struct MacNodeCodexThreadCatalogTests {
         }
     }
 
+    /// Lifecycle/bootstrap requests use the product budget; deadline tests opt into short limits.
     private func requestEmptyList(
         client: CodexAppServerThreadClient,
         executable: URL,
-        timeoutSeconds: Double = 2,
+        timeoutSeconds: Double = MacNodeCodexThreadCatalog.defaultTimeoutSeconds,
         maxLineBytes: Int = 1024 * 1024) async throws -> Data
     {
         try await client.request(
@@ -1080,23 +1081,33 @@ extension MacNodeCodexThreadCatalogTests {
         let second = try makeEmptyListServer(tracksLaunches: true)
         let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
 
-        _ = try await self.requestEmptyList(client: client, executable: first.executable)
-        let replacement = Task {
-            try await self.requestEmptyList(client: client, executable: second.executable)
+        var pendingReplacement: Task<Data, Error>?
+        do {
+            _ = try await self.requestEmptyList(client: client, executable: first.executable)
+            let replacement = Task {
+                try await self.requestEmptyList(client: client, executable: second.executable)
+            }
+            pendingReplacement = replacement
+            let exitGate = try await self.openFIFOForWriting(first.exitGate)
+            defer { try? exitGate.close() }
+
+            #expect(FileManager.default.fileExists(atPath: first.eof.path))
+            #expect(!FileManager.default.fileExists(atPath: second.executable.path + ".processes"))
+            try exitGate.write(contentsOf: Data("exit\n".utf8))
+            try exitGate.close()
+            _ = try await replacement.value
+
+            #expect(try self.readTrimmed(
+                URL(fileURLWithPath: first.executable.path + ".processes")) == "1")
+            #expect(try self.readTrimmed(
+                URL(fileURLWithPath: second.executable.path + ".processes")) == "1")
+            #expect(FileManager.default.fileExists(atPath: first.exited.path))
+        } catch {
+            pendingReplacement?.cancel()
+            await client.shutdown()
+            _ = await pendingReplacement?.result
+            throw error
         }
-        let exitGate = try await self.openFIFOForWriting(first.exitGate)
-
-        #expect(FileManager.default.fileExists(atPath: first.eof.path))
-        #expect(!FileManager.default.fileExists(atPath: second.executable.path + ".processes"))
-        try exitGate.write(contentsOf: Data("exit\n".utf8))
-        try exitGate.close()
-        _ = try await replacement.value
-
-        #expect(try self.readTrimmed(
-            URL(fileURLWithPath: first.executable.path + ".processes")) == "1")
-        #expect(try self.readTrimmed(
-            URL(fileURLWithPath: second.executable.path + ".processes")) == "1")
-        #expect(FileManager.default.fileExists(atPath: first.exited.path))
         await client.shutdown()
     }
 
@@ -1346,33 +1357,38 @@ extension MacNodeCodexThreadCatalogTests {
     @Test func `queued request consumes its wall-clock deadline`() async throws {
         let fake = try makeBlockedRequestServer(warmup: true)
         let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
-        // Complete the real handshake before exercising an active or queued deadline.
-        _ = try await self.requestEmptyList(client: client, executable: fake.executable)
+        do {
+            // Complete the real handshake before exercising an active or queued deadline.
+            _ = try await self.requestEmptyList(client: client, executable: fake.executable)
 
-        let first = Task {
-            try await self.requestEmptyList(
-                client: client,
-                executable: fake.executable,
-                timeoutSeconds: 0.5)
-        }
-        #expect(await self.waitForFile(
-            URL(fileURLWithPath: fake.executable.path + ".request-started")))
-        let second = Task {
-            try await self.requestEmptyList(
-                client: client,
-                executable: fake.executable,
-                timeoutSeconds: 0.05)
-        }
+            let first = Task {
+                try await self.requestEmptyList(
+                    client: client,
+                    executable: fake.executable,
+                    timeoutSeconds: 0.5)
+            }
+            #expect(await self.waitForFile(
+                URL(fileURLWithPath: fake.executable.path + ".request-started")))
+            let second = Task {
+                try await self.requestEmptyList(
+                    client: client,
+                    executable: fake.executable,
+                    timeoutSeconds: 0.05)
+            }
 
-        await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
-            try await second.value
+            await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
+                try await second.value
+            }
+            await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
+                try await first.value
+            }
+            #expect(!FileManager.default.fileExists(atPath: fake.executable.path + ".unexpected-request"))
+            #expect(try self.readTrimmed(
+                URL(fileURLWithPath: fake.executable.path + ".processes")) == "1")
+        } catch {
+            await client.shutdown()
+            throw error
         }
-        await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
-            try await first.value
-        }
-        #expect(!FileManager.default.fileExists(atPath: fake.executable.path + ".unexpected-request"))
-        #expect(try self.readTrimmed(
-            URL(fileURLWithPath: fake.executable.path + ".processes")) == "1")
         await client.shutdown()
     }
 

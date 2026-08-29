@@ -826,6 +826,66 @@ class ChatFullMessageOwnershipLayoutTest {
   }
 
   @Test
+  fun replacementOperatorLeaseSurvivesTheRestOfGatewayRefresh() =
+    runBlocking {
+      val nodeSession =
+        NodeRuntime::class.java
+          .getDeclaredField("nodeSession")
+          .apply { isAccessible = true }
+          .get(runtime) as GatewaySession
+      val nodeLifecycleLock =
+        checkNotNull(
+          GatewaySession::class.java
+            .getDeclaredField("lifecycleLock")
+            .apply { isAccessible = true }
+            .get(nodeSession),
+        )
+      val acquired = CountDownLatch(1)
+      val release = CountDownLatch(1)
+      val previousConnection = gateway.operatorConnection.get()
+      val heldNode =
+        async(Dispatchers.IO) {
+          synchronized(nodeLifecycleLock) {
+            acquired.countDown()
+            check(release.await(FULL_MESSAGE_READY_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+          }
+        }
+      val refresh =
+        async(Dispatchers.IO) {
+          check(acquired.await(FULL_MESSAGE_READY_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+          runtime.refreshGatewayConnection()
+        }
+      try {
+        // Hold the second role's connect while the replacement operator finishes its
+        // real hello. Finishing one refresh must not close that new connection again.
+        val replacement =
+          withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) {
+            combine(gateway.historyReads, runtime.serverName) { reads, _ ->
+              val lease = operatorSession().captureRequestLease(gateway.endpoint.stableId)
+              val connection = gateway.operatorConnection.get()
+              lease?.takeIf {
+                connection > previousConnection &&
+                  runtime.serverName.value == "full-message-$connection" &&
+                  reads.any { it.first == connection && it.second == FULL_MESSAGE_FIRST_CHAT } &&
+                  it.isCurrent()
+              }
+            }.first { it != null }
+          }
+        val current = prepareCurrentRead()
+        release.countDown()
+        heldNode.await()
+        refresh.await()
+        assertTrue("The refreshed operator must survive the later node-role connect", checkNotNull(replacement).isCurrent())
+        current.execute()
+        assertEquals(gateway.fullText(FULL_MESSAGE_FIRST_CHAT), loadedText(current.state.value))
+      } finally {
+        release.countDown()
+        refresh.cancelAndJoin()
+        heldNode.cancelAndJoin()
+      }
+    }
+
+  @Test
   fun preparedReadSurvivesAnUnchangedRefreshButNotAChangedPreview() {
     val unchanged = prepareCurrentRead()
     refreshSelectedChat()
@@ -886,16 +946,11 @@ class ChatFullMessageOwnershipLayoutTest {
       .assertIsEnabled()
       .performClick()
     selectChat(FULL_MESSAGE_SECOND_CHAT)
-    val operatorSession =
-      NodeRuntime::class.java
-        .getDeclaredField("operatorSession")
-        .apply { isAccessible = true }
-        .get(runtime) as GatewaySession
     val writeLock =
       GatewaySession::class.java
         .getDeclaredField("writeLock")
         .apply { isAccessible = true }
-        .get(operatorSession) as Mutex
+        .get(operatorSession()) as Mutex
     val lockOwner = Any()
     val autoAdvance = composeRule.mainClock.autoAdvance
     try {
@@ -1292,6 +1347,12 @@ class ChatFullMessageOwnershipLayoutTest {
 
   private fun currentOwner() = ChatComposerOwner(gateway.endpoint.stableId, "main", runtime.chatSessionKey.value)
 
+  private fun operatorSession(): GatewaySession =
+    NodeRuntime::class.java
+      .getDeclaredField("operatorSession")
+      .apply { isAccessible = true }
+      .get(runtime) as GatewaySession
+
   private fun prepareCurrentRead() =
     checkNotNull(
       runtime.prepareFullMessageRead(currentOwner(), runtime.chatSelectionGeneration.value, runtime.gatewayCatalogRevision.value, runtime.chatMessages.value.single()),
@@ -1354,10 +1415,20 @@ class ChatFullMessageOwnershipLayoutTest {
   private fun replaceConnectionBeforeRecomposition() {
     val oldConnection = gateway.operatorConnection.get()
     val key = runtime.chatSessionKey.value
+    val session = operatorSession()
     runtime.refreshGatewayConnection()
     runBlocking {
       withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) {
-        gateway.historyReads.first { reads -> reads.any { it.first > oldConnection && it.second == key } }
+        // A server-side read is not proof that the replacement is still current.
+        // Capturing its lease waits for hello publication without advancing Compose.
+        combine(gateway.historyReads, runtime.serverName) { reads, _ ->
+          val lease = session.captureRequestLease(gateway.endpoint.stableId)
+          val connection = gateway.operatorConnection.get()
+          connection > oldConnection &&
+            runtime.serverName.value == "full-message-$connection" &&
+            reads.any { it.first == connection && it.second == key } &&
+            lease?.isCurrent() == true
+        }.first { it }
       }
     }
     assertTrue(gateway.operatorConnection.get() > oldConnection)

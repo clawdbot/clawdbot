@@ -82,9 +82,9 @@ def run_git(`,
       "deadline is not None and time.monotonic() >= deadline",
       "deadline is not None and fetch_clock() >= deadline",
     )
-    .replace("timeout=30)", "timeout=2)")
+    .replace(/\btimeout=30(?=[,)])/gu, "timeout=2")
     .replace(/retry_at = time\.monotonic\(\) \+ [^\n]+/u, "retry_at = time.monotonic() + 0.05")
-    .replaceAll("--git 120", "--git 2")
+    .replace(/--((?:checkout-)?git) 120\b/gu, "--$1 2")
     // Keep pre-fix standalone shell bodies executable for red/green proof.
     .replaceAll("120s git", "2s git")
     .replaceAll("sleep $((attempt * 5))", "sleep 0.05")

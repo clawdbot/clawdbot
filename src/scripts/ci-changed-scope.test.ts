@@ -398,31 +398,6 @@ describe("detectChangedScope", () => {
     });
   });
 
-  it("runs macOS CI for macOS packaging scripts with Darwin-only tests", () => {
-    for (const changedPath of [
-      "scripts/codesign-mac-app.sh",
-      "scripts/create-dmg.sh",
-      "scripts/lib/plistbuddy.sh",
-      "scripts/lib/swift-toolchain.sh",
-      "scripts/notarize-mac-artifact.sh",
-      "scripts/package-mac-app.sh",
-      "scripts/package-mac-dist.sh",
-    ]) {
-      expect(detectChangedScope([changedPath])).toEqual({
-        runNode: true,
-        runMacos: true,
-        runMacosNode: true,
-        runIosBuild: false,
-        runAndroid: false,
-        runWindows: false,
-        runSkillsPython: false,
-        runChangedSmoke: false,
-        runControlUiI18n: false,
-        runUiTests: false,
-      });
-    }
-  });
-
   it.each([
     ".github/actions/git-owner/action.yml",
     ".github/actions/git-owner/owner.py",
@@ -446,27 +421,50 @@ describe("detectChangedScope", () => {
     });
   });
 
-  it("runs macOS CI for Darwin-only mac packaging owner tests", () => {
-    for (const changedPath of [
-      "test/scripts/codesign-mac-app.test.ts",
-      "test/scripts/create-dmg.test.ts",
-      "test/scripts/notarize-mac-artifact.test.ts",
-      "test/scripts/package-mac-app.test.ts",
-      "test/scripts/package-mac-dist.test.ts",
-    ]) {
-      expect(detectChangedScope([changedPath])).toEqual({
-        runNode: true,
-        runMacos: true,
-        runMacosNode: true,
-        runIosBuild: false,
-        runAndroid: false,
-        runWindows: false,
-        runSkillsPython: false,
-        runChangedSmoke: false,
-        runControlUiI18n: false,
-        runUiTests: false,
-      });
-    }
+  it.each([
+    "scripts/codesign-mac-app.sh",
+    "scripts/create-dmg.sh",
+    "scripts/lib/plistbuddy.sh",
+    "scripts/lib/swift-toolchain.sh",
+    "scripts/notarize-mac-artifact.sh",
+    "scripts/package-mac-app.sh",
+    "scripts/package-mac-dist.sh",
+    "scripts/stage-mac-node-worker.sh",
+    "scripts/restart-mac.sh",
+    "scripts/lib/mac-app-bundle.sh",
+    "test/scripts/restart-mac.test.ts",
+    "scripts/materialize-mac-node-worker.py",
+    "scripts/lib/mac-native-inventory.py",
+    "scripts/lib/mac-bundle-mutation.py",
+    "scripts/verify-mac-node-worker.mjs",
+    "scripts/verify-mac-node-worker-fs.mjs",
+    "scripts/lib/mac-node-worker-proof-state.mjs",
+    "scripts/lib/mac-worker-portability.mjs",
+    "test/helpers/mac-native.ts",
+    "test/helpers/mac-signing.ts",
+    "test/scripts/codesign-mac-app.test.ts",
+    "test/scripts/create-dmg.test.ts",
+    "test/scripts/notarize-mac-artifact.test.ts",
+    "test/scripts/package-mac-app.test.ts",
+    "test/scripts/package-mac-dist.test.ts",
+    "test/scripts/mac-elevation-artifact.test-support.ts",
+    "test/scripts/mac-native-fixtures.test-support.ts",
+    "test/scripts/mac-node-worker-materialization.test-support.ts",
+    "test/scripts/mac-node-worker.test.ts",
+    "test/scripts/verify-mac-node-worker-fs.test.ts",
+  ])("runs macOS CI for packaging owner %s", (changedPath) => {
+    expect(detectChangedScope([changedPath])).toEqual({
+      runNode: true,
+      runMacos: true,
+      runMacosNode: true,
+      runIosBuild: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+      runUiTests: false,
+    });
   });
 
   it.each<[string, boolean, boolean]>([

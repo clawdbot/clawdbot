@@ -202,6 +202,37 @@ describe("package-openclaw-for-docker", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32").each(["pnpm", "corepack"])(
+    "resolves pnpm from POSIX PATH through %s without inheriting another runner",
+    async (tool) => {
+      const tempDir = tempDirs.make("openclaw-package-corepack-runner-");
+      const bin = path.join(tempDir, "bin");
+      const inherited = path.join(tempDir, "inherited", "pnpm");
+      fs.mkdirSync(bin);
+      fs.mkdirSync(path.dirname(inherited));
+      fs.symlinkSync(process.execPath, inherited);
+      // Reuse the running interpreter instead of executing a newly created script.
+      // Its input filename records the Corepack prefix as part of the actual argv.
+      fs.symlinkSync(process.execPath, path.join(bin, tool));
+      for (const entry of ["pnpm", "probe"]) {
+        fs.writeFileSync(
+          path.join(tempDir, entry),
+          "console.log(JSON.stringify({ command: process.argv0, args: [require('node:path').basename(process.argv[1]), ...process.argv.slice(2)] }));\n",
+        );
+      }
+      const output = await runCommandForTest("pnpm", ["probe", "value with spaces"], tempDir, {
+        captureStdout: true,
+        env: { ...process.env, PATH: bin, npm_execpath: inherited },
+        timeoutMs: 30_000,
+      });
+      const prefix = tool === "corepack" ? ["pnpm"] : [];
+      const result = JSON.parse(output) as { command: string; args: string[] };
+      expect(path.basename(result.command)).toBe(tool);
+      expect(result.command).not.toBe(inherited);
+      expect(result.args).toEqual([...prefix, "probe", "value with spaces"]);
+    },
+  );
+
   it.runIf(process.platform === "win32")(
     "runs pnpm.cmd through the portable runner on Windows",
     async () => {

@@ -23,6 +23,49 @@ it("keeps exactly one byte-identical generated CI owner", () => {
   expect(body).toBe(source);
 });
 
+it.each([false, true])("preserves linked Git metadata (reclaim locks=%s)", async (reclaimLocks) => {
+  const invocation = reclaimLocks
+    ? 'run_git(os.getcwd(), "fetch", "origin", "fixture", reclaim_locks=True)'
+    : 'print(git_output(os.getcwd(), "rev-parse", "HEAD"), end="")';
+  const report = await runCiGitStep({
+    fetchResults: [],
+    policy:
+      policyImport +
+      `from pathlib import Path
+shared = Path.cwd().parent / "shared-git"
+shared.mkdir()
+lock = shared / "shallow.lock"
+lock.write_text("not invocation-owned\\n")
+metadata = Path(".git")
+metadata.write_text("gitdir: ../shared-git\\n")
+try:
+    ${invocation}
+finally:
+    assert metadata.read_text() == "gitdir: ../shared-git\\n"
+    assert lock.read_text() == "not invocation-owned\\n"
+`,
+  });
+  expect(report.code, report.output).toBe(reclaimLocks ? 125 : 0);
+  expect(report.commands.map(({ args }) => args)).toEqual(
+    reclaimLocks ? [] : [["rev-parse", "HEAD"]],
+  );
+  if (!reclaimLocks) {
+    expect(report.output).toBe(`${head}\n`);
+  }
+});
+
+it("reclaims failed supplemental-fetch locks before the next attempt", async () => {
+  const report = await runCiGitStep({
+    job: "checks-fast-core",
+    step: "Prepare release-gate ratchet merge tree",
+    fetchResults: ["hang", 0],
+    prepare: true,
+  });
+  expect(report.code, report.output).toBe(0);
+  expect(report.fetches).toHaveLength(2);
+  expect(report.readyAttempts).toEqual([1, 2]);
+});
+
 linuxIt(
   "bootstraps only action-owned bytes outside the candidate with isolated Python",
   async () => {

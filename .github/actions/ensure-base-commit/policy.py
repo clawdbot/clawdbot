@@ -52,7 +52,8 @@ def ensure_base():
     for arguments, message, warning, resolution in attempts:
         print(message, flush=True)
         try:
-            run_git(os.getcwd(), "-c", "protocol.version=2", "fetch", *arguments, timeout=30)
+            run_git(os.getcwd(), "-c", "protocol.version=2", "fetch", *arguments,
+                    timeout=30, reclaim_locks=True)
         except (GitFailure, FetchTimeout):
             # A failed fetch can still supply the base. Lifecycle failures and
             # cancellation escape this policy before any availability probe.

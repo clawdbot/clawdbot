@@ -24,6 +24,7 @@ const platformCases = [
   { scenario: "harness-timeout", attempts: 2, code: 124, checkout: true },
   { scenario: "git-failure", attempts: 1, code: 23, checkout: false },
   { scenario: "git-exit-124", attempts: 1, code: 124, checkout: false },
+  { scenario: "pre-existing-lock", attempts: 1, code: 128, checkout: false },
   // Windows has no POSIX signals/ps boundary; native Job cancellation proof is separate.
   ...(process.platform === "win32" ? [] : ["SIGTERM", "SIGINT", "SIGHUP"]).map((signal, index) => ({
     scenario: `cancel-${signal}`,
@@ -79,6 +80,10 @@ it.each([
           // Reproduce startup beyond the old wall-clock budget without delaying other consumers.
           writeFileSync(path.join(root, "tree-start-delay-3.json"), "2100");
         }
+        if (scenario === "git-exit-124") {
+          // Slow child startup must not replace Git's injected exit with a fixture timeout.
+          writeFileSync(path.join(root, "tree-start-delay-1.json"), "4100");
+        }
         const accelerated = renderGitTestClock(run, { realDrain: scenario.startsWith("cancel-") });
         expect(accelerated).not.toBe(run);
         // A broken preflight must never let these negative fixture tests run real Git.
@@ -108,7 +113,27 @@ it.each([
         expect(report.error, stderr).toBeUndefined();
         expectCiCheckoutCleanup(report);
         expect(report.code).toBe(code);
-        expect(report.readyAttempts).toEqual(Array.from({ length: attempts }, (_, i) => i + 1));
+        expect(readFileSync(path.join(workspace, ".git/preexisting.lock"), "utf8")).toBe(
+          "not invocation-owned\n",
+        );
+        if (scenario === "pre-existing-lock") {
+          expect(readFileSync(path.join(workspace, ".git/shallow.lock"), "utf8")).toBe(
+            "not invocation-owned\n",
+          );
+        }
+        if (scenario === "recovery") {
+          for (let attempt = 1; attempt <= attempts; attempt++) {
+            expect(
+              readFileSync(path.join(root, "shared-git-cache", `${attempt}.lock`), "utf8"),
+            ).toBe("outside Git ownership\n");
+          }
+        }
+        if (scenario === "git-exit-124") {
+          expect(report.output).toBe("");
+        }
+        const readyAttempts =
+          scenario === "pre-existing-lock" ? [] : Array.from({ length: attempts }, (_, i) => i + 1);
+        expect(report.readyAttempts).toEqual(readyAttempts);
         expect(report.boundaries.filter((entry) => entry.name.startsWith("fetch:"))).toHaveLength(
           attempts,
         );

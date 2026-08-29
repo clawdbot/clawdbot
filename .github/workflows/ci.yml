@@ -392,16 +392,37 @@ jobs:
                   self.code = code
 
 
-          def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=None):
+          def git_lock_files(directory):
+              git_dir = os.path.join(os.path.realpath(directory), ".git")
+              if not os.path.lexists(git_dir):
+                  return set()
+              if not os.path.isdir(git_dir) or os.path.realpath(git_dir) != git_dir:
+                  raise RuntimeError("Checkout Git directory is not physical")
+              def scan_error(error):
+                  raise error
+              locks = set()
+              for root, directories, files in os.walk(git_dir, onerror=scan_error):
+                  directories[:] = [name for name in directories
+                                    if os.path.realpath(os.path.join(root, name)) == os.path.join(root, name)]
+                  locks.update(os.path.join(root, name) for name in files if name.endswith(".lock"))
+              return locks
+
+
+          def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=None,
+                      reclaim_locks=False):
               global closed
               if closed:
                   raise RuntimeError("Git owner is closed")
               check_cancelled()
               if git is None:
                   raise RuntimeError("Git unavailable")
+              # Process ownership alone does not grant metadata ownership: generic callers
+              # may use linked worktrees. Only exclusive checkout fetches reclaim locks.
+              previous_locks = git_lock_files(directory) if reclaim_locks else None
               command = [git, "-C", directory, *arguments]
               job = None
               child = None
+              timed_out = False
               deadline = time.monotonic() + timeout if timeout is not None else None
               try:
                   options = {"stdin": subprocess.DEVNULL, "stdout": stdout, "stderr": stderr,
@@ -426,6 +447,7 @@ jobs:
                       os.set_handle_inheritable(job, False)
                   while child.poll() is None and not cancelled:
                       if deadline is not None and time.monotonic() >= deadline:
+                          timed_out = True
                           raise FetchTimeout()
                       time.sleep(0.05)
               finally:
@@ -435,6 +457,11 @@ jobs:
                   try:
                       if child is not None:
                           drain(child, job)
+                          if previous_locks is not None and (timed_out or cancelled or child.returncode):
+                              # Forced termination skips Git's lockfile cleanup. This checkout is exclusive;
+                              # reclaim only newly created locks after tree extinction, never existing locks.
+                              for lock in sorted(git_lock_files(directory) - previous_locks):
+                                  os.unlink(lock)
                   finally:
                       if job is not None:
                           close_handle(job)
@@ -460,7 +487,7 @@ jobs:
                       run_git(directory, "-c", "protocol.version=2", "fetch", "--no-tags",
                               *(["--prune"] if prune else []), "--no-recurse-submodules", f"--depth={depth}",
                               *(["--filter=blob:none"] if blobless else []), "origin", *refs,
-                              timeout=fetch_timeout_seconds)
+                              timeout=fetch_timeout_seconds, reclaim_locks=True)
                       return
                   except (FetchTimeout, GitFailure) as error:
                       check_cancelled()
@@ -584,9 +611,10 @@ jobs:
                               raise RuntimeError("Git owner is closed")
                           check_cancelled()
                       return
-                  if sys.argv[1] != "--git":
+                  if sys.argv[1] not in ("--git", "--checkout-git"):
                       raise ValueError("Unknown Git owner command")
-                  run_git(os.getcwd(), *sys.argv[3:], timeout=float(sys.argv[2]) or None)
+                  run_git(os.getcwd(), *sys.argv[3:], timeout=float(sys.argv[2]) or None,
+                          reclaim_locks=sys.argv[1] == "--checkout-git")
                   return
               if git is None:
                   raise RuntimeError("Git unavailable")
@@ -710,7 +738,7 @@ jobs:
           fi
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$RELEASE_GATE" = "true" ]; then
             merge_ref="refs/remotes/origin/release-gate-merge"
-            python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 120 fetch \
+            python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --checkout-git 120 fetch \
               --no-tags --no-recurse-submodules --depth=2 origin \
               "+refs/pull/${PULL_REQUEST_NUMBER}/merge:${merge_ref}"
             release_gate_head="$(git rev-parse "${merge_ref}^2")"
@@ -1555,7 +1583,7 @@ jobs:
           # Include the synthetic merge, every pull request commit, and one
           # ancestor so TruffleHog can clone and resolve the bounded range.
           fetch_depth=$((PR_COMMIT_COUNT + 2))
-          python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 120 \
+          python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --checkout-git 120 \
             -c protocol.version=2 \
             fetch --no-tags --no-recurse-submodules --depth="$fetch_depth" origin "$PR_MERGE_SHA"
 
@@ -2430,7 +2458,7 @@ jobs:
           # Base freshness belongs to the landing gate; chasing moving main here can never converge.
           prepared=false
           for attempt in {1..6}; do
-            if python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 120 fetch --no-tags --depth=2 origin \
+            if python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --checkout-git 120 fetch --no-tags --depth=2 origin \
               "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-ratchet-merge"; then
               merge_sha="$(git rev-parse refs/remotes/origin/ci-ratchet-merge)"
               read -r frozen_base_sha merge_head extra_parent <<<"$(git show -s --format=%P "$merge_sha")"
@@ -2482,7 +2510,7 @@ jobs:
           case "$TASK" in
             bundled-protocol)
               pnpm test:bundled
-              python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin \
+              python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin \
                 "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"
               pnpm protocol:check
               ;;
@@ -3191,7 +3219,7 @@ jobs:
                 exit 1
               fi
               if [ -n "$PR_BASE_SHA" ]; then
-                python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 120 fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
+                python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --checkout-git 120 fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
                 node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
@@ -3209,7 +3237,7 @@ jobs:
               npm_lock_base=""
               if [[ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" && -n "$DIFF_BASE_SHA" ]] &&
                 has_package_script "deps:npm-lock:check:changed"; then
-                if python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 120 fetch --no-tags --depth=1 origin "+${DIFF_BASE_SHA}:refs/remotes/origin/npm-lock-base"; then
+                if python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --checkout-git 120 fetch --no-tags --depth=1 origin "+${DIFF_BASE_SHA}:refs/remotes/origin/npm-lock-base"; then
                   npm_lock_base="refs/remotes/origin/npm-lock-base"
                 else
                   fetch_status="$?"

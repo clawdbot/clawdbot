@@ -6331,8 +6331,8 @@ struct ChatViewModelTests {
             sessionKey: "agent:aiden:main",
             historyResponses: [historyPayload(sessionKey: "agent:aiden:main")])
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         transport.emit(
             .sessionMessage(
@@ -6367,8 +6367,8 @@ struct ChatViewModelTests {
             sessionKey: "agent:work:global",
             historyResponses: [historyPayload(sessionKey: "agent:work:global")])
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         transport.emit(
             .sessionMessage(
@@ -6404,8 +6404,8 @@ struct ChatViewModelTests {
             sessionKey: "agent:work:global",
             historyResponses: [historyPayload(sessionKey: "agent:work:global")])
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         transport.emit(
             .sessionMessage(
@@ -6479,8 +6479,8 @@ struct ChatViewModelTests {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         transport.emit(
             .sessionMessage(
@@ -6510,8 +6510,8 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload()],
             sendMessageStatus: "pending")
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         await sendUserMessage(vm, text: "ping")
         try await waitUntil("local run pending") { await MainActor.run { vm.pendingRunCount == 1 } }
@@ -6551,8 +6551,8 @@ struct ChatViewModelTests {
                 OpenClawChatSendResponse(runId: runId, status: "pending")
             })
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         await sendUserMessage(vm, text: "echo me")
         let runId = try await waitForLastSentRunId(transport)
@@ -6597,8 +6597,8 @@ struct ChatViewModelTests {
             historyResponses: [history, history],
             sendMessageStatus: "pending")
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         await sendUserMessage(vm, text: "sensitive draft")
         let runId = try await waitForLastSentRunId(transport)
@@ -6655,8 +6655,8 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload()],
             sendMessageStatus: "pending")
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         await sendUserMessage(vm, text: "legacy echo")
         let runId = try await waitForLastSentRunId(transport)
@@ -6771,8 +6771,8 @@ struct ChatViewModelTests {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         transport.emit(
             .sessionMessage(
