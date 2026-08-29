@@ -139,6 +139,61 @@ describe("cron service store seam coverage", () => {
       description: "external description",
     });
   });
+  it("preserves newer runtime state for schedule-identical target updates", async () => {
+    const { storePath } = await makeStorePath();
+    const job = createReloadCronJob({
+      id: "same-job-edit",
+      name: "before rename",
+      state: { nextRunAtMs: STORE_TEST_NOW + 60_000 },
+    });
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+
+    const manager = new CronService({
+      storePath,
+      cronEnabled: false,
+      log: logger,
+      nowMs: () => STORE_TEST_NOW + 10_000,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    await manager.list({ includeDisabled: true });
+
+    const externalNextRunAtMs = STORE_TEST_NOW + 900_000;
+    const externalUpdatedAtMs = STORE_TEST_NOW + 12_000;
+    const database = openOpenClawStateDatabase().db;
+    const storeKey = cronStoreKey(storePath);
+    await manager.updateWithPrecondition(job.id, { name: "after rename" }, () => {
+      database
+        .prepare(
+          "UPDATE cron_jobs SET state_json = ?, runtime_updated_at_ms = ? WHERE store_key = ? AND job_id = ?",
+        )
+        .run(
+          JSON.stringify({
+            nextRunAtMs: externalNextRunAtMs,
+            lastRunAtMs: STORE_TEST_NOW + 7_000,
+          }),
+          externalUpdatedAtMs,
+          storeKey,
+          job.id,
+        );
+    });
+
+    const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
+    expect(persisted).toMatchObject({
+      name: "after rename",
+      updatedAtMs: externalUpdatedAtMs,
+      state: {
+        nextRunAtMs: externalNextRunAtMs,
+        lastRunAtMs: STORE_TEST_NOW + 7_000,
+      },
+    });
+    const persistedRuntime = database
+      .prepare("SELECT runtime_updated_at_ms FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+      .get(storeKey, job.id) as { runtime_updated_at_ms?: unknown } | undefined;
+    expect(persistedRuntime?.runtime_updated_at_ms).toBe(externalUpdatedAtMs);
+  });
+
   it("does not drain post-persist notifications when there is no store to write", async () => {
     const { storePath } = await makeStorePath();
     const state = createStoreTestState(storePath);

@@ -350,7 +350,8 @@ export function upsertCronJobRow(
   if (
     opts?.preserveNewerRuntime === true &&
     existing &&
-    existing.job_json === values.job_json &&
+    typeof existing.schedule_identity === "string" &&
+    existing.schedule_identity === values.schedule_identity &&
     existingRuntimeJob !== null &&
     normalizeCronJobForSqlite(existingRuntimeJob) !== null &&
     existingRuntimeUpdatedAt !== undefined &&
