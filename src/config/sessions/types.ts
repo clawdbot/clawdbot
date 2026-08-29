@@ -490,8 +490,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Timestamp (ms) when `/tts latest` last sent audio for this session. */
     lastTtsReadLatestAt?: number;
     execHost?: string;
-    execSecurity?: string;
-    execAsk?: string;
     execNode?: string;
     /** Working directory interpreted only by the bound exec node. */
     execCwd?: string;

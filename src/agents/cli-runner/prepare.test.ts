@@ -3317,8 +3317,6 @@ describe("prepareCliRunContext", () => {
       runId: "run-test-room-event-tools",
       sessionEntry: {
         execHost: "node",
-        execSecurity: "allowlist",
-        execAsk: "on-miss",
         execNode: "mac-a",
       } as never,
       execOverrides: {
@@ -3391,8 +3389,6 @@ describe("prepareCliRunContext", () => {
         nodeExecAllowed: true,
         execSession: {
           execHost: "node",
-          execSecurity: "allowlist",
-          execAsk: "on-miss",
           execNode: "mac-a",
         },
         execOverrides: {

@@ -208,8 +208,6 @@ describe("lazy protocol validators", () => {
       responseUsage: "full",
       elevatedLevel: "on",
       execHost: "gateway",
-      execSecurity: "allowlist",
-      execAsk: "on-miss",
       execNode: "node-1",
       model: "openai/gpt-5.6-luna",
       completionOwnerSessionKey: "agent:main:main",
@@ -252,6 +250,15 @@ describe("lazy protocol validators", () => {
       { targets: [target], patch: { archived: true, extra: true } },
       { targets: [target], patch: { archived: true }, extra: true },
     ]);
+  });
+
+  it.each(["execSecurity", "execAsk"])("rejects retired session policy field %s", (field) => {
+    for (const value of ["deny", "always", null]) {
+      expectRejected(validateSessionsPatchParams, [sessionPatch({ [field]: value })]);
+      expectRejected(validateSessionsPatchManyParams, [
+        { targets: [{ key: "agent:main:main" }], patch: { [field]: value } },
+      ]);
+    }
   });
 
   it("validates sparse session tool overrides", () => {

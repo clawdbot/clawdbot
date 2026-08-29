@@ -32,8 +32,10 @@ New sessions, including managed worktree sessions, inherit the configured global
 
 ## Policy precedence and clamping
 
-An explicit session mode takes precedence over the session's legacy `execSecurity` and `execAsk` overrides. When the mode is unset, those fields and the normal global or per-agent configuration continue to work as before.
+Session-wide exec policy belongs to the permission mode. When the mode is unset, normal global or per-agent configuration applies. `/exec security=... ask=...` applies only to its message and can only tighten an explicit session mode; `host` and `node` remain session placement defaults. See [Exec session overrides](/tools/exec#session-overrides-exec).
 
-An explicit `full` mode is the admin-authorized exception to host approval-file floors: its OpenClaw exec policy remains `full` with approvals off. Approval-file floors continue to tighten config-driven exec policy, legacy session overrides, unset modes, and every non-full session mode. Sandbox restrictions and tool allow/deny policy remain independent, and a harness may clamp an unsupported mode to a compatible safer policy tuple. Codex also continues to honor externally enforced `requirements.toml` constraints.
+Before resuming sessions after upgrading a store with legacy session exec policy, run `openclaw doctor --fix`; the runtime no longer reads that policy. Restrictive policies migrate to `read-only` or `guarded`, with missing policy values conservatively resolved as `security=allowlist` and `ask=on-miss`. Existing permission modes remain unchanged. Legacy full-access policy is removed with a notice so configuration applies, never converted into a `full` permission grant.
+
+An explicit `full` mode is the admin-authorized exception to host approval-file floors: its OpenClaw exec policy remains `full` with approvals off unless a turn-scoped override tightens it. Approval-file floors continue to tighten config-driven exec policy, unset modes, and every non-full session mode. Tightening a full session's security restores those floors; tightening only `ask` does not. Sandbox restrictions and tool allow/deny policy remain independent, and a harness may clamp an unsupported mode to a compatible safer policy tuple. Codex also continues to honor externally enforced `requirements.toml` constraints.
 
 For the independent sandbox, tool-policy, and elevated-exec controls, see [Sandbox vs tool policy vs elevated](/gateway/sandbox-vs-tool-policy-vs-elevated).

@@ -1,9 +1,6 @@
 // Session patch applier for gateway session metadata and model/runtime overrides.
 import { randomUUID } from "node:crypto";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -115,20 +112,6 @@ export function resolveSessionPatchModelSelection(params: {
       resolved.ref.provider === params.defaultProvider &&
       resolved.ref.model === params.defaultModel,
   };
-}
-
-function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  return normalized === "deny" || normalized === "allowlist" || normalized === "full"
-    ? normalized
-    : undefined;
-}
-
-function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  return normalized === "off" || normalized === "on-miss" || normalized === "always"
-    ? normalized
-    : undefined;
 }
 
 function normalizeSessionToolOverrides(
@@ -477,32 +460,6 @@ export async function projectSessionsPatchEntry(params: {
         return invalid('invalid execHost (use "auto"|"sandbox"|"gateway"|"node")');
       }
       next.execHost = normalized;
-    }
-  }
-
-  if ("execSecurity" in patch) {
-    const raw = patch.execSecurity;
-    if (raw === null) {
-      delete next.execSecurity;
-    } else if (raw !== undefined) {
-      const normalized = normalizeExecSecurity(raw);
-      if (!normalized) {
-        return invalid('invalid execSecurity (use "deny"|"allowlist"|"full")');
-      }
-      next.execSecurity = normalized;
-    }
-  }
-
-  if ("execAsk" in patch) {
-    const raw = patch.execAsk;
-    if (raw === null) {
-      delete next.execAsk;
-    } else if (raw !== undefined) {
-      const normalized = normalizeExecAsk(raw);
-      if (!normalized) {
-        return invalid('invalid execAsk (use "off"|"on-miss"|"always")');
-      }
-      next.execAsk = normalized;
     }
   }
 

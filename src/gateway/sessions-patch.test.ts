@@ -1688,8 +1688,6 @@ describe("gateway sessions patch", () => {
         patch: {
           key: MAIN_SESSION_KEY,
           execHost: " AUTO ",
-          execSecurity: " ALLOWLIST ",
-          execAsk: " ON-MISS ",
           execNode: " worker-1 ",
           sendPolicy: "DENY" as unknown as "allow",
           groupActivation: "Always" as unknown as "mention",
@@ -1697,8 +1695,6 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.execHost).toBe("auto");
-    expect(entry.execSecurity).toBe("allowlist");
-    expect(entry.execAsk).toBe("on-miss");
     expect(entry.execNode).toBe("worker-1");
     expect(entry.sendPolicy).toBe("deny");
     expect(entry.groupActivation).toBe("always");

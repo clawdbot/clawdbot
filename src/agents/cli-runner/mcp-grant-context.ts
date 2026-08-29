@@ -21,8 +21,6 @@ function buildCliMcpExecSession(
       : permissionMode;
   const execSession = {
     execHost: normalizeOptionalMcpContextValue(sessionEntry?.execHost),
-    execSecurity: normalizeOptionalMcpContextValue(sessionEntry?.execSecurity),
-    execAsk: normalizeOptionalMcpContextValue(sessionEntry?.execAsk),
     execNode: normalizeOptionalMcpContextValue(sessionEntry?.execNode),
     ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}),
   };

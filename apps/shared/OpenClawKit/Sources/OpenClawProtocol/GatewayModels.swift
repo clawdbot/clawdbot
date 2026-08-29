@@ -9789,8 +9789,6 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let responseusage: AnyCodable?
     public let elevatedlevel: AnyCodable?
     public let exechost: AnyCodable?
-    public let execsecurity: AnyCodable?
-    public let execask: AnyCodable?
     public let execnode: AnyCodable?
     public let permissionmode: AnyCodable?
     public let model: AnyCodable?
@@ -9828,8 +9826,6 @@ public struct SessionsPatchParams: Codable, Sendable {
         responseusage: AnyCodable? = nil,
         elevatedlevel: AnyCodable? = nil,
         exechost: AnyCodable? = nil,
-        execsecurity: AnyCodable? = nil,
-        execask: AnyCodable? = nil,
         execnode: AnyCodable? = nil,
         permissionmode: AnyCodable? = nil,
         model: AnyCodable? = nil,
@@ -9866,8 +9862,6 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.responseusage = responseusage
         self.elevatedlevel = elevatedlevel
         self.exechost = exechost
-        self.execsecurity = execsecurity
-        self.execask = execask
         self.execnode = execnode
         self.permissionmode = permissionmode
         self.model = model
@@ -9906,8 +9900,6 @@ public struct SessionsPatchParams: Codable, Sendable {
         case responseusage = "responseUsage"
         case elevatedlevel = "elevatedLevel"
         case exechost = "execHost"
-        case execsecurity = "execSecurity"
-        case execask = "execAsk"
         case execnode = "execNode"
         case permissionmode = "permissionMode"
         case model
@@ -9942,8 +9934,6 @@ public struct SessionsPatchMutation: Codable, Sendable {
     public let responseusage: AnyCodable?
     public let elevatedlevel: AnyCodable?
     public let exechost: AnyCodable?
-    public let execsecurity: AnyCodable?
-    public let execask: AnyCodable?
     public let execnode: AnyCodable?
     public let permissionmode: AnyCodable?
     public let model: AnyCodable?
@@ -9976,8 +9966,6 @@ public struct SessionsPatchMutation: Codable, Sendable {
         responseusage: AnyCodable? = nil,
         elevatedlevel: AnyCodable? = nil,
         exechost: AnyCodable? = nil,
-        execsecurity: AnyCodable? = nil,
-        execask: AnyCodable? = nil,
         execnode: AnyCodable? = nil,
         permissionmode: AnyCodable? = nil,
         model: AnyCodable? = nil,
@@ -10009,8 +9997,6 @@ public struct SessionsPatchMutation: Codable, Sendable {
         self.responseusage = responseusage
         self.elevatedlevel = elevatedlevel
         self.exechost = exechost
-        self.execsecurity = execsecurity
-        self.execask = execask
         self.execnode = execnode
         self.permissionmode = permissionmode
         self.model = model
@@ -10044,8 +10030,6 @@ public struct SessionsPatchMutation: Codable, Sendable {
         case responseusage = "responseUsage"
         case elevatedlevel = "elevatedLevel"
         case exechost = "execHost"
-        case execsecurity = "execSecurity"
-        case execask = "execAsk"
         case execnode = "execNode"
         case permissionmode = "permissionMode"
         case model
