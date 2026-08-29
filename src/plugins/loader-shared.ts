@@ -35,6 +35,7 @@ import {
 } from "./manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -42,7 +43,7 @@ import {
   rollbackStagedPluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
-import { validateManifestSchemaValue } from "./schema-validator.js";
+import { validatePluginSchemaValue } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { PluginLogger } from "./types.js";
@@ -199,6 +200,7 @@ class PluginLoadFailureError extends Error {
 }
 
 export function validatePluginConfig(params: {
+  origin: PluginOrigin;
   schema?: Record<string, unknown>;
   cacheKey?: string;
   value?: unknown;
@@ -223,7 +225,8 @@ export function validatePluginConfig(params: {
     }
     return resultError(["<root>: config must be empty"]);
   }
-  const result = validateManifestSchemaValue({
+  const result = validatePluginSchemaValue({
+    origin: params.origin,
     schema,
     cacheKey: params.cacheKey ?? JSON.stringify(schema),
     value: value ?? {},
@@ -238,7 +241,7 @@ export function validatePluginConfig(params: {
 // The empty-config shortcut answers without compiling the schema, so it is only sound for
 // schemas built purely from keywords it accounts for. An allowlist holds that invariant where
 // a denylist leaked every new keyword: an extra constraint, an unresolvable `$ref`, or an
-// unknown keyword now falls through to validateManifestSchemaValue, which owns the diagnostic.
+// unknown keyword now falls through to validatePluginSchemaValue, which owns the diagnostic.
 const EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS = new Set([
   "type",
   "additionalProperties",

@@ -1,9 +1,10 @@
 // Covers the manifest-schema boundary that keeps third-party schema failures out of the loader.
 import { describe, expect, it } from "vitest";
-import { validateManifestSchemaValue } from "./schema-validator.js";
-describe("validateManifestSchemaValue", () => {
+import { validatePluginSchemaValue } from "./schema-validator.js";
+describe("validatePluginSchemaValue", () => {
   it("returns an error instead of throwing for a structurally invalid schema", () => {
-    const result = validateManifestSchemaValue({
+    const result = validatePluginSchemaValue({
+      origin: "global",
       cacheKey: "manifest-schema.unresolved-ref",
       schema: { type: "object", properties: { mode: { $ref: "#/$defs/Mode" } } },
       value: {},
@@ -15,7 +16,8 @@ describe("validateManifestSchemaValue", () => {
 
   it("strips terminal control characters a manifest embedded in the thrown text", () => {
     const escape = String.fromCharCode(27);
-    const result = validateManifestSchemaValue({
+    const result = validatePluginSchemaValue({
+      origin: "global",
       cacheKey: "manifest-schema.ansi-pattern",
       schema: {
         type: "object",
@@ -29,7 +31,8 @@ describe("validateManifestSchemaValue", () => {
   });
 
   it("keeps returning results for a valid schema", () => {
-    const result = validateManifestSchemaValue({
+    const result = validatePluginSchemaValue({
+      origin: "global",
       cacheKey: "manifest-schema.valid",
       schema: { type: "object", properties: { a: { type: "string" } } },
       value: { a: "ok" },
@@ -39,14 +42,16 @@ describe("validateManifestSchemaValue", () => {
   });
 
   it("flags schemaError only when the schema itself is unusable, not on ordinary value failures", () => {
-    const malformedSchema = validateManifestSchemaValue({
+    const malformedSchema = validatePluginSchemaValue({
+      origin: "global",
       cacheKey: "manifest-schema.schema-error-flag",
       schema: { type: "object", properties: { mode: { $ref: "#/$defs/Mode" } } },
       value: {},
     });
     expect(malformedSchema).toMatchObject({ ok: false, schemaError: true });
 
-    const wellFormedSchemaRejectingValue = validateManifestSchemaValue({
+    const wellFormedSchemaRejectingValue = validatePluginSchemaValue({
+      origin: "global",
       cacheKey: "manifest-schema.value-error-flag",
       schema: { type: "object", required: ["token"], properties: { token: { type: "string" } } },
       value: {},

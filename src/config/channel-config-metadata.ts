@@ -11,7 +11,7 @@ import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 
 type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
   schemaPluginId?: string;
-  schemaPluginOrigin?: PluginOrigin;
+  schemaPluginOrigin: PluginOrigin;
 };
 
 type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
@@ -162,17 +162,17 @@ function prepareChannelConfigSchema(
   channelId: string,
   schema: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
+  if (origin === "bundled") {
+    return widenOfficialExternalChannelSecretSchema({ channelId, schema });
+  }
   try {
-    const coreOwnedSchema =
-      origin === "bundled" || schema === undefined
-        ? schema
-        : normalizeCoreOwnedChannelSchema(schema);
+    const coreOwnedSchema = schema === undefined ? schema : normalizeCoreOwnedChannelSchema(schema);
     return widenOfficialExternalChannelSecretSchema({ channelId, schema: coreOwnedSchema });
   } catch {
     // Normalization and official-channel widening both clone and walk the schema, so a deeply
     // nested external manifest overflows here, before any validator runs. Surfacing the raw
     // schema keeps metadata collection total and leaves the diagnostic to the one owner of it,
-    // validateManifestSchemaValue.
+    // validatePluginSchemaValue.
     return schema;
   }
 }
@@ -200,7 +200,7 @@ export function collectChannelSchemaMetadataWithOwnership(
           configSchema: current?.configSchema,
           configUiHints: current?.configUiHints,
           schemaPluginId: current?.schemaPluginId,
-          schemaPluginOrigin: current?.schemaPluginOrigin,
+          schemaPluginOrigin: current?.schemaPluginOrigin ?? record.origin,
           originRank,
         });
       }

@@ -4,7 +4,11 @@ import { describe, expect, it } from "vitest";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { collectChannelSchemaMetadataWithOwnership } from "./channel-config-metadata.js";
 
-function createExternalChannelSchemaRegistry(channelId: string, schema: Record<string, unknown>) {
+function createChannelSchemaRegistry(
+  channelId: string,
+  schema: Record<string, unknown>,
+  origin: PluginManifestRecord["origin"] = "global",
+) {
   return {
     diagnostics: [],
     plugins: [
@@ -15,7 +19,7 @@ function createExternalChannelSchemaRegistry(channelId: string, schema: Record<s
         cliBackends: [],
         hooks: [],
         manifestPath: "/tmp/deep-channel-schema-plugin/openclaw.plugin.json",
-        origin: "global",
+        origin,
         providers: [],
         rootDir: "/tmp/deep-channel-schema-plugin",
         skills: [],
@@ -40,7 +44,7 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
       }
 
       const entries = collectChannelSchemaMetadataWithOwnership(
-        createExternalChannelSchemaRegistry(channelId, schema),
+        createChannelSchemaRegistry(channelId, schema),
       );
 
       expect(entries).toContainEqual(
@@ -48,4 +52,17 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
       );
     },
   );
+
+  it("keeps bundled schema preparation failures on the throwing path", () => {
+    let schema: Record<string, unknown> = { type: "object" };
+    for (let depth = 0; depth < 3_000; depth++) {
+      schema = { type: "object", properties: { nested: schema } };
+    }
+
+    expect(() =>
+      collectChannelSchemaMetadataWithOwnership(
+        createChannelSchemaRegistry("qqbot", schema, "bundled"),
+      ),
+    ).toThrow();
+  });
 });

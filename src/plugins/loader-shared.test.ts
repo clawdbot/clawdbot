@@ -9,7 +9,7 @@ import type { PluginCandidate } from "./discovery.js";
 import {
   createManifestPluginRecord,
   createPluginCandidatesFromManifestRegistry,
-  validatePluginConfig,
+  validatePluginConfig as validatePluginConfigByOrigin,
 } from "./loader-shared.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
 import {
@@ -24,6 +24,12 @@ const emptyObjectSchema = {
   additionalProperties: false,
   properties: {},
 } as const;
+
+function validatePluginConfig(
+  params: Omit<Parameters<typeof validatePluginConfigByOrigin>[0], "origin">,
+) {
+  return validatePluginConfigByOrigin({ ...params, origin: "global" });
+}
 
 function withSchemaKeyword(key: "if" | "then" | "else", value: unknown) {
   return { [key]: value };
@@ -165,6 +171,19 @@ describe("validatePluginConfig manifest schema isolation", () => {
     }
 
     expect(validatePluginConfig({ schema, value: {} })).toMatchObject({ ok: false });
+  });
+
+  it("keeps malformed bundled schemas on the throwing path", () => {
+    expect(() =>
+      validatePluginConfigByOrigin({
+        origin: "bundled",
+        schema: {
+          type: "object",
+          properties: { mode: { $ref: "#/$defs/Mode" } },
+        },
+        value: {},
+      }),
+    ).toThrow("invalid schema");
   });
 });
 

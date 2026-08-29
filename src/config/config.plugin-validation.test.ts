@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { validateConfigObjectWithPlugins as validateConfigObjectWithPluginsRaw } from "./validation.js";
@@ -310,6 +311,39 @@ describe("config plugin validation", () => {
         "invalid schema",
       );
     }
+  });
+
+  it("keeps malformed bundled plugin schemas on the throwing path", () => {
+    const bundledRecord = {
+      id: "bundled-schema-plugin",
+      channels: [],
+      cliBackends: [],
+      configSchema: {
+        type: "object",
+        properties: { mode: { $ref: "#/$defs/Mode" } },
+      },
+      hooks: [],
+      manifestPath: "/bundled/schema/openclaw.plugin.json",
+      origin: "bundled",
+      providers: [],
+      rootDir: "/bundled/schema",
+      skills: [],
+      source: "/bundled/schema/index.js",
+    } satisfies PluginManifestRecord;
+
+    expect(() =>
+      validateConfigObjectWithPlugins(
+        {
+          agents: { list: [{ id: "openclaw" }] },
+          plugins: { entries: { "bundled-schema-plugin": { enabled: true } } },
+        },
+        {
+          pluginMetadataSnapshot: {
+            manifestRegistry: { diagnostics: [], plugins: [bundledRecord] },
+          },
+        },
+      ),
+    ).toThrow("invalid schema");
   });
 
   it("reports missing plugin refs across entries and allowlist surfaces", () => {

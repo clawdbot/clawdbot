@@ -13,7 +13,7 @@ import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstall,
 } from "../plugins/official-external-plugin-catalog.js";
-import { validateManifestSchemaValue } from "../plugins/schema-validator.js";
+import { validatePluginSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
@@ -387,7 +387,8 @@ export function validateExplicitPluginConfig(params: {
     const shouldValidate = enabled || entryHasConfig;
     if (shouldValidate) {
       if (record.configSchema) {
-        const result = validateManifestSchemaValue({
+        const result = validatePluginSchemaValue({
+          origin: record.origin,
           schema: record.configSchema,
           cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
           value: entry?.config ?? {},

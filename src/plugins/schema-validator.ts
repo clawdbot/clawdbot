@@ -12,6 +12,7 @@ import {
 } from "../shared/json-schema-defaults.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 
 type TypeBoxValidationError = {
   keyword?: string;
@@ -352,22 +353,26 @@ function formatValidationErrors(
  * "config invalid" need this to avoid telling an operator to fill in config that no
  * value could ever satisfy.
  */
-export type ManifestSchemaValidationResult =
+type PluginSchemaValidationResult =
   | { ok: true; value: unknown }
   | { ok: false; errors: JsonSchemaValidationError[]; schemaError: boolean };
 
 /**
  * Validate a value against a schema supplied by a plugin manifest.
- * Manifest schemas are third-party input, so every failure mode is a validation
- * result: a structurally invalid schema, and a traversal that exhausts the stack
- * on a deeply nested one. validateJsonSchemaValue keeps throwing for repo-owned
- * schemas, where a malformed one is a programming error and must stay loud.
+ * External manifest schemas are third-party input, so every failure mode becomes
+ * a validation result. Bundled schemas stay on the throwing path because a malformed
+ * repository-owned schema is a programming error and must stay loud.
  */
-export function validateManifestSchemaValue(
-  params: Parameters<typeof validateJsonSchemaValue>[0],
-): ManifestSchemaValidationResult {
+export function validatePluginSchemaValue(
+  params: Parameters<typeof validateJsonSchemaValue>[0] & { origin: PluginOrigin },
+): PluginSchemaValidationResult {
+  const { origin, ...validationParams } = params;
+  if (origin === "bundled") {
+    const result = validateJsonSchemaValue(validationParams);
+    return result.ok ? result : { ...result, schemaError: false };
+  }
   try {
-    const result = validateJsonSchemaValue(params);
+    const result = validateJsonSchemaValue(validationParams);
     return result.ok ? result : { ...result, schemaError: false };
   } catch (error) {
     // The thrown text can embed raw manifest content (TypeBox echoes a bad regex

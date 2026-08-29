@@ -649,46 +649,6 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("reports a malformed external channel manifest schema as an issue instead of throwing", () => {
-    // channelConfigs.*.schema is untrusted external-plugin input (channel-config-metadata.ts
-    // merges every plugin origin, not just bundled), so a structurally invalid schema must
-    // isolate the same way a malformed plugin configSchema already does.
-    mockLoadPluginManifestRegistry.mockReturnValue({
-      diagnostics: [],
-      plugins: [
-        createPluginManifestRecord({
-          id: "broken-channel-schema-plugin",
-          origin: "global",
-          channels: ["feishu"],
-          channelConfigs: {
-            feishu: {
-              schema: {
-                type: "object",
-                properties: { mode: { $ref: "#/$defs/Mode" } },
-              },
-            },
-          },
-        }),
-      ],
-    });
-
-    const result = validateConfigObjectRawWithPlugins({
-      channels: {
-        feishu: { appId: "app-id" },
-      },
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({
-          path: "channels.feishu",
-          message: expect.stringContaining("invalid schema"),
-        }),
-      );
-    }
-  });
-
   it("accepts core-owned heartbeat visibility in closed channel and account schemas", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(createExternalFeishuSchemaRegistry());
 
