@@ -74,6 +74,9 @@ export type WhatsAppAppendReplyWindow = {
   maxAgeMs: number;
 };
 
+/** How far before connect a steady-state append may be dated and still be answered. */
+export const APPEND_RECENT_GRACE_MS = 60_000;
+
 type WhatsAppMessageDeliveryOptions = {
   cfg: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
@@ -200,7 +203,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     if (upsertType !== "append") {
       return false;
     }
-    const APPEND_RECENT_GRACE_MS = 60_000;
     const msgTsSeconds = parseWhatsAppTimestampSeconds(msg.messageTimestamp);
     const msgTsMs = msgTsSeconds !== undefined ? msgTsSeconds * 1000 : 0;
     // Reconnect catch-up is temporary; after it expires, preserve steady-state

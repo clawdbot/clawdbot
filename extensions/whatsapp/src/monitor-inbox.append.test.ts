@@ -283,6 +283,39 @@ describe("append upsert handling (#20952)", () => {
     await listener.close();
   });
 
+  it("delivery coordinator keeps steady-state appends as the cold-start window retires", async () => {
+    // The window's floor rolls with the clock while the steady-state floor stays
+    // pinned to connect, so late in the window the rolling floor is the stricter
+    // of the two. Nothing inside the grace period may be dropped on the way out.
+    const catchUpMaxMs = 5 * 60_000;
+    const connectedAtMs = 1_700_000_000_000;
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(connectedAtMs);
+    try {
+      writeSyncedCreds(3);
+      const onMessage = vi.fn(async () => {});
+      const { listener, sock } = await startInboxMonitor(onMessage, {
+        appendCatchUpMaxMs: catchUpMaxMs,
+      });
+      try {
+        dateNow.mockReturnValue(connectedAtMs + catchUpMaxMs - 30_000);
+        emitUpsert(sock, {
+          id: "grace-period-survivor",
+          body: "inside the steady-state grace period",
+          remoteJid: "999@s.whatsapp.net",
+          type: "append",
+          timestamp: (connectedAtMs - 45_000) / 1000,
+        });
+        await waitForMessageCalls(onMessage, 1);
+
+        expect(onMessage).toHaveBeenCalledTimes(1);
+      } finally {
+        await listener.close();
+      }
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("delivery coordinator drops replayed history for a session awaiting its first sync", async () => {
     writeSyncedCreds(0);
     const onMessage = vi.fn(async () => {});

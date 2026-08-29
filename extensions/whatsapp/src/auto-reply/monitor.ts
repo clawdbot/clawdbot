@@ -288,6 +288,7 @@ export async function monitorWebChannel(
                     maxAgeMs: reconnectCatchUpWindowMs,
                   }
                 : undefined,
+              appendCatchUpMaxMs: reconnectCatchUpWindowMs,
               shouldDebounce,
               socketRef: controller.socketRef,
               shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),

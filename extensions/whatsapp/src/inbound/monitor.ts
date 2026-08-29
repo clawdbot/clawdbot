@@ -21,6 +21,7 @@ import {
 } from "./group-metadata-cache.js";
 import { closeInboundMonitorSocket } from "./lifecycle.js";
 import {
+  APPEND_RECENT_GRACE_MS,
   createWhatsAppMessageDeliveryCoordinator,
   type WhatsAppAppendReplyWindow,
 } from "./message-delivery.js";
@@ -34,12 +35,8 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   }
 }
 
-/**
- * Ceiling on how far back a connect-time offline flush may reach. Mirrors the
- * reconnect catch-up cap so a restart can never answer further back than a
- * reconnect already does.
- */
-const WHATSAPP_OFFLINE_CATCH_UP_MAX_MS = 20 * 60_000;
+/** Fallback catch-up width when the caller does not supply its own. */
+const DEFAULT_OFFLINE_CATCH_UP_MS = 20 * 60_000;
 
 /**
  * Baileys tags an inbound stanza `append` when the server released it from this
@@ -50,11 +47,17 @@ const WHATSAPP_OFFLINE_CATCH_UP_MAX_MS = 20 * 60_000;
  * backlog. An already-synced credential is an established session, so it earns
  * the same bounded catch-up. A credential still awaiting its first sync does
  * not, because its replay is the phone's history rather than our backlog.
+ *
+ * The floor `shouldSkipStaleAppend` derives from this window rolls forward with
+ * the clock, while the steady-state floor is pinned to connect. Retiring the
+ * window one grace period early keeps the rolling floor from ever overtaking
+ * the pinned one, so this can only widen what a socket answers, never narrow it.
  */
 function resolveAppendReplyWindow(params: {
   requested: WhatsAppAppendReplyWindow | undefined;
   authDir: string;
   connectedAtMs: number;
+  catchUpMaxMs: number;
 }): WhatsAppAppendReplyWindow | undefined {
   if (params.requested) {
     return params.requested;
@@ -63,9 +66,9 @@ function resolveAppendReplyWindow(params: {
     return undefined;
   }
   return {
-    afterMs: params.connectedAtMs - WHATSAPP_OFFLINE_CATCH_UP_MAX_MS,
-    untilMs: params.connectedAtMs + WHATSAPP_OFFLINE_CATCH_UP_MAX_MS,
-    maxAgeMs: WHATSAPP_OFFLINE_CATCH_UP_MAX_MS,
+    afterMs: params.connectedAtMs - params.catchUpMaxMs,
+    untilMs: params.connectedAtMs + params.catchUpMaxMs - APPEND_RECENT_GRACE_MS,
+    maxAgeMs: params.catchUpMaxMs,
   };
 }
 
@@ -86,6 +89,8 @@ type MonitorWebInboxOptions = {
   debounceMs?: number;
   /** Bounded reconnect window for offline append auto-replies. */
   appendReplyWindow?: WhatsAppAppendReplyWindow;
+  /** Catch-up width used when no window is supplied; keeps both paths on one bound. */
+  appendCatchUpMaxMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
   /** Optional shared socket reference so reply closures can follow reconnects. */
@@ -171,6 +176,7 @@ export async function attachWebInboxToSocket(
       requested: options.appendReplyWindow,
       authDir: options.authDir,
       connectedAtMs: socketSession.connectedAtMs,
+      catchUpMaxMs: options.appendCatchUpMaxMs ?? DEFAULT_OFFLINE_CATCH_UP_MS,
     }),
     shouldDebounce: options.shouldDebounce,
     onPendingWorkChanged: options.onPendingWorkChanged,
