@@ -1,9 +1,9 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-types";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   createStartedThreadHarness,
   createTestParams,
-  fastWait,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   threadStartResult,
@@ -29,12 +29,15 @@ describe("Codex reasoning effort across completed turns", () => {
     "changes high to off on the same thread with $metadata metadata",
     async ({ metadata, supported, expectedOff }) => {
       let turnCount = 0;
+      let turnStarted = createDeferred<void>();
       const harness = createStartedThreadHarness(async (method) => {
         if (method === "thread/resume") {
           return threadStartResult();
         }
         if (method === "turn/start") {
-          return turnStartResult(`turn-${++turnCount}`);
+          const result = turnStartResult(`turn-${++turnCount}`);
+          turnStarted.resolve();
+          return result;
         }
         return undefined;
       });
@@ -58,12 +61,14 @@ describe("Codex reasoning effort across completed turns", () => {
       };
 
       for (const [index, thinkLevel] of (["high", "off"] as const).entries()) {
+        turnStarted = createDeferred<void>();
         const run = runCodexAppServerAttempt({
           ...params,
           thinkLevel,
           runId: `run-${index + 1}`,
         });
-        await vi.waitFor(() => expect(turnCount).toBe(index + 1), fastWait);
+        await Promise.race([turnStarted.promise, run]);
+        expect(turnCount).toBe(index + 1);
         await harness.completeTurn({ threadId: "thread-1", turnId: `turn-${index + 1}` });
         await run;
       }

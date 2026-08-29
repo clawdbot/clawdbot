@@ -121,6 +121,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
     }
     platformModel = model;
     preparedModelRuntime = {
+      catalogOwner: undefined,
       agentDir: path.join(root, "agent"),
       workspaceDir: root,
       activeProjectKeys: [],
