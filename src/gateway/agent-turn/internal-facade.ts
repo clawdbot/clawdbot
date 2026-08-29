@@ -33,6 +33,17 @@ type InternalAgentTurnFacadeOptions = {
   isWebchatConnect?: GatewayRequestOptions["isWebchatConnect"];
 };
 
+export type InternalAgentTurnPrincipalOptions = Omit<
+  InternalAgentTurnFacadeOptions,
+  "getContext" | "getMethodRegistry"
+>;
+
+export type InternalAgentTurnFacadeFactory = (
+  principal: InternalAgentTurnPrincipalOptions,
+) =>
+  | ReturnType<typeof createInternalAgentTurnFacade>
+  | Promise<ReturnType<typeof createInternalAgentTurnFacade>>;
+
 type InternalAgentTurnDispatchOptions = {
   expectFinal?: boolean;
   onAccepted?: (payload: unknown) => void;
@@ -60,6 +71,7 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
   ): Promise<GatewayMethodDispatchResponse> => {
     const method = "agent";
     throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
+    options.assertContextCurrent?.();
     const context = options.getContext();
     const methodRegistry = getMethodRegistry();
     const authorization = await authorizeGatewayRequestPreDispatch({
@@ -221,6 +233,7 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
   ): Promise<T> => {
     const method = "agent.wait";
     throwIfGatewayDispatchAborted(method, signal);
+    options.assertContextCurrent?.();
     const context = options.getContext();
     const methodRegistry = getMethodRegistry();
     const authorization = await authorizeGatewayRequestPreDispatch({

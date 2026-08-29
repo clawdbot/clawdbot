@@ -10,6 +10,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { resolveNodeInvokeRuntimeAuthorityError } from "./server-methods/nodes.invoke-authority.js";
 import type {
@@ -33,11 +34,20 @@ vi.mock("./agent-turn/agent-turn-service.js", () => ({
 }));
 
 function createContext(): GatewayRequestContext {
-  return {
+  const context = {
     dedupe: new Map(),
     getRuntimeConfig: () => ({}),
     logGateway: { error: vi.fn(), warn: vi.fn() },
   } as unknown as GatewayRequestContext;
+  context.createAgentTurnFacade = (principal) =>
+    createInternalAgentTurnFacade({
+      ...principal,
+      getContext: () => context,
+      ...(context.getGatewayMethodRegistry
+        ? { getMethodRegistry: context.getGatewayMethodRegistry }
+        : {}),
+    });
+  return context;
 }
 
 function createOperatorClient(params: {
@@ -114,6 +124,66 @@ describe("typed in-process agent authorization", () => {
     startTurn.mockReset();
     waitForTurn.mockReset();
   });
+
+  it.each([
+    ["agent", { message: "owned turn", idempotencyKey: "host-owned" }],
+    ["agent.wait", { runId: "host-owned" }],
+  ] as const)(
+    "uses the captured host factory for %s and refuses an ownerless context",
+    async (method, params) => {
+      const client = createOperatorClient({ profileId: "owner", scopes: ["operator.write"] });
+      const context = createContext();
+      const createFacade = vi.fn(context.createAgentTurnFacade!);
+      context.createAgentTurnFacade = createFacade;
+      const result = { runId: "host-owned", status: "ok" };
+      startTurn.mockImplementation(async ({ io }) => io.emitAcceptance([true, result, undefined]));
+      waitForTurn.mockResolvedValue(result);
+
+      await expect(dispatchScopedMethod({ client, context, method, params })).resolves.toEqual(
+        result,
+      );
+      expect(createFacade).toHaveBeenCalledOnce();
+      expect(createFacade.mock.calls[0]?.[0].client).toBe(client);
+
+      delete context.createAgentTurnFacade;
+      await expect(dispatchScopedMethod({ client, context, method, params })).rejects.toThrow(
+        "Gateway instance agent turn facade unavailable",
+      );
+    },
+  );
+
+  it.each([
+    ["agent", { message: "retired turn", idempotencyKey: "retired-host" }],
+    ["agent.wait", { runId: "retired-host" }],
+  ] as const)(
+    "revalidates the captured host after awaiting its %s factory",
+    async (method, params) => {
+      const context = createContext();
+      let current = context;
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const createFacade = context.createAgentTurnFacade!;
+      context.createAgentTurnFacade = async (principal) => {
+        entered.resolve();
+        await release.promise;
+        return createFacade(principal);
+      };
+
+      const pending = dispatchGatewayMethodInProcess(method, params, {
+        forceSyntheticClient: true,
+        operatorRoleActor: { kind: "system" },
+        resolveGatewayContext: () => current,
+      });
+      const rejected = expect(pending).rejects.toThrow("current gateway instance binding");
+      await entered.promise;
+      current = createContext();
+      release.resolve();
+
+      await rejected;
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(waitForTurn).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves verified operator identity and never widens a synthetic tool caller's scopes", async () => {
     const owner = createOperatorClient({

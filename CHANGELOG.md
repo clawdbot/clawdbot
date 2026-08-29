@@ -69,6 +69,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/subagents: keep plugin completion turns bound to the owning Gateway runtime so successful native subagents can finish delivery without losing the published reply runtime.
+
 - **Control UI tool progress:** keep error-shaped partial output running until the tool returns its result, with consistent status in collapsed rows, expanded cards, and side-panel details.
 
 - MCP Apps: let standalone operations finish across catalog refreshes within per-request server budgets, propagate App cancellation without cancelling shared catalog work, and reload restored history views without replaying interrupted operations. Thanks @tzy-17. (#119388)
