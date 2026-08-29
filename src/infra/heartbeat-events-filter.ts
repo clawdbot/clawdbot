@@ -159,6 +159,36 @@ export function buildExecEventPrompt(
   );
 }
 
+/** Compose every event class inspected by one heartbeat into a single model turn. */
+export function buildHeartbeatEventPrompt(params: {
+  execEvents?: readonly string[];
+  cronEvents?: readonly string[];
+  genericEvents?: readonly string[];
+  deliverToUser?: boolean;
+  useHeartbeatResponseTool?: boolean;
+}): string {
+  const opts = {
+    deliverToUser: params.deliverToUser,
+    useHeartbeatResponseTool: params.useHeartbeatResponseTool,
+  };
+  const sections: string[] = [];
+  if (params.execEvents?.length) {
+    sections.push(buildExecEventPrompt([...params.execEvents], opts));
+  }
+  if (params.cronEvents?.length) {
+    sections.push(buildCronEventPrompt([...params.cronEvents], opts));
+  }
+  if (params.genericEvents?.length) {
+    sections.push(buildSystemEventPrompt([...params.genericEvents], opts));
+  }
+  return sections.length > 1
+    ? [
+        "Multiple heartbeat events were triggered. Assess each event and handle every event shown below.",
+        ...sections,
+      ].join("\n\n")
+    : (sections[0] ?? buildSystemEventPrompt([], opts));
+}
+
 /** Build a heartbeat prompt for system events that are not owned by exec or cron. */
 export function buildSystemEventPrompt(
   pendingEvents: string[],

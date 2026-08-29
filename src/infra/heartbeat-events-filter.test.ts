@@ -1,6 +1,7 @@
 // Covers heartbeat event prompt filtering.
 import { describe, expect, it } from "vitest";
 import {
+  buildHeartbeatEventPrompt,
   buildCronEventPrompt,
   buildExecEventPrompt,
   buildSystemEventPrompt,
@@ -127,6 +128,19 @@ describe("heartbeat event prompts", () => {
     expect(prompt).toContain("heartbeat_respond");
     expect(prompt).toContain("notify=false");
     expect(prompt).not.toContain("HEARTBEAT_OK");
+  });
+
+  it("composes generic, exec, and cron events in one heartbeat prompt", () => {
+    const prompt = buildHeartbeatEventPrompt({
+      execEvents: ["Exec failed (backup, code 1) :: backup failed"],
+      cronEvents: ["Cron: send the overnight report"],
+      genericEvents: ["Gateway restart ok"],
+    });
+
+    expect(prompt).toContain("Multiple heartbeat events were triggered");
+    expect(prompt).toContain("backup failed");
+    expect(prompt).toContain("Cron: send the overnight report");
+    expect(prompt).toContain("Gateway restart ok");
   });
 
   it("embeds generic system events in the heartbeat prompt", () => {
