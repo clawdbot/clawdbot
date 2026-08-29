@@ -13,6 +13,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { BundledChannelSetupEntryContract } from "../plugin-sdk/channel-entry-contract.js";
 import type { BundledChannelLegacyStateMigrationDetector } from "../plugin-sdk/channel-entry-contract.types.js";
 import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/doctor-migration-plan-adapter.js";
+import { hasPluginConfigMigrationSource } from "./config-contract-matches.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import {
@@ -53,8 +54,19 @@ type PluginDoctorContractEntry = {
 
 type PluginDoctorStateMigrationEntry = {
   pluginId: string;
+  channelIds: string[];
+  /**
+   * Mirrors the runtime proxy's durable-store gate: only bundled plugins and trusted
+   * official installs may reach channel ingress queues. Doctor must not become a way
+   * around that for an activated workspace plugin.
+   */
+  trustedForDurableStores?: boolean;
   migration: PluginDoctorStateMigration;
 };
+
+function isTrustedForDurableStores(record: PluginManifestRegistryRecord): boolean {
+  return record.origin === "bundled" || record.trustedOfficialInstall === true;
+}
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
 
@@ -62,10 +74,9 @@ function loadPluginDoctorContractModule(params: {
   modulePath: string;
   rootDir: string;
 }): PluginDoctorContractModule {
-  pluginDoctorContractRegistryLoaderState.moduleRoots.set(params.modulePath, params.rootDir);
   return getCachedPluginModuleLoader({
-    cache: pluginDoctorContractRegistryLoaderState.moduleLoaders,
     modulePath: params.modulePath,
+    rootDir: params.rootDir,
     importerUrl: import.meta.url,
     ...(pluginDoctorContractRegistryLoaderState.moduleLoaderFactory
       ? { createLoader: pluginDoctorContractRegistryLoaderState.moduleLoaderFactory }
@@ -181,7 +192,7 @@ export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
   return [...ids].toSorted();
 }
 
-export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
+function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
   raw: unknown;
   touchedPaths: ReadonlyArray<ReadonlyArray<string>>;
 }): string[] {
@@ -227,6 +238,38 @@ export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
     }
   }
 
+  return [...ids].toSorted();
+}
+
+/** Include manifest-owned legacy roots for config repair, never session ownership. */
+export function collectDoctorConfigRepairPluginIds(
+  raw: unknown,
+  touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
+): string[] {
+  const config = asNullableRecord(raw);
+  if (!config) {
+    return [];
+  }
+  const ids = new Set(
+    touchedPaths
+      ? collectRelevantDoctorPluginIdsForTouchedPaths({ raw, touchedPaths })
+      : collectRelevantDoctorPluginIds(raw),
+  );
+  const registry = loadPluginManifestRegistryForPluginRegistry({
+    config,
+    includeDisabled: true,
+  });
+  for (const plugin of registry.plugins) {
+    if (
+      hasPluginConfigMigrationSource({
+        root: raw,
+        pathPatterns: plugin.configContracts?.compatibilityMigrationPaths,
+        touchedPaths,
+      })
+    ) {
+      ids.add(plugin.id);
+    }
+  }
   return [...ids].toSorted();
 }
 
@@ -450,7 +493,12 @@ export function listPluginDoctorStateMigrationEntries(params?: {
       records: [record],
       surface: "stateMigrations",
     }).flatMap((entry) =>
-      entry.stateMigrations.map((migration) => ({ pluginId: entry.pluginId, migration })),
+      entry.stateMigrations.map((migration) => ({
+        pluginId: entry.pluginId,
+        channelIds: record.channels,
+        trustedForDurableStores: isTrustedForDurableStores(record),
+        migration,
+      })),
     );
     if (modernEntries.length > 0) {
       entries.push(...modernEntries);
@@ -471,6 +519,8 @@ export function listPluginDoctorStateMigrationEntries(params?: {
     }
     entries.push({
       pluginId: record.id,
+      channelIds: record.channels,
+      trustedForDurableStores: isTrustedForDurableStores(record),
       migration: definePluginDoctorMigrationFromPlans({
         id: `${record.id}-legacy-channel-state`,
         label: `${record.id} legacy channel state`,

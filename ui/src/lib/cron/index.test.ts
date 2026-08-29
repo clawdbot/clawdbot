@@ -575,19 +575,14 @@ describe("cron controller", () => {
     });
   });
 
-  it('sends delivery: { mode: "none" } explicitly in cron.add payload', async () => {
-    const { submit } = createCronSubmitHarness("job-none-add", {
-      form: {
-        name: "none delivery job",
-        everyAmount: "1",
-        everyUnit: "minutes",
-        wakeMode: "next-heartbeat",
-        payloadText: "run this",
-        deliveryMode: "none",
-      },
-    });
+  it('defaults a fresh cron.add to delivery: { mode: "none" }', async () => {
+    const request = createCronRequest("job-none-add");
+    const state = createStateWithRequest(request);
+    state.cronForm.name = "none delivery job";
+    state.cronForm.payloadText = "run this";
 
-    const { call } = await submit();
+    await addCronJob(state);
+    const call = findRequestCall(request.mock.calls, "cron.add");
 
     expect((call[1] as { delivery?: unknown } | undefined)?.delivery).toEqual({
       mode: "none",
@@ -693,8 +688,8 @@ describe("cron controller", () => {
     expect((call[1] as { delivery?: unknown } | undefined)?.delivery).toEqual({
       mode: "none",
     });
-    // After submit, form is reset to defaults (deliveryMode = "announce" from DEFAULT_CRON_FORM).
-    expect(state.cronForm.deliveryMode).toBe("announce");
+    // After submit, the form returns to the targetless internal-only default.
+    expect(state.cronForm.deliveryMode).toBe("none");
   });
 
   it("submits cron.update when editing an existing job", async () => {

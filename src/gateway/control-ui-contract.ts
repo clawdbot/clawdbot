@@ -66,6 +66,14 @@ type ControlUiSessionPullRequestChecks = {
 /** One GitHub pull request whose head is the session's working branch. */
 export type ControlUiSessionPullRequest = {
   number: number;
+  /**
+   * Author login from the list payload GitHub already returns; no extra call.
+   * Absent for a ghosted or deleted account. Deliberately login-only: the
+   * sibling GitHub-link hovercard inlines avatars server-side rather than
+   * hotlinking them, so a remote <img> here would leak a browser request to
+   * GitHub on every hover.
+   */
+  author?: { login: string };
   owner: string;
   repo: string;
   branch: string;

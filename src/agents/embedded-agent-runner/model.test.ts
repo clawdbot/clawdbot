@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadBundledPluginPublicSurface } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import type { ProviderPlugin } from "../../plugins/types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
 import {
@@ -196,7 +199,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
       activeProjectKeys: [],
       config: input.config ?? {},
       authModes: {},
-      metadataSnapshot: { plugins: [] },
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       allowGatewaySubagentBinding: false,
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: preparedSnapshotState.configuredRuntimeModels,
@@ -259,6 +262,7 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/ty
 import type { Model } from "../../llm/types.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
+import { applyConfiguredProviderOverrides } from "./model.configured-overrides.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
 import { resolveModelAsync, resolveModelWithRegistry } from "./model.js";
@@ -1078,7 +1082,7 @@ describe("resolveModel", () => {
       allowGatewaySubagentBinding: false,
       config: cfg,
       authModes: {},
-      metadataSnapshot: { plugins: [] } as never,
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [
         {
@@ -1119,7 +1123,7 @@ describe("resolveModel", () => {
       allowGatewaySubagentBinding: false,
       config: {},
       authModes: {},
-      metadataSnapshot: { plugins: [] } as never,
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [],
       inlineProviderModels: [],
@@ -1149,7 +1153,7 @@ describe("resolveModel", () => {
   });
 
   it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
-    const metadataSnapshot = { plugins: [] } as never;
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
     const preparedModelRuntime = {
       agentDir: "/tmp/agent",
       activeProjectKeys: [],
@@ -4478,6 +4482,83 @@ describe("resolveModel", () => {
       "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
     );
   });
+
+  it.each(["provider", "model"])(
+    "preserves authored %s transport and model overrides",
+    async (scope) => {
+      const { buildOpenAIProvider } = await loadBundledPluginPublicSurface<{
+        buildOpenAIProvider: () => ProviderPlugin;
+      }>({ pluginId: "openai", artifactBasename: "api.js" });
+      const provider = buildOpenAIProvider();
+      const modelId = "gpt-5.6-luna";
+      const route = { api: "openai-completions", baseUrl: "https://proxy.example/v1" } as const;
+      const providerConfig: ModelProviderConfig = {
+        baseUrl: "https://api.openai.com/v1",
+        ...(scope === "provider" ? route : {}),
+        headers: { "X-Provider-Route": "authored" },
+        models: [
+          {
+            id: modelId,
+            name: "Authored Luna",
+            ...(scope === "model" ? route : {}),
+            headers: { "X-Model-Route": "authored" },
+            compat: { codeMode: "capable", supportsTemperature: true },
+            reasoning: false,
+            input: ["text"],
+            contextWindow: 64_000,
+            maxTokens: 4_000,
+            cost: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      };
+      const config = { models: { providers: { openai: providerConfig } } };
+      const discoveredModel = provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId,
+        providerConfig,
+        config,
+        modelRegistry: {
+          find: () => undefined,
+          getAll: () => [],
+          getAvailable: () => [],
+          hasConfiguredAuth: () => false,
+        },
+      });
+      if (!discoveredModel) {
+        throw new Error("expected the OpenAI dynamic model");
+      }
+      expect(discoveredModel.compat?.codeMode).toBe("preferred");
+
+      const model = applyConfiguredProviderOverrides({
+        provider: "openai",
+        modelId,
+        discoveredModel,
+        providerConfig,
+        cfg: config,
+        manifestAlias: { provider: "openai" },
+        runtimeHooks: {
+          buildProviderUnknownModelHintWithPlugin: ({ context }) =>
+            provider.buildUnknownModelHint?.(context) ?? undefined,
+          prepareProviderDynamicModel: async () => undefined,
+          runProviderDynamicModel: ({ context }) => provider.resolveDynamicModel?.(context),
+          normalizeProviderResolvedModelWithPlugin: ({ context }) =>
+            provider.normalizeResolvedModel?.(context),
+          normalizeProviderTransportWithPlugin: ({ context }) =>
+            provider.normalizeTransport?.(context) ?? undefined,
+        },
+      });
+      expect(model).toMatchObject({
+        ...route,
+        headers: { "X-Provider-Route": "authored", "X-Model-Route": "authored" },
+        compat: { codeMode: "capable", supportsTemperature: true },
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 64_000,
+        maxTokens: 4_000,
+        cost: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 },
+      });
+    },
+  );
 
   it("applies provider overrides to openai gpt-5.4 forward-compat models", async () => {
     mockDiscoveredModel(discoverModels, {

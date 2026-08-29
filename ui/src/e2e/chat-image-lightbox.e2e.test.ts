@@ -1,7 +1,8 @@
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -31,15 +32,6 @@ async function newContext(options: Parameters<Browser["newContext"]>[0]) {
 async function closeContext(context: BrowserContext) {
   openContexts.delete(context);
   await context.close().catch(() => {});
-}
-
-async function waitForLightboxAnimations(page: Page): Promise<void> {
-  await page.locator("openclaw-image-lightbox wa-dialog").evaluate(async (dialogAdapter) => {
-    const nativeDialog = dialogAdapter.shadowRoot?.querySelector("dialog");
-    await Promise.all(
-      (nativeDialog?.getAnimations({ subtree: true }) ?? []).map((animation) => animation.finished),
-    );
-  });
 }
 
 describeControlUiE2e("Control UI image lightbox", () => {
@@ -138,6 +130,49 @@ describeControlUiE2e("Control UI image lightbox", () => {
       const openOriginal = page.getByRole("link", { name: "Open in new tab" });
       await openOriginal.waitFor({ state: "visible" });
       await expect.poll(() => openOriginal.getAttribute("href")).toMatch(/^blob:/);
+      const readControlContrast = () =>
+        page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
+          const root = lightbox.shadowRoot!;
+          return [".open-original", ".close", '[aria-label="Zoom in"]'].map((selector) => {
+            const style = getComputedStyle(root.querySelector(selector)!);
+            return {
+              backdropFilter: style.backdropFilter,
+              backgroundColor: style.backgroundColor,
+              borderWidth: style.borderWidth,
+              color: style.color,
+            };
+          });
+        });
+      for (const [theme, backgroundColor] of [
+        ["dark", "rgba(255, 255, 255, 0.16)"],
+        ["light", "rgba(12, 16, 24, 0.64)"],
+      ] as const) {
+        await page.evaluate(
+          (mode) => document.documentElement.setAttribute("data-theme-mode", mode),
+          theme,
+        );
+        await expect.poll(readControlContrast).toEqual([
+          expect.objectContaining({
+            backdropFilter: expect.stringContaining("blur(16px)"),
+            backgroundColor,
+            borderWidth: "0px",
+            color: "rgb(255, 255, 255)",
+          }),
+          expect.objectContaining({
+            backdropFilter: expect.stringContaining("blur(16px)"),
+            backgroundColor,
+            borderWidth: "0px",
+            color: "rgb(255, 255, 255)",
+          }),
+          expect.objectContaining({
+            backdropFilter: expect.stringContaining("blur(16px)"),
+            backgroundColor,
+            borderWidth: "0px",
+            color: "rgb(255, 255, 255)",
+          }),
+        ]);
+      }
+      await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
       const focusIsInsideLightbox = () =>
         page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
           let active: Element | null = document.activeElement;
@@ -165,7 +200,9 @@ describeControlUiE2e("Control UI image lightbox", () => {
           ),
         )
         .toBeGreaterThan(0);
-      await waitForLightboxAnimations(page);
+      await page
+        .locator("openclaw-image-lightbox wa-dialog dialog")
+        .evaluate(finishElementAnimations);
       const desktopBox = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
       const viewport = page.viewportSize();
       expect(desktopBox?.x).toBe(0);
@@ -226,7 +263,9 @@ describeControlUiE2e("Control UI image lightbox", () => {
       await page.setViewportSize({ height: 844, width: 390 });
       await sidebarTrigger.click();
       await sidebarDialog.waitFor({ state: "visible" });
-      await waitForLightboxAnimations(page);
+      await page
+        .locator("openclaw-image-lightbox wa-dialog dialog")
+        .evaluate(finishElementAnimations);
       await page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
         lightbox.style.setProperty("--safe-area-top", "18px");
         lightbox.style.setProperty("--safe-area-right", "12px");

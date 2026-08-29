@@ -128,9 +128,7 @@ export async function patchSessionRows(
       targets: chunkRows.map((row) => ({
         key: row.key,
         agentId: sessionRowAgentId(row, scope),
-        ...(typeof patch.archived === "boolean" && row.sessionId
-          ? { expectedSessionId: row.sessionId }
-          : {}),
+        ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
       })),
       patch,
     };

@@ -17,6 +17,7 @@ import {
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
 } from "./message-action-runner.test-helpers.js";
+import { ensureOutboundSessionEntry } from "./outbound-session.js";
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 const requireLabeledRecord = createRequireRecord("record", "expected-label");
@@ -543,6 +544,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes local chart presentations through core delivery", async () => {
+      const sourceSessionKey = "agent:main:cardchat:direct:restricted-creator";
       const presentation = {
         blocks: [
           {
@@ -604,6 +606,7 @@ describe("runMessageAction plugin dispatch", () => {
           mode: "cli",
         },
         agentId: "main",
+        sessionKey: sourceSessionKey,
         suppressTranscriptMirror: true,
         dryRun: false,
       });
@@ -621,6 +624,9 @@ describe("runMessageAction plugin dispatch", () => {
         readRecordField(executeCall, "payload", "execute send payload"),
         { text: "Deployment trend", presentation },
         "execute send payload",
+      );
+      expect(ensureOutboundSessionEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceSessionKey }),
       );
     });
 

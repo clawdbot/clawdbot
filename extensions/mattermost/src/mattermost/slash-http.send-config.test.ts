@@ -1,8 +1,8 @@
 // Mattermost tests cover slash http.send config plugin behavior.
 import { ServerResponse, type IncomingMessage } from "node:http";
-import { PassThrough } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 
@@ -18,7 +18,7 @@ const mockState = vi.hoisted(() => ({
     team_id: "team-1",
   })),
   resolveCommandText: vi.fn((_trigger: string, text: string) => text),
-  buildModelsProviderData: vi.fn(async () => ({ providers: [], modelNames: new Map() })),
+  buildPreparedModelsProviderData: vi.fn(async () => ({ providers: [], modelNames: new Map() })),
   resolveMattermostModelPickerEntry: vi.fn((): { kind: string } | null => ({ kind: "summary" })),
   authorizeMattermostCommandInvocation: vi.fn(() => ({
     ok: true,
@@ -54,7 +54,7 @@ const mockState = vi.hoisted(() => ({
 
 vi.mock("./runtime-api.js", () => {
   return {
-    buildModelsProviderData: mockState.buildModelsProviderData,
+    buildPreparedModelsProviderData: mockState.buildPreparedModelsProviderData,
     createChannelMessageReplyPipeline: vi.fn(() => ({
       onModelSelected: vi.fn(),
       typingCallbacks: {},
@@ -147,17 +147,13 @@ let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashC
 const callbackUrlFixture = "https://gateway.example.com/slash";
 
 function createRequest(body = "token=valid-token"): IncomingMessage {
-  const req = new PassThrough();
-  const incoming = req as PassThrough & IncomingMessage;
-  incoming.method = "POST";
-  incoming.url = "/slash";
-  incoming.headers = {
+  const req = createMockIncomingRequest([body]);
+  req.method = "POST";
+  req.url = "/slash";
+  req.headers = {
     "content-type": "application/x-www-form-urlencoded",
   };
-  process.nextTick(() => {
-    req.end(body);
-  });
-  return incoming;
+  return req;
 }
 
 function createResponse(): {
@@ -220,7 +216,7 @@ describe("slash-http cfg threading", () => {
     mockState.readRequestBodyWithLimit.mockClear();
     mockState.parseSlashCommandPayload.mockClear();
     mockState.resolveCommandText.mockClear();
-    mockState.buildModelsProviderData.mockClear();
+    mockState.buildPreparedModelsProviderData.mockClear();
     mockState.resolveMattermostModelPickerEntry.mockClear();
     mockState.authorizeMattermostCommandInvocation.mockClear();
     mockState.createMattermostClient.mockClear();

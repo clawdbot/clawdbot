@@ -9,13 +9,17 @@ read_when:
   - You are reviewing the MCP namespace bridge or virtual API declarations
 ---
 
-Code mode is an experimental OpenClaw agent-runtime feature. It defaults to the
-`"auto"` tier, which engages only models whose catalog marks them as preferred
-code-mode performers; every other model keeps normal tool exposure. When
-engaged, the model no longer sees every enabled tool schema; instead, it sees
+Code mode is an experimental, opt-in OpenClaw agent-runtime feature. When
+enabled, the model no longer sees every enabled tool schema; instead, it sees
 `exec`, `wait`, and any direct-only tool whose structured result cannot cross
 the JSON-only guest bridge. The model writes a small JavaScript or TypeScript
 program that searches, describes, and calls the hidden tool catalog.
+
+<Note>
+OpenClaw Code Mode is off by default. To try it, open **Settings → Agents &
+Tools → Labs** and turn on **Code Mode**. The Labs switch writes the `"auto"`
+tier, which engages only for models marked as preferred Code Mode performers.
+</Note>
 
 This page documents OpenClaw code mode, not Codex Code Mode. The two features
 share a name and the same control-tool names (`exec`, `wait`), but they are
@@ -25,8 +29,8 @@ separate implementations:
   freeform-grammar tool: the model writes raw JavaScript source (optionally
   prefixed by a `// @exec: {...}` pragma line for execution options), executed
   in Codex's in-process V8 Code Mode runtime.
-- OpenClaw code mode runs in the generic OpenClaw agent runtime, gated by
-  `tools.codeMode.enabled` (default `"auto"`, per-model activation). Its `exec`
+- OpenClaw code mode runs in the generic OpenClaw agent runtime and is
+  disabled unless `tools.codeMode.enabled` is `true` or `"auto"`. Its `exec`
   tool takes a JSON `{ code, language }` payload, executed in a QuickJS-WASI
   worker.
 
@@ -64,6 +68,12 @@ commands are rejected before the QuickJS worker starts with actionable
 - `wait` resumes a suspended code-mode run when nested tool calls are still
   pending.
 
+Call `wait` only when the outer code-mode result has `status: "waiting"`, using
+its top-level `runId`. A completed cell can return a background shell operation
+with its own `sessionId` inside `value`; use the enabled process-control tool
+inside a new `exec` to poll that operation. Its `sessionId` is not a code-mode
+run ID.
+
 Code mode changes the model-facing orchestration surface only. It does not
 replace tools, plugin tools, MCP tools, auth, approval policy, channel
 behavior, or model selection.
@@ -93,20 +103,18 @@ the QuickJS-WASI guest.
 
 ## Quickstart
 
-### Defaults and overrides
+### Enable code mode
 
-Code mode ships enabled in the `"auto"` tier: it engages only when the run's
-model is flagged as a preferred code-mode performer in its provider catalog,
-and every other model keeps normal tool exposure. No configuration is needed.
-See [Automatic per-model activation](#automatic-per-model-activation) for the
-exact semantics and the shipped model list.
+The recommended path is **Settings → Agents & Tools → Labs → Code Mode**. The
+switch takes effect for future agent runs without restarting the Gateway and
+selects the `"auto"` tier.
 
-To opt out for every run:
+To enable the same tier without the Control UI, set it in config:
 
 ```json5
 {
   tools: {
-    codeMode: false,
+    codeMode: "auto",
   },
 }
 ```
@@ -122,8 +130,12 @@ To force code mode on for every tool-capable run, regardless of model:
 ```
 
 Object form works too: `tools.codeMode.enabled` accepts the same `false`,
-`true`, and `"auto"` values. An object without `enabled` keeps the `"auto"`
-default.
+`true`, and `"auto"` values. Code mode stays off when `tools.codeMode` is
+omitted, `false`, or an object without an explicit `enabled` value. Configuring
+limits or other Code Mode options does not enable it.
+
+See [Automatic per-model activation](#automatic-per-model-activation) for the
+exact semantics and the shipped model list.
 
 If you use sandboxed agents with configured MCP servers, also allow the
 bundled MCP plugin in the sandbox tool policy, for example
@@ -184,14 +196,32 @@ try {
 }
 ```
 
+Await every tool call or handle its rejection explicitly. OpenClaw drains
+dispatched calls before completing a cell; an unhandled rejection, including
+one from an unawaited call or timer callback, fails the cell instead of silently
+reporting success. Handlers attached after a suspension still handle their
+original promises.
+
 JavaScript syntax errors, TypeScript transform errors, and tool failures proven
 to occur before execution become failed `exec` results that the model can read
-and correct across successive turns. A failed tool call does not automatically
-end the agent run when OpenClaw can prove that no nested action started.
+and correct across successive turns. A failed `exec` or `wait` does not automatically
+end the agent run when OpenClaw's host execution record proves that no potentially
+mutating nested action started, including before a suspended run resumed.
+
+An exec host-policy rejection can carry this proof even after hooks, approval
+resolution, and tool implementation entry: the host owns the narrower fact that
+no command process or remote dispatch started. A corrected call runs the ordinary
+hooks and approvals again. Consumed voice confirmations stay consumed; recovery
+does not restore a grant or authorize replay.
+
+Catalog search, handle `describe()`, `skills.list()`, and `skills.read()` are
+read-only discovery. A guest error after only these operations still allows
+ordinary recovery from a failed `exec`; discovery does not count as a mutation.
 
 OpenClaw does not automatically replay a failed program. If earlier calls
-already ran or a failed call may have partially applied, OpenClaw first limits
-recovery to an authorized read-only inspection of the current state. It does
+may have changed state or a failed call may have partially applied, OpenClaw
+deliberately permits one temporary read-only recovery attempt to inspect the
+current state. The internal instruction identifies OpenClaw as its source. It does
 not expose writes, sends, shell commands, or other mutations during that
 reconciliation. Cancellation, explicitly terminal tool outcomes, sandbox
 restrictions, approval requirements, and tool-policy denials retain their
@@ -233,7 +263,7 @@ validating high-risk deployments.
 |                     |                                                                                             |
 | ------------------- | ------------------------------------------------------------------------------------------- |
 | Runtime             | [`quickjs-wasi`](https://github.com/vercel-labs/quickjs-wasi)                               |
-| Default state       | `"auto"` (engages only catalog-preferred models)                                            |
+| Default state       | disabled                                                                                    |
 | Stability           | experimental OpenClaw surface (Codex Code Mode is a separate, stable Codex harness surface) |
 | Target surface      | generic OpenClaw agent runs                                                                 |
 | Security posture    | model code is hostile                                                                       |
@@ -275,13 +305,13 @@ Provider-owned tools such as remote Python sandboxes are separate tools. See
 
 ## Configuration
 
-`tools.codeMode.enabled` is the activation gate. If it is omitted, including
-from object-form config that sets other fields, it inherits the `"auto"`
-default and may engage for catalog-preferred models.
+`tools.codeMode.enabled` is the activation gate. It defaults to `false`,
+including when the Code Mode object configures other fields. Set `true` or
+`"auto"` explicitly to enable it.
 
 | Field                 | Default                        | Clamp                                           |
 | --------------------- | ------------------------------ | ----------------------------------------------- |
-| `enabled`             | `"auto"`                       | `false`, `true`, or `"auto"` (per-model)        |
+| `enabled`             | `false`                        | `false`, `true`, or `"auto"` (per-model)        |
 | `runtime`             | `"quickjs-wasi"`               | only supported value                            |
 | `mode`                | `"only"`                       | exposes control/direct tools, catalogs the rest |
 | `languages`           | `["javascript", "typescript"]` | any subset of the two                           |
@@ -303,13 +333,13 @@ an engaged run never silently falls back to broad direct tool exposure.
 
 `tools.codeMode.enabled` accepts three values:
 
-- `"auto"` (default): code mode engages only when the run's model is flagged
-  as a preferred code-mode performer in its provider catalog.
-- `false`: code mode is off for every run.
+- `false` (default): code mode is off for every run.
 - `true`: code mode engages for every tool-capable run, regardless of model.
+- `"auto"`: code mode engages only when the run's model is flagged as a
+  preferred code-mode performer in its provider catalog.
 
-`false` and `true` are absolute overrides and behave exactly as before the
-`"auto"` tier existed.
+`false` and `true` behave exactly as before the `"auto"` tier existed; `"auto"`
+is an explicit per-model opt-in.
 
 ### The `compat.codeMode` catalog flag
 
@@ -381,9 +411,8 @@ replacing many full tool schemas and per-tool round trips with one compact
 program surface. Models below the preferred tier showed no consistent win and
 sometimes regressed, which is why `"auto"` leaves them on direct tools.
 
-The default `"auto"` fits agents that switch between models: strong models get
-the compact surface, weaker or local ones keep the exposure they handle best.
-Use `true`
+Use `"auto"` when agents switch between models: strong models get the compact
+surface, weaker or local ones keep the exposure they handle best. Use `true`
 when you have verified a specific unflagged model performs well with code
 mode; global force-on is most predictable for single-model deployments. For
 open-weight or uncached serving where every prompt token is billed or
@@ -524,6 +553,24 @@ forcing one model tool call per await.
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.
 
+### Source in session history
+
+In the built-in OpenClaw runtime, the JSON Code Mode tool executes the original
+input. Session history preserves computations such as `const API_TOKEN = computeToken();`
+and boolean or null initializers in the outer call's JavaScript or TypeScript
+`code` and `command` fields, while masking credential literals, recognizable
+tokens, registered secrets, and configured redaction patterns. Credential
+assignments use full masks so repeated storage redaction stays stable.
+
+This treatment does not extend to shell commands, nested tool calls, unrelated
+argument strings, or assistant prose. Large or unrecognized source syntax
+remains subject to diagnostic masking. Stored source is a redacted record, not
+a place to recover credentials; no additional setting is required.
+This applies to new calls; already-redacted source cannot be reconstructed.
+The Copilot runtime's separate transcript journal does not yet preserve this
+source structure. Native Codex uses a separate freeform source path; this
+behavior does not describe its storage.
+
 ## `wait`
 
 `wait` continues a suspended code-mode VM.
@@ -558,6 +605,10 @@ QuickJS-WASI snapshot/restore is the resume mechanism:
 Snapshots are runtime state, not user artifacts: they live only in an
 in-process map (no database or disk write), are size-limited, expire, and are
 scoped to the run and session that created them.
+Canceling the owning run or tool call, or closing its tool catalog at attempt
+teardown, immediately releases parked snapshots and cancels their pending host
+work, even if no `wait` call follows. Catalog description refreshes and client
+tool additions do not close the owner.
 
 `wait` fails (as a `failed` result) when:
 
@@ -586,6 +637,8 @@ declare function yield_control(reason?: string): Promise<void>;
 ```
 
 Guest timers are bridged through the host, so they survive QuickJS snapshot/resume and remain bounded by the Code Mode execution and snapshot limits.
+`clearTimeout` also cancels a timer created before an earlier suspension; this
+applies to interactive Code Mode and headless automation scripts.
 
 Every effective non-MCP tool is also installed as an async global function.
 The model-visible `exec` description includes a bounded, deterministic subset
@@ -655,6 +708,12 @@ type ToolCatalog = {
   all(): readonly ToolCatalogHandle[];
 };
 ```
+
+`catalog.search(...)` returns a frozen array of callable handles, or an empty
+array when no tools match. If the matching callable names exceed the output
+budget, search rejects with guidance to narrow the query or lower `limit`.
+It never silently substitutes an empty or partial match list. A narrower search
+remains available after the error.
 
 Paired Gateway nodes are available through the `nodes` global:
 
@@ -887,8 +946,12 @@ type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: un
 ```
 
 Rules: output order matches guest calls. Nested tool results, cumulative guest
-output, and the final value share the `maxOutputBytes` serialized UTF-8 budget.
-When a successful result exceeds the budget, OpenClaw returns a bounded value
+output, and the final value or failure diagnostic share the `maxOutputBytes`
+serialized UTF-8 budget. Oversized errors retain their leading cause and end
+with `[error truncated]`; truncation does not turn a failure into success.
+Catalog search rejects when its callable-name array cannot fit this budget;
+narrow the query or lower `limit` and retry. For other successful results that
+exceed the budget, OpenClaw returns a bounded value
 with `truncated: true`, a UTF-8-safe `prefix`, `omittedBytes`, and guidance to
 rerun with narrower arguments. Treat that marker as a successful partial result:
 reduce the search scope, paginate, select fewer files, or return a smaller
@@ -981,12 +1044,15 @@ code-mode tool call and the nested tool id.
 
 Nested tool failures cross into the guest as catchable JavaScript errors. If
 guest code does not catch an error, `exec` or `wait` returns a failed tool
-result. Proven no-start failures and guest-only errors allow ordinary model
-recovery; possible nested side effects require authorized read-only
-reconciliation before any further action. Network-controlled tool output and
-errors retain their existing untrusted-content wrapping and sanitization;
-recovering from a failure does not grant new permissions or replay completed
-side effects.
+result. Proven no-start failures and errors after only audited read-only work
+allow ordinary model recovery, including when `wait` resumes a suspended cell.
+This proof covers the cell's entire execution, not just the latest resume.
+Failed waits without that host proof remain terminal; serialized result fields
+cannot grant recovery. Possible nested side effects in a failed `exec` require
+authorized read-only reconciliation before any further action. Network-controlled
+tool output and errors retain their existing untrusted-content wrapping and
+sanitization; recovering from a failure does not grant new permissions or replay
+completed side effects.
 
 Parallel nested calls are allowed up to `maxPendingToolCalls`.
 
@@ -1094,11 +1160,17 @@ objects, prototypes, and host functions do not cross into QuickJS.
 
 Each result's `telemetry` field reports: hidden catalog size and a source
 breakdown (`openclaw`/`mcp`/`client` counts), cumulative search/describe/call
-counts for the run's catalog, and the model-visible tool names (`exec`,
-`wait`, and retained direct-only tools).
+counts for the run's catalog, and the code-mode control tool names (`exec` and
+`wait`).
 The `counterScope` identifies one counter lifetime, changing when a catalog is
 replaced or restored but remaining stable when tools are appended or prompt
 policy narrows that catalog.
+
+Catalog teardown retains only these final aggregate diagnostics, not executable
+tools or VM state. If teardown closes a suspended run while `wait` is observing
+pending work, that wait returns `failed` with `code: "aborted"` and the final
+telemetry; pending calls are canceled and the snapshot is dropped. Retained
+diagnostics grant no authority to resume or repair the closed run.
 
 The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
 `agent exec --json` envelope) adds per-run stats:
@@ -1167,8 +1239,8 @@ does not use a `node:vm` child as the sandbox.
 Code mode coverage should prove:
 
 - disabled config leaves existing tool exposure unchanged
-- omitted `enabled`, including object config that sets other fields, inherits
-  `"auto"` and engages only for catalog-preferred models
+- omitted `enabled`, including object config that sets other fields, stays
+  disabled
 - enabled config exposes `exec`, `wait`, and only required direct-only tools to
   the model when tools are active for the run
 - raw no-tool runs, `disableTools`, and empty allowlists do not trigger

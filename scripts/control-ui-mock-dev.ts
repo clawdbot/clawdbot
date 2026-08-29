@@ -55,6 +55,7 @@ type CliOptions = {
     | "attachments"
     | "board"
     | "code-fences"
+    | "goal"
     | "swarm"
     | "update-available"
     | "update-blocked"
@@ -358,6 +359,7 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
     value !== "attachments" &&
     value !== "board" &&
     value !== "code-fences" &&
+    value !== "goal" &&
     value !== "swarm" &&
     value !== "update-available" &&
     value !== "update-blocked" &&
@@ -1700,6 +1702,20 @@ async function createChatPickerScenario(
   const workboardMocks = buildWorkboardMocks(baseTime);
   const activityTime = Date.now();
   const activitySessions = buildActivitySessionRows(activityTime);
+  const activeGoal = {
+    schemaVersion: 1 as const,
+    id: "goal-mobile-parity",
+    objective:
+      "Make Goal work on mobile exactly as it does on desktop while preserving action access, progress visibility, timing, token usage, and composer space across narrow viewports. Keep the collapsed state compact enough for active conversations, while making the expanded state comfortable to scan and operate with one hand. Preserve clear hierarchy between the objective, elapsed time, token budget, and available actions without letting long content push the composer out of reach. Ensure the full objective remains readable when it contains detailed constraints, acceptance criteria, rollout notes, and operational context that cannot be reduced to a short summary. Account for long-running sessions whose goals accumulate multiple requirements, edge cases, validation steps, ownership notes, and deployment considerations. The operator should be able to review all of that context without losing access to the Goal controls or forcing the message composer below the visible viewport.",
+    status: "active" as const,
+    createdAt: activityTime - 14 * 60_000,
+    updatedAt: activityTime - 30_000,
+    tokenStart: 120_000,
+    tokenStartFresh: true,
+    tokensUsed: 127_000,
+    tokenBudget: 300_000,
+    continuationTurns: 3,
+  };
   const sessions = [
     ...activitySessions,
     ...(fixture === "workboard"
@@ -1716,6 +1732,7 @@ async function createChatPickerScenario(
       hasActiveRun: true,
       totalTokens: 170_000,
       totalTokensFresh: true,
+      ...(fixture === "goal" ? { goal: activeGoal } : {}),
     }),
     ...swarmChildRows,
     sessionRow(OBSERVER_DEMO_SESSION_KEY, "Session observer demo", baseTime - 3_000, {
@@ -1799,6 +1816,18 @@ async function createChatPickerScenario(
         branch: "claude/sidebar-agent-zones",
         repoRoot: "~/Projects/openclaw",
       },
+    }),
+    // Second repo plus a spawned worktree checkout so the sidebar's
+    // Project grouping shows several sections and the worktree fold.
+    sessionRow("agent:main:clawdbot-vite", "Vite upgrade spike", baseTime - 160_000, {
+      worktree: {
+        id: "wt-clawdbot-vite",
+        branch: "openclaw/vite-upgrade",
+        repoRoot: "~/Projects/clawdbot",
+      },
+    }),
+    sessionRow("agent:main:project-grouping", "Sidebar project grouping", baseTime - 170_000, {
+      spawnedCwd: "~/Projects/openclaw/.claude/worktrees/groups-c7c338",
     }),
     ...buildSessionRows({
       baseTime: baseTime - 400_000,
@@ -1901,6 +1930,7 @@ async function createChatPickerScenario(
     activeRunIds: [PLAN_DEMO_RUN_ID],
     hasActiveRun: true,
     key: "agent:main:main",
+    ...(fixture === "goal" ? { goal: activeGoal } : {}),
   };
   const planInFlightRun = {
     runId: PLAN_DEMO_RUN_ID,

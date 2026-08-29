@@ -562,7 +562,7 @@ jobs:
         run: mkdir -p "$(pnpm store path --silent)"
 
       - name: Install workflow validation dependencies
-        if: inputs.candidate_artifact_name != ''
+        if: inputs.candidate_artifact_name != '' || inputs.mode != 'fresh'
         working-directory: workflow
         env:
           CI: "true"
@@ -896,15 +896,17 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      # Windows Server 2025 with Node 24.19 can crash in libuv fs-event on RUNNER~1.
+      # Keep only packaged-fresh on the last validated Node until an upstream fix ships.
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: ${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.15.0' || env.NODE_VERSION }}
 
       - name: Setup pnpm
         uses: ./workflow/.github/actions/setup-pnpm-store-cache
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: ${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.15.0' || env.NODE_VERSION }}
           package-manager-file: workflow/package.json
           lockfile-path: workflow/pnpm-lock.yaml
           cache-mode: off

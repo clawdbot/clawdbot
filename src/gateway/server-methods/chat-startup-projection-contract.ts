@@ -4,6 +4,8 @@ import type { ChatMetadataResult, ChatMetadataSessionEntry } from "./chat-metada
 export type ChatStartupProjectionReadParams = {
   agentId: string;
   sessionEntry?: ChatMetadataSessionEntry;
+  // History may use settled facts only; startup retains its current-generation wait.
+  readPolicy?: "current" | "ready";
 };
 
 export type ChatStartupProjectionResult = {

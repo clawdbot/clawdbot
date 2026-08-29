@@ -41,7 +41,12 @@ import {
 } from "./reply-delivery-result.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
+import {
+  chunkFeishuCardMarkdown,
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+  type CardHeaderConfig,
+} from "./send.js";
 import {
   FeishuStreamingFinalizationError,
   FeishuStreamingSession,
@@ -711,6 +716,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     infoKind?: string;
     firstChunkMentions?: MentionTarget[];
     chunkMentions?: MentionTarget[];
+    header?: CardHeaderConfig;
+    note?: string;
     sendChunk: (params: {
       chunk: string;
       isFirst: boolean;
@@ -727,18 +734,23 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       textChunkLimit,
       chunkMode,
     );
+    const chunkOptions = {
+      text: chunkSource,
+      limit: textChunkLimit,
+      mode: chunkMode,
+      firstChunkMentions: paramsLocal.firstChunkMentions,
+      chunkMentions: paramsLocal.chunkMentions,
+      initialChunks,
+    };
     const chunks = resolveTextChunksWithFallback(
       chunkSource,
       paramsLocal.useCard
-        ? initialChunks
-        : chunkFeishuPostMarkdown({
-            text: chunkSource,
-            limit: textChunkLimit,
-            mode: chunkMode,
-            firstChunkMentions: paramsLocal.firstChunkMentions,
-            chunkMentions: paramsLocal.chunkMentions,
-            initialChunks,
-          }),
+        ? chunkFeishuCardMarkdown({
+            ...chunkOptions,
+            header: paramsLocal.header,
+            note: paramsLocal.note,
+          })
+        : chunkFeishuPostMarkdown(chunkOptions),
     );
     const results: FeishuReplyDeliverySource[] = [];
     const acceptedChunks: string[] = [];
@@ -957,6 +969,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       text: content,
       useCard: true,
       infoKind,
+      header: cardHeader,
+      note: cardNote,
       chunkMentions: requiredMentionTargets,
       sendChunk: async ({ chunk, mentions }) =>
         await sendStructuredCardFeishu({
@@ -1445,6 +1459,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               text,
               useCard: true,
               infoKind: info?.kind,
+              header: cardHeader,
+              note: cardNote,
               chunkMentions: requiredMentionTargets,
               sendChunk: async ({ chunk, mentions }) =>
                 await sendStructuredCardFeishu({

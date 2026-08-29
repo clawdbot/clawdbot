@@ -20,7 +20,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import {
@@ -44,7 +44,9 @@ import {
 import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
+  type ConversationToolCall,
   IMAGE_ONLY_USER_MESSAGE,
+  renderConversationToolCall,
 } from "./agent-prompt.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -448,12 +450,6 @@ function extractTextContent(content: unknown): string {
   return "";
 }
 
-type AssistantToolCall = {
-  id: string;
-  name: string;
-  arguments: string;
-};
-
 function stringifyToolCallArguments(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -469,11 +465,11 @@ function stringifyToolCallArguments(value: unknown): string {
   }
 }
 
-function extractAssistantToolCalls(value: unknown): AssistantToolCall[] {
+function extractAssistantToolCalls(value: unknown): ConversationToolCall[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  const calls: AssistantToolCall[] = [];
+  const calls: ConversationToolCall[] = [];
   for (const rawCall of value) {
     if (!rawCall || typeof rawCall !== "object" || Array.isArray(rawCall)) {
       continue;
@@ -493,12 +489,6 @@ function extractAssistantToolCalls(value: unknown): AssistantToolCall[] {
     calls.push({ id, name, arguments: argumentsValue });
   }
   return calls;
-}
-
-function renderAssistantToolCalls(calls: AssistantToolCall[]): string {
-  return calls
-    .map((call) => `tool_call id=${call.id} name=${call.name} arguments=${call.arguments}`)
-    .join("\n");
 }
 
 function resolveImageUrlPart(part: unknown): string | undefined {
@@ -681,8 +671,7 @@ function buildAgentPrompt(
     }
     const assistantToolCalls =
       normalizedRole === "assistant" ? extractAssistantToolCalls(msg.tool_calls) : [];
-    const assistantToolCallsSummary =
-      assistantToolCalls.length > 0 ? renderAssistantToolCalls(assistantToolCalls) : "";
+    const assistantToolCallsSummary = assistantToolCalls.map(renderConversationToolCall).join("\n");
 
     // Keep the image-only placeholder scoped to the active user turn so we don't
     // mention historical image-only turns whose bytes are intentionally not replayed.
@@ -1244,7 +1233,7 @@ export async function handleOpenAiHttpRequest(
     maybeFinalize();
   };
 
-  const unsubscribe = onAgentEvent((evt) => {
+  const unsubscribe = onAgentEventForRun(runId, (evt) => {
     if (evt.runId !== runId) {
       return;
     }

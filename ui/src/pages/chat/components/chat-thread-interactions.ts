@@ -29,6 +29,7 @@ import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+import type { ChatQueueProps } from "./chat-composer-queue.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import {
   dismissConfirmedActionPopovers,
@@ -67,7 +68,8 @@ export type ChatThreadProps = {
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;
   loading: boolean;
-  historyLoading?: boolean;
+  /** Older-history pagination is active; render its auto-load sentinel. */
+  historySentinel?: boolean;
   messages: unknown[];
   toolMessages: unknown[];
   guardianNotices?: ChatGuardianNotice[];
@@ -78,6 +80,7 @@ export type ChatThreadProps = {
   runOutputTokens?: number | null;
   runStatus?: ChatRunUiStatus | null;
   queue: ChatQueueItem[];
+  queueControls?: ChatQueueProps;
   showThinking: boolean;
   showToolCalls: boolean;
   persistCommentary?: boolean;
@@ -122,6 +125,7 @@ export type ChatThreadProps = {
   onDraftChange: (next: string) => void;
   onSend: () => void;
   onRetryQueuedMessage?: (id: string) => void;
+  queuedMessageAction?: { id: string; label?: string; onAction?: () => void };
   onSetReply?: (target: MessageReplyTarget) => void;
   replyMessageAccess?: ReplyMessageAccess;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;

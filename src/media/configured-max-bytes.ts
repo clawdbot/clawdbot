@@ -1,6 +1,9 @@
 // Configured media size helpers resolve maximum byte limits by media kind.
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeAccountId } from "../routing/account-id.js";
+import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { MEDIA_MAX_BYTES } from "./store.js";
 
 const MB = 1024 * 1024;
@@ -26,21 +29,16 @@ export function resolveChannelAccountMediaMaxMb(params: {
   const channelId = params.channel?.trim();
   const accountId = params.accountId?.trim();
   const channelCfg = channelId ? params.cfg.channels?.[channelId] : undefined;
-  const channelObj =
-    channelCfg && typeof channelCfg === "object"
-      ? (channelCfg as Record<string, unknown>)
-      : undefined;
+  const channelObj = asOptionalObjectRecord(channelCfg);
   const channelMediaMax =
     typeof channelObj?.mediaMaxMb === "number" ? channelObj.mediaMaxMb : undefined;
-  const accountsObj =
-    channelObj?.accounts && typeof channelObj.accounts === "object"
-      ? (channelObj.accounts as Record<string, unknown>)
-      : undefined;
-  const accountCfg = accountId && accountsObj ? accountsObj[accountId] : undefined;
-  const accountMediaMax =
-    accountCfg && typeof accountCfg === "object"
-      ? (accountCfg as Record<string, unknown>).mediaMaxMb
-      : undefined;
+  const accountsObj = asOptionalObjectRecord(channelObj?.accounts);
+  const accountCfg = accountId
+    ? asOptionalObjectRecord(
+        resolveNormalizedAccountEntry(accountsObj, accountId, normalizeAccountId),
+      )
+    : undefined;
+  const accountMediaMax = accountCfg?.mediaMaxMb;
   return (typeof accountMediaMax === "number" ? accountMediaMax : undefined) ?? channelMediaMax;
 }
 

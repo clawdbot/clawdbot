@@ -187,6 +187,7 @@ describe("production lint suppressions", () => {
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual(
       filterExpectedSuppressionsForPresentFiles([
+        "extensions/browser/src/browser/pw-tools-core.activity.ts|unicorn/prefer-dom-node-text-content|1",
         "extensions/browser/src/browser/pw-tools-core.interactions.actions.ts|@typescript-eslint/no-implied-eval|2",
         "extensions/browser/src/browser/pw-tools-core.interactions.content.ts|@typescript-eslint/no-implied-eval|1",
         "extensions/browser/src/cli/browser-cli-actions-input/register.files-downloads.ts|typescript/no-unnecessary-type-parameters|1",
@@ -196,11 +197,15 @@ describe("production lint suppressions", () => {
         "extensions/discord/src/test-support/provider.test-support.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/feishu/src/bitable.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
-        "extensions/qa-lab/src/gateway-child.ts|preserve-caught-error|1",
+        // Oxlint 1.78 checks AggregateError cause options at the wrong argument position.
+        "extensions/qa-lab/src/gateway-child-lifecycle.ts|preserve-caught-error|1",
+        "extensions/qa-lab/src/gateway-child-setup.ts|preserve-caught-error|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|6",
+        // JSON parser causes can quote reflected credentials from authenticated provider responses.
+        "src/agents/provider-http-errors.ts|preserve-caught-error|1",
         "src/agents/sessions/session-manager-entries.ts|unicorn/prefer-structured-clone|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
@@ -210,6 +215,8 @@ describe("production lint suppressions", () => {
         "src/cli/plugins-cli-test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/program/openclaw-command.ts|eslint/no-underscore-dangle|1",
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
+        // Cleanup is retained in AggregateError.errors; extraction remains the primary cause.
+        "src/commands/backup-restore.ts|preserve-caught-error|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
@@ -241,7 +248,6 @@ describe("production lint suppressions", () => {
         "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
-        "ui/public/sw.js|unicorn/require-post-message-target-origin|1",
         // oxlint misreads CanvasRenderingContext2D.fill(path) as Array.fill.
         "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
       ]),

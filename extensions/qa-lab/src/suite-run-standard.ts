@@ -1,7 +1,7 @@
 import path from "node:path";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { startQaGatewayChild } from "./gateway-child.js";
+import { createQaGatewayChild } from "./gateway-child.js";
 import type { QaLabLatestReport, QaLabScenarioOutcome } from "./lab-server.types.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
@@ -103,7 +103,7 @@ export async function runQaFlowSuiteStandard(
   });
   const transport = transportFactoryResult.adapter;
   let mock: Awaited<ReturnType<typeof startQaProviderServer>> | undefined;
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gateway = createQaGatewayChild();
   let env: QaSuiteEnvironment | undefined;
   let preserveGatewayRuntimeDir: string | undefined;
   let runFailed = false;
@@ -123,7 +123,7 @@ export async function runQaFlowSuiteStandard(
       `provider ready: ${sanitizeQaSuiteProgressValue(activeMock?.baseUrl ?? "live")}`,
     );
     writeQaSuiteProgress(progressEnabled, "gateway start");
-    const activeGateway = await startQaGatewayChild({
+    const activeGateway = await gateway.start({
       repoRoot,
       command: params?.sutOpenClawCommand,
       providerBaseUrl: activeMock ? `${activeMock.baseUrl}/v1` : undefined,
@@ -156,7 +156,6 @@ export async function runQaFlowSuiteStandard(
         buildQaGatewayHeapCheckpointRuntimeEnvPatch(),
       ),
     });
-    gateway = activeGateway;
     writeQaSuiteProgress(
       progressEnabled,
       `gateway ready: ${sanitizeQaSuiteProgressValue(activeGateway.baseUrl)}`,
@@ -453,13 +452,11 @@ export async function runQaFlowSuiteStandard(
       closeWebSessions: activeEnv ? () => closeQaWebSessions(activeEnv.webSessionIds) : undefined,
       cleanupTransportBeforeGatewayStop: () => transportFactoryResult.cleanupBeforeGatewayStop(),
       cleanupTransportAfterGatewayStop: () => transportFactoryResult.cleanupAfterGatewayStop(),
-      stopGateway: activeGateway
-        ? () =>
-            activeGateway.stop({
-              keepTemp,
-              preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
-            })
-        : undefined,
+      stopGateway: () =>
+        activeGateway.stop({
+          keepTemp,
+          preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
+        }),
       disposeAgentHarnesses: () => disposeRegisteredAgentHarnesses(),
       stopProvider: activeMock ? () => activeMock.stop() : undefined,
       finishLab: ownsLab

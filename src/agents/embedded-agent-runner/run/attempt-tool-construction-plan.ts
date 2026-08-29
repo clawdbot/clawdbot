@@ -5,10 +5,14 @@ import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import {
   type CoreToolFactoryFamily,
   type OpenClawCodingToolConstructionPlan,
+  listCoreToolFactoryDescriptors,
   resolveCoreToolFactoryFamily,
 } from "../../core-tool-factory-descriptors.js";
 import { mayMatchGlobWithPrefix } from "../../glob-pattern.js";
-import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";
+import {
+  isRuntimeToolAllowed,
+  isRuntimeToolAllowedForConstruction,
+} from "../../tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
   buildPluginToolGroups,
@@ -80,7 +84,7 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
     const policy = pluginGroups
       ? expandPolicyWithPluginGroups({ allow: restriction }, pluginGroups)
       : { allow: expandShippedCoreToolPolicyNames(restriction) };
-    return currentTools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
+    return currentTools.filter((tool) => isRuntimeToolAllowed(tool.name, policy?.allow));
   }, tools);
 }
 
@@ -123,20 +127,37 @@ function resolveCodingToolConstructionPlanForAllowlist(
   if (!toolsAllow) {
     return cloneCodingToolConstructionPlan(ALL_CODING_TOOL_CONSTRUCTION_PLAN);
   }
-  if (toolsAllow.length === 0) {
+  const restrictions = readToolAllowlistIntersection(toolsAllow);
+  if (!restrictions && toolsAllow.length === 0) {
     return cloneCodingToolConstructionPlan(NO_CODING_TOOL_CONSTRUCTION_PLAN);
   }
-  if (hasWildcardToolAllowlist(toolsAllow)) {
+  if (!restrictions && hasWildcardToolAllowlist(toolsAllow)) {
     return cloneCodingToolConstructionPlan(ALL_CODING_TOOL_CONSTRUCTION_PLAN);
   }
-  const expanded = expandToolGroups(expandShippedCoreToolPolicyNames(toolsAllow));
+  const constructionEntries = restrictions?.flat() ?? toolsAllow;
+  const expanded = expandToolGroups(expandShippedCoreToolPolicyNames(constructionEntries));
   const normalized = normalizeToolList(expanded);
-  const coreFamilies = new Set<CoreToolFactoryFamily>();
+  const constructionRestrictions = restrictions ?? [toolsAllow];
+  // Construct every family containing a tool that the final runtime policy can retain.
+  // Otherwise a valid glob can survive filtering after its factory was never run.
+  const coreFamilies = new Set<CoreToolFactoryFamily>(
+    listCoreToolFactoryDescriptors()
+      .filter(({ name }) =>
+        constructionRestrictions.every(
+          (restriction) =>
+            restriction.length > 0 &&
+            isRuntimeToolAllowedForConstruction(
+              name,
+              expandShippedCoreToolPolicyNames(restriction),
+            ),
+        ),
+      )
+      .map(({ family }) => family),
+  );
   let includePluginTools = false;
   for (const name of normalized) {
     const family = resolveCoreToolFactoryFamily(name);
     if (family) {
-      coreFamilies.add(family);
       continue;
     }
     // Plugin ids/tool names are not known to the local factory catalog.

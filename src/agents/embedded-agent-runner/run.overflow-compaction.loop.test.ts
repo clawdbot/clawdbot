@@ -74,7 +74,13 @@ function makeDispatchInput(
       fallbackActive: false,
       fallbackReason: null,
       agentHarnessId: "codex",
-      runtimePlan: {},
+      runtimePlan: {
+        resolvedRef: { provider: "openai", modelId: "gpt-5.6-luna" },
+        auth: {
+          providerForAuth: "openai",
+          authProfileProviderForAuth: "openai",
+        },
+      },
       model: {
         id: "gpt-5.6-luna",
         provider: "openai",
@@ -178,6 +184,20 @@ describe("embedded run retry dispatch", () => {
       const result = await dispatchEmbeddedRunAttempt(input);
 
       expect(result.preparedAttempt.githubPublicationAvailable).toBe(githubPublicationAvailable);
+    },
+  );
+
+  it.each([undefined, "current-turn-tool-policy"])(
+    "preserves the supplied turn tool authority at dispatch (%s)",
+    async (toolAuthorityFingerprint) => {
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.params.toolAuthorityFingerprint = toolAuthorityFingerprint;
+
+      await dispatchEmbeddedRunAttempt(input);
+
+      expect(mocks.runAttempt.mock.calls[0]?.[0].toolAuthorityFingerprint).toBe(
+        toolAuthorityFingerprint,
+      );
     },
   );
 

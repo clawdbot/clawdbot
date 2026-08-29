@@ -22,6 +22,9 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     await installMockGateway(page, {
       methodResponses: {
         "sessions.list": sessionsListResponse([
@@ -319,7 +322,7 @@ suite.define(() => {
       const pullRequestRow = page.locator(`[data-session-key="${pullRequestKey}"]`);
       await plainRow.waitFor({ state: "visible", timeout: 10_000 });
       await expect
-        .poll(() => pullRequestRow.locator("[data-session-pr-state='merged']").isVisible())
+        .poll(() => pullRequestRow.locator("[data-pull-request-state='merged']").isVisible())
         .toBe(true);
 
       const dotInsetFromRowRight = async (row: typeof plainRow) => {
@@ -394,6 +397,9 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const gateway = await installMockGateway(page, {
       featureMethods: [
         "chat.metadata",
@@ -472,17 +478,24 @@ suite.define(() => {
         .toBe(true);
       await expect.poll(() => state.locator('[aria-label="Forked session"]').count()).toBe(0);
       await expect
-        .poll(() => state.locator("[data-session-pr-state='open']").isVisible())
+        .poll(() => row.locator("[data-pull-request-state='open']").isVisible())
         .toBe(true);
       await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
       await expect.poll(() => state.locator(".session-unread-dot").count()).toBe(0);
+      const prIcon = row.locator("[data-pull-request-state='open'] svg");
+      expect(
+        await prIcon.evaluate((icon) => {
+          const { width, height } = icon.getBoundingClientRect();
+          return { width, height };
+        }),
+      ).toEqual({ width: 12, height: 12 });
       const stateLayout = await row.evaluate((element) => {
         const endcap = element.querySelector<HTMLElement>(
           ".sidebar-recent-session__details-endcap",
         );
         const atoms = Array.from(
           element.querySelectorAll<HTMLElement>(
-            ".session-row-state :is([data-session-pr-state='open'], .session-run-spinner)",
+            ".sidebar-recent-session__details-endcap :is([data-pull-request-state='open'], .session-run-spinner)",
           ),
         );
         if (!endcap || atoms.length !== 2) {

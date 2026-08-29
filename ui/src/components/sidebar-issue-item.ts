@@ -172,12 +172,6 @@ function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>
   return state satisfies never;
 }
 
-function scopeUpgradeSummaryText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>): string {
-  return state.phase === "guidance" || state.phase === "available"
-    ? t("connection.scopeUpgrade.inboxState")
-    : scopeUpgradeText(state);
-}
-
 export function renderSidebarScopeUpgradeItem(params: {
   state: ScopeUpgradeState;
   onCancel: () => void;
@@ -189,8 +183,11 @@ export function renderSidebarScopeUpgradeItem(params: {
     return nothing;
   }
   const text = scopeUpgradeText(params.state);
-  const summary = scopeUpgradeSummaryText(params.state);
-  const retryable = ["pending", "rejected", "error"].includes(params.state.phase);
+  const summary = t("connection.scopeUpgrade.inboxState");
+  const retryable =
+    params.state.phase === "error"
+      ? params.state.retryable
+      : params.state.phase === "pending" || params.state.phase === "rejected";
   return html`<details
     class="sidebar-issues-panel__details sidebar-issues-panel__details--${params.state.phase ===
       "error" || params.state.phase === "rejected"
@@ -231,15 +228,17 @@ export function renderSidebarScopeUpgradeItem(params: {
                 ${t("connection.scopeUpgrade.requestingAction")}
               </button>
             </div>`
-          : retryable
+          : retryable || params.state.phase === "error"
             ? html`<div class="sidebar-issues-panel__actions">
-                <button
-                  type="button"
-                  class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-                  @click=${params.onRetry}
-                >
-                  ${t("connection.scopeUpgrade.retry")}
-                </button>
+                ${retryable
+                  ? html`<button
+                      type="button"
+                      class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+                      @click=${params.onRetry}
+                    >
+                      ${t("connection.scopeUpgrade.retry")}
+                    </button>`
+                  : nothing}
                 <button
                   type="button"
                   class="sidebar-issues-panel__action"

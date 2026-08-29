@@ -69,6 +69,9 @@ describe("monitorTwitchProvider", () => {
     vi.clearAllMocks();
     mocks.getClient.mockResolvedValue({});
     mocks.sendMessage.mockResolvedValue({ ok: true, messageId: "message-id" });
+    mocks.ingressStop.mockImplementation(async () => {
+      await Promise.allSettled(mocks.ingressAccept.mock.results.map((result) => result.value));
+    });
     mocks.createIngress.mockImplementation(
       (options: {
         deliver: (
@@ -81,8 +84,8 @@ describe("monitorTwitchProvider", () => {
             onAbandoned: () => Promise<void>;
           },
         ) => Promise<void>;
-      }) => {
-        mocks.ingressAccept.mockImplementation(async (message: TwitchChatMessage) => {
+      }) => ({
+        accept: mocks.ingressAccept.mockImplementation(async (message: TwitchChatMessage) => {
           await options.deliver(message, {
             admission: "exclusive",
             abortSignal: new AbortController().signal,
@@ -90,17 +93,10 @@ describe("monitorTwitchProvider", () => {
             onDeferred: () => undefined,
             onAbandoned: async () => undefined,
           });
-        });
-        // Real ingress stop drains accepted deliveries before the next monitor starts.
-        mocks.ingressStop.mockImplementation(async () => {
-          await Promise.all(mocks.ingressAccept.mock.results.map((result) => result.value));
-        });
-        return {
-          accept: mocks.ingressAccept,
-          start: mocks.ingressStart,
-          stop: mocks.ingressStop,
-        };
-      },
+        }),
+        start: mocks.ingressStart,
+        stop: mocks.ingressStop,
+      }),
     );
     mocks.getRuntime.mockReturnValue({
       logging: {
@@ -199,6 +195,7 @@ describe("monitorTwitchProvider", () => {
         account,
         accountId: "default",
         config,
+        channelRuntime: mocks.getRuntime().channel,
         runtime: { error: runtimeError },
         abortSignal: new AbortController().signal,
       });
@@ -212,6 +209,7 @@ describe("monitorTwitchProvider", () => {
           channel: "testchannel",
         });
         expect(mocks.ingressAccept).toHaveBeenCalledOnce();
+        // Await the owning delivery task, including cold shared-dispatcher startup.
         await mocks.ingressAccept.mock.results[0]?.value;
         expect(mocks.sendMessage).toHaveBeenCalledOnce();
         expect(mocks.sendMessage).toHaveBeenCalledWith(
@@ -304,6 +302,7 @@ describe("monitorTwitchProvider", () => {
         account,
         accountId: "default",
         config: {},
+        channelRuntime: mocks.getRuntime().channel,
         runtime: { error: runtimeError },
         abortSignal: new AbortController().signal,
         statusSink,

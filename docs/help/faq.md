@@ -70,7 +70,14 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
 <AccordionGroup>
   <Accordion title="What is OpenClaw, in one paragraph?">
-    OpenClaw is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (Discord, Google Chat, iMessage, Mattermost, Signal, Slack, Telegram, WebChat, WhatsApp, and bundled channel plugins such as QQ Bot) and can also do voice plus hosted widgets in chat, on session dashboards, and in the macOS panel. The **Gateway** is the always-on control plane; the assistant is the product.
+    OpenClaw is an AI assistant you run on your own infrastructure - for yourself, or shared with your team. It replies on the messaging surfaces you already use (Discord, Google Chat, iMessage, Mattermost, Signal, Slack, Telegram, WebChat, WhatsApp, and bundled channel plugins such as QQ Bot) and can also do voice plus hosted widgets in chat, on session dashboards, and in the macOS panel. The **Gateway** is the always-on control plane; the assistant is the product. The same gateway scales from one person's WhatsApp to a shared workspace bot with [multi-user sessions](/concepts/multi-user).
+  </Accordion>
+
+  <Accordion title="Can my team share one OpenClaw?">
+    Yes. A shared gateway is a supported, first-class deployment: sessions carry an immutable creator, an assignable owner, and the people who prompted them; the Control UI shows who is viewing and typing in real time; and commits from shared sessions can carry `Co-authored-by` trailers for the people who steered them. [Named operator roles](/gateway/operator-scopes#named-operator-roles) bound what each teammate can do.
+
+    One boundary to respect: a gateway is one trust domain. Share it with people who trust each other; mutually adversarial users need separate gateways. See [Team setup](/start/teams), [Multi-user mode](/concepts/multi-user), and [Security](/gateway/security).
+
   </Accordion>
 
   <Accordion title="Value proposition">
@@ -113,7 +120,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   </Accordion>
 
   <Accordion title="What are the advantages vs Claude Code for web development?">
-    OpenClaw is a **personal assistant** and coordination layer, not an IDE replacement. Use Claude Code or Codex for the fastest direct coding loop inside a repo. Use OpenClaw for durable memory, cross-device access, and tool orchestration.
+    OpenClaw is an **assistant and coordination layer**, not an IDE replacement. Use Claude Code or Codex for the fastest direct coding loop inside a repo. Use OpenClaw for durable memory, cross-device access, and tool orchestration.
 
     - Persistent memory and workspace across sessions.
     - Multi-platform access (Telegram, WhatsApp, TUI, WebChat).
@@ -462,16 +469,21 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     | Path                                                               | Purpose                                                            |
     | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
     | `$OPENCLAW_STATE_DIR/openclaw.json`                                 | Main config (JSON5)                                                 |
-    | `$OPENCLAW_STATE_DIR/credentials/oauth.json`                        | Legacy OAuth import (copied into auth profiles on first use)        |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth-profiles.json`     | Auth profiles (OAuth, API keys, optional `keyRef`/`tokenRef`)        |
+    | `$OPENCLAW_STATE_DIR/credentials/oauth.json`                        | Legacy OAuth migration source for `openclaw doctor --fix`           |
+    | `$OPENCLAW_STATE_DIR/state/openclaw.sqlite`                         | Shared SQLite state, including shared auth profiles                 |
     | `$OPENCLAW_STATE_DIR/secrets.json`                                  | Optional file-backed secret payload for `file` SecretRef providers   |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`              | Legacy compatibility file (static `api_key` entries scrubbed)        |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`              | Legacy auth migration source for `openclaw doctor --fix`             |
     | `$OPENCLAW_STATE_DIR/credentials/`                                  | Provider state (for example `whatsapp/<accountId>/creds.json`)      |
     | `$OPENCLAW_STATE_DIR/agents/`                                       | Per-agent state (agentDir + legacy/archive session artifacts)        |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite`  | Per-agent SQLite state, including session rows and transcripts      |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite`  | Per-agent SQLite state, including local auth profiles, sessions, and transcripts |
     | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                    | Legacy session migration sources and archive/support artifacts      |
 
     Legacy single-agent path `~/.openclaw/agent/*` is migrated by `openclaw doctor`.
+
+    Legacy `auth-profiles.json` files are imported by `openclaw doctor --fix`;
+    new logins write SQLite. Agent-local profiles override the shared read-through
+    base. Older installs keep that shared store in the main agent's database until
+    doctor relocates it; see [Auth credential semantics](/auth-credential-semantics#agent-copy-portability).
 
     Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate, configured via `agents.defaults.workspace` (default: `~/.openclaw/workspace`).
 
@@ -668,8 +680,8 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - OpenClaw-owned config writes validate the full post-change config before writing.
     - Invalid or destructive OpenClaw-owned writes are rejected and saved as `openclaw.json.rejected.*`.
-    - A direct edit that breaks startup or hot reload makes the Gateway fail closed or skip the reload; it does not rewrite `openclaw.json`.
-    - `openclaw doctor --fix` owns repair, can restore last-known-good, and saves the rejected file as `openclaw.json.clobbered.*`.
+    - Startup can migrate deterministic legacy keys in eligible single-file configs when the whole result validates, keeping the previous config in the `.bak` ring. Other invalid edits make startup fail closed; hot reload skips invalid edits without rewriting `openclaw.json`.
+    - `openclaw doctor --fix` owns repairs beyond that startup migration, can restore last-known-good, and saves the rejected file as `openclaw.json.clobbered.*`.
 
     Recover:
 
@@ -1404,12 +1416,12 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
 <AccordionGroup>
   <Accordion title="Is it safe to expose OpenClaw to inbound DMs?">
-    Treat inbound DMs as untrusted input. Defaults reduce risk:
+    Yes - on channels that default to **pairing** (most DM-capable channels), a stranger who DMs your bot never reaches the model:
 
-    - Default behavior on DM-capable channels is **pairing**: unknown senders receive a pairing code and their message is not processed. Approve with `openclaw pairing approve --channel <channel> [--account <id>] <code>`. Pending requests are capped at **3 per channel**; check `openclaw pairing list --channel <channel> [--account <id>]` if a code did not arrive.
+    - With the pairing default, unknown senders receive a pairing code and their message is not processed. Approve with `openclaw pairing approve --channel <channel> [--account <id>] <code>`. Pending requests are capped at **3 per channel**; check `openclaw pairing list --channel <channel> [--account <id>]` if a code did not arrive.
     - Opening DMs publicly requires explicit opt-in (`dmPolicy: "open"` and allowlist `"*"`).
 
-    Run `openclaw doctor` to surface risky DM policies.
+    A few workspace channels ship different defaults - ClickClack, for example, allows workspace members by default. Check your channel's page, and run `openclaw doctor` to confirm your DM policies look the way you expect.
 
   </Accordion>
 
@@ -1442,7 +1454,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
     openclaw gateway status
     ```
 
-    A safer baseline: Gateway bound to `loopback`, or exposed only through authenticated private access (tailnet, SSH tunnel, token/password auth, or a correctly configured trusted proxy); DMs in `pairing` or `allowlist` mode; groups allowlisted and mention-gated unless every member is trusted; high-risk tools (`exec`, `browser`, `gateway`, `cron`) denied or tightly scoped for agents that read untrusted content; sandboxing enabled where tool execution needs a smaller blast radius.
+    A safer baseline: Gateway bound to `loopback`, or exposed only through authenticated private access (tailnet, SSH tunnel, token/password auth, or a correctly configured trusted proxy); DMs in `pairing` or `allowlist` mode; group access limited to rooms you chose (group allowlists), with mention gating or sender allowlists where membership is broad or public; high-risk tools (`exec`, `browser`, `gateway`, `cron`) denied or tightly scoped for agents that read untrusted content; sandboxing enabled where tool execution needs a smaller blast radius.
 
     Public binds without auth, open DMs/groups with tools, and exposed browser control are the findings to fix first. Details: [openclaw security audit](/gateway/security#openclaw-security-audit).
 
@@ -1571,7 +1583,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
 <AccordionGroup>
   <Accordion title='What is the default model for Anthropic with an API key?'>
-    Credentials and model selection are separate. Setting `ANTHROPIC_API_KEY` (or storing an Anthropic API key in auth profiles) enables authentication, but the actual default model is whatever you configure in `agents.defaults.model.primary` (for example `anthropic/claude-sonnet-4-6` or `anthropic/claude-opus-4-6`). `No credentials found for profile "anthropic:default"` means the Gateway could not find Anthropic credentials in the expected `auth-profiles.json` for the running agent.
+    Credentials and model selection are separate. Setting `ANTHROPIC_API_KEY` (or storing an Anthropic API key in auth profiles) enables authentication, but the actual default model is whatever you configure in `agents.defaults.model.primary` (for example `anthropic/claude-sonnet-4-6` or `anthropic/claude-opus-4-6`). `No credentials found for profile "anthropic:default"` means the Gateway could not find Anthropic credentials in the SQLite auth stores available to the running agent.
   </Accordion>
 </AccordionGroup>
 

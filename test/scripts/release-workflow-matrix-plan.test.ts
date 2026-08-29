@@ -22,12 +22,14 @@ type WorkflowStep = {
   if?: string;
   name?: string;
   run?: string;
+  with?: Record<string, unknown>;
 };
 
 type MatrixEntry = {
   advisory?: boolean;
   chunk_id?: string;
   id?: string;
+  label?: string;
   profiles?: string;
   providers?: string;
   suite_group?: string;
@@ -59,6 +61,8 @@ function requiredJob(definition: WorkflowDocument, name: string): WorkflowJob {
 // may provide the complete immutable package artifact tuple.
 const WORKFLOW_CALL_ONLY_INPUTS = new Set([
   "prepare_only",
+  "emit_candidate_evidence",
+  "release_soak",
   "package_artifact_name",
   "package_artifact_id",
   "package_artifact_digest",
@@ -286,6 +290,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       .filter((entry: MatrixEntry) => entry.suite_group === "live-gateway-anthropic-docker")
       .map((entry: MatrixEntry) => ({
         advisory: entry.advisory,
+        label: entry.label,
         profiles: entry.profiles,
         suiteId: entry.suite_id,
       }));
@@ -293,11 +298,13 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     expect(anthropicEntries).toEqual([
       {
         advisory: undefined,
+        label: "Docker live gateway Anthropic",
         profiles: "stable",
         suiteId: "live-gateway-anthropic-docker",
       },
       {
         advisory: true,
+        label: "Docker live gateway Anthropic (full advisory)",
         profiles: "full",
         suiteId: "live-gateway-anthropic-docker-full",
       },

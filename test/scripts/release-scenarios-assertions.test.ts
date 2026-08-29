@@ -112,6 +112,48 @@ describe("release scenario assertions", () => {
     }
   });
 
+  it("reports bounded onboarding hook diagnostics without leaking unrelated config", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
+    const configPath = path.join(root, "openclaw.json");
+    const secretSentinel = "release-diagnostic-secret-sentinel";
+
+    try {
+      writeJson(configPath, {
+        wizard: {
+          lastRunCommand: "onboard",
+          lastRunMode: "local",
+          lastRunVersion: secretSentinel,
+        },
+        hooks: {
+          internal: {
+            enabled: true,
+            entries: {
+              "unrelated-hook": { token: secretSentinel },
+            },
+          },
+        },
+        env: {
+          vars: {
+            OPENCLAW_TEST_SECRET: secretSentinel,
+          },
+        },
+      });
+
+      const result = runAssertion(["assert-session-memory-hook-enabled"], {
+        OPENCLAW_CONFIG_PATH: configPath,
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        'Onboarding config projection: {"wizard":{"present":true,"lastRunCommand":"onboard","lastRunMode":"local"},"hooks":{"present":true,"internalPresent":true,"internalEnabled":true,"sessionMemoryPresent":false,"sessionMemoryEnabled":"missing"}}',
+      );
+      expect(result.stderr).not.toContain(secretSentinel);
+      expect(result.stderr.length).toBeLessThan(4 * 1024);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("scans large request logs for image describe responses", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
     const outputPath = path.join(root, "describe.json");

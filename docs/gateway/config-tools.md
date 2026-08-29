@@ -92,17 +92,16 @@ catalog bridge, and MCP tools are available through the generated `MCP`
 namespace. The model normally sees `exec` and `wait`; tools such as `computer`
 whose structured results cannot cross the JSON-only bridge stay direct.
 
-`enabled` defaults to `"auto"`, which engages code mode only for models whose
-catalog entry flags `compat.codeMode: "preferred"`. See
+`enabled` defaults to `false`, including when the object sets other Code Mode
+options. To engage code mode only for models whose catalog entry flags
+`compat.codeMode: "preferred"`, enable `"auto"` explicitly. See
 [Code Mode - automatic per-model activation](/tools/code-mode#automatic-per-model-activation).
-
-To opt out for every run:
 
 ```json5
 {
   tools: {
     codeMode: {
-      enabled: false,
+      enabled: "auto",
     },
   },
 }
@@ -112,7 +111,7 @@ The shorthand is also accepted:
 
 ```json5
 {
-  tools: { codeMode: false },
+  tools: { codeMode: "auto" },
 }
 ```
 
@@ -287,6 +286,8 @@ Control UI repository previews and project discovery use the separate optional `
 
 Values shown are defaults except `applyPatch.allowModels` (empty/unset by default, meaning any compatible model may use `apply_patch`). `approvalRunningNoticeMs` emits a running notice when approval-backed exec runs long; `0` disables it.
 
+`tools.exec.grantExpiryDays` (unset by default) sets the default lifetime, in days (1–3650), for standing grants minted by Always allow on automation approvals. Unset keeps grants valid until revoked or the owning automation changes. Terms freeze at mint, so changing the value affects only future grants; see [Standing grants for automations](/tools/exec-approvals#standing-grants-for-automations).
+
 ### `tools.loopDetection`
 
 Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
@@ -309,7 +310,7 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
     web: {
       search: {
         enabled: true,
-        apiKey: "brave_api_key", // or BRAVE_API_KEY env (Brave provider)
+        provider: "brave", // optional; omit for auto-detect
         maxResults: 5,
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
@@ -328,10 +329,19 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
       },
     },
   },
+  plugins: {
+    entries: {
+      brave: {
+        config: {
+          webSearch: { apiKey: "brave_api_key" }, // or BRAVE_API_KEY env
+        },
+      },
+    },
+  },
 }
 ```
 
-Values shown are defaults except `provider` and `userAgent`. `maxResponseBytes` clamps to 32000–10000000; `maxChars` clamps to `maxCharsCap` (raise `maxCharsCap` to allow larger responses).
+Web-search provider credentials belong under `plugins.entries.<plugin>.config.webSearch`, as shown for Brave; see [Web search](/tools/web#storing-api-keys). The `tools.web` values shown are defaults except `provider` and `userAgent`. `maxResponseBytes` clamps to 32000–10000000; `maxChars` clamps to `maxCharsCap` (raise `maxCharsCap` to allow larger responses).
 
 ### `tools.media`
 
@@ -369,7 +379,7 @@ Configures inbound media understanding (image/audio/video):
 
     - `provider`: API provider id (`openai`, `anthropic`, `google`/`gemini`, `groq`, etc.)
     - `model`: model id override
-    - `profile` / `preferredProfile`: `auth-profiles.json` profile selection
+    - `profile` / `preferredProfile`: stored auth-profile selection
 
     **CLI entry** (`type: "cli"`):
 
@@ -383,7 +393,7 @@ Configures inbound media understanding (image/audio/video):
     - Matching image model `timeoutSeconds` entries also apply when the agent calls the explicit `view_image` tool. For image understanding, this timeout applies to the request itself and is not reduced by earlier preparation work.
     - Failures fall back to the next entry.
 
-    Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.
+    Provider auth follows standard order: SQLite auth profiles → env vars → `models.providers.*.apiKey`.
 
   </Accordion>
 </AccordionGroup>
@@ -625,6 +635,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `supportsReasoningEffort` | Accepts a reasoning-effort control. |
     | `supportsTemperature` | Accepts `temperature` for this model and adapter. |
     | `supportsUsageInStreaming` | Emits usage metadata in streaming responses. |
+    | `supportsInstructions` | Responses API only: accepts the system prompt via top-level `instructions` instead of embedded in `input`. Defaults to `true` only for native OpenAI and xAI's main route — the two routes with confirmed contract evidence. Every other route, bundled or custom, defaults to `false`; set explicitly once verified against that endpoint. |
     | `supportsTools` | Supports structured tool/function calling. Set `false` to disable tools. |
     | `supportsStrictMode` | Accepts strict tool schemas. |
     | `requiresStringContent` | Requires plain-string Chat Completions message content. |

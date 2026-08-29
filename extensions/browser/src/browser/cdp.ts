@@ -300,15 +300,22 @@ export async function createTargetViaCdp(opts: {
           if (!targetId) {
             throw new Error("CDP Target.createTarget returned no targetId");
           }
-          opts.signal?.throwIfAborted();
-          const finalUrl = await prepareCdpTargetSession(
-            send,
-            targetId,
-            opts.waitForNavigationResult ? opts.url : undefined,
-            opts.signal,
-          );
-          opts.signal?.throwIfAborted();
-          return finalUrl ? { targetId, finalUrl } : { targetId };
+          try {
+            opts.signal?.throwIfAborted();
+            const finalUrl = await prepareCdpTargetSession(
+              send,
+              targetId,
+              opts.waitForNavigationResult ? opts.url : undefined,
+              opts.signal,
+            );
+            opts.signal?.throwIfAborted();
+            return finalUrl ? { targetId, finalUrl } : { targetId };
+          } catch (error) {
+            // The caller cannot compensate until it receives this id. Keep cleanup
+            // on the creating socket, independent of cancellation, before releasing it.
+            await send("Target.closeTarget", { targetId }).catch(() => {});
+            throw error;
+          }
         },
         {
           commandTimeoutMs: opts.timeouts?.httpTimeoutMs ?? 5000,

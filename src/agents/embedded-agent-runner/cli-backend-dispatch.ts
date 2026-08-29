@@ -12,7 +12,7 @@
  * to run through the CLI backend on plan limits instead.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { onAgentEvent } from "../../infra/agent-events.js";
+import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
 import { stripOpenClawMcpToolPrefix } from "../cli-runner/tool-policy.js";
@@ -140,7 +140,7 @@ async function runEmbeddedAgentViaCliBackend(
   // CLI tool results arrive as agent events with transport-prefixed MCP
   // names; strip and normalize so observers and transcript records see the
   // same tool names and soft-error signal the native embedded path reports.
-  const unsubscribe = onAgentEvent((evt) => {
+  const unsubscribe = onAgentEventForRun(params.runId, (evt) => {
     if (evt.runId !== params.runId) {
       return;
     }

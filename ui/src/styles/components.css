@@ -164,8 +164,8 @@ openclaw-session-owner-chip {
   position: absolute;
   inset: -2px;
   box-sizing: border-box;
-  border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
-  border-top-color: var(--run);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
   border-radius: var(--radius-full);
   pointer-events: none;
 }
@@ -762,6 +762,19 @@ openclaw-session-owner-chip {
 /* A corner toast degenerates at phone widths, where it would span nearly the
  * whole viewport anyway. Use the full-width top idiom instead. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .shell--chat {
+    --app-toast-shell-top: calc(
+      var(--safe-area-top) + var(--shell-topbar-height) + var(--chat-mobile-pane-header-height) +
+        20px
+    );
+  }
+
+  /* The unanchored chat toast shares the viewport with shell and pane chrome.
+     Anchored permission toasts already carry a measured pane-header offset. */
+  openclaw-toast-host[data-toast-placement="shell"] .app-toast:not(.app-toast--anchored) {
+    top: var(--app-toast-shell-top, calc(20px + var(--safe-area-top)));
+  }
+
   .app-toast {
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
@@ -965,6 +978,10 @@ openclaw-session-progress-hovercard-provider {
   pointer-events: auto;
 }
 
+.person-activity-hovercard {
+  width: min(304px, calc(100vw - 24px));
+}
+
 .person-activity-card {
   font-size: calc(12px * var(--control-ui-text-scale));
   line-height: 1.5;
@@ -974,11 +991,22 @@ openclaw-session-progress-hovercard-provider {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 16px 16px 12px;
+  padding: 15px 16px 12px;
 }
 
 .person-activity-card__header > div {
+  display: grid;
+  gap: 4px;
   min-width: 0;
+}
+
+.person-activity-card__header .viewer-avatar--footer {
+  flex-shrink: 0;
+  width: 34.5px;
+  height: 34.5px;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  /* The base ring color assumes the sidebar surface; blend with the popover. */
+  border-color: var(--session-hovercard-surface);
 }
 
 .person-activity-card h2,
@@ -991,13 +1019,16 @@ openclaw-session-progress-hovercard-provider {
   overflow-wrap: anywhere;
   font-size: calc(14px * var(--control-ui-text-scale));
   font-weight: 600;
+  line-height: 1;
 }
 
 .person-activity-card__status {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 3px;
   color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .person-activity-card__status > span {
@@ -1021,8 +1052,15 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .person-activity-card__facts dt,
+.person-activity-card h3 {
+  color: var(--muted);
+  font-size: inherit;
+  font-weight: 400;
+}
+
 .person-activity-card__muted,
-.person-activity-card small {
+.person-activity-card small,
+.person-activity-card__session-age {
   color: var(--muted);
 }
 
@@ -1031,6 +1069,15 @@ openclaw-session-progress-hovercard-provider {
   gap: 3px;
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.person-activity-card__facts dd > span {
+  font-weight: 500;
+}
+
+.person-activity-card__facts time,
+.person-activity-card__session-age {
+  font-variant-numeric: tabular-nums;
 }
 
 .person-activity-card small {
@@ -1046,9 +1093,6 @@ openclaw-session-progress-hovercard-provider {
 
 .person-activity-card h3 {
   margin-bottom: 6px;
-  color: var(--muted);
-  font-size: inherit;
-  font-weight: 500;
 }
 
 .person-activity-card__sessions {
@@ -1058,7 +1102,7 @@ openclaw-session-progress-hovercard-provider {
 
 .person-activity-card__session {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   padding: 6px;
   margin: 0 -6px;
@@ -1068,19 +1112,63 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .person-activity-card__session-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
   min-width: 0;
+  overflow-wrap: normal;
+}
+
+.person-activity-card__session-name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+}
+
+.person-activity-card__session-name--multiline {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow-wrap: anywhere;
 }
 
-.person-activity-card__session-copy > span {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+.person-activity-card__session-name.hover-marquee {
+  white-space: nowrap;
+  color: var(--text);
+  text-overflow: clip;
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to right, black calc(100% - 18px), transparent 100%);
+}
+
+@media (hover: none), (pointer: coarse), (prefers-reduced-motion: reduce) {
+  .person-activity-card__session-name.hover-marquee {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    text-indent: 0;
+    transition: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
+
+.person-activity-card__session-age {
+  justify-self: end;
+  font-size: calc(11px * var(--control-ui-text-scale));
+  font-weight: 400;
+  white-space: nowrap;
 }
 
 .person-activity-card__session-icon {
   flex: none;
+  align-self: flex-start;
   margin-top: 2px;
   color: var(--muted);
 }
@@ -1091,11 +1179,19 @@ openclaw-session-progress-hovercard-provider {
   height: 14px;
 }
 
+.person-activity-card footer {
+  padding: 0;
+}
+
 .person-activity-card footer a {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 16px;
   color: var(--text);
+  font-weight: 500;
   text-decoration: none;
 }
 
@@ -3284,6 +3380,12 @@ td.data-table-key-col {
   color: var(--text);
 }
 
+.exec-approval-scope {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .exec-approval-meta {
   margin-top: 12px;
   display: grid;
@@ -4962,7 +5064,6 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
-  animation: scale-in 0.15s ease-out;
 }
 
 .cmd-palette__label {
@@ -5621,13 +5722,6 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
-/* The 16px PR glyph inks 1px beyond its 14px track. Inset only that glyph so
-   the other trailing atoms keep their shared axis inside the clipped endcap. */
-.session-row-state [data-session-pr-state] {
-  position: relative;
-  left: 1px;
-}
-
 .sidebar-session-fork-indicator {
   display: inline-flex;
   margin-right: 4px;
@@ -5672,7 +5766,7 @@ td.data-table-key-col {
 }
 
 .session-row-badge--pull-request[data-pull-request-state="merged"] {
-  color: var(--accent);
+  color: var(--pr-merged);
 }
 
 .session-row-badge--cloud[data-placement-state="failed"],
@@ -5797,8 +5891,8 @@ td.data-table-key-col {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
-  border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
-  border-top-color: var(--run);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
   border-radius: var(--radius-full);
 }
 
@@ -5817,7 +5911,7 @@ td.data-table-key-col {
   .session-run-spinner,
   .session-glyph__ring {
     animation: none;
-    border-color: var(--run);
+    border-color: var(--accent);
   }
 }
 

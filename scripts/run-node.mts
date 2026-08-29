@@ -1585,6 +1585,8 @@ function createRunNodeDeps(params: RunNodeMainParams) {
   const cwd = params.cwd ?? process.cwd();
   const distRoot = path.join(cwd, "dist");
   const env = params.env ? { ...params.env } : { ...process.env };
+  // Select this checkout's plugins over tracked installs without changing source/dist loading.
+  env.OPENCLAW_DEV_SOURCE_ROOT ??= cwd;
   const mutableState: RunNodeMutableState = {
     outputTee: null,
     runNodeProgress: undefined,

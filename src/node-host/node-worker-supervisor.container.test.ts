@@ -15,6 +15,7 @@ import {
   fakeEngineSource,
   stdioWorkerSource,
 } from "./node-worker-supervisor.container.test-support.js";
+import { waitForNodeWorkerTerminal as waitForTerminal } from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   testNodeWorkerEnvironmentIdentity,
@@ -150,19 +151,6 @@ function containerFixture(
   };
 }
 
-async function waitForTerminal(
-  supervisor: ReturnType<typeof createNodeWorkerSupervisor>,
-  launchId: string,
-) {
-  await vi.waitFor(
-    async () => {
-      expect((await supervisor.status(launchId))?.state).not.toMatch(/^(?:pending|running)$/u);
-    },
-    { timeout: 5_000 },
-  );
-  return await supervisor.status(launchId);
-}
-
 async function waitForWorkerStarted(workspaceDir: string): Promise<void> {
   await vi.waitFor(
     () => expect(fs.existsSync(path.join(workspaceDir, "worker-started"))).toBe(true),
@@ -226,7 +214,7 @@ describe("node worker supervisor container isolation", () => {
       });
       const completed = await waitForTerminal(fixture.supervisor, input.launchId);
       expect(completed).toMatchObject({ state: "completed" });
-      expect(JSON.parse(completed?.resultJson ?? "null")).toEqual({
+      expect(JSON.parse(completed.resultJson ?? "null")).toEqual({
         status: "completed",
         transcriptLeafId: "leaf-1",
         transcriptNextSeq: 2,
@@ -297,12 +285,12 @@ describe("node worker supervisor container isolation", () => {
       await fixture.supervisor.launch(input, endpoint);
       const failed = await waitForTerminal(fixture.supervisor, input.launchId);
       expect(failed).toMatchObject({ state: "failed" });
-      expect(failed?.errorText).toContain(
+      expect(failed.errorText).toContain(
         "worker admission deadline exceeded after 9 attempts to gateway.example:443: connect failed: Opening handshake has timed out",
       );
-      expect(failed?.errorText).not.toContain(input.descriptor.admission.credential);
-      expect(Buffer.byteLength(failed?.errorText ?? "", "utf8")).toBeLessThanOrEqual(4_096);
-      expect((await fixture.supervisor.status(input.launchId))?.errorText).toBe(failed?.errorText);
+      expect(failed.errorText).not.toContain(input.descriptor.admission.credential);
+      expect(Buffer.byteLength(failed.errorText ?? "", "utf8")).toBeLessThanOrEqual(4_096);
+      expect((await fixture.supervisor.status(input.launchId))?.errorText).toBe(failed.errorText);
     } finally {
       await fixture.supervisor.close();
     }
@@ -329,7 +317,7 @@ describe("node worker supervisor container isolation", () => {
         fs.readFileSync(path.join(fixture.workspaceDir, `${first.launchId}.fixture.json`), "utf8"),
       ) as { pid: number };
       const worker = requireNodeWorkerProcessIdentity(originalWorker.pid);
-      expect(completed?.state).toBe("completed");
+      expect(completed.state).toBe("completed");
       expect(store.get(first.launchId)).toMatchObject({
         state: "running",
         container: running.container,
@@ -343,7 +331,7 @@ describe("node worker supervisor container isolation", () => {
         worker: running.worker,
         container: running.container,
       });
-      expect((await waitForTerminal(fixture.supervisor, next.launchId))?.state).toBe("completed");
+      expect((await waitForTerminal(fixture.supervisor, next.launchId)).state).toBe("completed");
       expect(
         JSON.parse(
           fs.readFileSync(path.join(fixture.workspaceDir, `${next.launchId}.fixture.json`), "utf8"),

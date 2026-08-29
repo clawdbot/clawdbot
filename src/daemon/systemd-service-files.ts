@@ -4,6 +4,7 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { isUnresolvedShellReference } from "../config/state-dir-dotenv.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { resolveGatewaySystemdServiceName } from "./constants.js";
 import { normalizeWindowsPathSeparators } from "./output.js";
@@ -40,10 +41,6 @@ export function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
 }
 
-export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
-  return resolveSystemdUnitPath(env);
-}
-
 // Unit file parsing/rendering: see systemd-unit.ts
 
 type SystemdEnvironmentFileSpec = string | [string, boolean];
@@ -61,6 +58,7 @@ async function buildSystemdCommandSnapshot(params: {
   unsetEnvironment: string[];
   env: GatewayServiceEnv;
   unitPath: string;
+  failOnUnavailable?: boolean;
 }): Promise<GatewayServiceCommandSnapshot> {
   const fileEnvironment = await resolveSystemdEnvironmentFiles(params);
   const environment = { ...params.inlineEnvironment, ...fileEnvironment };
@@ -88,12 +86,13 @@ async function buildSystemdCommandSnapshot(params: {
 
 async function readSystemdManagerCommand(
   env: GatewayServiceEnv,
-  sourcePath: string,
-  managedDefinition: GatewayServiceCommandSnapshot,
+  localDefinition: GatewayServiceCommandSnapshot | null,
   managedUnsetEnvironment: string[],
   opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceCommandConfig | null> {
   const manager = "org.freedesktop.systemd1";
+  const unitName = `${resolveSystemdServiceName(env)}.service`;
+  const unavailable = () => new Error("Effective systemd service command could not be inspected.");
   const timeoutMs =
     opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : SYSTEMD_MANAGER_QUERY_TIMEOUT_MS;
   const deadlineAt = Date.now() + timeoutMs;
@@ -106,57 +105,71 @@ async function readSystemdManagerCommand(
       Math.max(1, Math.floor((deadlineAt - Date.now()) / remainingCalls--)),
     );
     if (result.code !== 0) {
-      return null;
+      if (
+        args.includes("LoadUnit") &&
+        result.stderr.trim() === `Call failed: Unit ${unitName} not found.`
+      ) {
+        return null;
+      }
+      throw unavailable();
     }
     const properties = result.stdout
       .trim()
       .split(/\r?\n/)
       .map((line) => asOptionalRecord(JSON.parse(line)));
-    return properties.length === signatures.length &&
-      properties.every((property, index) => property?.type === signatures[index])
-      ? properties.map((property) => property?.data)
-      : null;
+    if (
+      properties.length !== signatures.length ||
+      !properties.every((property, index) => property?.type === signatures[index])
+    ) {
+      throw unavailable();
+    }
+    return properties.map((property) => property?.data);
   };
   const loaded = await query(
-    [
-      "call",
-      manager,
-      "/org/freedesktop/systemd1",
-      `${manager}.Manager`,
-      "LoadUnit",
-      "s",
-      `${resolveSystemdServiceName(env)}.service`,
-    ],
+    ["call", manager, "/org/freedesktop/systemd1", `${manager}.Manager`, "LoadUnit", "s", unitName],
     ["o"],
   );
-  const loadedUnit = loaded?.[0];
+  if (!loaded) {
+    return null;
+  }
+  const loadedUnit = loaded[0];
   const unitPath = Array.isArray(loadedUnit) && loadedUnit.length === 1 ? loadedUnit[0] : null;
   if (typeof unitPath !== "string" || !unitPath) {
-    return null;
+    throw unavailable();
   }
-  const properties = await query(
-    [
-      "get-property",
-      manager,
-      unitPath,
-      `${manager}.Service`,
-      "ExecStart",
-      "WorkingDirectory",
-      "Environment",
-      "EnvironmentFiles",
-      "UnsetEnvironment",
-    ],
-    ["a(sasbttttuii)", "s", "as", "a(sb)", "as"],
-  );
-  if (!properties) {
-    return null;
-  }
-  const [executions, workingDirectory, assignments, environmentFileSpecs, unsetEnvironment] =
-    properties;
-  const execution = Array.isArray(executions) && executions.length === 1 ? executions[0] : null;
-  const programArguments = Array.isArray(execution) ? execution[1] : null;
+  const readProperties = (scope: "Unit" | "Service", names: string[], signatures: string[]) =>
+    query(["get-property", manager, unitPath, `${manager}.${scope}`, ...names], signatures);
   const isStringArray = (value: unknown): value is string[] =>
     Array.isArray(value) && value.every((entry) => typeof entry === "string");
+  const unitProperties = await readProperties(
+    "Unit",
+    ["FragmentPath", "DropInPaths", "NeedDaemonReload", "LoadState"],
+    ["s", "as", "b", "s"],
+  );
+  const [sourcePath, dropInPaths, reloadPending, loadState] = unitProperties ?? [];
+  // LoadUnit also returns objects for missing units; only LoadState proves absence.
+  if (loadState === "not-found") {
+    return null;
+  }
+  if (
+    loadState !== "loaded" ||
+    typeof sourcePath !== "string" ||
+    !sourcePath ||
+    !isStringArray(dropInPaths) ||
+    dropInPaths.some((pathname) => !pathname) ||
+    typeof reloadPending !== "boolean"
+  ) {
+    throw unavailable();
+  }
+  const properties = await readProperties(
+    "Service",
+    ["ExecStart", "WorkingDirectory", "Environment", "EnvironmentFiles", "UnsetEnvironment"],
+    ["a(sasbttttuii)", "s", "as", "a(sb)", "as"],
+  );
+  const [executions, workingDirectory, assignments, environmentFileSpecs, unsetEnvironment] =
+    properties ?? [];
+  const execution = Array.isArray(executions) && executions.length === 1 ? executions[0] : null;
+  const programArguments = Array.isArray(execution) ? execution[1] : null;
   if (
     !Array.isArray(execution) ||
     execution.length !== 10 ||
@@ -180,43 +193,20 @@ async function readSystemdManagerCommand(
     !isStringArray(unsetEnvironment) ||
     unsetEnvironment.some((assignment) => !assignment || assignment.startsWith("="))
   ) {
-    return null;
+    throw unavailable();
   }
   const inlineEnvironment: Record<string, string> = {};
   for (const assignment of assignments) {
     const separator = assignment.indexOf("=");
     if (separator <= 0) {
-      return null;
+      throw unavailable();
     }
     inlineEnvironment[assignment.slice(0, separator)] = assignment.slice(separator + 1);
   }
 
-  const unitProperties = await query(
-    [
-      "get-property",
-      manager,
-      unitPath,
-      `${manager}.Unit`,
-      "FragmentPath",
-      "DropInPaths",
-      "NeedDaemonReload",
-    ],
-    ["s", "as", "b"],
-  );
-  const [fragmentPath, dropInPaths, reloadPending] = unitProperties ?? [];
-  if (
-    !unitProperties ||
-    typeof fragmentPath !== "string" ||
-    !isStringArray(dropInPaths) ||
-    dropInPaths.some((pathname) => !pathname) ||
-    typeof reloadPending !== "boolean"
-  ) {
-    return null;
-  }
+  const managedDefinition = sourcePath === resolveSystemdUnitPath(env) ? localDefinition : null;
   const managedOverrides =
-    !reloadPending &&
-    path.posix.normalize(normalizeWindowsPathSeparators(fragmentPath)) ===
-      path.posix.normalize(normalizeWindowsPathSeparators(sourcePath))
+    !reloadPending && managedDefinition
       ? await readSystemdDropInOverrides(
           dropInPaths,
           managedUnsetEnvironment,
@@ -233,8 +223,11 @@ async function readSystemdManagerCommand(
       unsetEnvironment,
       env,
       unitPath: sourcePath,
+      failOnUnavailable: opts?.requireEffective,
     })),
-    ...(managedOverrides ? { managedDefinition, managedOverrides } : {}),
+    ...(managedDefinition && managedOverrides ? { managedDefinition, managedOverrides } : {}),
+    sourcePath,
+    definitionPaths: [sourcePath, ...dropInPaths],
     ...(reloadPending ? { reloadPending: true } : {}),
   };
 }
@@ -362,13 +355,21 @@ export async function readSystemdServiceExecStart(
 ): Promise<GatewayServiceCommandConfig | null> {
   const unitPath = resolveSystemdUnitPath(env);
   try {
-    const content = await fs.readFile(unitPath, "utf8");
+    const content = await fs.readFile(unitPath, "utf8").catch((error: unknown) => {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
+      return null;
+    });
+    if (content === null && !opts?.requireEffective) {
+      return null;
+    }
     let execStart = "";
     let workingDirectory = "";
     let inlineEnvironment: Record<string, string> = {};
     const environmentFileSpecs: string[] = [];
     const unsetEnvironment: string[] = [];
-    for (const rawLine of content.split("\n")) {
+    for (const rawLine of (content ?? "").split("\n")) {
       const line = rawLine.trim();
       if (!line || line.startsWith("#")) {
         continue;
@@ -386,26 +387,22 @@ export async function readSystemdServiceExecStart(
         for (const parsed of parseSystemdEnvAssignments(raw)) {
           inlineEnvironment[parsed.key] = expandSystemdSpecifier(parsed.value, env);
         }
-      } else if (line.startsWith("EnvironmentFile=")) {
-        const raw = line.slice("EnvironmentFile=".length).trim();
-        if (raw) {
-          environmentFileSpecs.push(raw);
-        } else {
-          environmentFileSpecs.length = 0;
-        }
-      } else if (line.startsWith("UnsetEnvironment=")) {
-        const raw = line.slice("UnsetEnvironment=".length).trim();
+      } else if (line.startsWith("EnvironmentFile=") || line.startsWith("UnsetEnvironment=")) {
+        const file = line.startsWith("EnvironmentFile=");
+        const entries = file ? environmentFileSpecs : unsetEnvironment;
+        const raw = line.slice(line.indexOf("=") + 1).trim();
         if (!raw) {
-          unsetEnvironment.length = 0;
+          entries.length = 0;
         } else {
-          unsetEnvironment.push(...splitSystemdEnvironmentWords(raw));
+          entries.push(...(file ? [raw] : splitSystemdEnvironmentWords(raw)));
         }
       }
     }
+    // Only manager-effective EnvironmentFile entries are required; drop-ins can reset the base.
     const managedDefinition = await buildSystemdCommandSnapshot({
-      programArguments: execStart
-        ? parseSystemdExecStart(execStart).map((argument) => expandSystemdSpecifier(argument, env))
-        : [],
+      programArguments: parseSystemdExecStart(execStart).map((argument) =>
+        expandSystemdSpecifier(argument, env),
+      ),
       workingDirectory,
       inlineEnvironment,
       environmentFileSpecs,
@@ -413,23 +410,26 @@ export async function readSystemdServiceExecStart(
       env,
       unitPath,
     });
-    const manager = await readSystemdManagerCommand(
-      env,
-      unitPath,
-      managedDefinition,
-      unsetEnvironment,
-      opts,
-    ).catch(() => null);
-    if (!manager && managedDefinition.programArguments.length === 0) {
-      return null;
+    const localDefinition = content === null ? null : managedDefinition;
+    const managerRead = readSystemdManagerCommand(env, localDefinition, unsetEnvironment, opts);
+    const manager = opts?.requireEffective
+      ? await managerRead
+      : await managerRead.catch(() => null);
+    if (manager || opts?.requireEffective) {
+      return manager;
     }
-    const command = manager ?? {
-      ...managedDefinition,
-      managedDefinition,
-      managedOverrides: UNKNOWN_SYSTEMD_OVERRIDES,
-    };
-    return { ...command, sourcePath: unitPath };
-  } catch {
+    return managedDefinition.programArguments.length
+      ? {
+          ...managedDefinition,
+          managedDefinition,
+          managedOverrides: UNKNOWN_SYSTEMD_OVERRIDES,
+          sourcePath: unitPath,
+        }
+      : null;
+  } catch (error) {
+    if (opts?.requireEffective) {
+      throw error;
+    }
     return null;
   }
 }
@@ -451,9 +451,7 @@ export function resolveLegacyNodeSystemdEnvironmentFilePath(params: {
   if (params.environment?.OPENCLAW_SERVICE_KIND?.trim() !== "node") {
     return null;
   }
-  const legacyPath = path.join(params.stateDir, SYSTEMD_GATEWAY_DOTENV_FILENAME);
-  const currentPath = resolveSystemdEnvironmentFilePath(params);
-  return legacyPath === currentPath ? null : legacyPath;
+  return path.join(params.stateDir, SYSTEMD_GATEWAY_DOTENV_FILENAME);
 }
 
 export function isNodeSystemdEnvironment(env: GatewayServiceEnv): boolean {
@@ -646,8 +644,8 @@ async function resolveSystemdEnvironmentFiles(params: {
     const managerExpandedPath = typeof specRaw !== "string";
     const tokens = managerExpandedPath ? [specRaw[0]] : parseEnvironmentFileSpecs(specRaw);
     for (const token of tokens) {
-      const optional = token.startsWith("-");
-      const pathnameRaw = optional ? token.slice(1).trim() : token;
+      const optional = token.startsWith("-") || (typeof specRaw !== "string" && specRaw[1]);
+      const pathnameRaw = token.startsWith("-") ? token.slice(1).trim() : token;
       if (!pathnameRaw) {
         continue;
       }

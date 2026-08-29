@@ -389,6 +389,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
+  it("omits tool guidance from tool-free minimal prompts", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      extraSystemPrompt: "Write only the requested prose.",
+    });
+
+    expect(prompt).not.toContain("## Tooling");
+    expect(prompt).not.toContain("## Tool Call Style");
+    expect(prompt).toContain("## Subagent Context\nWrite only the requested prose.");
+  });
+
   it("avoids the Claude subscription classifier wording in reply tag guidance", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -1924,6 +1936,7 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
         agentId: "work",
+        agentName: "Runt",
         sessionKey: "agent:main:main",
         sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
         sessionUrl: "https://gateway.example/control/chat/main",
@@ -1935,7 +1948,7 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("agent=work");
+    expect(prompt).toContain("Runtime: name=Runt | agent=work | session=agent:main:main");
     expect(prompt).toContain("session=agent:main:main");
     expect(prompt).toContain("sessionId=23ae7fce-3c27-4a51-b58e-d800d8ca091f");
     expect(prompt).toContain("sessionUrl=https://gateway.example/control/chat/main");

@@ -598,11 +598,12 @@ Required env when `--credential-source env`:
 - `OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID` - must match the SUT bot user id
   returned by Discord (the lane fails fast otherwise).
 
-Optional:
+Voice destination:
 
 - `OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID` selects the voice/stage channel for
   `discord-voice-autojoin`; without it, the scenario picks the first visible
-  voice/stage channel for the SUT bot.
+  voice/stage channel for the SUT bot. It is required for
+  `discord-transcripts-voice-authorization` when using env credentials.
 
 Discord YAML module scenarios (`qa/scenarios/channels/discord-*.yaml`):
 
@@ -623,7 +624,11 @@ Discord YAML module scenarios (`qa/scenarios/channels/discord-*.yaml`):
   channel receives a visible transcript-tool denial without a join. The same
   sender is then allowlisted and must start, stop, and leave live capture. The
   scenario writes redacted JSON evidence and deletes its known Discord
-  messages during cleanup.
+  messages during cleanup. It requires an explicit `voiceChannelId` in the
+  leased credential or `OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID`; it never discovers
+  a room automatically. The operator must reserve a dedicated empty QA voice
+  channel before running it. An explicit ID does not prove that prerequisite:
+  the harness observes the SUT bot's connection, not the room's full membership.
 - `discord-status-reactions-tool-only` - opt-in Mantis scenario. Runs by
   itself because it switches the SUT to always-on, tool-only guild replies
   with `messages.statusReactions.enabled=true`, then captures a REST
@@ -641,7 +646,12 @@ pnpm openclaw qa discord \
   --provider-mode mock-openai
 ```
 
-Run the transcript authorization scenario with a Convex lease:
+During teardown of a successfully started child gateway, the Discord adapter
+keeps its credential lease and heartbeat until that gateway has stopped. If
+shutdown fails, the suite withholds lease release.
+
+Run the transcript authorization scenario with a Convex lease whose payload
+contains the reserved QA room's `voiceChannelId`:
 
 ```bash
 pnpm openclaw qa discord \
@@ -1089,6 +1099,27 @@ QA Lab acquires an exclusive lease, heartbeats it for the duration of the
 run, and releases it on shutdown. Pool kinds are `"buzz"`, `"discord"`,
 `"slack"`, `"telegram"`, and `"whatsapp"`.
 
+The suite owns its Gateway lifecycle before startup begins, including startup
+retries and replacement processes. Transport adapters drain their driver work in
+`cleanup()` and release Gateway-backed credentials in
+`cleanupAfterGatewayStop()`. The suite runs that second phase only when no
+Gateway was spawned or process-group termination was confirmed. A readiness
+failure or an exited group leader is not shutdown proof.
+
+Failed startup or replacement settles the process without finalizing its logs
+or staging directory. The caller retains the lifecycle owner and always calls
+`stop()`, including after startup rejects. That explicit stop applies the
+caller's artifact policy, so failure reports can preserve sanitized Gateway logs
+before temporary runtime state is removed.
+
+If termination cannot be confirmed, the suite reports a cleanup failure, keeps
+the runtime directory, and leaves the adapter's lease and heartbeat owned.
+Inspect the reported process group and retained runtime before reusing those
+credentials. Log, RPC, or artifact errors are still reported, but do not prevent
+after-stop cleanup when the process group is confirmed stopped. This ordering
+requires adapters to use the two cleanup phases; it does not change broker TTLs
+or provide a durable guarantee after the QA parent or host is lost.
+
 Payload shapes the broker validates on `admin/add`:
 
 - Buzz (`kind: "buzz"`): `{ relayUrl: string, roomId: string,
@@ -1324,7 +1355,10 @@ for machine-readable output). When choosing focused proof for a touched
 behavior or file path, run `pnpm openclaw qa coverage --match <query>`. The
 match report searches scenario metadata, docs refs, code refs, coverage IDs,
 plugins, and provider requirements, then prints matching `qa suite
---scenario ...` targets.
+--scenario ...` targets. Generated commands preserve declared channel-driver
+requirements and separate scenarios with different driver requirements. Without
+a driver requirement, non-QA channels use `live` and `qa-channel` keeps its
+default driver.
 
 Every `qa suite` run writes top-level `qa-evidence.json`,
 `qa-suite-summary.json`, and `qa-suite-report.md` artifacts for the selected

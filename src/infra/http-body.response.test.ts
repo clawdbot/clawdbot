@@ -162,6 +162,55 @@ describe("readResponseWithLimit", () => {
     vi.useRealTimers();
   });
 
+  it.each(["prefix", "overflow", "deadline"] as const)(
+    "settles %s reads before a retained response clone is released",
+    async (kind) => {
+      const cancel = vi.fn();
+      const response = new Response(
+        makeStallingStream([new TextEncoder().encode("abcdefgh")], cancel),
+      );
+      const capture = response.clone();
+      const expected = new Error("read rejected");
+      const operation = (
+        kind === "prefix"
+          ? readResponseTextPrefix(response, 8)
+          : readResponseWithLimit(
+              response,
+              4,
+              kind === "overflow"
+                ? { onOverflow: () => expected }
+                : {
+                    timeoutMs: () => {
+                      throw expected;
+                    },
+                  },
+            )
+      ).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        const result = await Promise.race([
+          operation,
+          new Promise<undefined>((resolve) => {
+            setImmediate(() => resolve(undefined));
+          }),
+        ]);
+        expect(result).toEqual(
+          kind === "prefix"
+            ? { value: { text: "abcdefgh", size: 8, truncated: true } }
+            : { error: expected },
+        );
+        expect(response.body?.locked).toBe(false);
+        expect(cancel).not.toHaveBeenCalled();
+      } finally {
+        await capture.body?.cancel();
+        await operation;
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([
     {
       name: "reads all chunks within the limit",

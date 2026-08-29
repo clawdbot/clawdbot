@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { computeDeclaredSurfaceHash } from "./capability-consent.js";
+import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import {
   emptyMetadataSnapshot,
   hostedFeedDiffsEntry,
   metadataSnapshot,
 } from "./management-service.test-helpers.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 const mocks = vi.hoisted(() => ({ metadata: vi.fn(), officialCatalog: vi.fn() }));
 
@@ -24,6 +25,7 @@ const { clearManagedPluginOfficialCatalogCache, inspectManagedPlugin } =
 
 describe("managed plugin inspection", () => {
   beforeEach(() => {
+    clearPluginMetadataLifecycleCaches();
     clearManagedPluginOfficialCatalogCache();
     mocks.metadata.mockReset();
     mocks.officialCatalog.mockReset();
@@ -34,7 +36,7 @@ describe("managed plugin inspection", () => {
     mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: true }));
 
     const inspection = await inspectManagedPlugin({
-      config: {},
+      config: { plugins: { entries: { workboard: { enabled: true } } } },
       env: {},
       pluginId: "workboard",
     });
@@ -93,6 +95,7 @@ describe("managed plugin inspection", () => {
         plugins: {
           entries: {
             "community-plugin": {
+              enabled: false,
               hooks: { allowPromptInjection: false, allowConversationAccess: true },
               llm: { allowModelOverride: true },
             },
@@ -148,7 +151,7 @@ describe("managed plugin inspection", () => {
     );
 
     const inspection = await inspectManagedPlugin({
-      config: {},
+      config: { plugins: { entries: { "community-plugin": { enabled: false } } } },
       env: {},
       pluginId: "community-plugin",
     });

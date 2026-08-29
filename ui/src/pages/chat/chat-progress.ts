@@ -167,11 +167,17 @@ export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
   return (
     queuedSendStarted(item) &&
     !item.localCommandName &&
-    (item.sendState === "failed" || (item.sendState === "waiting-idle" && Boolean(item.sendError)))
+    (item.sendState === "failed" ||
+      item.sendState === "unconfirmed" ||
+      (item.sendState === "waiting-idle" && Boolean(item.sendError)))
   );
 }
 
 export function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
+  return !item.localCommandName && !item.pendingRunId;
+}
+
+function isStartedQueuedSend(item: ChatQueueItem): boolean {
   // Page-local submit timing is not persisted; durable attempts keep restored prompts visible.
   return (
     queuedSendStarted(item) &&
@@ -191,8 +197,8 @@ export function resolveWorkingProgress(
   toolMessages: unknown[],
 ): WorkingProgress {
   const queuedProgress =
-    queue.find((item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item)) ??
-    queue.find(shouldRenderQueuedSendInThread);
+    queue.find((item) => item.sendState === "sending" && isStartedQueuedSend(item)) ??
+    queue.find(isStartedQueuedSend);
   const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
   const segmentRunId = streamSegments
     .map((segment) => segment.runId)
@@ -214,7 +220,7 @@ export function resolveWorkingProgress(
     compatibleCached?.startedAt,
     streamStartedAt,
     ...queue
-      .filter(shouldRenderQueuedSendInThread)
+      .filter(isStartedQueuedSend)
       // Send performance fields use performance.now(); the elapsed timer renders against Date.now().
       .map((item) => item.createdAt),
     ...streamSegments.map((segment) => segment.ts),

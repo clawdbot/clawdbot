@@ -1447,7 +1447,11 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     subagentRole: "orchestrator",
     subagentControlScope: "children",
     createdVia: "spawn",
-    createdActor: { type: "agent", id: "agent:main:main" },
+    createdActor: {
+      type: "agent",
+      id: "agent:main:main",
+      identity: { type: "agent", id: "agent:main:main" },
+    },
     createdAt: 1_000,
     forkSource: {
       sessionKey: "agent:main:main",

@@ -61,6 +61,15 @@ export const ModelChoiceSchema = closedObject({
   alias: Type.Optional(NonEmptyString),
   tags: Type.Optional(Type.Array(NonEmptyString)),
   available: Type.Optional(Type.Boolean()),
+  unavailableReason: Type.Optional(
+    Type.Union([
+      Type.Literal("missing-auth"),
+      Type.Literal("auth-failed"),
+      Type.Literal("cooldown"),
+    ]),
+  ),
+  /** Earliest known retry time in epoch milliseconds, only for unavailable models. */
+  unavailableUntil: Type.Optional(Type.Integer({ minimum: 0 })),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
   contextWindows: Type.Optional(Type.Array(GatewayContextWindowOptionSchema)),
   contextWindowDefault: Type.Optional(NonEmptyString),
@@ -434,7 +443,6 @@ export const SkillsInstallParamsSchema = Type.Union([
     slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
     version: Type.Optional(NonEmptyString),
     force: Type.Optional(Type.Boolean()),
-    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
   }),
   closedObject({
@@ -462,7 +470,6 @@ export const SkillsUpdateParamsSchema = Type.Union([
     slug: Type.Optional(NonEmptyString),
     all: Type.Optional(Type.Boolean()),
     force: Type.Optional(Type.Boolean()),
-    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
   }),
 ]);
 

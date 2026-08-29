@@ -41,15 +41,11 @@ type BrowserProfilesSurface = {
   ) => ResolvedBrowserProfile | null;
 };
 
-let cachedBrowserProfilesSurface: BrowserProfilesSurface | undefined;
-
 function loadBrowserProfilesSurface(): BrowserProfilesSurface {
-  cachedBrowserProfilesSurface ??=
-    loadBundledPluginPublicSurfaceModuleSyncCore<BrowserProfilesSurface>({
-      dirName: "browser",
-      artifactBasename: "browser-profiles.js",
-    });
-  return cachedBrowserProfilesSurface;
+  return loadBundledPluginPublicSurfaceModuleSyncCore<BrowserProfilesSurface>({
+    dirName: "browser",
+    artifactBasename: "browser-profiles.js",
+  });
 }
 
 /** Resolves browser config through the activated bundled browser profile facade. */

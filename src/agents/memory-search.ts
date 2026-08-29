@@ -128,9 +128,13 @@ const DEFAULT_MMR_LAMBDA = 0.7;
 const DEFAULT_TEMPORAL_DECAY_ENABLED = true;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
-const DEFAULT_CACHE_MAX_ENTRIES = undefined;
+// LRU bound for the embedding cache. #111382 purged the operator knob but left the
+// built-in default unset, so pruneEmbeddingCacheIfNeeded early-returns and the cache grows
+// without limit. Must stay above a typical live chunk count: a cap below the working set
+// evicts rows the next sync needs and forces paid re-embedding.
+const DEFAULT_CACHE_MAX_ENTRIES = 50_000;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
-export const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
+const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 const DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_REMOTE_BATCH_TIMEOUT_MINUTES = 60;
 

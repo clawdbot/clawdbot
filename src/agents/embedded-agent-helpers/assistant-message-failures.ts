@@ -7,6 +7,7 @@ import {
   isBillingErrorMessage,
   isRateLimitErrorMessage,
 } from "../failover/classify.js";
+import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import { extractFailoverSignalDetails } from "../failover/signal-details.js";
 import type { FailoverReason, FailoverSignal } from "../failover/signal.js";
 export function buildAssistantFailoverSignal(
@@ -24,12 +25,18 @@ export function buildAssistantFailoverSignal(
 }
 export function classifyAssistantFailoverReason(
   msg: AssistantMessage | undefined,
-  opts?: { provider?: string },
+  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner },
 ): FailoverReason | null {
   if (!msg || msg.stopReason !== "error" || isReplayUnsafeAssistantError(msg)) {
     return null;
   }
-  const classification = classifyFailoverSignal(buildAssistantFailoverSignal(msg, opts));
+  // Runtime preparation carries the resolved owner here so packaged runs do
+  // not rediscover provider policy through a source-relative loader.
+  const providerOwner = opts?.providerOwner;
+  const classification = classifyFailoverSignal(
+    buildAssistantFailoverSignal(msg, { provider: providerOwner?.id ?? opts?.provider }),
+    { providerPlugin: providerOwner },
+  );
   return classification?.kind === "reason"
     ? classification.reason
     : classification

@@ -134,6 +134,17 @@ it("uses the shared surface empty state when no background tasks exist", async (
   expect(container.querySelector(".chat-tasks-rail__scroll")?.hasAttribute("hidden")).toBe(true);
 });
 
+it("renders task-shaped placeholders while the initial task list loads", async () => {
+  const container = renderTaskRail({ loading: true, tasks: null });
+
+  const skeleton = container.querySelector("openclaw-panel-loading-skeleton");
+  expect(skeleton).toBeInstanceOf(HTMLElement);
+  await (skeleton as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
+  expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("tasks");
+  expect(skeleton?.shadowRoot?.querySelectorAll(".skeleton").length).toBeGreaterThan(3);
+  expect(container.textContent).not.toContain("Loading tasks");
+});
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();

@@ -8,11 +8,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 import { loadPluginManifestRegistryCore } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
+import { getPluginCache, getPluginMetadataSnapshotCache } from "../../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   normalizePluginDiscoveryResult,
@@ -28,6 +29,7 @@ import {
 } from "../../plugins/providers.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildInlineProviderModels, type InlineModelEntry } from "./model.inline-provider.js";
+import type { BundledStaticCatalogState } from "./model.static-catalog.types.js";
 import {
   createStaticModelIdMatcher,
   staticModelIdMatches,
@@ -127,24 +129,7 @@ type BundledStaticCatalogParams = {
   workspaceDir?: string;
 };
 
-type BundledStaticCatalogState = {
-  plugins: StaticCatalogPlugin[];
-  plans: Map<string, ReturnType<typeof planEffectiveModelCatalogRows>>;
-};
-
-let bundledStaticCatalogStatesByOwner = new WeakMap<
-  object,
-  WeakMap<OpenClawConfig, BundledStaticCatalogState>
->();
 const defaultBundledStaticCatalogConfig: OpenClawConfig = {};
-
-function clearBundledStaticCatalogStates(): void {
-  bundledStaticCatalogStatesByOwner = new WeakMap();
-}
-
-// Snapshot or environment identity pins one plugin generation; install/reload
-// owners replace this map so retained resolvers cannot keep stale provider plans.
-registerPluginMetadataProcessMemoLifecycleClear(clearBundledStaticCatalogStates);
 
 function resolveBundledStaticCatalogMetadataSnapshot(
   params: BundledStaticCatalogParams,
@@ -153,6 +138,10 @@ function resolveBundledStaticCatalogMetadataSnapshot(
   // Rediscovery here can mix generations and repeat manifest work for every model lookup.
   if (params.metadataSnapshot) {
     return params.metadataSnapshot;
+  }
+  const gatewaySnapshot = getGatewayPluginMetadataSnapshot();
+  if (gatewaySnapshot) {
+    return gatewaySnapshot;
   }
   if (params.env !== process.env) {
     return undefined;
@@ -200,6 +189,10 @@ function resolveBundledStaticCatalogState(
   params: BundledStaticCatalogParams,
   metadataSnapshot?: PluginMetadataSnapshot,
 ): BundledStaticCatalogState {
+  const cache = metadataSnapshot
+    ? getPluginMetadataSnapshotCache(metadataSnapshot)
+    : getPluginCache();
+  const bundledStaticCatalogStatesByOwner = cache.metadata.staticCatalogStates;
   const owner = metadataSnapshot ?? params.env;
   let states = bundledStaticCatalogStatesByOwner.get(owner);
   if (!states) {

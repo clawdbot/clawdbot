@@ -37,17 +37,26 @@ export type SettingsSectionProps = {
   danger?: boolean;
 };
 
+type SettingsHelpTriggerProps = {
+  id: string;
+  label: string;
+  tooltip: string;
+  icon: "question" | "info";
+  popoverId: string;
+};
+
+export type SettingsPageHeaderProps = {
+  title: unknown;
+  subtitle?: unknown;
+  actions?: TemplateResult;
+};
+
 export function renderSettingsPage(
   children: unknown,
-  options: { wide?: boolean; intro?: unknown } = {},
+  options: { wide?: boolean } = {},
 ): TemplateResult {
   const className = options.wide ? "settings-page settings-page--wide" : "settings-page";
-  return html`
-    <div class=${className}>
-      ${options.intro ? html`<p class="settings-page__intro">${options.intro}</p>` : nothing}
-      ${children}
-    </div>
-  `;
+  return html`<div class=${className}>${children}</div>`;
 }
 
 export function renderDocsLink(url: string, label: unknown): TemplateResult {
@@ -56,12 +65,55 @@ export function renderDocsLink(url: string, label: unknown): TemplateResult {
   >`;
 }
 
+export function renderSettingsHelpTrigger(props: SettingsHelpTriggerProps): TemplateResult {
+  const helpIcon = props.icon === "info" ? icons.info : icons.circleQuestionMark;
+  return html`
+    <openclaw-tooltip .content=${props.tooltip}>
+      <button
+        id=${props.id}
+        type="button"
+        class="settings-section__help-button"
+        aria-label=${props.label}
+        aria-controls=${props.popoverId}
+        aria-haspopup="dialog"
+      >
+        <span aria-hidden="true">${helpIcon}</span>
+      </button>
+    </openclaw-tooltip>
+  `;
+}
+
+export function renderLearnMoreLink(url: string): TemplateResult {
+  return html`<a
+    class="learn-more-link"
+    href=${url}
+    target=${EXTERNAL_LINK_TARGET}
+    rel=${buildExternalLinkRel()}
+    >${t("common.learnMore")}</a
+  >`;
+}
+
+export function renderSettingsPageHeader(props: SettingsPageHeaderProps): TemplateResult {
+  return html`
+    <section class="content-header">
+      <div>
+        <div class="page-title">${props.title}</div>
+        ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}
+      </div>
+      ${props.actions ? html`<div class="page-header-actions">${props.actions}</div>` : nothing}
+    </section>
+  `;
+}
+
 /** Section = plain text heading + one group surface containing rows. */
 export function renderSettingsSection(props: SettingsSectionProps, rows: unknown): TemplateResult {
-  const heading =
-    props.title || props.actions
+  const description = props.description
+    ? html`<p class="settings-section__desc">${props.description}</p>`
+    : nothing;
+  const copy =
+    props.title || props.description
       ? html`
-          <div class="settings-section__header">
+          <div class="settings-section__copy">
             ${props.title
               ? html`
                   <h2 class="settings-section__heading">
@@ -71,19 +123,25 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
                   </h2>
                 `
               : nothing}
+            ${description}
+          </div>
+        `
+      : nothing;
+  const header =
+    copy || props.actions
+      ? html`
+          <div class="settings-section__header">
+            ${copy}
             ${props.actions
               ? html`<div class="settings-section__actions">${props.actions}</div>`
               : nothing}
           </div>
         `
       : nothing;
-  const description = props.description
-    ? html`<p class="settings-section__desc">${props.description}</p>`
-    : nothing;
   const groupClass = props.danger ? "settings-group settings-group--danger" : "settings-group";
   return html`
     <section class="settings-section">
-      ${heading}${description}
+      ${header}
       <div class=${groupClass}>${rows}</div>
     </section>
   `;
@@ -173,7 +231,6 @@ export function renderSettingsToggleRow(props: {
   /** Runs synchronously during direct activation for effects gated on user activation. */
   onAct?: (checked: boolean) => void;
   disabled?: boolean;
-  actions?: TemplateResult | typeof nothing;
 }): TemplateResult {
   const notifySwitchActivation = (event: MouseEvent | KeyboardEvent) => {
     const fromInput = event.composedPath().some((node) => node instanceof HTMLInputElement);
@@ -208,7 +265,6 @@ export function renderSettingsToggleRow(props: {
           : nothing}
       </div>
       <div class="settings-row__control">
-        ${props.actions ?? nothing}
         <wa-switch
           class="settings-toggle"
           size="s"
@@ -232,37 +288,6 @@ export function renderSettingsToggleRow(props: {
 
 export function renderSettingsDefaultDescription(value: string, overridden: boolean) {
   return html`${t(overridden ? "configForm.defaultValue" : "configForm.usingDefault", { value })}`;
-}
-
-export function renderSettingsDefaultState(props: {
-  value: string;
-  overridden: boolean;
-  disabled?: boolean;
-  onReset: () => void;
-}): {
-  description: TemplateResult;
-  action: TemplateResult | typeof nothing;
-} {
-  return {
-    description: renderSettingsDefaultDescription(props.value, props.overridden),
-    action: props.overridden
-      ? html`
-          <button
-            type="button"
-            class="btn btn--icon"
-            title=${t("configForm.resetToDefault")}
-            aria-label=${t("configForm.resetToDefault")}
-            ?disabled=${props.disabled ?? false}
-            @click=${(event: Event) => {
-              event.stopPropagation();
-              props.onReset();
-            }}
-          >
-            ${icons.refresh}
-          </button>
-        `
-      : nothing,
-  };
 }
 
 export function renderSettingsSegmented<T extends string>(props: {

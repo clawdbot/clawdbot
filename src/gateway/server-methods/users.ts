@@ -3,7 +3,6 @@ import {
   ErrorCodes,
   GatewayErrorDetailCodes,
   errorShape,
-  formatValidationErrors,
   validateUsersLinkEmailParams,
   validateUsersListParams,
   validateUsersPrefsGetParams,
@@ -34,6 +33,7 @@ import {
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function refreshConnectedProfile(
   context: GatewayRequestHandlerOptions["context"],
@@ -57,13 +57,6 @@ function decodeBase64(value: string): Uint8Array | undefined {
     return undefined;
   }
   return Buffer.from(trimmed, "base64");
-}
-
-function invalidParams(name: string, errors: Parameters<typeof formatValidationErrors>[0]) {
-  return errorShape(
-    ErrorCodes.INVALID_REQUEST,
-    `invalid ${name} params: ${formatValidationErrors(errors)}`,
-  );
 }
 
 function profileError(error: unknown) {
@@ -128,15 +121,13 @@ function requireProfileMutationAccess(
 
 export const usersHandlers: GatewayRequestHandlers = {
   "users.list": ({ params, respond }) => {
-    if (!validateUsersListParams(params)) {
-      respond(false, undefined, invalidParams("users.list", validateUsersListParams.errors));
+    if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
       return;
     }
     respond(true, { profiles: listProfiles() });
   },
   "users.self": async ({ client, params, respond }) => {
-    if (!validateUsersSelfParams(params)) {
-      respond(false, undefined, invalidParams("users.self", validateUsersSelfParams.errors));
+    if (!assertValidParams(params, validateUsersSelfParams, "users.self", respond)) {
       return;
     }
     if (!client?.authenticatedUserId) {
@@ -166,12 +157,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
   },
   "users.prefs.get": ({ client, params, respond }) => {
-    if (!validateUsersPrefsGetParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("users.prefs.get", validateUsersPrefsGetParams.errors),
-      );
+    if (!assertValidParams(params, validateUsersPrefsGetParams, "users.prefs.get", respond)) {
       return;
     }
     const profileId = client?.authenticatedUserProfile?.profileId ?? "";
@@ -199,12 +185,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
   },
   "users.prefs.set": ({ client, context, params, respond }) => {
-    if (!validateUsersPrefsSetParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("users.prefs.set", validateUsersPrefsSetParams.errors),
-      );
+    if (!assertValidParams(params, validateUsersPrefsSetParams, "users.prefs.set", respond)) {
       return;
     }
     const profileId = client?.authenticatedUserProfile?.profileId ?? "";
@@ -278,12 +259,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
   },
   "users.linkEmail": ({ context, params, respond }) => {
-    if (!validateUsersLinkEmailParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("users.linkEmail", validateUsersLinkEmailParams.errors),
-      );
+    if (!assertValidParams(params, validateUsersLinkEmailParams, "users.linkEmail", respond)) {
       return;
     }
     const email = params.email.trim();
@@ -300,12 +276,9 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
   },
   "users.setDisplayName": ({ client, context, params, respond }) => {
-    if (!validateUsersSetDisplayNameParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("users.setDisplayName", validateUsersSetDisplayNameParams.errors),
-      );
+    if (
+      !assertValidParams(params, validateUsersSetDisplayNameParams, "users.setDisplayName", respond)
+    ) {
       return;
     }
     try {
@@ -320,8 +293,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
   },
   "users.setRole": ({ context, params, respond }) => {
-    if (!validateUsersSetRoleParams(params)) {
-      respond(false, undefined, invalidParams("users.setRole", validateUsersSetRoleParams.errors));
+    if (!assertValidParams(params, validateUsersSetRoleParams, "users.setRole", respond)) {
       return;
     }
     const roleDefinitions = context.getRuntimeConfig().gateway?.roles?.definitions;
@@ -349,12 +321,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
   },
   "users.setAvatar": ({ client, context, params, respond }) => {
-    if (!validateUsersSetAvatarParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("users.setAvatar", validateUsersSetAvatarParams.errors),
-      );
+    if (!assertValidParams(params, validateUsersSetAvatarParams, "users.setAvatar", respond)) {
       return;
     }
     const bytes = decodeBase64(params.avatarBase64);

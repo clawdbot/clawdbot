@@ -3,16 +3,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import { listDevicePairing, type PairedDevice } from "../../infra/device-pairing.js";
 import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
-import {
-  collectNodeRunnerIssuesByNodeId,
-  collectNodeWorkerBundleStatusByNodeId,
-  collectNodeWorkerCapacityByNodeId,
-  isNodeRunnerSessionHost,
-} from "../node-registry-private.js";
+import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
 import type {
   WorkerEnvironmentServiceContract,
   WorkerEnvironmentServiceRecord,
@@ -20,9 +16,9 @@ import type {
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
 
-vi.mock("../../infra/device-pairing.js", () => ({
+vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
   listDevicePairing: vi.fn(),
-  resolveNodePairingState: vi.fn(),
 }));
 
 vi.mock("../../infra/device-pairing-node.js", () => ({
@@ -30,13 +26,16 @@ vi.mock("../../infra/device-pairing-node.js", () => ({
 }));
 
 vi.mock("../node-registry-private.js", () => ({
-  collectNodeRunnerIssuesByNodeId: vi.fn(() => new Map()),
-  collectNodeWorkerBundleStatusByNodeId: vi.fn(() => new Map()),
-  collectNodeWorkerCapacityByNodeId: vi.fn(() => new Map()),
-  isNodeRunnerSessionHost: vi.fn(() => false),
+  collectNodeCatalogRuntimeState: vi.fn(() => ({
+    sessionHostNodeIds: new Set(),
+    issuesByNodeId: new Map(),
+    workerSlotsByNodeId: new Map(),
+    workerBundleByNodeId: new Map(),
+  })),
 }));
 
 const NOW = 10_000;
+let runtimeState: ReturnType<typeof collectNodeCatalogRuntimeState>;
 
 type TestWorkerRecord = WorkerEnvironmentRecord & WorkerEnvironmentServiceRecord;
 
@@ -188,10 +187,13 @@ class FakeWorkerServiceError extends Error {
 
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
-  vi.mocked(isNodeRunnerSessionHost).mockReturnValue(false);
-  vi.mocked(collectNodeRunnerIssuesByNodeId).mockReturnValue(new Map());
-  vi.mocked(collectNodeWorkerCapacityByNodeId).mockReturnValue(new Map());
-  vi.mocked(collectNodeWorkerBundleStatusByNodeId).mockReturnValue(new Map());
+  runtimeState = {
+    sessionHostNodeIds: new Set(),
+    issuesByNodeId: new Map(),
+    workerSlotsByNodeId: new Map(),
+    workerBundleByNodeId: new Map(),
+  };
+  vi.mocked(collectNodeCatalogRuntimeState).mockReturnValue(runtimeState);
   vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
   vi.mocked(listNodePairing).mockResolvedValue({
     paired: [
@@ -208,8 +210,88 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("environment gateway methods", () => {
+  it.each(["devices", "nodes"] as const)(
+    "waits for both independent pairing reads when %s finishes first",
+    async (first) => {
+      const devices = createDeferred<Awaited<ReturnType<typeof listDevicePairing>>>();
+      const nodes = createDeferred<Awaited<ReturnType<typeof listNodePairing>>>();
+      vi.mocked(listDevicePairing).mockClear().mockReturnValue(devices.promise);
+      vi.mocked(listNodePairing).mockClear().mockReturnValue(nodes.promise);
+      const context = mockContext();
+      const project = vi.spyOn(context.nodeRegistry, "listConnectedForPairingStates");
+      const respond = vi.fn();
+      const request = environmentsHandlers["environments.list"]?.({
+        params: {},
+        respond,
+        context,
+      } as never);
+
+      const liveDevice: PairedDevice = {
+        deviceId: "node-live",
+        publicKey: "public-key-live",
+        roles: ["node"],
+        tokens: { node: { token: "test-node-token", role: "node", scopes: [], createdAtMs: 1 } },
+        createdAtMs: 1,
+        approvedAtMs: 1,
+      };
+      const deviceSnapshot = {
+        paired: [
+          liveDevice,
+          { ...liveDevice, deviceId: "operator-only", roles: ["operator"], tokens: {} },
+        ],
+        pending: [],
+      };
+      const nodeSnapshot = {
+        paired: [
+          {
+            nodeId: "node-offline",
+            displayName: "Independent snapshot",
+            createdAtMs: 1,
+            approvedAtMs: 1,
+          },
+        ],
+        pending: [],
+      };
+      try {
+        expect(listDevicePairing).toHaveBeenCalledTimes(1);
+        expect(listNodePairing).toHaveBeenCalledTimes(1);
+        if (first === "devices") {
+          devices.resolve(deviceSnapshot);
+          await devices.promise;
+        } else {
+          nodes.resolve(nodeSnapshot);
+          await nodes.promise;
+        }
+        expect(project).not.toHaveBeenCalled();
+        expect(respond).not.toHaveBeenCalled();
+        devices.resolve(deviceSnapshot);
+        nodes.resolve(nodeSnapshot);
+        await request;
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            environments: expect.arrayContaining([
+              expect.objectContaining({ id: "node:node-offline", label: "Independent snapshot" }),
+            ]),
+          }),
+          undefined,
+        );
+        expect(project).toHaveBeenCalledTimes(1);
+        expect(project).toHaveBeenCalledWith(
+          new Map([["node-live", { identity: expect.any(String) }]]),
+        );
+        expect(listDevicePairing).toHaveBeenCalledTimes(1);
+        expect(listNodePairing).toHaveBeenCalledTimes(1);
+      } finally {
+        devices.resolve(deviceSnapshot);
+        nodes.resolve(nodeSnapshot);
+        await request;
+      }
+    },
+  );
+
   it("projects live node session-host capability without a worker service", async () => {
-    vi.mocked(isNodeRunnerSessionHost).mockImplementation(({ nodeId }) => nodeId === "node-live");
+    runtimeState.sessionHostNodeIds.add("node-live");
     const [ok, payload] = await callEnvironmentMethod("environments.list", {});
 
     expect(ok).toBe(true);
@@ -331,12 +413,11 @@ describe("environment gateway methods", () => {
   });
 
   it("projects the same exact slots and redacted bundle status through list and status", async () => {
-    vi.mocked(collectNodeWorkerCapacityByNodeId).mockReturnValue(
-      new Map([["node-live", { total: 2, available: 1 }]]),
-    );
-    vi.mocked(collectNodeWorkerBundleStatusByNodeId).mockReturnValue(
-      new Map([["node-live", { status: "installed", version: "2026.8.9" }]]),
-    );
+    runtimeState.workerSlotsByNodeId.set("node-live", { total: 2, available: 1 });
+    runtimeState.workerBundleByNodeId.set("node-live", {
+      status: "installed",
+      version: "2026.8.9",
+    });
 
     const [, listPayload] = await callEnvironmentMethod("environments.list", {});
     const [, statusPayload] = await callEnvironmentMethod("environments.status", {
@@ -358,9 +439,7 @@ describe("environment gateway methods", () => {
   });
 
   it("projects the same current-node update issue through list and status", async () => {
-    vi.mocked(collectNodeRunnerIssuesByNodeId).mockReturnValue(
-      new Map([["node-live", [NODE_RUNNER_UPDATE_REQUIRED_ISSUE]]]),
-    );
+    runtimeState.issuesByNodeId.set("node-live", [NODE_RUNNER_UPDATE_REQUIRED_ISSUE]);
 
     const [, listPayload] = await callEnvironmentMethod("environments.list", {});
     const [, statusPayload] = await callEnvironmentMethod("environments.status", {
@@ -567,7 +646,7 @@ describe("environment gateway methods", () => {
   });
 
   it("returns status for one node environment", async () => {
-    vi.mocked(isNodeRunnerSessionHost).mockReturnValue(true);
+    runtimeState.sessionHostNodeIds.add("node-live");
     const [ok, payload] = await callEnvironmentMethod("environments.status", {
       environmentId: "node:node-live",
     });

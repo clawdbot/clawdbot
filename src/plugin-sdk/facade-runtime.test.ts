@@ -5,10 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import * as facadeActivationRuntime from "./facade-activation-check.runtime.js";
 import {
   evaluateBundledPluginPublicSurfaceAccess,
   resolveBundledPluginPublicSurfaceAccess as resolveActivationCheckBundledPluginPublicSurfaceAccess,
@@ -117,6 +118,55 @@ afterEach(() => {
 });
 
 describe("plugin-sdk facade runtime", () => {
+  it("refreshes browser SDK surfaces only when the plugin cache generation changes", async () => {
+    const dir = createTrustedBundledFixtureRoot("openclaw-browser-generation-");
+    const pluginDir = path.join(dir, "browser");
+    writePluginPackageJson(pluginDir, "browser", "commonjs");
+    writeJsonFile(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "browser",
+      enabledByDefault: true,
+    });
+    useBundledPluginDirOverrideForTest(dir);
+    setRuntimeConfigSnapshot({});
+    testing.setFacadeActivationCheckRuntimeForTest(facadeActivationRuntime);
+    const auth = await import("./browser-control-auth.js");
+    const profiles = await import("./browser-profiles.js");
+    const maintenance = await import("./browser-maintenance.js");
+    const writeSurfaces = (generation: number) => {
+      fs.writeFileSync(
+        path.join(pluginDir, "browser-control-auth.js"),
+        `exports.resolveBrowserControlAuth = () => ({ token: "fixture-${generation}" });\n`,
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "browser-profiles.js"),
+        `exports.resolveBrowserConfig = () => ({ defaultProfile: "fixture-${generation}" });\n`,
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "browser-maintenance.js"),
+        `exports.closeTrackedBrowserTabsForSessions = async () => ${generation};\n`,
+      );
+    };
+    const readSurfaces = async () => [
+      auth.resolveBrowserControlAuth().token,
+      profiles.resolveBrowserConfig(undefined).defaultProfile,
+      await maintenance.closeTrackedBrowserTabsForSessions({ sessionKeys: ["fixture-session"] }),
+    ];
+
+    writeSurfaces(1);
+    expect(await readSurfaces()).toEqual(["fixture-1", "fixture-1", 1]);
+    writeSurfaces(2);
+    expect(await readSurfaces()).toEqual(["fixture-1", "fixture-1", 1]);
+
+    clearPluginMetadataLifecycleCaches();
+    testing.setFacadeActivationCheckRuntimeForTest(facadeActivationRuntime);
+
+    expect(await readSurfaces()).toEqual(["fixture-2", "fixture-2", 2]);
+    setRuntimeConfigSnapshot({ plugins: { entries: { browser: { enabled: false } } } });
+    expect(
+      await maintenance.closeTrackedBrowserTabsForSessions({ sessionKeys: ["fixture-session"] }),
+    ).toBe(0);
+  });
+
   it("reuses successful facade locations without repeating filesystem probes", () => {
     const dir = createBundledPluginDir("openclaw-facade-location-cache-", "cached");
     useBundledPluginDirOverrideForTest(dir);
@@ -793,19 +843,21 @@ describe("plugin-sdk facade runtime", () => {
       } = {},
     ): PluginMetadataSnapshot {
       const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+      const index: PluginMetadataSnapshot["index"] = {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash,
+        generatedAtMs: 1,
+        installRecords: {},
+        plugins: [],
+        diagnostics: [],
+      };
       return {
         policyHash,
-        index: {
-          version: 1,
-          hostContractVersion: "test",
-          compatRegistryVersion: "test",
-          migrationVersion: 1,
-          policyHash,
-          generatedAtMs: 1,
-          installRecords: {},
-          plugins: [],
-          diagnostics: [],
-        },
+        index,
+        registryIndex: index,
         registryDiagnostics: [],
         manifestRegistry: { plugins: params.plugins ?? [], diagnostics: [] },
         plugins: [],

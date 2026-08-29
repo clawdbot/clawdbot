@@ -45,9 +45,10 @@ function formatParentForkTooLargeMessage(params: {
 export function planParentForkDecision(
   parentEntry: SessionEntry,
   transcriptEstimate?: SqliteTranscriptParentTokenEstimate,
-  options: { preferTranscriptEstimate?: boolean } = {},
+  options: { maxTokens?: number; preferTranscriptEstimate?: boolean } = {},
 ): SessionParentForkDecision {
-  const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
+  const maxTokens =
+    normalizePositiveTokenCount(options.maxTokens) ?? DEFAULT_PARENT_FORK_MAX_TOKENS;
   const parentTokens = options.preferTranscriptEstimate
     ? transcriptEstimate?.tokens
     : (resolveFreshSessionTotalTokens(parentEntry) ?? transcriptEstimate?.tokens);

@@ -55,6 +55,14 @@ function resolveTsxImport(checkoutRoot) {
   throw resolutionError;
 }
 
+export async function registerToolingTsx() {
+  // tsx indexes the entire shared disk cache before expiration, coupling startup
+  // to other checkouts' cache size. This flag retains its in-process Map and
+  // reaches descendant tooling before their loaders initialize.
+  process.env.TSX_DISABLE_CACHE = "1";
+  await import(resolveTsxImport(SHIM_CHECKOUT_ROOT));
+}
+
 function signalExitCode(signal) {
   const signalNumber = osConstants.signals[signal];
   return typeof signalNumber === "number" ? 128 + signalNumber : 1;
@@ -118,7 +126,7 @@ async function runTsxCliShimInner(moduleUrl, options) {
   try {
     const implementationUrl = new URL(options.implementation, moduleUrl);
     const implementationPath = fileURLToPath(implementationUrl);
-    const tsxImport = resolveTsxImport(SHIM_CHECKOUT_ROOT);
+    const tsxImport = new URL("../tsx.mjs", import.meta.url).href;
     const nodeExecutable = process.versions.bun ? "node" : process.execPath;
     child = spawn(
       nodeExecutable,

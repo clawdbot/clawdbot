@@ -2,15 +2,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeSync } from "node:fs";
 import fs from "node:fs/promises";
-import {
-  createServer as createHttpServer,
-  type IncomingMessage,
-  type ServerResponse,
-} from "node:http";
+import { createServer as createHttpServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -19,7 +14,7 @@ import {
   type Model,
   type ModelThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { discoverAuthStorage, discoverModels } from "../agents/agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
@@ -1643,7 +1638,7 @@ describe("providerScopedModelRegistryProviders", () => {
         useExplicit: false,
         useSmall: false,
       }),
-    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" }]);
+    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/routers/glm-5p2-fast" }]);
   });
 
   it("loads explicit gateway model refs through dynamic discovery", () => {
@@ -1796,6 +1791,22 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
         requestedLevel: "high",
       }),
     ).toBe("off");
+  });
+
+  it.each([
+    ["openai-completions", "off"],
+    ["anthropic-messages", "high"],
+  ] as const)("uses the discovered %s transport for provider thinking policy", (api, expected) => {
+    expect(
+      resolveGatewayLiveModelThinkingLevel({
+        model: {
+          ...createGatewayLiveTestModel("opencode-go", "glm-5.1"),
+          api,
+          reasoning: true,
+        },
+        requestedLevel: "high",
+      }),
+    ).toBe(expected);
   });
 
   it.each(["xai", "x-ai"])(
@@ -3992,11 +4003,11 @@ type GatewayModelSuiteParams = {
 type OpenAIUltraWireObservation = {
   model?: string;
   reasoningEffort?: string;
+  sessionsSpawn?: { strict?: boolean; categoryRequired: boolean };
 };
 
 type OpenAIUltraWireCapture = {
-  baseUrl: string;
-  close: () => Promise<void>;
+  close: () => void;
   observations: OpenAIUltraWireObservation[];
 };
 
@@ -4010,16 +4021,26 @@ function isOpenAIGpt56UltraTarget(model: Model, thinkingLevel: string): boolean 
   );
 }
 
-function readOpenAIUltraWireObservation(body: Buffer): OpenAIUltraWireObservation {
+function readOpenAIUltraWireObservation(body: string): OpenAIUltraWireObservation {
   try {
-    const parsed = JSON.parse(body.toString("utf8")) as {
+    const parsed = JSON.parse(body) as {
       model?: unknown;
       reasoning?: { effort?: unknown };
+      tools?: Array<{ name?: string; strict?: boolean; parameters?: { required?: string[] } }>;
     };
+    const spawn = parsed.tools?.find((tool) => tool.name === "sessions_spawn");
     return {
       ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
       ...(typeof parsed.reasoning?.effort === "string"
         ? { reasoningEffort: parsed.reasoning.effort }
+        : {}),
+      ...(spawn
+        ? {
+            sessionsSpawn: {
+              ...(typeof spawn.strict === "boolean" ? { strict: spawn.strict } : {}),
+              categoryRequired: spawn.parameters?.required?.includes("category") ?? false,
+            },
+          }
         : {}),
     };
   } catch {
@@ -4027,142 +4048,36 @@ function readOpenAIUltraWireObservation(body: Buffer): OpenAIUltraWireObservatio
   }
 }
 
-async function startOpenAIUltraWireCapture(
-  upstreamBaseUrl: string,
-): Promise<OpenAIUltraWireCapture> {
-  const upstream = new URL(upstreamBaseUrl);
+function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenAIUltraWireCapture {
+  const endpoints = new Set(
+    upstreamBaseUrls.map((baseUrl) => `${baseUrl.replace(/\/$/u, "")}/responses`),
+  );
   const observations: OpenAIUltraWireObservation[] = [];
-  const activeUpstreamRequests = new Set<AbortController>();
-  // Retain only model/effort evidence. Forward auth to the model's original
-  // origin without logging or storing headers, bodies, or response content.
-  const handleRequest = async (
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> => {
-    const upstreamAbort = new AbortController();
-    const abortUpstream = () => upstreamAbort.abort();
-    const abortOnPrematureResponseClose = () => {
-      if (!response.writableEnded) {
-        abortUpstream();
+  const host = getAiTransportHost();
+  // Changing baseUrl to a capture proxy changes native OpenAI schema policy.
+  // The guarded client bypasses global fetch for pinned dispatchers, so observe
+  // its existing host port without changing request bytes or network policy.
+  configureAiTransportHost({
+    ...host,
+    buildModelFetch: (...args) => {
+      const fetchModel = host.buildModelFetch(...args);
+      if (!fetchModel) {
+        return fetchModel;
       }
-    };
-    activeUpstreamRequests.add(upstreamAbort);
-    request.once("aborted", abortUpstream);
-    response.once("close", abortOnPrematureResponseClose);
-    try {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      const body = Buffer.concat(chunks);
-      observations.push(readOpenAIUltraWireObservation(body));
-
-      const headers = new Headers();
-      for (const [name, value] of Object.entries(request.headers)) {
-        if (
-          value === undefined ||
-          name === "host" ||
-          name === "connection" ||
-          name === "content-length"
-        ) {
-          continue;
+      return ((input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (endpoints.has(url) && typeof init?.body === "string") {
+          observations.push(readOpenAIUltraWireObservation(init.body));
         }
-        headers.set(name, Array.isArray(value) ? value.join(", ") : value);
-      }
-      const upstreamResponse = await fetch(new URL(request.url ?? "/", upstream.origin), {
-        method: request.method,
-        headers,
-        body: request.method === "GET" || request.method === "HEAD" ? undefined : body,
-        redirect: "manual",
-        signal: upstreamAbort.signal,
-      });
-      const responseHeaders: Record<string, string> = {};
-      upstreamResponse.headers.forEach((value, name) => {
-        if (
-          name !== "connection" &&
-          name !== "content-encoding" &&
-          name !== "content-length" &&
-          name !== "transfer-encoding"
-        ) {
-          responseHeaders[name] = value;
-        }
-      });
-      response.writeHead(upstreamResponse.status, responseHeaders);
-      if (upstreamResponse.body) {
-        // Pipeline couples backpressure and downstream closure to the upstream
-        // stream instead of buffering an abandoned or slow SSE response.
-        await pipeline(Readable.from(upstreamResponse.body), response);
-      } else {
-        response.end();
-      }
-    } catch (error) {
-      if (response.destroyed) {
-        return;
-      }
-      if (response.headersSent) {
-        response.destroy(error instanceof Error ? error : new Error(String(error)));
-        return;
-      }
-      response.writeHead(502, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
-      );
-    } finally {
-      activeUpstreamRequests.delete(upstreamAbort);
-      request.off("aborted", abortUpstream);
-      response.off("close", abortOnPrematureResponseClose);
-    }
-  };
-  const server = createHttpServer((request, response) => {
-    void handleRequest(request, response).catch((error: unknown) => {
-      if (!response.destroyed) {
-        response.destroy(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
+        return fetchModel(input, init);
+      }) as typeof fetch;
+    },
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-    throw new Error("failed to start OpenAI Ultra wire capture proxy");
-  }
-  let closePromise: Promise<void> | undefined;
   return {
-    baseUrl: `http://127.0.0.1:${address.port}${upstream.pathname.replace(/\/$/u, "")}`,
     observations,
     close: () => {
-      closePromise ??= (async () => {
-        for (const controller of activeUpstreamRequests) {
-          controller.abort();
-        }
-        await new Promise<void>((resolve, reject) => {
-          let settled = false;
-          const finish = (error?: Error) => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            clearTimeout(forceCloseTimer);
-            if (error) {
-              reject(error);
-            } else {
-              resolve();
-            }
-          };
-          const forceCloseTimer = setTimeout(() => {
-            server.closeAllConnections();
-            finish();
-          }, 5_000);
-          server.close((error) => finish(error));
-          server.closeIdleConnections();
-        });
-      })();
-      return closePromise;
+      configureAiTransportHost(host);
     },
   };
 }
@@ -4191,117 +4106,104 @@ async function closeUltraWireTestServer(
 }
 
 describe("OpenAI Ultra wire capture", () => {
-  it("forwards streaming responses while retaining only model and effort evidence", async () => {
-    let upstreamAuthorization: string | undefined;
-    const upstream = createHttpServer((request, response) => {
-      void (async () => {
-        upstreamAuthorization = request.headers.authorization;
-        for await (const chunk of request) {
-          // Drain the request before responding, like the Responses API.
-          Buffer.byteLength(chunk);
-        }
-        response.writeHead(200, { "content-type": "text/event-stream" });
-        response.write("data: first\n\n");
-        response.end("data: done\n\n");
-      })().catch((error: unknown) => {
-        response.destroy(error instanceof Error ? error : new Error(String(error)));
-      });
+  it("observes the selected native endpoint without rerouting the request", async () => {
+    const endpoint = "https://api.openai.com/v1/responses";
+    const response = new Response("data: done\n\n", {
+      headers: { "content-type": "text/event-stream" },
     });
-    const upstreamBaseUrl = await listenOnLoopbackForUltraWireTest(upstream);
-    const capture = await startOpenAIUltraWireCapture(upstreamBaseUrl);
+    const host = getAiTransportHost();
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(response);
+    const buildModelFetch = vi.fn(() => transport);
+    configureAiTransportHost({ ...host, buildModelFetch });
+    const capture = startOpenAIUltraWireCapture(["https://api.openai.com/v1"]);
+    const model = createGatewayLiveTestModel("openai", "gpt-5.6-sol");
+    const options = { sanitizeSse: false };
+    const fetchModel = expectDefined(
+      getAiTransportHost().buildModelFetch(model, 1_000, options),
+      "model fetch",
+    );
+    const request: RequestInit = {
+      method: "POST",
+      headers: { authorization: "Bearer test-only", "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-5.6-sol",
+        reasoning: { effort: "max" },
+        input: "private prompt must not be retained",
+        tools: [{ name: "sessions_spawn", strict: false, parameters: { required: ["task"] } }],
+      }),
+      signal: new AbortController().signal,
+    };
     try {
-      const response = await fetch(`${capture.baseUrl}/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: "Bearer redacted" },
-        body: JSON.stringify({ model: "gpt-5.6-sol", reasoning: { effort: "max" } }),
-      });
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("data: first\n\ndata: done\n\n");
-      expect(capture.observations).toEqual([{ model: "gpt-5.6-sol", reasoningEffort: "max" }]);
-      expect(upstreamAuthorization).toBe("Bearer redacted");
-      expect(JSON.stringify(capture.observations)).not.toContain("redacted");
+      expect(await fetchModel(endpoint, request)).toBe(response);
+      expect(buildModelFetch).toHaveBeenCalledExactlyOnceWith(model, 1_000, options);
+      expect(transport).toHaveBeenCalledExactlyOnceWith(endpoint, request);
+      expect(capture.observations).toEqual([
+        {
+          model: "gpt-5.6-sol",
+          reasoningEffort: "max",
+          sessionsSpawn: { strict: false, categoryRequired: false },
+        },
+      ]);
+      await fetchModel("https://api.openai.com/v1/other", request);
+      await fetchModel("https://api.openai.com.example/v1/responses", request);
+      expect(capture.observations).toHaveLength(1);
+      const failure = new Error("transport failed");
+      transport.mockRejectedValueOnce(failure);
+      await expect(fetchModel(endpoint, request)).rejects.toBe(failure);
     } finally {
-      try {
-        await capture.close();
-      } finally {
-        await closeUltraWireTestServer(upstream);
-      }
+      capture.close();
+      expect(getAiTransportHost().buildModelFetch).toBe(buildModelFetch);
+      configureAiTransportHost(host);
     }
   });
 
-  it("aborts an active upstream stream during bounded close", async () => {
-    let resolveUpstreamClosed: (() => void) | undefined;
-    const upstreamClosed = new Promise<void>((resolve) => {
-      resolveUpstreamClosed = resolve;
-    });
-    const upstream = createHttpServer((_request, response) => {
-      response.once("close", () => resolveUpstreamClosed?.());
+  it("preserves guarded HTTP streaming, cancellation, and host restoration", async () => {
+    await import("../agents/ai-transport-runtime-host.js");
+    let upstreamAuthorization: string | undefined;
+    let upstreamClosed = false;
+    const upstream = createHttpServer((request, response) => {
+      upstreamAuthorization = request.headers.authorization;
+      response.once("close", () => {
+        upstreamClosed = true;
+      });
+      request.resume();
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write("data: open\n\n");
     });
     const upstreamBaseUrl = await listenOnLoopbackForUltraWireTest(upstream);
-    const capture = await startOpenAIUltraWireCapture(upstreamBaseUrl);
+    const host = getAiTransportHost();
+    const capture = startOpenAIUltraWireCapture([upstreamBaseUrl]);
+    const controller = new AbortController();
     try {
-      const response = await fetch(`${capture.baseUrl}/responses`, {
+      const fetchModel = expectDefined(
+        getAiTransportHost().buildModelFetch(
+          { ...createGatewayLiveTestModel("openai", "gpt-5.6-sol"), baseUrl: upstreamBaseUrl },
+          undefined,
+          { sanitizeSse: false },
+        ),
+        "guarded model fetch",
+      );
+      const response = await fetchModel(`${upstreamBaseUrl}/responses`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { authorization: "Bearer test-only", "content-type": "application/json" },
         body: JSON.stringify({ model: "gpt-5.6-sol", reasoning: { effort: "max" } }),
+        signal: controller.signal,
       });
-      expect(response.status).toBe(200);
-      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-      const closeResult = await Promise.race([
-        capture.close().then(() => "closed" as const),
-        new Promise<"timed-out">((resolve) => {
-          timeoutHandle = setTimeout(() => resolve("timed-out"), 2_000);
-        }),
-      ]);
-      clearTimeout(timeoutHandle);
-      expect(closeResult).toBe("closed");
-      await upstreamClosed;
-      await response.body?.cancel().catch(() => undefined);
+      const reader = expectDefined(response.body, "stream body").getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe("data: open\n\n");
+      expect(upstreamAuthorization).toBe("Bearer test-only");
+      expect(capture.observations).toEqual([{ model: "gpt-5.6-sol", reasoningEffort: "max" }]);
+      capture.close();
+      expect(getAiTransportHost().buildModelFetch).toBe(host.buildModelFetch);
+      expect(upstreamClosed).toBe(false);
+      controller.abort();
+      await expect(reader.read()).rejects.toThrow();
+      await expect.poll(() => upstreamClosed).toBe(true);
     } finally {
-      try {
-        await capture.close();
-      } finally {
-        await closeUltraWireTestServer(upstream);
-      }
+      controller.abort();
+      capture.close();
+      await closeUltraWireTestServer(upstream);
     }
-  });
-
-  it("preserves model-specific capture endpoints in the provider override", () => {
-    const capture = (baseUrl: string): OpenAIUltraWireCapture => ({
-      baseUrl,
-      close: () => Promise.resolve(),
-      observations: [],
-    });
-    const candidates = [
-      {
-        ...createGatewayLiveTestModel("openai", "gpt-5.6-sol"),
-        baseUrl: "https://sol.test/v1",
-      },
-      {
-        ...createGatewayLiveTestModel("openai", "gpt-5.6-terra"),
-        baseUrl: "https://terra.test/v1",
-      },
-    ];
-    const capturesByModel = new Map<string, OpenAIUltraWireCapture>([
-      ["gpt-5.6-sol", capture("http://127.0.0.1:4101/v1")],
-      ["gpt-5.6-terra", capture("http://127.0.0.1:4102/v1")],
-    ]);
-
-    const override = buildOpenAIUltraWireProviderOverride({
-      candidates,
-      capturesByModel,
-      cfg: {},
-    });
-
-    expect(override.baseUrl).toBe("http://127.0.0.1:4101/v1");
-    expect(
-      Object.fromEntries(override.models?.map((model) => [model.id, model.baseUrl]) ?? []),
-    ).toEqual({
-      "gpt-5.6-sol": "http://127.0.0.1:4101/v1",
-      "gpt-5.6-terra": "http://127.0.0.1:4102/v1",
-    });
   });
 
   it("uses the configured or official route for explicit fallback models", () => {
@@ -4341,34 +4243,6 @@ function resolveOpenAIUltraUpstreamBaseUrl(params: {
   );
 }
 
-function buildOpenAIUltraWireProviderOverride(params: {
-  candidates: Array<Model>;
-  capturesByModel: ReadonlyMap<string, OpenAIUltraWireCapture>;
-  cfg: OpenClawConfig;
-}): ModelProviderConfig {
-  const discovered = buildLiveProviderConfigs({
-    candidates: params.candidates,
-    cfg: params.cfg,
-  }).openai;
-  if (!discovered) {
-    throw new Error("missing OpenAI provider config for Ultra wire capture");
-  }
-  const merged = mergeLiveProviderConfig({
-    provider: "openai",
-    base: params.cfg.models?.providers?.openai,
-    discovered,
-  });
-  const firstCapture = params.capturesByModel.values().next().value;
-  return {
-    ...merged,
-    baseUrl: firstCapture?.baseUrl ?? merged.baseUrl,
-    models: merged.models?.map((model) => {
-      const capture = params.capturesByModel.get(model.id);
-      return capture ? Object.assign({}, model, { baseUrl: capture.baseUrl }) : model;
-    }),
-  };
-}
-
 function assertOpenAIUltraWireEffort(params: {
   expectedModel: string;
   observations: OpenAIUltraWireObservation[];
@@ -4386,6 +4260,16 @@ function assertOpenAIUltraWireEffort(params: {
       matching,
     )}`,
   ).toBe(true);
+  const spawnSchemas = [
+    ...new Set(
+      matching.flatMap((entry) =>
+        entry.sessionsSpawn ? [JSON.stringify(entry.sessionsSpawn)] : [],
+      ),
+    ),
+  ];
+  logProgress(
+    `[ultra] ${params.expectedModel}: sessions_spawn wire schemas=${spawnSchemas.join(",")}`,
+  );
   return matching.length;
 }
 
@@ -4712,6 +4596,7 @@ function resolveGatewayLiveModelThinkingLevel(params: {
     context: {
       provider: model.provider,
       modelId: model.id,
+      api: model.api,
       agentRuntime: "openclaw",
       reasoning: model.reasoning,
       compat: getProviderThinkingModelCompat(model),
@@ -4992,8 +4877,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   let cleanupTempAgentDir: string | undefined;
   let cleanupToolProbePath: string | undefined;
   let cleanupTempDir: string | undefined;
-  const ultraWireCapturesByModel = new Map<string, OpenAIUltraWireCapture>();
-  const ultraWireCapturesByUpstream = new Map<string, OpenAIUltraWireCapture>();
+  let ultraWireCapture: OpenAIUltraWireCapture | undefined;
   let server: GatewayServer | undefined;
   let client: GatewayClient | undefined;
 
@@ -5049,35 +4933,20 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       ...params.cfg,
       auth: sanitizeAuthConfig({ cfg: params.cfg, store: isolatedStore }),
     };
-    let providerOverrides = params.providerOverrides;
     if (ultraCandidates.length > 0) {
-      for (const candidate of ultraCandidates) {
-        const upstreamBaseUrl = resolveOpenAIUltraUpstreamBaseUrl({
-          candidate,
-          cfg: sanitizedCfg,
-        });
-        let capture = ultraWireCapturesByUpstream.get(upstreamBaseUrl);
-        if (!capture) {
-          capture = await startOpenAIUltraWireCapture(upstreamBaseUrl);
-          ultraWireCapturesByUpstream.set(upstreamBaseUrl, capture);
-        }
-        ultraWireCapturesByModel.set(candidate.id, capture);
-      }
-      providerOverrides = {
-        ...params.providerOverrides,
-        openai: buildOpenAIUltraWireProviderOverride({
-          candidates: ultraCandidates,
-          capturesByModel: ultraWireCapturesByModel,
-          cfg: sanitizedCfg,
-        }),
-      };
+      await import("../agents/ai-transport-runtime-host.js");
+      ultraWireCapture = startOpenAIUltraWireCapture(
+        ultraCandidates.map((candidate) =>
+          resolveOpenAIUltraUpstreamBaseUrl({ candidate, cfg: sanitizedCfg }),
+        ),
+      );
     }
     const nextCfg = buildLiveGatewayConfig({
       cfg: sanitizedCfg,
       candidates: params.candidates.map(({ model }) => model),
       liveAgentDir: tempSessionAgentDir,
       liveAgentWorkspaceDir: workspaceDir,
-      providerOverrides,
+      providerOverrides: params.providerOverrides,
     });
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-"));
     cleanupTempDir = tempDir;
@@ -5154,7 +5023,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       const progressLabel = `[${params.label}] ${index + 1}/${total} ${modelKey}`;
       const strictUltraProof = isOpenAIGpt56UltraTarget(model, params.thinkingLevel);
       const skippedBeforeModel = skippedCount;
-      const ultraWireCapture = ultraWireCapturesByModel.get(model.id);
       const wireObservationStart = ultraWireCapture?.observations.length ?? 0;
       const thinkingLevel = resolveGatewayLiveModelThinkingLevel({
         model,
@@ -5839,9 +5707,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           await server.close({ reason: "live test complete" });
         }
       } finally {
-        await Promise.all(
-          [...ultraWireCapturesByUpstream.values()].map((capture) => capture.close()),
-        );
+        ultraWireCapture?.close();
       }
     } finally {
       try {

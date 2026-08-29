@@ -56,6 +56,7 @@ import {
 } from "./composer-persistence.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { handleChatInputHistoryKey } from "./input-history.ts";
+import { handleChatScrollTakeover } from "./scroll.ts";
 import {
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
@@ -81,20 +82,6 @@ function writeChatQueueForScope(
 ): void {
   const scope = resolveStoredChatOutboxScope(host, sessionKey, agentId);
   chatOutboxOwner(host).replace(host, scope, queue);
-}
-
-function setTransientQueuedMessageProjection(
-  host: TestChatHost,
-  sessionKey: string,
-  item: ChatQueueItem,
-): boolean {
-  const owner = chatOutboxOwner(host);
-  const scope = resolveStoredChatOutboxScope(host, sessionKey, item.agentId);
-  if (!owner.durable(host, item.id)) {
-    return false;
-  }
-  owner.projectLive(host, scope, item.id, item);
-  return true;
 }
 
 function requireChatMessageCache(host: ChatHost): ChatMessageCache {
@@ -2577,6 +2564,56 @@ describe("handleSendChat", () => {
     expect(host.sessionsResult?.sessions[0]?.thinkingLevel).toBe("low");
   });
 
+  it.each([false, true])(
+    "preserves reader ownership across pending delivery with steer=%s",
+    async (steer) => {
+      const settings = createDeferred<boolean>();
+      const ack = createDeferred<{ status: string; runId: string }>();
+      const container = document.createElement("div");
+      Object.defineProperties(container, {
+        scrollHeight: { value: 2000 },
+        clientHeight: { value: 400 },
+      });
+      container.scrollTop = 1600;
+      const scrollToEnd = vi.fn(() => true);
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        callback(0);
+        return 1;
+      });
+      const host = makeChatHost({
+        requestHandlers: { "chat.send": () => ack.promise },
+        chatMessage: "send while reading",
+        chatRunId: steer ? "active-run" : null,
+        chatHasAutoScrolled: true,
+        chatScrollElement: () => container,
+        chatScrollToEnd: scrollToEnd,
+        pendingSettingsPatches: { "agent:main": settings.promise },
+        settings: { chatFollowUpMode: "steer" },
+      });
+      const send = handleSendChat(host);
+      await Promise.resolve();
+      expect(scrollToEnd).toHaveBeenCalledWith({ source: "manual", behavior: "auto" });
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      container.scrollTop = 1200;
+      handleChatScrollTakeover(host);
+      expect(host.chatFollowLocked).toBe(true);
+      scrollToEnd.mockClear();
+
+      settings.resolve(true);
+      await waitForFast(() =>
+        expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything()),
+      );
+      ack.resolve({ status: "started", runId: "accepted-run" });
+      await send;
+      await Promise.resolve();
+
+      expect(host.chatFollowLocked).toBe(true);
+      expect(host.chatHasAutoScrolled).toBe(true);
+      expect(scrollToEnd).not.toHaveBeenCalled();
+      expect(container.scrollTop).toBe(1200);
+    },
+  );
+
   it("preserves draft edits made while waiting for a model picker update", async () => {
     const switchUpdate = createDeferred<boolean>();
 
@@ -5008,7 +5045,7 @@ describe("handleSendChat", () => {
     const item = {
       ...createQueuedLocalCommand("unconfirmed-reset-retry", "/reset"),
       sendAttempts: 1,
-      sendError: "Delivery could not be confirmed after reconnect.",
+      sendError: UNCONFIRMED_CHAT_SEND_ERROR,
       sendRequestStartedAtMs: 10,
       sendRunId: runId,
       sendState: "unconfirmed" as const,
@@ -6074,15 +6111,13 @@ describe("handleSendChat", () => {
 
     expect(host.chatQueue[0]?.sendState).toBe("sending");
     expect(host.lastError).toBeNull();
-    await waitForFast(() => expect(listStoredChatOutboxes(host)).toStrictEqual([]), {
-      timeout: 1_000,
-    });
+    await flushChatQueueForEvent(host);
     expect(historyRequests).toBeGreaterThanOrEqual(3);
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.lastError).toBeNull();
   });
 
-  it("marks an acknowledged live send unconfirmed after history stays missing", async () => {
+  it("keeps an acknowledged live send pending while its connection stays current", async () => {
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const host = makeChatHost({
@@ -6107,47 +6142,8 @@ describe("handleSendChat", () => {
     await flushChatQueueForEvent(host);
 
     expect(host.chatQueue[0]).toMatchObject({
-      sendError: UNCONFIRMED_CHAT_SEND_ERROR,
-      sendState: "unconfirmed",
-      text: "history never catches up",
-    });
-    expect(host.lastError).toBe(UNCONFIRMED_CHAT_SEND_ERROR);
-  });
-
-  it("starts a fresh confirmation grace after the prior outbox scope is removed", async () => {
-    let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.history": () => idleChatHistory(),
-        "chat.send": (params: unknown) => {
-          const payload = requireRecord(params, "live send payload");
-          const runId = String(payload.idempotencyKey);
-          return Promise.resolve({ runId, status: "started" });
-        },
-      },
-    });
-
-    await handleSendChat(host, "reuse this delivery version");
-    host.chatRunId = null;
-    await flushChatQueueForEvent(host);
-
-    const item = expectDefined(host.chatQueue[0], "queued live send");
-    const sessionKey = expectDefined(item.sessionKey, "queued session key");
-    expect(removeQueuedMessage(host, item.id)).toBe("removed");
-
-    now = 5_500;
-    expect(admitQueuedMessageForSession(host, sessionKey, item)).toBe(true);
-    expect(setTransientQueuedMessageProjection(host, sessionKey, item)).toBe(true);
-    await flushChatQueueForEvent(host);
-
-    now = 6_001;
-    await flushChatQueueForEvent(host);
-
-    expect(host.chatQueue[0]).toMatchObject({
-      id: item.id,
       sendState: "sending",
-      text: "reuse this delivery version",
+      text: "history never catches up",
     });
     expect(host.lastError).toBeNull();
   });
@@ -7513,6 +7509,56 @@ describe("handleSendChat", () => {
     },
   );
 
+  it.each([
+    {
+      proof: "active run",
+      sessionInfo: row("agent:main", {
+        hasActiveRun: true,
+        activeRunIds: ["admitted-run"],
+        status: "running",
+      }),
+    },
+    {
+      proof: "completed run",
+      sessionInfo: row("agent:main", {
+        hasActiveRun: false,
+        lastRunId: "admitted-run",
+        status: "done",
+      }),
+    },
+  ])(
+    "retires a reconnect send proved by its $proof before transcript persistence",
+    async ({ sessionInfo }) => {
+      const host = makeChatHost({
+        requestHandlers: {
+          "chat.history": () => ({ messages: [], sessionInfo }),
+        },
+        chatQueue: [
+          {
+            id: "admitted-send",
+            text: "keep my admitted message visible",
+            createdAt: 1,
+            sendAttempts: 1,
+            sendRunId: "admitted-run",
+            sendState: "sending",
+            sessionKey: "agent:main",
+          },
+        ],
+      });
+      admitHostQueueItems(host);
+      markQueuedChatSendsWaitingForReconnect(host);
+
+      await retryReconnectableQueuedChatSends(host);
+
+      expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+      expect(host.chatQueue).toStrictEqual([]);
+      expect(host.chatMessages.map(extractText)).toContain("keep my admitted message visible");
+      expect(host.lastError).toBeNull();
+      expect(host.chatError).toBeNull();
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    },
+  );
+
   it("rechecks an idle history snapshot before parking a delivered send", async () => {
     let historyRequests = 0;
 
@@ -7603,13 +7649,17 @@ describe("handleSendChat", () => {
     expect(listStoredChatOutboxes(host)[0]?.queue[0]?.id).toBe(item.id);
   });
 
-  it("parks an ambiguous reconnect send when idle history cannot prove delivery", async () => {
+  it("parks an ambiguous reconnect send when idle history only proves another run", async () => {
     const host = makeChatHost({
       requestHandlers: {
         "chat.history": () =>
           Promise.resolve({
             messages: [],
-            sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+            sessionInfo: row("agent:main", {
+              hasActiveRun: false,
+              lastRunId: "other-run",
+              status: "done",
+            }),
           }),
       },
       chatQueue: [
@@ -7639,42 +7689,53 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]).toMatchObject({
       id: "ambiguous-unconfirmed",
       sendState: "unconfirmed",
+      sendError: UNCONFIRMED_CHAT_SEND_ERROR,
     });
     expect(host.chatQueue.map((item) => item.id)).toEqual([
       "ambiguous-unconfirmed",
       "blocked-tail",
     ]);
-    expect(host.lastError).toContain("Delivery could not be confirmed");
+    // The parked bubble's inline footer owns the outcome; no pane banner.
+    expect(host.lastError).toBeNull();
   });
 
-  it("does not replay while fresh history reports an active run", async () => {
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.history": () =>
-          Promise.resolve({
-            messages: [],
-            sessionInfo: row("agent:main", { hasActiveRun: true, status: "done" }),
-          }),
-      },
-      chatQueue: [
-        {
-          id: "wait-for-idle",
-          text: "send after the active run",
-          createdAt: 1,
-          sendAttempts: 0,
-          sendRunId: "wait-for-idle-run",
-          sendState: "waiting-reconnect",
-          sessionKey: "agent:main",
+  it.each([0, 1])(
+    "does not replay or retire a send with %i attempts while another run is active",
+    async (sendAttempts) => {
+      const host = makeChatHost({
+        requestHandlers: {
+          "chat.history": () =>
+            Promise.resolve({
+              messages: [],
+              sessionInfo: row("agent:main", {
+                hasActiveRun: true,
+                activeRunIds: ["other-run"],
+                status: "running",
+              }),
+            }),
         },
-      ],
-    });
-    admitHostQueueItems(host);
+        chatQueue: [
+          {
+            id: "wait-for-idle",
+            text: "send after the active run",
+            createdAt: 1,
+            sendAttempts,
+            sendRunId: "wait-for-idle-run",
+            sendState: "waiting-reconnect",
+            sessionKey: "agent:main",
+          },
+        ],
+      });
+      admitHostQueueItems(host);
 
-    await retryReconnectableQueuedChatSends(host);
+      await retryReconnectableQueuedChatSends(host);
 
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
-    expect(host.chatQueue[0]?.sendState).toBe("waiting-reconnect");
-  });
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+      expect(host.chatQueue[0]?.sendState).toBe("waiting-reconnect");
+      expect(host.lastError).toBeNull();
+      expect(listStoredChatOutboxes(host)[0]?.queue[0]?.sendRunId).toBe("wait-for-idle-run");
+    },
+  );
 
   it("skips a manually failed head when replaying a later reconnect send", async () => {
     const host = makeChatHost({
@@ -8809,13 +8870,14 @@ describe("handleSendChat", () => {
     await retryReconnectableQueuedChatSends(host);
 
     // An attempted head may already be a server-side turn; it must park for
-    // review rather than fail-and-release, and the outcome must be visible.
-    expect(host.lastError).toBe(
-      "Delivery could not be confirmed after reconnect. Check the conversation before retrying.",
-    );
+    // review rather than fail-and-release. The parked bubble's inline footer
+    // owns the visible outcome, so the pane banner stays clear.
+    expect(host.lastError).toBeNull();
     const stored = listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue);
     expect(stored.find((entry) => entry.id === "attempted-head")).toMatchObject({
       sendState: "unconfirmed",
+      sendError:
+        "Reconnected before delivery was confirmed. Check the conversation — retry only if your message didn't arrive.",
     });
     expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
   });

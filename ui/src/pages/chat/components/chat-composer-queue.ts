@@ -10,11 +10,11 @@ import {
   isMovableChatQueueItem,
 } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
-import { isQueuedSendInlineState } from "../chat-progress.ts";
+import { isQueuedSendInlineState, shouldRenderQueuedSendInThread } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 
-type ChatQueueProps = {
+export type ChatQueueProps = {
   queue: ChatQueueItem[];
   offline?: boolean;
   canAbort?: boolean;
@@ -152,13 +152,10 @@ function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
   }
 }
 
-export function renderChatQueue(props: ChatQueueProps) {
+function queueReorder(props: ChatQueueProps): ChatQueueReorder {
   const visibleQueue = props.queue.filter(
     (item) => item.sendState !== "sending" && !isQueuedSendInlineState(item),
   );
-  if (!visibleQueue.length) {
-    return nothing;
-  }
   // Move positions address one movable segment, matching what the reorder owner
   // permutes. A row attached to a run keeps its place and ends the segment, so
   // the handle never offers a move across it. An edited row holds the queue
@@ -167,18 +164,32 @@ export function renderChatQueue(props: ChatQueueProps) {
     visibleQueue,
     (item) => isMovableChatQueueItem(item) && item.id !== props.editingId,
   ).map((rows) => rows.map((row) => row.id));
-  const reorder: ChatQueueReorder = {
+  return {
     segments: movableSegments,
     // Whether this queue reorders at all, which is a queue-level fact: an open
     // edit shrinks the segments but must not retract the handle column.
     offered: visibleQueue.filter(isMovableChatQueueItem).length > 1,
   };
+}
+
+export function renderQueuedSendControls(item: ChatQueueItem, props: ChatQueueProps) {
+  return item.sendState === "sending" || isQueuedSendInlineState(item)
+    ? nothing
+    : renderChatQueueItem(item, props, queueReorder(props), true);
+}
+
+export function renderChatQueue(props: ChatQueueProps) {
+  const visibleQueue = props.queue.filter((item) => !shouldRenderQueuedSendInThread(item));
+  const reorder = queueReorder(props);
   // Applying settings belongs to the queue as a whole. Connection loss is the
   // exceptional per-item delivery state operators need to see on every row.
   const globalState =
-    visibleQueue.some((item) => item.sendState === "waiting-model") && !props.offline
+    props.queue.some((item) => item.sendState === "waiting-model") && !props.offline
       ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
       : null;
+  if (!visibleQueue.length && !globalState) {
+    return nothing;
+  }
   // Keyed rows so a reorder moves the existing DOM node instead of rewriting
   // it in place; that is what keeps focus on the handle the operator is using.
   return html`
@@ -248,8 +259,9 @@ function renderChatQueueItem(
   item: ChatQueueItem,
   props: ChatQueueProps,
   reorder: ChatQueueReorder,
+  inThread = false,
 ) {
-  const authorAvatar = renderChatAuthorAvatar(item.sender);
+  const authorAvatar = inThread ? nothing : renderChatAuthorAvatar(item.sender);
   const hasAuthorAvatar = authorAvatar !== nothing;
   const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
   const reconnecting = !failed && (props.offline || item.sendState === "waiting-reconnect");
@@ -263,6 +275,7 @@ function renderChatQueueItem(
     Boolean(props.canAbort && props.onQueueSteer) &&
     !editing &&
     !item.localCommandName &&
+    !item.intent &&
     (isSteerableQueuedMessage(item) || item.sendState === "waiting-model");
   const segment = reorder.segments.find((ids) => ids.includes(item.id)) ?? [];
   const moveIndex = segment.indexOf(item.id);
@@ -284,7 +297,7 @@ function renderChatQueueItem(
   // The leading glyph identifies the object, not its transient delivery state.
   // Row tone, badges, and actions carry failure, review, reconnect, and steer.
   const leadingIcon = queueWaitingIcon;
-  const itemClass = `chat-queue__item${hasAuthorAvatar ? "" : " chat-queue__item--no-avatar"}${steered ? " chat-queue__item--steered" : ""}${
+  const itemClass = `chat-queue__item${inThread ? " chat-queue__item--in-thread" : ""}${hasAuthorAvatar ? "" : " chat-queue__item--no-avatar"}${steered ? " chat-queue__item--steered" : ""}${
     failed ? " chat-queue__item--failed" : ""
   }${reconnecting ? " chat-queue__item--reconnect" : ""}${
     editing ? " chat-queue__item--editing" : ""
@@ -419,7 +432,11 @@ function renderChatQueueItem(
             }}
           ></textarea>`
         : html`<span class="chat-queue__copy">
-            <span class="chat-queue__text" title=${text}>${text}</span>
+            ${inThread
+              ? stateLabel || steered
+                ? nothing
+                : html`<span class="chat-queue__state">${t("chat.queue.states.queued")}</span>`
+              : html`<span class="chat-queue__text" title=${text}>${text}</span>`}
             ${steered
               ? html`<span class="chat-queue__badge chat-queue__badge--steered"
                   >${t("chat.queue.steer")}</span

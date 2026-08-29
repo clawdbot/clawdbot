@@ -1,11 +1,16 @@
 import type { AuthenticateResult } from "mailauth";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
 import { createImapState } from "./state.js";
 
 export function createImapTestRuntime() {
   const namespaces = new Map<string, Map<string, unknown>>();
-  const dispatchHookAgentTurn = vi.fn(async () => ({ ok: true as const, runId: "mail-run" }));
+  const initialCursorRegistered = createDeferred<void>();
+  const dispatchHookAgentTurn = vi.fn<
+    OpenClawPluginApi["runtime"]["hooks"]["dispatchHookAgentTurn"]
+  >(async () => ({ ok: true, runId: "mail-run" }));
   const runtime = createPluginRuntimeMock({
     hooks: { dispatchHookAgentTurn },
     state: {
@@ -17,7 +22,12 @@ export function createImapTestRuntime() {
         }
         const entries = values;
         return {
-          register: async (key: string, value: T) => void entries.set(key, value),
+          register: async (key: string, value: T) => {
+            entries.set(key, value);
+            if (options.namespace === "cursor") {
+              initialCursorRegistered.resolve();
+            }
+          },
           registerIfAbsent: async (key: string, value: T) => {
             if (entries.has(key)) {
               return false;
@@ -39,7 +49,12 @@ export function createImapTestRuntime() {
       },
     },
   });
-  return { runtime, state: createImapState(runtime), dispatchHookAgentTurn };
+  return {
+    runtime,
+    state: createImapState(runtime),
+    dispatchHookAgentTurn,
+    initialCursorRegistered: initialCursorRegistered.promise,
+  };
 }
 
 type AuthenticationStatus = Exclude<AuthenticateResult["dmarc"], false>["status"]["result"];

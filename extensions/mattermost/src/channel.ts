@@ -16,6 +16,7 @@ import type {
   ChannelToolSend,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
@@ -67,6 +68,7 @@ import {
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
 import { normalizeMattermostEmojiName } from "./mattermost/emoji.js";
+import { mattermostIngressIdentity } from "./mattermost/ingress-identity.js";
 import type { MattermostSendResult } from "./mattermost/send.js";
 import {
   looksLikeMattermostTargetId,
@@ -137,6 +139,7 @@ const mattermostSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedM
   groupAllowFromPath: "channels.mattermost.groupAllowFrom",
   findingTitle: "Mattermost security warning",
   policyPathSuffix: "dmPolicy",
+  classifyEntryAuthentication: identityEntryAuthenticationClassifier(mattermostIngressIdentity),
   normalizeDmEntry: (raw) => normalizeAllowEntry(raw),
 });
 

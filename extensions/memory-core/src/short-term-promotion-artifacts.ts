@@ -36,7 +36,6 @@ import type {
   ShortTermRecallStore,
 } from "./short-term-promotion-types.js";
 import {
-  MAX_QUERY_HASHES,
   MAX_RECALL_DAYS,
   SHORT_TERM_RECALL_MAX_ENTRIES,
   enforceShortTermRecallStoreRetention,
@@ -219,15 +218,6 @@ export async function repairShortTermPromotionArtifacts(params: {
             key,
             {
               ...entry,
-              dailyCount: Math.max(
-                0,
-                Math.floor((entry as { dailyCount?: number }).dailyCount ?? 0),
-              ),
-              groundedCount: Math.max(
-                0,
-                Math.floor((entry as { groundedCount?: number }).groundedCount ?? 0),
-              ),
-              queryHashes: (entry.queryHashes ?? []).slice(-MAX_QUERY_HASHES),
               recallDays: mergeRecentDistinct(entry.recallDays ?? [], fallbackDay, MAX_RECALL_DAYS),
               conceptTags: conceptTags.length > 0 ? conceptTags : (entry.conceptTags ?? []),
             } satisfies ShortTermRecallEntry,

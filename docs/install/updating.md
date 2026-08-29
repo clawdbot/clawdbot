@@ -104,6 +104,11 @@ installs. Extended-stable is rejected on a git checkout without mutating or
 converting it. If the gateway is already installed, `openclaw update` refreshes
 the service metadata and restarts it unless you pass `--no-restart`.
 
+Dev updates build the complete runtime, including plugins and the Control UI,
+without generating TypeScript declarations. Preflight still validates the
+candidate, and the final checkout is rebuilt after checkout or rebase. Ordinary
+`pnpm build` and package builds continue to generate declarations.
+
 For package installs with a managed Gateway service, `openclaw update` targets
 the package root used by that service. If the shell `openclaw` command comes
 from a different install, the updater prints both roots and the managed
@@ -232,11 +237,14 @@ release predates pnpm 11's isolated global-package layout, so its updater can
 mistake another npm installation for the running CLI. Later releases retain
 pnpm ownership and follow the replacement package root during updates. They
 also use the owning manager's reported global bin directory and stop before
-mutation when the available pnpm command reports another global root or major,
+mutation when the available pnpm command reports another global root,
 or when the invoking package is orphaned or not the only active OpenClaw
 install there.
 
-If OpenClaw shares a pnpm 11 global install group with another package, the
+pnpm 12 retains the `global/v11` layout; the layout number does not need to match
+the pnpm CLI major version.
+
+If OpenClaw shares a pnpm global install group with another package, the
 automatic updater stops before changing the group. Update the original
 comma-separated group manually so its sibling packages and build policy stay
 intact.

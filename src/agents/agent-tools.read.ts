@@ -2,7 +2,7 @@
 // Adds workspace-root guards, adaptive read paging, image validation, memory
 // append-only writes, and parameter cleanup around the session file tools.
 
-import fs, { type FileHandle } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
@@ -10,7 +10,7 @@ import { formatByteSize } from "@openclaw/normalization-core";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import { hasErrnoCode, toErrorObject } from "../infra/errors.js";
+import { toErrorObject } from "../infra/errors.js";
 import {
   canonicalPathFromExistingAncestor,
   root as fsRoot,
@@ -35,6 +35,7 @@ import {
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { writeHostFile } from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import {
   type MemoryWriteProvenanceObserver,
@@ -43,6 +44,7 @@ import {
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AgentTool, AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import {
   createEditTool,
@@ -532,11 +534,6 @@ function normalizeReadResultDetails(
     };
   }
   return { ...result, details: { kind: "text", content: text } };
-}
-
-/** Wrap a file tool so path params stay inside the workspace root. */
-export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
-  return wrapToolWorkspaceRootGuardWithOptions(tool, root);
 }
 
 function mapContainerPathToWorkspaceRoot(params: {
@@ -1242,6 +1239,8 @@ export function wrapReadToolWithSkillContent(
 
 function createSandboxReadOperations(params: SandboxToolParams) {
   return {
+    resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
+      resolveSandboxFileQueueKey(params, absolutePath, signal),
     resolvePath: (filePath: string) => {
       const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
       if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
@@ -1266,6 +1265,8 @@ function createSandboxReadOperations(params: SandboxToolParams) {
 function createSandboxWriteOperations(params: SandboxToolParams) {
   return withMemoryWriteProvenance(
     {
+      resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
+        resolveSandboxFileQueueKey(params, absolutePath, signal),
       mkdir: async (dir: string) => {
         await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
       },
@@ -1284,6 +1285,8 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
 function createSandboxEditOperations(params: SandboxToolParams) {
   return withMemoryWriteProvenance(
     {
+      resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
+        resolveSandboxFileQueueKey(params, absolutePath, signal),
       readFile: (absolutePath: string) =>
         params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
       writeFile: (absolutePath: string, content: string) =>
@@ -1294,6 +1297,20 @@ function createSandboxEditOperations(params: SandboxToolParams) {
     } as const,
     params.memoryWriteProvenance,
   );
+}
+
+async function resolveSandboxFileQueueKey(
+  params: SandboxToolParams,
+  absolutePath: string,
+  signal?: AbortSignal,
+) {
+  return await resolveSandboxFileMutationQueueKey({
+    bridge: params.bridge,
+    root: params.root,
+    filePath: absolutePath,
+    cwd: params.root,
+    signal,
+  });
 }
 
 async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: string) {
@@ -1308,98 +1325,6 @@ async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: 
 
 function resolveHostPath(filePath: string): string {
   return path.resolve(expandOsHomePrefix(filePath));
-}
-
-async function writeHostFileRange(
-  handle: FileHandle,
-  payload: Buffer,
-  offset: number,
-  length: number,
-  position: number,
-) {
-  let written = 0;
-  while (written < length) {
-    const { bytesWritten } = await handle.write(
-      payload,
-      offset + written,
-      length - written,
-      position + written,
-    );
-    if (bytesWritten <= 0) {
-      throw new Error(`host file write made no progress at byte ${position + written}`);
-    }
-    written += bytesWritten;
-  }
-}
-
-async function readHostFilePrefix(handle: FileHandle, length: number) {
-  const prefix = Buffer.alloc(length);
-  let read = 0;
-  while (read < length) {
-    const { bytesRead } = await handle.read(prefix, read, length - read, read);
-    if (bytesRead <= 0) {
-      throw new Error(`host file read made no progress at byte ${read}`);
-    }
-    read += bytesRead;
-  }
-  return prefix;
-}
-
-async function overwriteHostFileInPlace(handle: FileHandle, payload: Buffer, currentSize: number) {
-  const prefixLength = Math.min(payload.length, currentSize);
-  const originalPrefix = await readHostFilePrefix(handle, prefixLength);
-  let prefixStarted = false;
-  try {
-    if (payload.length > currentSize) {
-      await writeHostFileRange(
-        handle,
-        payload,
-        currentSize,
-        payload.length - currentSize,
-        currentSize,
-      );
-    }
-    prefixStarted = true;
-    await writeHostFileRange(handle, payload, 0, prefixLength, 0);
-    if (payload.length < currentSize) {
-      await handle.truncate(payload.length);
-    }
-  } catch (error) {
-    if (prefixStarted) {
-      await writeHostFileRange(handle, originalPrefix, 0, prefixLength, 0).catch(() => undefined);
-    }
-    await handle.truncate(currentSize).catch(() => undefined);
-    throw error;
-  }
-}
-
-async function openHostFileForUpdate(resolved: string) {
-  try {
-    const existing = await fs.stat(resolved);
-    // Rollback requires the original bytes; unreadable files must fail before mutation.
-    return existing.isFile() ? await fs.open(resolved, "r+") : undefined;
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-async function writeHostFile(absolutePath: string, content: string) {
-  const resolved = resolveHostPath(absolutePath);
-  await fs.mkdir(path.dirname(resolved), { recursive: true });
-  const handle = await openHostFileForUpdate(resolved);
-  if (!handle) {
-    await fs.writeFile(resolved, content, "utf-8");
-    return;
-  }
-  try {
-    const stat = await handle.stat();
-    await overwriteHostFileInPlace(handle, Buffer.from(content, "utf-8"), stat.size);
-  } finally {
-    await handle.close().catch(() => undefined);
-  }
 }
 
 async function statHostFile(absolutePath: string) {

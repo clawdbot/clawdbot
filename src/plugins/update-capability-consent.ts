@@ -6,13 +6,15 @@ import type {
 import { readInstalledPackageManifest } from "../infra/package-update-utils.js";
 import {
   buildPluginCapabilityConsentReview,
-  computeDeclaredSurfaceHash,
   diffDeclaredSurfaceWidening,
-  resolveAcceptedSurfaceCurrent,
   resolvePluginArtifactDeclaredSurface,
-  resolvePluginInstallRecordIntegrity,
   type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
+import {
+  computeDeclaredSurfaceHash,
+  resolveAcceptedSurfaceCurrent,
+  resolvePluginInstallRecordIntegrity,
+} from "./capability-summary.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";

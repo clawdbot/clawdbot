@@ -1,4 +1,4 @@
-import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import {
   HEARTBEAT_IDLE_RETRY_GRACE_MS,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
@@ -11,11 +11,14 @@ import { type CronActiveJobMarker, isCronActiveJobMarkerCurrent } from "../activ
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import { resolveCronToolsAllowExecTargetRecoveryError } from "../scheduled-tool-policy.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
 import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
 import type {
   CronDeliveryTrace,
+  CronResolvedDeliveryState,
   CronJob,
+  CronStoredJob,
   CronNextCheckProposal,
   CronRunOutcome,
   CronRunTelemetry,
@@ -37,7 +40,7 @@ import { enqueueCronSystemEvent, requestCronHeartbeat } from "./wake.js";
 /** Executes a cron job without mutating persisted job state. */
 export async function executeJobCore(
   state: CronServiceState,
-  job: CronJob,
+  job: CronStoredJob,
   abortSignal?: AbortSignal,
   options?: ExecuteJobCoreOptions,
 ): Promise<
@@ -47,6 +50,7 @@ export async function executeJobCore(
       deliveryAttempted?: boolean;
       deliveryError?: string;
       deliverySuppressionReason?: NormalizeReplySkipReason;
+      deliveryState?: CronResolvedDeliveryState;
       delivery?: CronDeliveryTrace;
       nextCheck?: CronNextCheckProposal;
       scriptStateChanged?: boolean;
@@ -84,6 +88,20 @@ export async function executeJobCore(
 
   if (abortSignal?.aborted) {
     return resolveAbortError();
+  }
+  const execTargetRecoveryError = resolveCronToolsAllowExecTargetRecoveryError({
+    jobId: job.id,
+    requirement: job.toolsAllowExecTargetRequirement,
+    execTarget: job.toolsAllowExecTarget,
+  });
+  if (execTargetRecoveryError) {
+    return {
+      status: "error",
+      error: execTargetRecoveryError,
+      diagnostics: createCronRunDiagnosticsFromError("cron-preflight", execTargetRecoveryError, {
+        nowMs: state.deps.nowMs,
+      }),
+    };
   }
   if (options?.streamScheduleKey !== undefined || options?.streamSourceIdentity !== undefined) {
     // Defense in depth over the locked admission checks: stream-origin work must
@@ -326,18 +344,19 @@ async function executeMainSessionCronJob(
         heartbeatResult.reason === HEARTBEAT_SKIP_CRON_IN_PROGRESS
           ? maxWaitMs
           : state.deps.nowMs() - waitStartedAt;
-      if (elapsedMs >= maxWaitMs) {
-        requestCronHeartbeat(state, heartbeatWake);
+      const delayMs =
+        heartbeatResult.retryAtMs !== undefined
+          ? Math.max(0, heartbeatResult.retryAtMs - state.deps.nowMs())
+          : heartbeatResult.reason === HEARTBEAT_SKIP_PREEMPTED
+            ? HEARTBEAT_IDLE_RETRY_GRACE_MS
+            : retryDelayMs;
+      // A caller's wait budget cannot shorten the runner's retry deadline.
+      // Hand unfinished work to the wake owner with its original retry facts.
+      if (elapsedMs >= maxWaitMs || delayMs > maxWaitMs - elapsedMs) {
+        requestCronHeartbeat(state, heartbeatWake, heartbeatResult);
         return { status: "ok", summary: text };
       }
-      await waitWithAbort(
-        Math.min(
-          heartbeatResult.reason === HEARTBEAT_SKIP_PREEMPTED
-            ? HEARTBEAT_IDLE_RETRY_GRACE_MS
-            : retryDelayMs,
-          maxWaitMs - elapsedMs,
-        ),
-      );
+      await waitWithAbort(delayMs);
     }
 
     if (heartbeatResult.status === "ran") {
@@ -372,6 +391,7 @@ async function executeDetachedCronJob(
       deliveryAttempted?: boolean;
       deliveryError?: string;
       deliverySuppressionReason?: NormalizeReplySkipReason;
+      deliveryState?: CronResolvedDeliveryState;
       delivery?: CronDeliveryTrace;
       nextCheck?: CronNextCheckProposal;
     }
@@ -407,6 +427,8 @@ async function executeDetachedCronJob(
       error: res.error,
       errorClassification: res.errorClassification,
       deliveryError: res.deliveryError,
+      deliverySuppressionReason: res.deliverySuppressionReason,
+      deliveryState: res.deliveryState,
       summary: res.summary,
       delivered: res.delivered,
       deliveryAttempted: res.deliveryAttempted,
@@ -468,6 +490,7 @@ async function executeDetachedCronJob(
     // emit it on the finished event for CLI/UI/API run logs (#95419).
     deliveryError: res.deliveryError,
     deliverySuppressionReason: res.deliverySuppressionReason,
+    deliveryState: res.deliveryState,
     nextCheck: res.nextCheck,
     summary: res.summary,
     delivered: res.delivered,
@@ -562,6 +585,8 @@ async function executeScriptCronJob(
     delivered: result.delivered,
     deliveryAttempted: result.deliveryAttempted,
     deliveryError: result.deliveryError,
+    deliverySuppressionReason: result.deliverySuppressionReason,
+    deliveryState: result.deliveryState,
     delivery: result.delivery,
     nextCheck: result.nextCheck,
     scriptStateChanged: result.stateChanged === true,

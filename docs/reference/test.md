@@ -79,6 +79,14 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
+Maintained JavaScript tooling wrappers and root package commands use tsx's
+in-process transform cache. They skip its shared disk cache before the loader
+starts, and child tooling inherits that policy. This cache policy does not clean
+existing temporary directories, Node or Vitest caches, or other global caches. Standalone
+`pnpm ui:build` keeps native startup and applies the same preload to its post-build
+validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
+external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
+
 Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary; Vitest's own duration line stays the per-shard detail.
 
 | Command                                           | What it does                                                                                                                                                                                                                                                                                                                                          |
@@ -92,7 +100,53 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 | `pnpm changed:lanes`                              | Shows the architectural lanes triggered by the diff against `origin/main`.                                                                                                                                                                                                                                                                            |
 | `pnpm check:changed`                              | Classifies and runs the local changed formatting/typecheck/lint/guard plan. Does not run Vitest; use `pnpm test:changed` or `pnpm test <target>` for test proof.                                                                                                                                                                                      |
 
+## Linux shell integrations
+
+The Mantis Telegram lease-fence integration tests require Linux, Bash,
+util-linux `setsid`, and coreutils (`sleep`, `cat`, and `true`). On Ubuntu,
+install the prerequisites with `sudo apt-get install bash util-linux coreutils`.
+With repository dependencies ready, run the focused proof on Linux:
+
+```bash
+node scripts/run-vitest.mjs test/scripts/run-with-lease-fence.test.ts
+```
+
+All three tests must pass: lease loss removes the command's process group,
+clean exit propagates, and stdin reaches the fenced command. Missing `setsid`
+fails the Linux suite with prerequisite guidance; it does not skip the tests.
+macOS and Windows skip this Linux workflow integration. Use Linux CI or an
+isolated Linux environment for that proof. See [Mantis](/concepts/mantis).
+
+Remote filesystem fixtures that execute GNU `stat` and `readlink` run locally
+only on Linux. The shared leading-`@` file-tool scenario
+also runs against a portable remote-only bridge on every platform. Native
+Python helper coverage remains separate, including macOS; these fixture gates
+do not restrict the [SSH backend's Gateway host](/gateway/sandboxing#ssh-backend).
+
 ## Shared test state and process helpers
+
+Plugin SDK declaration preparation and `scripts/run-tsgo.mjs` require child work
+to finish before reporting success. On POSIX, each verifies its own managed
+process group: leftover children are terminated and the command fails instead of
+allowing artifact stamps or downstream checks to proceed. Windows retains normal
+joined-launcher completion because strict group verification is unsupported there.
+This does not detect descendants that deliberately leave the managed groups.
+
+On POSIX hosts, `run-vitest` (including project shards), plugin batches, `test-live`
+(including live shards), `run-vitest-profile`, and the TUI PTY watcher give each
+Vitest invocation an owned temporary namespace through `TMPDIR`, `TMP`, and `TEMP`.
+The namespace contains isolated homes, their JIT caches, SDK/shared-home allocation
+roots, and fallback SQLite state; its lifetime spans shared-worker files and module
+resets. The parent removes
+only that namespace after its child process group has stopped and output pipes
+have closed, including passing and failing runs, child crashes, caught `SIGINT`/`SIGTERM`
+signals, and watchdog termination where supported. Explicit state, profile output,
+and mirror artifacts outside the namespace remain untouched. Failed or unverified
+group joins retain the namespace and report the exact path for manual recovery.
+Windows and raw external invocations retain their existing behavior. Forced parent
+or supervisor death (such as `SIGKILL`) can prevent cleanup; descendants that
+intentionally escape the owned group can recreate removed paths. The wrappers do
+not sweep old directories or infer ownership from names, ages, or PIDs.
 
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.
@@ -104,6 +158,7 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 - **Control UI mocked E2E:** `pnpm test:ui:e2e` runs the Vitest + Playwright lane that starts the Vite Control UI and drives a real Chromium page against a mocked Gateway WebSocket. Tests live in `ui/src/**/*.e2e.test.ts`; shared mocks/controls live in `ui/src/test-helpers/control-ui-e2e.ts`. `pnpm test:e2e` includes this lane. Use Testbox/Crabbox only when clean Linux/browser parity is part of the proof. In a linked worktree, `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-flow.messaging.e2e.test.ts` avoids pnpm dependency reconciliation for a targeted local run.
 - **TUI PTY tests:** `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` runs the fast fake-backend PTY lane. `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` or `pnpm tui:pty:test:watch --mode local` runs the slower `tui --local` smoke, which mocks only the external model endpoint. CI also sets `OPENCLAW_TUI_PTY_USE_BUILT_CLI=1` after building `dist/`; use that flag only when exact-head built artifacts already exist. Assert stable visible text or fixture calls, not raw ANSI snapshots.
 - `pnpm test:extensions` and `pnpm test extensions` run all extension/plugin shards. Heavy channel plugins, the browser plugin, and OpenAI run as dedicated shards; other plugin groups stay batched. `pnpm test extensions/<id>` runs one bundled plugin lane.
+- **Browser native host:** `node scripts/run-vitest.mjs extensions/browser/src/browser/extension-install.native-host.e2e.test.ts` runs the real native messaging launcher on macOS or Linux against built dist with synthetic installation state; it does not launch Chrome or a Gateway. Windows skips this POSIX process proof because [native bootstrap uses manual pairing there](/tools/chrome-extension#requirements). The E2E owner prepares artifacts before workers. With an already-built candidate, prefix the command with `OPENCLAW_E2E_USE_PREBUILT_DIST=1` to reuse it; missing artifacts fail the test. This case belongs to `pnpm test:e2e`, not the browser source shard or untargeted `pnpm test` unit suite. Linux CI runs it explicitly in `build-artifacts` and validates a JSON report proving the exact named test passed. The workflow skips only frozen historical checkouts missing this test file; that skip is unavailable proof, not a pass or coverage.
 - Source files with sibling tests map to that sibling before falling back to wider directory globs. Helper edits under `src/channels/plugins/contracts/test-helpers`, `src/plugin-sdk/test-helpers`, and `src/plugins/contracts` use a local import graph to run importing tests instead of broad-running every shard when the dependency path is precise.
 - Contract directory targets fan out to their contract lanes: `pnpm test src/channels/plugins/contracts` runs the four channel contract configs and `pnpm test src/plugins/contracts` runs the plugin contracts config, since the generic `channels`/`plugins` projects exclude `contracts/**`.
 - `auto-reply` splits into three dedicated configs (`core`, `top-level`, `reply`) so the reply harness does not dominate the lighter top-level status/token/helper tests.
@@ -114,7 +169,7 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 ## Gateway and E2E
 
 - Gateway tests are included in the untargeted `pnpm test` full suite; run them alone with `pnpm test:gateway`.
-- `pnpm test:e2e`: repo E2E aggregate = `pnpm test:e2e:gateway && pnpm test:ui:e2e`.
+- `pnpm test:e2e`: repo E2E aggregate = `pnpm test:e2e:gateway && pnpm test:e2e:agent-plugin-gateway && pnpm test:ui:e2e`.
 - `pnpm test:e2e:gateway`: gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with one worker in `vitest.e2e.config.ts`; opt into parallelism with `OPENCLAW_E2E_WORKERS=<n>` (capped at 16), and enable verbose logs with `OPENCLAW_E2E_VERBOSE=1`.
 - `pnpm test:live`: provider live tests (Claude/Minimax/DeepSeek/z.ai/etc, gated by `*.live.test.ts`). Requires API keys and `LIVE=1` (or `OPENCLAW_LIVE_TEST=1`) to unskip; verbose output with `OPENCLAW_LIVE_TEST_QUIET=0`.
 
@@ -200,6 +255,11 @@ If `pnpm test` flakes on a loaded host, rerun once before treating it as a regre
 - `pnpm test:perf:profile:main` writes a CPU profile for the Vitest main thread (`.artifacts/vitest-main-profile`); `pnpm test:perf:profile:runner` writes CPU + heap profiles for the unit runner (`.artifacts/vitest-runner-profile`).
 - `pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json`: runs every full-suite Vitest leaf config serially and writes grouped duration data plus per-config JSON/log artifacts. Full-suite reports isolate files by default so retained module graphs and GC pauses from earlier files are not charged to later assertions; pass `-- --no-isolate` only when intentionally profiling shared-worker accumulation. `pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json` compares grouped reports after a performance-focused change.
 - Full, extension, and include-pattern shard runs update local timing data in `.artifacts/vitest-shard-timings.json`; later whole-config runs use those timings to balance slow and fast shards. Include-pattern CI shards append the shard name to the timing key, which keeps filtered shard timings visible without replacing whole-config timing data. Set `OPENCLAW_TEST_PROJECTS_TIMINGS=0` to ignore the local timing artifact.
+- `pnpm ci:timings:refit`: regenerate committed `config/ci-test-timings.json` from the last five successful main CI runs; add `--dry-run` to preview the changed-entry table. This file owns per-file UI E2E and per-profile compact-group weights, unlike the gitignored `.artifacts/vitest-shard-timings.json` whole-config timing cache. Independent CI shards use only the committed weights, never that cache. See [CI timing refits](/ci#measured-shard-weights) for the daily refresh and sampling rules.
+
+`pnpm test:extensions:memory` profiles built plugin index entries from `dist/extensions` (including nested `dist` output) and package-local `extensions/<id>/dist` output; TypeScript source entries are excluded. Root artifacts take precedence when both builds exist. Selecting an already-built plugin with `--extension <id>` reuses its output without requiring unrelated plugin builds; build the plugin package first if its output is not supplied by `pnpm build`.
+
+Native imports also need the plugin's declared dependencies and a resolvable `openclaw` host package. The profiler does not install or link dependencies: missing dependencies remain import failures in the JSON report and cause a nonzero exit.
 
 ## Benchmarks
 

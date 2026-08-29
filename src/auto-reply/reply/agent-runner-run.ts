@@ -524,21 +524,13 @@ export async function runReplyAgent(
     },
     storePath,
   });
-  type SessionResetOptions = {
-    failureLabel: string;
-    buildLogMessage: (nextSessionId: string) => string;
-    cleanupTranscripts?: boolean;
-  };
-  const resetSession = async ({
-    failureLabel,
-    buildLogMessage,
-    cleanupTranscripts,
-  }: SessionResetOptions): Promise<boolean> =>
+  const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
     await resetReplyRunSession({
       options: {
-        failureLabel,
-        buildLogMessage,
-        cleanupTranscripts,
+        failureLabel: "role ordering conflict",
+        buildLogMessage: (nextSessionId) =>
+          `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
+        cleanupTranscripts: true,
       },
       sessionKey,
       queueKey,
@@ -552,13 +544,6 @@ export async function runReplyAgent(
       onNewSession: () => {
         activeIsNewSession = true;
       },
-    });
-  const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
-    resetSession({
-      failureLabel: "role ordering conflict",
-      buildLogMessage: (nextSessionId) =>
-        `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
-      cleanupTranscripts: true,
     });
   try {
     return await executePreparedReplyAgentRun({
@@ -580,7 +565,6 @@ export async function runReplyAgent(
       isRestartRecoveryArmed,
       opts: runOpts,
       pendingToolTasks,
-      performSessionReset: resetSession,
       queueKey,
       replyMediaContext,
       replyOperation,

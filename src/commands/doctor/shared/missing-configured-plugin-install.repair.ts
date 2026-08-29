@@ -1,9 +1,13 @@
 import { rm } from "node:fs/promises";
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
-import type { ClawHubRiskAcknowledgementRequest } from "../../../plugins/clawhub.js";
+import {
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+} from "../../../plugins/config-state.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
@@ -20,11 +24,9 @@ import {
   collectConfiguredPluginIds,
 } from "./missing-configured-plugin-install.ids.js";
 import {
-  appendClawHubRiskAcknowledgementGuidance,
   installCandidate,
   isActionableClawHubSkippedOutcome,
   isClawHubReviewNotice,
-  recordClawHubInstallSpec,
 } from "./missing-configured-plugin-install.install.js";
 import {
   forceNpmInstallRecordRepair,
@@ -70,8 +72,6 @@ type RepairMissingPluginInstallsResult = {
 export async function repairMissingConfiguredPluginInstalls(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   /**
    * Optional pre-seeded records. When provided, this map is used instead of
@@ -88,8 +88,6 @@ export async function repairMissingConfiguredPluginInstalls(params: {
     pluginIds: collectConfiguredPluginIds(params.cfg, params.env),
     channelIds: collectConfiguredChannelIds(params.cfg, params.env),
     blockedPluginIds: collectBlockedPluginIds(params.cfg),
-    ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-    ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
     ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
   });
@@ -103,8 +101,6 @@ export async function repairMissingPluginInstallsForIds(params: {
   blockedPluginIds?: Iterable<string>;
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls({
@@ -123,8 +119,6 @@ export async function repairMissingPluginInstallsForIds(params: {
         .map((pluginId) => pluginId.trim())
         .filter((pluginId) => pluginId),
     ),
-    ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-    ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
     ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
   });
@@ -137,8 +131,6 @@ async function repairMissingPluginInstalls(params: {
   blockedPluginIds?: ReadonlySet<string>;
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<RepairMissingPluginInstallsResult> {
   // Baseline, awaited review, package publication, and the index write share one generation.
@@ -179,6 +171,31 @@ async function repairMissingPluginInstallsWithLease(
   const deferredPluginIds = new Set<string>();
   const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
   let nextRecords = records;
+  const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
+  const recordFailure = (pluginId: string, messages: string[], code?: string) => {
+    const retainedEnabledInstall =
+      code === PLUGIN_CAPABILITY_CONSENT_REQUIRED &&
+      knownIds.has(pluginId) &&
+      !isInstalledRecordMissingOnDisk(records[pluginId], env) &&
+      !installedPluginIdsWithRepairablePackageDiagnostics.has(pluginId) &&
+      !configuredPluginIdsWithStaleDescriptors.has(pluginId) &&
+      resolveEffectiveEnableState({
+        id: pluginId,
+        origin: "global",
+        config: normalizedPluginConfig,
+        rootConfig: params.cfg,
+      }).enabled;
+    // Consent refusal rolls back the replacement; a retained enabled artifact is
+    // still subject to the caller's payload smoke check, not a failed activation.
+    if (retainedEnabledInstall) {
+      notices.push(
+        `Kept installed plugin "${pluginId}"; replacement deferred. ${messages.join(" ")}`,
+      );
+    } else {
+      warnings.push(...messages);
+    }
+    failedPluginIds.add(pluginId);
+  };
 
   for (const [pluginId, record] of Object.entries(records)) {
     const bundled = bundledPluginsById.get(pluginId);
@@ -213,8 +230,8 @@ async function repairMissingPluginInstallsWithLease(
     }
   }
 
-  const missingRecordedPluginIds = Object.keys(records).filter(
-    (pluginId) =>
+  const missingRecordedPlugins = Object.entries(records).filter(
+    ([pluginId]) =>
       !deferredPluginIds.has(pluginId) &&
       !officialReplacementPluginIds.has(pluginId) &&
       Object.hasOwn(nextRecords, pluginId) &&
@@ -224,30 +241,24 @@ async function repairMissingPluginInstallsWithLease(
         configuredPluginIdsWithStaleDescriptors.has(pluginId) ||
         installedPluginIdsWithRepairablePackages.has(pluginId)),
   );
+  const missingRecordedPluginIds = missingRecordedPlugins.map(([pluginId]) => pluginId);
 
   if (missingRecordedPluginIds.length > 0) {
-    for (const pluginId of missingRecordedPluginIds) {
-      const record = nextRecords[pluginId];
-      if (!record) {
-        continue;
-      }
-      const forced = forceNpmInstallRecordRepair(record);
-      if (forced !== record) {
-        if (nextRecords === records) {
-          nextRecords = { ...records };
-        }
-        nextRecords[pluginId] = forced;
-      }
+    // Dropping resolved fields forces an installer attempt, not a record mutation.
+    const repairRecords = { ...nextRecords };
+    for (const [pluginId, record] of missingRecordedPlugins) {
+      repairRecords[pluginId] = forceNpmInstallRecordRepair(record);
     }
     const updateResult = await updateNpmInstalledPlugins({
       config: {
         ...params.cfg,
         plugins: {
           ...params.cfg.plugins,
-          installs: nextRecords,
+          installs: repairRecords,
         },
       },
       pluginIds: missingRecordedPluginIds,
+      skipDisabledPlugins: true,
       updateChannel,
       coreVersion: resolveCompatibilityHostVersion(env),
       logger: {
@@ -261,8 +272,6 @@ async function repairMissingPluginInstallsWithLease(
         },
         error: (message) => warnings.push(message),
       },
-      ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-      ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
       ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     });
     for (const outcome of updateResult.outcomes) {
@@ -275,20 +284,18 @@ async function repairMissingPluginInstallsWithLease(
               ? `Repaired broken installed plugin "${outcome.pluginId}".`
               : `Repaired missing configured plugin "${outcome.pluginId}".`,
         );
-      } else if (outcome.status === "error") {
-        warnings.push(outcome.message);
-        failedPluginIds.add(outcome.pluginId);
-      } else if (isActionableClawHubSkippedOutcome(outcome)) {
-        warnings.push(
-          appendClawHubRiskAcknowledgementGuidance({
-            message: outcome.message,
-            spec: recordClawHubInstallSpec(nextRecords[outcome.pluginId]),
-          }),
-        );
-        failedPluginIds.add(outcome.pluginId);
+      } else if (outcome.status === "error" || isActionableClawHubSkippedOutcome(outcome)) {
+        recordFailure(outcome.pluginId, [outcome.message], outcome.code);
       }
     }
-    nextRecords = updateResult.config.plugins?.installs ?? nextRecords;
+    if (repairedPluginIds.size > 0) {
+      nextRecords = { ...(updateResult.config.plugins?.installs ?? nextRecords) };
+      for (const [pluginId, record] of missingRecordedPlugins) {
+        if (!repairedPluginIds.has(pluginId)) {
+          nextRecords[pluginId] = record;
+        }
+      }
+    }
   }
 
   const missingPluginIds = new Set(
@@ -361,8 +368,6 @@ async function repairMissingPluginInstallsWithLease(
       ...(installedPluginIdsWithStaleVersionBoundRuntimePackages.has(candidate.pluginId)
         ? { repairReason: "stale-version-bound-runtime" as const }
         : {}),
-      ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-      ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
       ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     });
     if (shouldReplaceBrokenOfficialInstall) {
@@ -386,12 +391,13 @@ async function repairMissingPluginInstallsWithLease(
     nextRecords = installed.records;
     changes.push(...installed.changes);
     notices.push(...installed.notices);
-    warnings.push(...installed.warnings);
     if (!installed.failedPluginId && installed.records[candidate.pluginId]) {
       repairedPluginIds.add(candidate.pluginId);
     }
     if (installed.failedPluginId) {
-      failedPluginIds.add(installed.failedPluginId);
+      recordFailure(installed.failedPluginId, installed.warnings, installed.code);
+    } else {
+      warnings.push(...installed.warnings);
     }
   }
 

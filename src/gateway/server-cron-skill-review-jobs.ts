@@ -13,6 +13,7 @@ export async function reconcileSkillCollectionReviewJobs(params: {
   cron: SkillReviewJobCron;
   cfg: OpenClawConfig;
   logger: { warn: (obj: unknown, msg?: string) => void };
+  commitGuard?: () => void;
 }): Promise<{ ok: boolean }> {
   let ok = true;
   let jobs: CronJob[];
@@ -22,6 +23,7 @@ export async function reconcileSkillCollectionReviewJobs(params: {
     params.logger.warn({ err: String(error) }, "cron-skill-review: monitor inventory failed");
     return { ok: false };
   }
+  params.commitGuard?.();
 
   const specs = resolveSkillCollectionReviewMonitorSpecs(params.cfg);
   const desired = new Set(specs.map((spec) => spec.agentId));
@@ -31,8 +33,10 @@ export async function reconcileSkillCollectionReviewJobs(params: {
         enabledExplicit: true,
         systemOwned: true,
         matchesExisting: (job) => skillCollectionReviewMonitorAgentId(job) !== undefined,
+        ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
       });
     } catch (error) {
+      params.commitGuard?.();
       ok = false;
       params.logger.warn(
         { agentId: spec.agentId, err: String(error) },
@@ -47,8 +51,12 @@ export async function reconcileSkillCollectionReviewJobs(params: {
       continue;
     }
     try {
-      await params.cron.remove(job.id, { systemOwned: true });
+      await params.cron.remove(job.id, {
+        systemOwned: true,
+        ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
+      });
     } catch (error) {
+      params.commitGuard?.();
       ok = false;
       params.logger.warn(
         { agentId, err: String(error) },

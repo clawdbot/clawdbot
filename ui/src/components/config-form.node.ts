@@ -12,7 +12,6 @@ import { renderNumberInput, renderSelect, renderTextInput } from "./config-form.
 import {
   renderFieldRow,
   isAnySchema,
-  renderRestoreDefaultButton,
   renderSchemaDefaultDescription,
   renderSegmentedControl,
   renderTags,
@@ -105,16 +104,13 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
         defaultDescription: renderSchemaDefaultDescription(schema, value),
         tags,
         showLabel,
-        control: html`
-          ${renderSegmentedControl({
-            options: literals,
-            resolvedValue,
-            disabled,
-            ariaLabel: label,
-            onSelect: (literal) => onPatch(path, literal),
-          })}
-          ${renderRestoreDefaultButton(params)}
-        `,
+        control: renderSegmentedControl({
+          options: literals,
+          resolvedValue,
+          disabled,
+          ariaLabel: label,
+          onSelect: (literal) => onPatch(path, literal),
+        }),
       });
     }
 
@@ -170,16 +166,13 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
         defaultDescription: renderSchemaDefaultDescription(schema, value),
         tags,
         showLabel,
-        control: html`
-          ${renderSegmentedControl({
-            options,
-            resolvedValue,
-            disabled,
-            ariaLabel: label,
-            onSelect: (option) => onPatch(path, option),
-          })}
-          ${renderRestoreDefaultButton(params)}
-        `,
+        control: renderSegmentedControl({
+          options,
+          resolvedValue,
+          disabled,
+          ariaLabel: label,
+          onSelect: (option) => onPatch(path, option),
+        }),
       });
     }
     return renderSelect({ ...params, options });
@@ -233,7 +226,6 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
       checked: displayValue,
       disabled,
       onChange,
-      actions: renderRestoreDefaultButton(params),
     });
   }
 

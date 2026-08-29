@@ -379,10 +379,13 @@ async function mutateSessionAtMessage(
         );
         return;
       }
+      const creation = resolveOperatorSessionCreation(client);
+      const sandbox = action === "fork" ? resolveCreatorSandbox(cfg, creation) : undefined;
       const upstreamFork =
         upstreamLink && upstreamForkHarness
           ? await upstreamForkHarness.fork({
               targetKey,
+              sandbox,
               source: {
                 agentId: current.target.agentId,
                 sessionId: current.entry.sessionId,
@@ -435,7 +438,6 @@ async function mutateSessionAtMessage(
       }
       let result: MessageCutMutationResult;
       try {
-        const creation = resolveOperatorSessionCreation(client);
         result = await (action === "fork"
           ? forkSessionAtMessage(
               {
@@ -445,12 +447,7 @@ async function mutateSessionAtMessage(
                 sessionStoreKey: current.sessionStoreKey,
                 storePath: current.storePath,
                 targetKey,
-                creation: {
-                  ...creation,
-                  ...(resolveCreatorSandbox(cfg, creation) === "required"
-                    ? { sandbox: "required" }
-                    : {}),
-                },
+                creation: { ...creation, sandbox },
               },
               expectedState,
             )

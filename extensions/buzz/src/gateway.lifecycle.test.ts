@@ -297,6 +297,28 @@ describe("Buzz gateway lifecycle", () => {
     });
   });
 
+  it("preserves an explicit send's thread even when automatic replies are flat", async () => {
+    const cfg = createBuzzConfig();
+    const flatCfg = {
+      ...cfg,
+      channels: { ...cfg.channels, buzz: { ...cfg.channels?.buzz, replyToMode: "off" as const } },
+    };
+    await buzzOutboundAdapter.sendText({
+      cfg: flatCfg,
+      to: CHANNEL_ID,
+      text: "explicit thread send",
+      threadId: "requested-thread",
+      replyToId: "requested-parent",
+    });
+    expect(gatewayMocks.sendBuzzTextOneShot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "requested-thread",
+        replyToId: "requested-parent",
+        text: "explicit thread send",
+      }),
+    );
+  });
+
   it("blocks direct sends before opening a relay when an auth-tag SecretRef is unavailable", async () => {
     const cfg = createUnavailableBuzzConfig("authTag");
 
@@ -473,35 +495,42 @@ describe("Buzz gateway lifecycle", () => {
     await expect(lifecycle).resolves.toBeUndefined();
   });
 
-  it("uses the active bus for heartbeat typing without destabilizing the account", async () => {
-    const { abortController, cfg, lifecycle } = startTestGateway();
-    await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+  it.each(["all", "off"] as const)(
+    "uses %s-mode heartbeat typing without destabilizing the account",
+    async (replyToMode) => {
+      const { abortController, cfg, lifecycle } = startTestGateway();
+      await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+      const typingCfg = {
+        ...cfg,
+        channels: { ...cfg.channels, buzz: { ...cfg.channels?.buzz, replyToMode } },
+      };
 
-    await sendBuzzTyping({
-      cfg,
-      to: `buzz:${CHANNEL_ID}`,
-      accountId: "default",
-      threadId: "root-id",
-    });
-    expect(gatewayMocks.busSendTyping).toHaveBeenCalledWith({
-      channelId: CHANNEL_ID,
-      threadId: "root-id",
-    });
-
-    gatewayMocks.busSendTyping.mockRejectedValueOnce(new Error("socket closing"));
-    await expect(
-      sendBuzzTyping({
-        cfg,
+      await sendBuzzTyping({
+        cfg: typingCfg,
         to: `buzz:${CHANNEL_ID}`,
         accountId: "default",
-      }),
-    ).rejects.toThrow("socket closing");
-    expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce();
-    expect(gatewayMocks.close).not.toHaveBeenCalled();
+        threadId: "root-id",
+      });
+      expect(gatewayMocks.busSendTyping).toHaveBeenCalledWith({
+        channelId: CHANNEL_ID,
+        threadId: replyToMode === "off" ? undefined : "root-id",
+      });
 
-    abortController.abort();
-    await expect(lifecycle).resolves.toBeUndefined();
-  });
+      gatewayMocks.busSendTyping.mockRejectedValueOnce(new Error("socket closing"));
+      await expect(
+        sendBuzzTyping({
+          cfg,
+          to: `buzz:${CHANNEL_ID}`,
+          accountId: "default",
+        }),
+      ).rejects.toThrow("socket closing");
+      expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce();
+      expect(gatewayMocks.close).not.toHaveBeenCalled();
+
+      abortController.abort();
+      await expect(lifecycle).resolves.toBeUndefined();
+    },
+  );
 
   it("preserves room activation after a failed initial session", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

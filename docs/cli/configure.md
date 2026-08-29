@@ -34,6 +34,14 @@ Selecting `gateway`, `daemon`, or `health` (or running the full wizard with no `
 `openclaw configure` requires an interactive terminal (both stdin and stdout must be TTYs). Without one it prints the equivalent non-interactive `openclaw config get|set|patch|validate` commands and exits with an error instead of partially running.
 </Note>
 
+## Gateway section
+
+For **Trusted Proxy** auth, enter comma-separated IPv4 or IPv6 addresses or CIDR ranges, such as `10.0.0.1, ::1, 10.0.0.0/24`. The wizard rejects malformed addresses and empty entries before saving; surrounding whitespace is ignored.
+
+For **Trusted Proxy** auth, entering an address or CIDR that matches a loopback source shows a security warning and asks for explicit consent before setting `gateway.auth.trustedProxy.allowLoopback`. Declining leaves it unset and warns that loopback proxy requests will be rejected at runtime. See [Trusted proxy auth](/gateway/trusted-proxy-auth#configure-with-the-wizard) for the trust requirements.
+
+Reconfiguring trusted-proxy mode defaults the loopback prompt to the existing opt-in and preserves `deviceAutoApprove` unchanged. An explicit refusal revokes loopback consent; without a matching loopback source, the existing setting is retained.
+
 ## Model section
 
 <Note>
@@ -53,6 +61,7 @@ When configure starts from a provider auth choice, the default-model and model-p
 
 ## Other notes
 
+- Gateway reconfiguration preserves existing `gateway.auth.allowTailscale`, `gateway.auth.rateLimit`, and `gateway.auth.identityScopes` policies. The selected auth mode replaces its credentials or trusted-proxy settings and removes fields belonging to other auth modes.
 - After local config writes, configure installs selected downloadable plugins when the chosen setup path requires them. Remote gateway config does not install local plugin packages.
 - Channel-oriented services (Slack/Discord/Matrix/Microsoft Teams) prompt for channel/room allowlists during setup. You can enter names or IDs; the wizard resolves names to IDs when possible.
 - Choosing **Reinstall** keeps the existing Gateway service in place while you select its runtime and configure validates authentication and prepares the replacement. Cancelling or failing during preparation leaves the existing service installed.

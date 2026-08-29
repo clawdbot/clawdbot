@@ -103,21 +103,23 @@ const modelPluginMetadataSnapshot = vi.hoisted(() => {
       manifestPath: "/test/github-copilot/openclaw.plugin.json",
     },
   ];
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "models-test-plugin-policy",
+    generatedAtMs: 0,
+    installRecords: {},
+    // A real isolated bundled snapshot has no installed-index rows; bundled
+    // manifest records remain the authoritative graph for this fixture.
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash: "models-test-plugin-policy",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "models-test-plugin-policy",
-      generatedAtMs: 0,
-      installRecords: {},
-      // A real isolated bundled snapshot has no installed-index rows; bundled
-      // manifest records remain the authoritative graph for this fixture.
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins, diagnostics: [] },
     plugins,
@@ -1009,6 +1011,7 @@ describe("models.list", () => {
                   source: "implicit",
                 },
                 available: false,
+                unavailableReason: "missing-auth",
                 tags: ["default"],
               },
             ],
@@ -1071,6 +1074,7 @@ describe("models.list", () => {
                   source: "implicit",
                 },
                 available: false,
+                unavailableReason: "missing-auth",
                 tags: ["default"],
               },
             ],
@@ -1124,6 +1128,7 @@ describe("models.list", () => {
                 source: "implicit",
               },
               available: false,
+              unavailableReason: "missing-auth",
               tags: ["default"],
             },
           ],
@@ -1366,7 +1371,15 @@ describe("models.list", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       {
-        models: [{ id: "qwen-local", name: "Qwen Local", provider: "vllm", available: false }],
+        models: [
+          {
+            id: "qwen-local",
+            name: "Qwen Local",
+            provider: "vllm",
+            available: false,
+            unavailableReason: "missing-auth",
+          },
+        ],
       },
       undefined,
     );
@@ -1466,6 +1479,7 @@ describe("models.list", () => {
               name: "Claude Test",
               provider: "anthropic",
               available: false,
+              unavailableReason: "missing-auth",
             },
             {
               id: "gpt-5.4",
@@ -2115,7 +2129,8 @@ describe("models.list", () => {
             },
           });
 
-        await writeCooldown(Date.now() + 60_000);
+        const billingCooldownUntil = Date.now() + 60_000;
+        await writeCooldown(billingCooldownUntil);
         const cooled = requestModelsList({
           view: "all",
           runtimeConfig,
@@ -2127,7 +2142,14 @@ describe("models.list", () => {
           true,
           {
             models: [
-              { id: "qwen-remote", name: "Qwen Remote", provider: "cliproxyapi", available: false },
+              {
+                id: "qwen-remote",
+                name: "Qwen Remote",
+                provider: "cliproxyapi",
+                available: false,
+                unavailableReason: "cooldown",
+                unavailableUntil: billingCooldownUntil,
+              },
             ],
           },
           undefined,
@@ -2355,6 +2377,7 @@ describe("models.list", () => {
             name: "Demo Model",
             provider: "demo-provider",
             available: false,
+            unavailableReason: "missing-auth",
           },
         ],
       },
@@ -2431,6 +2454,7 @@ describe("models.list", () => {
             name: "Vision Model",
             provider: "demo-provider",
             available: false,
+            unavailableReason: "missing-auth",
             contextWindow: 128_000,
           },
         ],

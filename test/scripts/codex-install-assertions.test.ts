@@ -767,7 +767,7 @@ describe("Codex install helpers", () => {
 
     const result = runCodexOnDemandAssertions(root);
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(`[codex-release] packageVersion=${CODEX_VERSION}`);
     expect(result.stdout).toContain(`[codex-release] cliVersion=${CODEX_VERSION}`);

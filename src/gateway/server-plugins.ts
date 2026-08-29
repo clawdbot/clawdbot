@@ -316,6 +316,7 @@ export function createGatewaySubagentRuntime(
           ...(allowOverride && params.provider && { provider: params.provider }),
           ...(allowOverride && params.model && { model: params.model }),
           ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
+          ...(params.promptMode === "minimal" && { promptMode: params.promptMode }),
           ...(params.lane && { lane: params.lane }),
           ...(params.cwd && { cwd: params.cwd }),
           ...(params.lightContext === true && { bootstrapContextMode: "lightweight" }),

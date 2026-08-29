@@ -1071,6 +1071,7 @@
                 "group": "Guides",
                 "pages": [
                   "start/openclaw",
+                  "start/teams",
                   "start/wizard-cli-reference",
                   "start/wizard-cli-automation"
                 ]
@@ -1715,7 +1716,6 @@
                       "gateway/security/rate-limiting",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
-                      "gateway/daytona",
                       "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated",
                       "gateway/permission-modes"

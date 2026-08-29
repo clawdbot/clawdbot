@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -140,7 +141,9 @@ suite.define(() => {
       });
       expect(
         (await gateway.getRequests("sessions.list")).slice(before).map((request) => request.params),
-      ).toEqual([expect.objectContaining({ ownerFirst: true, limit: 60 })]);
+      ).toEqual([
+        expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
+      ]);
 
       for (let sample = 0; sample < 6; sample += 1) {
         expect(await bob.count()).toBe(1);

@@ -1,5 +1,4 @@
 // ClawHub lifecycle tests cover registry metadata lookup and error handling.
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -194,7 +193,15 @@ function mockGitHubInstallResolution(params: {
 function mockSkillSecurityVerdict(item: ClawHubSkillSecurityVerdictItem) {
   fetchClawHubSkillSecurityVerdictsMock.mockResolvedValueOnce({
     schema: "clawhub.skill.security-verdicts.v1",
-    items: [item],
+    items: [
+      {
+        ...item,
+        overview: item.overview ?? "No security analysis has been recorded yet.",
+        securityAuditUrl:
+          item.securityAuditUrl ??
+          `${item.skillUrl ?? `https://clawhub.ai/${item.publisherHandle ?? "openclaw"}/skills/${item.requestedSlug}`}/security-audit?version=${item.requestedVersion}`,
+      },
+    ],
   });
 }
 
@@ -387,6 +394,8 @@ describe("skills-clawhub", () => {
           version: item.version,
           displayName: "Agent Receipt",
           ...(item.ownerHandle ? { publisherHandle: item.ownerHandle } : {}),
+          overview: "No security analysis has been recorded yet.",
+          securityAuditUrl: `https://clawhub.ai/${item.ownerHandle ?? "openclaw"}/skills/${item.slug}/security-audit?version=${item.version}`,
           security: {
             status: "clean",
             passed: true,
@@ -702,7 +711,6 @@ describe("skills-clawhub", () => {
       workspaceDir: "/tmp/workspace",
       slug: "agentreceipt",
       version: "1.0.0",
-      acknowledgeClawHubRisk: true,
     });
 
     expect(result).toEqual({ ok: true, action: "install", integrity });
@@ -812,6 +820,8 @@ describe("skills-clawhub", () => {
       slug: "agentreceipt",
       version: "1.0.0",
       publisherHandle: "acme",
+      overview: "ClawHub found malicious behavior in this release.",
+      securityAuditUrl: "https://clawhub.ai/acme/skills/agentreceipt/security-audit?version=1.0.0",
       security: {
         status: "malicious",
         passed: false,
@@ -830,14 +840,18 @@ describe("skills-clawhub", () => {
     }
     expect(result.error).toBe("ClawHub blocked this release; install was not started.");
     expect(result.code).toBe("clawhub_download_blocked");
-    expect(result.warning).toContain("BLOCKED - ClawHub flagged this release as malicious");
-    expect(warnings.join("\n")).toContain("BLOCKED - ClawHub flagged this release as malicious");
-    expect(warnings.join("\n")).toContain("OpenClaw will not install this skill release");
+    expect(result.warning).toContain("Blocked");
+    expect(result.warning).toContain("ClawHub found malicious behavior in this release.");
+    expect(result.warning).toContain(
+      "https://clawhub.ai/acme/skills/agentreceipt/security-audit?version=1.0.0",
+    );
+    expect(result.warning).not.toContain('replying "Install"');
+    expect(warnings.join("\n")).toContain("Blocked");
     expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
     expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
   });
 
-  it("requires acknowledgement before installing suspicious ClawHub skill releases", async () => {
+  it("prints the ClawHub audit and installs releases with a Review outcome", async () => {
     const warnings: string[] = [];
     mockSkillSecurityVerdict({
       ok: false,
@@ -849,6 +863,8 @@ describe("skills-clawhub", () => {
       version: "1.0.0",
       skillUrl: "https://clawhub.ai/acme/skills/agentreceipt",
       securityAuditUrl: "https://clawhub.ai/acme/skills/agentreceipt/security-audit?version=1.0.0",
+      overview:
+        "The skill combines gateway and GitHub mutation authority with mutable remote issue content.\n\nReview the requested capabilities before installing.",
       security: {
         status: "suspicious",
         passed: false,
@@ -861,22 +877,32 @@ describe("skills-clawhub", () => {
       },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected suspicious skill install failure");
+    expectInstalledSkill(result, { slug: "agentreceipt", version: "1.0.0" });
+    if (!result.ok) {
+      throw new Error("expected Review skill install success");
     }
-    expect(result.error).toContain("--acknowledge-clawhub-risk");
-    expect(result.version).toBe("1.0.0");
-    expect(result.warning).toContain("WARNING - ClawHub found security risks");
-    expect(result.warning).toContain(
+    const warning = result.warning;
+    if (!warning) {
+      throw new Error("expected Review skill audit output");
+    }
+    expect(warning).toContain("ClawHub Security Audit");
+    expect(warning).toMatch(/│ agentreceipt@1\.0\.0[^\n]*\n│\s*│\n│ Outcome: Review/u);
+    expect(warning).toContain("Outcome: Review");
+    expect(warning).toContain("Overview:");
+    expect(warning.replace(/[│\s]+/gu, " ")).toContain(
+      "The skill combines gateway and GitHub mutation authority with mutable remote issue content.",
+    );
+    expect(warning).toContain("Review the requested capabilities before installing.");
+    expect(warning).toContain(
       "https://clawhub.ai/acme/skills/agentreceipt/security-audit?version=1.0.0",
     );
-    expect(warnings.join("\n")).toContain("WARNING - ClawHub found security risks");
+    expect(warnings.join("\n")).toContain("Outcome: Review");
     expect(warnings.join("\n")).toContain(
       "https://clawhub.ai/acme/skills/agentreceipt/security-audit?version=1.0.0",
     );
-    expect(warnings.join("\n")).toContain("large instruction/tool-use blast radius");
-    expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
+    expect(warnings.join("\n")).not.toContain("suspicious");
+    expect(warnings.join("\n")).not.toContain("unsigned");
+    expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalled();
   });
 
   it("returns review-recommended warnings with successful ClawHub skill installs", async () => {
@@ -903,10 +929,8 @@ describe("skills-clawhub", () => {
     if (!result.ok) {
       throw new Error("expected review-recommended skill install success");
     }
-    expect(result.warning).toContain(
-      "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check",
-    );
-    expect(result.warning).toContain("security scan is pending");
+    expect(result.warning).toContain("Review");
+    expect(result.warning).toContain("Overview:");
   });
 
   it("fails closed when ClawHub skill trust checks are unavailable", async () => {
@@ -995,7 +1019,6 @@ describe("skills-clawhub", () => {
     });
 
     const result = await installTestSkill("/tmp/workspace", "agentreceipt", {
-      acknowledgeClawHubRisk: true,
       logger: {
         warn: (message) => warnings.push(message),
       },
@@ -1007,11 +1030,11 @@ describe("skills-clawhub", () => {
     }
     expect(result.error).toBe("ClawHub blocked this release; install was not started.");
     expect(result.code).toBe("clawhub_download_blocked");
-    expect(warnings.join("\n")).toContain("BLOCKED - ClawHub blocked this release");
+    expect(warnings.join("\n")).toContain("Blocked");
     expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
   });
 
-  it("requires acknowledgement when ClawHub returns a failed skill verdict with clean nested scan status", async () => {
+  it("treats a failed verdict with clean nested scan status as Review", async () => {
     mockSkillSecurityVerdict({
       ok: false,
       decision: "fail",
@@ -1028,18 +1051,15 @@ describe("skills-clawhub", () => {
 
     const result = await installTestSkill("/tmp/workspace", "agentreceipt");
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected failed skill verdict install failure");
+    expectInstalledSkill(result, { slug: "agentreceipt", version: "1.0.0" });
+    if (!result.ok) {
+      throw new Error("expected Review skill install success");
     }
-    expect(result.error).toContain("--acknowledge-clawhub-risk");
-    expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
+    expect(result.warning).toContain("Outcome: Review");
+    expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalled();
   });
 
-  it("uses the owner-qualified skill name for suspicious ClawHub acknowledgements", async () => {
-    const onClawHubRisk = vi.fn<
-      NonNullable<Parameters<typeof installSkillFromClawHub>[0]["onClawHubRisk"]>
-    >(async () => false);
+  it("uses the owner-qualified skill name in Review audits", async () => {
     mockSkillSecurityVerdict({
       ok: false,
       decision: "fail",
@@ -1055,28 +1075,21 @@ describe("skills-clawhub", () => {
       },
     });
 
-    const result = await installTestSkill("/tmp/workspace", "@acme/agentreceipt", {
-      onClawHubRisk,
-    });
+    const result = await installTestSkill("/tmp/workspace", "@acme/agentreceipt");
 
-    expect(result.ok).toBe(false);
-    expect(onClawHubRisk).toHaveBeenCalledWith(
-      expect.objectContaining({
-        packageName: "@acme/agentreceipt",
-        version: "1.0.0",
-      }),
-    );
-    const acknowledgementRequest = onClawHubRisk.mock.calls[0]?.[0];
-    expect(acknowledgementRequest?.warning).toContain(
-      "https://clawhub.ai/acme/skills/agentreceipt",
-    );
-    expect(acknowledgementRequest?.warning).toContain(
+    expectInstalledSkill(result, { slug: "agentreceipt", version: "1.0.0" });
+    if (!result.ok) {
+      throw new Error("expected owner-qualified Review install success");
+    }
+    expect(result.warning).toContain("@acme/agentreceipt@1.0.0");
+    expect(result.warning).toContain("https://clawhub.ai/acme/skills/agentreceipt");
+    expect(result.warning).toContain(
       "https://clawhub.ai/acme/skills/agentreceipt/security-audit?version=1.0.0",
     );
-    expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
+    expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalled();
   });
 
-  it("continues after explicit acknowledgement for suspicious ClawHub skill releases", async () => {
+  it("installs suspicious ClawHub skill releases after printing Review", async () => {
     mockSkillSecurityVerdict({
       ok: false,
       decision: "fail",
@@ -1091,18 +1104,16 @@ describe("skills-clawhub", () => {
       },
     });
 
-    const result = await installTestSkill("/tmp/workspace", "agentreceipt", {
-      acknowledgeClawHubRisk: true,
-    });
+    const result = await installTestSkill("/tmp/workspace", "agentreceipt");
 
     expectInstalledSkill(result, {
       slug: "agentreceipt",
       version: "1.0.0",
     });
     if (!result.ok) {
-      throw new Error("expected acknowledged suspicious skill install success");
+      throw new Error("expected Review skill install success");
     }
-    expect(result.warning).toContain("WARNING - ClawHub found security risks");
+    expect(result.warning).toContain("Outcome: Review");
     expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalledWith({
       url: "https://clawhub.ai/api/v1/download?slug=agentreceipt&version=1.0.0",
       baseUrl: undefined,
@@ -1111,20 +1122,6 @@ describe("skills-clawhub", () => {
 
   it("installs owner-qualified ClawHub skills without using owner as a local path", async () => {
     const workspaceDir = await tempDirs.make("openclaw-owner-skill-");
-    mockSkillSecurityVerdict({
-      ok: false,
-      decision: "fail",
-      reasons: ["skill.not_found"],
-      requestedSlug: "weather",
-      requestedVersion: "1.0.0",
-      slug: "weather",
-      version: null,
-      security: null,
-      error: {
-        code: "skill_not_found",
-        message: "Skill not found",
-      },
-    });
     mockSkillVerification({
       schema: "clawhub.skill.verify.v1",
       ok: true,
@@ -1148,6 +1145,10 @@ describe("skills-clawhub", () => {
     mockInstalledSkillFile("# Weather\n");
 
     const result = await installTestSkill(workspaceDir, "@demo-owner/weather");
+
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
 
     expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
       slug: "weather",
@@ -1223,22 +1224,8 @@ describe("skills-clawhub", () => {
     });
   });
 
-  it("does not require acknowledgement for owner-qualified clean skills missing only cards", async () => {
+  it("installs owner-qualified clean skills missing only cards", async () => {
     const workspaceDir = await tempDirs.make("openclaw-owner-card-missing-");
-    mockSkillSecurityVerdict({
-      ok: false,
-      decision: "fail",
-      reasons: ["skill.not_found"],
-      requestedSlug: "weather",
-      requestedVersion: "1.0.0",
-      slug: "weather",
-      version: null,
-      security: null,
-      error: {
-        code: "skill_not_found",
-        message: "Skill not found",
-      },
-    });
     mockSkillVerification({
       schema: "clawhub.skill.verify.v1",
       ok: false,
@@ -1259,23 +1246,22 @@ describe("skills-clawhub", () => {
       security: { status: "clean" },
       signature: { status: "unsigned" },
     });
-    const onClawHubRisk = vi.fn(async () => false);
     mockInstalledSkillFile("# Weather\n");
 
-    const result = await installTestSkill(workspaceDir, "@demo-owner/weather", {
-      onClawHubRisk,
-    });
+    const result = await installTestSkill(workspaceDir, "@demo-owner/weather");
 
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
     expectInstalledSkill(result, {
       slug: "weather",
       version: "1.0.0",
       targetDir: path.join(workspaceDir, "skills", "weather"),
     });
-    expect(onClawHubRisk).not.toHaveBeenCalled();
     expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalled();
   });
 
-  it("does not let owner-qualified fallback acknowledgement mask missing exact versions", async () => {
+  it("does not let owner-qualified fallback mask missing exact versions", async () => {
     mockSkillSecurityVerdict({
       ok: false,
       decision: "fail",
@@ -1311,9 +1297,7 @@ describe("skills-clawhub", () => {
       signature: { status: "unsigned" },
     });
 
-    const result = await installTestSkill("/tmp/workspace", "@demo-owner/weather", {
-      acknowledgeClawHubRisk: true,
-    });
+    const result = await installTestSkill("/tmp/workspace", "@demo-owner/weather");
 
     expect(result.ok).toBe(false);
     if (result.ok) {
@@ -1941,54 +1925,46 @@ describe("skills-clawhub", () => {
     {
       ownerHandle: undefined,
       skillRef: "agentreceipt",
-      shellArg: "agentreceipt",
       workspaceName: "agent-workspace",
     },
     {
       ownerHandle: "acme",
       skillRef: "@acme/agentreceipt",
-      shellArg: "@acme/agentreceipt",
       workspaceName: "different agent workspace",
     },
     {
       ownerHandle: undefined,
       skillRef: "agentreceipt",
-      shellArg: "agentreceipt",
       workspaceName: ".openclaw",
     },
     {
       ownerHandle: undefined,
       skillRef: "a;printf X",
-      shellArg: "'a;printf X'",
       workspaceName: "shared state;printf PWN",
     },
     {
       ownerHandle: undefined,
       skillRef: "b$(printf X)",
-      shellArg: "'b$(printf X)'",
       workspaceName: "agent$(printf PWN)",
     },
     {
       ownerHandle: undefined,
       skillRef: "c`printf X`",
-      shellArg: "'c`printf X`'",
       workspaceName: "agent`printf PWN`",
     },
     {
       ownerHandle: undefined,
       skillRef: "white space",
-      shellArg: "'white space'",
       workspaceName: "custom state directory",
     },
     {
       ownerHandle: undefined,
       skillRef: "d'$(printf X)",
-      shellArg: "'d'\\''$(printf X)'",
       workspaceName: "agent's $(printf PWN) state",
     },
   ])(
     "explains that a malicious skill update will not be downloaded ($skillRef)",
-    async ({ ownerHandle, skillRef, shellArg, workspaceName }) => {
+    async ({ ownerHandle, skillRef, workspaceName }) => {
       const tempRoot = await tempDirs.make("openclaw-skill-malicious-update-");
       const workspaceDir = path.join(tempRoot, workspaceName);
       const warnings: string[] = [];
@@ -2026,36 +2002,12 @@ describe("skills-clawhub", () => {
           error: "ClawHub blocked this release; update was not started.",
         }),
       ]);
-      expect(warnings.join("\n")).toContain(
-        "Latest skill version is marked malicious; OpenClaw will not download it.",
-      );
-      const workspaceArg = /^[A-Za-z0-9_/:=.,@%+-]+$/.test(workspaceDir)
-        ? workspaceDir
-        : `'${workspaceDir.replaceAll("'", "'\\''")}'`;
-      const uninstallCommand = `clawhub --workdir ${workspaceArg} uninstall ${shellArg}`;
-      const actionLine = expectDefined(
-        warnings
-          .join("\n")
-          .split("\n")
-          .find((line) => line.startsWith("Remove installed skill: ")),
-        "malicious skill warning remediation",
-      );
-      expect(actionLine).toBe(`Remove installed skill: ${uninstallCommand}`);
-      expect(warnings.join("\n")).toContain("independently reviewed it.");
-      expect(warnings.join("\n")).not.toContain("Choose a different version");
+      expect(warnings.join("\n")).toContain("ClawHub Security Audit");
+      expect(warnings.join("\n")).toContain("Outcome: Blocked");
+      expect(warnings.join("\n")).toContain("Overview:");
+      expect(warnings.join("\n")).not.toContain('replying "Update"');
       expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
       expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
-
-      const shellResult = spawnSync(
-        "sh",
-        [
-          "-c",
-          `clawhub() { printf '%s\\n' "$@"; }\n${actionLine.slice("Remove installed skill: ".length)}`,
-        ],
-        { encoding: "utf8" },
-      );
-      expect(shellResult.status).toBe(0);
-      expect(shellResult.stdout).toBe(`--workdir\n${workspaceDir}\nuninstall\n${skillRef}\n`);
     },
   );
 

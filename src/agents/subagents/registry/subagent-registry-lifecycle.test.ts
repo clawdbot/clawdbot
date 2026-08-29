@@ -4881,10 +4881,12 @@ describe("requester settle wake trigger", () => {
         return "intentional_non_delivery" as const;
       },
     );
+    let pendingDescendantRuns = 0;
     const controller = createLifecycleController({
       entry,
       maybeWakeRequesterAfterAllChildrenSettled,
       runSubagentAnnounceFlow,
+      countPendingDescendantRuns: () => pendingDescendantRuns,
     });
 
     await completeRun(controller, entry, {
@@ -4914,6 +4916,30 @@ describe("requester settle wake trigger", () => {
     expect(taskExecutorMocks.completeTaskRunByRunId).toHaveBeenCalledWith(
       expect.objectContaining({ terminalOutcome: "blocked" }),
     );
+    expect(entry.suppressCompletionDelivery).toBe(true);
+
+    entry.cleanupCompletedAt = undefined;
+    entry.cleanupHandled = false;
+    entry.wakeOnDescendantSettle = true;
+    vi.mocked(runSubagentAnnounceFlow).mockClear();
+    taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockClear();
+
+    pendingDescendantRuns = 1;
+    expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(entry.suppressCompletionDelivery).toBe(true);
+    expect(entry.wakeOnDescendantSettle).toBe(true);
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+
+    pendingDescendantRuns = 0;
+    expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toEqual(expect.any(Number)));
+
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(entry.suppressCompletionDelivery).toBeUndefined();
+    expect(entry.wakeOnDescendantSettle).toBeUndefined();
+    expect(entry.requesterSettleWake).toBeUndefined();
+    expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
   });
 
   it("retains a delete-mode child after no-wake until its requester turn settles", async () => {

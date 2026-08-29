@@ -25,6 +25,7 @@ vi.mock("../session-utils.js", async () => {
     ...actual,
     loadGatewaySessionEntryReadOnly: vi.fn(actual.loadGatewaySessionEntryReadOnly),
     loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
+      agentIdBySessionKey: new Map(),
       durableTargets: [],
       storePath: "(multiple)",
       store: {},
@@ -516,6 +517,7 @@ describe("sessions.usage", () => {
 
   it("does not attach out-of-scope store entries to list-style usage results", async () => {
     vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+      agentIdBySessionKey: new Map([["agent:main:s-opus", "main"]]),
       durableTargets: [],
       storePath: "(multiple)",
       store: {
@@ -548,6 +550,7 @@ describe("sessions.usage", () => {
       mockStoredSession("agent:opus:main", "main");
 
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        agentIdBySessionKey: new Map([["agent:opus:main", "opus"]]),
         durableTargets: [],
         storePath: "(multiple)",
         store: {
@@ -603,6 +606,7 @@ describe("sessions.usage", () => {
         updatedAt: 999,
       };
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        agentIdBySessionKey: new Map([["global", "opus"]]),
         durableTargets: [],
         storePath: "(multiple)",
         store: {
@@ -642,6 +646,7 @@ describe("sessions.usage", () => {
       const sessionFile = writeSessionFile("shared.jsonl");
 
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        agentIdBySessionKey: new Map([["agent:main:shared", "main"]]),
         durableTargets: [],
         storePath: "(multiple)",
         store: {
@@ -688,6 +693,7 @@ describe("sessions.usage", () => {
       // Swap the store mock for this test: the canonical key differs from the discovered key
       // but points at the same sessionId.
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        agentIdBySessionKey: new Map([[storeKey, "opus"]]),
         durableTargets: [],
         storePath: "(multiple)",
         store: {
@@ -718,17 +724,19 @@ describe("sessions.usage", () => {
     const storeKey = "agent:opus:main";
 
     await withUsageState(async (writeSessionFile) => {
-      writeSessionFile("current.jsonl");
-      writeSessionFile("old.jsonl.reset.2026-02-01T00-00-00.000Z");
+      const oldSessionFile = writeSessionFile("old.jsonl.reset.2026-02-01T00-00-00.000Z");
       mockStoredSession(storeKey, "current");
+      vi.mocked(discoverAllSessions).mockResolvedValueOnce([
+        { sessionId: "old", sessionFile: oldSessionFile, mtime: 1_000 },
+      ]);
 
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        agentIdBySessionKey: new Map([[storeKey, "opus"]]),
         durableTargets: [],
         storePath: "(multiple)",
         store: {
           [storeKey]: {
             sessionId: "current",
-            sessionFile: "current.jsonl",
             updatedAt: 1_000,
             usageFamilyKey: storeKey,
             usageFamilySessionIds: ["old", "current"],
@@ -865,6 +873,10 @@ describe("sessions.usage", () => {
       mockStoredSession(preferredKey, "run-dup");
 
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        agentIdBySessionKey: new Map([
+          [preferredKey, "opus"],
+          ["agent:other:main", "other"],
+        ]),
         durableTargets: [],
         storePath: "(multiple)",
         store: {

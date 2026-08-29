@@ -44,29 +44,41 @@ export function createVisibleMessageCursor(params: {
 }
 
 export function parseVisibleMessageCursor(value: string): VisibleMessageCursor | undefined {
-  // The cursor is a continuation hint, not an authorization token. Every field
-  // is revalidated against the current scope, generation, and projection.
+  // Accept only exact encoder output so aliases and unknown fields cannot resume or be re-emitted.
+  // The caller still revalidates this continuation hint against the current scope and projection.
   if (value.length > 4_096) {
     return undefined;
   }
   try {
-    const parsed = JSON.parse(
-      Buffer.from(value, "base64url").toString("utf8"),
-    ) as Partial<VisibleMessageCursor>;
+    const bytes = Buffer.from(value, "base64url");
+    if (bytes.toString("base64url") !== value) {
+      return undefined;
+    }
+    const parsed = JSON.parse(bytes.toString("utf8")) as Partial<VisibleMessageCursor>;
     if (
       parsed.version !== VISIBLE_MESSAGE_CURSOR_VERSION ||
       typeof parsed.agentId !== "string" ||
       typeof parsed.sessionId !== "string" ||
       typeof parsed.generation !== "string" ||
+      typeof parsed.lastEventSeq !== "number" ||
       !Number.isSafeInteger(parsed.lastEventSeq) ||
-      (parsed.lastEventSeq ?? -2) < -1 ||
+      parsed.lastEventSeq < -1 ||
+      typeof parsed.lastMessagePosition !== "number" ||
       !Number.isSafeInteger(parsed.lastMessagePosition) ||
-      (parsed.lastMessagePosition ?? -2) < -1 ||
+      parsed.lastMessagePosition < -1 ||
       (parsed.lastEventSeq === -1) !== (parsed.lastMessagePosition === -1)
     ) {
       return undefined;
     }
-    return parsed as VisibleMessageCursor;
+    const cursor: VisibleMessageCursor = {
+      agentId: parsed.agentId,
+      generation: parsed.generation,
+      sessionId: parsed.sessionId,
+      lastEventSeq: parsed.lastEventSeq,
+      lastMessagePosition: parsed.lastMessagePosition,
+      version: parsed.version,
+    };
+    return encodeVisibleMessageCursor(cursor) === value ? cursor : undefined;
   } catch {
     return undefined;
   }

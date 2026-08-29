@@ -425,6 +425,72 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
+  it("keeps a successful retry call when later post-call processing fails", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: { input: 100, output: 20, totalTokens: 120 },
+      },
+    });
+    emit(retryingCompactionEnd());
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: { input: 240, output: 30, totalTokens: 270 },
+      },
+    });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        usage: makeZeroUsageSnapshot(),
+      },
+    });
+
+    expect(subscription.getLastAssistantUsage()).toEqual({
+      input: 240,
+      output: 30,
+      total: 270,
+    });
+  });
+
+  it("restores the previous call when a retry fails before recording usage", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: { input: 100, output: 20, totalTokens: 120 },
+      },
+    });
+    emit(retryingCompactionEnd());
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        usage: makeZeroUsageSnapshot(),
+      },
+    });
+
+    expect(subscription.getLastAssistantUsage()).toEqual({
+      input: 100,
+      output: 20,
+      total: 120,
+    });
+  });
+
   it.each(THINKING_TAG_CASES)(
     "streams <%s> reasoning via onReasoningStream without leaking into final text",
     async ({ open, close }) => {

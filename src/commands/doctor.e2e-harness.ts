@@ -37,7 +37,6 @@ export const resolveOpenClawPackageRoot = defineMockFn(vi.fn().mockResolvedValue
 export const runGatewayUpdate = defineMockFn(
   vi.fn().mockResolvedValue(createGatewayUpdateResult()),
 );
-const collectRelevantDoctorPluginIds = defineMockFn(vi.fn(() => []));
 const listPluginDoctorLegacyConfigRules = defineMockFn(vi.fn(() => []));
 const runDoctorHealthContributions = defineMockFn(vi.fn(defaultRunDoctorHealthContributions));
 const maybeRepairMemoryRecallHealth = defineMockFn(vi.fn().mockResolvedValue(undefined));
@@ -495,7 +494,7 @@ vi.mock("../plugins/doctor-contract-registry.js", () => ({
     config,
     changes: [],
   }),
-  collectRelevantDoctorPluginIds,
+  collectDoctorConfigRepairPluginIds: () => [],
   listPluginDoctorLegacyConfigRules,
 }));
 
@@ -524,6 +523,7 @@ vi.mock("../agents/auth-profiles/store.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore,
+    ensureAuthProfileStoreWithoutExternalProfiles: ensureAuthProfileStore,
   };
 });
 

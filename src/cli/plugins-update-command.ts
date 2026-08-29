@@ -57,7 +57,6 @@ import {
 } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
-import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { notifyGatewayPluginMetadataChanged } from "./plugins-update-gateway-signal.js";
@@ -183,7 +182,6 @@ type RunPluginUpdateCommandParams = {
   opts: {
     all?: boolean;
     acceptCapabilities?: boolean;
-    acknowledgeClawHubRisk?: boolean;
     acknowledgeInstallPolicyWarning?: boolean;
     dryRun?: boolean;
     dangerouslyForceUnsafeInstall?: boolean;
@@ -426,11 +424,6 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
                 ...resolvePluginCapabilityConsentCliOptions({
                   acceptCapabilities: params.opts.acceptCapabilities,
                   action: "update",
-                  allowPrompt: !params.opts.dryRun,
-                }),
-                ...resolveClawHubRiskAcknowledgementCliOptions({
-                  acknowledgeClawHubRisk: params.opts.acknowledgeClawHubRisk,
-                  action: "updating",
                   allowPrompt: !params.opts.dryRun,
                 }),
                 logger,

@@ -9,6 +9,7 @@ import {
   resolveGatewayPort,
   validateConfigObjectWithPlugins,
 } from "../config/config.js";
+import { formatCommandResult } from "../process/command-error.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { displayPath } from "../utils.js";
@@ -340,7 +341,6 @@ async function startGmailWatch(cfg: Pick<GmailHookRuntimeConfig, "account" | "la
   const args = [resolveGogExecutable(), ...buildGogWatchStartArgs(cfg)];
   const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
   if (result.code !== 0) {
-    const message = result.stderr || result.stdout || "gog watch start failed";
-    throw new Error(message);
+    throw new Error(formatCommandResult("gog gmail watch start", result));
   }
 }

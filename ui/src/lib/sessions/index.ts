@@ -29,12 +29,6 @@ import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 import { SwarmActivityTracker } from "./swarm-activity.ts";
 
-export {
-  buildSessionUsageDateParams,
-  requestSessionUsage,
-  requestSessionUsageLogs,
-  requestSessionUsageTimeSeries,
-} from "./usage.ts";
 export type { SessionArchivedFilter } from "./navigation.ts";
 export type {
   SessionCapability,
@@ -43,7 +37,7 @@ export type {
   SessionMessageSubscription,
 } from "./session-capability.ts";
 export type { SessionPatch } from "./patch.ts";
-export { DEFAULT_SESSION_LIST_QUERY } from "./session-requests.ts";
+export { DEFAULT_SESSION_LIST_QUERY, SESSIONS_PAGE_DEFAULT_LIMIT } from "./session-requests.ts";
 export { reconcileSessionRunTerminal, type SessionRunTerminal } from "./reconcile.ts";
 export { requestSessionCreate } from "./create.ts";
 export { resolveSessionKey } from "./navigation.ts";
@@ -596,8 +590,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return () => listeners.delete(notify);
     },
     refreshList: (options) => roster.refreshList(options),
-    setOwnerFilter: (ownerId) => roster.setOwnerFilter(ownerId),
-    setInvolvingMeFilter: (enabled) => roster.setInvolvingMeFilter(enabled),
     reconcile,
     reconcileChanged,
     reconcileRunTerminal,
@@ -608,7 +600,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     recover: operations.recover,
     patch: mutations.patch,
     archiveVisibility: mutations.archiveVisibility,
-    setArchiveVisibility: mutations.setArchiveVisibility,
+    setArchivePending: mutations.setArchivePending,
     assignOwner: mutations.assignOwner,
     retireModelOverride: mutations.retireModelOverride,
     think: (key, agentId) => thinkingLevelClaims.get(thinkingClaimKey(key, agentId))?.[0],

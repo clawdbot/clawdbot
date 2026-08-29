@@ -90,6 +90,7 @@ function buildInstalledPluginIndex(
     candidates: discovery.candidates,
     registry,
     config: params.config,
+    env,
     diagnostics,
     installRecords,
   });
@@ -177,5 +178,7 @@ export function isInstalledPluginEnabled(
     rootConfig: config,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
   });
-  return state.enabled && (record.enabled || state.explicitlyEnabled);
+  // The index records startup policy; current activation is evaluated against
+  // the same package facts without making the startup enablement sticky.
+  return state.enabled;
 }

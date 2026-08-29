@@ -9,7 +9,9 @@ import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import "../../../components/tooltip.ts";
 import { syncTabGroupLabel } from "../../../components/web-awesome-tabs.ts";
 import { t } from "../../../i18n/index.ts";
+import { browserTabCardRevision } from "../../../lib/chat/browser-tab-preview.ts";
 import type {
+  MessageGroup,
   ToolApprovalReview,
   ToolCard,
   ToolCardOutcome,
@@ -18,6 +20,7 @@ import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews
 import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
+  extractToolCardsCached,
   formatDistinctCollapsedToolSummaryText as distinctSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
@@ -42,6 +45,39 @@ export {
   type WidgetPromptEventDetail,
 } from "./widget-card.ts";
 
+export function renderBrowserTabPreviews(
+  groups: readonly MessageGroup[],
+  options: { sessionKey?: string; latestBrowserTabs?: ReadonlyMap<string, string> },
+) {
+  const cards = groups.flatMap((group) =>
+    group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key)),
+  );
+  // One card per tab per rendered group: open/navigate/screenshot in a single
+  // turn all describe the same tab, and stacked near-identical cards are noise.
+  const lastCardForTab = new Map<string, (typeof cards)[number]>();
+  for (const card of cards) {
+    if (
+      card.preview?.kind === "browser-tab" &&
+      resolveToolCardOutcome(card, false) === "succeeded"
+    ) {
+      lastCardForTab.set(card.preview.targetId, card);
+    }
+  }
+  return [...lastCardForTab.values()].map((card) => {
+    const preview = card.preview;
+    if (preview?.kind !== "browser-tab") {
+      return nothing;
+    }
+    const revision = browserTabCardRevision(card);
+    return renderToolPreview(preview, "chat_tool", {
+      browserTabRevision: revision ? JSON.stringify([options.sessionKey, revision]) : undefined,
+      browserTabLatest: Boolean(
+        revision && options.latestBrowserTabs?.get(preview.targetId) === revision,
+      ),
+    });
+  });
+}
+
 export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
   if (event.detail === 0) {
     return true;
@@ -64,7 +100,9 @@ function formatToolOutputForSidebar(text: string): string {
   const trimmed = text.trim();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
-      return "```json\n" + JSON.stringify(JSON.parse(trimmed), null, 2) + "\n```";
+      JSON.parse(trimmed);
+      // Keep the source literal: reserialization can change numbers, escapes, and duplicate keys.
+      return "```json\n" + trimmed + "\n```";
     } catch {
       return text;
     }
@@ -951,16 +989,17 @@ export function renderExpandedToolCardContent(
     buildSidebarContent(buildToolCardSidebarContent(card), {
       rawText: card.outputText ?? null,
     });
-  const visiblePreview = card.preview
-    ? renderToolPreview(card.preview, "chat_tool", {
-        onOpenSidebar,
-        rawText: card.outputText,
-        canvasPluginSurfaceUrl,
-        embedSandboxMode,
-        allowExternalEmbedUrls,
-        sessionKey,
-      })
-    : nothing;
+  const visiblePreview =
+    card.preview?.kind === "canvas"
+      ? renderToolPreview(card.preview, "chat_tool", {
+          onOpenSidebar,
+          rawText: card.outputText,
+          canvasPluginSurfaceUrl,
+          embedSandboxMode,
+          allowExternalEmbedUrls,
+          sessionKey,
+        })
+      : nothing;
   const sidebarAction = canOpenSidebar
     ? html`
         <openclaw-tooltip content=${t("chat.toolCards.openDetails")}>
@@ -1052,7 +1091,7 @@ export function renderExpandedToolCardContent(
             })
         : nothing}
       ${hasOutput
-        ? card.preview
+        ? card.preview?.kind === "canvas"
           ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
           : renderToolDataBlock({
               ...(isError ? { label: t("chat.toolCards.toolError") } : {}),

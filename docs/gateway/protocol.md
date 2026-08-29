@@ -374,6 +374,7 @@ Operator scopes (`src/gateway/operator-scopes.ts`), the full closed set:
 - `operator.write`
 - `operator.admin`
 - `operator.approvals`
+- `operator.questions`
 - `operator.pairing`
 - `operator.talk`
 - `operator.talk.secrets`
@@ -567,7 +568,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   <Accordion title="Plugin management">
     - `plugins.list` (`operator.read`) returns the installed plugin inventory plus locally curated official picks, diagnostics, and whether the current install mode allows mutations.
     - `plugins.search` (`operator.read`) searches installable ClawHub code-plugin and bundle-plugin families. Pass non-empty `query` and optional `limit` from 1 to 100.
-    - `plugins.install` (`operator.admin`) installs either an official catalog entry with `{ source: "official", pluginId, acknowledgeInstallPolicyWarning? }` or a ClawHub package with `{ source: "clawhub", packageName, version?, acknowledgeClawHubRisk?, acknowledgeInstallPolicyWarning? }`. When install policy returns `warn`, the error `details` include `installPolicyCode: "install_policy_warning_acknowledgement_required"`, the target, reason, and optional findings. After review, retrying the same action with `acknowledgeInstallPolicyWarning: true` approves every warning in that install invocation; each warning is freshly evaluated before installation continues. `block` and policy failures remain terminal. ClawHub installs preserve Gateway trust and integrity checks. Successful installs require a Gateway restart.
+    - `plugins.install` (`operator.admin`) installs either an official catalog entry with `{ source: "official", pluginId, acknowledgeInstallPolicyWarning? }` or a ClawHub package with `{ source: "clawhub", packageName, version?, acknowledgeInstallPolicyWarning? }`. When install policy returns `warn`, the error `details` include `installPolicyCode: "install_policy_warning_acknowledgement_required"`, the target, reason, and optional findings. After review, retrying the same action with `acknowledgeInstallPolicyWarning: true` approves every warning in that install invocation; each warning is freshly evaluated before installation continues. `block` and policy failures remain terminal. ClawHub installs preserve Gateway trust and integrity checks. Successful installs require a Gateway restart.
     - `plugins.setEnabled` (`operator.admin`) changes one installed plugin's enabled policy with `{ pluginId, enabled }`. The response includes the updated catalog entry, restart metadata, and any slot-selection warnings.
     - `plugins.uninstall` (`operator.admin`) removes one externally installed plugin with `{ pluginId }`: config references, the install record, and managed files. Bundled plugins cannot be uninstalled, only disabled. The response lists the removal actions and always requires a Gateway restart.
 
@@ -713,6 +714,12 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `node.rename` updates a paired node label.
     - `node.invoke` forwards a command to a connected node.
     - `node.invoke.result` returns the result for an invoke request.
+      A node may return `NODE_NOT_READY` only when lifecycle cleanup prevented
+      execution, before calling a command handler or emitting progress. The
+      Gateway retries this rejection up to four times within the original invoke
+      deadline, rechecking the connection, pairing, and command authorization at
+      each dispatch. General `UNAVAILABLE` errors, disconnects, timeouts, and
+      failures after progress are not retried.
     - `mcp.tools.call.v1` is the headless node-host command for calling a configured node-local MCP tool. It is carried through `node.invoke`, requires the node to declare the command, and remains subject to pairing approval and `gateway.nodes.commands.deny`.
     - `node.event` carries node-originated events back into the gateway.
     - `node.pluginTools.update` is the only publication path for replacing the connected node's agent-visible plugin/MCP tool descriptors; `connect` params do not carry them.
@@ -722,7 +729,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Approval families">
-    - `approval.history` returns newest-first terminal approvals retained for 30 days for exec, plugin, and system-agent requests (scope `operator.approvals`). It supports cursor pagination plus an optional kind filter; pending approvals are not history rows.
+    - `approval.history` returns newest-first terminal approvals retained for 30 days for exec, plugin, and system-agent requests (scope `operator.approvals`). It supports cursor pagination plus an optional kind filter; pending approvals are not history rows. Treat each cursor as an opaque server token and return the exact value without padding, rewriting, or adding fields.
     - `approval.get` and `approval.resolve` are the kind-agnostic durable approval methods (scope `operator.approvals`). `approval.get` returns a sanitized pending or retained terminal projection with a stable `urlPath`; `approval.resolve` accepts the canonical approval id, an explicit `kind`, and a decision, applies first-answer-wins resolution, and always returns the recorded canonical result.
     - `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and `exec.approval.resolve` cover one-shot exec approval requests plus pending approval lookup/replay. They are protocol-boundary adapters over the same durable approval registry.
     - `exec.approval.waitDecision` waits on one pending exec approval and returns the final decision (or `null` on timeout).

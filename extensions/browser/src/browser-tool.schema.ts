@@ -48,6 +48,10 @@ const BROWSER_TOOL_ACTIONS = [
   "screenshot",
   "navigate",
   "console",
+  "requests",
+  "errors",
+  "text",
+  "emulate",
   "pdf",
   "download",
   "waitfordownload",
@@ -65,7 +69,7 @@ const BROWSER_SNAPSHOT_REFS = ["role", "aria"] as const;
 const BROWSER_IMAGE_TYPES = ["png", "jpeg"] as const;
 
 const TAB_REFERENCE_DESCRIPTION =
-  "Prefer suggestedTargetId/tabId/label; raw CDP targetId or unique prefix works.";
+  "Prefer suggestedTargetId/tabId/label; or raw CDP targetId/prefix.";
 
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
 // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
@@ -82,7 +86,13 @@ export function resolveBrowserToolCapabilities(params?: {
   profileCapabilities?: Pick<
     BrowserProfileCapabilities,
     "supportsBatchActions" | "supportsDownloads" | "supportsPdf"
-  >;
+  > &
+    Partial<
+      Pick<
+        BrowserProfileCapabilities,
+        "supportsRequests" | "supportsErrors" | "supportsPageText" | "supportsEmulation"
+      >
+    >;
 }): BrowserToolCapabilities {
   const evaluateEnabled = params?.evaluateEnabled !== false;
   const profileCapabilities = params?.profileCapabilities;
@@ -91,6 +101,10 @@ export function resolveBrowserToolCapabilities(params?: {
     actions: actions.filter(
       (action) =>
         (profileCapabilities?.supportsPdf !== false || action !== "pdf") &&
+        (profileCapabilities?.supportsRequests !== false || action !== "requests") &&
+        (profileCapabilities?.supportsErrors !== false || action !== "errors") &&
+        (profileCapabilities?.supportsPageText !== false || action !== "text") &&
+        (profileCapabilities?.supportsEmulation !== false || action !== "emulate") &&
         (profileCapabilities?.supportsDownloads !== false ||
           (action !== "download" && action !== "waitfordownload")),
     ),
@@ -108,25 +122,19 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
   return {
     // Common fields
     targetId: Type.Optional(Type.String({ description: TAB_REFERENCE_DESCRIPTION })),
-    ref: Type.Optional(
-      Type.String({ description: "Element reference from a current-tab snapshot." }),
-    ),
+    ref: Type.Optional(Type.String({ description: "Current snapshot ref." })),
     // batch - permissive children keep the provider schema flat; runtime validates each action.
     actions: Type.Optional(
       Type.Array(
         Type.Object({}, { additionalProperties: true }),
-        supportsBatch ? { description: "Nested act requests for kind=batch." } : {},
+        supportsBatch ? { description: "Nested batch actions." } : {},
       ),
     ),
     stopOnError: Type.Optional(
-      Type.Boolean(
-        supportsBatch ? { description: "Stop batch at first error (default: true)." } : {},
-      ),
+      Type.Boolean(supportsBatch ? { description: "Stop batch on error (default: true)." } : {}),
     ),
     // click
-    doubleClick: Type.Optional(
-      Type.Boolean({ description: "Double-click for kind=click or clickCoords." }),
-    ),
+    doubleClick: Type.Optional(Type.Boolean({ description: "Double-click/clickCoords." })),
     button: Type.Optional(Type.String()),
     modifiers: Type.Optional(Type.Array(Type.String())),
     x: optionalFiniteNumberSchema(),
@@ -171,14 +179,14 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
 export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
   const actProperties = createBrowserActProperties(capabilities);
   const actKindDescription = capabilities.actKinds.includes("batch")
-    ? "Browser action kind; batch runs the nested actions array."
-    : "Browser action kind.";
+    ? "Act kind; batch uses actions."
+    : "Act kind.";
   const BrowserActSchema = Type.Object(
     {
       kind: stringEnum(capabilities.actKinds, { description: actKindDescription }),
       ...actProperties,
     },
-    { description: "Preferred nested request for action=act." },
+    { description: "Nested act request." },
   );
   return Type.Object({
     action: stringEnum(capabilities.actions),
@@ -187,8 +195,8 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
     profile: Type.Optional(
       Type.String({
         description: capabilities.tabBound
-          ? "Bound browser profile selected for this run."
-          : "Browser profile name; omit to use the configured default.",
+          ? "Run-bound browser profile."
+          : "Profile; omit for configured default.",
       }),
     ),
     browser: Type.Optional(Type.String()),
@@ -208,7 +216,7 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
     frame: Type.Optional(Type.String()),
     labels: Type.Optional(
       Type.Boolean({
-        description: "Overlay snapshot or screenshot with element reference labels.",
+        description: "Label snapshot/screenshot refs.",
       }),
     ),
     urls: Type.Optional(Type.Boolean()),
@@ -217,6 +225,13 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
     element: Type.Optional(Type.String()),
     type: optionalStringEnum(BROWSER_IMAGE_TYPES),
     level: Type.Optional(Type.String()),
+    filter: Type.Optional(Type.String()),
+    clear: Type.Optional(Type.Boolean()),
+    query: Type.Optional(Type.String()),
+    device: Type.Optional(Type.String()),
+    colorScheme: optionalStringEnum(["dark", "light", "no-preference", "none"] as const),
+    timezoneId: Type.Optional(Type.String()),
+    locale: Type.Optional(Type.String()),
     paths: Type.Optional(Type.Array(Type.String())),
     inputRef: Type.Optional(Type.String()),
     dialogId: Type.Optional(Type.String()),

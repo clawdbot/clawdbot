@@ -657,15 +657,20 @@ describe("pw-session ensurePageState", () => {
     ensurePageState(page);
     const capture = beginActionDownloadCaptureOnPage(page);
     const error = new Error("action download save failed");
+    const cancel = vi.fn(async () => {
+      throw new Error("browser disconnected during cancellation");
+    });
 
     handlers.get("download")?.[0]?.({
       suggestedFilename: () => "failed.txt",
       saveAs: vi.fn(async () => {
         throw error;
       }),
+      cancel,
     });
 
     await expect(capture.drain()).rejects.toBe(error);
+    expect(cancel).toHaveBeenCalledOnce();
     capture.dispose();
   });
 

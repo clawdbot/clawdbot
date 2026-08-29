@@ -10,7 +10,7 @@ import type { NodeListNode } from "../shared/node-list-types.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code-mode-catalog.js";
-import { boundCodeModeValue } from "./code-mode-json.js";
+import { boundCodeModeResult, boundCodeModeValue } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
@@ -26,6 +26,11 @@ import {
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "./subagents/swarm/swarm-code-mode.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
+import {
+  consumeToolEffectReceipt,
+  registerToolEffectReceipt,
+  type ToolEffectReceipt,
+} from "./tool-effect-receipt.js";
 import { isToolExecutionAllowed, TOOL_EXECUTION_GATED_MESSAGE } from "./tool-policy-shared.js";
 import {
   consumeTrustedToolNoStartError,
@@ -398,6 +403,7 @@ export async function runBridgeRequest(params: {
   onUpdate?: AgentToolUpdateCallback;
 }): Promise<SettledBridgeRequest> {
   const catalogProjection = params.catalogProjection;
+  let effectReceipt: ToolEffectReceipt | undefined;
   try {
     const values = Array.isArray(params.request.args) ? params.request.args : [];
     let value: unknown;
@@ -473,6 +479,7 @@ export async function runBridgeRequest(params: {
           signal: params.signal,
           onUpdate: params.onUpdate,
         });
+        effectReceipt = consumeToolEffectReceipt(called.result);
         value =
           isRecord(called.result) && "details" in called.result
             ? called.result.details
@@ -523,6 +530,7 @@ export async function runBridgeRequest(params: {
               signal: params.signal,
               onUpdate: params.onUpdate,
             });
+            effectReceipt = consumeToolEffectReceipt(called.result);
             if (request.catalogId) {
               const guestResult = consumeMcpCodeModeGuestResult(called.result);
               if (guestResult === undefined) {
@@ -537,6 +545,7 @@ export async function runBridgeRequest(params: {
               : called.result;
           },
         );
+        effectReceipt ??= consumeToolEffectReceipt(value);
         break;
       }
       case "agentSpawn": {
@@ -584,20 +593,32 @@ export async function runBridgeRequest(params: {
         break;
       }
     }
-    return {
-      id: params.request.id,
-      ok: true,
-      value: boundCodeModeValue(value, params.maxOutputBytes),
-    };
+    value = boundCodeModeValue(value, params.maxOutputBytes);
+    // Search must remain a callable-name array; a truncation marker erases discovery.
+    if (params.request.method === "search" && !Array.isArray(value)) {
+      throw new ToolInputError(
+        "Search results exceed the output budget. Narrow the query or lower the limit.",
+      );
+    }
+    const settled: SettledBridgeRequest = { id: params.request.id, ok: true, value };
+    return effectReceipt ? registerToolEffectReceipt(settled, effectReceipt) : settled;
   } catch (error) {
+    const bounded = boundCodeModeResult({
+      error: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
+      output: [],
+      maxOutputBytes: params.maxOutputBytes,
+    });
     const settled: SettledBridgeRequest = {
       id: params.request.id,
       ok: false,
-      error: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
+      error: bounded.error,
     };
-    if (consumeTrustedToolNoStartError(error)) {
+    const trustedNoStart = consumeTrustedToolNoStartError(error);
+    if (trustedNoStart) {
       registerTrustedToolNoStartError(settled);
     }
-    return settled;
+    effectReceipt =
+      consumeToolEffectReceipt(error) ?? (trustedNoStart ? { state: "not_started" } : undefined);
+    return effectReceipt ? registerToolEffectReceipt(settled, effectReceipt) : settled;
   }
 }

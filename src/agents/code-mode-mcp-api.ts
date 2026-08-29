@@ -140,7 +140,7 @@ function schemaType(schema: unknown): string {
     case "boolean":
       return "boolean";
     case "array":
-      return `${schemaType(schema.items)}[]`;
+      return `Array<${schemaType(schema.items)}>`;
     case "object":
       return renderInlineObjectType(schema);
     case "null":

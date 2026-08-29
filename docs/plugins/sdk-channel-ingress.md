@@ -76,6 +76,27 @@ execution provenance and must not be passed as `channelIngress`. When a channel
 batches several admitted messages, pass their exact results in source order;
 the finalized context message id identifies the last source result.
 
+### Product participant identity
+
+An identity descriptor may provide `resolveParticipant(subject)`, returning
+`{ domain, idKind, id }` only when the plugin can prove those remote facts.
+The domain belongs to the remote service: for example, a Slack workspace or
+an application-scoped identity issuer. It is not OpenClaw's local `accountId`.
+Keep user IDs, bot IDs, and proxy identities distinct when the service gives
+them different meanings. Names and successful Gateway profile lookups are
+not identity evidence.
+
+Pass the exact resolver result through the host-injected context builder.
+The host carries product facts privately until accepted input is recorded in
+the session participant aggregate. Raw product identity is not added to the
+public diagnostic result. An unqualified producer retains an unresolved
+observation instead of becoming a Gateway profile or an invented remote
+subject. Product participation does not grant access.
+
+This product path is independent of execution-identity audit collection:
+it neither enables that collection nor reuses its HMAC references or opaque
+diagnostic carriers. Audit's separate evidence contract is described below.
+
 ## Result
 
 Bundled plugins should consume modern projections directly:
@@ -135,6 +156,10 @@ execution-identity assurance strength. In particular, an identifier claim of
 `verified` never becomes execution assurance `boundary-verified` or
 `cryptographic`.
 
+Import the type and `meetsIdentifierAuthentication(actual, minimum)` from
+`openclaw/plugin-sdk/channel-ingress-runtime`. Downstream authentication mappers
+should use this boolean comparator instead of maintaining their own rank tables.
+
 The meanings are normative:
 
 - `verified`: the owning trusted transport or session boundary bound this exact
@@ -161,6 +186,19 @@ A subject that supplies a per-message `authentication` map must claim every
 field it wants counted. A field missing from a supplied map is treated as
 `unverified`, even if its identity descriptor declares a stronger static claim.
 Channels with static strength omit the map entirely.
+
+Expose `classifyEntryAuthentication: identityEntryAuthenticationClassifier(identity)`
+from the security adapter's `resolveDmPolicy` result, importing the helper from
+`openclaw/plugin-sdk/channel-ingress-runtime`. It uses the identity descriptor's
+entry normalizers and returns the strongest static claim among accepting fields,
+or `undefined` when none accepts the entry; wildcard entries are excluded.
+The [security audit](/gateway/security/audit-checks) counts configured `allowFrom`
+entries that depend only on mutable identifiers: it warns when name matching is
+disabled and, when enabled, previews how many entries would stop authorizing
+after disabling it. Findings contain counts and config paths, not raw entries;
+pairing-store approvals are outside this check.
+Symbolic `accessGroup:` references resolve membership separately and are not
+counted as mutable identifiers.
 
 Existing plugins remain source-compatible during the deprecation window:
 

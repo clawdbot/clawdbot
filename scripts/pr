@@ -52,10 +52,14 @@ pr_wrapper_components=(
   scripts/lib/direct-run.mjs
   scripts/lib/tsx-cli-shim.mjs
   scripts/lib/local-check-runtime.mts
+  scripts/tsx.mjs
+  scripts/crabbox-untrusted-bootstrap.sh
+  scripts/pr-crabbox-gate-publisher.mjs
   scripts/verify-pr-hosted-gates.mjs
   scripts/verify-pr-hosted-gates.mts
   scripts/watch-pr-ci.mjs
   scripts/watch-pr-ci.mts
+  .github/workflows/pr-crabbox-gate-publisher.yml
 )
 if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
   canonical_repo_root="$(dirname "$common_git_dir")"
@@ -203,12 +207,13 @@ Usage:
   scripts/pr prepare-push <PR>
   scripts/pr prepare-sync-head <PR>
   scripts/pr prepare-run <PR>
-  scripts/pr ci-dispatch <PR>
+  scripts/pr ci-dispatch <PR> [--backend crabbox --run-id <id> --lease-id <id> --bootstrap-sha256 <hash>]
   scripts/pr merge-verify <PR>
   scripts/pr merge-run <PR> [--auto-merge]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
-    --auto-merge enables pinned squash auto-merge for a verified BEHIND head.
+    --auto-merge selects pinned immediate squash for MERGEABLE/CLEAN, auto for MERGEABLE/BEHIND.
     OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
+    Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
 
   --dev-wrapper permits a mismatched local wrapper only for subcommands
   classified advisory. OPENCLAW_PR_DEV_WRAPPER=1 is equivalent.
@@ -318,7 +323,8 @@ main() {
 
   require_cmds
 
-  if is_main_only_pr_command "$cmd"; then
+  # merge-run reconciles retained outcomes before reading disposable artifacts or base guards.
+  if [ "$cmd" != merge-run ] && is_main_only_pr_command "$cmd"; then
     require_main_target_pr "${1-}"
   fi
 
@@ -419,7 +425,8 @@ main() {
     ci-dispatch)
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
-      ci_dispatch "$pr"
+      shift
+      ci_dispatch "$pr" "$@"
       ;;
     merge-verify)
       local pr="${1-}"

@@ -16,7 +16,11 @@ import type { GatewayBindMode } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
-import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
+import {
+  assertServiceDefinitionWritable,
+  resolveManagedGatewayServiceCommand,
+} from "../../daemon/service-types.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
@@ -32,6 +36,7 @@ import {
   normalizeEnvVarKey,
 } from "../../infra/host-env-security.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
@@ -146,6 +151,13 @@ export function mergeInstallInvocationEnv(params: {
 /** Install or refresh the managed Gateway service. */
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
+  const warn = (message: string) => {
+    if (json) {
+      warnings.push(message);
+    } else {
+      defaultRuntime.log(message);
+    }
+  };
   if (failIfNixDaemonInstallMode(fail)) {
     return;
   }
@@ -153,6 +165,55 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     assertGatewayServiceMutationAllowed("install or rewrite the gateway service");
   } catch (error) {
     fail(`Gateway install blocked: ${String(error)}`);
+    return;
+  }
+
+  const service = resolveGatewayService();
+  let loaded;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch (error) {
+    if (!isNonFatalSystemdInstallProbeError(error)) {
+      fail(`Gateway service check failed: ${String(error)}`);
+      return;
+    }
+    loaded = false;
+  }
+  let existingServiceCommand: GatewayServiceCommandConfig | null;
+  try {
+    existingServiceCommand = await service.readCommand(process.env, { requireEffective: true });
+  } catch {
+    fail("SERVICE_DEFINITION_UNKNOWN: Service definition cannot be safely inspected.");
+    return;
+  }
+  const existingManagedCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);
+  const existingServiceEnv = existingManagedCommand?.environment;
+  const installEnv = mergeInstallInvocationEnv({
+    env: process.env,
+    existingServiceEnv,
+  });
+  const effectiveServiceEnv = mergeGatewayServiceEnv(process.env, existingServiceCommand);
+  const assertWritable = async () => {
+    try {
+      // Drop-ins can redirect effective state away from the files this install will publish.
+      for (const environment of [effectiveServiceEnv, installEnv]) {
+        const capability = await service
+          .readDefinitionMutationCapability?.({ env: process.env, environment })
+          .catch(() => ({ kind: "unknown" as const, detail: "" }));
+        if (capability && capability.kind !== "writable") {
+          assertServiceDefinitionWritable({
+            kind: capability.kind,
+            detail: "Service definition cannot be safely modified.",
+          });
+        }
+      }
+      return true;
+    } catch (error) {
+      fail(`Gateway install blocked: ${String(error)}`);
+      return false;
+    }
+  };
+  if ((opts.force || !loaded) && !(await assertWritable())) {
     return;
   }
 
@@ -195,56 +256,6 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       return;
     }
   }
-  if (configSnapshot.valid && cfg.gateway?.mode === undefined) {
-    const baseConfig = configSnapshot.sourceConfig ?? configSnapshot.config;
-    await replaceConfigFile({
-      nextConfig: {
-        ...baseConfig,
-        gateway: {
-          ...baseConfig.gateway,
-          mode: "local",
-        },
-      },
-      snapshot: configSnapshot,
-      writeOptions: {
-        baseSnapshot: configSnapshot,
-        ...configWriteOptions,
-        skipRuntimeSnapshotRefresh: true,
-      },
-      afterWrite: { mode: "auto" },
-    });
-    const refreshed = await readConfigFileSnapshotForWrite();
-    configSnapshot = refreshed.snapshot;
-    configWriteOptions = refreshed.writeOptions;
-    cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
-    const message = "No gateway.mode found. Set gateway.mode=local for managed gateway install.";
-    if (json) {
-      warnings.push(message);
-    } else {
-      defaultRuntime.log(message);
-    }
-  }
-
-  const service = resolveGatewayService();
-  let loaded;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch (err) {
-    if (isNonFatalSystemdInstallProbeError(err)) {
-      loaded = false;
-    } else {
-      fail(`Gateway service check failed: ${String(err)}`);
-      return;
-    }
-  }
-  const existingServiceCommand = await service.readCommand(process.env).catch(() => null);
-  const existingManagedCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);
-  const existingServiceEnv: Record<string, string> | undefined =
-    existingManagedCommand?.environment;
-  const installEnv = mergeInstallInvocationEnv({
-    env: process.env,
-    existingServiceEnv,
-  });
   if (!wrapperPath) {
     try {
       wrapperPath = await resolveOpenClawWrapperPath(installEnv[OPENCLAW_WRAPPER_ENV_KEY]);
@@ -265,41 +276,58 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail(`Gateway install blocked: ${noAuthNonLoopbackBlock}`);
     return;
   }
-  if (loaded) {
-    if (!opts.force) {
-      const autoRefreshMessage = await getGatewayServiceAutoRefreshMessage({
-        currentCommand: existingManagedCommand,
-        env: process.env,
-        installEnv,
-        port,
-        runtime: runtimeRaw,
-        wrapperPath,
-        existingEnvironment: existingServiceEnv,
-        existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
-        config: cfg,
-      });
-      if (autoRefreshMessage) {
-        if (json) {
-          warnings.push(autoRefreshMessage);
-        } else {
-          defaultRuntime.log(autoRefreshMessage);
-        }
-      } else {
-        emit({
-          ok: true,
-          result: "already-installed",
-          message: `Gateway service already ${service.loadedText}.`,
-          service: buildDaemonServiceSnapshot(service, loaded),
-        });
-        if (!json) {
-          defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
-          defaultRuntime.log(
-            `Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`,
-          );
-        }
+  let autoRefreshMessage: string | undefined;
+  if (loaded && !opts.force) {
+    autoRefreshMessage = await getGatewayServiceAutoRefreshMessage({
+      currentCommand: existingServiceCommand,
+      env: process.env,
+      installEnv,
+      port,
+      runtime: runtimeRaw,
+      wrapperPath,
+      existingEnvironment: existingServiceEnv,
+      existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
+      config: cfg,
+    });
+    if (autoRefreshMessage) {
+      if (!(await assertWritable())) {
         return;
       }
+      warn(autoRefreshMessage);
     }
+  }
+
+  if (configSnapshot.valid && cfg.gateway?.mode === undefined) {
+    const baseConfig = configSnapshot.sourceConfig ?? configSnapshot.config;
+    await replaceConfigFile({
+      nextConfig: { ...baseConfig, gateway: { ...baseConfig.gateway, mode: "local" } },
+      snapshot: configSnapshot,
+      writeOptions: {
+        baseSnapshot: configSnapshot,
+        ...configWriteOptions,
+        skipRuntimeSnapshotRefresh: true,
+      },
+      afterWrite: { mode: "auto" },
+    });
+    const refreshed = await readConfigFileSnapshotForWrite();
+    configSnapshot = refreshed.snapshot;
+    configWriteOptions = refreshed.writeOptions;
+    cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
+    warn("No gateway.mode found. Set gateway.mode=local for managed gateway install.");
+  }
+
+  if (loaded && !opts.force && !autoRefreshMessage) {
+    emit({
+      ok: true,
+      result: "already-installed",
+      message: `Gateway service already ${service.loadedText}.`,
+      service: buildDaemonServiceSnapshot(service, loaded),
+    });
+    if (!json) {
+      defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
+      defaultRuntime.log(`Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`);
+    }
+    return;
   }
 
   const tokenResolution = await resolveGatewayInstallToken({
@@ -317,11 +345,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
   for (const warning of tokenResolution.warnings) {
-    if (json) {
-      warnings.push(warning);
-    } else {
-      defaultRuntime.log(warning);
-    }
+    warn(warning);
   }
 
   const { programArguments, workingDirectory, environment, environmentValueSources } =
@@ -330,25 +354,12 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       port,
       runtime: runtimeRaw,
       wrapperPath,
+      existingCommand: existingServiceCommand,
       existingEnvironment: existingServiceEnv,
       existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
-      warn: (message) => {
-        if (json) {
-          warnings.push(message);
-        } else {
-          defaultRuntime.log(message);
-        }
-      },
+      warn,
       config: cfg,
     });
-  const warn = (message: string) => {
-    if (json) {
-      warnings.push(message);
-    } else {
-      defaultRuntime.log(message);
-    }
-  };
-
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",
     service,
@@ -381,22 +392,26 @@ async function getGatewayServiceAutoRefreshMessage(params: {
   config: OpenClawConfig;
 }): Promise<string | undefined> {
   try {
-    const currentCommand = params.currentCommand;
+    const currentCommand = resolveManagedGatewayServiceCommand(params.currentCommand);
     if (!currentCommand) {
       return undefined;
     }
-    const currentEmbeddedToken = readEmbeddedGatewayToken(currentCommand);
-    if (currentEmbeddedToken) {
-      const plannedInstall = await buildGatewayInstallPlan({
+    const getPlannedInstall = createLazyPromise(() =>
+      buildGatewayInstallPlan({
         env: params.installEnv,
         port: params.port,
         runtime: params.runtime,
         wrapperPath: params.wrapperPath,
+        existingCommand: params.currentCommand,
         existingEnvironment: params.existingEnvironment,
         existingEnvironmentValueSources: params.existingEnvironmentValueSources,
         warn: () => undefined,
         config: params.config,
-      });
+      }),
+    );
+    const currentEmbeddedToken = readEmbeddedGatewayToken(currentCommand);
+    if (currentEmbeddedToken) {
+      const plannedInstall = await getPlannedInstall();
       const plannedEmbeddedToken = normalizeOptionalString(
         plannedInstall.environment.OPENCLAW_GATEWAY_TOKEN,
       );
@@ -408,16 +423,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
       params.wrapperPath || normalizeOptionalString(params.installEnv[OPENCLAW_WRAPPER_ENV_KEY]),
     );
     if (wrapperRequested) {
-      const plannedInstall = await buildGatewayInstallPlan({
-        env: params.installEnv,
-        port: params.port,
-        runtime: params.runtime,
-        wrapperPath: params.wrapperPath,
-        existingEnvironment: params.existingEnvironment,
-        existingEnvironmentValueSources: params.existingEnvironmentValueSources,
-        warn: () => undefined,
-        config: params.config,
-      });
+      const plannedInstall = await getPlannedInstall();
       if (
         plannedInstall.programArguments.join("\u0000") !==
         currentCommand.programArguments.join("\u0000")

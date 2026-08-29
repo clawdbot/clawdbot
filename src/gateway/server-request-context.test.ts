@@ -31,7 +31,7 @@ function makeCronState(overrides: Partial<TestCronState> = {}): TestCronState {
     reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileHeartbeatJobs: vi.fn(async () => {}),
+    reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
     ...overrides,
   };
 }
@@ -347,6 +347,7 @@ describe("createGatewayRequestContext", () => {
           expect.objectContaining({
             user: {
               id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
               email: "ada@example.test",
               name: "Augusta Ada",
               avatarUrl: "/api/users/profile-ada/avatar?v=avatar-new-png",
@@ -355,6 +356,7 @@ describe("createGatewayRequestContext", () => {
           expect.objectContaining({
             user: {
               id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
               email: "ada@work.test",
               name: "Augusta Ada",
               avatarUrl: "/api/users/profile-ada/avatar?v=avatar-new-png",
@@ -375,6 +377,7 @@ describe("createGatewayRequestContext", () => {
           expect.objectContaining({
             user: {
               id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
               email: "ada@example.test",
               name: "Augusta Ada",
               avatarUrl: "/api/users/profile-ada/avatar?v=avatar-newer-png",
@@ -383,6 +386,7 @@ describe("createGatewayRequestContext", () => {
           expect.objectContaining({
             user: {
               id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
               email: "ada@work.test",
               name: "Augusta Ada",
               avatarUrl: "/api/users/profile-ada/avatar?v=avatar-newer-png",
@@ -469,7 +473,7 @@ describe("createGatewayRequestContext", () => {
       expect(unrelatedClient.authenticatedUserProfile.profileId).toBe(unrelatedProfile.id);
       for (const email of ["merge-source@example.test", "merge-target@example.test"]) {
         expect(listSystemPresence().find((entry) => entry.user?.email === email)).toMatchObject({
-          user: { id: target.id },
+          user: { id: target.id, identity: { type: "profile", id: target.id } },
           onlineSince: 1_000,
           lastActivityAt: 3_000,
         });
@@ -481,6 +485,7 @@ describe("createGatewayRequestContext", () => {
         presence.presence?.find((entry) => entry.user?.email === "merge-source@example.test")?.user,
       ).toEqual({
         id: target.id,
+        identity: { type: "profile", id: target.id },
         email: "merge-source@example.test",
         name: target.displayName,
         avatarUrl: `/api/users/${target.id}/avatar?v=${display.avatarRevision}`,
@@ -599,6 +604,7 @@ describe("createGatewayRequestContext", () => {
       presence.presence?.find((entry) => entry.user?.id === "profile-ada-avatar-removed")?.user,
     ).toEqual({
       id: "profile-ada-avatar-removed",
+      identity: { type: "profile", id: "profile-ada-avatar-removed" },
       email: "ada@example.test",
       name: "Ada",
       avatarUrl: "/api/users/profile-ada-avatar-removed/avatar?v=profile-updated-2",
@@ -640,6 +646,7 @@ describe("createGatewayRequestContext", () => {
       presence.presence?.find((entry) => entry.user?.id === "profile-ada-tailscale")?.user,
     ).toEqual({
       id: "profile-ada-tailscale",
+      identity: { type: "profile", id: "profile-ada-tailscale" },
       name: "Augusta Ada",
       avatarUrl: "/api/users/profile-ada-tailscale/avatar?v=avatar-tailscale-new-png",
     });

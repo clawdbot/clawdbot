@@ -78,7 +78,7 @@ field map and defaults.
 ## Strict validation
 
 <Warning>
-OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
+OpenClaw only accepts configurations that fully match the schema. Gateway startup first applies safe legacy-key migrations to eligible single-file configs. Unknown keys, malformed types, or invalid values that remain cause the Gateway to **refuse to start**. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
 </Warning>
 
 `openclaw config schema` prints the canonical JSON Schema used by Control UI
@@ -94,7 +94,9 @@ settings. A leaf inherits the nearest ancestor tier when it has no direct hint;
 paths with no declared ancestor default to advanced. This affects presentation
 only, not validation, defaults, reload behavior, or whether the key can be set.
 
-When validation fails:
+Startup migration uses the same deterministic, prompt-free transforms as `openclaw doctor --fix` and writes only when the entire migrated config validates, including plugins. The previous config stays in the `.bak` ring. Configs using `$include`, Nix-managed configs, and configs written by a newer OpenClaw version are not automatically migrated. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale) for the conditions and fallback.
+
+When validation still fails:
 
 - The Gateway does not boot
 - Only diagnostic commands work (`openclaw doctor`, `openclaw logs`, `openclaw health`, `openclaw status`)
@@ -103,9 +105,10 @@ When validation fails:
 
 The Gateway keeps a trusted last-known-good copy after each successful startup,
 but startup and hot reload do not restore it automatically - only `openclaw doctor --fix`
-does. If `openclaw.json` fails validation (including plugin-local validation), Gateway
-startup fails or the reload is skipped and the current runtime keeps the last accepted
-config. A rejected write is also saved as `<path>.rejected.<timestamp>` for inspection.
+does. If `openclaw.json` remains invalid after eligible startup migrations (including
+plugin-local validation), Gateway startup fails. An invalid hot reload is skipped and
+the current runtime keeps the last accepted config. A rejected write is also saved as
+`<path>.rejected.<timestamp>` for inspection.
 The Gateway blocks writes that look like accidental clobbers - dropping `gateway.mode`,
 losing the `meta` block, or shrinking the file by more than half - unless the write
 explicitly allows destructive changes. Promotion to last-known-good is skipped when a
@@ -556,6 +559,10 @@ Most fields hot-apply without downtime; some hot-applied sections restart just t
 subsystem (channel, cron, heartbeat, health monitor) rather than the whole Gateway. In
 `hybrid` mode, Gateway-restart-required changes are handled automatically.
 
+By default, changing `agents.defaults.mediaMaxMb` restarts channel runtimes so their inherited
+attachment limits take effect together. Automatic reloads preserve manually
+stopped accounts; use an explicit channel start to resume those accounts.
+
 | Category            | Fields                                                                  | Gateway restart needed?      |
 | ------------------- | ----------------------------------------------------------------------- | ---------------------------- |
 | Channels            | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels       | No (restarts that channel)   |
@@ -571,6 +578,13 @@ subsystem (channel, cron, heartbeat, health monitor) rather than the whole Gatew
 <Note>
 `gateway.reload` and `gateway.remote` are exceptions under `gateway.*` - changing them does **not** trigger a restart. Individual plugins can also override this table: a loaded plugin may declare its own restart-triggering config prefixes (for example the bundled Canvas plugin restarts the Gateway for `plugins.enabled`, `plugins.allow`, and `plugins.deny`, not just its own `plugins.entries.canvas`), so the actual behavior depends on which plugins are active.
 </Note>
+
+Plugin hot reload uses the package metadata discovered at Gateway startup.
+Enablement, plugin config, and account changes do not rescan plugin files.
+Install, update, uninstall, and explicit plugin metadata refresh require a
+Gateway restart; `hybrid` schedules that restart, while `off` leaves it to you.
+Changing an agent's workspace also does not discover plugins in the new
+directory until restart. See [Plugin metadata snapshots](/plugins/architecture#plugin-metadata-snapshot-and-lookup-table).
 
 ### Reload planning
 
@@ -623,6 +637,18 @@ Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
 `note`, and `restartDelayMs`. `baseHash` is required for both methods once a
 config file already exists (a first write with no existing config skips the check).
 
+For hot-applied changes, these RPCs wait until the active Gateway applies the
+exact write. Channel or plugin reloads may defer for unrelated active work. If
+the file watcher takes over the same unapplied write during that wait, the RPC stays pending
+through replay; persistence alone is not an application acknowledgment. Shutdown,
+supersession by different content, or failed application returns `UNAVAILABLE`
+with recovery guidance. `config.set` acknowledges persistence only.
+
+Once a reload has committed, it finishes its model and channel work before a
+newer config is applied. If that work needs restart recovery, the RPC returns
+`UNAVAILABLE`; wait for the Gateway to restart, then use `config.get` to verify
+the active revision.
+
 `config.patch` also accepts `replacePaths`, an array of config paths whose array
 replacement is intentional. If a patch would replace or delete an existing array
 with fewer entries, the Gateway rejects the write unless that exact path appears
@@ -630,6 +656,11 @@ in `replacePaths`; nested arrays under array entries use `[]`, such as
 `agents.entries.*.skills`. This prevents truncated `config.get` snapshots from
 silently clobbering routing or allowlist arrays. Use `config.apply` when you
 intend to replace the full config.
+
+Arrays of objects with stable `id` fields merge by ID unless their path appears
+in `replacePaths`. These updates preserve authored fields in untouched entries;
+runtime defaults, such as model catalog compatibility and context budgets, are
+not saved into sibling entries. Explicitly configured values remain authoritative.
 
 ## Environment variables
 

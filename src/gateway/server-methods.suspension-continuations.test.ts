@@ -6,13 +6,13 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
-import {
-  createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptor,
-} from "./methods/registry.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { NodeRegistry } from "./node-registry.js";
 import { QuestionManager } from "./question-manager.js";
 import { handleGatewayRequest } from "./server-methods.js";
+import { handleNodeInvokeProgress } from "./server-methods/nodes.handlers.invoke-progress.js";
+import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -292,46 +292,42 @@ describe("draining Gateway completion ownership", () => {
       expect.objectContaining({ code: "UNAVAILABLE" }),
     );
 
+    const malformed = await dispatch({
+      method: "node.invoke.progress",
+      requestParams: { invokeId, nodeId: "node-1", seq: -1, chunk: "invalid" },
+      context,
+      client: node,
+      handler: handleNodeInvokeProgress,
+    });
+    expect(malformed).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(chunks).toEqual([]);
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
     const progressed = await dispatch({
       method: "node.invoke.progress",
       requestParams: { invokeId, nodeId: "node-1", seq: 0, chunk: "working" },
       context,
       client: node,
-      handler: ({ respond }) => {
-        respond(true, {
-          ok: registry.handleInvokeProgress({
-            invokeId,
-            nodeId: "node-1",
-            connId: node.connId,
-            seq: 0,
-            chunk: "working",
-          }),
-        });
-      },
+      handler: handleNodeInvokeProgress,
     });
-    expect(progressed).toHaveBeenCalledWith(true, { ok: true });
+    expect(progressed).toHaveBeenCalledWith(true, { ok: true, ignored: false }, undefined);
     expect(chunks).toEqual(["working"]);
 
     const completed = await dispatch({
       method: "node.invoke.result",
-      requestParams: { id: invokeId, nodeId: "node-1", ok: true },
+      requestParams: { id: invokeId, nodeId: "node-1", ok: true, payloadJSON: null, error: null },
       context,
       client: node,
-      handler: ({ respond }) => {
-        respond(true, {
-          ok: registry.handleInvokeResult({
-            id: invokeId,
-            nodeId: "node-1",
-            connId: node.connId,
-            ok: true,
-          }),
-        });
-      },
+      handler: handleNodeInvokeResult,
     });
-    expect(completed).toHaveBeenCalledWith(true, { ok: true });
+    expect(completed).toHaveBeenCalledWith(true, { ok: true }, undefined);
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     finishDelivery.resolve();
-    await expect(owner).resolves.toMatchObject({ ok: true });
+    await expect(owner).resolves.toMatchObject({ ok: true, payloadJSON: null, error: null });
     expect(getActiveGatewayRootWorkCount()).toBe(0);
     expect(suspension?.release()).toBe(true);
     registry.unregister(node.connId);

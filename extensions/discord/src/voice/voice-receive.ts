@@ -124,6 +124,8 @@ export class DiscordVoiceReceive {
       `capture start: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
     );
     const voiceSdk = loadDiscordVoiceSdk();
+    // Queued STT belongs to the subscription that received the audio.
+    const transcripts = entry.transcripts;
     const voiceMode = resolveDiscordVoiceMode(this.params.discordConfig.voice);
     const realtime =
       entry.realtimeLifecycle.status === "active" && isDiscordRealtimeVoiceMode(voiceMode)
@@ -245,6 +247,9 @@ export class DiscordVoiceReceive {
       entry.processingQueue = entry.processingQueue
         .then(async () => {
           if (!this.params.isEntryCurrent(entry)) {
+            return;
+          }
+          if (entry.transcripts !== transcripts) {
             return;
           }
           await this.processSegment({ entry, wavPath, userId, durationSeconds });

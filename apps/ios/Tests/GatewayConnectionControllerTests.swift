@@ -29,7 +29,7 @@ private func saveActiveManualGateway(
     return GatewaySettingsStore.upsertGatewayRegistryEntry(entry, activate: true)
 }
 
-private struct GatewayRegistryTestIsolation {
+struct GatewayRegistryTestIsolation {
     private static let service = GatewaySettingsStore._testGatewayService
     private static let keychainAccounts = [
         "gateway-registry",
@@ -789,6 +789,7 @@ private func waitUntil(
             host: "first.gateway.example.com",
             port: 443,
             tls: true,
+            tlsFingerprintSha256: String(repeating: "ab", count: 32),
             bootstrapToken: "bootstrap-token",
             token: "source-token",
             password: "source-password")
@@ -820,20 +821,39 @@ private func waitUntil(
             pendingOverride: nil,
             password: nil,
             targetStableID: secondStableID)
+        let selectedSameTarget = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+            current: pending,
+            instanceId: "missing-instance",
+            targetStableID: firstStableID,
+            allowManualOverride: true)
+        let selectedDifferentTarget = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+            current: pending,
+            instanceId: "missing-instance",
+            targetStableID: secondStableID,
+            allowManualOverride: true)
 
         #expect(first?.token == "source-token")
         #expect(first?.bootstrapToken == "bootstrap-token")
         #expect(first?.password == "source-password")
         #expect(first?.targetStableID == firstStableID)
+        #expect(first?.tlsFingerprintSha256 == String(repeating: "ab", count: 32))
+        #expect(first?.isSetupCodeOrigin == true)
         #expect(first?.suppressStoredDeviceAuth == true)
         #expect(second?.token == nil)
         #expect(second?.bootstrapToken == nil)
         #expect(second?.password == nil)
         #expect(second?.targetStableID == secondStableID)
+        #expect(second?.tlsFingerprintSha256 == nil)
+        #expect(second?.isSetupCodeOrigin == false)
         #expect(second?.suppressStoredDeviceAuth == true)
         #expect(edited?.token == "replacement-token")
         #expect(edited?.password == nil)
         #expect(ordinary?.suppressStoredDeviceAuth == false)
+        #expect(ordinary?.tlsFingerprintSha256 == nil)
+        #expect(ordinary?.isSetupCodeOrigin == false)
+        #expect(selectedSameTarget?.tlsFingerprintSha256 == String(repeating: "ab", count: 32))
+        #expect(selectedSameTarget?.isSetupCodeOrigin == true)
+        #expect(selectedDifferentTarget == nil)
     }
 
     @Test func `persisted setup auth stays scoped after view recreation`() throws {
@@ -853,6 +873,7 @@ private func waitUntil(
             GatewayConnectionController.ManualAuthOverride.persisted(
                 instanceId: instanceID,
                 targetStableID: firstStableID))
+        #expect(relaunchedOverride.isSetupCodeOrigin == false)
         let sameTargetRetryOverride = try #require(
             GatewayConnectionController.ManualAuthOverride.persisted(
                 instanceId: instanceID,
@@ -1883,7 +1904,7 @@ private func waitUntil(
         }
     }
 
-    @Test @MainActor func `active manual TLS auto connect wins over legacy manual defaults`() async {
+    @Test @MainActor func `active manual TLS auto connect uses system trust before legacy defaults`() async {
         let registryIsolation = GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let host = "manual-autoconnect-\(UUID().uuidString).example.com"
@@ -1925,13 +1946,10 @@ private func waitUntil(
             let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
             controller._test_triggerAutoConnect()
-            #expect(!controller._test_didAutoConnect())
-
-            GatewayTLSStore.saveFingerprint("trusted-certificate", stableID: stableID)
-            controller._test_triggerAutoConnect()
             #expect(controller._test_didAutoConnect())
             await waitUntil { appModel.activeGatewayConnectConfig?.effectiveStableID == stableID }
             #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == stableID)
+            #expect(appModel.activeGatewayConnectConfig?.tls?.expectedFingerprint == nil)
         }
     }
 
@@ -2025,7 +2043,7 @@ private func waitUntil(
             token: nil,
             password: nil,
             sessionKey: "main")
-        defaults.set(try JSONEncoder().encode(otherRelay), forKey: "share.gatewayRelay.config.v1")
+        try defaults.set(JSONEncoder().encode(otherRelay), forKey: "share.gatewayRelay.config.v1")
         let mismatched = try #require(ShareGatewayRelaySettings.loadConfig())
         #expect(mismatched.token == nil)
         #expect(mismatched.password == nil)
@@ -2620,7 +2638,7 @@ private func waitUntil(
             useTLS: false,
             lastConnectedAtMs: nil))
         let appModel = NodeAppModel()
-        let session = OpenClawChatSessionEntry(
+        var session = OpenClawChatSessionEntry(
             key: "agent:main:a",
             kind: nil,
             displayName: "Gateway A session",
@@ -2640,12 +2658,34 @@ private func waitUntil(
             modelProvider: nil,
             model: nil,
             contextTokens: nil)
+        session.agentId = "main"
+        var matchingBare = session
+        matchingBare.key = "shared-tool"
+        var ownerlessPrefixed = session
+        ownerlessPrefixed.key = "agent:main:legacy"
+        ownerlessPrefixed.agentId = nil
+        appModel.gatewayDefaultAgentId = "main"
 
-        await appModel.storeCachedChatSessions([session])
+        await appModel.storeCachedChatSessions(
+            [session, matchingBare, ownerlessPrefixed],
+            gatewayID: gatewayA,
+            agentID: "main")
+        var workGlobal = session
+        workGlobal.key = "global"
+        workGlobal.agentId = "work"
+        appModel.selectedAgentId = "work"
+        await appModel.storeCachedChatSessions([workGlobal], gatewayID: gatewayA, agentID: "work")
         _ = GatewaySettingsStore.setActiveGateway(stableID: gatewayB)
-        #expect(await appModel.loadCachedChatSessions().isEmpty)
+        #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayB, agentID: "work").isEmpty)
         _ = GatewaySettingsStore.setActiveGateway(stableID: gatewayA)
-        #expect(await appModel.loadCachedChatSessions() == [session])
+        appModel.selectedAgentId = "main"
+        #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "main") == [
+            session,
+            matchingBare,
+            ownerlessPrefixed,
+        ])
+        appModel.selectedAgentId = "work"
+        #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "work") == [workGlobal])
     }
 
     private static func makeNodeOptions(

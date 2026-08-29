@@ -68,7 +68,7 @@ export class DraftPlaceState {
       () => ({
         remotePlacement: this.remotePlacement,
         selectedProject: this.browser.selectedProject(),
-        remoteProjectSelected: Boolean(this.browser.remoteProject),
+        remoteProject: this.browser.remoteProject,
         folder: this.folderValue,
         workspace: this.workspacePath(),
         workspaceGit: this.selectedAgent()?.workspaceGit === true,

@@ -90,6 +90,7 @@ function invalid(message: string): { ok: false; error: ErrorShape } {
 
 export function resolveSessionPatchModelSelection(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   catalog: ModelCatalogEntry[];
   raw: string;
   defaultProvider: string;
@@ -101,6 +102,7 @@ export function resolveSessionPatchModelSelection(params: {
   const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
   const resolved = resolveAllowedModelRef({
     cfg: params.cfg,
+    agentId: params.agentId,
     catalog: params.catalog,
     raw: modelWithoutProfile,
     defaultProvider: params.defaultProvider,
@@ -607,15 +609,6 @@ export async function projectSessionsPatchEntry(params: {
       if (!trimmed) {
         return invalid("invalid model: empty");
       }
-      if (!params.loadGatewayModelCatalog) {
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "model catalog is still loading; retry in a few seconds",
-          ),
-        };
-      }
       const catalog = await loadPreparedModelCatalogForPatch();
       if (!catalog) {
         return {
@@ -628,6 +621,7 @@ export async function projectSessionsPatchEntry(params: {
       }
       const resolved = resolveSessionPatchModelSelection({
         cfg,
+        agentId: sessionAgentId,
         catalog,
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,
@@ -747,6 +741,12 @@ export async function projectSessionsPatchEntry(params: {
       }
       next.groupActivation = normalized;
     }
+  }
+
+  // Fresh rows and placeholder aliases have no running model to replace. Model
+  // and context-window initialization must not queue a switch on their first turn.
+  if (!existing?.sessionId) {
+    delete next.liveModelSwitchPending;
   }
 
   return { ok: true, entry: next };

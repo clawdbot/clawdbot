@@ -330,7 +330,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     };
   }
   const snapshots = authorizedRuns.flatMap(({ runId, entry }) => {
-    const text = params.context.chatRunState.resolveBuffer(runId).text;
+    const text = params.context.chatRunState.resolveBuffer(runId, { final: true }).text;
     return text?.trim()
       ? [
           {

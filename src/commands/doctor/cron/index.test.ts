@@ -180,6 +180,39 @@ function mockExdevRename(filePath: string) {
 }
 
 describe("collectLegacyCronStoreHealthFindings", () => {
+  it("reports alias-only Gateway exec jobs with recreation guidance", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        id: "legacy-gateway-exec",
+        name: "Legacy gateway shell",
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        payload: {
+          kind: "agentTurn",
+          message: "run",
+          toolsAllow: ["gateway_exec"],
+        },
+      }),
+    ]);
+
+    const findings = await collectLegacyCronStoreHealthFindings({
+      cfg: createCronConfig(storePath),
+    });
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          requirement: "legacy-gateway-exec-recreation",
+          message: expect.stringContaining("retired `gateway_exec` alias"),
+          fixHint: expect.stringContaining("fresh authenticated creator turn"),
+        }),
+      ]),
+    );
+    expect((await readPersistedJobs(storePath))[0]?.payload).toMatchObject({
+      toolsAllow: ["gateway_exec"],
+    });
+  });
+
   it("reports legacy cron store, run-log, and payload findings without mutating files", async () => {
     const storePath = await makeTempStorePath();
     await writeLegacyCronArrayStore(storePath, [
@@ -1825,7 +1858,7 @@ describe("maybeRepairLegacyCronStore", () => {
         payload: {
           kind: "agentTurn",
           message: "Execute ./scripts/check_mail.sh and report changed mailbox counts.",
-          toolsAllow: ["shell"],
+          toolsAllow: ["process"],
         },
         delivery: { mode: "announce" },
       }),

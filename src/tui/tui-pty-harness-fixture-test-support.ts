@@ -387,7 +387,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           }
           const isSourceReplyProof = opts.message === "message tool only source reply proof";
           setTimeout(() => {
-            if (opts.message === "xai limit proof") {
+            if (opts.message === "xai limit proof" || opts.message === "provider failure proof") {
               this.onEvent?.({
                 event: "chat",
                 payload: {
@@ -395,7 +395,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
                   sessionKey: opts.sessionKey,
                   seq: 0,
                   state: "error",
-                  errorMessage: xaiLimitError,
+                  errorMessage: opts.message === "xai limit proof" ? xaiLimitError : "fixture provider failed",
                 },
               });
               return;

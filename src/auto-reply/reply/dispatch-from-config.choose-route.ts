@@ -615,7 +615,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
   }
 
-  if (hookRunner?.hasHooks("reply_dispatch")) {
+  if (hookRunner?.hasHooks("reply_dispatch", { dispatchKind: state.dispatchKind })) {
     const replyDispatchResult = await traceReplyPhase("reply.reply_dispatch_hooks", () =>
       runWithDispatchLifecycleAdmission(
         async () =>
@@ -647,9 +647,12 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                 }),
                 {
                   cfg,
+                  dispatchKind: state.dispatchKind,
                   dispatcher: state.dispatchHookDispatcher,
                   abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
                   onReplyStart: params.replyOptions?.onReplyStart,
+                  onAgentRunStart: params.replyOptions?.onAgentRunStart,
+                  userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
                   recordProcessed,
                   markIdle,
                 },

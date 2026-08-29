@@ -70,6 +70,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   hostDisconnected(): void {
+    this.input.cancelOverlayPointerGesture();
     this.invalidateViewOperations();
     this.setState("loading", false);
   }
@@ -647,8 +648,12 @@ export class BrowserPanelController implements ReactiveController {
     this.input.handleOverlayPointerMove(event);
   }
 
-  handleOverlayPointerUp(): void {
-    this.input.handleOverlayPointerUp();
+  handleOverlayPointerUp(event: PointerEvent): void {
+    this.input.handleOverlayPointerUp(event);
+  }
+
+  cancelOverlayPointerGesture(): void {
+    this.input.cancelOverlayPointerGesture();
   }
 
   undoStroke(): void {

@@ -56,6 +56,7 @@ import {
   readGatewayRestartHandoffSync,
   type GatewayRestartHandoff,
 } from "../../infra/restart-handoff.js";
+import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import {
   inspectWindowsGatewayFirewall,
   type WindowsGatewayFirewallDiagnostic,
@@ -66,11 +67,11 @@ import {
   detectPluginVersionDrift,
   type PluginVersionDriftReport,
 } from "../../plugins/plugin-version-drift.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { VERSION } from "../../version.js";
 import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
-import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
+import { normalizeListenerAddress, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
 
 type ConfigSummary = {
@@ -133,45 +134,13 @@ type CliStatusSummary = {
 
 type GatewayConnectFailureKind = ReturnType<typeof classifyGatewayConnectFailure>["kind"];
 
-const gatewayProbeAuthModuleLoader = createLazyImportLoader(
-  () => import("../../gateway/probe-auth.js"),
-);
-const daemonInspectModuleLoader = createLazyImportLoader(() => import("../../daemon/inspect.js"));
-const launchdModuleLoader = createLazyImportLoader(() => import("../../daemon/launchd.js"));
-const serviceAuditModuleLoader = createLazyImportLoader(
-  () => import("../../daemon/service-audit.js"),
-);
-const gatewayTlsModuleLoader = createLazyImportLoader(() => import("../../infra/tls/gateway.js"));
-const daemonProbeModuleLoader = createLazyImportLoader(() => import("./probe.js"));
-const restartHealthModuleLoader = createLazyImportLoader(() => import("./restart-health.js"));
-
-function loadGatewayProbeAuthModule() {
-  return gatewayProbeAuthModuleLoader.load();
-}
-
-function loadDaemonInspectModule() {
-  return daemonInspectModuleLoader.load();
-}
-
-function loadLaunchdModule() {
-  return launchdModuleLoader.load();
-}
-
-function loadServiceAuditModule() {
-  return serviceAuditModuleLoader.load();
-}
-
-function loadGatewayTlsModule() {
-  return gatewayTlsModuleLoader.load();
-}
-
-function loadDaemonProbeModule() {
-  return daemonProbeModuleLoader.load();
-}
-
-function loadRestartHealthModule() {
-  return restartHealthModuleLoader.load();
-}
+const loadGatewayProbeAuthModule = createLazyPromise(() => import("../../gateway/probe-auth.js"));
+const loadDaemonInspectModule = createLazyPromise(() => import("../../daemon/inspect.js"));
+const loadLaunchdModule = createLazyPromise(() => import("../../daemon/launchd.js"));
+const loadServiceAuditModule = createLazyPromise(() => import("../../daemon/service-audit.js"));
+const loadGatewayTlsModule = createLazyPromise(() => import("../../infra/tls/gateway.js"));
+const loadDaemonProbeModule = createLazyPromise(() => import("./probe.js"));
+const loadRestartHealthModule = createLazyPromise(() => import("./restart-health.js"));
 
 function resolveSnapshotRuntimeConfig(snapshot: ConfigFileSnapshot | null): OpenClawConfig | null {
   if (!snapshot?.valid || !snapshot.runtimeConfig) {
@@ -436,7 +405,7 @@ async function resolveGatewayStatusSummary(params: {
   rpcUrlOverride?: string;
   localPortOverride?: number;
 }): Promise<ResolvedGatewayStatus> {
-  const portFromArgs = parsePortFromArgs(params.commandProgramArguments);
+  const portFromArgs = parseTcpPortFromArgs(params.commandProgramArguments);
   const daemonPort =
     params.localPortOverride ??
     portFromArgs ??
@@ -828,10 +797,21 @@ export async function gatherDaemonStatus(
       notLoadedText: service.notLoadedText,
       targetRole: serviceTargetsProbe ? "target" : "diagnostic-only",
       command,
-      runtime,
+      runtime: runtime?.inspectionFailure
+        ? {
+            ...runtime,
+            detail: `${runtime.detail}; retry with openclaw gateway status --deep`,
+          }
+        : runtime,
       configAudit,
       ...(command
-        ? { gatewayHeap: inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS) }
+        ? {
+            gatewayHeap: inspectGatewayHeapLimit(
+              command.environment?.NODE_OPTIONS,
+              {},
+              command.programArguments,
+            ),
+          }
         : {}),
       ...(restartHandoff ? { restartHandoff } : {}),
       ...(staleUpdateLaunchdJobs.length > 0 ? { staleUpdateLaunchdJobs } : {}),

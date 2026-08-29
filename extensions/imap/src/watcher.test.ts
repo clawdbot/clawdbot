@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { createServer, type Server, type Socket } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveImapConfig, type ImapAccountConfig } from "./config.js";
@@ -18,8 +19,13 @@ class ScriptedImapServer {
   fetchGate: Promise<void> | undefined;
   private readonly server: Server;
 
-  constructor(private readonly supportsIdle = true) {
-    this.server = createServer((socket) => this.accept(socket));
+  constructor(
+    private readonly supportsIdle = true,
+    private readonly beforeGreeting?: () => Promise<void>,
+  ) {
+    this.server = createServer((socket) => {
+      void this.accept(socket);
+    });
   }
 
   async listen(): Promise<number> {
@@ -57,12 +63,13 @@ class ScriptedImapServer {
     });
   }
 
-  private accept(socket: Socket): void {
+  private async accept(socket: Socket): Promise<void> {
     this.connectionCount++;
     this.sockets.add(socket);
     socket.on("error", () => {});
     socket.once("close", () => this.sockets.delete(socket));
     const capabilities = `IMAP4rev1${this.supportsIdle ? " IDLE" : ""}`;
+    await this.beforeGreeting?.();
     socket.write(`* OK [CAPABILITY ${capabilities}] scripted IMAP ready\r\n`);
     let buffered = "";
     let idleTag: string | undefined;
@@ -144,9 +151,10 @@ async function startWatcher(
     supportsIdle?: boolean;
     rejectAuthentication?: boolean;
     account?: Partial<ImapAccountConfig>;
+    beforeGreeting?: () => Promise<void>;
   } = {},
 ) {
-  const server = new ScriptedImapServer(options.supportsIdle);
+  const server = new ScriptedImapServer(options.supportsIdle, options.beforeGreeting);
   server.rejectAuthentication = options.rejectAuthentication ?? false;
   activeServers.push(server);
   server.append("From: trusted@example.com\r\nSubject: Existing\r\n\r\nExisting email");
@@ -168,7 +176,8 @@ async function startWatcher(
     throw new Error("fixture account was not configured");
   }
   Object.assign(account, options.account);
-  const { runtime, state, dispatchHookAgentTurn } = createImapTestRuntime();
+  const { runtime, state, dispatchHookAgentTurn, initialCursorRegistered } =
+    createImapTestRuntime();
   const context: OpenClawPluginServiceContext = {
     config: {},
     stateDir: "/unused-imap-test-state",
@@ -186,17 +195,206 @@ async function startWatcher(
   });
   activeWatchers.push(watcher);
   watcher.start();
+  // start() is fire-and-forget; observe the committed baseline before driving mail.
+  // Authentication-failure tests intentionally never reach cursor registration.
+  if (!options.rejectAuthentication) {
+    await initialCursorRegistered;
+  }
   return { server, watcher, state, context, authenticator, dispatchHookAgentTurn };
 }
 
 describe("IMAP watcher protocol boundary", () => {
-  it("sweeps a pushed message through the real IMAP connection into one isolated hook dispatch", async () => {
-    const { server, state, dispatchHookAgentTurn } = await startWatcher();
-    await vi.waitFor(async () => {
-      expect(await state.cursors.lookup("inbox")).toMatchObject({
-        uidValidity: "17",
-        lastSeenUid: 1,
+  it.each([
+    ["unverified", "none", "", "strength=unverified"],
+    ["verified", "pass", "", "strength=verified"],
+    [
+      "asserted",
+      "none",
+      "Authentication-Results: mx.example.com; dmarc=pass\r\n",
+      "strength=asserted",
+    ],
+    ["token", "none", "To: reader+secret-token@example.com\r\n", "gate=token"],
+  ] as const)(
+    "dispatches %s mail with the actual admission evidence",
+    async (gate, dmarc, headers, log) => {
+      const { server, state, context, authenticator, dispatchHookAgentTurn } = await startWatcher({
+        account: {
+          senderAuth: {
+            min: gate === "token" ? "verified" : gate,
+            trustedAuthservIds: ["mx.example.com"],
+            acceptTrustedAuthservId: gate === "asserted",
+          },
+          addressTokens: [{ token: "secret-token", senders: ["trusted@example.com"] }],
+        },
       });
+      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
+      authenticator.mockResolvedValue(createImapAuthResult(dmarc));
+      server.append(
+        `From: trusted@example.com\r\n${headers}Subject: Admission\r\n\r\nEmail content`,
+      );
+      await vi.waitFor(async () =>
+        expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 2 }),
+      );
+      expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(1);
+      expect(authenticator).toHaveBeenCalledTimes(gate === "token" ? 0 : 1);
+      expect(context.logger.info).toHaveBeenCalledWith(
+        `imap: account=inbox uid=2 domain=example.com ${log} run=mail-run`,
+      );
+      expect(await state.skips.lookup("inbox:dmarc-none")).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["From: trusted@example.com, attacker@evil.example", "invalid-from", "unknown"],
+    ["From: attacker@evil.example", "sender-not-allowed", "evil.example"],
+  ])(
+    "records pre-auth rejection for %s without claiming strength",
+    async (from, reason, domain) => {
+      const { server, state, context, authenticator, dispatchHookAgentTurn } = await startWatcher({
+        account: {
+          addressTokens: [{ token: "secret-token", senders: ["@evil.example"] }],
+        },
+      });
+      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
+      server.append(`${from}\r\nTo: reader+secret-token@example.com\r\n\r\nRejected mail`);
+      await vi.waitFor(async () =>
+        expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 2 }),
+      );
+      expect(authenticator).not.toHaveBeenCalled();
+      expect(dispatchHookAgentTurn).not.toHaveBeenCalled();
+      expect(context.logger.warn).toHaveBeenCalledWith(
+        `imap: account=inbox uid=2 domain=${domain} gate=${reason}`,
+      );
+      expect(await state.skips.lookup(`inbox:${reason}`)).toEqual({ count: 1 });
+      expect(await state.claims.lookup("attempt:inbox:17:2")).toBeUndefined();
+    },
+  );
+
+  it.each(["rejected admission", "throwing admission", "transient authentication"] as const)(
+    "retries %s without waiting for another email",
+    async (failure) => {
+      const { server, state, authenticator, dispatchHookAgentTurn } = await startWatcher({
+        account: { watch: { mode: "auto", pollSeconds: 0.02 } },
+      });
+      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
+      if (failure === "rejected admission") {
+        dispatchHookAgentTurn.mockResolvedValueOnce({ ok: false, reason: "Gateway unavailable" });
+      } else if (failure === "throwing admission") {
+        dispatchHookAgentTurn.mockRejectedValueOnce(new Error("Gateway unavailable"));
+      } else {
+        authenticator.mockResolvedValueOnce(createImapAuthResult("temperror"));
+      }
+      server.append("From: trusted@example.com\r\nSubject: Retry\r\n\r\nRecover this email");
+      await vi.waitFor(async () =>
+        expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 2 }),
+      );
+      expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(
+        failure === "transient authentication" ? 1 : 2,
+      );
+      expect(
+        dispatchHookAgentTurn.mock.calls.every(
+          ([params]) =>
+            params.sessionKey === "hook:imap:inbox:17:2" &&
+            params.idempotencyKey === params.sessionKey,
+        ),
+      ).toBe(true);
+      expect(await state.skips.lookup("inbox:duplicate-uid")).toBeUndefined();
+    },
+  );
+
+  it("records exhausted admission retries and continues with the next email", async () => {
+    const { server, state, dispatchHookAgentTurn } = await startWatcher({
+      account: { watch: { mode: "auto", pollSeconds: 0.02 } },
+    });
+    expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
+    dispatchHookAgentTurn.mockRejectedValue(new Error("Gateway unavailable"));
+    server.append("From: trusted@example.com\r\nSubject: Exhausted\r\n\r\nNo admission");
+    await vi.waitFor(async () =>
+      expect(await state.skips.lookup("inbox:dispatch-rejected")).toEqual({ count: 1 }),
+    );
+    expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(3);
+    expect(await state.claims.lookup("attempt:inbox:17:2")).toEqual({
+      count: 3,
+      reason: "dispatch-rejected",
+    });
+    dispatchHookAgentTurn.mockResolvedValue({ ok: true, runId: "recovered-run" });
+    server.append("From: trusted@example.com\r\nSubject: Next\r\n\r\nAdmitted");
+    await vi.waitFor(async () =>
+      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 3 }),
+    );
+    expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(4);
+  });
+
+  it("serializes reconnect admission with later mailbox wakeups", async () => {
+    const { server, state, dispatchHookAgentTurn } = await startWatcher({
+      account: { watch: { mode: "auto", pollSeconds: 0.02 } },
+    });
+    expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
+    dispatchHookAgentTurn.mockImplementationOnce(async () => {
+      // Keep admission unresolved across subsequent mailbox notifications and polls.
+      server.append("From: trusted@example.com\r\nSubject: Later\r\n\r\nWait for earlier mail");
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      return { ok: false, reason: "Gateway temporarily unavailable" };
+    });
+    server.disconnect();
+    server.messages.push({
+      uid: 2,
+      raw: "From: trusted@example.com\r\nSubject: Reconnect\r\n\r\nRetry after reconnect",
+    });
+    await vi.waitFor(
+      async () => expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 3 }),
+      { timeout: 5_000 },
+    );
+    expect(dispatchHookAgentTurn.mock.calls.map(([params]) => params.sessionKey)).toEqual([
+      "hook:imap:inbox:17:2",
+      "hook:imap:inbox:17:2",
+      "hook:imap:inbox:17:3",
+    ]);
+    expect(await state.skips.lookup("inbox:duplicate-uid")).toBeUndefined();
+  });
+
+  it("stops pending admission retries when the watcher is stopped", async () => {
+    const { server, watcher, state, context, dispatchHookAgentTurn } = await startWatcher({
+      account: { watch: { mode: "auto", pollSeconds: 0.1 } },
+    });
+    expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
+    dispatchHookAgentTurn.mockRejectedValue(new Error("Gateway unavailable"));
+    server.append("From: trusted@example.com\r\nSubject: Stop\r\n\r\nDo not retry after stop");
+    await vi.waitFor(() => expect(context.logger.warn).toHaveBeenCalled());
+    await watcher.stop();
+    const attempts = dispatchHookAgentTurn.mock.calls.length;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 150);
+    });
+    expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(attempts);
+    expect(server.sockets.size).toBe(0);
+  });
+
+  it("sweeps a pushed message through the real IMAP connection into one isolated hook dispatch", async () => {
+    const connected = createDeferred<void>();
+    const greeting = createDeferred<void>();
+    let initialized = false;
+    const starting = startWatcher({
+      beforeGreeting: async () => {
+        connected.resolve();
+        await greeting.promise;
+      },
+    }).then((fixture) => {
+      initialized = true;
+      return fixture;
+    });
+    try {
+      await connected.promise;
+      expect(initialized).toBe(false);
+    } finally {
+      greeting.resolve();
+    }
+    const { server, state, dispatchHookAgentTurn } = await starting;
+    expect(await state.cursors.lookup("inbox")).toMatchObject({
+      uidValidity: "17",
+      lastSeenUid: 1,
     });
     server.append(
       "From: trusted@example.com\r\nTo: reader@example.com\r\nSubject: New mail\r\nMessage-ID: <new@example.com>\r\n\r\nHello safely",
@@ -232,9 +430,7 @@ describe("IMAP watcher protocol boundary", () => {
 
   it("delivers mail that arrived during an IDLE connection interruption", async () => {
     const { server, state, dispatchHookAgentTurn } = await startWatcher();
-    await vi.waitFor(async () =>
-      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 }),
-    );
+    expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
     server.disconnect();
     server.messages.push({
       uid: 2,
@@ -251,9 +447,7 @@ describe("IMAP watcher protocol boundary", () => {
 
   it("coalesces a wakeup that arrives during an active sweep", async () => {
     const { server, state, dispatchHookAgentTurn } = await startWatcher();
-    await vi.waitFor(async () =>
-      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 }),
-    );
+    expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
     let releaseFetch = () => {};
     server.fetchGate = new Promise<void>((resolve) => {
       releaseFetch = resolve;
@@ -275,9 +469,7 @@ describe("IMAP watcher protocol boundary", () => {
 
   it("re-baselines a rotated UIDVALIDITY without replaying existing mail", async () => {
     const { server, state, dispatchHookAgentTurn } = await startWatcher();
-    await vi.waitFor(async () =>
-      expect(await state.cursors.lookup("inbox")).toMatchObject({ uidValidity: "17" }),
-    );
+    expect(await state.cursors.lookup("inbox")).toMatchObject({ uidValidity: "17" });
     server.uidValidity = "18";
     server.disconnect();
     server.messages.push({
@@ -300,7 +492,7 @@ describe("IMAP watcher protocol boundary", () => {
       supportsIdle: false,
       account: { watch: { mode: "auto", pollSeconds: 0.02 } },
     });
-    await vi.waitFor(async () => expect(await state.cursors.lookup("inbox")).toBeDefined());
+    expect(await state.cursors.lookup("inbox")).toBeDefined();
     server.messages.push({
       uid: 2,
       raw: "From: trusted@example.com\r\nSubject: Poll\r\n\r\nPolled",

@@ -20,6 +20,7 @@ interface LineThreadBindingsConfig {
 
 interface LineAccountBaseConfig {
   enabled?: boolean;
+  joinIntro?: boolean;
   channelAccessToken?: string;
   channelSecret?: string;
   tokenFile?: string;

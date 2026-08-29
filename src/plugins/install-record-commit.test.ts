@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => {
     replaceConfigFile: vi.fn(),
     restorePersistedInstalledPluginIndexIfCurrent:
       vi.fn<
-        typeof import("./installed-plugin-index-store.js").restorePersistedInstalledPluginIndexIfCurrent
+        typeof import("./installed-plugin-index-store-write.js").restorePersistedInstalledPluginIndexIfCurrent
       >(),
     transformConfigFileWithRetry: vi.fn(),
     withPluginLifecycleLease: vi.fn(
@@ -67,8 +67,8 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./installed-plugin-index-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./installed-plugin-index-store.js")>();
+vi.mock("./installed-plugin-index-store-write.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./installed-plugin-index-store-write.js")>();
   return {
     ...actual,
     restorePersistedInstalledPluginIndexIfCurrent:

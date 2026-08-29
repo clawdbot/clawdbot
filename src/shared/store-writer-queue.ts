@@ -13,8 +13,6 @@ type StoreWriterTask = {
 
 /** Per-store-path FIFO queue that serializes file writes within one process. */
 export type StoreWriterQueue = {
-  /** True while a drain loop owns this queue. */
-  running: boolean;
   /** Writes waiting behind the active drain. */
   pending: StoreWriterTask[];
   /** Active drain promise, reused by waiters until the current batch settles. */
@@ -70,7 +68,7 @@ function getOrCreateStoreWriterQueue(
   if (existing) {
     return existing;
   }
-  const created: StoreWriterQueue = { running: false, pending: [], drainPromise: null };
+  const created: StoreWriterQueue = { pending: [], drainPromise: null };
   queues.set(storePath, created);
   return created;
 }
@@ -84,7 +82,6 @@ async function drainStoreWriterQueue(queues: StoreWriterQueues, storePath: strin
     await queue.drainPromise;
     return;
   }
-  queue.running = true;
   queue.drainPromise = (async () => {
     try {
       while (queue.pending.length > 0) {
@@ -108,7 +105,6 @@ async function drainStoreWriterQueue(queues: StoreWriterQueues, storePath: strin
         task.resolve(result);
       }
     } finally {
-      queue.running = false;
       queue.drainPromise = null;
       if (queue.pending.length === 0) {
         queues.delete(storePath);

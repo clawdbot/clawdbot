@@ -158,6 +158,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     getActiveSession: () => ({ id: "session-1", file: "/tmp/session-1.jsonl" }),
     prepareCurrentTranscriptRetry: vi.fn(),
     prepareCompactedTranscriptRetry: vi.fn(async () => {}),
+    markOwnedTranscriptRetry: vi.fn(),
     armPostCompactionGuard: vi.fn(),
     ...overrides,
     attempt,
@@ -446,6 +447,53 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(mocks.compact).not.toHaveBeenCalled();
   });
 
+  it("stops the run on a provider request-size ceiling instead of compacting", async () => {
+    // Groq refuses an oversized single request with a 413 naming TPM that states both numbers.
+    // Requested above Limit cannot be admitted by any bucket state, and compaction budgets
+    // against the model's context window rather than this per-request ceiling, so the owner
+    // must stop the run rather than compact, adopt a transcript, truncate, or retry.
+    const promptError = new Error(
+      "413 Request too large for model `openai/gpt-oss-120b` in organization `org_x` " +
+        "service tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested 8098, " +
+        "please reduce your message size and try again.",
+    );
+
+    // Oversized tool results are present, so a bypass that only skipped compaction would still
+    // fall into fallback truncation and return { action: "retry" }. This pins real terminality.
+    mocks.sessionLikelyHasOversizedToolResults.mockReturnValue(true);
+    const input = makeInput({ promptError });
+
+    const result = await recoverEmbeddedRunOverflow(input);
+
+    // Returning { action: "none" } would hand the refusal back to the same-model rate-limit
+    // retry that reported it, so the run must end here rather than merely skip compaction.
+    expect(result).toMatchObject({ action: "surface", kind: "context_overflow" });
+    expect(mocks.compact).not.toHaveBeenCalled();
+    expect(mocks.truncateOversizedToolResults).not.toHaveBeenCalled();
+    expect(mocks.warn).toHaveBeenCalledWith(
+      expect.stringContaining("provider request-size ceiling"),
+    );
+    // The run's recovery budget is untouched, so a genuine overflow later in the same run still
+    // gets its full compaction attempts and its one tool-result truncation.
+    expect(input.state.overflowCompactionAttempts).toBe(0);
+    expect(input.state.toolResultTruncationAttempted).toBe(false);
+  });
+
+  it("keeps ordinary TPM throttling out of overflow recovery", async () => {
+    // Same wording family, but the requested size fits the limit: waiting still resolves it,
+    // so this stays a rate limit and never reaches overflow recovery at all.
+    const promptError = new Error(
+      "429 Rate limit reached for model `openai/gpt-oss-120b` in organization `org_x` " +
+        "service tier `on_demand` on tokens per minute (TPM): Limit 8000, Used 7500, " +
+        "Requested 1000, please try again in 3.5s.",
+    );
+
+    const result = await recoverEmbeddedRunOverflow(makeInput({ promptError }));
+
+    expect(result).toEqual({ action: "none" });
+    expect(mocks.compact).not.toHaveBeenCalled();
+  });
+
   it("recovers overflow reported only by the assistant error text", async () => {
     const result = await recoverEmbeddedRunOverflow(
       makeInput({
@@ -592,12 +640,12 @@ describe("recoverEmbeddedRunOverflow", () => {
 
   it("does not reset the overflow-compaction budget after an in-attempt compaction", async () => {
     const state = createEmbeddedRunContextRecoveryState();
-    const result = await recoverEmbeddedRunOverflow(
-      makeInput({ state, attemptCompactionCount: 1 }),
-    );
+    const input = makeInput({ state, attemptCompactionCount: 1 });
+    const result = await recoverEmbeddedRunOverflow(input);
 
     expect(result).toEqual({ action: "retry" });
     expect(state.overflowCompactionAttempts).toBe(1);
+    expect(input.markOwnedTranscriptRetry).toHaveBeenCalledOnce();
     expect(mocks.compact).not.toHaveBeenCalled();
   });
 
