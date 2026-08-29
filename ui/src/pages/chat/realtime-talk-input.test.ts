@@ -12,6 +12,13 @@ function mediaDevice(kind: MediaDeviceKind, deviceId: string, label: string): Me
   return { kind, deviceId, label, groupId: "", toJSON: () => ({}) } as MediaDeviceInfo;
 }
 
+function legacyWebKitOverconstrainedError(): Error & { constraint: string } {
+  return Object.assign(new Error("Invalid constraint"), {
+    name: "OverconstrainedError",
+    constraint: "",
+  });
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -143,9 +150,9 @@ describe("realtime Talk microphone inputs", () => {
     );
   });
 
-  it("does not silently fall back when the selected microphone is unavailable", async () => {
+  it("explains a legacy WebKit overconstraint without silently falling back", async () => {
     const getUserMedia = vi.fn(async () => {
-      throw new DOMException("missing", "OverconstrainedError");
+      throw legacyWebKitOverconstrainedError();
     });
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
@@ -380,7 +387,7 @@ describe("realtime Talk camera inputs", () => {
 
   it("does not silently fall back when the selected camera is unavailable", async () => {
     const getUserMedia = vi.fn(async () => {
-      throw new DOMException("missing", "OverconstrainedError");
+      throw legacyWebKitOverconstrainedError();
     });
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
