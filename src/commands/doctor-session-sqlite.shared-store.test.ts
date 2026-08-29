@@ -20,6 +20,7 @@ import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/target
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
@@ -179,10 +180,12 @@ async function repairHistoricalSharedStore(
 function expectUpgradedSharedStore(store: Awaited<ReturnType<typeof createHistoricalSharedStore>>) {
   const reopened = openOpenClawAgentDatabase(store.options);
   expect(reopened.agentId).toBe("main");
-  expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(18);
+  expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+    OPENCLAW_AGENT_SCHEMA_VERSION,
+  );
   expect(reopened.db.prepare("SELECT agent_id, schema_version FROM schema_meta").get()).toEqual({
     agent_id: "main",
-    schema_version: 18,
+    schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
   });
   expect(loadExactSessionEntry(store.scope)?.entry.sessionId).toBe("doctor-session");
   expect(loadExactSessionEntry(store.scope)?.entry.goal).toEqual(store.goalReceipt?.goal);

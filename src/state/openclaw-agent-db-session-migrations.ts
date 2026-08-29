@@ -4,9 +4,12 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { buildConversationRef, normalizeConversationPeerId } from "../routing/conversation-ref.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
+import { migrateLegacySessionCreator } from "./creator-namespace-migration.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 type MigratedConversationEntry = Record<string, unknown>;
 
@@ -387,5 +390,28 @@ export function migrateSessionEntryStatusProjection(
     if (typeof row.session_key === "string") {
       update.run(readStatus(row.entry_json), row.session_key);
     }
+  }
+}
+
+export function migrateSessionCreatorNamespaces(db: DatabaseSync, previousVersion: number): void {
+  if (previousVersion >= 19 || !tableExists(db, "session_nodes")) {
+    return;
+  }
+  const update = db.prepare(
+    "UPDATE session_nodes SET entry_json = ?, created_actor_type = ?, created_actor_id = ? WHERE session_key = ?",
+  );
+  const rows = db.prepare(`SELECT session_key, entry_json FROM session_nodes
+    WHERE json_valid(entry_json) AND (json_extract(entry_json, '$.createdActor.type') = 'human'
+      OR (json_type(entry_json, '$.createdActor') IS NULL AND json_type(entry_json, '$.createdBy') = 'object'))`);
+  // SAFETY: The query selects the two declared, non-null TEXT columns without projection casts.
+  for (const row of rows.all() as Array<{ session_key: string; entry_json: string }>) {
+    // SAFETY: SQL admits valid JSON with a human actor or legacy actor object; all other fields are retained verbatim.
+    const entry = migrateLegacySessionCreator(JSON.parse(row.entry_json) as SessionEntry);
+    update.run(
+      JSON.stringify(entry),
+      entry.createdActor?.type ?? null,
+      entry.createdActor?.id ?? null,
+      row.session_key,
+    );
   }
 }

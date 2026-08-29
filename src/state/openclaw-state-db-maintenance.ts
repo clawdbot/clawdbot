@@ -293,3 +293,17 @@ export function markCurrentStateSchemaVersion(
 export function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {
   return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
 }
+
+/** Historical jobs lost the creator's origin; preserve attribution without guessing authority. */
+export function migrateCronCreatorNamespaces(db: DatabaseSync, previousVersion: number): boolean {
+  if (previousVersion >= 14 || !tableExists(db, "cron_jobs")) {
+    return false;
+  }
+  db.exec(`
+    UPDATE cron_jobs
+       SET job_json = json_set(job_json, '$.createdActor.source', 'unknown')
+     WHERE json_valid(job_json)
+       AND json_extract(job_json, '$.createdActor.type') = 'human';
+  `);
+  return true;
+}

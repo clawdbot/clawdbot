@@ -37,7 +37,6 @@ import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { VERSION } from "../version.js";
-import { migrateCronCreatorNamespaces } from "./creator-namespace-migration.js";
 import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import {
@@ -63,6 +62,7 @@ import {
   assertOpenClawStateDatabaseForMaintenance,
   assertSupportedSchemaVersion,
   markCurrentStateSchemaVersion,
+  migrateCronCreatorNamespaces,
   openClawStateMigrationAssertions,
   resolveDatabasePath,
 } from "./openclaw-state-db-maintenance.js";

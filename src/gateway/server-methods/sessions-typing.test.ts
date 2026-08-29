@@ -119,7 +119,7 @@ describe("session typing handler", () => {
         {
           sessionId,
           updatedAt: 1,
-          createdActor: { type: "human", id: "shared" },
+          createdActor: { type: "human", source: "profile", id: "shared" },
           visibility: "shared",
         },
       );

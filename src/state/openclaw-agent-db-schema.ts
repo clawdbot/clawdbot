@@ -22,7 +22,6 @@ import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { VERSION } from "../version.js";
-import { migrateSessionCreatorNamespaces } from "./creator-namespace-migration.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
@@ -50,6 +49,7 @@ import {
   ensureSessionEntryValidityProjection,
   hasPendingSessionConversationRouteContextColumn,
   migrateConversationDeliveryTargetColumn,
+  migrateSessionCreatorNamespaces,
   migrateSessionEntryStatusProjection,
   readSqliteTableColumns,
 } from "./openclaw-agent-db-session-migrations.js";
