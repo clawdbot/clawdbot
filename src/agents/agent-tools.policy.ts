@@ -39,7 +39,7 @@ import {
   type SessionCapabilityStore,
   type SubagentSessionRole,
 } from "./subagents/spawn/subagent-capabilities.js";
-import { createToolPolicyMatcher } from "./tool-policy-match.js";
+import { createToolPolicyMatcher, isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
@@ -404,7 +404,16 @@ export function resolveEffectiveToolPolicy(params: {
   });
   const explicitProfileAlsoAllow =
     resolveExplicitProfileAlsoAllow(agentTools) ?? resolveExplicitProfileAlsoAllow(globalTools);
+  const globalPolicy = pickSandboxToolPolicy(globalTools);
+  const globalProviderPolicy = pickSandboxToolPolicy(providerPolicy);
   const agentPolicy = pickSandboxToolPolicy(agentTools);
+  const agentProviderPolicyLayer = pickSandboxToolPolicy(agentProviderPolicy);
+  const providerProfile = agentProviderPolicy?.profile ?? providerPolicy?.profile;
+  const providerProfileAlsoAllow = Array.isArray(agentProviderPolicy?.alsoAllow)
+    ? agentProviderPolicy.alsoAllow
+    : Array.isArray(providerPolicy?.alsoAllow)
+      ? providerPolicy.alsoAllow
+      : undefined;
   const clawToolPolicyConsent = resolveClawToolPolicyConsent({
     agentTools,
     agentId,
@@ -430,10 +439,25 @@ export function resolveEffectiveToolPolicy(params: {
         explicitProfileAlsoAllow,
       );
       const matchesProfile = createToolPolicyMatcher(profilePolicy);
+      const providerProfilePolicy = mergeAlsoAllowPolicy(
+        resolveToolProfilePolicy(providerProfile),
+        providerProfileAlsoAllow,
+      );
+      const staticOverridePolicies = [
+        providerProfilePolicy,
+        globalPolicy,
+        globalProviderPolicy,
+        agentPolicy,
+        agentProviderPolicyLayer,
+      ];
       const uncoveredEntries = implicitGrants.entries
         .map((entry) => ({
           section: entry.section,
-          grants: entry.grants.filter((toolName) => !matchesProfile(toolName)),
+          grants: entry.grants.filter(
+            (toolName) =>
+              !matchesProfile(toolName) &&
+              isToolAllowedByPolicies(toolName, staticOverridePolicies),
+          ),
         }))
         .filter((entry) => entry.grants.length > 0);
       const uncovered = uncoveredEntries.flatMap((entry) => entry.grants);
@@ -453,19 +477,15 @@ export function resolveEffectiveToolPolicy(params: {
     : undefined;
   return {
     agentId,
-    globalPolicy: pickSandboxToolPolicy(globalTools),
-    globalProviderPolicy: pickSandboxToolPolicy(providerPolicy),
+    globalPolicy,
+    globalProviderPolicy,
     agentPolicy,
-    agentProviderPolicy: pickSandboxToolPolicy(agentProviderPolicy),
+    agentProviderPolicy: agentProviderPolicyLayer,
     profile,
-    providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
+    providerProfile,
     // alsoAllow is applied at the profile stage to avoid early filtering.
     profileAlsoAllow,
-    providerProfileAlsoAllow: Array.isArray(agentProviderPolicy?.alsoAllow)
-      ? agentProviderPolicy?.alsoAllow
-      : Array.isArray(providerPolicy?.alsoAllow)
-        ? providerPolicy?.alsoAllow
-        : undefined,
+    providerProfileAlsoAllow,
   };
 }
 

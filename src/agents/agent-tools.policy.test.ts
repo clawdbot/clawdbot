@@ -718,6 +718,89 @@ describe("resolveEffectiveToolPolicy", () => {
     }
   });
 
+  const staticDenyCases: Array<{
+    name: string;
+    config: OpenClawConfig;
+    resolveArgs: { agentId?: string; modelProvider?: string };
+  }> = [
+    {
+      name: "global deny",
+      config: {
+        tools: {
+          profile: "messaging",
+          alsoAllow: ["exec"],
+          deny: ["process"],
+          exec: { mode: "allowlist" },
+        },
+      } as OpenClawConfig,
+      resolveArgs: {},
+    },
+    {
+      name: "global provider deny",
+      config: {
+        tools: {
+          profile: "messaging",
+          alsoAllow: ["exec"],
+          byProvider: { openai: { deny: ["process"] } },
+          exec: { mode: "allowlist" },
+        },
+      } as OpenClawConfig,
+      resolveArgs: { modelProvider: "openai" },
+    },
+    {
+      name: "agent deny",
+      config: {
+        agents: {
+          list: [
+            {
+              id: "sage",
+              tools: {
+                profile: "messaging",
+                alsoAllow: ["exec"],
+                deny: ["process"],
+                exec: { mode: "allowlist" },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      resolveArgs: { agentId: "sage" },
+    },
+    {
+      name: "agent provider deny",
+      config: {
+        agents: {
+          list: [
+            {
+              id: "sage",
+              tools: {
+                profile: "messaging",
+                alsoAllow: ["exec"],
+                byProvider: { openai: { deny: ["process"] } },
+                exec: { mode: "allowlist" },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      resolveArgs: { agentId: "sage", modelProvider: "openai" },
+    },
+  ];
+
+  it.each(staticDenyCases)(
+    "does not warn for an implied grant blocked by a $name (#131102)",
+    async ({ config, resolveArgs }) => {
+      const warnLogs = createWarnLogCapture("openclaw-agent-tools-policy-test");
+      try {
+        resolveEffectiveToolPolicy({ config, ...resolveArgs });
+
+        expect(await warnLogs.findText('tools policy: profile "messaging"')).toBeUndefined();
+      } finally {
+        warnLogs.cleanup();
+      }
+    },
+  );
+
   it("only lists configured sections whose grants are still missing (#47487)", async () => {
     const warnLogs = createWarnLogCapture("openclaw-agent-tools-policy-test");
     try {
