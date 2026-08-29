@@ -32,10 +32,8 @@ import {
 } from "../../tasks/task-flow-registry.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  prepareFormattedSystemEvents,
-  settleManagedSystemEventsAfterTurnAdoption,
-} from "../reply/session-system-events.js";
+import { settleManagedSystemEventsAfterTurnAdoption } from "../reply/session-system-event-adoption.js";
+import { prepareFormattedSystemEvents } from "../reply/session-system-events.js";
 import { CONTINUATION_WORK_CONTROLLER_ID } from "./work-flow-state.js";
 import {
   enqueuePendingWork,
