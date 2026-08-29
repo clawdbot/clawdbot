@@ -783,6 +783,50 @@ describe("LINE webhook spool", () => {
     });
   });
 
+  // A combined delivery that rejects before the handoff rides back to the holder's
+  // drain only. Every other part already returned as deferred, so the failure has
+  // to reach their claims too or they stay held until recovery.
+  it("returns every buffered claim when the combined delivery rejects", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn(async () => {
+        throw new Error("combined turn failed before adoption");
+      });
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver,
+      });
+
+      spool.start();
+      try {
+        for (const index of [1, 2]) {
+          await spool.accept(
+            callback(
+              createEvent({
+                webhookEventId: `event-reject-${index}`,
+                userId: "user-reject",
+                imageSet: { id: "set-reject", index, total: 2 },
+              }),
+            ),
+          );
+        }
+
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+        // Both parts come back for retry; neither is stranded in a held claim.
+        await vi.waitFor(
+          async () => {
+            const pending = await queue.listPending();
+            expect(pending).toHaveLength(2);
+          },
+          { timeout: 20_000 },
+        );
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
   // The lane is released so the rest of a set can be claimed; a message the sender
   // sent afterwards must still arrive after the images, not before them.
   it("keeps a later message on the same lane behind an incomplete image set", async () => {
