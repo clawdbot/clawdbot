@@ -332,7 +332,9 @@ async function repairMissingPluginInstallsWithLease(
             },
             error: (message) => warnings.push(message),
           },
-          ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
+          ...(params.onCapabilityConsent
+            ? { onCapabilityConsent: params.onCapabilityConsent }
+            : {}),
         });
       } catch (error) {
         await clearDependencyRepairRetention(retainedDependencyRepairInstallPaths.keys());
