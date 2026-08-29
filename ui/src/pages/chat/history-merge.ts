@@ -12,6 +12,16 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 
 const chatSessionProjections = new WeakMap<object, SessionProjectionState>();
+// Display ownership outlives active-state cleanup. It is not the foreground
+// terminal fence: an unowned final cannot suppress authoritative active rows.
+const chatRunOwners = new WeakMap<object, string>();
+const CHAT_PROJECTION_SCOPE_KEYS = [
+  "sessionKey",
+  "sessionId",
+  "agentId",
+  "lifecycleRevision",
+  "activeLeafEntryId",
+] as const;
 
 type ChatSessionProjectionOwner = {
   sessionKey: string;
@@ -55,6 +65,16 @@ export function readChatSessionProjectionScope(
   };
 }
 
+function chatProjectionScopeChanged(
+  previous: SessionProjectionScope,
+  scope: SessionProjectionScope,
+) {
+  return CHAT_PROJECTION_SCOPE_KEYS.some(
+    (key) =>
+      Object.hasOwn(scope, key) && previous[key] !== undefined && previous[key] !== scope[key],
+  );
+}
+
 /** One pane owns its shared-reducer projection; split panes never share live state. */
 export function getChatSessionProjection(
   owner: object,
@@ -62,26 +82,14 @@ export function getChatSessionProjection(
   scope: SessionProjectionScope = {},
 ): SessionProjectionState {
   const current = chatSessionProjections.get(owner);
-  const scopeChanged =
-    current !== undefined &&
-    (
-      ["sessionKey", "sessionId", "agentId", "lifecycleRevision", "activeLeafEntryId"] as const
-    ).some((key) => {
-      if (!Object.hasOwn(scope, key)) {
-        return false;
-      }
-      const previous = current.scope[key];
-      return previous !== undefined && previous !== scope[key];
-    });
+  const scopeChanged = current !== undefined && chatProjectionScopeChanged(current.scope, scope);
   if (!current || scopeChanged) {
     const projection = createSessionProjection(scope, messages);
-    chatSessionProjections.set(owner, projection);
+    setChatSessionProjection(owner, projection);
     return projection;
   }
 
-  const bindsScope = (
-    ["sessionKey", "sessionId", "agentId", "lifecycleRevision", "activeLeafEntryId"] as const
-  ).some(
+  const bindsScope = CHAT_PROJECTION_SCOPE_KEYS.some(
     (key) =>
       Object.hasOwn(scope, key) && current.scope[key] === undefined && scope[key] !== undefined,
   );
@@ -97,12 +105,33 @@ export function getChatSessionProjection(
     ? scopedProjection
     : reconcileSessionProjectionSnapshot(scopedProjection, messages, scope);
   if (projection !== current) {
-    chatSessionProjections.set(owner, projection);
+    setChatSessionProjection(owner, projection);
   }
   return projection;
 }
 
+export function getChatRunOwner(owner: object): string | undefined {
+  return chatRunOwners.get(owner);
+}
+
+export function setChatRunOwner(owner: object, runId: string | undefined): void {
+  if (runId === undefined) {
+    chatRunOwners.delete(owner);
+  } else {
+    chatRunOwners.set(owner, runId);
+  }
+}
+
 export function setChatSessionProjection(owner: object, projection: SessionProjectionState): void {
+  const current = chatSessionProjections.get(owner);
+  const runId = chatRunOwners.get(owner);
+  if (
+    runId !== undefined &&
+    (!Object.hasOwn(projection.runs, runId) ||
+      (current && chatProjectionScopeChanged(current.scope, projection.scope)))
+  ) {
+    chatRunOwners.delete(owner);
+  }
   chatSessionProjections.set(owner, projection);
 }
 
