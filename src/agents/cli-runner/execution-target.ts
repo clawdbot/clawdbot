@@ -1,12 +1,5 @@
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
-import type { RunCliAgentParams } from "./types.js";
-
-export type NodeClaudePlacement = { nodeId: string; cwd?: string };
-
-export type CliExecutionTarget =
-  | { kind: "node"; placement: NodeClaudePlacement }
-  | { kind: "plugin"; execute: CliBackendExecute }
-  | { kind: "process" };
+import type { CliExecutionTarget, RunCliAgentParams } from "./types.js";
 
 /** Preparation and execution must agree on the owner of private prompt context. */
 export function resolveCliExecutionTarget(context: {

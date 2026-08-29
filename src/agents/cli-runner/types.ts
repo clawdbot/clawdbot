@@ -33,6 +33,7 @@ import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type {
   CliBackendConfig,
+  CliBackendExecute,
   CliBackendExecutionMode,
   CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
@@ -67,7 +68,13 @@ import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js"
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { SessionManager } from "../sessions/index.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
-import type { CliExecutionTarget } from "./execution-target.js";
+
+export type NodeClaudePlacement = { nodeId: string; cwd?: string };
+
+export type CliExecutionTarget =
+  | { kind: "node"; placement: NodeClaudePlacement }
+  | { kind: "plugin"; execute: CliBackendExecute }
+  | { kind: "process" };
 
 type CliSessionRetryParams = {
   provider: string;

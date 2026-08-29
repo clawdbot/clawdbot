@@ -18,6 +18,7 @@ import {
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import { resolveCliExecutionTarget } from "./cli-runner/execution-target.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 
 type CliProvider = "claude-cli" | "codex-cli" | "google-gemini-cli";
@@ -239,7 +240,10 @@ export function buildPreparedCliRunContext(
         (provider === "google-gemini-cli" ? "prepare-execution" : "execution-args"),
       runtimeArtifact: overrides.runtimeArtifact,
     },
-    executionTarget: { kind: "process" },
+    executionTarget: resolveCliExecutionTarget({
+      params: { sessionEntry: overrides.sessionEntry },
+      backendId: provider,
+    }),
     preparedBackend: {
       backend,
       env: overrides.preparedEnv ?? {},

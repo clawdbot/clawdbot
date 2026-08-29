@@ -7,8 +7,7 @@ import type {
   registerExecApprovalRequestForHostOrThrow,
   resolveRegisteredExecApprovalDecision,
 } from "../bash-tools.exec-approval-request.js";
-import type { NodeClaudePlacement } from "./execution-target.js";
-import type { PreparedCliRunContext } from "./types.js";
+import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const NODE_CLI_MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const NODE_CLI_MAX_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
