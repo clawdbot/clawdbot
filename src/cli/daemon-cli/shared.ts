@@ -1,5 +1,7 @@
 // Shared Gateway service CLI helpers: status styles, env filtering, port parsing, and hints.
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
+import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { createConfigIO } from "../../config/io.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -12,6 +14,8 @@ import {
   buildPlatformRuntimeLogHints,
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
@@ -19,7 +23,6 @@ import { createDaemonActionContext } from "./response.js";
 
 export { formatRuntimeStatus };
 export { parsePort };
-export { resolveDaemonContainerContext };
 
 /** Create install action context with JSON flag normalization. */
 export function createDaemonInstallActionContext(jsonFlag: unknown) {
@@ -68,11 +71,6 @@ export function resolveRuntimeStatusColor(status: string | undefined): (value: s
         : theme.warn;
 }
 
-/** Extract `--port` from service ProgramArguments. */
-export function parsePortFromArgs(programArguments: string[] | undefined): number | null {
-  return parseTcpPortFromArgs(programArguments);
-}
-
 /** Pick the best local probe host for a configured Gateway bind mode. */
 export function pickProbeHostForBind(
   bindMode: string,
@@ -85,12 +83,9 @@ export function pickProbeHostForBind(
   if (bindMode === "tailnet") {
     return tailnetIPv4 ?? "127.0.0.1";
   }
-  if (bindMode === "lan") {
-    // Same as call.ts: self-connections should always target loopback.
-    // bind=lan controls which interfaces the server listens on (0.0.0.0),
-    // but co-located CLI probes should connect via 127.0.0.1.
-    return "127.0.0.1";
-  }
+  // Same as call.ts: self-connections should always target loopback.
+  // bind=lan controls which interfaces the server listens on (0.0.0.0),
+  // but co-located CLI probes should connect via 127.0.0.1.
   return "127.0.0.1";
 }
 
@@ -205,7 +200,7 @@ export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.
   const container = resolveDaemonContainerContext(env);
   const hints = buildPlatformServiceStartHints({
     installCommand: formatCliCommand("openclaw gateway install", env),
-    startCommand: formatCliCommand("openclaw gateway", env),
+    startCommand: formatCliCommand("openclaw gateway start", env),
     launchAgentPlistPath: `~/Library/LaunchAgents/${resolveGatewayLaunchAgentLabel(profile)}.plist`,
     systemdServiceName: resolveGatewaySystemdServiceName(profile),
     windowsTaskName: resolveGatewayWindowsTaskName(profile),
@@ -229,4 +224,34 @@ export function filterContainerGenericHints(
       !hint.includes("If you're in a container, run the gateway in the foreground instead of") &&
       !hint.includes("systemd user services are unavailable; install/enable systemd"),
   );
+}
+
+export async function resolveGatewayLifecycleContext(
+  service = resolveGatewayService(),
+  requireEffective = false,
+) {
+  const command = requireEffective
+    ? await service.readCommand(process.env, { requireEffective: true })
+    : await service.readCommand(process.env).catch(() => null);
+  if (requireEffective && !command) {
+    throw new Error(
+      "Updated gateway service could not be inspected; run `openclaw gateway status --deep`.",
+    );
+  }
+  const env = mergeGatewayServiceEnv(process.env, command);
+  const config = await createConfigIO({
+    env,
+    observe: false,
+    pluginValidation: "skip",
+    suppressFutureVersionWarning: true,
+  })
+    .readBestEffortConfig()
+    .catch(() => undefined);
+  const port = parseTcpPortFromArgs(command?.programArguments) ?? resolveGatewayPort(config, env);
+  return { port, env, command };
+}
+
+export async function resolveGatewayConfigPorts() {
+  const config = await readBestEffortConfig({ observe: false }).catch(() => undefined);
+  return { explicit: config?.gateway?.port, fallback: resolveGatewayPort(config, process.env) };
 }

@@ -70,6 +70,8 @@ type RequesterSessionEntryResult = {
   cfg: ReturnType<typeof getRuntimeConfig>;
   entry: ReturnType<typeof loadSessionEntry>;
   canonicalKey: string;
+  agentId?: string;
+  storePath?: string;
 };
 
 export function tryResolveSubagentRequesterAgentId(
@@ -124,7 +126,7 @@ function loadDefaultRequesterSessionEntry(
     agentId,
     clone: false,
   });
-  return { cfg, entry, canonicalKey };
+  return { cfg, entry, canonicalKey, agentId, storePath };
 }
 
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {

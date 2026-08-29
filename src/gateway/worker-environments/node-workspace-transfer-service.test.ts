@@ -1,36 +1,24 @@
 import fs from "node:fs/promises";
-import type { IncomingMessage, Server } from "node:http";
+import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
+import { ensureStagedInputDirectory, stagedInputDirectory } from "../../media/staged-inputs.js";
 import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-supervisor-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
-import type { ResolvedGatewayAuth } from "../auth.js";
-import { createGatewayHttpServer } from "../server-http.js";
-import { createNodeWorkspaceTransferHttpCallback } from "./node-workspace-transfer-http.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
-
-async function listen(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("workspace transfer test server did not bind");
-  }
-  return `ws://127.0.0.1:${address.port}`;
-}
 
 function injectUploadWriteFaults() {
   const originalOpen = fs.open.bind(fs);
@@ -113,6 +101,79 @@ function retryOrUploadStatus(retryStarted: Promise<void>, upload: Promise<unknow
 }
 
 describe("node workspace transfer service", () => {
+  it("keeps a plain workspace transferable after durable result staging initializes Git", async () => {
+    const root = tempDirs.make("node-workspace-transfer-unborn-git-");
+    const localPath = path.join(root, "workspace");
+    await fs.mkdir(localPath);
+    await fs.writeFile(path.join(localPath, "input.txt"), "gateway input\n");
+    const service = createNodeWorkspaceTransferService({
+      getOwner: () => ({
+        credential: {
+          ownerEpoch: 1,
+          expiresAtMs: Date.now() + 60_000,
+          sessionId: "session-unborn",
+        },
+        environment: {
+          ownerEpoch: 1,
+          attachedSessionIds: ["session-unborn"],
+          destroyRequestedAtMs: null,
+          state: "attached",
+        },
+      }),
+      temporaryRoot: path.join(root, "transfer-tmp"),
+    });
+    const request = {
+      environmentId: "environment-unborn",
+      ownerEpoch: 1,
+      sessionId: "session-unborn",
+      localPath,
+      isAuthorized: () => true,
+    };
+    const git = async (...args: string[]) => {
+      const result = await runCommandWithTimeout(["git", "-C", localPath, ...args], {
+        timeoutMs: 10_000,
+      });
+      expect(result.code).toBe(0);
+      return result.stdout.trim();
+    };
+    try {
+      const plain = await service.prepareSync({ ...request, generation: 1 });
+      expect(plain.snapshot.manifest.baseCommit).toBeNull();
+
+      await git("init", "--quiet", "--object-format=sha1");
+
+      const staged = await service.prepareSync({ ...request, generation: 2 });
+      expect(staged.snapshot.manifest.baseCommit).toBeNull();
+      expect(staged.snapshot.packPath).toBeUndefined();
+      expect(staged.snapshot.manifestRef).toBe(plain.snapshot.manifestRef);
+      expect(staged.snapshot.manifest.entries).toContainEqual(
+        expect.objectContaining({ path: "input.txt", type: "file" }),
+      );
+
+      await git("add", "input.txt");
+      await git(
+        "-c",
+        "user.name=Worker Transfer Test",
+        "-c",
+        "user.email=worker-transfer@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "tracked workspace",
+      );
+      const committed = await service.prepareSync({ ...request, generation: 3 });
+      expect(committed.snapshot.manifest.baseCommit).toBe(await git("rev-parse", "HEAD"));
+      expect(committed.snapshot.packPath).toBeDefined();
+
+      await fs.writeFile(path.join(localPath, ".git", "HEAD"), "invalid HEAD\n");
+      await expect(service.prepareSync({ ...request, generation: 4 })).rejects.toThrow(
+        "Worker workspace sync failed",
+      );
+    } finally {
+      await service.closeAll();
+    }
+  });
+
   it("streams a plain workspace to the node and accepts only its changed result blobs", async () => {
     const root = tempDirs.make("node-workspace-transfer-service-");
     const localPath = path.join(root, "gateway-workspace");
@@ -138,18 +199,8 @@ describe("node workspace transfer service", () => {
       now: () => nowMs,
       temporaryRoot: path.join(root, "gateway-transfer-tmp"),
     });
-    const server = createGatewayHttpServer({
-      clients: new Set(),
-      controlUiEnabled: false,
-      controlUiBasePath: "",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
-      handleHooksRequest: async () => false,
-      resolvedAuth,
-      getRuntimeConfig: () => ({}),
-      handleNodeWorkspaceTransferRequest: createNodeWorkspaceTransferHttpCallback(service),
-    });
-    const gatewayUrl = await listen(server);
+    const server = await startNodeWorkspaceTransferTestServer(service);
+    const { gatewayUrl } = server;
     const runtime = new NodeWorkerWorkspaceRuntime({ root: path.join(root, "node-workspaces") });
     try {
       const prepared = await service.prepareSync({
@@ -215,6 +266,72 @@ describe("node workspace transfer service", () => {
         fs.readFile(path.join(downloaded.workspaceDir, "nested", "input.txt"), "utf8"),
       ).resolves.toBe("nested input\n");
       await fs.writeFile(path.join(downloaded.workspaceDir, "result.txt"), "node result\n");
+      const attachmentsRoot = path.join(root, "attachments");
+      const inputDirectory = stagedInputDirectory("a".repeat(64));
+      const attachmentPath = `${inputDirectory}/input-document.txt`;
+      await fs.mkdir(attachmentsRoot);
+      await ensureStagedInputDirectory(attachmentsRoot, inputDirectory);
+      await fs.writeFile(path.join(attachmentsRoot, attachmentPath), "new attachment");
+      let attachmentTurnCurrent = true;
+      const attachments = await service.prepareAttachments({
+        environmentId: "environment-1",
+        localPath: attachmentsRoot,
+        isAuthorized: () => attachmentTurnCurrent,
+        signal: new AbortController().signal,
+      });
+      const attachmentInput = {
+        ...downloadInput,
+        argv: [...downloadInput.argv],
+        transfer: {
+          direction: "download" as const,
+          token: attachments.token,
+          manifestRef: attachments.snapshot.manifestRef,
+          attachments: true as const,
+        },
+      };
+      const collision = path.join(downloaded.workspaceDir, inputDirectory);
+      await fs.mkdir(collision, { recursive: true });
+      await fs.writeFile(path.join(collision, "project.txt"), "existing project file");
+      await expect(runtime.exec(attachmentInput, undefined, { url: gatewayUrl })).rejects.toThrow(
+        "workspace-transfer-failed",
+      );
+      await expect(fs.readFile(path.join(collision, "project.txt"), "utf8")).resolves.toBe(
+        "existing project file",
+      );
+      await expect(fs.stat(path.join(collision, ".gitignore"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await fs.rm(collision, { recursive: true });
+      const staged = await invokeNodeWorkerSupervisorCommand({
+        command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+        paramsJSON: JSON.stringify(attachmentInput),
+        workspace: runtime,
+        gatewayUrl,
+      });
+      expect(staged).toMatchObject({ handled: true, ok: true });
+      await expect(
+        fs.readFile(path.join(downloaded.workspaceDir, attachmentPath), "utf8"),
+      ).resolves.toBe("new attachment");
+      await expect(
+        fs.readFile(path.join(downloaded.workspaceDir, "result.txt"), "utf8"),
+      ).resolves.toBe("node result\n");
+      await expect(
+        fs.readFile(path.join(downloaded.workspaceDir, "input.txt"), "utf8"),
+      ).resolves.toBe("gateway input\n");
+      await fs.writeFile(
+        path.join(downloaded.workspaceDir, attachmentPath),
+        "worker attachment edit",
+      );
+      await runtime.exec(attachmentInput, undefined, { url: gatewayUrl });
+      await expect(
+        fs.readFile(path.join(downloaded.workspaceDir, attachmentPath), "utf8"),
+      ).resolves.toBe("worker attachment edit");
+      attachmentTurnCurrent = false;
+      await expect(runtime.exec(attachmentInput, undefined, { url: gatewayUrl })).rejects.toThrow(
+        "workspace-transfer-failed",
+      );
+      service.revoke("environment-1", attachments.token);
+      expect(service.getSnapshot("environment-1", prepared.snapshot.manifestRef)).toBeDefined();
       const writeFaults = injectUploadWriteFaults();
       const persistenceRetry = writeFaults.blockNextRetry();
       const uploadResult = (token: string) =>
@@ -332,10 +449,7 @@ describe("node workspace transfer service", () => {
       );
     } finally {
       await service.closeAll();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await server.close();
     }
   });
 
@@ -401,6 +515,77 @@ describe("node workspace transfer service", () => {
     await expect(fs.readdir(temporaryRoot)).resolves.toEqual([]);
     await service.closeAll();
     await expect(fs.stat(temporaryRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("drains sibling transfer contexts and removes scratch after a cleanup failure", async () => {
+    const root = tempDirs.make("node-workspace-transfer-close-siblings-");
+    const localPath = path.join(root, "workspace");
+    const temporaryRoot = path.join(root, "transfer-tmp");
+    await fs.mkdir(localPath);
+    const service = createNodeWorkspaceTransferService({
+      getOwner: (environmentId) => ({
+        credential: {
+          ownerEpoch: 1,
+          expiresAtMs: Date.now() + 60_000,
+          sessionId: `session-${environmentId}`,
+        },
+        environment: {
+          ownerEpoch: 1,
+          attachedSessionIds: [`session-${environmentId}`],
+          destroyRequestedAtMs: null,
+          state: "attached",
+        },
+      }),
+      temporaryRoot,
+    });
+    for (const environmentId of ["environment-1", "environment-2"]) {
+      await service.prepareSync({
+        environmentId,
+        ownerEpoch: 1,
+        sessionId: `session-${environmentId}`,
+        generation: 1,
+        localPath,
+        isAuthorized: () => true,
+      });
+    }
+
+    const cleanupError = new Error("first transfer context cleanup failed");
+    const siblingCleanup = createDeferred();
+    const originalRemove = fs.rm.bind(fs);
+    let contextRemovals = 0;
+    const remove = vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+      const target = args[0];
+      if (typeof target === "string" && path.dirname(target) === temporaryRoot) {
+        contextRemovals += 1;
+        if (contextRemovals === 1) {
+          throw cleanupError;
+        }
+        await siblingCleanup.promise;
+      }
+      await originalRemove(...args);
+    });
+    const stopping = service.closeAll();
+    const settled = vi.fn();
+    void stopping.then(settled, settled);
+
+    try {
+      await vi.waitFor(() => expect(contextRemovals).toBe(2));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(settled).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalledWith(temporaryRoot, expect.anything());
+
+      siblingCleanup.resolve();
+      await expect(stopping).rejects.toBe(cleanupError);
+      expect(remove).toHaveBeenCalledWith(temporaryRoot, { recursive: true, force: true });
+      await expect(fs.stat(temporaryRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      siblingCleanup.resolve();
+      await stopping.catch(() => undefined);
+      remove.mockRestore();
+      await fs.rm(temporaryRoot, { recursive: true, force: true });
+    }
   });
 
   it("serializes transfer context replacement for one environment", async () => {

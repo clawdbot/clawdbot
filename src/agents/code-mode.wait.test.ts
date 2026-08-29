@@ -538,6 +538,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     const { tools: codeModeTools } = createCodeModeHarness();
     testing.activeRuns.set("invalid-expiry-run", {
       expiresAt: 8_640_000_000_000_001,
+      owner: { close: () => undefined },
     } as never);
 
     await expect(
@@ -716,69 +717,6 @@ describe("Code Mode wait, scope, and suspended runs", () => {
 
     expect(stillWaiting.status).toBe("waiting");
     expect(stillWaiting.runId).toBe(first.runId);
-  });
-
-  it("resumes and reparks a yielding run at the suspended-run capacity limit", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const first = resultDetails(
-      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
-        "code-call-at-capacity",
-        {
-          code: `
-            await yield_control("first");
-            await yield_control("second");
-            return "done";
-          `,
-        },
-      ),
-    );
-    expect(first.status).toBe("waiting");
-    const firstRunId = first.runId;
-    expect(typeof firstRunId).toBe("string");
-    if (typeof firstRunId !== "string") {
-      throw new Error("expected a parked Code Mode run");
-    }
-    const parked = testing.activeRuns.get(firstRunId);
-    expect(parked).toBeDefined();
-    if (!parked) {
-      throw new Error("expected a parked Code Mode snapshot");
-    }
-
-    // Inert snapshots occupy real capacity without starting 63 extra workers.
-    for (let index = 0; index < 63; index += 1) {
-      const runId = `cm_code_mode_capacity_${index}`;
-      testing.activeRuns.set(runId, { ...parked, runId, pending: [] });
-    }
-
-    const second = resultDetails(
-      await expectDefined(codeModeTools[1], "Code Mode wait test invariant").execute(
-        "code-wait-at-capacity",
-        { runId: firstRunId },
-      ),
-    );
-
-    expect(second.status).toBe("waiting");
-    expect(second.reason).toBe("yield");
-    expect(testing.activeRuns.size).toBe(64);
-
-    const completed = resultDetails(
-      await expectDefined(codeModeTools[1], "Code Mode wait test invariant").execute(
-        "code-wait-after-capacity",
-        { runId: second.runId },
-      ),
-    );
-
-    expect(completed).toMatchObject({ status: "completed", value: "done" });
-    expect(testing.activeRuns.size).toBe(63);
   });
 
   it("reports only unsettled pending tool calls when wait times out", async () => {

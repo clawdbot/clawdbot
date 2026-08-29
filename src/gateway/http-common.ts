@@ -1,13 +1,18 @@
 // Shared Gateway HTTP helpers handle small JSON/text responses, SSE headers,
 // body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { z } from "zod";
 import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
-import { closeRequestAfterResponse } from "../infra/http-body.js";
+import {
+  clearHttpResponseRepresentationHeaders,
+  sendHttpRequestRejection,
+} from "../infra/http-request-lifecycle.js";
 import {
   logRejectedLargePayload,
   parseContentLengthHeader,
 } from "../logging/diagnostic-payload.js";
 import type { GatewayAuthResult } from "./auth.js";
+import { respondPlainText } from "./control-ui-http-utils.js";
 import { readJsonBody } from "./hooks.js";
 import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "./ingress-attribution.js";
 
@@ -36,9 +41,10 @@ export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
     return;
   }
   if (!res.headersSent) {
-    res.statusCode = 500;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Internal Server Error");
+    clearHttpResponseRepresentationHeaders(res);
+    res.setHeader("Cache-Control", "no-store");
+    res.statusMessage = "Internal Server Error";
+    respondPlainText(res, 500, res.statusMessage);
     return;
   }
 
@@ -52,15 +58,9 @@ export function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-function sendText(res: ServerResponse, status: number, body: string) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.end(body);
-}
-
 export function sendMethodNotAllowed(res: ServerResponse, allow = "POST") {
   res.setHeader("Allow", allow);
-  sendText(res, 405, "Method Not Allowed");
+  respondPlainText(res, 405, "Method Not Allowed");
 }
 
 export function sendUnauthorized(res: ServerResponse) {
@@ -103,6 +103,23 @@ export function sendInvalidRequest(res: ServerResponse, message: string) {
   sendJson(res, 400, {
     error: { message, type: "invalid_request_error" },
   });
+}
+
+export function parseGatewayJsonRequest<T extends z.ZodType>(
+  res: ServerResponse,
+  body: unknown,
+  schema: T,
+): z.output<T> | undefined {
+  const parsed = schema.safeParse(body);
+  if (parsed.success) {
+    return parsed.data;
+  }
+  const issue = parsed.error.issues[0];
+  sendInvalidRequest(
+    res,
+    issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body",
+  );
+  return undefined;
 }
 
 function buildMissingScopeForbiddenBody(
@@ -149,17 +166,21 @@ export async function readJsonBodyOrError(
         reason: "json_body_limit",
         ...(contentLength !== undefined ? { bytes: contentLength } : {}),
       });
-      closeRequestAfterResponse(req, res);
-      sendJson(res, 413, {
-        error: { message: "Payload too large", type: "invalid_request_error" },
-      });
-      return undefined;
     }
-    if (body.error === "request body timeout") {
-      closeRequestAfterResponse(req, res);
-      sendJson(res, 408, {
-        error: { message: "Request body timeout", type: "invalid_request_error" },
-      });
+    if (body.error === "payload too large" || body.error === "request body timeout") {
+      const tooLarge = body.error === "payload too large";
+      await sendHttpRequestRejection(
+        req,
+        res,
+        tooLarge ? 413 : 408,
+        JSON.stringify({
+          error: {
+            message: tooLarge ? "Payload too large" : "Request body timeout",
+            type: "invalid_request_error",
+          },
+        }),
+        "application/json; charset=utf-8",
+      );
       return undefined;
     }
     sendInvalidRequest(res, body.error);

@@ -5,6 +5,7 @@ import {
   type BuiltChannelInboundEventContext,
   formatMediaPlaceholderText,
   formatInboundEnvelope,
+  formatInboundMediaUnavailableText,
   resolveEnvelopeFormatOptions,
   toLocationContext,
   type NormalizedLocation,
@@ -483,6 +484,24 @@ export async function buildTelegramInboundContextPayload(params: {
         forwardedFrom: visibleForwardOrigin?.from,
         forwardedDate: visibleForwardOrigin?.date ? visibleForwardOrigin.date * 1000 : undefined,
       });
+  // Record terminal download outcomes after body assembly, including buffered forwards.
+  // Missing paths alone also describe intentionally unsupported media; raw commands stay untouched.
+  const unavailableMedia = allMedia.flatMap((media) =>
+    media.unavailable ? [media.unavailable] : [],
+  );
+  const unavailableReason =
+    allMedia.length > 1
+      ? `${unavailableMedia.length} of ${allMedia.length} attachments could not be downloaded`
+      : unavailableMedia[0]?.reason === "oversize"
+        ? `file exceeds ${unavailableMedia[0].limitMb}MB limit`
+        : "download failed";
+  const appendMediaUnavailableNotice = (text: string) =>
+    unavailableMedia.length > 0
+      ? formatInboundMediaUnavailableText({
+          body: text,
+          notice: `[media unavailable: ${unavailableReason}]`,
+        })
+      : text;
   const replySuffix =
     visibleReplyChain.length > 0
       ? `\n\n[Reply chain - nearest first]\n${visibleReplyChain
@@ -536,7 +555,7 @@ export async function buildTelegramInboundContextPayload(params: {
     channel: "Telegram",
     from: conversationLabel,
     timestamp: msg.date ? msg.date * 1000 : undefined,
-    body: `${visibleBodyText}${replySuffix}`,
+    body: `${appendMediaUnavailableNotice(visibleBodyText)}${replySuffix}`,
     chatType: isGroup ? "group" : "direct",
     sender: {
       name: senderName,
@@ -592,6 +611,7 @@ export async function buildTelegramInboundContextPayload(params: {
   const toInboundMedia = (media: TelegramMediaRef, index?: number) => ({
     ...(media.path ? { path: media.path, url: media.path } : {}),
     contentType: media.contentType,
+    ...(media.fileName ? { fileName: media.fileName } : {}),
     kind: media.kind,
     transcribed: index !== undefined && audioTranscribedMediaIndex === index,
   });
@@ -713,7 +733,9 @@ export async function buildTelegramInboundContextPayload(params: {
       inboundEventKind,
       body,
       rawBody,
-      bodyForAgent: shouldRenderBufferedBody ? visibleBodyText : bodyText,
+      bodyForAgent: appendMediaUnavailableNotice(
+        shouldRenderBufferedBody ? visibleBodyText : bodyText,
+      ),
       commandBody,
       inboundHistory,
       sourceModality: msg.voice ? "voice" : undefined,

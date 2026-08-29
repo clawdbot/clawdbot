@@ -206,6 +206,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
           sessionFile: sessionPromptState.sessionFile,
           provider,
           model: preparedRuntime.model.id,
+          credentialSource: attempt.modelAttempt?.credentialSource,
           ...runtime.outerContextTokenMeta,
           usageAccumulator: input.usageAccumulator,
           lastRunPromptUsage,
@@ -264,6 +265,9 @@ export async function normalizeEmbeddedRunAttempt(input: {
         (retryingFromTranscript ? "retrying from current transcript" : "retrying prompt"),
     );
     if (retryingFromTranscript) {
+      if ((preflightRecovery.truncatedCount ?? 0) > 0) {
+        sessionPromptState.markOwnedTranscriptRetry();
+      }
       sessionPromptState.continueFromCurrentTranscript();
     }
     const retryKind = resolveRunRetryKind({

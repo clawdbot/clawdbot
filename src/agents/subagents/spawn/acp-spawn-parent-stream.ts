@@ -17,7 +17,7 @@ import {
   type StreamingCompatEntry,
 } from "../../../channels/streaming.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { onAgentEvent } from "../../../infra/agent-events.js";
+import { onAgentEventForRun } from "../../../infra/agent-events.js";
 import {
   type EventSessionRoutingPolicy,
   resolveEventSessionKeyForPolicy,
@@ -556,7 +556,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     emitStartNotice();
   }
 
-  const unsubscribe = onAgentEvent((event) => {
+  const unsubscribe = onAgentEventForRun(runId, (event) => {
     if (disposed || event.runId !== runId) {
       return;
     }

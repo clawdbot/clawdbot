@@ -130,7 +130,7 @@ export async function prepareGatewayKernelState(params: {
       ? createDesktopSessionRegistry()
       : undefined;
   const nodeDesktopStreamBroker =
-    nodeDesktopObserveAvailable || workerDesktopObserveAvailable
+    nodeDesktopObserveAvailable || shouldStartWorkerEnvironmentService
       ? (
           await startupTrace.measure(
             "node-desktop.runtime-import",
@@ -156,6 +156,8 @@ export async function prepareGatewayKernelState(params: {
           const workerModule = await loadWorkerEnvironmentStartupModule();
           return await workerModule.createGatewayWorkerEnvironmentRuntime({
             getPluginRegistry: () => pluginRuntime.registry,
+            getPortalRuntime: () => pluginGatewayContext.current,
+            resolveGatewayContext: () => pluginGatewayContext.current,
             desktopSessionRegistry,
             ...(nodeDesktopStreamBroker ? { nodeDesktopStreamBroker } : {}),
             startup: workerEnvironmentStartup,
@@ -206,7 +208,7 @@ export async function prepareGatewayKernelState(params: {
             getSessionChangeContext: () => pluginGatewayContext.current,
             persistAbandonedPartial: async ({ sessionId, sessionKey, agentId, runId }) => {
               // Placement runtime starts before chat state exists; moves invoke this only after startup.
-              const text = connectionState.chatRunState.resolveBuffer(runId).text;
+              const text = connectionState.chatRunState.resolveBuffer(runId, { final: true }).text;
               if (!text.trim()) {
                 return;
               }
@@ -219,6 +221,7 @@ export async function prepareGatewayKernelState(params: {
               });
             },
             revokeSessionAuthority: (request) => workerDispatchAuthority.revoke(request),
+            info: (message) => log.info(message),
             warn: (message) => log.warn(message),
             ...(githubPublicationRuntime ? { githubPublicationRuntime } : {}),
           }),

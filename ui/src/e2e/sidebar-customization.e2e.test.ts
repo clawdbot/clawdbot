@@ -471,9 +471,15 @@ suite.define(() => {
       await settingsSearch.fill("channel");
       await captureSettingsSidebarProof(settingsSidebar, "01e-settings-search-route.png");
       await holdUiProof(page);
-      await settingsSidebar.getByRole("link", { name: "Channels" }).first().click();
+      const channelsResult = settingsSidebar.getByRole("link", { name: "Channels" }).first();
+      await channelsResult.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/channels");
       await expect.poll(() => settingsSearch.inputValue()).toBe("channel");
+      await captureSettingsSidebarProof(
+        settingsSidebar,
+        `settings-navigation-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "current"}.png`,
+      );
+      await expect.poll(() => channelsResult.getAttribute("aria-current")).toBe("page");
       await captureSettingsSidebarProof(settingsSidebar, "01f-settings-search-navigated.png");
       await holdUiProof(page);
       await page.keyboard.press("Escape");
@@ -850,7 +856,7 @@ suite.define(() => {
           'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
         );
         const sidebarAutomation = sidebar.locator('[data-attention-kind="cronFailed"]');
-        await expect.poll(() => sidebar.locator(".sidebar-footer-update").count()).toBe(1);
+        await expect.poll(() => sidebar.locator(".sidebar-issues-button__count").count()).toBe(1);
         await sidebar.locator(".sidebar-issues-button").click();
         await expect.poll(() => sidebarUpdate.count()).toBe(1);
         await expect.poll(() => sidebarAutomation.count()).toBe(1);

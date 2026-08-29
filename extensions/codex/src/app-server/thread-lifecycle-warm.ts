@@ -2,9 +2,13 @@ import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   CodexAppServerUnsafeSubscriptionError,
+  isCodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
-import { consumeCodexAppServerLiveThread } from "./client-runtime.js";
+import {
+  consumeCodexAppServerLiveThread,
+  releaseCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import {
@@ -61,6 +65,7 @@ type CodexLiveThreadReleaseParams = {
   lifecycleTiming: CodexThreadLifecycleTimingTracker;
   threadId: string;
   cause?: unknown;
+  assertCurrent?: () => void;
 };
 
 /** Preserves the caller's abort reason across thread ownership transitions. */
@@ -89,25 +94,41 @@ export async function releaseCodexConsumedLiveThread(
     unsubscribeCodexThreadBestEffort(options.client, {
       threadId: options.threadId,
       timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+      assertCurrent: options.assertCurrent,
     }),
   );
   if (released) {
     return;
   }
+  return await abandonCodexLiveThreadRelease(options, options.cause);
+}
+
+async function abandonCodexLiveThreadRelease(
+  options: CodexLiveThreadReleaseParams,
+  cause?: unknown,
+): Promise<never> {
+  options.assertCurrent?.();
   await (options.abandonClient ?? (() => closeCodexStartupClientBestEffort(options.client)))();
   throw new CodexAppServerUnsafeSubscriptionError(
     `Codex retained thread subscription could not be released: ${options.threadId}`,
-    options.cause !== undefined ? { cause: options.cause } : undefined,
+    cause !== undefined ? { cause } : undefined,
   );
 }
 
-/** Transfers retained-slot ownership before unconditionally releasing it. */
+/** Releases through the retained owner, preserving its guarded callback and rollback. */
 export async function releaseCodexRetainedLiveThread(
   options: CodexLiveThreadReleaseParams,
-): Promise<void> {
-  if (await consumeCodexAppServerLiveThread(options.client, options.threadId)) {
-    // An abort must not leave a consumed subscription orphaned on the client.
-    await releaseCodexConsumedLiveThread(options);
+): Promise<boolean> {
+  try {
+    return await options.lifecycleTiming.measure("retained-thread-unsubscribe", () =>
+      releaseCodexAppServerLiveThread(options.client, options.threadId, options.assertCurrent),
+    );
+  } catch (error) {
+    // An owner callback may already have retired the client; do not close it twice.
+    if (isCodexAppServerUnsafeSubscriptionError(error)) {
+      throw error;
+    }
+    return await abandonCodexLiveThreadRelease(options, error);
   }
 }
 

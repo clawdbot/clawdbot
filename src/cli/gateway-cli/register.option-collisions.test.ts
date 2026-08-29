@@ -246,6 +246,26 @@ describe("gateway register option collisions", () => {
       },
     },
     {
+      name: "preserves the custom suspend port in its human-readable resume hint",
+      argv: ["gateway", "suspend", "--port", "19086"],
+      assert: () => {
+        expectLocalGatewayCall("gateway.suspend.prepare", 19086);
+        expect(defaultRuntime.log).toHaveBeenCalledWith(
+          "Resume with: openclaw gateway resume suspension-1 --port 19086",
+        );
+      },
+    },
+    {
+      name: "preserves an inherited suspend port in its human-readable resume hint",
+      argv: ["gateway", "--port", "19087", "suspend"],
+      assert: () => {
+        expectLocalGatewayCall("gateway.suspend.prepare", 19087);
+        expect(defaultRuntime.log).toHaveBeenCalledWith(
+          "Resume with: openclaw gateway resume suspension-1 --port 19087",
+        );
+      },
+    },
+    {
       name: "inherits parent --port for gateway resume",
       argv: ["gateway", "--port", "19087", "resume", "suspension-1", "--json"],
       assert: () => {
@@ -353,65 +373,69 @@ describe("gateway register option collisions", () => {
         expectLocalGatewayCall("diagnostics.stability", 19095, { limit: 25 });
       },
     },
-    {
-      name: "falls back for non-decimal usage-cost --days values",
-      argv: ["gateway", "usage-cost", "--days", "1e3", "--json"],
-      assert: () => {
-        expect(callGatewayCli).toHaveBeenCalledTimes(1);
-        const [method, _opts, params] = firstGatewayCall();
-        expect(method).toBe("usage.cost");
-        expect(params).toEqual({ days: 30 });
-      },
-    },
   ])("$name", async ({ argv, assert }) => {
     await sharedProgram.parseAsync(argv, { from: "user" });
     assert();
+  });
+
+  it("rejects non-decimal usage-cost --days values instead of silently defaulting", async () => {
+    await sharedProgram.parseAsync(["gateway", "usage-cost", "--days", "1e3", "--json"], {
+      from: "user",
+    });
+
+    expect(callGatewayCli).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: expect.stringContaining("Invalid --days") },
+    });
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it.each([
     {
       name: "call",
       args: ["call", "health"],
-      failure: "Gateway call failed",
     },
     {
       name: "usage-cost",
       args: ["usage-cost"],
-      failure: "Gateway usage cost failed",
     },
     {
       name: "live stability",
       args: ["stability"],
-      failure: "Gateway stability failed",
     },
-  ])("rejects combining --url and --port for gateway $name", async ({ args, failure }) => {
+  ])("rejects combining --url and --port for gateway $name", async ({ args }) => {
     await sharedProgram.parseAsync(
       ["gateway", ...args, "--url", "ws://127.0.0.1:19084", "--port", "19084", "--json"],
       { from: "user" },
     );
 
     expect(callGatewayCli).not.toHaveBeenCalled();
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      `${failure}: Use either --url or --port, not both.`,
-    );
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: "Use either --url or --port, not both." },
+    });
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("uses the effective local port override for gateway health auth diagnostics", async () => {
+  it("uses the effective local port and timeout for gateway health auth diagnostics", async () => {
     const authError = new Error("gateway auth required");
     callGatewayCli.mockRejectedValueOnce(authError);
     emitReachableGatewayAuthDiagnostic.mockResolvedValueOnce(true);
 
-    await sharedProgram.parseAsync(["gateway", "health", "--port", "19081", "--json"], {
-      from: "user",
-    });
+    await sharedProgram.parseAsync(
+      ["gateway", "health", "--port", "19081", "--timeout", "1234", "--json"],
+      { from: "user" },
+    );
 
     expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledTimes(1);
     expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledWith({
       error: authError,
       config: {},
       runtime: defaultRuntime,
-      timeoutMs: 10000,
+      timeoutMs: 1234,
       token: undefined,
       password: undefined,
       localPortOverride: 19081,

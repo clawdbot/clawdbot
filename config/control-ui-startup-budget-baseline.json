@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 340388,
-  "reason": "rebase onto current main; startup growth landed on main since the boot-group ratchet",
-  "updatedAt": "2026-08-24"
+  "startupJsGzipBytes": 346185,
+  "reason": "Per-session colors in the boot path (#132570): sidebar stripe render, color tokens, and menu wiring measured 346185 B, +579 B over the prior baseline and 3 B past its growth allowance; below the maintainer-approved 347323 B ceiling; hard cap and allowances unchanged",
+  "updatedAt": "2026-08-29"
 }

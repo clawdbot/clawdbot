@@ -1,6 +1,6 @@
 import type { Model } from "@openclaw/llm-core";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { isAnthropicOAuthApiKey } from "../providers/anthropic-auth-headers.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
   splitSystemPromptCacheBoundary,
@@ -12,6 +12,7 @@ import {
  * capabilities allow them.
  */
 import { resolveProviderEndpoint, resolveProviderRequestCapabilities } from "./host-policy.js";
+import { parsePositiveInteger } from "./transport-utils.js";
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 type AnthropicServiceTier = "auto" | "standard_only";
@@ -46,13 +47,6 @@ type AnthropicPayloadPolicy = {
   useServerCompaction: boolean;
 };
 
-function parsePositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
-  return typeof value === "string" ? parseStrictPositiveInteger(value) : undefined;
-}
-
 /** Resolve the Anthropic input-token trigger, including the API's minimum. */
 function resolveAnthropicCompactThreshold(contextWindow: unknown, configured: unknown): number {
   const configuredThreshold = parsePositiveInteger(configured);
@@ -77,12 +71,14 @@ export function resolveAnthropicServerCompactionPlan(
     contextWindow?: unknown;
   },
   extraParams?: Record<string, unknown>,
+  apiKey?: string,
 ): { enabled: boolean; threshold?: number } {
   const provider = normalizeOptionalLowercaseString(model.provider);
   const api = normalizeOptionalLowercaseString(model.api);
   const endpointClass = resolveProviderEndpoint(model).endpointClass;
   const enabled =
     extraParams?.anthropicServerCompaction === true &&
+    !isAnthropicOAuthApiKey(apiKey) &&
     provider === "anthropic" &&
     api === "anthropic-messages" &&
     (endpointClass === "default" || endpointClass === "anthropic-public");

@@ -264,6 +264,8 @@ describe("createSessionCapability message subscriptions", () => {
     const client = { request, forceReconnect } as unknown as GatewayBrowserClient;
     let current = true;
     const operations = createSessionScopedOperations({
+      notifyCreated: vi.fn(),
+      reportError: vi.fn(),
       connection: {
         capture: () => ({ client, epoch: 0 }),
         isCurrent: () => current,

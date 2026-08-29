@@ -1,4 +1,6 @@
 /** Combined session MCP runtime facade for static + requester partitions. */
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import type {
   McpCatalogTool,
   McpServerCatalog,
@@ -141,8 +143,10 @@ export function createCombinedSessionMcpRuntime(params: {
   // Fresh combined facades have an empty owner map until the catalog is loaded.
   // Share one in-flight getCatalog so concurrent tool/resource calls do not fan out.
   const ownerForServer = async (serverName: string): Promise<SessionMcpRuntime> => {
+    const signal = getSessionMcpRequestSignal();
+    signal?.throwIfAborted();
     if (serverOwner.size === 0) {
-      await loadCatalog();
+      await racePromiseWithAbortSignal(loadCatalog(), signal);
     }
     const owner = serverOwner.get(serverName);
     if (owner) {

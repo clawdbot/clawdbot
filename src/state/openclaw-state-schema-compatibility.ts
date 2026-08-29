@@ -92,18 +92,11 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
       "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
     ],
     "claw_package_refs.updated_at_ms": ["updated_at_ms INTEGER NOT NULL DEFAULT 0"],
-    "cron_jobs.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
     "cron_jobs.enabled": ["enabled INTEGER NOT NULL DEFAULT 1"],
     "cron_jobs.name": ["name TEXT NOT NULL DEFAULT ''"],
     "cron_jobs.payload_kind": ["payload_kind TEXT NOT NULL DEFAULT 'message'"],
-    "cron_jobs.schedule_kind": ["schedule_kind TEXT NOT NULL DEFAULT 'manual'"],
-    "cron_jobs.session_target": ["session_target TEXT NOT NULL DEFAULT 'main'"],
-    "cron_jobs.wake_mode": ["wake_mode TEXT NOT NULL DEFAULT 'auto'"],
     "current_conversation_bindings.conversation_kind": [
       "conversation_kind TEXT NOT NULL DEFAULT 'channel'",
-    ],
-    "current_conversation_bindings.target_agent_id": [
-      "target_agent_id TEXT NOT NULL DEFAULT 'main'",
     ],
     "operator_approvals.resolution_ref": ["resolution_ref TEXT"],
     "worker_environments.desktop_json": ["desktop_json TEXT"],

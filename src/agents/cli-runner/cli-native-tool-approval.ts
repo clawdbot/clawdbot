@@ -1,5 +1,5 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
-import { sanitizeExecApprovalWarningTextWithStatus } from "../../infra/exec-approval-command-display.js";
+import { sanitizeExecApprovalWarningTextWithStatus } from "../../infra/exec-approval-text-sanitize.js";
 import type { ExecAsk, ExecSecurity } from "../../infra/exec-approvals.js";
 import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,

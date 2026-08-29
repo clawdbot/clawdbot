@@ -1998,35 +1998,46 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("exits for local runs that resolve after SIGTERM aborts them", async () => {
-    await withTempStore(async () => {
-      const signals = createSignalProcess();
-      agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
-        return await new Promise((resolve) => {
-          opts.abortSignal?.addEventListener(
-            "abort",
-            () => {
-              resolve({
-                payloads: [],
-                meta: { aborted: true },
-              } as unknown as Awaited<ReturnType<typeof AgentCommand>>);
-            },
-            { once: true },
-          );
+  it.each([
+    ["SIGTERM", 143],
+    ["SIGINT", 130],
+  ] as const)(
+    "preserves %s when a local run returns a failed outcome",
+    async (signal, exitCode) => {
+      await withTempStore(async () => {
+        const signals = createSignalProcess();
+        agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
+          return await new Promise((resolve) => {
+            opts.abortSignal?.addEventListener(
+              "abort",
+              () => {
+                resolve(
+                  recordAgentRunTerminalOutcome(
+                    {
+                      payloads: [],
+                      meta: { aborted: true },
+                    },
+                    "failed",
+                  ) as unknown as Awaited<ReturnType<typeof AgentCommand>>,
+                );
+              },
+              { once: true },
+            );
+          });
         });
-      });
 
-      const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
-        process: signals.processLike,
-      });
-      await waitForAgentCommandCall();
-      signals.emit("SIGTERM");
+        const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
+          process: signals.processLike,
+        });
+        await waitForAgentCommandCall();
+        signals.emit(signal);
 
-      await expect(run).resolves.toBeUndefined();
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(143);
-    });
-  });
+        await expect(run).resolves.toBeUndefined();
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledWith(exitCode);
+      });
+    },
+  );
 
   it("does not classify abort errors as gateway transport failures", async () => {
     await withTempStore(async () => {
@@ -2477,7 +2488,10 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("marks a failed local terminal outcome unsuccessful", async () => {
+  it.each([
+    ["failed", 1],
+    ["completed", 0],
+  ] as const)("maps a %s local terminal outcome to exit %s", async (outcome, exitCode) => {
     await withTempStore(async () => {
       const signals = createSignalProcess();
       agentCommand.mockResolvedValueOnce(
@@ -2486,7 +2500,7 @@ describe("agentCliCommand", () => {
             payloads: [{ text: "provider failed", isError: true }],
             meta: { error: new Error("provider failed") },
           },
-          "failed",
+          outcome,
         ),
       );
 
@@ -2494,7 +2508,7 @@ describe("agentCliCommand", () => {
         process: signals.processLike,
       });
 
-      expect(signals.processLike.exitCode).toBe(1);
+      expect(signals.processLike.exitCode).toBe(exitCode);
     });
   });
 

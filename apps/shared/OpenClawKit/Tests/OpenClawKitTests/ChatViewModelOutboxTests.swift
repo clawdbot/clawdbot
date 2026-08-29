@@ -2040,13 +2040,19 @@ struct ChatViewModelOutboxTests {
         #expect(await MainActor.run { vm.input } == "queued once")
     }
 
-    @Test func `queued send transport failure fails closed until explicit retry`() async throws {
+    @Test(arguments: [false, true])
+    func `queued send transport failure fails closed until explicit retry`(retryBeforeReconnect: Bool) async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
         let transport = OutboxTestTransport(healthy: false, sendFails: true)
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
 
         await MainActor.run { vm.load() }
+        try await waitUntil("offline bootstrap settled") {
+            await MainActor.run { !vm.isLoading && vm.hasRestoredOutboxMessages }
+        }
+        // A failed history request cannot refresh the displayed retry version.
+        await transport.state.update { $0.historyFails = retryBeforeReconnect }
         try await sendWhileOffline(vm, text: "stuck in transit")
 
         // Gateway reports healthy but the send throws. One ambiguous attempt
@@ -2062,14 +2068,35 @@ struct ChatViewModelOutboxTests {
         #expect(command.retryCount == 0)
         #expect(await transport.state.sentIdempotencyKeys.isEmpty)
 
-        // Reconnect only reconciles. Explicit retry is required to send.
+        try await waitUntil("failed send is visible and settled") {
+            await MainActor.run {
+                !vm.isFlushingOutbox && vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
+            }
+        }
+        // Retry must work from the displayed failure, even before reconnect
+        // or a successful history refresh can reload the durable command.
         await transport.state.update { $0.sendFails = false }
-        await transport.goOnline()
-        try await Task.sleep(nanoseconds: 50_000_000)
+        if !retryBeforeReconnect {
+            let historyRequests = await transport.state.historyRequestCount
+            await transport.goOnline()
+            try await waitUntil("reconnect reconciles without replay") {
+                let historyRefreshed = await transport.state.historyRequestCount > historyRequests
+                return await MainActor.run { historyRefreshed && vm.healthOK && !vm.isFlushingOutbox }
+            }
+        }
         #expect(await store.loadCommands().map(\.status) == [.failed])
 
-        let messageID = try #require(await MainActor.run { vm.messages.last?.id })
+        let messageID = try #require(await MainActor.run {
+            vm.messages.first { vm.outboxState(for: $0.id)?.isFailed == true }?.id
+        })
         await MainActor.run { vm.retryOutboxMessage(messageID) }
+        if retryBeforeReconnect {
+            try await waitUntil("offline explicit retry queues command") {
+                await store.loadCommands().map(\.status) == [.queued]
+            }
+            await transport.state.update { $0.historyFails = false }
+            await transport.goOnline()
+        }
         try await waitUntil("explicit retry drains command") {
             await store.loadCommands().isEmpty
         }

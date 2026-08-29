@@ -1,9 +1,23 @@
 import { Command } from "commander";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
 import type { installChromeExtensionBootstrap } from "../browser/extension-install.js";
 import { relayKeyIdFromHex } from "../browser/extension-relay/auth-v2-crypto.js";
 import * as cliCoreApiModule from "./core-api.js";
+
+// Metadata output must remain usable without loading browser or agent execution runtimes.
+vi.mock("../control-service.js", () => {
+  throw new Error("Browser extension CLI must not load browser control services");
+});
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => {
+  throw new Error("Browser extension CLI must not load agent runtime");
+});
+vi.mock("openclaw/plugin-sdk/media-runtime", () => {
+  throw new Error("Browser extension CLI must not load media runtime");
+});
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => {
+  throw new Error("Browser extension CLI must not load media understanding runtime");
+});
 
 const relayMocks = vi.hoisted(() => {
   let relayKey = "";
@@ -12,7 +26,11 @@ const relayMocks = vi.hoisted(() => {
   }
   return { relayKey, ensureExtensionRelayToken: vi.fn(() => relayKey) };
 });
-const installMocks = vi.hoisted(() => ({ installChromeExtensionBootstrap: vi.fn() }));
+const installMocks = vi.hoisted(() => ({
+  browserExtensionStatus: vi.fn(),
+  installChromeExtensionBootstrap: vi.fn(),
+  uninstallChromeExtensionNativeHosts: vi.fn(),
+}));
 
 vi.mock("../browser/extension-relay/relay-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../browser/extension-relay/relay-auth.js")>()),
@@ -21,15 +39,44 @@ vi.mock("../browser/extension-relay/relay-auth.js", async (importOriginal) => ({
 
 vi.mock("../browser/extension-install.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../browser/extension-install.js")>()),
+  browserExtensionStatus: installMocks.browserExtensionStatus,
   installChromeExtensionBootstrap: installMocks.installChromeExtensionBootstrap,
+  uninstallChromeExtensionNativeHosts: installMocks.uninstallChromeExtensionNativeHosts,
 }));
 
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 
+function createExtensionStatus() {
+  return {
+    platform: "linux" as const,
+    platformSupport: "automatic" as const,
+    installedCopy: { path: "/stable/openclaw-extension", present: true, owned: true },
+    bundledPath: "/bundled/openclaw-extension",
+    approvedPaths: ["/stable/openclaw-extension"],
+    discovered: [],
+    storeDiscovered: [],
+    registrations: [],
+    manualSetupRequired: false,
+    issues: [],
+  };
+}
+
 describe("browser extension pairing Gateway URL", () => {
+  beforeEach(() => {
+    installMocks.browserExtensionStatus.mockResolvedValue(createExtensionStatus());
+    installMocks.installChromeExtensionBootstrap.mockResolvedValue(createExtensionStatus());
+    installMocks.uninstallChromeExtensionNativeHosts.mockResolvedValue({
+      removed: [],
+      refused: [],
+      manualRequired: false,
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+    installMocks.browserExtensionStatus.mockReset();
     installMocks.installChromeExtensionBootstrap.mockReset();
+    installMocks.uninstallChromeExtensionNativeHosts.mockReset();
     resetRuntimeCapture();
   });
 
@@ -81,6 +128,28 @@ describe("browser extension pairing Gateway URL", () => {
     expect(output.at(-1)).toContain("extension identity verified");
   });
 
+  it.each(["0x1000", "1e4", "+50000", " 50000", "50000 ", "50000\t"])(
+    "rejects invalid install --wait-ms value %j before installation",
+    async (value) => {
+      const errorSpy = vi
+        .spyOn(cliCoreApiModule.defaultRuntime, "error")
+        .mockImplementation(runtime.error);
+      vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(runtime.exit);
+      const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
+      const program = new Command();
+      registerBrowserExtensionCommands(program.command("browser"), () => ({}));
+
+      await expect(
+        program.parseAsync(["browser", "extension", "install", "--wait-ms", value], {
+          from: "user",
+        }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--wait-ms"));
+      expect(installMocks.installChromeExtensionBootstrap).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects path-rewriting proxy prefixes for strict v2 resource binding", async () => {
     vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({});
     const errorSpy = vi
@@ -123,6 +192,43 @@ describe("browser extension pairing Gateway URL", () => {
     expect(logSpy).not.toHaveBeenCalled();
   });
 
+  it.each(["install", "status", "uninstall-host", "pair", "cdp"])(
+    "honors browser-level and leaf JSON placement for extension %s",
+    async (subcommand) => {
+      vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({});
+      const logSpy = vi
+        .spyOn(cliCoreApiModule.defaultRuntime, "log")
+        .mockImplementation(runtime.log);
+      const writeJsonSpy = vi
+        .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
+        .mockImplementation(runtime.writeJson);
+      const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
+      const placements = [
+        ["browser", "--json", "extension", subcommand],
+        ["browser", "extension", subcommand, "--json"],
+      ];
+
+      for (const argv of placements) {
+        const program = new Command().enablePositionalOptions();
+        const browser = program.command("browser").option("--json", "Output JSON", false);
+        registerBrowserExtensionCommands(browser, (command) => {
+          let owner: Command | null = command;
+          while (owner && owner.name() !== "browser") {
+            owner = owner.parent;
+          }
+          return owner?.opts() ?? {};
+        });
+        writeJsonSpy.mockClear();
+        logSpy.mockClear();
+
+        await program.parseAsync(argv, { from: "user" });
+
+        expect(writeJsonSpy, argv.join(" ")).toHaveBeenCalledTimes(1);
+        expect(logSpy, argv.join(" ")).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("pairs with the allocated extension relay when another profile pins the default port", async () => {
     vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({
       browser: {
@@ -148,28 +254,38 @@ describe("browser extension pairing Gateway URL", () => {
     });
   });
 
-  it("prints only safe v2 relay metadata via cdp --json", async () => {
-    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({});
+  it.each([
+    { label: "default", config: {}, port: 18799 },
+    {
+      label: "configured",
+      config: {
+        browser: {
+          profiles: { custom: { driver: "extension" as const, cdpPort: 21117, color: "#00AA00" } },
+        },
+      },
+      port: 21117,
+    },
+  ])("prints safe $label v2 metadata through the lazy root CLI", async ({ config, port }) => {
+    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue(config);
     const logSpy = vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
     const writeJsonSpy = vi
       .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
       .mockImplementation(runtime.writeJson);
-    const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
+    const { registerBrowserCli } = await import("./browser-cli.js");
     const program = new Command();
-    const browser = program.command("browser");
-    registerBrowserExtensionCommands(browser, () => ({}));
+    registerBrowserCli(program, ["node", "openclaw", "browser", "extension", "cdp", "--json"]);
 
     await program.parseAsync(["browser", "extension", "cdp", "--json"], { from: "user" });
 
     expect(writeJsonSpy).toHaveBeenCalledWith({
-      browserUrl: "http://127.0.0.1:18799",
-      wsEndpoint: "ws://127.0.0.1:18799/cdp",
+      browserUrl: `http://127.0.0.1:${port}`,
+      wsEndpoint: `ws://127.0.0.1:${port}/cdp`,
       auth: {
         label: "openclaw.browser-relay.auth",
         version: 2,
         keyId: relayKeyIdFromHex(relayMocks.relayKey),
-        challengeUrl: "http://127.0.0.1:18799/_openclaw/relay/auth/v2/challenge",
-        completeUrl: "http://127.0.0.1:18799/_openclaw/relay/auth/v2/complete",
+        challengeUrl: `http://127.0.0.1:${port}/_openclaw/relay/auth/v2/challenge`,
+        completeUrl: `http://127.0.0.1:${port}/_openclaw/relay/auth/v2/complete`,
         role: "cdp",
         transport: "connection",
         method: "SEQUENCE",

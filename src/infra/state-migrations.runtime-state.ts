@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
@@ -18,10 +17,7 @@ import { archiveLegacyImportSource } from "./state-migrations.storage.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 import { normalizeVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 
-type LegacyVoiceWakeImportDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "voicewake_routing_config" | "voicewake_routing_routes" | "voicewake_triggers"
->;
+type LegacyVoiceWakeImportDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 type LegacyConfigHealthImportDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 type LegacyPluginBindingApprovalsImportDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -32,7 +28,8 @@ type LegacyCurrentConversationBindingsImportDatabase = Pick<
   "current_conversation_bindings"
 >;
 
-const VOICEWAKE_CONFIG_KEY = "default";
+const VOICEWAKE_TRIGGERS_STATE_KEY = "voicewake.triggers";
+const VOICEWAKE_ROUTING_STATE_KEY = "voicewake.routing";
 const DEFAULT_VOICEWAKE_TRIGGERS = ["openclaw", "claude", "computer"];
 
 export function resolveLegacyVoiceWakeTriggersPath(stateDir: string): string {
@@ -116,82 +113,28 @@ function normalizeLegacyVoiceWakeTriggers(input: unknown): string[] {
   return triggers.length > 0 ? triggers : DEFAULT_VOICEWAKE_TRIGGERS;
 }
 
-function legacyVoiceWakeTriggersMatch(
-  rows: Array<{ trigger: string }>,
-  triggers: string[],
-): boolean {
-  return (
-    rows.length === triggers.length && rows.every((row, index) => row.trigger === triggers[index])
+function importLegacyVoiceWakeMachineState(
+  database: DatabaseSync,
+  key: string,
+  value: unknown,
+): { current: unknown; imported: boolean } {
+  const db = getNodeSqliteKysely<LegacyVoiceWakeImportDatabase>(database);
+  const existing = executeSqliteQueryTakeFirstSync(
+    database,
+    db.selectFrom("config_machine_state").select("value_json").where("state_key", "=", key),
   );
-}
-
-function legacyVoiceWakeTargetColumns(target: {
-  agentId?: string;
-  mode?: "current";
-  sessionKey?: string;
-}): {
-  targetAgentId: string | null;
-  targetMode: string;
-  targetSessionKey: string | null;
-} {
-  if (target.agentId) {
-    return { targetAgentId: target.agentId, targetMode: "agent", targetSessionKey: null };
+  if (existing) {
+    return { current: JSON.parse(existing.value_json), imported: false };
   }
-  if (target.sessionKey) {
-    return { targetAgentId: null, targetMode: "session", targetSessionKey: target.sessionKey };
-  }
-  return { targetAgentId: null, targetMode: "current", targetSessionKey: null };
-}
-
-function legacyVoiceWakeTargetColumnsMatch(
-  left: ReturnType<typeof legacyVoiceWakeTargetColumns>,
-  right: {
-    target_agent_id?: string | null;
-    target_mode?: string | null;
-    target_session_key?: string | null;
-  },
-): boolean {
-  return (
-    left.targetAgentId === (right.target_agent_id ?? null) &&
-    left.targetMode === right.target_mode &&
-    left.targetSessionKey === (right.target_session_key ?? null)
+  executeSqliteQuerySync(
+    database,
+    db.insertInto("config_machine_state").values({
+      state_key: key,
+      value_json: JSON.stringify(value),
+      updated_at_ms: Date.now(),
+    }),
   );
-}
-
-function legacyVoiceWakeRoutingMatches(
-  configRow: {
-    default_target_agent_id: string | null;
-    default_target_mode: string;
-    default_target_session_key: string | null;
-  },
-  routeRows: Array<{
-    target_agent_id: string | null;
-    target_mode: string;
-    target_session_key: string | null;
-    trigger: string;
-  }>,
-  routingConfig: ReturnType<typeof normalizeVoiceWakeRoutingConfig>,
-): boolean {
-  const defaultTarget = legacyVoiceWakeTargetColumns(routingConfig.defaultTarget);
-  if (
-    !legacyVoiceWakeTargetColumnsMatch(defaultTarget, {
-      target_agent_id: configRow.default_target_agent_id,
-      target_mode: configRow.default_target_mode,
-      target_session_key: configRow.default_target_session_key,
-    })
-  ) {
-    return false;
-  }
-  return (
-    routeRows.length === routingConfig.routes.length &&
-    routeRows.every((row, index) => {
-      const route = routingConfig.routes[index];
-      if (!route || row.trigger !== route.trigger) {
-        return false;
-      }
-      return legacyVoiceWakeTargetColumnsMatch(legacyVoiceWakeTargetColumns(route.target), row);
-    })
-  );
+  return { current: value, imported: true };
 }
 
 export function migrateLegacyVoiceWakeSettings(params: {
@@ -205,19 +148,15 @@ export function migrateLegacyVoiceWakeSettings(params: {
     normalize: normalizeLegacyVoiceWakeTriggers,
     shouldMigrate: (triggers) => triggers.length > 0,
     migrate(db, triggers) {
-      const stateDb = getNodeSqliteKysely<LegacyVoiceWakeImportDatabase>(db);
-      const existing = executeSqliteQuerySync(
+      const imported = importLegacyVoiceWakeMachineState(
         db,
-        stateDb
-          .selectFrom("voicewake_triggers")
-          .select(["trigger"])
-          .where("config_key", "=", VOICEWAKE_CONFIG_KEY)
-          .orderBy("position", "asc"),
-      ).rows;
-      if (existing.length > 0) {
+        VOICEWAKE_TRIGGERS_STATE_KEY,
+        triggers,
+      );
+      if (!imported.imported) {
         return {
           changes: [],
-          ...(legacyVoiceWakeTriggersMatch(existing, triggers)
+          ...(JSON.stringify(imported.current) === JSON.stringify(triggers)
             ? {}
             : {
                 notices: [
@@ -226,18 +165,6 @@ export function migrateLegacyVoiceWakeSettings(params: {
               }),
         };
       }
-      const updatedAtMs = Date.now();
-      executeSqliteQuerySync(
-        db,
-        stateDb.insertInto("voicewake_triggers").values(
-          triggers.map((trigger, position) => ({
-            config_key: VOICEWAKE_CONFIG_KEY,
-            position,
-            trigger,
-            updated_at_ms: updatedAtMs,
-          })),
-        ),
-      );
       return {
         changes: [
           `Migrated ${triggers.length} voice wake ${triggers.length === 1 ? "trigger" : "triggers"} → shared SQLite state`,
@@ -253,26 +180,18 @@ export function migrateLegacyVoiceWakeSettings(params: {
     normalize: normalizeVoiceWakeRoutingConfig,
     shouldMigrate: Boolean,
     migrate(db, routingConfig) {
-      const stateDb = getNodeSqliteKysely<LegacyVoiceWakeImportDatabase>(db);
-      const existing = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb
-          .selectFrom("voicewake_routing_config")
-          .select(["default_target_agent_id", "default_target_mode", "default_target_session_key"])
-          .where("config_key", "=", VOICEWAKE_CONFIG_KEY),
-      );
-      if (existing) {
-        const routeRows = executeSqliteQuerySync(
-          db,
-          stateDb
-            .selectFrom("voicewake_routing_routes")
-            .select(["target_agent_id", "target_mode", "target_session_key", "trigger"])
-            .where("config_key", "=", VOICEWAKE_CONFIG_KEY)
-            .orderBy("position", "asc"),
-        ).rows;
+      const imported = importLegacyVoiceWakeMachineState(db, VOICEWAKE_ROUTING_STATE_KEY, {
+        ...routingConfig,
+        updatedAtMs: Date.now(),
+      });
+      if (!imported.imported) {
+        const existing = normalizeVoiceWakeRoutingConfig(imported.current);
+        const matches =
+          JSON.stringify(existing.defaultTarget) === JSON.stringify(routingConfig.defaultTarget) &&
+          JSON.stringify(existing.routes) === JSON.stringify(routingConfig.routes);
         return {
           changes: [],
-          ...(legacyVoiceWakeRoutingMatches(existing, routeRows, routingConfig)
+          ...(matches
             ? {}
             : {
                 notices: [
@@ -280,38 +199,6 @@ export function migrateLegacyVoiceWakeSettings(params: {
                 ],
               }),
         };
-      }
-      const updatedAtMs = Date.now();
-      const defaultTarget = legacyVoiceWakeTargetColumns(routingConfig.defaultTarget);
-      executeSqliteQuerySync(
-        db,
-        stateDb.insertInto("voicewake_routing_config").values({
-          config_key: VOICEWAKE_CONFIG_KEY,
-          version: 1,
-          default_target_mode: defaultTarget.targetMode,
-          default_target_agent_id: defaultTarget.targetAgentId,
-          default_target_session_key: defaultTarget.targetSessionKey,
-          updated_at_ms: updatedAtMs,
-        }),
-      );
-      if (routingConfig.routes.length > 0) {
-        executeSqliteQuerySync(
-          db,
-          stateDb.insertInto("voicewake_routing_routes").values(
-            routingConfig.routes.map((route, position) => {
-              const target = legacyVoiceWakeTargetColumns(route.target);
-              return {
-                config_key: VOICEWAKE_CONFIG_KEY,
-                position,
-                trigger: route.trigger,
-                target_mode: target.targetMode,
-                target_agent_id: target.targetAgentId,
-                target_session_key: target.targetSessionKey,
-                updated_at_ms: updatedAtMs,
-              };
-            }),
-          ),
-        );
       }
       return {
         changes: [
@@ -774,8 +661,6 @@ function normalizeLegacyCurrentConversationBindingFile(input: unknown): SessionB
 function currentConversationBindingRow(record: SessionBindingRecord): {
   binding_key: string;
   binding_id: string;
-  target_agent_id: string;
-  target_session_id: string | null;
   target_session_key: string;
   channel: string;
   account_id: string;
@@ -794,8 +679,6 @@ function currentConversationBindingRow(record: SessionBindingRecord): {
   return {
     binding_key: currentConversationBindingKey(conversation),
     binding_id: record.bindingId,
-    target_agent_id: resolveAgentIdFromSessionKey(record.targetSessionKey),
-    target_session_id: null,
     target_session_key: record.targetSessionKey,
     channel: conversation.channel,
     account_id: conversation.accountId,

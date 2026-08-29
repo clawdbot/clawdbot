@@ -122,6 +122,9 @@ async function runChannelMessageSendWithLifecycle<
   try {
     attemptToken = await params.lifecycle.beforeSendAttempt?.(params.ctx);
     const result = await params.send();
+    if (result.outcome === "not_sent") {
+      return { result };
+    }
     const successCtx = {
       ...params.ctx,
       result,
@@ -402,11 +405,12 @@ function createPluginHandler(
       ? (payload) => outbound.shouldSkipPlainTextSanitization!({ payload })
       : undefined,
     resolveEffectiveTextChunkLimit: outbound?.resolveEffectiveTextChunkLimit
-      ? (fallbackLimit) =>
+      ? ({ fallbackLimit, formatting }) =>
           outbound.resolveEffectiveTextChunkLimit!({
             cfg: params.cfg,
             accountId: params.accountId ?? undefined,
             fallbackLimit,
+            formatting,
           })
       : undefined,
     sendPayload:

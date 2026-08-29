@@ -143,6 +143,7 @@ function isNodeSession(value: unknown, sessionIdPattern: RegExp): value is Sessi
     typeof value.canContinue === "boolean" &&
     typeof value.canArchive === "boolean" &&
     isOptionalString(value.name) &&
+    isOptionalString(value.color) &&
     isOptionalString(value.cwd) &&
     isOptionalString(value.source) &&
     isOptionalString(value.modelProvider) &&
@@ -512,8 +513,10 @@ export function createSessionCatalogFamily(
       }
       const agentId = options.continuation.resolveAgentId(request.agentId);
       const sourceKey = sessionCatalogAdoptedSourceKey(request.hostId, request.threadId);
+      // Scope in-flight results to the agent without changing host/thread adoption lookup keys.
+      const operationKey = `${agentId}\0${sourceKey}`;
       return await continueAdoption({
-        sourceKey,
+        sourceKey: operationKey,
         findExisting: async () => (await options.continuation.listAdopted(agentId)).get(sourceKey),
         create: async () => {
           const session = await options.continuation.loadSession(request.threadId);

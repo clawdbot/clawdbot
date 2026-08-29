@@ -12,6 +12,7 @@ import type {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { finalizeTestManagerCalls } from "./manager.test-harness.js";
 import type { VoiceCallStateRuntime } from "./runtime-state.js";
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
@@ -238,11 +239,19 @@ describe("voice-call realtime route ownership", () => {
       await runtime?.stop();
       for (const ws of sockets) {
         if (ws.readyState !== WebSocket.CLOSED) {
+          const closed = waitForClose(ws);
           ws.terminate();
+          await closed;
         }
       }
       await Promise.all(servers.map((server) => server.close()));
-      resetPluginStateStoreForTests();
+      try {
+        if (runtime) {
+          finalizeTestManagerCalls(runtime.manager);
+        }
+      } finally {
+        resetPluginStateStoreForTests();
+      }
     }
   });
 });

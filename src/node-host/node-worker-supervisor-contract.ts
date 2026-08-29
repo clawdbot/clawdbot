@@ -1,5 +1,6 @@
 import {
   parseNodeWorkerSupervisorReceipt,
+  type NodeWorkerEnvironmentStopInput,
   type NodeWorkerLaunchInput,
   type NodeWorkerSupervisorIdentity,
   type NodeWorkerSupervisorReceipt,
@@ -12,9 +13,9 @@ import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpo
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 
 export {
-  assertNodeWorkerLaunchIdentity,
   nodeWorkerPlanHash,
   parseNodeWorkerCancelInput,
+  parseNodeWorkerEnvironmentStopInput,
   parseNodeWorkerLaunchInput,
   parseNodeWorkerLookupInput,
 } from "../worker/node-supervisor-protocol.js";
@@ -36,6 +37,7 @@ export type NodeWorkerSupervisorControl = {
     signal?: AbortSignal,
   ): Promise<NodeWorkerWorkspaceRetainResult>;
   cancel(expected: NodeWorkerSupervisorIdentity): Promise<NodeWorkerLaunchReceipt | undefined>;
+  stopEnvironment(input: NodeWorkerEnvironmentStopInput): Promise<void>;
 };
 
 export function projectNodeWorkerSupervisorReceipt(

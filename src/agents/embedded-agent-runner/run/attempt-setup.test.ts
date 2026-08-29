@@ -33,7 +33,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
     resolveSandboxContext.mockClear();
   });
 
-  it("prepares the default and session agent identities together", async () => {
+  it("prepares the identity that owns the current agent session", async () => {
     const setup = await prepareEmbeddedAttemptSetup({
       config: {
         agents: {
@@ -50,7 +50,6 @@ describe("prepareEmbeddedAttemptSetup", () => {
       workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-agent-identities"),
     } as unknown as EmbeddedRunAttemptParams);
 
-    expect(setup.defaultAgentId).toBe("main");
     expect(setup.sessionAgentId).toBe("marketing");
   });
 
@@ -80,6 +79,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       getPrePromptMessageCount: () => 0,
       getPromptCache: () => undefined,
       getPromptCacheRetention: () => undefined,
+      getCompactionReplayEnabled: () => false,
       getSystemPrompt: () => "",
       isOpenAIResponsesApi: false,
       repairToolUseResultPairing: false,

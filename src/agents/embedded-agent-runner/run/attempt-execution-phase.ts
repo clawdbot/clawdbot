@@ -9,6 +9,7 @@ import {
   projectAgentRunAttemptTerminal,
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
+import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
@@ -34,12 +35,12 @@ export async function runEmbeddedAttemptExecutionPhase(
       builtinToolNames,
       coreBuiltinToolNames,
       clientToolCallSlots,
-      clientToolLoopDetection,
       hasDeliveredSourceReply,
       hookRunner,
       markSourceReplyDelivered,
       replaySafeToolNames,
       replaySafeTools,
+      codeModeExecToolNames,
       sideEffectToolOwners,
       setActiveSessionSystemPrompt,
       settingsManager,
@@ -57,7 +58,10 @@ export async function runEmbeddedAttemptExecutionPhase(
   const { capabilityToolNames, liveAllowedToolNames, replayAllowedToolNames } =
     toolCatalog.toolSearchRunPlan;
   const { runtimeChannel } = systemPrompt;
-  const { toolSearchTargetTranscriptProjections } = toolBase;
+  const { nestedToolActivities } = toolBase;
+  activeSession[agentSessionSetContextReplacementHook](() =>
+    toolBase.skillInstructionDeliveryCache.clear(),
+  );
   const hookAgentId = input.setup.sessionAgentId;
   let repairedRejectedProviderReplay = false;
   const diagnosticOwner = createDiagnosticEmbeddedRunOwner({
@@ -82,8 +86,8 @@ export async function runEmbeddedAttemptExecutionPhase(
     isOpenAIResponsesApi,
     replayAllowedToolNames,
     liveAllowedToolNames,
-    clientToolLoopDetection,
     anthropicPayloadLogger,
+    codeModeExecToolNames,
     effectiveAgentTransport,
     providerTextTransforms,
     runTrace: input.diagnostics.runTrace,
@@ -107,6 +111,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
       cacheTrace,
       capabilityToolNames,
+      compactionReplayEnabled: sessionRuntime.transport.compactionReplayEnabled,
       effectiveWorkspace: input.setup.effectiveWorkspace,
       isOpenAIResponsesApi,
       isRawModelRun: input.isRawModelRun,
@@ -203,7 +208,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     hookAgentId,
     diagnosticTrace: input.diagnostics.diagnosticTrace,
     clientToolCallSlots,
-    toolSearchTargetTranscriptProjections,
+    nestedToolActivities,
     isReplaySafeTool: (tool) => replaySafeTools.has(tool as never),
     hasDeliveredSourceReply,
     markSourceReplyDelivered,
@@ -211,9 +216,12 @@ export async function runEmbeddedAttemptExecutionPhase(
     builtinToolNames,
     coreBuiltinToolNames,
     replaySafeToolNames,
+    codeModeExecToolNames,
     sideEffectToolOwners,
     diagnosticOwner,
+    trajectoryRecorder: sessionRuntime.trajectoryRecorder,
   });
+  state.deferredLifecycleOwner = preparedStream.deferredLifecycleOwner;
   input.lifecycle.setToolSearchCatalogExecutor(preparedStream.toolSearchCatalogExecutor);
   input.externalAbortController.setCompactionState({
     isPendingOrRetrying: preparedStream.subscription.isCompacting,

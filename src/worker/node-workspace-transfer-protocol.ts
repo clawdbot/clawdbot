@@ -15,6 +15,8 @@ export type NodeWorkerWorkspaceTransferInput =
       direction: "download";
       token: string;
       manifestRef: string;
+      /** Install attachment files only; never replace or delete workspace entries. */
+      attachments?: true;
     }
   | {
       direction: "upload";

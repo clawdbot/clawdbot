@@ -17,19 +17,15 @@ import {
 import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import {
-  externalCliDiscoveryForProviderAuth,
-  removeProviderAuthProfilesWithLock,
-} from "../../agents/auth-profiles.js";
-import {
-  listProfilesForProvider,
   promoteAuthProfileInOrder,
+  upsertAuthProfileAfterLoginWithLockOrThrow,
   upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
-import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
-import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
+import { isCliProvider } from "../../agents/model-selection-cli.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -428,7 +424,7 @@ async function persistProviderAuthResult(params: {
       params.config,
       profile.credential.provider,
     );
-    await upsertAuthProfileWithLockOrThrow({
+    await upsertAuthProfileAfterLoginWithLockOrThrow({
       profileId: profile.profileId,
       credential: profile.credential,
       agentDir: params.agentDir,
@@ -540,9 +536,6 @@ async function runProviderAuthMethod(params: {
   openUrl?: (url: string) => Promise<void>;
 }): Promise<{ result: ProviderAuthResult; profiles: ProviderAuthResult["profiles"] }> {
   params.signal?.throwIfAborted();
-  const selectedProviderId = normalizeProviderId(params.provider.id);
-  await clearStaleProfileLockouts(selectedProviderId, params.agentDir);
-
   const result = await params.method.run({
     config: params.config,
     env: params.env ?? process.env,
@@ -564,15 +557,6 @@ async function runProviderAuthMethod(params: {
     },
   });
   params.signal?.throwIfAborted();
-  const resultProviderIds = new Set(
-    result.profiles.map((profile) => normalizeProviderId(profile.credential.provider)),
-  );
-  for (const providerId of resultProviderIds) {
-    if (providerId && providerId !== selectedProviderId) {
-      await clearStaleProfileLockouts(providerId, params.agentDir);
-    }
-  }
-
   const profiles = resolveLoginProfiles({
     result,
     requestedProfileId: params.profileId,
@@ -917,26 +901,6 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
   openUrl?: (url: string) => Promise<void>;
 };
 
-/**
- * Clear stale cooldown/disabled state for all profiles matching a provider.
- * When a user explicitly runs `models auth login`, they intend to fix auth —
- * stale `auth_permanent` / `billing` lockouts should not persist across
- * a deliberate re-authentication attempt.
- */
-async function clearStaleProfileLockouts(provider: string, agentDir: string): Promise<void> {
-  try {
-    const store = loadAuthProfileStoreForRuntime(agentDir, {
-      externalCli: externalCliDiscoveryForProviderAuth({ provider }),
-    });
-    const profileIds = listProfilesForProvider(store, provider);
-    for (const profileId of profileIds) {
-      await clearAuthProfileCooldown({ store, profileId, agentDir });
-    }
-  } catch {
-    // Best-effort housekeeping — never block re-authentication.
-  }
-}
-
 /** Resolves a requested login provider or throws with available provider details. */
 export function resolveRequestedLoginProviderOrThrow(
   providers: ProviderPlugin[],
@@ -987,23 +951,43 @@ function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: str
 export async function runModelsAuthLoginFlowCore(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
-  const { config, agentId, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
-    requestedProvider: opts.provider,
+  const requestedProviderId = opts.provider
+    ? normalizeManualAuthProvider(opts.provider)
+    : undefined;
+  let context = await resolveModelsAuthContext({
+    requestedProvider: requestedProviderId,
     rawAgentId: opts.agent,
     config: opts.config,
   });
   const prompter = opts.prompter;
-  const authProviders = listProvidersWithAuthMethods(providers);
+  let authProviders = listProvidersWithAuthMethods(context.providers);
+  let requestedProvider = requestedProviderId
+    ? resolveProviderMatch(authProviders, requestedProviderId)
+    : null;
+  const useProviderPicker =
+    requestedProviderId !== undefined &&
+    requestedProvider === null &&
+    isCliProvider(requestedProviderId, context.config);
+  if (useProviderPicker) {
+    context = await resolveModelsAuthContext({
+      rawAgentId: opts.agent,
+      config: context.config,
+    });
+    authProviders = listProvidersWithAuthMethods(context.providers);
+  }
   if (authProviders.length === 0) {
     throw new Error(
       `No provider plugins found. Install one via \`${formatCliCommand("openclaw plugins install")}\`.`,
     );
   }
-
-  const requestedProvider = resolveRequestedLoginProviderOrThrow(
-    authProviders,
-    opts.provider ? normalizeManualAuthProvider(opts.provider) : undefined,
-  );
+  if (useProviderPicker) {
+    await prompter.note(
+      `Provider "${requestedProviderId}" uses its own CLI login. Select a provider with an OpenClaw auth flow.`,
+      "Provider auth",
+    );
+  } else if (requestedProviderId && !requestedProvider) {
+    requestedProvider = resolveRequestedLoginProviderOrThrow(authProviders, requestedProviderId);
+  }
   const selectedProvider =
     requestedProvider ??
     (await prompter
@@ -1047,7 +1031,7 @@ export async function runModelsAuthLoginFlowCore(
     try {
       const clearedStore = await removeProviderAuthProfilesWithLock({
         provider: selectedProvider.id,
-        agentDir,
+        agentDir: context.agentDir,
       });
       if (!clearedStore) {
         throw new Error("profile store update failed");
@@ -1065,10 +1049,10 @@ export async function runModelsAuthLoginFlowCore(
   }
 
   const { result, profiles } = await runProviderAuthMethod({
-    config,
-    agentId,
-    agentDir,
-    workspaceDir,
+    config: context.config,
+    agentId: context.agentId,
+    agentDir: context.agentDir,
+    workspaceDir: context.workspaceDir,
     provider: selectedProvider,
     method: chosenMethod,
     runtime: opts.runtime,

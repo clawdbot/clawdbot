@@ -64,6 +64,29 @@ describe("getSlashCommands", () => {
     ]);
   });
 
+  it.each([
+    { command: "think", alias: "thinking", level: "max" },
+    { command: "think", alias: "t", level: "max" },
+    { command: "think", alias: "t", level: "default" },
+    { command: "verbose", alias: "v", level: "full" },
+    { command: "reasoning", alias: "reason", level: "stream" },
+    { command: "elevated", alias: "elev", level: "ask" },
+  ])("keeps /$command $level completion on its /$alias alias", ({ command, alias, level }) => {
+    for (const local of [false, true]) {
+      const commands = getSlashCommands({
+        local,
+        thinkingLevels: [{ id: "max", label: "max" }],
+      });
+      const canonical = commands.find((candidate) => candidate.name === command);
+      const alternate = commands.find((candidate) => candidate.name === alias);
+
+      expect(alternate?.getArgumentCompletions?.(level)).toEqual(
+        canonical?.getArgumentCompletions?.(level),
+      );
+      expect(shouldSubmitExactArgumentCompletion(`/${alias} ${level}`, commands)).toBe(true);
+    }
+  });
+
   it.each([{}, { local: true }])("exposes usage cost in completion and help", (options) => {
     const commands = getSlashCommands(options);
     const usage = commands.find((command) => command.name === "usage");
@@ -92,9 +115,12 @@ describe("getSlashCommands", () => {
   it("keeps session status on the shared command path and exposes gateway status separately", () => {
     const commands = getSlashCommands();
     const status = commands.find((command) => command.name === "status");
+    const identityAlias = commands.find((command) => command.name === "id");
     const gatewayStatus = commands.find((command) => command.name === "gateway-status");
     const openclaw = commands.find((command) => command.name === "openclaw");
     expect(status?.description).toBe("Show current status.");
+    expect(identityAlias?.description).toBe("Show your sender id.");
+    expect(identityAlias?.getArgumentCompletions?.("")).toBeUndefined();
     expect(gatewayStatus?.description).toBe("Show gateway status summary");
     expect(openclaw?.description).toBe("Return to OpenClaw");
   });
@@ -172,7 +198,7 @@ describe("getSlashCommands", () => {
       dynamicCommands: [
         {
           name: "dreaming",
-          textAliases: ["/dreaming"],
+          textAliases: ["/dreaming", "/dream"],
           description: "Enable or disable memory dreaming.",
           source: "plugin",
           scope: "both",
@@ -184,6 +210,9 @@ describe("getSlashCommands", () => {
     expect(commands.find((command) => command.name === "dreaming")?.description).toBe(
       "Enable or disable memory dreaming.",
     );
+    expect(
+      commands.find((command) => command.name === "dream")?.getArgumentCompletions?.(""),
+    ).toBeUndefined();
   });
 
   it("only advertises shared commands that local mode can route", () => {
@@ -210,6 +239,21 @@ describe("helpText", () => {
       expect(helpText()).toContain(usage);
     },
   );
+
+  it("uses session-supported thinking levels in help before the provider fallback", () => {
+    const model = { provider: "minimax", model: "MiniMax-M3" };
+
+    expect(
+      helpText({
+        ...model,
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "max", label: "max" },
+        ],
+      }),
+    ).toContain("/think <off|max|default>");
+    expect(helpText({ ...model, thinkingLevels: [] })).toContain("/think <off|adaptive|default>");
+  });
 
   it("documents default reset values for model, thinking, and fast mode", () => {
     const output = helpText();

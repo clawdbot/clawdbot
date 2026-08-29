@@ -210,6 +210,7 @@ export type ChannelOutboundAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
     fallbackLimit?: number;
+    formatting?: OutboundDeliveryFormattingOptions;
   }) => number | undefined;
   shouldSuppressLocalPayloadPrompt?: (params: {
     cfg: OpenClawConfig;

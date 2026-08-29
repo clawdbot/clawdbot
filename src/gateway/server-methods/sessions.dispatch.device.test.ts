@@ -49,7 +49,15 @@ function useDeviceSession(agentRuntimeOverride?: string): void {
   dispatchTestMocks.resolveTarget.mockReturnValue(
     makeSessionTarget({
       sessionId: dispatchTestSessionId,
-      ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
+      ...(agentRuntimeOverride
+        ? {
+            agentHarnessId: agentRuntimeOverride,
+            agentRuntimeOverride,
+            modelSelectionLocked: true,
+            modelOverride: "gpt-test",
+            providerOverride: "openai",
+          }
+        : {}),
       worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
     }),
   );
@@ -294,7 +302,7 @@ describe("sessions.dispatch device targets", () => {
           deviceEnvironments(nodes),
         );
         let firstChecks = 0;
-        const workerEnvironmentService = {};
+        const workerEnvironmentService = { get: () => undefined };
         bindDeviceWorkerAvailability(workerEnvironmentService, async (deviceId) => {
           if (deviceId === "first" && ++firstChecks >= 2) {
             return unavailableReason === "disconnected"
@@ -681,6 +689,43 @@ describe("sessions.dispatch device targets", () => {
           message: supported
             ? "paired-device dispatch reached"
             : "runtime cloud-only does not support paired-device placement; select a compatible runtime or cloud worker provider",
+        }),
+      );
+    });
+
+    it("carries runtime-owned node command requirements into cloud-profile dispatch", async () => {
+      useDeviceSession("codex");
+      const dispatch = vi.fn().mockRejectedValue(new Error("cloud-profile dispatch reached"));
+
+      const respond = await invokeSessionDispatch(
+        makeDispatchTestContext({
+          getRuntimeConfig: () => ({
+            cloudWorkers: { profiles: { test: { provider: "multimode-cloud" } } },
+            gateway: { nodes: { commands: { allow: ["codex.exec-server.stdio.v1"] } } },
+          }),
+          workerPlacementDispatchService: { dispatch },
+          workerSessionPlacementService: { getMany: () => new Map() },
+        }),
+      );
+
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionMode: "remote-exec",
+          profileId: "test",
+          devicePlacement: {
+            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+            consumesWorkerSlot: false,
+          },
+        }),
+        expect.any(Function),
+        undefined,
+      );
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.UNAVAILABLE,
+          message: "cloud-profile dispatch reached",
         }),
       );
     });

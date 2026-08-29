@@ -378,6 +378,7 @@ function main() {
 
 const isMain =
   process.argv[1] &&
+  fs.existsSync(process.argv[1]) &&
   fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
 if (isMain) {
   try {

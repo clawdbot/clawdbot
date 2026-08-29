@@ -62,6 +62,13 @@ export type CliBackendConfig = {
   serialize?: boolean;
   /** Opt in to bounded raw transcript reseed before compaction for safe session resets. */
   reseedFromRawTranscriptWhenUncompacted?: boolean;
+  /**
+   * Controls fresh recovery after a recoverable resumed-session failure.
+   *
+   * Undefined and `replace-binding` preserve the legacy clear-and-reseed behavior.
+   * `invalidated-only` retries fresh only when the failure proves the binding expired.
+   */
+  freshSessionRecovery?: "replace-binding" | "invalidated-only";
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
     /** No-output watchdog tuning (fresh vs resumed runs). */
@@ -225,6 +232,12 @@ export type CliBackendLiveSessionCapability = {
   remove(handle: CliBackendLiveSessionHandle): void;
 };
 
+/** Turn-only context that must not become an operator-authored native transcript row. */
+export type CliBackendPromptContext = {
+  prependContext?: string;
+  appendContext?: string;
+};
+
 /** Exact prepared local process facts consumed by a plugin-owned execution transport. */
 export type CliBackendExecuteContext = {
   command: string;
@@ -232,6 +245,7 @@ export type CliBackendExecuteContext = {
   cwd: string;
   env: Record<string, string>;
   prompt: string;
+  promptContext?: CliBackendPromptContext;
   modelId: string;
   systemPrompt: string;
   sessionId?: string;

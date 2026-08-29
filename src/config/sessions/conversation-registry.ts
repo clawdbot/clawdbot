@@ -149,7 +149,12 @@ function mapConversationRow(row: {
 
 function selectConversationRows(
   scope: ConversationRegistryScope,
-  options: { channel?: string; conversationRef?: string; limit?: number } = {},
+  options: {
+    channel?: string;
+    conversationRef?: string;
+    limit?: number;
+    primarySession?: { sessionId: string; sessionKey: string };
+  } = {},
 ): ConversationRecord[] {
   const resolved = resolveSqliteReadScope({
     agentId: scope.agentId,
@@ -198,6 +203,17 @@ function selectConversationRows(
       "=",
       normalizeConversationRef(options.conversationRef),
     );
+  }
+  if (options.primarySession) {
+    // The window's primary pointer, not address recency, owns this route.
+    // Require its current node so reset/deleted sessions cannot lend old facts.
+    query = query
+      .where("s.session_id", "=", options.primarySession.sessionId)
+      .where("s.session_key", "=", options.primarySession.sessionKey)
+      .where("sn.current_session_id", "=", options.primarySession.sessionId)
+      .where("sn.entry_valid", "=", 1)
+      .whereRef("s.primary_conversation_id", "=", "c.conversation_id")
+      .where("sc.role", "=", "primary");
   }
   const rows = executeSqliteQuerySync(
     database.db,
@@ -284,4 +300,14 @@ export function resolveConversation(
     conversationRef: normalizeConversationRef(conversationRef),
     limit: 1,
   })[0];
+}
+
+/** Reads only the primary address bound to this exact current session window. */
+export function resolveCurrentSessionPrimaryConversation(
+  scope: ConversationRegistryScope & { sessionId: string; sessionKey: string },
+): ConversationRecord | undefined {
+  const [conversation] = selectConversationRows(scope, { primarySession: scope });
+  return conversation?.sessionId === scope.sessionId && conversation.sessionKey === scope.sessionKey
+    ? conversation
+    : undefined;
 }

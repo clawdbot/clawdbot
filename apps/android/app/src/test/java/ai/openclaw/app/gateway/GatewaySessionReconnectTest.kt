@@ -156,6 +156,192 @@ private data class ReconnectServer(
 @Config(sdk = [34])
 class GatewaySessionReconnectTest {
   @Test
+  fun sequenceGapSignalsRecoveryBeforeAdmittingTheNextEvent() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val connected = CompletableDeferred<Unit>()
+      val finalEvent = CompletableDeferred<Unit>()
+      val received = ConcurrentLinkedQueue<String>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") webSocket.send(connectResponseFrame(id))
+        }
+      val harness =
+        createReconnectHarness(
+          onConnected = { connected.complete(Unit) },
+          onEvent = { event, payload ->
+            val marker =
+              payload?.let { value ->
+                json
+                  .parseToJsonElement(value)
+                  .jsonObject["marker"]
+                  ?.jsonPrimitive
+                  ?.content
+              }
+            received += marker ?: event
+            if (marker == "after-gap") finalEvent.complete(Unit)
+          },
+        )
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+        val socket = checkNotNull(server.sockets.peek())
+        socket.send("""{"type":"event","event":"health","payload":{"marker":"first"},"seq":41}""")
+        socket.send("""{"type":"event","event":"health","payload":{"marker":"unsequenced"}}""")
+        socket.send("""{"type":"event","event":"health","payload":{"marker":"contiguous"},"seq":42}""")
+        socket.send("""{"type":"event","event":"health","payload":{"marker":"duplicate"},"seq":42}""")
+        socket.send("""{"type":"event","event":"health","payload":{"marker":"older"},"seq":41}""")
+        socket.send("""{"type":"event","event":"health","payload":{"marker":"after-older"},"seq":42}""")
+        socket.send("""{"type":"event","event":"chat","payload":{"marker":"after-gap"},"seq":44}""")
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { finalEvent.await() }
+
+        assertEquals(
+          listOf("first", "unsequenced", "contiguous", "duplicate", "older", "after-older", "seqGap", "after-gap"),
+          received.toList(),
+        )
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun sequenceGapSignalsRecoveryBeforeInvokingTheNextCommand() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val connected = CompletableDeferred<Unit>()
+      val invoked = CompletableDeferred<Unit>()
+      val received = ConcurrentLinkedQueue<String>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") webSocket.send(connectResponseFrame(id))
+        }
+      val harness =
+        createReconnectHarness(
+          onConnected = { connected.complete(Unit) },
+          onEvent = { event, _ -> received += event },
+          onInvoke = {
+            received += "invoke"
+            invoked.complete(Unit)
+            GatewaySession.InvokeResult.ok("{}")
+          },
+        )
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+        val socket = checkNotNull(server.sockets.peek())
+        socket.send("""{"type":"event","event":"health","payload":{},"seq":1}""")
+        socket.send(
+          """{"type":"event","event":"node.invoke.request","payload":{"id":"gap-invoke","nodeId":"node-1","command":"calendar.events"},"seq":3}""",
+        )
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { invoked.await() }
+
+        assertEquals(listOf("health", "seqGap", "invoke"), received.toList())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun sequenceGapCallbackCannotAdmitAnEventAfterDisconnect() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val connected = CompletableDeferred<Unit>()
+      val disconnected = CompletableDeferred<Unit>()
+      val decision = CompletableDeferred<String>()
+      val received = ConcurrentLinkedQueue<String>()
+      var currentSession: GatewaySession? = null
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") webSocket.send(connectResponseFrame(id))
+        }
+      val harness =
+        createReconnectHarness(
+          onConnected = { connected.complete(Unit) },
+          onDisconnected = { disconnected.complete(Unit) },
+          onEvent = { event, _ ->
+            received += event
+            if (event == "seqGap") {
+              checkNotNull(currentSession).disconnect()
+              decision.complete(event)
+            } else if (event == "chat") {
+              decision.complete(event)
+            }
+          },
+        )
+      currentSession = harness.session
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+        val socket = checkNotNull(server.sockets.peek())
+        socket.send("""{"type":"event","event":"health","payload":{},"seq":1}""")
+        socket.send("""{"type":"event","event":"chat","payload":{},"seq":3}""")
+
+        assertEquals("seqGap", withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { decision.await() })
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { disconnected.await() }
+        assertEquals(listOf("health", "seqGap"), received.toList())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun sequenceTrackingStartsFreshAfterReconnect() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val firstConnected = CompletableDeferred<Unit>()
+      val secondConnected = CompletableDeferred<Unit>()
+      val firstSocketEvent = CompletableDeferred<Unit>()
+      val finalEvent = CompletableDeferred<Unit>()
+      val connections = AtomicInteger()
+      val received = ConcurrentLinkedQueue<String>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") webSocket.send(connectResponseFrame(id))
+        }
+      val harness =
+        createReconnectHarness(
+          onConnected = {
+            if (connections.incrementAndGet() == 1) firstConnected.complete(Unit) else secondConnected.complete(Unit)
+          },
+          onEvent = { event, payload ->
+            val marker =
+              payload?.let { value ->
+                json
+                  .parseToJsonElement(value)
+                  .jsonObject["marker"]
+                  ?.jsonPrimitive
+                  ?.content
+              }
+            received += marker ?: event
+            if (marker == "first-socket") firstSocketEvent.complete(Unit)
+            if (marker == "second-after-gap") finalEvent.complete(Unit)
+          },
+        )
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { firstConnected.await() }
+        checkNotNull(server.sockets.peek())
+          .send("""{"type":"event","event":"health","payload":{"marker":"first-socket"},"seq":1}""")
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { firstSocketEvent.await() }
+
+        harness.session.reconnect()
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { secondConnected.await() }
+        val secondSocket = checkNotNull(server.sockets.lastOrNull())
+        secondSocket.send("""{"type":"event","event":"health","payload":{"marker":"second-first"},"seq":100}""")
+        secondSocket.send("""{"type":"event","event":"chat","payload":{"marker":"second-after-gap"},"seq":102}""")
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { finalEvent.await() }
+
+        assertEquals(listOf("first-socket", "second-first", "seqGap", "second-after-gap"), received.toList())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
   fun capturedRequestLeaseRejectsReplacementSocketBeforeEnqueue() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
@@ -235,6 +421,28 @@ class GatewaySessionReconnectTest {
         } finally {
           shutdownReconnectHarness(harness, server)
         }
+      }
+    }
+
+  @Test
+  fun connectedHelloPublishesServerCapabilities() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val hello = CompletableDeferred<GatewayHelloSummary>()
+      val capabilities = setOf("session-unread-ack-contract", "session-scoped-chat-metadata")
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") {
+            webSocket.send(connectResponseFrame(id, capabilities = capabilities))
+          }
+        }
+      val harness = createReconnectHarness(onHello = hello::complete)
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        assertEquals(capabilities, withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { hello.await() }.capabilities)
+      } finally {
+        shutdownReconnectHarness(harness, server)
       }
     }
 
@@ -1120,12 +1328,14 @@ class GatewaySessionReconnectTest {
   private fun connectResponseFrame(
     id: String,
     methods: Set<String>? = emptySet(),
+    capabilities: Set<String> = emptySet(),
   ): String {
     if (methods == null) {
       return """{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
     }
     val encodedMethods = methods.joinToString(",") { JsonPrimitive(it).toString() }
-    return """{"type":"res","id":"$id","ok":true,"payload":{"features":{"methods":[$encodedMethods]},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
+    val encodedCapabilities = capabilities.joinToString(",") { JsonPrimitive(it).toString() }
+    return """{"type":"res","id":"$id","ok":true,"payload":{"features":{"methods":[$encodedMethods],"capabilities":[$encodedCapabilities]},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
   }
 
   private fun startGatewayServer(

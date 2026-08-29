@@ -1,4 +1,5 @@
 import AppKit
+import OpenClawChatUI
 import SwiftUI
 
 @MainActor
@@ -100,7 +101,7 @@ struct SessionsSettings: View {
 
             HStack(spacing: 6) {
                 if row.kind != .direct {
-                    SessionKindBadge(kind: row.kind)
+                    SessionKindBadge(kind: row.kind, color: row.color)
                 }
                 if !row.flagLabels.isEmpty {
                     ForEach(row.flagLabels, id: \.self) { flag in
@@ -121,8 +122,7 @@ struct SessionsSettings: View {
                 }
                 ContextUsageBar(
                     usedTokens: row.tokens.total,
-                    contextTokens: row.tokens.contextTokens,
-                    width: nil)
+                    contextTokens: row.tokens.contextTokens)
             }
 
             HStack(spacing: 10) {
@@ -175,15 +175,21 @@ struct SessionsSettings: View {
 }
 
 private struct SessionKindBadge: View {
+    @Environment(\.colorScheme) private var colorScheme
     let kind: SessionKind
+    let color: String?
+
+    private var tint: Color {
+        OpenClawSessionColor(name: self.color)?.tint(in: self.colorScheme) ?? self.kind.tint
+    }
 
     var body: some View {
         Text(self.kind.label)
             .font(.caption2.weight(.bold))
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
-            .foregroundStyle(self.kind.tint)
-            .background(self.kind.tint.opacity(0.15))
+            .foregroundStyle(self.tint)
+            .background(self.tint.opacity(0.15))
             .clipShape(Capsule())
     }
 }

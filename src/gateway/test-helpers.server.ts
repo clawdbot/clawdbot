@@ -12,8 +12,9 @@ import "./test-helpers.mocks.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
-import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
-import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { getRuntimeConfig, parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
+import { resolveSystemMainSessionKey, type SessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
@@ -30,6 +31,7 @@ import {
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../infra/gateway-suspend-coordinator.js";
+import { writeJsonAtomic } from "../infra/json-files.js";
 import {
   resetGatewayRestartStateForInProcessRestart,
   setGatewaySigusr1RestartPolicy,
@@ -111,7 +113,8 @@ let activeSuiteHookScopeCount = 0;
 const DEFAULT_GATEWAY_TEST_BIND = "loopback" as const;
 
 function resolveGatewayTestMainSessionKeys(): string[] {
-  const resolved = resolveMainSessionKeyFromConfig();
+  // Use the fixture's config seam; transitive runtime readers can retain real IO bindings.
+  const resolved = resolveSystemMainSessionKey(getRuntimeConfig());
   const keys = new Set<string>();
   if (resolved) {
     keys.add(resolved);
@@ -201,8 +204,8 @@ async function persistTestSessionConfig(): Promise<void> {
     } else {
       delete config.session;
     }
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+    // Suite servers may still read config from pending session-change callbacks.
+    await writeJsonAtomic(configPath, config, { durable: false, trailingNewline: true });
   }
   resetConfigRuntimeState();
   lastSyncedSessionStorePath = testState.sessionStorePath;
@@ -359,6 +362,9 @@ function resetGatewayLifecycleTestState(options: { preserveRuntimeBindings: bool
 function resetGatewayMutableTestFixtures(): void {
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
+  agentDiscoveryMock.enabled = false;
+  agentDiscoveryMock.discoverCalls = 0;
+  agentDiscoveryMock.models = [];
   testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
   testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
   testState.gatewayControlUi = undefined;
@@ -480,9 +486,6 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   const mod = await getServerModule();
   await mod.resetPreparedModelCatalogForTest();
   gatewayReplyRuntimePrepared = false;
-  agentDiscoveryMock.enabled = false;
-  agentDiscoveryMock.discoverCalls = 0;
-  agentDiscoveryMock.models = [];
 }
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
@@ -551,17 +554,32 @@ export async function prepareGatewayReplyRuntimeForTest(options?: {
   gatewayReplyRuntimePrepared = true;
 }
 
-export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) {
-  const scope = options?.scope ?? "test";
-  if (scope === "suite") {
-    beforeAll(async () => {
-      vi.useRealTimers();
-      if (activeSuiteHookScopeCount === 0) {
-        await setupGatewayTestHome();
-        await resetGatewayTestState({ uniqueConfigRoot: false });
-      }
-      activeSuiteHookScopeCount += 1;
+export function installGatewayTestHooks(
+  options?:
+    | { scope?: "test" }
+    | { scope: "suite"; setup?: () => Promise<void>; cleanup?: () => Promise<void> },
+) {
+  if (options?.scope === "suite") {
+    let homeSetup: Promise<void> | undefined;
+    let fixtureSetup: Promise<void> | undefined;
+    let suiteCleanup: Promise<void> | undefined;
+    beforeAll(() => {
+      fixtureSetup = undefined;
+      suiteCleanup = undefined;
+      homeSetup = (async () => {
+        vi.useRealTimers();
+        const createHome = activeSuiteHookScopeCount === 0;
+        activeSuiteHookScopeCount += 1;
+        if (createHome) {
+          await setupGatewayTestHome();
+          await resetGatewayTestState({ uniqueConfigRoot: false });
+        }
+      })();
+      return homeSetup;
     });
+    if (options.setup) {
+      beforeAll(() => (fixtureSetup = Promise.resolve().then(options.setup)));
+    }
     beforeEach(async () => {
       vi.useRealTimers();
       if (activeSuiteGatewayServerCount > 0) {
@@ -578,10 +596,25 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
       await cleanupGatewayTestHome({ restoreEnv: false });
     });
     afterAll(async () => {
-      activeSuiteHookScopeCount = Math.max(0, activeSuiteHookScopeCount - 1);
-      if (activeSuiteHookScopeCount === 0) {
-        await cleanupGatewayTestHome({ restoreEnv: true });
+      if (!homeSetup) {
+        return;
       }
+      await (suiteCleanup ??= runQaGatewayFixture(
+        async () => {
+          // Vitest times out hooks without cancelling them. Keep late acquisition
+          // and fixture cleanup inside the environment's lifetime; setup errors
+          // are already reported by beforeAll, not duplicated by this join.
+          await homeSetup?.catch(() => {});
+          await fixtureSetup?.catch(() => {});
+          await options.cleanup?.();
+        },
+        async () => {
+          activeSuiteHookScopeCount -= 1;
+          if (activeSuiteHookScopeCount === 0) {
+            await cleanupGatewayTestHome({ restoreEnv: true });
+          }
+        },
+      ));
     }, 300_000);
     return;
   }
@@ -1248,11 +1281,9 @@ export async function rpcReq<T extends Record<string, unknown>>(
   if (hasUnsyncedGatewayTestSessionConfig()) {
     await persistTestSessionConfig();
   }
-  // Gateway suites often mutate testState-backed config/session inputs between
-  // RPCs while reusing one server instance; flush caches so the next request
-  // observes the updated test fixture state.
+  // Refresh mutable config fixtures, but leave in-flight session writers owned
+  // by the running Gateway; their producers publish SQLite cache updates.
   resetConfigRuntimeState();
-  clearSessionStoreCacheForTest();
   if (method === "agent" || method === "chat.send") {
     await prepareGatewayReplyRuntimeForTest();
   }

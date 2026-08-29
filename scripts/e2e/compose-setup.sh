@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-docker-e2e-functional:local")"
@@ -17,7 +18,7 @@ COMPOSE=(
   docker compose
   --project-name "$PROJECT_NAME"
   --project-directory "$PROJECT_DIR"
-  -f "$ROOT_DIR/docker-compose.yml"
+  -f "$SOURCE_ROOT/docker-compose.yml"
   -f "$HEALTH_OVERRIDE_PATH"
 )
 
@@ -56,7 +57,7 @@ NODE
 }
 
 assert_dockerfile_healthcheck() {
-  node - "$ROOT_DIR/Dockerfile" <<'NODE'
+  node - "$SOURCE_ROOT/Dockerfile" <<'NODE'
 const fs = require("node:fs");
 const dockerfilePath = process.argv[2];
 const dockerfile = fs.readFileSync(dockerfilePath, "utf8").replace(/\\\r?\n[ \t]*/g, " ");
@@ -203,11 +204,15 @@ EOF
 cat >"$HEALTH_OVERRIDE_PATH" <<'EOF'
 services:
   openclaw-gateway:
+    # The E2E runner defaults to appuser; documented Compose uses the node home.
+    user: node
     healthcheck:
       interval: 1s
       timeout: 5s
       retries: 3
       start_period: 5s
+  openclaw-cli:
+    user: node
 EOF
 
 export OPENCLAW_IMAGE="$IMAGE_NAME"

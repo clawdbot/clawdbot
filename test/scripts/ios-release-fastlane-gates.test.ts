@@ -127,33 +127,41 @@ function swiftFunctionBody(source: string, name: string): string {
 }
 
 describe("iOS Fastlane release upload gates", () => {
-  it("pins the CI Ruby and Fastlane toolchain", () => {
+  it("pins the CI Ruby and Fastlane toolchain on the Fastlane-owning screenshot shards", () => {
     const workflow = readFileSync(ciWorkflowPath, "utf8");
     const iosJobStart = workflow.indexOf("\n  ios-build:\n");
-    const iosJobEnd = workflow.indexOf("\n  android:\n", iosJobStart);
+    const iosJobEnd = workflow.indexOf("\n  ios-screenshot-shard:\n", iosJobStart);
     const iosJob = workflow.slice(iosJobStart, iosJobEnd);
+    const shardJobEnd = workflow.indexOf("\n  ios-screenshot-evidence:\n", iosJobEnd);
+    const shardJob = workflow.slice(iosJobEnd, shardJobEnd);
     const gemfile = readFileSync(gemfilePath, "utf8");
     const lockfile = readFileSync(gemfileLockPath, "utf8");
 
     expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.10\n");
-    expect(gemfile).toContain('gem "fastlane", "2.236.1"');
+    expect(gemfile).toContain('gem "fastlane", "2.238.0"');
     expect(gemfile).toContain('ruby "3.4.10"');
-    expect(lockfile).toContain("fastlane (2.236.1)");
+    expect(lockfile).toContain("fastlane (2.238.0)");
     expect(lockfile).toContain("arm64-darwin");
     expect(lockfile).toContain("x86_64-darwin");
     expect(lockfile).toContain("CHECKSUMS");
     expect(lockfile).toContain("RUBY VERSION\n   ruby 3.4.10");
     expect(lockfile).toContain("BUNDLED WITH\n   2.6.9");
-    expect(iosJob).toContain('BUNDLE_DEPLOYMENT: "true"');
-    expect(iosJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
-    expect(iosJob).toContain("ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b");
-    expect(iosJob).toContain('ruby-version: "3.4.10"');
-    expect(iosJob).toContain('bundler: "2.6.9"');
-    expect(iosJob).toContain("bundler-cache: false");
-    expect(iosJob).toContain("working-directory: apps/ios");
-    expect(iosJob).toContain("bundle _2.6.9_ install --jobs 4 --retry 3");
-    expect(iosJob).toContain("bundle _2.6.9_ check");
-    expect(iosJob).toContain("bundle _2.6.9_ exec fastlane --version");
+    expect(iosJob).not.toContain("BUNDLE_DEPLOYMENT");
+    expect(iosJob).not.toContain("BUNDLE_GEMFILE");
+    expect(iosJob).not.toContain("ruby/setup-ruby@");
+    expect(iosJob).not.toContain("Install locked Fastlane bundle");
+    expect(shardJob).toContain('BUNDLE_DEPLOYMENT: "true"');
+    expect(shardJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
+    expect(shardJob).toContain("ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b");
+    expect(shardJob).toContain('ruby-version: "3.4.10"');
+    expect(shardJob).toContain('bundler: "2.6.9"');
+    expect(shardJob).toContain("bundler-cache: false");
+    expect(shardJob).toContain("working-directory: apps/ios");
+    expect(shardJob).toContain("bundle _2.6.9_ install --jobs 4 --retry 3");
+    expect(shardJob).toContain("bundle _2.6.9_ check");
+    expect(shardJob).toContain("bundle _2.6.9_ exec fastlane --version");
+    expect(workflow.match(/ruby\/setup-ruby@/gu)).toHaveLength(1);
+    expect(workflow.match(/name: Install locked Fastlane bundle/gu)).toHaveLength(1);
   });
 
   it("documents every iOS Fastlane command through the pinned bundle", () => {
@@ -446,6 +454,8 @@ describe("iOS Fastlane release upload gates", () => {
     const screenshots = laneBody(fastfile, "screenshots");
     const capture = functionBody(fastfile, "capture_release_ios_screenshot!");
     const archive = functionBody(fastfile, "archive_snapshot_test_result!");
+    const attemptRecorder = functionBody(fastfile, "record_release_ios_screenshot_attempt!");
+    const attemptWriter = functionBody(fastfile, "write_release_ios_screenshot_attempts!");
     const verifier = functionBody(fastfile, "verify_snapshot_test_result!");
 
     expect(screenshots).toContain("devices = snapshot_devices");
@@ -465,10 +475,21 @@ describe("iOS Fastlane release upload gates", () => {
     expect(capture).toContain("stop_after_first_error: true");
     expect(capture).toContain("retrying once in a fresh simulator session");
     expect(capture).toContain("verify_snapshot_test_result!");
+    expect(capture).toContain('capture_outcome: "failed"');
+    expect(capture).toContain('capture_outcome: "succeeded"');
+    expect(capture.indexOf('capture_outcome: "failed"')).toBeLessThan(
+      capture.indexOf("raise if attempt == 2"),
+    );
+    expect(attemptRecorder).toContain('"captureOutcome" => capture_outcome');
+    expect(attemptRecorder).toContain("write_release_ios_screenshot_attempts!(");
+    expect(attemptWriter).toContain('"schemaVersion" => 1');
     expect(archive).toContain('"#{device}-#{screenshot_name}-attempt-#{attempt}.xcresult"');
     expect(screenshots).toContain("verify_release_ios_screenshot_manifest!(");
     expect(screenshots).toContain(
       'result_bundle_archive_directory = File.join(ios_root, "build", "SnapshotTestResults")',
+    );
+    expect(screenshots).toContain(
+      'capture_attempts_path = File.join(result_bundle_archive_directory, "capture-attempts.json")',
     );
     expect(screenshots.indexOf("capture_release_ios_screenshot!")).toBeLessThan(
       screenshots.indexOf('FileUtils.rm_rf(File.join(output_directory, "test_output"))'),
@@ -515,9 +536,17 @@ describe("iOS Fastlane release upload gates", () => {
   it("requires the exact nonempty PNG manifest before Watch capture", () => {
     const fastfile = readFastfile();
     const screenshots = laneBody(fastfile, "screenshots");
+    const snapshotDevices = functionBody(fastfile, "snapshot_devices");
+    const defaultSnapshotDevices = functionBody(fastfile, "default_snapshot_devices");
     const verifier = functionBody(fastfile, "verify_release_ios_screenshot_manifest!");
 
     expect(fastfile).toContain("REQUIRED_IOS_SCREENSHOT_NAMES");
+    expect(snapshotDevices).toContain('ENV["OPENCLAW_SNAPSHOT_DEVICES"]');
+    expect(snapshotDevices).toContain("return default_snapshot_devices if raw.empty?");
+    expect(defaultSnapshotDevices).toContain("available_simulator_devices");
+    expect(defaultSnapshotDevices).toContain('ENV["OPENCLAW_SNAPSHOT_DEVICE_FAMILY"]');
+    expect(defaultSnapshotDevices).toContain("families = DEFAULT_SNAPSHOT_DEVICE_FAMILIES");
+    expect(defaultSnapshotDevices).toContain("families = [family]");
     expect(verifier).toContain("expected_names - actual_names");
     expect(verifier).toContain("actual_names - expected_names");
     expect(verifier).toContain("File.size?(path)");
@@ -528,25 +557,76 @@ describe("iOS Fastlane release upload gates", () => {
     expect(screenshots.indexOf("verify_release_ios_screenshot_manifest!")).toBeLessThan(
       screenshots.indexOf("watch_screenshot("),
     );
+    expect(screenshots).toContain('ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"');
   });
 
-  it("runs the exact screenshot lane during native Apple, manual, and full release CI", () => {
+  it("runs screenshot shards alongside builds without changing runner authorization", () => {
     const workflow = readFileSync(ciWorkflowPath, "utf8");
     const iosJobStart = workflow.indexOf("\n  ios-build:\n");
-    const iosJobEnd = workflow.indexOf("\n  android:\n", iosJobStart);
+    const iosJobEnd = workflow.indexOf("\n  ios-screenshot-shard:\n", iosJobStart);
     const iosJob = workflow.slice(iosJobStart, iosJobEnd);
+    const shardJobStart = iosJobEnd;
+    const shardJobEnd = workflow.indexOf("\n  ios-screenshot-evidence:\n", shardJobStart);
+    const shardJob = workflow.slice(shardJobStart, shardJobEnd);
+    const reducerJobStart = shardJobEnd;
+    const reducerJobEnd = workflow.indexOf("\n  android:\n", reducerJobStart);
+    const reducerJob = workflow.slice(reducerJobStart, reducerJobEnd);
 
+    expect(workflow).toContain('IOS_SCREENSHOT_NODE_VERSION: "24.16.0"');
+    expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.6 Build version 17F113"');
     expect(iosJob).toContain("timeout-minutes: 150");
-    expect(iosJob).toContain("Capture iOS release screenshots");
-    expect(iosJob).toContain("github.event_name == 'workflow_dispatch'");
-    expect(iosJob).toContain("github.event_name == 'pull_request'");
-    expect(iosJob).toContain("inputs.release_gate");
-    expect(iosJob).toContain("needs.preflight.outputs.run_ios_screenshots == 'true'");
-    expect(iosJob).not.toContain("needs.preflight.outputs.run_macos == 'true'");
-    expect(iosJob).toContain("run: pnpm ios:screenshots");
-    expect(iosJob).toContain("Upload iOS release screenshot evidence");
-    expect(iosJob).toContain("apps/ios/build/SnapshotTestResults/*.xcresult");
-    expect(iosJob).toContain("if-no-files-found: error");
+    expect(iosJob).not.toContain("Capture iOS release screenshots");
+    expect(shardJob).toContain("needs: [preflight]");
+    expect(shardJob).toContain("max-parallel: 2");
+    expect(shardJob).toContain("device_family: [iphone, ipad-13]");
+    expect(shardJob).toContain('OPENCLAW_SNAPSHOT_SKIP_WATCH: "1"');
+    expect(shardJob).toContain("if: matrix.device_family == 'iphone'");
+    expect(shardJob).toContain("run_ios_fastlane ios watch_screenshot");
+    expect(shardJob).toContain("run: pnpm ios:screenshots");
+    expect(shardJob).toContain("id: package_screenshot_evidence");
+    expect(shardJob).toContain("steps.package_screenshot_evidence.outcome == 'failure'");
+    expect(shardJob).toContain("apps/ios/build/SnapshotTestResults/capture-attempts.json");
+    expect(shardJob).not.toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
+    expect(shardJob).toContain("IOS_SCREENSHOT_NODE_VERSION");
+    expect(shardJob).toContain("IOS_SCREENSHOT_XCODE_VERSION");
+    expect(shardJob).not.toContain('test "$fastlane_version" = "$IOS_SCREENSHOT_FASTLANE_VERSION"');
+    expect(shardJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
+    expect(shardJob).not.toContain("SnapshotDerivedData");
+    expect(shardJob.match(/contents: read/g)).toHaveLength(1);
+    expect(reducerJob).toContain("needs: [preflight, ios-screenshot-shard]");
+    expect(reducerJob).toContain("merge-multiple: false");
+    expect(reducerJob).toContain("Setup screenshot evidence Node");
+    expect(reducerJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
+    expect(reducerJob).toContain("id: reduce_screenshot_evidence");
+    expect(reducerJob).toContain("scripts/ios-screenshot-evidence.mjs reduce");
+    expect(reducerJob).toContain('--workflow-sha "$WORKFLOW_SHA"');
+    expect(reducerJob).toContain('--run-id "$RUN_ID"');
+    expect(reducerJob).toContain('--run-attempt "$RUN_ATTEMPT"');
+    expect(reducerJob).toContain('--xcode-version "$IOS_SCREENSHOT_XCODE_VERSION"');
+    expect(reducerJob).toContain('--fastlane-version "$IOS_SCREENSHOT_FASTLANE_VERSION"');
+    expect(reducerJob).toContain('--node-version "$(node --version)"');
+    expect(reducerJob).toContain("steps.reduce_screenshot_evidence.outcome == 'failure'");
+    expect(reducerJob).toContain("apps/ios/build/ScreenshotEvidenceInputs/**/xcresults/*.xcresult");
+    expect(reducerJob).toContain(
+      "name: ios-release-screenshots-${{ needs.preflight.outputs.checkout_revision }}",
+    );
+    expect(reducerJob).toContain("apps/ios/build/ScreenshotEvidence/manifest.json");
+    expect(reducerJob).not.toContain("SnapshotDerivedData");
+  });
+
+  it("records the installed Fastlane semver before the update notice", () => {
+    const workflow = readFileSync(ciWorkflowPath, "utf8");
+    const parser = workflow.match(/run_ios_fastlane --version 2>&1 \| awk '([^']+)'/u)?.[1];
+
+    expect(parser).toBeDefined();
+    const result = spawnSync("awk", [parser!], {
+      encoding: "utf8",
+      input:
+        "fastlane installation at path:\nfastlane 2.236.1\n# fastlane 2.238.0 is available. You are on 2.236.1.\n",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("2.236.1\n");
   });
 
   it("preserves caller-pinned Swift tools in archive build PATH", () => {

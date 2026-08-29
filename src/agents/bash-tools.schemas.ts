@@ -53,7 +53,7 @@ export const execSchema = Type.Object({
     }),
   ),
   host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
-    description: "Exec host/target (auto|sandbox|gateway|node).",
+    description: "Omit or use auto to inherit the configured host.",
   }),
   security: Type.Optional(
     Type.String({
@@ -94,7 +94,7 @@ export const processSchema = Type.Object({
     enum: [...PROCESS_TOOL_ACTIONS],
     description: "Process action (list|poll|log|write|send-keys|submit|paste|kill|clear|remove)",
   }),
-  sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
+  sessionId: Type.Optional(Type.String({ description: "Required for every action except list." })),
   data: Type.Optional(Type.String({ description: "Data to write for write" })),
   keys: Type.Optional(
     Type.Array(Type.String(), { description: "Key tokens to send for send-keys" }),

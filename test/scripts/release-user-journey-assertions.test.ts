@@ -1,18 +1,26 @@
 // Release User Journey Assertions tests cover release user journey assertions script behavior.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
 import {
   runReleaseUserJourneyAssertion,
   waitForClickClackSocket,
 } from "../../scripts/e2e/lib/release-user-journey/assertions.mjs";
 import { withEnvAsync } from "../../src/test-utils/env.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
+const CLICKCLACK_FIXTURE_SCRIPT = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
+const CLICKCLACK_PLUGIN_WRITER_SCRIPT =
+  "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function nodeOptionsWithoutExperimentalWarnings(extra?: string): string {
   const current = [process.env.NODE_OPTIONS, extra].filter(Boolean).join(" ");
@@ -44,10 +52,10 @@ function runAssertion(
   });
 }
 
-async function waitUntil(matches: () => boolean, label: string): Promise<void> {
+async function waitUntil(matches: () => boolean | Promise<boolean>, label: string): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < 1000) {
-    if (matches()) {
+    if (await matches()) {
       return;
     }
     await new Promise((resolve) => {
@@ -55,6 +63,37 @@ async function waitUntil(matches: () => boolean, label: string): Promise<void> {
     });
   }
   throw new Error(`timed out waiting for ${label}`);
+}
+
+async function reserveTcpPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  return port;
+}
+
+async function stopChild(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null) {
+    return;
+  }
+  child.kill("SIGTERM");
+  await once(child, "exit");
+}
+
+async function openClickClackSocket(port: number, token: string): Promise<WebSocket> {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/api/realtime/ws`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  await once(socket, "open");
+  return socket;
+}
+
+async function closeClickClackSocket(socket: WebSocket): Promise<void> {
+  socket.terminate();
+  await once(socket, "close");
 }
 
 async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise<{
@@ -175,6 +214,51 @@ describe("release user journey assertions", () => {
     }
   });
 
+  it("accepts a configured channel before Gateway startup", async () => {
+    const root = tempDirs.make("openclaw-release-user-assertions-");
+    const statusPath = path.join(root, "status.json");
+
+    writeJson(statusPath, { configuredChannels: ["clickclack"] });
+
+    await expect(
+      runReleaseUserJourneyAssertion("assert-channel-configured", ["clickclack", statusPath]),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects a configured channel that failed after Gateway restart", async () => {
+    const root = tempDirs.make("openclaw-release-user-assertions-");
+    const statusPath = path.join(root, "status.json");
+
+    writeJson(statusPath, {
+      configuredChannels: ["clickclack"],
+      channels: { clickclack: { ok: true, label: "configured" } },
+      channelAccounts: {
+        clickclack: [{ accountId: "default", configured: true, running: false }],
+      },
+    });
+
+    await expect(
+      runReleaseUserJourneyAssertion("assert-channel-running", ["clickclack", statusPath]),
+    ).rejects.toThrow("clickclack is not running");
+  });
+
+  it("accepts a running channel after Gateway restart", async () => {
+    const root = tempDirs.make("openclaw-release-user-assertions-");
+    const statusPath = path.join(root, "status.json");
+
+    writeJson(statusPath, {
+      configuredChannels: ["clickclack"],
+      channels: { clickclack: { ok: true } },
+      channelAccounts: {
+        clickclack: [{ accountId: "default", configured: true, running: true }],
+      },
+    });
+
+    await expect(
+      runReleaseUserJourneyAssertion("assert-channel-running", ["clickclack", statusPath]),
+    ).resolves.toBeUndefined();
+  });
+
   it("fails when uninstall leaves the managed plugin directory behind", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
@@ -276,29 +360,131 @@ describe("release user journey assertions", () => {
     }
   });
 
-  it("accepts ready ClickClack fixture state", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
-    const home = path.join(root, "home");
-    const server = await startTcpFixtureServer((socket) => {
-      const body = JSON.stringify({ socketCount: 1 });
-      socket.end(
-        `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
-      );
+  it("waits for a new ClickClack websocket generation across reconnect", async () => {
+    const root = tempDirs.make("openclaw-release-user-assertions-");
+    const statePath = path.join(root, "clickclack.json");
+    const port = await reserveTcpPort();
+    const token = "clickclack-test-token";
+    const fixture = spawn(process.execPath, [CLICKCLACK_FIXTURE_SCRIPT], {
+      env: {
+        ...process.env,
+        CLICKCLACK_FIXTURE_PORT: String(port),
+        CLICKCLACK_FIXTURE_STATE: statePath,
+        CLICKCLACK_FIXTURE_TOKEN: token,
+      },
+      stdio: "ignore",
     });
+    let socket: WebSocket | undefined;
 
     try {
-      await expect(
-        withEnvAsync({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000" }, () =>
-          runReleaseUserJourneyAssertion("wait-clickclack-socket", [
-            `http://127.0.0.1:${server.port}`,
-            "1",
-          ]),
+      await waitUntil(
+        async () =>
+          fetch(`http://127.0.0.1:${port}/health`)
+            .then((response) => response.ok)
+            .catch(() => false),
+        "ClickClack fixture startup",
+      );
+
+      socket = await openClickClackSocket(port, token);
+      await waitForClickClackSocket({
+        baseUrl: `http://127.0.0.1:${port}`,
+        pollIntervalMs: 20,
+        timeoutMs: 1000,
+      });
+      await closeClickClackSocket(socket);
+      socket = undefined;
+      await waitUntil(async () => {
+        const state = JSON.parse(
+          await fetch(`http://127.0.0.1:${port}/fixture/state`).then((response) => response.text()),
+        );
+        return state.socketCount === 0 && state.socketGeneration === 1;
+      }, "first ClickClack socket close");
+
+      const secondGeneration = waitForClickClackSocket({
+        baseUrl: `http://127.0.0.1:${port}`,
+        minimumSocketGeneration: 2,
+        pollIntervalMs: 20,
+        timeoutMs: 1000,
+      });
+      socket = await openClickClackSocket(port, token);
+      await expect(secondGeneration).resolves.toBeUndefined();
+      expect(
+        JSON.parse(
+          await fetch(`http://127.0.0.1:${port}/fixture/state`).then((response) => response.text()),
         ),
-      ).resolves.toBeUndefined();
+      ).toMatchObject({ socketCount: 1, socketGeneration: 2 });
     } finally {
-      await server.stop();
-      rmSync(root, { force: true, recursive: true });
+      if (socket) {
+        await closeClickClackSocket(socket);
+      }
+      await stopChild(fixture);
     }
+  });
+
+  it("preserves runtime state in generated ClickClack status snapshots", async () => {
+    type GeneratedClickClackPlugin = {
+      status: {
+        buildAccountSnapshot: (params: {
+          account: { accountId: string; enabled: boolean; configured: boolean; baseUrl: string };
+          runtime?: {
+            running?: boolean;
+            lastStartAt?: number;
+            lastStopAt?: number;
+            lastError?: string;
+          };
+        }) => Record<string, unknown>;
+      };
+    };
+
+    const pluginDir = path.join(tempDirs.make("openclaw-release-clickclack-plugin-"), "plugin");
+    const writer = spawnSync(process.execPath, [CLICKCLACK_PLUGIN_WRITER_SCRIPT, pluginDir], {
+      encoding: "utf8",
+    });
+    expect(writer.status, writer.stderr).toBe(0);
+
+    const generatedModule = (await import(
+      pathToFileURL(path.join(pluginDir, "index.mjs")).href
+    )) as {
+      default: {
+        register: (api: {
+          registerChannel: (registration: { plugin: GeneratedClickClackPlugin }) => void;
+        }) => void;
+      };
+    };
+    let plugin: GeneratedClickClackPlugin | undefined;
+    generatedModule.default.register({
+      registerChannel: (registration) => {
+        plugin = registration.plugin;
+      },
+    });
+    if (!plugin) {
+      throw new Error("generated ClickClack plugin did not register its channel");
+    }
+
+    expect(
+      plugin.status.buildAccountSnapshot({
+        account: {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          baseUrl: "http://127.0.0.1:1234",
+        },
+        runtime: {
+          running: true,
+          lastStartAt: 123,
+          lastStopAt: 45,
+          lastError: "prior disconnect",
+        },
+      }),
+    ).toMatchObject({
+      accountId: "default",
+      configured: true,
+      enabled: true,
+      running: true,
+      lastStartAt: 123,
+      lastStopAt: 45,
+      lastError: "prior disconnect",
+    });
   });
 
   it("cancels successful ClickClack inbound response bodies", async () => {
@@ -345,7 +531,7 @@ describe("release user journey assertions", () => {
             timeoutMs: 150,
           }),
         ),
-      ).rejects.toThrow("Timed out waiting for ClickClack websocket connection");
+      ).rejects.toThrow("Timed out waiting for ClickClack websocket generation 1");
       expect(Date.now() - startedAt).toBeLessThan(750);
     } finally {
       await server.stop();

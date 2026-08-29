@@ -414,6 +414,7 @@ describe("workboard tools", () => {
       await tools.get("workboard_proof")?.execute("call-proof", {
         id: parent.id,
         token,
+        status: "passed",
         command: "pnpm test extensions/workboard",
       }),
     );
@@ -425,7 +426,6 @@ describe("workboard tools", () => {
         summary: "Done.",
         createdCardIds: [child.id],
         proofId: pendingProof.proofId,
-        proof: { status: "passed", command: "pnpm test extensions/workboard" },
       }),
     );
     expect(completed.card).toMatchObject({

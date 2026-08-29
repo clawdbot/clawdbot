@@ -103,13 +103,43 @@ export type RestartRecoveryCandidate = {
   observedAt?: number;
 };
 
-type InFlightRunSnapshot = {
+export type InFlightRunSnapshot = {
   runId: string;
   text: string;
   startedAt?: number;
+  /**
+   * True when the in-flight run is owned by the embedded-run registry and can
+   * only be cancelled through the session-owned abort path (sessions.abort),
+   * never through run-specific chat.abort. Control UI uses this to keep Stop
+   * routing session-scoped for recovered embedded runs.
+   */
+  sessionAbortable?: boolean;
   plan?: ChatRunPlanSnapshot;
   events?: AgentEventPayload[];
 };
+
+export function projectInFlightRunSnapshot(params: {
+  chatRunState: Pick<ChatRunState, "resolveBuffer" | "runs">;
+  runId: string;
+  startedAtMs?: number;
+  sessionAbortable?: boolean;
+}): InFlightRunSnapshot {
+  const run = params.chatRunState.runs.get(params.runId);
+  const projected = projectLiveAssistantBufferedText(
+    params.chatRunState.resolveBuffer(params.runId).text,
+    { suppressLeadFragments: true },
+  );
+  const plan = run?.planSnapshot;
+  const events = run?.progressSnapshot?.events;
+  return {
+    runId: params.runId,
+    text: projected.suppress ? "" : projected.text,
+    ...(params.startedAtMs === undefined ? {} : { startedAt: params.startedAtMs }),
+    ...(params.sessionAbortable ? { sessionAbortable: true } : {}),
+    ...(plan ? { plan } : {}),
+    ...(events?.length ? { events } : {}),
+  };
+}
 
 type RegisteredChatAbortController = {
   controller: AbortController;
@@ -420,20 +450,11 @@ export function resolveInFlightRunSnapshot(params: {
   // only at completion — so there is nothing to show mid-run, but the client
   // should still adopt the run and show a `streaming` status (not idle) and
   // render the result cleanly when it lands.
-  const run = params.chatRunState.runs.get(best.runId);
-  const projected = projectLiveAssistantBufferedText(
-    params.chatRunState.resolveBuffer(best.runId).text,
-    { suppressLeadFragments: true },
-  );
-  const plan = run?.planSnapshot;
-  const events = run?.progressSnapshot?.events;
-  return {
+  return projectInFlightRunSnapshot({
+    chatRunState: params.chatRunState,
     runId: best.runId,
-    text: projected.suppress ? "" : projected.text,
-    startedAt: best.startedAtMs,
-    ...(plan ? { plan } : {}),
-    ...(events?.length ? { events } : {}),
-  };
+    startedAtMs: best.startedAtMs,
+  });
 }
 
 export function boundInFlightRunSnapshotForChatHistory(params: {
@@ -455,6 +476,7 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   let bounded: InFlightRunSnapshot = {
     runId: params.snapshot.runId,
     text: "",
+    ...(params.snapshot.sessionAbortable ? { sessionAbortable: true } : {}),
     ...(params.snapshot.events ? { events: [] } : {}),
     ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
   };
@@ -636,7 +658,7 @@ export function abortChatRunById(
     return { aborted: false };
   }
 
-  const bufferedText = ops.chatRunState.resolveBuffer(runId).text;
+  const bufferedText = ops.chatRunState.resolveBuffer(runId, { final: true }).text;
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
   if (stopReason) {

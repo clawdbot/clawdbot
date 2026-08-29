@@ -45,6 +45,7 @@ import type {
 export { readSkillProposalDraftDirectory, readSkillProposalDraftFile } from "./proposal-draft.js";
 export {
   composeSkillBodyPatch,
+  findUniqueSkillPatchSpan,
   proposeCreateSkill,
   proposeUpdateSkill,
   SkillProposalStaleTargetError,

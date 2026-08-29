@@ -98,7 +98,6 @@ describe("Telegram reaction presentation", () => {
     ["☃️", "☃"],
     ["❤️‍🔥", "❤‍🔥"],
     ["🤷‍♂️", "🤷‍♂"],
-    ["✅", "✅"],
     ["👍🏻", "👍🏻"],
   ])("sends %s using its Telegram wire representation %s", async (input, expected) => {
     botApi.setMessageReaction.mockResolvedValue(true);

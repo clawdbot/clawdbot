@@ -44,6 +44,7 @@ export function historicalV15AgentSchemaSql(): string {
     .replace("  entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),\n", "")
     .replace("  project_id TEXT,\n", "")
     .replace("  route_context_json TEXT,\n", "")
+    .replace("  context_eligible INTEGER,\n", "")
     .replace(
       "  owner_actor_type TEXT,\n  owner_actor_id TEXT,\n  owner_assigned_by_type TEXT,\n  owner_assigned_by_id TEXT,\n  owner_assigned_at INTEGER,\n",
       "",
@@ -60,6 +61,11 @@ export function historicalV15AgentSchemaSql(): string {
   );
   sql = removeSchemaRange(
     sql,
+    "CREATE INDEX IF NOT EXISTS idx_agent_session_windows_session_key",
+    "CREATE INDEX IF NOT EXISTS idx_agent_session_windows_created_at",
+  );
+  sql = removeSchemaRange(
+    sql,
     "-- Older same-version writers preserve the envelope while updating the association.",
     "CREATE INDEX IF NOT EXISTS idx_agent_session_conversations_conversation",
   );
@@ -67,6 +73,16 @@ export function historicalV15AgentSchemaSql(): string {
     sql,
     "CREATE TABLE IF NOT EXISTS message_tool_run_outcomes (",
     "CREATE TABLE IF NOT EXISTS transcript_events (",
+  );
+  sql = removeSchemaRange(
+    sql,
+    "CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_identity_sequence",
+    "CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent",
+  );
+  sql = removeSchemaRange(
+    sql,
+    "CREATE INDEX IF NOT EXISTS idx_agent_transcript_context_pending",
+    "CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts",
   );
   sql = removeSchemaRange(
     sql,

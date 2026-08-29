@@ -13,6 +13,62 @@ const suite = createControlUiE2eSuite({
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
+  it.each(["config.changed", "chat.metadata.changed"])(
+    "recovers the retained composer after %s without reloading",
+    async (event) => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const model = { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" };
+        const gateway = await installMockGateway(page, {
+          agentModel: "openai/gpt-5.6-luna",
+          models: [{ ...model, available: false, unavailableReason: "missing-auth" }],
+          historyMessages: [
+            { role: "assistant", content: [{ type: "text", text: "Earlier reply" }] },
+          ],
+          methodResponses: {
+            "sessions.list": {
+              count: 1,
+              defaults: { model: model.id, modelProvider: model.provider },
+              sessions: [
+                {
+                  key: "main",
+                  kind: "direct",
+                  model: model.id,
+                  modelProvider: model.provider,
+                  status: "error",
+                  lastRunError: "No route-compatible authentication source is configured",
+                  updatedAt: Date.now(),
+                },
+              ],
+              path: "",
+              ts: Date.now(),
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+        await expect.poll(() => textarea.isDisabled()).toBe(true);
+        const startupCount = (await gateway.getRequests("chat.startup")).length;
+        const socketCount = await gateway.getSocketCount();
+
+        await gateway.deferNext("chat.metadata");
+        await gateway.setMethodResponse("chat.metadata", {
+          commands: [],
+          models: [{ ...model, available: true }],
+        });
+        await gateway.emitGatewayEvent(event, {});
+        await gateway.waitForRequest("chat.metadata");
+        expect(await textarea.isDisabled()).toBe(true);
+        await gateway.resolveDeferred("chat.metadata");
+        await expect.poll(() => textarea.isDisabled()).toBe(false);
+        await expect.poll(() => page.getByText("Earlier reply", { exact: true }).count()).toBe(1);
+        expect(await gateway.getRequests("chat.startup")).toHaveLength(startupCount);
+        expect(await gateway.getRequests("models.list")).toHaveLength(0);
+        expect(await gateway.getSocketCount()).toBe(socketCount);
+      });
+    },
+  );
+
   it("refreshes the configured usable catalog after advertised chat metadata", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -24,6 +80,7 @@ suite.define(() => {
             name: "GPT-5.3 Codex Spark",
             provider: "codex",
             available: false,
+            unavailableReason: "missing-auth",
           },
         ],
         methodResponses: {
@@ -47,6 +104,7 @@ suite.define(() => {
                 name: "GPT-5.3 Codex Spark",
                 provider: "codex",
                 available: false,
+                unavailableReason: "missing-auth",
               },
             ],
           },
@@ -93,11 +151,14 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator('[data-chat-model-provider-group="codex"]').count())
         .toBe(0);
-      // The advertised default is configured but unavailable, so its row stays
-      // visible and disabled while the usable model remains selectable.
+      // The advertised default stays visible as a setup action while the usable
+      // model remains selectable.
       const unavailableDefault = composer.locator('[data-chat-model-default="true"]');
       await expect.poll(() => unavailableDefault.count()).toBe(1);
-      await expect.poll(() => unavailableDefault.getAttribute("disabled")).not.toBeNull();
+      await expect.poll(() => unavailableDefault.getAttribute("disabled")).toBeNull();
+      await expect
+        .poll(() => unavailableDefault.getAttribute("data-chat-model-setup"))
+        .toBe("true");
       await expect.poll(() => composer.locator('[data-chat-model-option=""]').count()).toBe(0);
     });
   });
@@ -110,12 +171,14 @@ suite.define(() => {
           name: "GPT-5.6 Sol",
           provider: "openai",
           available: false,
+          unavailableReason: "missing-auth" as const,
         },
         {
           id: "gpt-5.6-luna",
           name: "GPT-5.6 Luna",
           provider: "openai",
           available: false,
+          unavailableReason: "missing-auth" as const,
         },
       ];
       const gateway = await installMockGateway(page, {
@@ -162,12 +225,16 @@ suite.define(() => {
       await expect.poll(() => options.first().textContent()).toContain("Sign-in needed");
       await expect
         .poll(() =>
-          options.evaluateAll((rows) => rows.every((row) => row.hasAttribute("disabled"))),
+          options.evaluateAll(
+            (rows) =>
+              rows.every((row) => !row.hasAttribute("disabled")) &&
+              rows.every((row) => row.getAttribute("data-chat-model-setup") === "true"),
+          ),
         )
         .toBe(true);
       await expect
         .poll(() => composer.locator(".chat-controls__model-catalog-state").textContent())
-        .toContain("Review the provider credential or sign-in, then retry");
+        .toContain("No models available");
       await expect.poll(() => composer.locator("textarea").isDisabled()).toBe(true);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
@@ -178,7 +245,7 @@ suite.define(() => {
           path: `${artifactDir}/auth-cold-model-picker.png`,
         });
       }
-      await composer.locator('[data-chat-model-setup="true"]').click();
+      await options.first().click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
     });
   });
@@ -322,6 +389,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         models: [startupModel],
         methodResponses: {
+          "chat.metadata": { commands: [], models: [startupModel, discoveredModel] },
           "models.list": {
             sequence: [
               {
@@ -365,6 +433,75 @@ suite.define(() => {
     });
   });
 
+  it("retires an empty picker snapshot when the Gateway reconnects", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const routedModel = {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        provider: "openai",
+        available: true,
+      };
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/gpt-5.6-luna",
+        models: [routedModel],
+        methodResponses: {
+          "chat.metadata": {
+            sequence: [
+              { commands: [], models: [] },
+              { commands: [], models: [routedModel] },
+            ],
+          },
+          "models.list": {
+            sequence: [{ models: [] }, { models: [routedModel] }],
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const composer = page.locator(".agent-chat__input");
+      const pickerTrigger = composer.locator('[data-chat-model-select="true"]');
+      await pickerTrigger.click();
+      await gateway.waitForRequest("models.list");
+      await expect
+        .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
+        .toContain("No models available");
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: `${artifactDir}/01-empty-catalog-before-reconnect.png`,
+        });
+      }
+      await pickerTrigger.click();
+
+      const startupCount = (await gateway.getRequests("chat.startup")).length;
+      await gateway.setOnline(false);
+      await expect.poll(() => pickerTrigger.getAttribute("aria-disabled")).toBe("true");
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("chat.startup", { after: startupCount });
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').count())
+        .toBe(1);
+
+      await pickerTrigger.click();
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isVisible())
+        .toBe(true);
+      await expect.poll(() => composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: `${artifactDir}/02-routable-model-after-reconnect.png`,
+        });
+      }
+    });
+  });
+
   it("refreshes a successful account catalog after the picker cooldown", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const initialTime = new Date("2026-08-21T12:00:00Z");
@@ -384,6 +521,12 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         models: [existingModel],
         methodResponses: {
+          "chat.metadata": {
+            sequence: [
+              { commands: [], models: [existingModel] },
+              { commands: [], models: [existingModel, newlyAvailableModel] },
+            ],
+          },
           "models.list": {
             sequence: [
               { models: [existingModel] },
@@ -442,4 +585,35 @@ suite.define(() => {
       }
     });
   });
+
+  it.each([
+    [1280, 900, "desktop"],
+    [390, 844, "mobile"],
+  ] as const)(
+    "restores the native composer placeholder after a whitespace-only %s draft",
+    async (width, height, label) => {
+      await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
+        const gateway = await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+
+        const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+        await textarea.fill("   ");
+        await textarea.blur();
+
+        await expect.poll(() => textarea.inputValue()).toBe("");
+        await expect
+          .poll(() => textarea.evaluate((node) => node.matches(":placeholder-shown")))
+          .toBe(true);
+        await expect.poll(() => textarea.getAttribute("placeholder")).toContain("Message");
+        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        if (artifactDir) {
+          await page.locator(".agent-chat__composer-shell").screenshot({
+            animations: "disabled",
+            path: `${artifactDir}/placeholder-${label}.png`,
+          });
+        }
+      });
+    },
+  );
 });

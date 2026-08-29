@@ -267,13 +267,21 @@ describe("runNodeDaemonInstall", () => {
 
   it.each([
     ["an invalid explicit port", { port: "abc" }, "Invalid --port"],
-    ["an unsupported runtime", { runtime: "deno" }, 'Invalid --runtime (use "node"'],
+    ["an unsupported runtime", { runtime: "deno" }, 'Invalid --runtime (use "node" or "bun"'],
   ])("rejects %s before building an install plan", async (_name, opts, error) => {
     await runNodeDaemonInstall(opts);
 
     expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining(error));
     expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
     expect(mocks.service.install).not.toHaveBeenCalled();
+  });
+
+  it("forwards Bun as the explicit node-service runtime", async () => {
+    await runNodeDaemonInstall({ runtime: "bun", force: true });
+
+    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ runtime: "bun" }),
+    );
   });
 
   it("does not build or install a service in Nix daemon mode", async () => {
@@ -544,6 +552,11 @@ describe("runNodeDaemonStatus", () => {
         OPENCLAW_GATEWAY_TOKEN: "gateway-token",
         OPENCLAW_GATEWAY_PASSWORD: "gateway-password",
       },
+      managedDefinition: {
+        programArguments: ["node", "node-host"],
+        environment: { OPENCLAW_GATEWAY_TOKEN: "managed-base-token" },
+      },
+      managedOverrides: { launcher: "command", environment: { keys: ["OPENCLAW_GATEWAY_TOKEN"] } },
     });
 
     await runNodeDaemonStatus({ json: true });
@@ -558,5 +571,8 @@ describe("runNodeDaemonStatus", () => {
     const payload = JSON.stringify(mocks.runtime.writeJson.mock.calls[0]?.[0]);
     expect(payload).not.toContain("gateway-token");
     expect(payload).not.toContain("gateway-password");
+    expect(payload).not.toContain("managed-base-token");
+    expect(payload).not.toContain("managedDefinition");
+    expect(payload).not.toContain("managedOverrides");
   });
 });

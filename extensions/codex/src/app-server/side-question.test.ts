@@ -16,6 +16,7 @@ import {
   createMockPluginRegistry,
   loadWebFetchToolFactoryForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   codexTestTurnIds,
@@ -29,7 +30,7 @@ import {
   createCodexTestBindingStore,
   type CodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
-import { createClientHarness } from "./test-support.js";
+import { createClientHarness, createCodexTestModel } from "./test-support.js";
 
 const readCodexAppServerBindingMock = vi.fn();
 const isCodexAppServerNativeAuthProfileMock = vi.fn();
@@ -44,16 +45,16 @@ type SelectionRetryParams = {
   options: { timeoutMs?: number; abandonSignal?: AbortSignal };
   run: (
     client: unknown,
-    requestOptions: { timeoutMs: number; signal?: AbortSignal },
+    requestOptions: () => { timeoutMs: number; signal?: AbortSignal },
   ) => Promise<unknown>;
   onClientChange: (client: unknown) => void;
 };
 const withLeasedCodexAppServerClientStartSelectionRetryMock = vi.fn(
   async (params: SelectionRetryParams) =>
-    await params.run(params.lease.client, {
+    await params.run(params.lease.client, () => ({
       timeoutMs: params.options.timeoutMs ?? 60_000,
       signal: params.options.abandonSignal,
-    }),
+    })),
 );
 
 function supervisionConnectionFingerprint(): string {
@@ -283,7 +284,8 @@ function threadResult(threadId: string) {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/workspace",
-      cliVersion: "0.148.0",
+      projectId: null,
+      cliVersion: "0.149.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -406,7 +408,7 @@ function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionPa
         forwardedAuthProfileId: authProfileId,
         forwardedAuthProfileSource: authProfileId ? authProfileIdSource : undefined,
         forwardedAuthProfileCandidateIds: authProfileId ? [authProfileId] : undefined,
-        selectedAuthMode: authProfileId ? "token" : undefined,
+        selectedAuthMode: authProfileId ? "oauth" : undefined,
         modelRoute: {
           provider: "openai",
           modelId: "gpt-5.5",
@@ -421,10 +423,12 @@ function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionPa
         profiles: authProfileId
           ? {
               [authProfileId]: {
-                type: "token",
+                type: "oauth",
                 provider: "openai",
-                token: "test-token",
-                expires: Date.now() + 60_000,
+                access: "test-access-token",
+                refresh: "test-refresh-token",
+                expires: Date.now() + 24 * 60 * 60_000,
+                accountId: "account-1",
               },
             }
           : {},
@@ -546,10 +550,10 @@ describe("runCodexAppServerSideQuestion", () => {
     withLeasedCodexAppServerClientStartSelectionRetryMock.mockReset();
     withLeasedCodexAppServerClientStartSelectionRetryMock.mockImplementation(
       async (params: SelectionRetryParams) =>
-        await params.run(params.lease.client, {
+        await params.run(params.lease.client, () => ({
           timeoutMs: params.options.timeoutMs ?? 60_000,
           signal: params.options.abandonSignal,
-        }),
+        })),
     );
     resolveCodexProviderWebSearchSupportForClientMock.mockResolvedValue("supported");
 
@@ -672,6 +676,7 @@ describe("runCodexAppServerSideQuestion", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
@@ -763,47 +768,53 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
   });
 
-  it("keeps stale binding full access from overriding a guarded side-session root", async () => {
-    const root = "/tmp/workspace/guarded";
-    readCodexAppServerBindingMock.mockResolvedValue({
-      threadId: "parent-thread",
-      cwd: "/tmp/outside-session-root",
-      authProfileId: "openai:work",
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
-    const client = createFakeClient();
-    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+  it.each([
+    { boundary: "recorded root", sessionRoot: "/tmp/workspace/guarded" },
+    { boundary: "agent workspace", sessionRoot: undefined },
+  ])(
+    "clamps stale binding full access to the guarded side-session $boundary",
+    async ({ sessionRoot }) => {
+      const root = sessionRoot ?? "/tmp/workspace";
+      readCodexAppServerBindingMock.mockResolvedValue({
+        threadId: "parent-thread",
+        cwd: "/tmp/outside-session-root",
+        authProfileId: "openai:work",
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      });
+      const client = createFakeClient();
+      getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
-    await expect(
-      runCodexAppServerSideQuestion(
-        sideParams({
-          sessionKey: "agent:main:session-1",
-          sessionEntry: {
-            sessionId: "session-1",
-            sessionFile: "/tmp/session-1.jsonl",
-            updatedAt: 1,
-            permissionMode: "guarded",
-            sessionRoot: root,
-          },
-        }),
-      ),
-    ).resolves.toEqual({ text: "Side answer." });
+      await expect(
+        runCodexAppServerSideQuestion(
+          sideParams({
+            sessionKey: "agent:main:session-1",
+            sessionEntry: {
+              sessionId: "session-1",
+              sessionFile: "/tmp/session-1.jsonl",
+              updatedAt: 1,
+              permissionMode: "guarded",
+              ...(sessionRoot ? { sessionRoot } : {}),
+            },
+          }),
+        ),
+      ).resolves.toEqual({ text: "Side answer." });
 
-    expect(mockCall(client.request)[1]).toMatchObject({
-      cwd: root,
-      runtimeWorkspaceRoots: [root],
-      sandbox: "workspace-write",
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
-    });
-    expect(mockCall(createOpenClawCodingToolsMock)[0]).toMatchObject({
-      exec: { mode: "ask" },
-      sessionPermissionPolicy: { mode: "guarded", root },
-    });
-  });
+      expect(mockCall(client.request)[1]).toMatchObject({
+        cwd: root,
+        runtimeWorkspaceRoots: [root],
+        sandbox: "workspace-write",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+      });
+      expect(mockCall(createOpenClawCodingToolsMock)[0]).toMatchObject({
+        exec: { mode: "ask" },
+        sessionPermissionPolicy: { mode: "guarded", root },
+      });
+    },
+  );
 
   it("returns an explicit unsupported decline for ordinary MCP input", async () => {
     const client = createFakeClient({ completeTurn: false });
@@ -898,41 +909,47 @@ describe("runCodexAppServerSideQuestion", () => {
     });
   });
 
-  it("rejects paired-device side questions before acquiring a client, channel, or approval", async () => {
-    const client = createFakeClient();
-    getSharedCodexAppServerClientMock.mockResolvedValue(client);
-    const openDuplex = vi.fn(async () => {
-      throw new Error("paired-device side-question channel was opened");
-    });
-    const requestApproval = vi.fn(async () => undefined);
-    const sandbox = {
-      ...createSandboxContext({}),
-      placementExecutionMode: "remote-exec" as const,
-      placementNodeId: "paired-device-1",
-      placementEnvironmentId: "environment-1",
-      placementSessionId: "session-1",
-      placementOwnerEpoch: 1,
-      sessionKey: "agent:main:session-1",
-    };
+  it.each([
+    { host: "paired device", nodeId: "paired-device-1" },
+    { host: "cloud worker", nodeId: "cloud-worker-node-1" },
+  ])(
+    "rejects $host side questions before acquiring a client, channel, or approval",
+    async ({ nodeId }) => {
+      const client = createFakeClient();
+      getSharedCodexAppServerClientMock.mockResolvedValue(client);
+      const openDuplex = vi.fn(async () => {
+        throw new Error("node side-question channel was opened");
+      });
+      const requestApproval = vi.fn(async () => undefined);
+      const sandbox = {
+        ...createSandboxContext({}),
+        placementExecutionMode: "remote-exec" as const,
+        placementNodeId: nodeId,
+        placementEnvironmentId: "environment-1",
+        placementSessionId: "session-1",
+        placementOwnerEpoch: 1,
+        sessionKey: "agent:main:session-1",
+      };
 
-    await expect(
-      runCodexAppServerSideQuestion(
-        sideParams({
-          sandbox,
-          hostCapabilities: { ...TEST_HOST_CAPABILITIES, requestApproval },
-        }),
-        { runtime: { nodes: { openDuplex } } as never },
-      ),
-    ).rejects.toThrow(
-      "Normal Codex turns are supported on paired devices, but /btw is not yet bound to the active placement.",
-    );
+      await expect(
+        runCodexAppServerSideQuestion(
+          sideParams({
+            sandbox,
+            hostCapabilities: { ...TEST_HOST_CAPABILITIES, requestApproval },
+          }),
+          { runtime: { nodes: { openDuplex } } as never },
+        ),
+      ).rejects.toThrow(
+        "Normal Codex turns are supported on nodes, but /btw is not yet bound to the active placement.",
+      );
 
-    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
-    expect(openDuplex).not.toHaveBeenCalled();
-    expect(requestApproval).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
-    expect(createOpenClawCodingToolsMock).not.toHaveBeenCalled();
-  });
+      expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+      expect(openDuplex).not.toHaveBeenCalled();
+      expect(requestApproval).not.toHaveBeenCalled();
+      expect(client.request).not.toHaveBeenCalled();
+      expect(createOpenClawCodingToolsMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("rebinds side-question handlers when selection retry replaces the client", async () => {
     const initialClient = createFakeClient();
@@ -966,10 +983,10 @@ describe("runCodexAppServerSideQuestion", () => {
         expect(params.lease.client).toBe(initialClient);
         params.lease.client = replacementClient;
         params.onClientChange(replacementClient);
-        return await params.run(replacementClient, {
+        return await params.run(replacementClient, () => ({
           timeoutMs: params.options.timeoutMs ?? 60_000,
           signal: params.options.abandonSignal,
-        });
+        }));
       },
     );
 
@@ -983,6 +1000,64 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(replacementClient.notifications).toHaveLength(1);
     expect(replacementClient.requests).toHaveLength(1);
   });
+
+  it.each([
+    {
+      metadata: "Platform",
+      supported: ["none", "low", "medium", "high", "xhigh", "max"],
+      expected: "none",
+    },
+    {
+      metadata: "subscription",
+      supported: ["low", "medium", "high", "xhigh", "max"],
+      expected: null,
+    },
+    { metadata: "unknown", supported: undefined, expected: null },
+  ] as const)(
+    "sends off with $metadata metadata to the side-question request boundary",
+    async ({ metadata, supported, expected }) => {
+      const client = createFakeClient();
+      getSharedCodexAppServerClientMock.mockResolvedValue(client);
+      const compat: ModelCompatConfig | undefined = supported
+        ? { supportedReasoningEfforts: [...supported] }
+        : undefined;
+      const params = sideParams({
+        model: "gpt-5.6-luna",
+        resolvedThinkLevel: "off",
+        runtimeModel: {
+          ...createCodexTestModel(),
+          id: "gpt-5.6-luna",
+          api: metadata === "subscription" ? "openai-chatgpt-responses" : "openai-responses",
+          baseUrl:
+            metadata === "subscription"
+              ? "https://chatgpt.com/backend-api/codex"
+              : "https://api.openai.com/v1",
+          compat,
+        },
+      });
+      if (metadata !== "subscription") {
+        params.preparedRuntimeAuth = platformPreparedRuntimeAuth("platform-test-key");
+        params.authProfileId = undefined;
+        params.authProfileIdSource = undefined;
+        isCodexAppServerNativeAuthProfileMock.mockReturnValue(false);
+      }
+      params.preparedRuntimeAuth.plan.modelRoute!.modelId = params.model;
+
+      await expect(runCodexAppServerSideQuestion(params)).resolves.toEqual({
+        text: "Side answer.",
+      });
+
+      const turnStartCall = client.request.mock.calls.find(([method]) => method === "turn/start");
+      expect(turnStartCall?.[1]).toMatchObject({
+        threadId: "side-thread",
+        model: "gpt-5.6-luna",
+        effort: expected,
+        collaborationMode: {
+          settings: { model: "gpt-5.6-luna", reasoning_effort: expected },
+        },
+      });
+    },
+  );
 
   it("rejects a Platform plan before binding OAuth can fill missing prepared auth", async () => {
     await expect(
@@ -1121,8 +1196,9 @@ describe("runCodexAppServerSideQuestion", () => {
           runtimeModel: {
             id: "claude-opus-4-6",
             provider: "anthropic",
-            compat: { supportsTools: false },
+            compat: { supportsTools: false, supportedReasoningEfforts: ["none", "high"] },
           } as never,
+          resolvedThinkLevel: "off",
           authProfileId: "openai:outer",
         }),
         { pluginConfig: { supervision: { enabled: true } } },

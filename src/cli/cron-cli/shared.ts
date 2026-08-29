@@ -170,12 +170,12 @@ export function enrichCronJsonWithStatus(value: unknown): unknown {
 }
 
 function computeStatus(job: { enabled?: unknown; state?: unknown }): string {
-  if (!job.enabled) {
-    return "disabled";
-  }
   const state = asOptionalRecord(job.state) ?? {};
   if (state.runningAtMs) {
     return "running";
+  }
+  if (!job.enabled) {
+    return "disabled";
   }
   return typeof state.lastRunStatus === "string"
     ? state.lastRunStatus
@@ -196,14 +196,35 @@ function decorateStatusWithFailures(status: string, consecutiveErrors: number | 
   return failures > 99 ? `${status} (99+x)` : `${status} (${failures}x)`;
 }
 
-function formatCronStatusForDisplay(job: CronJob): string {
+function formatCronStatusForDisplay(job: CronJob) {
   const state = job.state ?? {};
-  if (computeStatus(job) === "disabled" && state.autoDisabled) {
-    return state.autoDisabled.reason === "schedule-errors"
-      ? "disabled (schedule)"
-      : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
+  const status = computeStatus(job);
+  const streamDisabled =
+    job.enabled && job.schedule?.kind === "stream" && state.streamStatus === "disabled";
+  const undelivered = status === "ok" && state.lastDeliveryStatus === "not-delivered";
+  const suppressed =
+    undelivered && !streamDisabled && state.deliverySuppressionReason !== undefined;
+  // The recorded non-outcome, not completion success, distinguishes silence from failed best-effort delivery.
+  const color =
+    status === "error"
+      ? theme.error
+      : status === "running" || (undelivered && !suppressed)
+        ? theme.warn
+        : status === "ok"
+          ? theme.success
+          : theme.muted;
+  let label = decorateStatusWithFailures(status, state.consecutiveErrors);
+  if (streamDisabled) {
+    label = "disabled";
+  } else if (status === "disabled" && state.autoDisabled) {
+    label =
+      state.autoDisabled.reason === "schedule-errors"
+        ? "disabled (schedule)"
+        : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
+  } else if (undelivered) {
+    label = suppressed ? "ok (suppressed)" : "ok (not delivered)";
   }
-  return decorateStatusWithFailures(computeStatus(job), state.consecutiveErrors);
+  return { label, color };
 }
 
 export function handleCronCliError(err: unknown) {
@@ -417,7 +438,7 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
   }
   if (schedule?.kind === "stream") {
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
-    return `stream ${schedule.command.join(" ")}${cwd}`;
+    return `stream ${schedule.command.join(" ")}${cwd}${suffix}`;
   }
   if (schedule?.kind !== "cron") {
     return "-";
@@ -497,8 +518,8 @@ export function printCronList(
       CRON_NEXT_PAD,
     );
     const lastLabel = formatCell(formatRelative(state.lastRunAtMs, now), CRON_LAST_PAD);
-    const statusRaw = computeStatus(job);
-    const statusLabel = formatCell(formatCronStatusForDisplay(job), CRON_STATUS_PAD);
+    const status = formatCronStatusForDisplay(job);
+    const statusLabel = formatCell(status.label, CRON_STATUS_PAD);
     const targetLabel = formatCell(job.sessionTarget, CRON_TARGET_PAD);
     const deliveryPreview = opts?.deliveryPreviews?.get(job.id);
     const deliveryText = deliveryPreview
@@ -511,22 +532,6 @@ export function printCronList(
       job.payload?.kind === "agentTurn" ? job.payload.model : undefined,
       CRON_MODEL_PAD,
     );
-
-    const coloredStatus = (() => {
-      if (statusRaw === "ok") {
-        return colorize(rich, theme.success, statusLabel);
-      }
-      if (statusRaw === "error") {
-        return colorize(rich, theme.error, statusLabel);
-      }
-      if (statusRaw === "running") {
-        return colorize(rich, theme.warn, statusLabel);
-      }
-      if (statusRaw === "skipped") {
-        return colorize(rich, theme.muted, statusLabel);
-      }
-      return colorize(rich, theme.muted, statusLabel);
-    })();
 
     const coloredTarget =
       job.sessionTarget === "main"
@@ -543,7 +548,7 @@ export function printCronList(
       colorize(rich, theme.info, scheduleLabel),
       colorize(rich, theme.muted, nextLabel),
       colorize(rich, theme.muted, lastLabel),
-      coloredStatus,
+      colorize(rich, status.color, statusLabel),
       coloredTarget,
       deliveryPreview
         ? colorize(rich, theme.info, deliveryLabel)
@@ -576,6 +581,10 @@ export function printCronShow(
   runtime.log(`owner session: ${showValue(job.owner?.sessionKey)}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
   runtime.log(`schedule: ${showValue(formatSchedule(job.schedule, job.trigger !== undefined))}`);
+  if (job.schedule?.kind === "stream") {
+    runtime.log(`stream status: ${showValue(job.state.streamStatus)}`);
+    runtime.log(`stream error: ${showValue(job.state.streamError)}`);
+  }
   runtime.log(
     `trigger: ${job.trigger ? `once=${job.trigger.once === true ? "yes" : "no"}; evals=${job.state.triggerEvalCount ?? 0}; last eval=${formatRelative(job.state.lastTriggerEvalAtMs, Date.now())}; last fire=${formatRelative(job.state.lastTriggerFireAtMs, Date.now())}` : "-"}`,
   );
@@ -587,11 +596,12 @@ export function printCronShow(
   runtime.log(`delivery: ${showValue(preview.label)} (${showValue(preview.detail)})`);
   runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
   runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
-  runtime.log(`status: ${showValue(formatCronStatusForDisplay(job))}`);
+  runtime.log(`status: ${showValue(formatCronStatusForDisplay(job).label)}`);
   // lastError is the run/schedule failure message; the diagnostic line below is
   // the run-diagnostics summary and can be empty when only lastError is set.
   runtime.log(`last error: ${showValue(job.state.lastError)}`);
   runtime.log(`last delivery: ${showValue(job.state.lastDeliveryStatus)}`);
+  runtime.log(`last delivery suppression: ${showValue(job.state.deliverySuppressionReason)}`);
   runtime.log(`last delivery error: ${showValue(job.state.lastDeliveryError)}`);
   runtime.log(`diagnostic: ${showValue(job.state.lastDiagnosticSummary)}`);
 }

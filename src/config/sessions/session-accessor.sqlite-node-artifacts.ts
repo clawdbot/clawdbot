@@ -7,7 +7,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../../state/openclaw-agent-progress-card-schema.js";
 import { ensureSessionParticipantsSchema } from "../../state/openclaw-agent-session-participants-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { mergeSessionParticipantSource } from "./session-entry-provenance.js";
+import { mergeParticipantAggregate } from "./session-participant-identity.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
 export function clearSessionCollaborationForKey(
@@ -37,7 +37,7 @@ export function copySessionNodeArtifactsForRepair(
   destination: OpenClawAgentDatabase,
   sourceKeys: readonly string[],
   canonicalKey: string,
-  options: { includeMembers?: boolean } = {},
+  options: { includeMembers?: boolean; includeParticipants?: boolean } = {},
 ): void {
   const keys = [...new Set(sourceKeys)];
   if (keys.length === 0) {
@@ -48,12 +48,13 @@ export function copySessionNodeArtifactsForRepair(
   const sourceKeyReferences = new Set(keys.flatMap((key) => [key, key.trim()]));
   const sourceTables = readSessionNodeArtifactTables(source);
   let destinationTables = readSessionNodeArtifactTables(destination);
-  if (sourceTables.has("session_participants") && !destinationTables.has("session_participants")) {
+  if (
+    options.includeParticipants !== false &&
+    sourceTables.has("session_participants") &&
+    !destinationTables.has("session_participants")
+  ) {
     ensureSessionParticipantsSchema(destination.db);
     destinationTables = readSessionNodeArtifactTables(destination);
-  }
-  if (destinationTables.has("session_participants")) {
-    ensureSessionParticipantsSchema(destination.db);
   }
   if (sourceTables.has("session_progress_cards")) {
     const progressCards = executeSqliteQuerySync(
@@ -225,40 +226,45 @@ export function copySessionNodeArtifactsForRepair(
       );
     }
   }
-  if (sourceTables.has("session_participants") && destinationTables.has("session_participants")) {
+  if (
+    options.includeParticipants !== false &&
+    sourceTables.has("session_participants") &&
+    destinationTables.has("session_participants")
+  ) {
     for (const participant of executeSqliteQuerySync(
       source.db,
       sourceDb.selectFrom("session_participants").selectAll().where("session_key", "in", keys),
     ).rows) {
+      if (source.db === destination.db && participant.session_key === canonicalKey) {
+        continue;
+      }
       const existing = executeSqliteQueryTakeFirstSync(
         destination.db,
         destinationDb
           .selectFrom("session_participants")
-          .select(["actor_source", "first_prompted_at", "last_prompted_at"])
+          .select(["contribution_count", "first_prompted_at", "last_prompted_at"])
           .where("session_key", "=", canonicalKey)
-          .where("actor_type", "=", participant.actor_type)
+          .where("identity_namespace", "=", participant.identity_namespace)
           .where("actor_id", "=", participant.actor_id),
+      );
+      const aggregate = mergeParticipantAggregate(
+        existing,
+        participant,
+        source.db === destination.db ? "sum" : "copy",
       );
       executeSqliteQuerySync(
         destination.db,
         destinationDb
           .insertInto("session_participants")
-          .values({ ...participant, session_key: canonicalKey })
+          .values({
+            ...participant,
+            ...aggregate,
+            session_key: canonicalKey,
+          })
           .onConflict((conflict) =>
-            conflict.columns(["session_key", "actor_type", "actor_id"]).doUpdateSet({
-              actor_source: mergeSessionParticipantSource(
-                existing?.actor_source,
-                participant.actor_source,
-              ),
-              first_prompted_at: Math.min(
-                existing?.first_prompted_at ?? participant.first_prompted_at,
-                participant.first_prompted_at,
-              ),
-              last_prompted_at: Math.max(
-                existing?.last_prompted_at ?? participant.last_prompted_at,
-                participant.last_prompted_at,
-              ),
-            }),
+            conflict
+              .columns(["session_key", "identity_namespace", "actor_id"])
+              .doUpdateSet(aggregate),
           ),
       );
     }

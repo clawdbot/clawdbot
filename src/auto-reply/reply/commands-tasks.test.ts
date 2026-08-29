@@ -93,6 +93,28 @@ describe("handleTasksCommand task board", () => {
     expect(reply.text).toContain("approval denied");
   });
 
+  it("shows blocked completions as warnings instead of successes", async () => {
+    createRunningTaskRunCore({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:tasks-blocked",
+      runId: "run-tasks-blocked",
+      task: "Incomplete background task",
+    });
+    completeTaskRunByRunIdCore({
+      runId: "run-tasks-blocked",
+      endedAt: Date.now(),
+      terminalOutcome: "blocked",
+      terminalSummary: "Required completion did not produce a final deliverable.",
+    });
+
+    const reply = await buildTasksReplyForTest();
+
+    expect(reply.text).toContain("⚠️ Incomplete background task");
+    expect(reply.text).toContain("Subagent · blocked");
+    expect(reply.text).not.toContain("✅ Incomplete background task");
+  });
+
   it("lists session-backed video generation tasks for the current session", async () => {
     createRunningTaskRunCore({
       runtime: "cli",

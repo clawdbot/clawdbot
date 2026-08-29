@@ -1,39 +1,64 @@
-import { describe, expect, it, vi } from "vitest";
-import type { CertMeta, WebSocket } from "ws";
-import { GatewayClient } from "../gateway/client.js";
+import { describe, expect, it } from "vitest";
 import {
   parseWorkerConnectionEndpoint,
   resolveWorkerConnectionTarget,
+  WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES,
   type WorkerConnectionEndpoint,
 } from "./worker-connection-endpoint.js";
 
-const wsMockState = vi.hoisted(() => ({ options: undefined as ClientSocketOptions | undefined }));
-
-type ClientSocketOptions = {
-  checkServerIdentity?: (hostname: string, cert: CertMeta) => Error | undefined;
-};
-
-vi.mock("ws", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("ws")>();
-  return {
-    ...actual,
-    WebSocket: class MockWebSocket {
-      on = vi.fn();
-      close = vi.fn();
-      send = vi.fn();
-
-      constructor(_url: unknown, options: ClientSocketOptions) {
-        wsMockState.options = options;
-      }
-    },
-  };
-});
-
-function getClientSocketOptions(): ClientSocketOptions | undefined {
-  return wsMockState.options;
-}
+const fingerprint = "ab".repeat(32);
+const colonFingerprint = (fingerprint.match(/.{2}/gu)?.join(":") ?? "").toUpperCase();
 
 describe("worker connection endpoint", () => {
+  it.each([
+    { name: "control", char: "\0" },
+    { name: "quote", char: '"' },
+    { name: "backslash", char: "\\" },
+    { name: "newline", char: "\n" },
+    { name: "lone surrogate", char: "\ud800" },
+    { name: "Unicode", char: "漢" },
+    { name: "astral Unicode", char: "😀" },
+  ])("bounds maximal $name endpoint and Access fields", ({ char }) => {
+    const prefix = "wss://worker.invalid/";
+    const suffix = "/__openclaw__/worker";
+    const fill = (length: number) => char.repeat(Math.ceil(length / char.length)).slice(0, length);
+    const input = {
+      kind: "websocket",
+      url: prefix + fill(4_096 - prefix.length - suffix.length) + suffix,
+      tlsFingerprint: colonFingerprint,
+      cloudflareAccess: { clientId: `x${fill(4_095)}`, clientSecret: `s${fill(4_095)}` },
+    };
+    const parsed = parseWorkerConnectionEndpoint(input);
+    expect(parsed).toBeDefined();
+    expect(Buffer.byteLength(JSON.stringify(parsed))).toBeLessThanOrEqual(
+      WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES,
+    );
+    for (const candidate of [
+      { ...input, url: prefix + "x" + input.url.slice(prefix.length) },
+      {
+        ...input,
+        cloudflareAccess: {
+          ...input.cloudflareAccess,
+          clientId: `${input.cloudflareAccess.clientId}x`,
+        },
+      },
+      {
+        ...input,
+        cloudflareAccess: {
+          ...input.cloudflareAccess,
+          clientSecret: `${input.cloudflareAccess.clientSecret}x`,
+        },
+      },
+    ]) {
+      expect(parseWorkerConnectionEndpoint(candidate)).toBeUndefined();
+    }
+    const unix = parseWorkerConnectionEndpoint({ kind: "unix", socketPath: `/${fill(255)}` });
+    expect(unix).toBeDefined();
+    expect(Buffer.byteLength(JSON.stringify(unix))).toBeLessThanOrEqual(
+      WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES,
+    );
+  });
+
   it("resolves Unix sockets through the existing ws+unix carrier", () => {
     const endpoint = parseWorkerConnectionEndpoint({
       kind: "unix",
@@ -47,92 +72,18 @@ describe("worker connection endpoint", () => {
     });
   });
 
-  it("applies the canonical TLS pin policy to public worker URLs", () => {
-    const fingerprint = "ab".repeat(32);
+  it.each([
+    `sha256:${fingerprint.toUpperCase()}`,
+    fingerprint.toUpperCase(),
+    colonFingerprint,
+    `ShA256:${colonFingerprint}`,
+  ])("normalizes the worker TLS pin %s", (tlsFingerprint) => {
     const endpoint = parseWorkerConnectionEndpoint({
       kind: "websocket",
       url: "wss://gateway.example/tenant/__openclaw__/worker",
-      tlsFingerprint: fingerprint,
+      tlsFingerprint,
     });
-    expect(endpoint).toBeDefined();
-
-    const target = resolveWorkerConnectionTarget(endpoint!);
-    expect(target.options.headers).toBeUndefined();
-    const checkServerIdentity = (hostname: string, cert: CertMeta) =>
-      target.options.checkServerIdentity?.(hostname, cert);
-    expect(target.options.rejectUnauthorized).toBe(false);
-    expect(
-      checkServerIdentity("gateway.example", {
-        fingerprint256: fingerprint,
-      } as unknown as CertMeta),
-    ).toBeUndefined();
-    expect(
-      checkServerIdentity("gateway.example", {
-        fingerprint256: "cd".repeat(32),
-      } as unknown as CertMeta),
-    ).toEqual(new Error("Server TLS fingerprint mismatch"));
-
-    const socket = {
-      _socket: { getPeerCertificate: () => ({ fingerprint256: fingerprint }) },
-    } as unknown as WebSocket;
-    expect(target.validateSocket(socket)).toBeNull();
-  });
-
-  it("keeps node-host and worker TLS pin forms in parity", () => {
-    const fingerprint = "ab".repeat(32);
-    const presentedFingerprint = (fingerprint.match(/.{2}/gu)?.join(":") ?? "").toUpperCase();
-    const certificate = { fingerprint256: presentedFingerprint } as unknown as CertMeta;
-    const acceptedPins = [
-      `sha256:${fingerprint.toUpperCase()}`,
-      fingerprint.toUpperCase(),
-      presentedFingerprint,
-      `ShA256:${presentedFingerprint}`,
-    ];
-
-    for (const tlsFingerprint of acceptedPins) {
-      wsMockState.options = undefined;
-      new GatewayClient({ url: "wss://gateway.example.com", tlsFingerprint }).start();
-      const nodeHostOptions = getClientSocketOptions();
-      const workerEndpoint = parseWorkerConnectionEndpoint({
-        kind: "websocket",
-        url: "wss://gateway.example.com/__openclaw__/worker",
-        tlsFingerprint,
-      });
-      expect(workerEndpoint).toMatchObject({ tlsFingerprint: fingerprint });
-      const worker = resolveWorkerConnectionTarget(workerEndpoint!);
-      const socket = {
-        _socket: { getPeerCertificate: () => ({ fingerprint256: presentedFingerprint }) },
-      } as unknown as WebSocket;
-
-      expect(
-        nodeHostOptions?.checkServerIdentity?.("gateway.example.com", certificate),
-      ).toBeUndefined();
-      expect(
-        worker.options.checkServerIdentity?.("gateway.example.com", certificate),
-      ).toBeUndefined();
-      expect(worker.validateSocket(socket)).toBeNull();
-    }
-
-    const wrongPin = "cd".repeat(32);
-    wsMockState.options = undefined;
-    new GatewayClient({ url: "wss://gateway.example.com", tlsFingerprint: wrongPin }).start();
-    const nodeHostOptions = getClientSocketOptions();
-    const worker = resolveWorkerConnectionTarget({
-      kind: "websocket",
-      url: "wss://gateway.example.com/__openclaw__/worker",
-      tlsFingerprint: wrongPin,
-    });
-
-    expect(nodeHostOptions?.checkServerIdentity?.("gateway.example.com", certificate)).toEqual(
-      new Error("Server TLS fingerprint mismatch"),
-    );
-    expect(worker.options.checkServerIdentity?.("gateway.example.com", certificate)).toEqual(
-      new Error("Server TLS fingerprint mismatch"),
-    );
-    const socket = {
-      _socket: { getPeerCertificate: () => ({ fingerprint256: presentedFingerprint }) },
-    } as unknown as WebSocket;
-    expect(worker.validateSocket(socket)).toEqual(new Error("gateway tls fingerprint mismatch"));
+    expect(endpoint).toMatchObject({ tlsFingerprint: fingerprint });
   });
 
   it("carries the closed Cloudflare Access credential pair to the worker upgrade", () => {

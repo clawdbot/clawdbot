@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import "./subagent-registry.mocks.shared.js";
 import { closeOpenClawStateDatabaseForTest as closeSeedStateDatabase } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -37,6 +38,57 @@ function activateRegistry() {
     sendRecoveryNotice: vi.fn(),
   };
   mod.activateSubagentRegistry(() => ({ recoveryRuntime }) as never);
+}
+
+function createOrphanedRequiredDelivery(
+  status: "pending" | "suspended" | "in_progress",
+): SubagentRunRecord {
+  const now = Date.now();
+  const runId = `run-orphan-${status}-delivery`;
+  const childSessionKey = `agent:main:subagent:orphan-${status}-delivery`;
+  const terminalReply = { disposition: "visible" as const, text: "durable final reply" };
+  return {
+    runId,
+    childSessionKey,
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task: "deliver after restart",
+    cleanup: "delete",
+    createdAt: now - 100,
+    expectsCompletionMessage: true,
+    cleanupHandled: false,
+    execution: {
+      status: "terminal",
+      startedAt: now - 50,
+      endedAt: now,
+      outcome: { status: "ok" },
+    },
+    completion: {
+      required: true,
+      resultText: "canonical final reply",
+      capturedAt: now,
+      terminalReply,
+    },
+    delivery: {
+      status,
+      ...(status === "suspended" ? { suspendedAt: now, suspendedReason: "expiry" as const } : {}),
+      ...(status === "in_progress"
+        ? { disposition: "session_queued" as const, queueId: "queue-1" }
+        : {}),
+      payload: {
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        childSessionKey,
+        childRunId: runId,
+        task: "deliver after restart",
+        startedAt: now - 50,
+        endedAt: now,
+        outcome: { status: "ok" },
+        expectsCompletionMessage: true,
+        terminalReply,
+      },
+    },
+  };
 }
 
 describe("subagent registry persistence resume", () => {
@@ -199,6 +251,68 @@ describe("subagent registry persistence resume", () => {
     });
   });
 
+  it("replays one required completion after restart without the child session", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    const stateDir = tempStateDir;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const run = createOrphanedRequiredDelivery("pending");
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      mod.initSubagentRegistry();
+      activateRegistry();
+      await vi.waitFor(
+        () => {
+          expect(announceSpy).toHaveBeenCalledOnce();
+          expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
+        },
+        { timeout: 5_000, interval: 10 },
+      );
+      expect(announceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          childSessionKey: run.childSessionKey,
+          childRunId: run.runId,
+          requesterSessionKey: "agent:main:main",
+          roundOneReply: "canonical final reply",
+          terminalReply: run.completion?.terminalReply,
+          outcome: { status: "ok" },
+        }),
+      );
+
+      mod.resetSubagentRegistryForTests({ persist: false });
+      mod.initSubagentRegistry();
+      activateRegistry();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(announceSpy).toHaveBeenCalledOnce();
+    });
+  });
+
+  it.each([
+    { status: "suspended" as const, disposition: undefined, queueId: undefined },
+    { status: "in_progress" as const, disposition: "session_queued" as const, queueId: "queue-1" },
+  ])("retains $status required delivery with its owner after restart", async (expected) => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    const stateDir = tempStateDir;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const run = createOrphanedRequiredDelivery(expected.status);
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      mod.initSubagentRegistry();
+      activateRegistry();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(announceSpy).not.toHaveBeenCalled();
+      expect(loadSubagentRegistryFromSqlite().get(run.runId)?.delivery).toMatchObject({
+        status: expected.status,
+        ...(expected.disposition ? { disposition: expected.disposition } : {}),
+        ...(expected.queueId ? { queueId: expected.queueId } : {}),
+      });
+    });
+  });
+
   it("keeps restored recovery dormant until the Gateway lifecycle activates it", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     const stateDir = tempStateDir;
@@ -320,11 +434,22 @@ describe("subagent registry persistence resume", () => {
         sendRecoveryNotice: vi.fn(),
       };
       let firstLifecycleOpen = true;
-      const resolveGatewayContext = vi.fn(() =>
-        firstLifecycleOpen ? ({ recoveryRuntime } as never) : undefined,
+      const gatewayContext = {
+        recoveryRuntime,
+        resolveGatewayContext: vi.fn(),
+      };
+      gatewayContext.resolveGatewayContext.mockImplementation(() =>
+        firstLifecycleOpen ? (gatewayContext as never) : undefined,
       );
+      const resolveGatewayContext = vi.fn(() => gatewayContext as never);
       mod.activateSubagentRegistry(resolveGatewayContext);
       mod.activateSubagentRegistry(resolveGatewayContext);
+      const restoredRun = mod.getSubagentRunByRunId(runningRun.runId);
+      expect(restoredRun).toBeDefined();
+      const restoredGatewayContextResolver = getGatewayContextResolver(restoredRun!);
+      expect(restoredGatewayContextResolver).toBeDefined();
+      expect(restoredGatewayContextResolver).not.toBe(resolveGatewayContext);
+      expect(restoredGatewayContextResolver?.()).toBe(gatewayContext);
 
       await vi.waitFor(() => {
         expect(wakeRequester).toHaveBeenCalledOnce();
@@ -336,7 +461,9 @@ describe("subagent registry persistence resume", () => {
       );
 
       firstLifecycleOpen = false;
-      expect(resolveGatewayContext()).toBeUndefined();
+      expect(resolveGatewayContext()).toBe(gatewayContext);
+      expect(gatewayContext.resolveGatewayContext()).toBeUndefined();
+      expect(restoredGatewayContextResolver?.()).toBeUndefined();
       const replacementRuntime = {
         dispatchAgent: vi.fn(),
         waitForAgent: vi.fn(async () => ({ status: "pending" })),
@@ -345,6 +472,7 @@ describe("subagent registry persistence resume", () => {
       const resolveReplacementContext = () => ({ recoveryRuntime: replacementRuntime }) as never;
       mod.activateSubagentRegistry(resolveReplacementContext);
       mod.activateSubagentRegistry(resolveReplacementContext);
+      expect(getGatewayContextResolver(restoredRun!)).toBe(restoredGatewayContextResolver);
       expect(wakeRequester).toHaveBeenCalledOnce();
       expect(recoveryRuntime.waitForAgent).toHaveBeenCalledOnce();
       expect(replacementRuntime.waitForAgent).not.toHaveBeenCalled();

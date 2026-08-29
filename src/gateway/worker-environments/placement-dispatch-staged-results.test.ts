@@ -505,9 +505,21 @@ describe("staged worker placement result recovery", () => {
     await fs.writeFile(path.join(workspacePath, "result.txt"), "local divergence\n");
     const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
     const restartedHarness = createHarness(restartedStore, { workspacePath });
-    restartedHarness.markEnvironmentDestroyed();
-    restartedHarness.reportWorkspaceResultConflict.mockRejectedValueOnce(
-      new Error("transcript report interrupted"),
+    restartedHarness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+    const secret = [
+      String.fromCharCode(115, 107),
+      "proj",
+      "recovery",
+      "abcdefghijklmnopqrstuvwxyz",
+    ].join("-");
+    const failure = new Error(
+      `transcript report interrupted token=${secret} ${"detail ".repeat(200)}`,
+    );
+    restartedHarness.reportWorkspaceResultConflict
+      .mockRejectedValueOnce(failure)
+      .mockRejectedValueOnce(failure);
+    restartedHarness.reportWorkspaceResultRecoveryFailure.mockRejectedValueOnce(
+      new Error("recovery transcript temporarily unavailable"),
     );
 
     await restartedHarness.service.reconcile();
@@ -515,6 +527,27 @@ describe("staged worker placement result recovery", () => {
     expect(restartedStore.listPendingWorkspaceResults()).toMatchObject([
       { stagedResultRef: staged.stagedResultRef, workspaceAcceptedAtMs: 2_000 },
     ]);
+    expect(restartedStore.get(active.sessionId)).toMatchObject({
+      state: "draining",
+      turnClaim: { claimId: claim.claimId, runId: claim.runId },
+    });
+    expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
+    expect(restartedHarness.reportWorkspaceResultRecoveryFailure).toHaveBeenCalledOnce();
+    const recovery = restartedHarness.reportWorkspaceResultRecoveryFailure.mock.calls[0]?.[0];
+    expect(recovery).toMatchObject({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      error: expect.stringContaining("transcript report interrupted"),
+    });
+    expect(JSON.stringify(recovery)).not.toContain(secret);
+    expect(recovery?.error.length).toBeLessThanOrEqual(1_024);
+
+    await restartedHarness.service.reconcile();
+
+    expect(restartedHarness.reportWorkspaceResultRecoveryFailure).toHaveBeenCalledTimes(2);
+    expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
     expect(
       await runCommandWithTimeout(
         ["git", "-C", workspacePath, "show-ref", "--verify", staged.stagedResultRef],
@@ -524,7 +557,7 @@ describe("staged worker placement result recovery", () => {
     await fs.writeFile(path.join(workspacePath, "result.txt"), "later local edit\n");
     const finalStore = createWorkerSessionPlacementStore({ database, now: () => 3_000 });
     const finalHarness = createHarness(finalStore, { workspacePath });
-    finalHarness.markEnvironmentDestroyed();
+    finalHarness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
 
     await finalHarness.service.reconcile();
 
@@ -540,6 +573,8 @@ describe("staged worker placement result recovery", () => {
     expect(recovered?.workspaceBaseManifestRef).not.toBe(staged.currentManifestRef);
     expect(finalStore.listPendingWorkspaceResults()).toEqual([]);
     expect(finalHarness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(finalHarness.environments.destroy).toHaveBeenCalledWith(active.environmentId);
+    expect(finalHarness.reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
     expect(finalHarness.log).not.toContain("placement:failed");
     expect(finalHarness.reportWorkspaceResultConflict).toHaveBeenCalledWith({
       sessionId: REQUEST.sessionId,

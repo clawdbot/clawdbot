@@ -31,9 +31,20 @@ and what the automatic resume looks like.
 | Restart continuation          | SQLite restart sentinel                     | One-shot follow-up dispatched to the session that asked for the restart |
 | Gateway terminal PTYs         | Process memory                              | End with the old process; terminal sessions are not recovered           |
 
-Pending delivery rows drain or retry after restart. Failed rows discard their
-payload; only reusable or crash-ambiguous owners keep a minimal bounded or
-permanent receipt that prevents duplicate delivery.
+Pending delivery rows drain or retry after restart. When a delivery exhausts its
+retry budget, recovery reclaims expired producer custody; an active producer
+keeps ownership. Failed deliveries cannot send again, but retain the information
+needed to settle their owning session or conversation. If that update fails or
+the gateway crashes, recovery resumes the update without resending the message.
+After settlement, failed rows discard their payload; only reusable or
+crash-ambiguous owners keep a minimal bounded or permanent receipt that prevents
+duplicate delivery. Delivery uncertainty notices retain their acknowledgment,
+so a repeated settlement cannot notify the same intent again.
+
+Finish pending settlements before downgrading. Older builds may discard their
+metadata during database repair or drop acknowledged notices while rewriting
+session records, even when the schema version is unchanged.
+See [Database schemas](/reference/database-schemas) for downgrade precautions.
 
 ## Graceful restarts drain first
 
@@ -51,8 +62,11 @@ affected session is marked for recovery.
 
 When a gateway host wakes from sleep, a virtual machine resumes, or the process
 continues after a long pause, the gateway detects the freeze within about 30
-seconds. It restarts channel connections and refreshes cached health and
-presence so clients do not wait for stale sockets or snapshots to expire.
+seconds. It restarts channel connections once tracked Gateway work is idle, then
+refreshes cached health and presence. The health and presence refresh still runs
+when a busy gateway defers only the channel restart. This keeps stale sockets from
+waiting for their normal expiry without interrupting an active reply or agent
+startup when a busy event loop caused the timer gap.
 
 The macOS app and Linux companion cooperate with a local gateway by preparing a
 short suspension lease before the host sleeps and resuming it after wake. Remote

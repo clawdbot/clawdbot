@@ -1,6 +1,8 @@
 // Qa Lab plugin module owns sanitized gateway debug artifacts and temp cleanup.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { ensureRepoBoundDirectory } from "./cli-paths.js";
 import { redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 
@@ -24,9 +26,28 @@ export async function cleanupQaGatewayTempRoots(params: {
   tempRoot: string;
   stagedBundledPluginsRoot?: string | null;
 }) {
-  await fs.rm(params.tempRoot, { recursive: true, force: true }).catch(() => {});
-  if (params.stagedBundledPluginsRoot) {
-    await fs.rm(params.stagedBundledPluginsRoot, { recursive: true, force: true }).catch(() => {});
+  const errors: Error[] = [];
+  for (const [label, root] of [
+    ["tempRoot", params.tempRoot],
+    ["stagedBundledPluginsRoot", params.stagedBundledPluginsRoot],
+  ] as const) {
+    if (!root) {
+      continue;
+    }
+    try {
+      await fs.rm(root, { recursive: true, force: true });
+    } catch (error) {
+      // Attempt both roots. Read only the top-level message before redaction;
+      // cause-aware formatting can expose arbitrary nested credentials.
+      const details = sliceUtf16Safe(redactQaGatewayDebugText(coerceErrorMessage(error)), 0, 2_048);
+      errors.push(new Error(`${label}: ${details}`));
+    }
+  }
+  if (errors.length) {
+    throw new AggregateError(
+      errors,
+      `qa gateway temp-root cleanup failed: ${errors.map((error) => error.message).join("; ")}`,
+    );
   }
 }
 

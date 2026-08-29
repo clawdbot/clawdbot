@@ -7,6 +7,7 @@ import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
@@ -16,6 +17,7 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
 import type { GatewayCronState } from "./server-cron.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import {
   connectOk,
   cronIsolatedRun,
@@ -24,6 +26,7 @@ import {
   rpcReq,
   startServerWithClient,
   testState,
+  writeSessionStore,
 } from "./test-helpers.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
@@ -265,6 +268,7 @@ async function directCronReq(
   cronState: DirectCronState,
   method: string,
   params: Record<string, unknown>,
+  options: { client?: GatewayClient } = {},
 ): Promise<DirectCronResponse> {
   const { cronHandlers } = await import("./server-methods/cron.js");
   let result: DirectCronResponse | undefined;
@@ -297,7 +301,7 @@ async function directCronReq(
         },
         getRuntimeConfig: cronState.getRuntimeConfig,
       } as never,
-      client: null,
+      client: options.client ?? null,
       isWebchatConnect: () => false,
     });
   } catch (err) {
@@ -310,6 +314,38 @@ async function directCronReq(
     throw new Error(`${method} did not respond`);
   }
   return result;
+}
+
+function agentCronClient(
+  sessionKey: string,
+  options: { spawnContext?: boolean } = {},
+): GatewayClient {
+  const operationalRunInstance = createOperationalRunInstanceRef("run-cron-agent-creator");
+  return {
+    connect: {} as GatewayClient["connect"],
+    internal: {
+      agentRuntimeIdentity: {
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey,
+        operationalRunInstance,
+        delegatedAuthority: {
+          kind: "local",
+          operationalRunInstance,
+          lifecycleGeneration: "cron-agent-creator-generation",
+          claimId: "cron-agent-creator-claim",
+        },
+        turnSourceAccountId: "default",
+        ...(options.spawnContext
+          ? {
+              sessionSpawnContext: {
+                inheritedToolPolicy: { version: 1, allow: ["*"], deny: [] },
+              },
+            }
+          : {}),
+      },
+    },
+  };
 }
 
 function expectCronJobIdFromResponse(response: { ok?: unknown; payload?: unknown }) {
@@ -512,6 +548,71 @@ describe("gateway server cron", () => {
         delivery: { mode: "announce" },
       });
     } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
+    }
+  });
+
+  test("persists an agent-created job with its caller session creator", async () => {
+    const { prevSkipCron, dir } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-agent-creator-",
+      cronEnabled: false,
+    });
+    const attributedSessionKey = "agent:main:dashboard:attributed";
+    const unattributedSessionKey = "agent:main:dashboard:unattributed";
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await writeSessionStore({
+      agentId: "main",
+      entries: {
+        [attributedSessionKey]: {
+          sessionId: "session-attributed",
+          updatedAt: 2,
+          createdAt: 1,
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "profile-ada", label: "Ada" },
+        },
+        [unattributedSessionKey]: {
+          sessionId: "session-unattributed",
+          updatedAt: 2,
+          createdAt: 1,
+          createdVia: "run",
+        },
+      },
+    });
+    const cronState = await createDirectCronState();
+    const addJob = async (name: string, sessionKey: string) =>
+      await directCronReq(
+        cronState,
+        "cron.add",
+        {
+          name,
+          enabled: false,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "test", toolsAllow: ["*"] },
+          delivery: { mode: "none" },
+        },
+        {
+          client: agentCronClient(sessionKey, {
+            spawnContext: sessionKey === attributedSessionKey,
+          }),
+        },
+      );
+
+    try {
+      const attributed = await addJob("attributed", attributedSessionKey);
+      const unattributed = await addJob("unattributed", unattributedSessionKey);
+
+      expect(attributed.ok, JSON.stringify(attributed.error ?? null)).toBe(true);
+      expect(attributed.payload).not.toHaveProperty("createdActor");
+      expect(unattributed.ok, JSON.stringify(unattributed.error ?? null)).toBe(true);
+      const jobs = (await loadCronStore(cronState.storePath)).jobs;
+      expect(jobs.find((job) => job.name === "attributed")).toMatchObject({
+        createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      });
+      expect(jobs.find((job) => job.name === "unattributed")).not.toHaveProperty("createdActor");
+    } finally {
+      testState.sessionStorePath = undefined;
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }
   });
@@ -1230,7 +1331,7 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("keeps delivery updates valid for main jobs owned by an explicit default agent", async () => {
+  test("atomically rejects chat delivery for main jobs owned by an explicit default agent", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-main-default-agent-delivery-",
       cronEnabled: false,
@@ -1267,16 +1368,25 @@ describe("gateway server cron", () => {
       const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
       expect(jobId.length > 0).toBe(true);
 
+      const before = await directCronReq(cronState, "cron.get", { id: jobId });
       const updateRes = await directCronReq(cronState, "cron.update", {
         id: jobId,
         patch: {
+          name: "must not persist",
           delivery: { mode: "announce", channel: "telegram", to: "19098680" },
         },
       });
 
-      expect(updateRes.ok).toBe(true);
-      const updated = updateRes.payload as { delivery?: unknown } | undefined;
-      expect(updated?.delivery).toBeUndefined();
+      expect(updateRes.ok).toBe(false);
+      expect(updateRes.error?.message).toContain("cron channel delivery config");
+      expect(await directCronReq(cronState, "cron.get", { id: jobId })).toEqual(before);
+
+      const renamed = await directCronReq(cronState, "cron.update", {
+        id: jobId,
+        patch: { name: "renamed main job" },
+      });
+      expect(renamed.ok).toBe(true);
+      expect(renamed.payload).toMatchObject({ name: "renamed main job", agentId: "ops" });
     } finally {
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }
@@ -1326,7 +1436,7 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("keeps delivery updates valid after gateway config changes the default agent", async () => {
+  test("atomically rejects chat delivery after gateway config changes the default agent", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-main-default-agent-drift-",
       cronEnabled: false,
@@ -1381,17 +1491,28 @@ describe("gateway server cron", () => {
       expect(agentIds).toContain("main");
       expect(agentIds).toContain("ops");
 
+      const before = await directCronReq(cronState, "cron.get", { id: jobId });
       const updateRes = await directCronReq(cronState, "cron.update", {
         id: jobId,
         patch: {
+          name: "must not persist",
           delivery: { mode: "announce", channel: "telegram", to: "19098680" },
         },
       });
 
-      if (!updateRes.ok) {
-        throw new Error(updateRes.error?.message ?? "cron.update failed");
-      }
-      expect(updateRes.ok).toBe(true);
+      expect(updateRes.ok).toBe(false);
+      expect(updateRes.error?.message).toContain("cron channel delivery config");
+      expect(await directCronReq(cronState, "cron.get", { id: jobId })).toEqual(before);
+
+      const renamed = await directCronReq(cronState, "cron.update", {
+        id: jobId,
+        patch: { name: "renamed after default drift" },
+      });
+      expect(renamed.ok).toBe(true);
+      expect(renamed.payload).toMatchObject({
+        name: "renamed after default drift",
+        agentId: "ops",
+      });
     } finally {
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }

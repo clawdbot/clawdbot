@@ -86,28 +86,6 @@ function proposalRowValues(params: {
   };
 }
 
-function replaceOriginRuns(
-  database: DatabaseSync,
-  record: SkillProposalRecord,
-  kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database),
-): void {
-  executeSqliteQuerySync(
-    database,
-    kysely.deleteFrom("skill_workshop_proposal_origin_runs").where("proposal_id", "=", record.id),
-  );
-  record.originRunIds?.forEach((runId, position) => {
-    executeSqliteQuerySync(
-      database,
-      kysely.insertInto("skill_workshop_proposal_origin_runs").values({
-        proposal_id: record.id,
-        run_id: runId,
-        position,
-        mutation_count: record.originRunMutationCounts?.[runId] ?? 1,
-      }),
-    );
-  });
-}
-
 export function insertProposal(
   database: DatabaseSync,
   params: { record: SkillProposalRecord; ownerAgentId: string | null; workspaceDir: string },
@@ -119,7 +97,6 @@ export function insertProposal(
       .insertInto("skill_workshop_proposals")
       .values(proposalRowValues({ ...params, claimReleasedTime: null })),
   );
-  replaceOriginRuns(database, params.record, kysely);
 }
 
 export function updateProposal(
@@ -138,5 +115,4 @@ export function updateProposal(
     database,
     kysely.updateTable("skill_workshop_proposals").set(values).where("proposal_id", "=", record.id),
   );
-  replaceOriginRuns(database, record, kysely);
 }

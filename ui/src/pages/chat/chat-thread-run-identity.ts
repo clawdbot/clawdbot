@@ -23,13 +23,20 @@ export function transcriptRunId(message: unknown): string | undefined {
   );
 }
 
-export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
+export function readAssistantStreamSegmentIdentity(
+  message: unknown,
+): { itemId: string; runId?: string } | undefined {
   const record = asRecord(message);
   if (normalizeLowercaseStringOrEmpty(record?.role) !== "assistant") {
-    return false;
+    return undefined;
   }
   const fallback = asRecord(record?.openclawStreamFallback);
-  return typeof fallback?.itemId === "string" && fallback.itemId.trim().length > 0;
+  const itemId = normalizeOptionalString(fallback?.itemId);
+  return itemId ? { itemId, ...optionalRunIdentity(transcriptRunId(message)) } : undefined;
+}
+
+export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
+  return readAssistantStreamSegmentIdentity(message) !== undefined;
 }
 
 export function optionalRunIdentity(value: unknown): { runId: string } | undefined {

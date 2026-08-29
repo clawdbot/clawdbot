@@ -21,8 +21,13 @@ type AgentRunContext = {
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;
+  /** Whether hidden events may reach exact sessions.messages subscribers.
+   * Internal maintenance sharing a foreground key disables this to prevent selected-chat leaks. */
+  projectSessionMessages?: boolean;
   /** Whether lifecycle events may update the shared session row. */
   projectSessionLifecycle?: boolean;
+  /** Sticky diagnostic provenance only; never authorization for recovery work. */
+  mainSessionRestartRecovery?: true;
   /** Active cadence state by job; admission permits one invocation per job. */
   cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
@@ -42,8 +47,6 @@ export type AgentRunDelegatedAuthority = Readonly<{
 type AgentRunContextOwnership = {
   lifecycleGeneration: string;
   claimIds: Set<string>;
-  /** Detached task ids exist only for the exact execution claims that own them. */
-  taskRunIds?: Map<string, string>;
   /** Live execution claims are lifecycle-owned and must not be expired by the projection sweeper. */
   sweepProtectedClaimIds: Set<string>;
   preserveAfterRelease: boolean;
@@ -58,7 +61,7 @@ type AgentRunRegistryState = {
   queuedRunContextLeases?: WeakMap<AgentRunContext, number>;
   lifecycleGeneration: string;
   sequenceResetHandler?: (runId: string) => void;
-  delegatedAuthorityClosedHandler?: (authority: AgentRunDelegatedAuthority) => void;
+  delegatedAuthorityClosedHandlers?: Set<(authority: AgentRunDelegatedAuthority) => void>;
   version: number;
 };
 
@@ -104,23 +107,23 @@ function notifyDelegatedAuthorityClosed(
   state: AgentRunRegistryState,
   authority: AgentRunDelegatedAuthority,
 ): void {
-  try {
-    state.delegatedAuthorityClosedHandler?.(authority);
-  } catch {
-    // Approval settlement observes lifecycle closure; it cannot block the owner transition.
+  for (const handler of state.delegatedAuthorityClosedHandlers ?? []) {
+    try {
+      handler(authority);
+    } catch {
+      // One observer cannot block closure or prevent other owners from cancelling work.
+    }
   }
 }
 
-/** Installs the Gateway-lifetime observer for exact delegated-authority closure. */
+/** Observe exact delegated-authority closure without displacing other lifecycle owners. */
 export function registerAgentRunDelegatedAuthorityClosedHandler(
   handler: (authority: AgentRunDelegatedAuthority) => void,
 ): () => void {
-  const state = getAgentRunRegistryState();
-  state.delegatedAuthorityClosedHandler = handler;
+  const handlers = (getAgentRunRegistryState().delegatedAuthorityClosedHandlers ??= new Set());
+  handlers.add(handler);
   return () => {
-    if (state.delegatedAuthorityClosedHandler === handler) {
-      state.delegatedAuthorityClosedHandler = undefined;
-    }
+    handlers.delete(handler);
   };
 }
 
@@ -192,6 +195,12 @@ export function registerAgentRunContext(
   }
   if (context.projectSessionLifecycle !== undefined) {
     existing.projectSessionLifecycle = context.projectSessionLifecycle;
+  }
+  if (context.projectSessionMessages !== undefined) {
+    existing.projectSessionMessages = context.projectSessionMessages;
+  }
+  if (context.mainSessionRestartRecovery === true) {
+    existing.mainSessionRestartRecovery = true;
   }
   if (context.cronRunsByJobId !== undefined) {
     existing.cronRunsByJobId ??= new Map();
@@ -305,31 +314,6 @@ export function claimAgentRunContext(
 /** Returns the currently registered context for a run, if it has not been cleared or swept. */
 export function getAgentRunContext(runId: string): AgentRunContext | undefined {
   return getAgentRunRegistryState().contexts.get(runId);
-}
-
-export function bindAgentRunTaskRunId(runId: string, claimId: string, taskRunId: string): boolean {
-  const normalizedTaskRunId = taskRunId.trim();
-  const ownership = getAgentRunRegistryState().owners.get(runId);
-  if (!normalizedTaskRunId || !ownership?.claimIds.has(claimId)) {
-    return false;
-  }
-  ownership.taskRunIds ??= new Map();
-  ownership.taskRunIds.set(claimId, normalizedTaskRunId);
-  return true;
-}
-
-export function getAgentRunTaskRunId(runId: string): string | undefined {
-  const ownership = getAgentRunRegistryState().owners.get(runId);
-  if (!ownership?.taskRunIds) {
-    return undefined;
-  }
-  const taskRunIds = new Set<string>();
-  for (const [claimId, taskRunId] of ownership.taskRunIds) {
-    if (ownership.claimIds.has(claimId)) {
-      taskRunIds.add(taskRunId);
-    }
-  }
-  return taskRunIds.size === 1 ? taskRunIds.values().next().value : undefined;
 }
 
 /** Holds an existing run context only while its current execution awaits lane admission. */
@@ -543,9 +527,9 @@ export function listAgentRunsForSession(params: {
   const state = getAgentRunRegistryState();
   const runs: Array<{ runId: string; lifecycleGeneration: string }> = [];
   for (const [runId, context] of state.contexts) {
-    const matches = context.sessionId
-      ? context.sessionId === params.sessionId
-      : context.sessionKey === params.sessionKey;
+    const matches =
+      context.sessionKey === params.sessionKey &&
+      (!context.sessionId || context.sessionId === params.sessionId);
     if (matches && context.lifecycleGeneration === state.lifecycleGeneration) {
       runs.push({ runId, lifecycleGeneration: context.lifecycleGeneration });
     }
@@ -694,7 +678,6 @@ export function releaseAgentRunContext(runId: string, claimId: string | undefine
   }
   owners.sweepProtectedClaimIds.delete(claimId);
   const versionBeforeRelease = readAgentRunIndexVersion();
-  owners.taskRunIds?.delete(claimId);
   owners.clearListeners?.delete(claimId);
   if (owners.exclusiveClaimId === claimId) {
     owners.exclusiveClaimId = undefined;

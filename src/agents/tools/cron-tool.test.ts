@@ -133,6 +133,61 @@ describe("cron tool", () => {
     expect(tool.description).toContain('tz:"Asia/Shanghai"');
   });
 
+  it("supports the promotion creation path: enabled add inherits conversation delivery, then a forced test run", async () => {
+    // Promotion flow contract (the guidance itself lives in the system prompt,
+    // since the repeat is noticed during ordinary work rather than while
+    // reading this tool's schema). The job is created enabled so the
+    // scheduler's failure alerts and auto-disable own a broken job; a job left
+    // disabled pending confirmation is watched by nothing. Delivery is
+    // inherited from the requesting conversation and the forced run is the
+    // visible test.
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+      currentDeliveryContext: {
+        channel: "matrix",
+        to: "room:!AbCdEf1234567890:example.org",
+        threadId: "$RootEvent:Example.Org",
+      },
+    });
+    callGatewayMock.mockResolvedValueOnce({ id: "job-promoted" });
+    await tool.execute("call-promote-add", {
+      action: "add",
+      job: {
+        name: "morning brief",
+        schedule: { kind: "cron", expr: "0 7 * * *", tz: "Europe/Vienna" },
+        payload: { kind: "agentTurn", message: "Summarize overnight updates." },
+      },
+    });
+    const addCall = readGatewayCall(0);
+    expect(addCall.method).toBe("cron.add");
+    // Never created disabled: that is the one state no scheduler guard watches.
+    expect(addCall.params?.enabled).not.toBe(false);
+    expect(addCall.params?.delivery).toEqual({
+      mode: "announce",
+      channel: "matrix",
+      to: "room:!AbCdEf1234567890:example.org",
+      threadId: "$RootEvent:Example.Org",
+    });
+
+    await tool.execute("call-promote-test-run", {
+      action: "run",
+      jobId: "job-promoted",
+      runMode: "force",
+    });
+    const runCall = readGatewayCall(1);
+    expect(runCall.method).toBe("cron.run");
+    expect(runCall.params).toEqual({ id: "job-promoted", mode: "force" });
+
+    // Failed test is cleaned up, not left behind as a broken schedule.
+    await tool.execute("call-promote-rollback", {
+      action: "remove",
+      jobId: "job-promoted",
+    });
+    const removeCall = readGatewayCall(2);
+    expect(removeCall.method).toBe("cron.remove");
+    expect(removeCall.params).toEqual({ id: "job-promoted" });
+  });
+
   function buildReminderAgentTurnJob(overrides: Record<string, unknown> = {}): {
     name: string;
     schedule: { at: string };
@@ -2921,37 +2976,47 @@ describe("cron tool", () => {
     });
   });
 
-  it("rejects agentId retargeting on update", async () => {
-    const tool = createTestCronTool({
-      agentSessionKey: "agent:agent-123:telegram:direct:channing",
-    });
+  it.each(["agent-123", "worker", null])(
+    "rejects scoped update agentId %j in either shape",
+    async (agentId) => {
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
+      });
 
-    await expect(
-      tool.execute("call-update-agent-id", {
-        action: "update",
-        id: "job-1",
-        job: { agentId: "worker" },
-      }),
-    ).rejects.toThrow("automation patch agentId cannot be changed");
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
+      for (const fields of [{ job: { agentId, enabled: false } }, { agentId, enabled: false }]) {
+        await expect(
+          tool.execute("call-update-agent-id", {
+            action: "update",
+            id: "job-1",
+            ...fields,
+          }),
+        ).rejects.toThrow("automation patch agentId cannot be changed");
+      }
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
 
-  it("allows unscoped operator cron.update agentId retargeting", async () => {
+  it.each([
+    ["nested", "worker"],
+    ["flat", "worker"],
+    ["nested", null],
+    ["flat", null],
+  ])("allows unscoped operator %s agentId %j updates", async (shape, agentId) => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
     const tool = createTestCronTool();
 
     await tool.execute("call-unscoped-update-agent-id", {
       action: "update",
       id: "job-1",
-      job: { agentId: "worker" },
+      ...(shape === "nested" ? { job: { agentId } } : { agentId }),
     });
 
     const params = expectSingleGatewayCallMethod("cron.update") as
-      | { id?: string; patch?: { agentId?: string } }
+      | { id?: string; patch?: { agentId?: string | null } }
       | undefined;
     expect(params).toEqual({
       id: "job-1",
-      patch: { agentId: "worker" },
+      patch: { agentId },
     });
   });
 

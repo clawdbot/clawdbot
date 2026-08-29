@@ -2,6 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import "../openclaw-mascot.ts";
+import { beginNativeWindowDrag } from "../../app/native-window-drag.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import {
@@ -159,7 +160,7 @@ export class OpenClawCustodianPanel extends OpenClawLightDomElement {
     return html`
       <section class="cp cp--${dock}" style=${style} aria-label=${t("custodian.panel.title")}>
         ${this.dockLayout.renderResizer("cp", t("custodian.panel.resize"))}
-        <header class="rail-header cp-header">
+        <header class="rail-header cp-header" @mousedown=${beginNativeWindowDrag}>
           <div class="cp-title">
             <openclaw-mascot
               .mood=${this.store.sending ? "thinking" : "idle"}

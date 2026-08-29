@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   killPidIfAlive,
-  readPidFile,
+  waitForPidFile,
   waitForPidToExit,
   writeForkingNoOutputScript,
 } from "../test-utils/process-tree.js";
@@ -438,6 +438,17 @@ describe("secret ref resolver", () => {
     const pidPath = path.join(root, "forked.pid");
     let childPid: number | undefined;
     let resultPromise: Promise<string> | undefined;
+    const nativeSetTimeout = globalThis.setTimeout;
+    const noOutputTimeouts: Array<() => void> = [];
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delay, ...args) => {
+        if (delay === 1_000) {
+          noOutputTimeouts.push(() => callback(...args));
+          return nativeSetTimeout(() => undefined, 60_000);
+        }
+        return nativeSetTimeout(callback, delay, ...args);
+      });
 
     try {
       resultPromise = resolveExecSecret(scriptPath, {
@@ -446,14 +457,16 @@ describe("secret ref resolver", () => {
         timeoutMs: 10_000,
       });
       const resultErrorPromise = resultPromise.catch((error: unknown) => error);
-      await vi.waitFor(async () => {
-        childPid = await readPidFile(pidPath);
-        expect(childPid).toBeGreaterThan(0);
-      });
-      if (childPid === undefined) {
-        throw new Error("forked exec provider pid was not recorded");
-      }
+      childPid = await waitForPidFile(pidPath);
+      await vi.waitFor(
+        () => {
+          expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
+        },
+        { timeout: 5_000 },
+      );
+      noOutputTimeouts.at(-1)?.();
       const error = await resultErrorPromise;
+
       expect(isProviderScopedSecretResolutionError(error)).toBe(true);
       if (!isProviderScopedSecretResolutionError(error)) {
         throw new Error("expected a provider-scoped no-output error");
@@ -466,6 +479,7 @@ describe("secret ref resolver", () => {
       });
       expect(await waitForPidToExit(childPid, 5_000)).toBe(true);
     } finally {
+      setTimeoutSpy.mockRestore();
       killPidIfAlive(childPid);
       await resultPromise?.catch(() => {});
     }

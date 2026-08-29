@@ -29,6 +29,7 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
+import { formatCliImageTurnContext } from "../cli-image-turn-correlation.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
 import {
   detectAndLoadPromptImages,
@@ -111,12 +112,12 @@ export function buildCliAgentSystemPrompt(params: {
   runtimeChatType?: ChatType;
   runtimeCapabilities?: string[];
   ownerNumbers?: string[];
-  heartbeatPrompt?: string;
   docsPath?: string;
   sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
   bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   modelDisplay: string;
   agentId?: string;
@@ -160,7 +161,6 @@ export function buildCliAgentSystemPrompt(params: {
     silentReplyPromptMode: params.silentReplyPromptMode,
     ownerNumbers: params.ownerNumbers,
     reasoningTagHint: false,
-    heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     acpEnabled: isAcpRuntimeSpawnAvailable({ config: params.config }),
@@ -175,6 +175,7 @@ export function buildCliAgentSystemPrompt(params: {
     userDate,
     contextFiles: params.contextFiles,
     bootstrapMode: params.bootstrapMode,
+    bootstrapTruncationNotice: params.bootstrapTruncationNotice,
   });
 }
 
@@ -393,6 +394,7 @@ export async function prepareCliPromptImagePayload(params: {
   imageOrder?: PromptImageOrderEntry[];
   mediaImageLayout?: MediaImageLayout;
   media?: MediaFact[];
+  imageTurnKey?: string;
 }): Promise<{
   prompt: string;
   imagePaths?: string[];
@@ -438,6 +440,9 @@ export async function prepareCliPromptImagePayload(params: {
     params.backend.input === "stdin" ||
     params.backend.imageArg === "@"
   ) {
+    if (params.imageTurnKey) {
+      prompt = `${prompt.trimEnd()}\n\n${formatCliImageTurnContext(params.imageTurnKey)}`;
+    }
     prompt = appendImagePathsToPrompt(
       prompt,
       imagePaths,

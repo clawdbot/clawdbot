@@ -420,7 +420,7 @@ export function createDiscordDraftPreviewController(params: {
         if (finalReplyError !== true && !finalizedViaPreviewMessage && draftStream?.messageId()) {
           await draftStream.clear();
         }
-        await draftStream?.cleanupRetargeted();
+        await draftStream?.cleanupPendingMessages();
       } catch (err) {
         params.log(`discord: draft cleanup failed: ${String(err)}`);
       }

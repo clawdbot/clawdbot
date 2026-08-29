@@ -17,7 +17,10 @@ import { SessionMutationAuthorizationChangedError } from "../session-sharing.js"
 import { resolveDevicePlacementEligibility } from "../worker-environments/device-placement-eligibility.js";
 import { selectDevicePlacementCandidates } from "../worker-environments/device-placement-selector.js";
 import { resolveWorkerPlacementDestination } from "../worker-environments/placement-destination.js";
-import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
+import {
+  projectWorkerSessionPlacement,
+  readWorkerPlacementIdentity,
+} from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import {
   resolveWorkerPlacementCapabilities,
@@ -163,18 +166,17 @@ async function validateDispatchExecutionMode(params: {
     respondInvalidWorkerSession(params.respond, eligibility.error);
     return false;
   }
+  const environmentService = params.context.workerEnvironmentService;
   if (
-    params.executionMode !== "remote-exec" ||
-    params.context.workerEnvironmentService?.supportsExecutionMode?.(
-      params.target.profileId,
-      params.executionMode,
-    ) === true
+    (params.executionMode === "worker-turn" && !environmentService?.supportsExecutionMode) ||
+    environmentService?.supportsExecutionMode?.(params.target.profileId, params.executionMode) ===
+      true
   ) {
     return true;
   }
   respondInvalidWorkerSession(
     params.respond,
-    `selected cloud worker provider does not support the remote-exec execution mode required by runtime ${params.sessionRuntime}; use an approved paired device or a provider that advertises remote-exec`,
+    `runtime ${params.sessionRuntime} requires a cloud worker provider that supports ${params.executionMode}; choose a compatible provider, or select an agent/model route with agentRuntime.id "openclaw"`,
   );
   return false;
 }
@@ -198,6 +200,7 @@ function respondWorkerPlacement(params: {
         // Canonical fenced runner reader; a node lost after durable provision
         // must project offline here exactly as sessions.list would.
         params.context.workerPlacementRunnerAvailabilityReader?.read(params.placement),
+        readWorkerPlacementIdentity(params.placement, params.context.workerEnvironmentService),
       ),
     },
     undefined,
@@ -446,7 +449,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
             agentId: target.target.agentId,
             executionMode,
             ...dispatchTarget,
-            ...(dispatchTarget.deviceId && devicePlacement ? { devicePlacement } : {}),
+            ...(devicePlacement ? { devicePlacement } : {}),
           },
           () =>
             emitSessionsChanged(context, {
@@ -573,7 +576,11 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
-      emitSessionsChanged(context, { reason: "move", sessionKey: target.canonicalKey });
+      try {
+        emitSessionsChanged(context, { reason: "move", sessionKey: target.canonicalKey });
+      } catch {
+        // Reporting cannot replace the placement owner's failure response.
+      }
       respondWorkerDispatchError(error, respond);
     }
   },
@@ -602,6 +609,22 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     }
     const { target, entry, sessionId } = resolved;
     const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
+    const reportPlacementChange = (placement: WorkerSessionPlacementRecord | undefined): void => {
+      if (
+        !placement ||
+        (existingPlacement &&
+          placement.state === existingPlacement.state &&
+          placement.generation === existingPlacement.generation &&
+          placement.updatedAtMs === existingPlacement.updatedAtMs)
+      ) {
+        return;
+      }
+      try {
+        emitSessionsChanged(context, { reason: "reclaim", sessionKey: target.canonicalKey });
+      } catch {
+        // Reporting cannot replace a committed reclaim outcome.
+      }
+    };
     if (
       existingPlacement?.state !== "failed" &&
       !resolveManagedSessionWorktree({
@@ -613,8 +636,9 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    let placement: WorkerSessionPlacementRecord;
     try {
-      const placement = await placementService.reclaim(
+      placement = await placementService.reclaim(
         {
           sessionId,
           sessionKey: target.canonicalKey,
@@ -622,9 +646,15 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         },
         sessionMutationAuthorization?.assertCurrent,
       );
-      respondWorkerPlacement({ respond, key: target.canonicalKey, sessionId, context, placement });
     } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw error;
+      }
+      reportPlacementChange(placementReader.getMany([sessionId]).get(sessionId));
       respondWorkerDispatchError(error, respond);
+      return;
     }
+    reportPlacementChange(placement);
+    respondWorkerPlacement({ respond, key: target.canonicalKey, sessionId, context, placement });
   },
 };

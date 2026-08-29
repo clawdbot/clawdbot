@@ -1,6 +1,7 @@
 // Memory Wiki tests cover index plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./api.js";
 import plugin from "./index.js";
@@ -106,6 +107,22 @@ describe("memory-wiki plugin", () => {
           hasSubcommands: true,
         },
       ],
+    });
+  });
+
+  it("registers default-vault tools inside the configured state directory", () => {
+    const stateDir = "/tmp/openclaw-memory-wiki-runtime-state";
+    const { api, registerTool } = createPluginApi();
+
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      plugin.register(api);
+      const statusFactory = registerTool.mock.calls.find(
+        ([, registration]) => registration.name === "wiki_status",
+      )?.[0];
+
+      expect(statusFactory?.({ agentId: "main" })).toMatchObject({
+        testConfig: { vault: { path: path.join(stateDir, "wiki", "main") } },
+      });
     });
   });
 

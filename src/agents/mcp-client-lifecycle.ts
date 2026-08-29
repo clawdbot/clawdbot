@@ -110,33 +110,37 @@ export async function disposeMcpClient(
   session: LifecycleSession,
   timeoutMs = 5_000,
 ): Promise<void> {
-  session.detachStderr?.();
-  const closed = await settleWithin(
-    (async () => {
-      if (session.transportType === "streamable-http") {
-        await ignoreCloseFailure(() => session.transport.terminateSession?.());
-      }
-      await ignoreCloseFailure(() => session.transport.close());
-      await ignoreCloseFailure(() => session.client.close());
-    })(),
-    timeoutMs,
-  );
-  if (closed) {
-    return;
-  }
+  try {
+    const closed = await settleWithin(
+      (async () => {
+        if (session.transportType === "streamable-http") {
+          await ignoreCloseFailure(() => session.transport.terminateSession?.());
+        }
+        await ignoreCloseFailure(() => session.transport.close());
+        await ignoreCloseFailure(() => session.client.close());
+      })(),
+      timeoutMs,
+    );
+    if (closed) {
+      return;
+    }
 
-  // Closing an HTTP transport aborts a hung DELETE. Stdio owns a process
-  // group, so force it dead before disposal can report completion.
-  const { transport } = session;
-  const closeTransport =
-    session.transportType === "stdio" && transport instanceof OpenClawStdioClientTransport
-      ? () => transport.forceClose()
-      : () => transport.close();
-  await settleWithin(
-    Promise.all([
-      ignoreCloseFailure(closeTransport),
-      ignoreCloseFailure(() => session.client.close()),
-    ]),
-    timeoutMs,
-  );
+    // Closing an HTTP transport aborts a hung DELETE. Stdio owns a process
+    // group, so force it dead before disposal can report completion.
+    const { transport } = session;
+    const closeTransport =
+      session.transportType === "stdio" && transport instanceof OpenClawStdioClientTransport
+        ? () => transport.forceClose()
+        : () => transport.close();
+    await settleWithin(
+      Promise.all([
+        ignoreCloseFailure(closeTransport),
+        ignoreCloseFailure(() => session.client.close()),
+      ]),
+      timeoutMs,
+    );
+  } finally {
+    // Shutdown itself may emit the last diagnostic; detach only after it settles.
+    session.detachStderr?.();
+  }
 }

@@ -1,8 +1,10 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { capCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
+import { resolveCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import {
   calculateContextTokens,
@@ -13,11 +15,14 @@ import {
   type CompactionPreparation,
   type CompactionResult,
 } from "../runtime/index.js";
+import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 import { AgentSessionInspection } from "./agent-session-inspection.js";
 import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
+import { createCompactionRuntime } from "./compaction/runtime.js";
 import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
 import { getLatestCompactionEntry, type CompactionEntry } from "./session-manager.js";
+import { recordSessionModelUsage } from "./session-model-usage.js";
 import type { SettingsManager } from "./settings-manager.js";
 
 type CompactionReason = "manual" | "threshold" | "overflow";
@@ -37,7 +42,18 @@ export const agentSessionAutomaticCompaction: unique symbol = Symbol.for(
   "openclaw.agent-session.automatic-compaction",
 );
 
+/** Installs a synchronous callback for model-context replacement during compaction. */
+export const agentSessionSetContextReplacementHook: unique symbol = Symbol.for(
+  "openclaw.agent-session.set-context-replacement-hook",
+);
+
 export abstract class AgentSessionCompaction extends AgentSessionInspection {
+  private onContextReplaced?: () => void;
+
+  [agentSessionSetContextReplacementHook](callback: (() => void) | undefined): void {
+    this.onContextReplaced = callback;
+  }
+
   // =========================================================================
   // Compaction
   // =========================================================================
@@ -207,16 +223,24 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
 
     if (!compactionResult) {
+      // Hooks keep the original input. Only the host's core path bounds raw focus
+      // before escaping, and both summaries and any retry share this prepared text.
+      const focus = normalizeOptionalString(options.customInstructions);
+      const boundedFocus = focus ? resolveCompactionInstructions(focus, undefined) : undefined;
+      const coreInstructions = boundedFocus
+        ? wrapUntrustedPromptDataBlock({ label: "Compaction focus", text: boundedFocus })
+        : undefined;
       const runCoreCompaction = () =>
         compact(
           preparation,
           model,
           auth.apiKey,
           auth.headers,
-          options.customInstructions,
+          coreInstructions,
           options.signal,
           this.thinkingLevel,
           this.agent.streamFn,
+          createCompactionRuntime((usage) => recordSessionModelUsage(this.sessionManager, usage)),
         );
       let result = await runCoreCompaction();
       // Automatic core compaction owns one retry for invalid summary output.
@@ -258,6 +282,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     // Compaction replaces the request prefix, invalidating retained usage and thinking signatures.
     // Sanitize at assignment so every continuation driver receives replay-safe history.
     this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
+    // The retry loop can continue before queued subscribers observe compaction_end.
+    // Invalidate context-bound state synchronously with the authoritative replacement.
+    this.onContextReplaced?.();
 
     const savedCompactionEntry = newEntries.find(
       (e) => e.type === "compaction" && e.summary === compactionResult.summary,

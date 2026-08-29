@@ -1,9 +1,11 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   actionOpacity,
@@ -79,8 +81,19 @@ suite.define(() => {
       await draft.waitFor();
 
       await homeRow.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(mainKey));
+      await waitForControlUiRoute(page, {
+        pathname: controlUiSessionPath(mainKey),
+        routeId: "chat",
+      });
       await draft.waitFor();
+      const presentedPanes = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      await expect
+        .poll(() =>
+          presentedPanes.evaluateAll((panes) =>
+            panes.map((pane) => (pane as ChatPaneElement).sessionKey),
+          ),
+        )
+        .toEqual([mainKey]);
 
       await composer.fill("");
       await secondRow.getByRole("link").click();
@@ -166,6 +179,9 @@ suite.define(() => {
       const parent = page.locator(`[data-session-key="${parentKey}"]`);
       await parent.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
+      await expect
+        .poll(() => parent.locator(".session-run-spinner").getAttribute("aria-label"))
+        .toBe("Active run");
       await captureUiProof(page, "child-sessions-collapsed.png");
 
       await parent.getByRole("button", { name: "Show 4 child sessions for Plan release" }).click();
@@ -487,7 +503,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps sidebar sessions visible through a same-client Gateway reconnect", async () => {
+  it("keeps sidebar sessions visible through transport and client replacement reconnects", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -499,7 +515,10 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": sessionsListResponse([
-          sessionRow(sessionKey, "Disconnect proof", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(sessionKey, "Disconnect proof", Date.parse("2026-07-01T16:00:00.000Z"), {
+            pinned: true,
+            pinnedAt: Date.parse("2026-07-01T16:00:00.000Z"),
+          }),
           sessionRow(otherSessionKeys[0], "Other A", Date.parse("2026-07-01T15:59:00.000Z")),
           sessionRow(otherSessionKeys[1], "Other B", Date.parse("2026-07-01T15:58:00.000Z")),
         ]),
@@ -510,7 +529,9 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const sidebarRow = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+      const pinnedEntry = page.locator(`[data-sidebar-entry="session:${sessionKey}"]`);
       await sidebarRow.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => pinnedEntry.count()).toBe(1);
       const sidebarRows = page.locator(".sidebar-recent-session");
       await expect.poll(() => sidebarRows.count()).toBe(3);
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
@@ -530,6 +551,15 @@ suite.define(() => {
       await expect
         .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
         .toBe(socketsBefore + 1);
+      await page.locator(".sidebar-identity-card").click();
+      const retryConnection = page.locator(
+        'wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:retry-connect"]',
+      );
+      await retryConnection.waitFor({ state: "visible", timeout: 10_000 });
+      await retryConnection.click();
+      await expect.poll(() => pinnedEntry.count()).toBe(1);
+      await captureUiProof(page, "sidebar-sessions-during-client-replacement.png");
+
       await gateway.deferNext("sessions.list", { includeLastMessage: true });
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
@@ -843,6 +873,9 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": sessionsListResponse(rows(false)),

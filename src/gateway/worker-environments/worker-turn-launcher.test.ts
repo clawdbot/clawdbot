@@ -10,8 +10,9 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createChatRunState } from "../server-chat-state.js";
-import { prepareSessionArchiveLifecycle } from "../server-methods/sessions-archive-lifecycle.js";
+import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -23,6 +24,7 @@ import {
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
+  measureLaunchTurn,
   placements,
   root,
   seedActivePlacement,
@@ -359,7 +361,8 @@ describe("worker turn launcher local placement", () => {
       removeChatRun: vi.fn(),
       workerSessionPlacementService: placements,
     } as unknown as GatewayRequestContext;
-    const archiveDrain = await prepareSessionArchiveLifecycle({
+    const archiveDrain = await prepareSessionLifecycleDrain({
+      action: "archive",
       context,
       storePath: sessionTarget.storePath,
       sessionKeys: [SESSION_KEY],
@@ -461,11 +464,12 @@ describe("worker turn launcher local placement", () => {
   );
 
   it.each([
-    { label: "SSH", nodeDeviceId: undefined },
-    { label: "paired-device", nodeDeviceId: "paired-node-1" },
+    { label: "SSH", nodeDeviceId: undefined, providerId: "fake" },
+    { label: "paired-device", nodeDeviceId: "paired-node-1", providerId: "device" },
+    { label: "cloud-node", nodeDeviceId: "cloud-node-1", providerId: "crabbox" },
   ])(
     "runs a $label remote-exec placement locally and reconciles without launching a worker child",
-    async ({ nodeDeviceId }) => {
+    async ({ nodeDeviceId, providerId }) => {
       seedActivePlacement("remote-exec");
       const order: string[] = [];
       const launchTurn = vi.fn();
@@ -493,6 +497,7 @@ describe("worker turn launcher local placement", () => {
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
+        measureLaunchTurn,
         launchTurn,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace,
@@ -504,14 +509,61 @@ describe("worker turn launcher local placement", () => {
         ...unusedEnvironments(),
         get: vi.fn(() =>
           nodeDeviceId
-            ? { ...attachedEnvironment(), providerId: "device", nodeDeviceId, sshEndpoint: null }
+            ? { ...attachedEnvironment(), providerId, nodeDeviceId, sshEndpoint: null }
             : attachedEnvironment(),
         ),
         startTunnel: vi.fn(async () => tunnel),
       };
       const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+      let retainedNodeAuthority: (() => void) | undefined;
       const runLocal = vi.fn(async () => {
         order.push("local");
+        if (nodeDeviceId) {
+          const assertCurrent = getPluginRuntimeGatewayRequestScope()?.assertNodeExecutionCurrent;
+          expect(assertCurrent).toBeTypeOf("function");
+          const request = {
+            runId: "run-remote-exec",
+            agentId: "main",
+            nodeId: nodeDeviceId,
+            workspace: {
+              workspaceDir: "/worker/workspace",
+              environmentId: ENVIRONMENT_ID,
+              sessionId: SESSION_ID,
+              sessionKey: SESSION_KEY,
+              ownerEpoch: OWNER_EPOCH,
+            },
+          };
+          retainedNodeAuthority = () => assertCurrent!(request);
+          retainedNodeAuthority();
+          for (const changed of [
+            { ...request, runId: "other" },
+            { ...request, nodeId: "other" },
+            ...[
+              { ownerEpoch: OWNER_EPOCH + 1 },
+              { environmentId: "other" },
+              { sessionId: "other" },
+              { workspaceDir: "/other" },
+            ].map((workspace) =>
+              Object.assign({}, request, {
+                workspace: Object.assign({}, request.workspace, workspace),
+              }),
+            ),
+          ]) {
+            expect(() => assertCurrent!(changed)).toThrow("no longer current");
+          }
+          const original = environments.get(ENVIRONMENT_ID)!;
+          if (original.state !== "attached") {
+            throw new Error("expected an attached environment");
+          }
+          for (const changed of [
+            { ...original, nodeDeviceId: "replacement" },
+            { ...original, leaseId: "replacement" },
+          ]) {
+            vi.mocked(environments.get).mockReturnValueOnce(changed);
+            await Promise.resolve();
+            expect(retainedNodeAuthority).toThrow("no longer current");
+          }
+        }
         return { payloads: [{ text: "local remote reply" }], meta: { durationMs: 1 } };
       });
 
@@ -532,6 +584,9 @@ describe("worker turn launcher local placement", () => {
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
       const placement = placements.get(SESSION_ID);
       expect([placement?.state, placement?.turnClaim]).toEqual(["active", null]);
+      if (retainedNodeAuthority) {
+        expect(retainedNodeAuthority).toThrow("no longer current");
+      }
     },
   );
 
@@ -647,7 +702,6 @@ describe("worker turn launcher local placement", () => {
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        launchTurn: vi.fn(),
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(async () => ({
           assertActive: vi.fn(async () => {}),
@@ -715,11 +769,13 @@ describe("worker turn launcher local placement", () => {
   );
 
   it.each([
-    { label: "failed execution", executionFailed: true },
-    { label: "successful execution", executionFailed: false },
+    { label: "failed paired-device execution", executionFailed: true, providerId: "device" },
+    { label: "successful paired-device execution", executionFailed: false, providerId: "device" },
+    { label: "failed cloud-node execution", executionFailed: true, providerId: "crabbox" },
+    { label: "successful cloud-node execution", executionFailed: false, providerId: "crabbox" },
   ])(
-    "preserves a disconnected paired-node placement after $label for a fresh attempt",
-    async ({ executionFailed }) => {
+    "preserves a disconnected node-backed placement after $label for a fresh attempt",
+    async ({ executionFailed, providerId }) => {
       seedActivePlacement("remote-exec");
       const original = placements.get(SESSION_ID);
       if (original?.state !== "active") {
@@ -749,6 +805,7 @@ describe("worker turn launcher local placement", () => {
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
+        measureLaunchTurn,
         launchTurn,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace,
@@ -758,7 +815,7 @@ describe("worker turn launcher local placement", () => {
       };
       const environment = {
         ...attachedEnvironment(),
-        providerId: "device",
+        providerId,
         nodeDeviceId: "paired-node-1",
         sshEndpoint: null,
       };

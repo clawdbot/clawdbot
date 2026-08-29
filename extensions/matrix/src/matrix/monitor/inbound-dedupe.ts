@@ -1,7 +1,7 @@
 // Matrix inbound replay protection: /sync replays events after an unclean
 // shutdown and the decrypt bridge re-emits decrypted events, so each
-// (account, room, event) is claimed before handling and committed only after
-// reply dispatch succeeds; release on retryable failure reopens the event.
+// (account, room, event) is claimed before handling. Durable turn adoption or
+// terminal handling commits it; failure or abandonment before adoption releases it.
 import {
   createChannelReplayGuard,
   resolvePersistentDedupePluginStateNamespace,

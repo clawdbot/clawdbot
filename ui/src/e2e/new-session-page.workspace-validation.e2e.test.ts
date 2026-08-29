@@ -4,6 +4,7 @@ import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   SOURCE_REPO,
   TARGET_REPO,
@@ -231,9 +232,9 @@ suite.define(() => {
       await trigger.click();
       const worktree = place.getByRole("button", { name: "Worktree" });
       expect(await worktree.isEnabled()).toBe(true);
-      expect(await worktree.getAttribute("title")).toBe(
-        "Couldn't verify Git for this folder. Choose it again to retry.",
-      );
+      await expect
+        .poll(() => tooltipTitleText(worktree))
+        .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
       await worktree.click();
       await expect.poll(() => trigger.count()).toBe(0);
       await expect.poll(() => start.isEnabled()).toBe(true);
@@ -289,9 +290,9 @@ suite.define(() => {
       await whereTrigger.click();
       const cloud = where.getByRole("button", { name: "Cloud · aws" });
       expect(await cloud.isDisabled()).toBe(true);
-      expect(await cloud.getAttribute("title")).toBe(
-        "Couldn't verify Git for this folder. Choose it again to retry.",
-      );
+      await expect
+        .poll(() => tooltipTitleText(cloud))
+        .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
       await page.keyboard.press("Escape");
       await projectTrigger.click();
       await project.getByText("Advanced", { exact: true }).click();
@@ -415,7 +416,7 @@ suite.define(() => {
         await page.getByRole("heading", { name: "Original agent" }).waitFor();
         const message = page.locator(".new-session-page__message");
         const projectTrigger = page.locator("#new-session-project-trigger");
-        const start = page.locator("button.chat-send-btn");
+        const start = page.locator("button.new-session-page__start-submit");
         await message.fill("retry this draft after reconnect");
         await gateway.deferNext("sessions.create");
         await start.click();

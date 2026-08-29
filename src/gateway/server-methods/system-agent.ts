@@ -56,7 +56,7 @@ import {
 import {
   createAdmittedWizardSession,
   runExclusiveSystemAgentSetupActivation,
-  SETUP_ADMISSION_BUSY_MESSAGE,
+  respondSetupAdmissionBusy,
   SetupAdmissionBusyError,
 } from "./setup-admission.js";
 import { sanitizeSystemAgentChatParams } from "./system-agent-chat-params.js";
@@ -67,7 +67,7 @@ import {
   runSystemAgentChatInput,
 } from "./system-agent-chat-turn.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 /**
@@ -230,10 +230,6 @@ function queueDelegatedApproval(params: {
   return record.id;
 }
 
-function respondRetryableSetupUnavailable(respond: RespondFn, message: string): void {
-  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, { retryable: true }));
-}
-
 export const systemAgentHandlers: GatewayRequestHandlers = {
   "openclaw.approval.list": async ({ respond, client, context }) => {
     const manager = context.systemAgentApprovalManager;
@@ -342,12 +338,16 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             if (!result.ok) {
               throw new Error(result.error);
             }
+            runnerSession.setModelActivation({
+              modelRef: result.modelRef,
+              ...(result.gatewayRestartRequired ? { gatewayRestartRequired: true } : {}),
+            });
           },
           { timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS },
         ),
     );
     if (!session) {
-      respondRetryableSetupUnavailable(respond, SETUP_ADMISSION_BUSY_MESSAGE);
+      respondSetupAdmissionBusy(respond);
       return;
     }
     context.wizardSessions.set(sessionId, session);
@@ -430,7 +430,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         ),
     );
     if (!session) {
-      respondRetryableSetupUnavailable(respond, SETUP_ADMISSION_BUSY_MESSAGE);
+      respondSetupAdmissionBusy(respond);
       return;
     }
     context.wizardSessions.set(sessionId, session);
@@ -483,7 +483,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       if (!(error instanceof SetupAdmissionBusyError)) {
         throw error;
       }
-      respondRetryableSetupUnavailable(respond, error.message);
+      respondSetupAdmissionBusy(respond);
     }
   },
   "openclaw.chat": async ({ params: rawParams, respond, client, context }) => {
@@ -604,6 +604,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             );
           }
           const welcomeHistoryStart = engine.historyLength();
+          let persistWelcome = !welcomeOnly;
           let welcome: string;
           let welcomeQuestion: SystemAgentChatQuestion | undefined;
           try {
@@ -617,6 +618,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               const overview = await engine.loadOverview();
               const facts = loadSystemAgentGreetingFacts();
               greetingAuditSequence = facts.auditSequence;
+              persistWelcome ||= facts.recentExternalEdit;
               welcome = (
                 await resolveSystemAgentGreeting({
                   overview,
@@ -636,7 +638,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
             return;
           }
-          persistEngineHistory(engine, welcomeHistoryStart);
+          // Passive welcomes are ephemeral; an external-edit alert must survive
+          // before delivery acknowledges the audit cursor that would hide it.
+          if (persistWelcome) {
+            persistEngineHistory(engine, welcomeHistoryStart);
+          }
           await evictOldestSession(sessions, context);
           session = {
             engine,

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentsListResult, GatewayAgentRow, GatewaySessionRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
 import "./app-host.ts";
@@ -72,6 +72,18 @@ describe("OpenClaw shell document title", () => {
     shell.routeState = { routeId: "usage" };
     shell.syncDocumentTitle();
     expect(document.title).toBe("Usage — OpenClaw");
+  });
+
+  it("does not read stored outboxes for a connected document title", () => {
+    const shell = createShell(createContext({}));
+    const summarizeStoredChatOutboxes = vi.fn(() => ({ total: 3 }));
+    shell.routeState = { routeId: "usage" };
+    shell.outboxStoreRuntime = { summarizeStoredChatOutboxes };
+
+    shell.syncDocumentTitle();
+
+    expect(document.title).toBe("Usage — OpenClaw");
+    expect(summarizeStoredChatOutboxes).not.toHaveBeenCalled();
   });
 
   it("appends the configured environment to route and custodian titles", () => {
@@ -155,16 +167,16 @@ describe("OpenClaw shell document title", () => {
     expect(document.title).toBe("(2) Usage — OpenClaw");
   });
 
-  it("shows offline instead of a stale approval count", () => {
+  it("shows disconnected instead of a stale approval count", () => {
     const shell = createShell(createContext({ connected: false, approvalCount: 2 }));
     shell.routeState = { routeId: "usage" };
 
     shell.syncDocumentTitle();
 
-    expect(document.title).toBe("(Offline) Usage — OpenClaw");
+    expect(document.title).toBe("(Disconnected) Usage — OpenClaw");
   });
 
-  it("includes stored chat outbox messages in the offline marker", () => {
+  it("includes stored chat outbox messages in the disconnected marker", () => {
     const shell = createShell(createContext({ connected: false }));
     shell.routeState = { routeId: "usage" };
     shell.outboxStoreRuntime = {
@@ -173,7 +185,7 @@ describe("OpenClaw shell document title", () => {
 
     shell.syncDocumentTitle();
 
-    expect(document.title).toBe("(Offline · 3 queued) Usage — OpenClaw");
+    expect(document.title).toBe("(Disconnected · 3 queued) Usage — OpenClaw");
   });
 
   it("uses the meaningful custodian label without a brand suffix", () => {

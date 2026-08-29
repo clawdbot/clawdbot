@@ -14,8 +14,10 @@ import {
   clearAgentRunContext,
   getAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { WorkerAdmissionError } from "./worker-connection-contract.js";
-import { WorkerConnectionStoppedError } from "./worker-connection.js";
+import {
+  WorkerAdmissionError,
+  WorkerConnectionStoppedError,
+} from "./worker-connection-contract.js";
 import {
   ComposedGatewayHarness,
   ENVIRONMENT_ID,
@@ -70,7 +72,7 @@ describe("cloud worker milestone 2 fault injection", () => {
   const clients: WorkerClients[] = [];
 
   beforeEach(async () => {
-    harness = await ComposedGatewayHarness.create(tempDirs.make("openclaw-worker-fault-"));
+    harness = await ComposedGatewayHarness.create(tempDirs.make("oc-wf-"));
     await harness.start();
   });
 

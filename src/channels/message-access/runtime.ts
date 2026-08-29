@@ -11,6 +11,8 @@ import type { PairingChannel } from "../../pairing/pairing-store.types.js";
 import { recordChannelIngressResolution } from "./admission-evidence.js";
 import { decideChannelIngress } from "./decision.js";
 import { resolveChannelIngressEffectiveAllowFromLists } from "./effective-allow-from.js";
+import { readChannelIngressHostOwner } from "./ingress-host-owner.js";
+import { prepareChannelParticipantInput } from "./participant-input.js";
 import {
   allReferencedAccessGroupNames,
   normalizeEffectiveEntries,
@@ -194,6 +196,8 @@ function resolveResolverPolicy(params: {
     groupAllowFromFallbackToAllowFrom:
       params.input.policy?.groupAllowFromFallbackToAllowFrom ??
       params.base.groupAllowFromFallbackToAllowFrom,
+    minIdentifierAuthentication:
+      params.input.policy?.minIdentifierAuthentication ?? params.base.minIdentifierAuthentication,
     mutableIdentifierMatching:
       params.input.policy?.mutableIdentifierMatching ?? params.base.mutableIdentifierMatching,
     ...(params.input.policy?.activation ? { activation: params.input.policy.activation } : {}),
@@ -554,6 +558,11 @@ export async function resolveChannelMessageIngress(
   params: ResolveChannelMessageIngressParams,
 ): Promise<ResolvedChannelMessageIngress> {
   const channelId = normalizeChannelId(params.channelId);
+  const promptedAt = Date.now();
+  const participantOwner = readChannelIngressHostOwner(channelId);
+  const participant = params.identity.resolveParticipant?.(params.subject);
+  const senderId = params.subject.stableId == null ? undefined : String(params.subject.stableId);
+  const participantBinding = params.contextBinding && { ...params.contextBinding };
   const adapter = createIdentityAdapter(params.identity);
   const subject = createIdentitySubject(params.identity, params.subject);
   const routeFacts = [...routeFactsFromDescriptors(params.route), ...(params.routeFacts ?? [])];
@@ -670,6 +679,33 @@ export async function resolveChannelMessageIngress(
     commandAccess,
     activationAccess,
   };
+  if (
+    (participant || senderId) &&
+    participantBinding &&
+    participantOwner &&
+    ingress.admission === "dispatch"
+  ) {
+    prepareChannelParticipantInput(result, {
+      identity: participant
+        ? {
+            type: "remote",
+            pluginId: channelId,
+            domain: participant.domain,
+            idKind: participant.idKind,
+            id: participant.id,
+          }
+        : {
+            type: "observation",
+            pluginId: channelId,
+            accountId: params.accountId ?? null,
+            senderKind: "unknown",
+            id: senderId!,
+          },
+      binding: participantBinding,
+      promptedAt,
+      owner: participantOwner,
+    });
+  }
   return recordChannelIngressResolution({
     result,
     channelId,
@@ -691,5 +727,12 @@ export async function resolveChannelMessageIngress(
       !(isGroup
         ? state.allowlists.group.hasWildcard
         : state.allowlists.dm.hasWildcard || state.allowlists.pairingStore.hasWildcard),
+    identifierAuthentication: ingress.graph.gates.some(
+      (gate) => gate.identifierAuthentication?.affectedMatch,
+    )
+      ? "affected"
+      : ingress.graph.gates.some((gate) => gate.identifierAuthentication?.evaluated)
+        ? "evaluated"
+        : "not-evaluated",
   });
 }

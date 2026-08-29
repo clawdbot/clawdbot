@@ -7,6 +7,7 @@ import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import {
+  isCompletionReportInputProvenance,
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
@@ -245,6 +246,9 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   if (!roleContent) {
     return false;
   }
+  if (roleContent.role === "user" && isCompletionReportInputProvenance(message.provenance)) {
+    return true;
+  }
   if (roleContent.role === "user" && isSubagentAnnounceInterSessionUserMessage(message)) {
     return true;
   }
@@ -405,7 +409,7 @@ export function filterVisibleProjectedHistoryMessages(
       continue;
     }
     if (
-      isDuplicateAcpGatewayInjectedMessage(current, visible.at(-1)) ||
+      isDuplicateAcpGatewayInjectedMessage(current, messages[i - 1]) ||
       isDuplicateChannelFinalDeliveryMirror(current, messages[i - 1])
     ) {
       changed = true;

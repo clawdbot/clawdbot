@@ -2,7 +2,7 @@
 // source-reply sink and embedded-run payload projection.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
 import { mirrorDeliveredReplyToTranscript } from "../../auto-reply/reply/dispatch-from-config.transcript.js";
@@ -19,9 +19,20 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
+import type { SandboxFsBridge } from "../sandbox/fs-bridge.types.js";
+import { createRemoteShellSandboxFsBridge } from "../sandbox/remote-fs-bridge.js";
+import { createLocalRemoteShellScriptRunner } from "../sandbox/remote-fs-bridge.test-helpers.js";
+import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { createMessageTool } from "./message-tool-execution.js";
 
-function createCurrentSourceMessageTool(params: { workspaceDir?: string } = {}) {
+function createCurrentSourceMessageTool(
+  params: {
+    workspaceDir?: string;
+    sandboxFsBridge?: SandboxFsBridge;
+    sandboxContainerWorkdir?: string;
+    sandboxWorkspaceMediaReadAllowed?: boolean;
+  } = {},
+) {
   return createMessageTool({
     config: { agents: { entries: { main: { default: true } } } },
     currentChannelProvider: "webchat",
@@ -29,6 +40,10 @@ function createCurrentSourceMessageTool(params: { workspaceDir?: string } = {}) 
     agentSessionKey: "agent:main:webchat:dm:dashboard",
     runId: "webchat-run",
     workspaceDir: params.workspaceDir,
+    sandboxRoot: params.sandboxFsBridge ? params.workspaceDir : undefined,
+    sandboxContainerWorkdir: params.sandboxContainerWorkdir,
+    sandboxFsBridge: params.sandboxFsBridge,
+    sandboxWorkspaceMediaReadAllowed: params.sandboxWorkspaceMediaReadAllowed,
     getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
     resolveCommandSecretRefsViaGateway: async ({ config }) => ({
       resolvedConfig: config,
@@ -119,9 +134,79 @@ describe("WebChat message tool internal source reply", () => {
         const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
         expect(sourceReply).toMatchObject({ text: "Attached proof." });
         expect(sourceReply?.mediaUrls).toHaveLength(1);
+        expect(sourceReply?.attachments).toEqual([
+          expect.objectContaining({
+            name: "proof.txt",
+            mimeType: "text/plain",
+            trustedLocalMedia: true,
+          }),
+        ]);
         const mediaPath = sourceReply?.mediaUrls?.[0];
         expect(mediaPath).toBeTruthy();
         await expect(fs.readFile(mediaPath as string)).resolves.toEqual(attachment);
+      },
+    );
+  });
+
+  it("uses policy-scoped bridge access for remote-only current-source media", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "message-tool-source-remote-media-" },
+      async (state) => {
+        await fs.mkdir(state.workspaceDir, { recursive: true });
+        const remoteWorkspaceDir = state.path("remote-workspace");
+        await fs.mkdir(remoteWorkspaceDir, { recursive: true });
+        await fs.writeFile(path.join(remoteWorkspaceDir, "proof.txt"), "remote proof");
+        const sandbox = createSandboxTestContext({
+          overrides: {
+            backendId: "test",
+            workspaceDir: state.workspaceDir,
+            agentWorkspaceDir: state.workspaceDir,
+            containerWorkdir: "/sandbox",
+          },
+        });
+        const sandboxFsBridge = createRemoteShellSandboxFsBridge({
+          sandbox,
+          runtime: {
+            remoteWorkspaceDir,
+            remoteAgentWorkspaceDir: remoteWorkspaceDir,
+            runRemoteShellScript: createLocalRemoteShellScriptRunner(),
+          },
+        });
+        const bridgeReadFile = vi.spyOn(sandboxFsBridge, "readFile");
+        const tool = createCurrentSourceMessageTool({
+          workspaceDir: state.workspaceDir,
+          sandboxContainerWorkdir: "/sandbox",
+          sandboxFsBridge,
+          sandboxWorkspaceMediaReadAllowed: true,
+        });
+
+        const toolResult = await tool.execute("message-remote-media-call", {
+          action: "send",
+          message: "Attached proof.",
+          media: "/sandbox/proof.txt",
+        });
+
+        const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
+        expect(sourceReply?.mediaUrls).toHaveLength(1);
+        await expect(fs.readFile(sourceReply?.mediaUrls?.[0] as string, "utf8")).resolves.toBe(
+          "remote proof",
+        );
+
+        bridgeReadFile.mockClear();
+        const deniedTool = createCurrentSourceMessageTool({
+          workspaceDir: state.workspaceDir,
+          sandboxContainerWorkdir: "/sandbox",
+          sandboxFsBridge,
+          sandboxWorkspaceMediaReadAllowed: false,
+        });
+        await expect(
+          deniedTool.execute("message-remote-media-denied", {
+            action: "send",
+            message: "Attached proof.",
+            media: "/sandbox/proof.txt",
+          }),
+        ).rejects.toThrow(/could not be staged|outside workspace root/i);
+        expect(bridgeReadFile).not.toHaveBeenCalled();
       },
     );
   });
@@ -147,7 +232,7 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
-  it("publishes managed images with the current run owner", async () => {
+  it("publishes managed media with aligned metadata and the current run owner", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-internal-source-reply-" },
       async (state) => {
@@ -157,12 +242,14 @@ describe("WebChat message tool internal source reply", () => {
         const sessionKey = "agent:main:webchat:dm:restart-proof";
         const sessionId = "restart-proof-session";
         const imagePaths = ["first.png", "second.png"].map((name) => path.join(workspaceDir, name));
+        const documentPath = path.join(workspaceDir, "report.json");
         await fs.mkdir(workspaceDir, { recursive: true });
         await Promise.all(
           imagePaths.map((imagePath) =>
             fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64")),
           ),
         );
+        await fs.writeFile(documentPath, '{"status":"ready"}\n');
 
         await replaceSessionEntry(
           { agentId: "main", sessionKey, storePath },
@@ -195,7 +282,7 @@ describe("WebChat message tool internal source reply", () => {
         const sendParams = {
           action: "send" as const,
           message: "Durable image reply",
-          mediaUrls: imagePaths,
+          mediaUrls: [...imagePaths, documentPath],
         };
         const updates: SessionTranscriptUpdate[] = [];
         const publishedDownloads: Array<Promise<unknown>> = [];
@@ -239,6 +326,18 @@ describe("WebChat message tool internal source reply", () => {
           reasoningLevel: "off",
           toolResultFormat: "plain",
         });
+        expect(sourcePayloads[0]).toMatchObject({
+          attachments: [
+            expect.objectContaining({ name: "first.png", trustedLocalMedia: true }),
+            expect.objectContaining({ name: "second.png", trustedLocalMedia: true }),
+            expect.objectContaining({
+              name: "report.json",
+              mimeType: "application/json",
+              trustedLocalMedia: true,
+            }),
+          ],
+          trustedLocalMedia: true,
+        });
         const mirror = getReplyPayloadMetadata(
           sourcePayloads[0] as object,
         )?.sourceReplyTranscriptMirror;
@@ -262,6 +361,7 @@ describe("WebChat message tool internal source reply", () => {
           ? (assistant.content as Array<Record<string, unknown>>)
           : [];
         const image = content.find((block) => block.type === "image");
+        const document = content.find((block) => block.type === "attachment");
         expect(toolResult.details).toMatchObject({
           sourceReplySink: "internal-ui",
           idempotencyKey: expect.any(String),
@@ -272,8 +372,17 @@ describe("WebChat message tool internal source reply", () => {
           artifactId: expect.stringMatching(/^artifact_managed_image_/u),
         });
         expect(content.filter((block) => block.type === "image")).toHaveLength(2);
+        expect(document).toMatchObject({
+          type: "attachment",
+          attachment: {
+            artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+            kind: "document",
+            label: "report.json",
+            mimeType: "application/json",
+          },
+        });
         expect(JSON.stringify(assistant)).not.toContain(workspaceDir);
-        expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
+        expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(3);
         const published = updates.find(
           (update) =>
             update.runId === "restart-proof-run" &&
@@ -303,6 +412,15 @@ describe("WebChat message tool internal source reply", () => {
             }),
           ).resolves.toMatchObject({ type: "image" });
         }
+        const documentAttachment = document?.attachment as { artifactId?: unknown } | undefined;
+        await expect(
+          resolveManagedOutgoingMediaArtifactDownload({
+            sessionKey,
+            agentId: "main",
+            artifactId: String(documentAttachment?.artifactId),
+            stateDir,
+          }),
+        ).resolves.toMatchObject({ type: "file", title: "report.json" });
       },
     );
   });

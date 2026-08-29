@@ -9,7 +9,10 @@ import {
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import { inspectMainRestartRecoveryRolloverEligibility } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import { recoverSessionEntryFromRestartTombstone } from "../config/sessions/session-accessor.js";
-import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
+import {
+  inheritSessionCreationPolicy,
+  type SessionCreatedActor,
+} from "../config/sessions/session-entry-provenance.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -18,7 +21,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { recordSessionCreated } from "../sessions/session-state-events.js";
-import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { buildDashboardSessionKey } from "./session-create-service.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
@@ -28,7 +31,7 @@ import {
   resolveGatewaySessionStoreTarget,
 } from "./session-utils.js";
 import {
-  prepareSessionWorkerPlacementForArchive,
+  prepareSessionWorkerPlacementStop,
   type SessionWorkerPlacementContext,
 } from "./worker-environments/session-placement-lifecycle.js";
 
@@ -193,14 +196,14 @@ export async function recoverGatewaySession(params: {
         .get(currentSource.sessionId);
       if (placement && !alreadyRecovered) {
         try {
-          await prepareSessionWorkerPlacementForArchive({
+          await prepareSessionWorkerPlacementStop({
+            action: "recover",
             agentId: sourceTarget.agentId,
             ...(params.commitGuard ? { authorize: params.commitGuard } : {}),
             context: params.workerPlacementContext,
-            reclaimActive: true,
             sessionId: currentSource.sessionId,
             sessionKey: sourceTarget.canonicalKey,
-          });
+          })();
         } catch (error) {
           params.commitGuard?.();
           return {
@@ -229,7 +232,11 @@ export async function recoverGatewaySession(params: {
       const successorEntry = buildRestartRecoverySuccessorEntry({
         sessionId: successorSessionId,
         source: currentSource,
-        ...(params.actor ? { actor: params.actor } : {}),
+        // Authenticated recovery creates a new person's session; actorless recovery
+        // continues the source's immutable isolation instead of dropping it.
+        creation: params.actor
+          ? { actor: params.actor, sandbox: resolveCreatorSandbox(params.cfg, params) }
+          : inheritSessionCreationPolicy(currentSource),
       });
 
       const result = await recoverSessionEntryFromRestartTombstone({

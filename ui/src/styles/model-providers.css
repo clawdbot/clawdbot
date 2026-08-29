@@ -168,7 +168,7 @@
 .model-providers__utility-label {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--space-2);
   width: fit-content;
 }
 

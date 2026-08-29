@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { PassThrough, Writable } from "node:stream";
+import { PassThrough } from "node:stream";
 import type {
   Options as ClaudeAgentSdkOptions,
   PermissionResult as ClaudeAgentSdkPermissionResult,
@@ -14,7 +14,11 @@ import type {
   CliBackendLiveSessionCloseReason,
   CliBackendLiveSessionHandle,
 } from "openclaw/plugin-sdk/cli-backend";
-import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
+import {
+  killProcessTree,
+  prepareSecretInputStdio,
+  type SpawnStdioEntry,
+} from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createClaudeAgentSdkUserMessage,
@@ -108,16 +112,16 @@ function spawnClaudeAgentSdkProcess(
   options: ClaudeAgentSdkSpawnOptions,
   secretInput?: ClaudeAgentSdkSecretInput,
 ): ClaudeAgentSdkSpawnedProcess {
+  const stdio: ["pipe", "pipe", "pipe", ...SpawnStdioEntry[]] = ["pipe", "pipe", "pipe"];
+  using secretDelivery = prepareSecretInputStdio(stdio, secretInput);
   const child = spawn(options.command, options.args, {
     cwd: options.cwd,
     detached: process.platform !== "win32",
     env: options.env,
     signal: options.signal,
-    stdio: secretInput
-      ? ["pipe", "pipe", "pipe", process.platform === "win32" ? "overlapped" : "pipe"]
-      : ["pipe", "pipe", "pipe"],
+    stdio,
     windowsHide: true,
-  });
+  }) as ChildProcessWithoutNullStreams; // SAFETY: stdio[0..2] are pipes.
   // The SDK only drains stderr for its built-in spawner; unread custom pipes
   // fill at 64 KiB and deadlock credential-backed Claude processes.
   child.stderr.resume();
@@ -134,34 +138,8 @@ function spawnClaudeAgentSdkProcess(
     });
     return true;
   };
-  if (!secretInput) {
-    return child;
-  }
-  let credential: Buffer | undefined;
-  try {
-    const descriptor = child.stdio[secretInput.fd];
-    if (!(descriptor instanceof Writable)) {
-      throw new Error(`Claude Agent SDK secret descriptor ${secretInput.fd} is unavailable.`);
-    }
-    credential = secretInput.createData();
-    const rejectDelivery = () => {
-      credential?.fill(0);
-      child.kill();
-    };
-    descriptor.on("error", rejectDelivery);
-    descriptor.once("close", () => descriptor.off("error", rejectDelivery));
-    descriptor.end(credential, (error?: Error | null) => {
-      credential?.fill(0);
-      if (error) {
-        child.kill();
-      }
-    });
-    return child;
-  } catch (error) {
-    credential?.fill(0);
-    child.kill();
-    throw error;
-  }
+  void secretDelivery?.deliverTo(child).catch(() => child.kill());
+  return child;
 }
 
 async function authorizeClaudeAgentSdkTool(params: {
@@ -230,6 +208,37 @@ function resolveClaudeAgentSdkOptions(
         toolUseId: request.toolUseID,
       }),
     hooks: {
+      UserPromptSubmit: [
+        {
+          hooks: [
+            async (input, _toolUseId, request) => {
+              const turn = currentTurn();
+              if (
+                input.hook_event_name !== "UserPromptSubmit" ||
+                !turn ||
+                request.signal.aborted ||
+                turn.controller.signal.aborted
+              ) {
+                return {};
+              }
+              const additionalContext = [
+                turn.context.promptContext?.prependContext,
+                turn.context.promptContext?.appendContext,
+              ]
+                .filter(Boolean)
+                .join("\n\n");
+              if (!additionalContext) {
+                return {};
+              }
+              // Native may rerun hooks after rewriting a prompt and commits only the final pass.
+              // Return this admitted turn's context on each pass; native owns attachment persistence.
+              return {
+                hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext },
+              };
+            },
+          ],
+        },
+      ],
       PreToolUse: [
         {
           hooks: [

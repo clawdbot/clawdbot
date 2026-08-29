@@ -11,6 +11,7 @@ import {
 } from "../../../../src/config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
 import { createManagedOutgoingMediaBlocks } from "../../../../src/gateway/managed-image-attachments.js";
+import { listManagedImageRecordEntries } from "../../../../src/gateway/managed-image-record-store.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "../../../../src/gateway/method-scopes.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
 import {
@@ -44,6 +45,7 @@ const injectedWorkerService = vi.hoisted(() => {
       const record: WorkerEnvironmentServiceRecord = {
         environmentId,
         providerId: profileId,
+        profileId,
         leaseId: `lease-${createCount}`,
         sharedHost: null,
         state: "ready",
@@ -115,9 +117,6 @@ const ENV_KEYS = [
   "OPENCLAW_SKIP_PROVIDERS",
   "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
 ] as const;
-
-const TINY_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=";
 
 type Cleanup = () => Promise<void> | void;
 
@@ -359,19 +358,42 @@ describe("Gateway agent and artifact APIs", () => {
     cleanup.push(() => {
       deleteTaskRecordById(task.taskId);
     });
-    const [managedBlock] = await createManagedOutgoingMediaBlocks({
+    const documentFixtures = [
+      {
+        name: "artifact.json",
+        mimeType: "application/json",
+        body: Buffer.from('{"ready":true}\n'),
+      },
+      {
+        name: "report.pdf",
+        mimeType: "application/pdf",
+        body: Buffer.from("%PDF-1.4\n% OpenClaw artifact proof\n"),
+      },
+    ];
+    await Promise.all(
+      documentFixtures.map((fixture) =>
+        fs.writeFile(path.join(mainWorkspace, fixture.name), fixture.body),
+      ),
+    );
+    const managedBlocks = await createManagedOutgoingMediaBlocks({
       sessionKey,
       agentId: "main",
-      mediaUrls: [`data:image/png;base64,${TINY_PNG_BASE64}`],
+      items: documentFixtures.map((fixture) => ({
+        url: path.join(mainWorkspace, fixture.name),
+        filename: fixture.name,
+        mimeType: fixture.mimeType,
+        trustedLocal: true,
+      })),
+      localRoots: [mainWorkspace],
       stateDir,
       messageId,
     });
-    expect(managedBlock).toBeDefined();
+    expect(managedBlocks).toHaveLength(2);
     await appendTranscriptMessage(scope, {
       eventId: messageId,
       message: {
         role: "assistant",
-        content: [managedBlock],
+        content: managedBlocks,
         timestamp: Date.now(),
         __openclaw: {
           id: messageId,
@@ -381,42 +403,80 @@ describe("Gateway agent and artifact APIs", () => {
       } as never,
     });
 
-    const artifactList = await client.request<{
+    await disconnectGatewayClient(client);
+    client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token,
+      clientDisplayName: "gateway artifact APIs after reload",
+      scopes: [ADMIN_SCOPE, READ_SCOPE],
+      timeoutMs: 30_000,
+    });
+    type ArtifactList = {
       artifacts: Array<{
         id: string;
         sessionKey: string;
         taskId?: string;
+        type: string;
+        title: string;
+        mimeType?: string;
         download: { mode: string };
       }>;
-    }>("artifacts.list", { taskId: task.taskId });
-    expect(artifactList.artifacts).toHaveLength(1);
-    const artifact = artifactList.artifacts[0]!;
-    expect(artifact).toMatchObject({
-      sessionKey,
+    };
+    const reloadedArtifactList = await client.request<ArtifactList>("artifacts.list", {
       taskId: task.taskId,
-      download: { mode: "url" },
     });
-    await expect(
-      client.request("artifacts.get", {
-        taskId: task.taskId,
-        artifactId: artifact.id,
-      }),
-    ).resolves.toMatchObject({ artifact: { id: artifact.id, taskId: task.taskId } });
+    expect(reloadedArtifactList.artifacts.map((artifact) => artifact.title)).toEqual([
+      "artifact.json",
+      "report.pdf",
+    ]);
+    expect(reloadedArtifactList.artifacts.every((artifact) => artifact.type === "file")).toBe(true);
+    expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
 
-    const download = await client.request<{ url: string; expiresAt: string }>(
-      "artifacts.download",
-      {
+    await restartGateway("gateway artifact APIs after document restart");
+    expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
+    const artifactList = await client.request<ArtifactList>("artifacts.list", {
+      taskId: task.taskId,
+    });
+    expect(artifactList.artifacts).toHaveLength(2);
+    for (const fixture of documentFixtures) {
+      const artifact = artifactList.artifacts.find((entry) => entry.title === fixture.name);
+      expect(artifact).toMatchObject({
         sessionKey,
-        artifactId: artifact.id,
-      },
-    );
-    expect(download.url).toContain("mediaTicket=");
-    expect(download.expiresAt).toBeTruthy();
-    const response = await fetch(`http://127.0.0.1:${port}${download.url}`);
-    expect(response.status).toBe(200);
-    expect(Buffer.from(await response.arrayBuffer())).toEqual(
-      Buffer.from(TINY_PNG_BASE64, "base64"),
-    );
+        taskId: task.taskId,
+        type: "file",
+        title: fixture.name,
+        mimeType: fixture.mimeType,
+        download: { mode: "url" },
+      });
+      await expect(
+        client.request("artifacts.get", {
+          taskId: task.taskId,
+          artifactId: artifact?.id,
+        }),
+      ).resolves.toMatchObject({ artifact: { id: artifact?.id, taskId: task.taskId } });
+
+      const download = await client.request<{ url: string; expiresAt: string }>(
+        "artifacts.download",
+        {
+          sessionKey,
+          artifactId: artifact?.id,
+        },
+      );
+      expect(download.url).toContain("mediaTicket=");
+      expect(download.expiresAt).toBeTruthy();
+      const downloadUrl = `http://127.0.0.1:${port}${download.url}`;
+      const response = await fetch(downloadUrl);
+      expect(response.status).toBe(200);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(fixture.body);
+      const head = await fetch(downloadUrl, { method: "HEAD" });
+      expect(head.status).toBe(200);
+      expect((await head.arrayBuffer()).byteLength).toBe(0);
+      const range = await fetch(downloadUrl, { headers: { Range: "bytes=0-3" } });
+      expect(range.status).toBe(206);
+      expect(Buffer.from(await range.arrayBuffer())).toEqual(fixture.body.subarray(0, 4));
+    }
+
+    const artifact = artifactList.artifacts[0]!;
 
     await expect(
       client.request("artifacts.get", {

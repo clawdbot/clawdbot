@@ -133,8 +133,7 @@ final class ControlChannel {
     private var recoveryTask: Task<Void, Never>?
     private var lastRecoveryAt: Date?
 
-    // Coalesce rapid connecting/degraded oscillations so SwiftUI does not churn
-    // MenuBarExtra status items while the gateway connection is unstable.
+    // Coalesce rapid connecting/degraded oscillations while the gateway connection is unstable.
     private var pendingStateTask: Task<Void, Never>?
     private var stateDebouncer = ControlChannelStateDebouncer()
 
@@ -505,10 +504,44 @@ final class ControlChannel {
             }
         case let .event(evt) where evt.event == "shutdown":
             self.setStateThrottled(.degraded("gateway shutdown"))
+        case let .event(evt) where evt.event == "users.prefs.changed":
+            // The gateway targets this event at connections bound to the
+            // caller's own profile; receipt means our profile appearance
+            // changed on another device.
+            self.refreshProfileAccent()
         case .snapshot:
             self.setStateThrottled(.connected)
+            self.refreshProfileAccent()
         default:
             break
+        }
+    }
+
+    private func refreshProfileAccent() {
+        Task {
+            let accent = await Self.fetchProfileAccentHex()
+            AppStateStore.shared.profileAccentHex = accent
+        }
+    }
+
+    /// Caller's per-profile accent (users.prefs.get). nil covers profile-less
+    /// connections (no_durable_identity), older gateways without the method,
+    /// and malformed stored values, so the gateway seam color stays the
+    /// fallback. Goes straight through GatewayConnection: routing this through
+    /// ControlChannel.request would mark the channel degraded on the expected
+    /// older-gateway failure.
+    private static func fetchProfileAccentHex() async -> String? {
+        do {
+            let data = try await GatewayConnection.shared.requestRaw(
+                method: "users.prefs.get",
+                params: ["keys": OpenClawKit.AnyCodable(["ui.accent"])],
+                timeoutMs: 8000)
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  json["status"] as? String == "ok"
+            else { return nil }
+            return ColorHexSupport.profileAccentHex(entries: json["entries"] as? [String: Any])
+        } catch {
+            return nil
         }
     }
 

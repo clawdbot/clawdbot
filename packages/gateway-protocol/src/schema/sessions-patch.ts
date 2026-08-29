@@ -8,9 +8,18 @@ import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessi
 
 export const SESSIONS_PATCH_MANY_MAX_TARGETS = 100;
 
+const ExpectedMarkedUnreadAt = Type.Optional(
+  Type.Union([Type.Number({ minimum: 0 }), Type.Null()], {
+    description:
+      "Apply an automatic unread=false acknowledgement only if the explicit unread marker still matches; null asserts no marker.",
+  }),
+);
+
 const SessionsPatchMutationProperties = {
   label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  /** Named sidebar tint from SESSION_COLOR_IDS; null clears it. */
+  color: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   /** User-defined organization bucket ("category", not chat-group); null clears it. */
   category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
@@ -69,6 +78,7 @@ export const SessionsPatchParamsSchema = closedObject({
   /** Reject the mutation if the session was reset or replaced before it commits. */
   expectedSessionId: Type.Optional(NonEmptyString),
   expectedLifecycleRevision: Type.Optional(NonEmptyString),
+  expectedMarkedUnreadAt: ExpectedMarkedUnreadAt,
   ...SessionsPatchMutationProperties,
 });
 

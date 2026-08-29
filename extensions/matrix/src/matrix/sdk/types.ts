@@ -18,6 +18,8 @@ export type MatrixRawEvent = {
     redacted_because?: unknown;
   };
   state_key?: string;
+  /** Bridge-owned membership evidence; snapshots never establish a new join. */
+  membershipProvenance?: "snapshot" | "transition" | "update";
 };
 
 export type MatrixRelationsPage = {

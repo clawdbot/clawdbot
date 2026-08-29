@@ -34,9 +34,9 @@
     "@openclaw/uirouter": "0.1.1",
     "@openclaw/workboard-contract": "workspace:*",
     "@panzoom/panzoom": "4.6.2",
-    "@tanstack/lit-virtual": "3.13.36",
-    "@tanstack/virtual-core": "3.17.7",
-    "dompurify": "3.4.13",
+    "@tanstack/lit-virtual": "3.13.37",
+    "@tanstack/virtual-core": "3.17.8",
+    "dompurify": "3.4.14",
     "ghostty-web": "0.4.0",
     "highlight.js": "11.12.0",
     "json5": "2.2.3",
@@ -47,16 +47,16 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/markdown-it": "14.1.2",
-    "@vitest/browser": "4.1.10",
-    "@vitest/browser-playwright": "4.1.10",
+    "@types/markdown-it": "14.2.0",
+    "@vitest/browser": "4.1.11",
+    "@vitest/browser-playwright": "4.1.11",
     "fake-indexeddb": "6.2.5",
     "jsdom": "29.1.1",
     "openclaw": "workspace:*",
     "pako": "3.0.1",
     "playwright": "1.62.1",
     "postcss": "8.5.26",
-    "vite": "8.2.1",
-    "vitest": "4.1.10"
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
   }
 }

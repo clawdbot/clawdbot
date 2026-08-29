@@ -109,8 +109,8 @@ interface SidebarMenusControllerHost
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
   readonly sessionOwnerFilterActive: boolean;
-  sessionOwnerFilterId: string | null;
-  sessionInvolvingMeFilterActive: boolean;
+  readonly sessionOwnerFilterId: string | null;
+  readonly sessionInvolvingMeFilterActive: boolean;
   readonly sessionOwnerOptions: readonly SessionOwnerOption[];
   readonly sessionOwnershipVisible: boolean;
   readSessionMutationAccess(request: {
@@ -127,6 +127,7 @@ interface SidebarMenusControllerHost
   effectiveSessionsGrouping(): SidebarSessionsGrouping;
   sessionPeopleSortAvailable(): boolean;
   setSessionSortMode(mode: SidebarSessionSortMode): void;
+  setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
   readonly terminalAvailable: boolean;
   readonly themeMode: ThemeMode;
   readonly workboardBoards: readonly SidebarWorkboardBoard[];

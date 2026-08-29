@@ -1048,6 +1048,9 @@ extension RealtimeTalkRelaySession {
     }
 
     private func markOutputPlaybackFinished(cancelIdleTask: Bool = true) {
+        // The idle timer and player completion can race; only the first completion owns the
+        // speaking-state transition and playback-mark acknowledgement.
+        guard self.isOutputPlaying else { return }
         if cancelIdleTask {
             self.outputIdleTask?.cancel()
             self.outputIdleTask = nil

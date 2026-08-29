@@ -1,5 +1,6 @@
-import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { safeParseJson } from "@openclaw/normalization-core";
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -23,6 +24,7 @@ import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
+import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
 
 // Control UI module implements storage behavior.
@@ -48,11 +50,12 @@ function currentGatewaySelectionKeyForPage(pageUrl: string): string {
 type ScopedSessionSelection = {
   sessionKey: string;
   lastActiveSessionKey: string;
+  selectedAgentId?: string;
 };
 
 type PersistedUiSettings = Omit<
   UiSettings,
-  "token" | "sessionKey" | "lastActiveSessionKey" | "navCollapsed"
+  "token" | "sessionKey" | "lastActiveSessionKey" | "selectedAgentId" | "navCollapsed"
 > & {
   token?: never;
   sessionKey?: string;
@@ -198,9 +201,13 @@ export type UiSettings = {
   token: string;
   sessionKey: string;
   lastActiveSessionKey: string;
+  selectedAgentId?: string;
   theme: ThemeName;
   themeMode: ThemeMode;
   accent?: string;
+  // Browser typeface overrides; undefined = theme default.
+  fontUi?: TypefaceId;
+  fontChat?: TypefaceId;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
@@ -290,7 +297,10 @@ export function resolvePageGatewaySettings(settings: UiSettings): UiSettings {
   return {
     ...settings,
     gatewayUrl: effectiveUrl,
-    token: resolveGatewayTokenForUrlEdit(settings.gatewayUrl, effectiveUrl, settings.token),
+    token: resolveGatewayCredentialsForUrlEdit(settings.gatewayUrl, effectiveUrl, {
+      token: settings.token,
+      password: "",
+    }).token,
     sessionKey: session.sessionKey,
     lastActiveSessionKey: session.lastActiveSessionKey,
   };
@@ -350,10 +360,14 @@ function resolveScopedSessionSelection(
   const scoped = parsed.sessionsByGateway?.[scope];
   const scopedSessionKey = normalizeOptionalString(scoped?.sessionKey);
   const scopedLastActiveSessionKey = normalizeOptionalString(scoped?.lastActiveSessionKey);
+  const scopedSelectedAgentId = normalizeOptionalString(scoped?.selectedAgentId);
   if (scopedSessionKey && scopedLastActiveSessionKey) {
     return {
       sessionKey: scopedSessionKey,
       lastActiveSessionKey: scopedLastActiveSessionKey,
+      ...(scopedSelectedAgentId
+        ? { selectedAgentId: normalizeAgentId(scopedSelectedAgentId) }
+        : {}),
     };
   }
 
@@ -394,17 +408,21 @@ function loadSessionToken(gatewayUrl: string): string {
   }
 }
 
-export function resolveGatewayTokenForUrlEdit(
+export function resolveGatewayCredentialsForUrlEdit(
   currentGatewayUrl: string,
   nextGatewayUrl: string,
-  currentToken: string,
-): string {
-  if (gatewayOriginScope(currentGatewayUrl) === gatewayOriginScope(nextGatewayUrl)) {
-    return currentToken;
-  }
-  // Gateway tokens stay session-scoped across endpoint edits.
-  // Durable settings may contain scrubbed legacy tokens, but must not restore them here.
-  return loadSessionToken(nextGatewayUrl);
+  credentials: { token: string; password: string },
+): { token: string; password: string } {
+  const sameTokenScope =
+    gatewayOriginScope(currentGatewayUrl) === gatewayOriginScope(nextGatewayUrl);
+  const sameCredentialScope =
+    gatewayCredentialScope(currentGatewayUrl) === gatewayCredentialScope(nextGatewayUrl);
+  return {
+    // Gateway tokens stay session-scoped across endpoint edits. Durable settings
+    // may contain scrubbed legacy tokens, but must not restore them here.
+    token: sameTokenScope ? credentials.token : loadSessionToken(nextGatewayUrl),
+    password: sameCredentialScope ? credentials.password : "",
+  };
 }
 
 export function persistSessionToken(gatewayUrl: string, token: string) {
@@ -465,11 +483,9 @@ export function loadSettings(): UiSettings {
     const selectedGatewayUrl = normalizeOptionalString(
       storage?.getItem(currentGatewaySelectionKeyForPage(pageDerivedUrl)),
     );
-    const selected = selectedGatewayUrl
-      ? readSettingsForGateway(storage, selectedGatewayUrl)
-      : null;
-    const defaultSource = readSettingsForGateway(storage, defaultUrl);
-    const source = selected ?? defaultSource;
+    const source =
+      (selectedGatewayUrl ? readSettingsForGateway(storage, selectedGatewayUrl) : null) ??
+      readSettingsForGateway(storage, defaultUrl);
     if (!source) {
       return defaults;
     }
@@ -507,9 +523,12 @@ export function loadSettings(): UiSettings {
       token: loadSessionToken(gatewayUrl),
       sessionKey: scopedSessionSelection.sessionKey,
       lastActiveSessionKey: scopedSessionSelection.lastActiveSessionKey,
+      selectedAgentId: scopedSessionSelection.selectedAgentId,
       theme: theme === "custom" && !customTheme ? "claw" : theme,
       themeMode: mode,
       accent: normalizeAccentColor(parsed.accent),
+      fontUi: normalizeTypefaceOverride(parsed.fontUi),
+      fontChat: normalizeTypefaceOverride(parsed.fontChat),
       chatShowThinking:
         typeof parsed.chatShowThinking === "boolean"
           ? parsed.chatShowThinking
@@ -630,6 +649,8 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
   const scope = gatewayOriginScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
   const accent = normalizeAccentColor(next.accent);
+  const fontUi = normalizeTypefaceOverride(next.fontUi);
+  const fontChat = normalizeTypefaceOverride(next.fontChat);
   const chatFollowUpMode = normalizeChatFollowUpModeOverride(next.chatFollowUpMode);
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
   try {
@@ -651,6 +672,9 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
         {
           sessionKey: next.sessionKey,
           lastActiveSessionKey: next.lastActiveSessionKey,
+          ...(normalizeOptionalString(next.selectedAgentId)
+            ? { selectedAgentId: normalizeAgentId(next.selectedAgentId) }
+            : {}),
         },
       ],
     ].slice(-MAX_SCOPED_SESSION_ENTRIES),
@@ -660,6 +684,8 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     theme: next.theme,
     themeMode: next.themeMode,
     ...(accent ? { accent } : {}),
+    ...(fontUi ? { fontUi } : {}),
+    ...(fontChat ? { fontChat } : {}),
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
     chatPersistCommentary: next.chatPersistCommentary ?? true,

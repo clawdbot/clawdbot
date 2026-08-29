@@ -217,7 +217,8 @@ struct OnboardingSystemAgentChatTests {
         #expect(handoffs == [.custodianOnboarding])
     }
 
-    @Test func `first run effective model is live verified before handoff`() async throws {
+    @Test(arguments: [false, true])
+    func `first run effective model is live verified before handoff`(receiptDuringVerification: Bool) async throws {
         let suiteName = "OnboardingFirstRunEffectiveModelTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -234,6 +235,14 @@ struct OnboardingSystemAgentChatTests {
                 case "agents.list":
                     task.emitReceiveSuccess(.data(configuredAgentsResponse(id: id)))
                 case "openclaw.setup.verify":
+                    if receiptDuringVerification {
+                        let callbackDefaults = try #require(UserDefaults(suiteName: suiteName))
+                        // An expired ownerless marker can arrive during an existing-model probe.
+                        // Completing it does not turn that probe into a fresh activation.
+                        OnboardingSystemAgentResumeStore.markPending(
+                            routeIdentity: "local", activationTimeoutMs: 0,
+                            defaults: callbackDefaults, now: Date(timeIntervalSinceNow: -10))
+                    }
                     task.emitReceiveSuccess(.data(verifiedInferenceResponse(id: id)))
                 default:
                     break
@@ -267,6 +276,7 @@ struct OnboardingSystemAgentChatTests {
         #expect(view.finishState.didFinish)
         // A live-verified pre-existing setup reopens the normal dashboard.
         #expect(handoffs == [.dashboard])
+        #expect(OnboardingSystemAgentResumeStore.pendingState(for: "local", defaults: defaults) == .none)
         #expect(await methods.snapshot() == [
             "agents.list",
             "health",
@@ -520,13 +530,13 @@ struct OnboardingSystemAgentChatTests {
             ifOwnedBy: routeIdentity,
             activationOwner: activationOwner,
             defaults: defaults)
-        var dashboardOpenCount = 0
+        var handoffs: [OnboardingDashboardHandoff] = []
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
             systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { routeIdentity },
-            dashboardHandoffOpener: { _ in dashboardOpenCount += 1 })
+            dashboardHandoffOpener: { handoffs.append($0) })
         let aiSetup = view.aiSetup
 
         let initialProbe = try #require(view.onboardingDidAppear())
@@ -540,7 +550,7 @@ struct OnboardingSystemAgentChatTests {
 
         #expect(aiSetup.connected)
         #expect(view.finishState.didFinish)
-        #expect(dashboardOpenCount == 1)
+        #expect(handoffs == [.custodianOnboarding])
         #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: routeIdentity,
             defaults: defaults) == .none)

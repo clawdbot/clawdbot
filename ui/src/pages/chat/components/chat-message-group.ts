@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
+import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import {
@@ -27,6 +28,7 @@ import type { TurnRecap } from "../chat-progress.ts";
 import {
   isPendingSendMessage,
   persistedMessageEntryId,
+  readPendingSendFailure,
   type AssistantMessageExpansionState,
 } from "../chat-thread.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
@@ -52,6 +54,7 @@ import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
+  renderBrowserTabPreviews,
   resolveToolRowText,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
@@ -66,6 +69,7 @@ type ActiveContinuation = {
 type ReplyPreview = MessageReplyTarget & { sourceMessageId: string };
 
 type RenderMessageGroupOptions = {
+  latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   sessionKey?: string;
@@ -85,9 +89,9 @@ type RenderMessageGroupOptions = {
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
   onRequestUpdate?: () => void;
-  onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  onAssistantAttachmentLoaded?: () => void;
   assistantName?: string;
   assistantAvatar?: string | null;
   userId?: string | null;
@@ -99,6 +103,7 @@ type RenderMessageGroupOptions = {
   showAssistantAvatar?: boolean;
   resourceBasePath?: string;
   localMediaPreviewRoots?: readonly string[];
+  connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
   canvasPluginSurfaceUrl?: string | null;
@@ -107,6 +112,8 @@ type RenderMessageGroupOptions = {
   fetchLinkFavicon?: LinkFaviconFetcher;
   contextWindow?: number | null;
   onReply?: (target: MessageReplyTarget) => void;
+  onRetryQueuedMessage?: (id: string) => void;
+  queuedMessageAction?: { id: string; label?: string; onAction?: () => void };
   resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
   onResolveReply?: (replyToId: string) => void;
   onOpenReply?: (replyToId: string) => void;
@@ -117,6 +124,7 @@ type RenderMessageGroupOptions = {
   turnRecap?: TurnRecap;
   frameContent?: unknown;
   frameActionOwner?: MessageGroup["messages"][number] | null;
+  latestAssistant?: boolean;
 };
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
@@ -176,12 +184,13 @@ function buildGroupedMessageRenderOptions(
     isToolExpanded: opts.isToolExpanded,
     onToggleToolExpanded: opts.onToggleToolExpanded,
     onRequestUpdate: opts.onRequestUpdate,
-    onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
+    onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
     canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
     resourceBasePath: opts.resourceBasePath,
     localMediaPreviewRoots: opts.localMediaPreviewRoots,
+    connectionEpoch: opts.connectionEpoch,
     assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     resolveArtifactDownload: opts.resolveArtifactDownload,
     embedSandboxMode: opts.embedSandboxMode,
@@ -211,7 +220,10 @@ const USER_TURN_ENTRY_FRESH_SUBMIT_MS = 2_000;
 const USER_TURN_ENTRY_SEEN_CAP = 256;
 
 function isPeerSenderGroup(group: MessageGroup, userId: string | null | undefined): boolean {
-  return Boolean(group.sender && !(userId && group.sender.id === userId));
+  const identity = group.sender?.identity;
+  return Boolean(
+    group.sender && !(userId && identity?.type === "profile" && identity.id === userId),
+  );
 }
 
 function shouldAnimateUserTurnEntry(messageKey: string, message: unknown): boolean {
@@ -328,6 +340,7 @@ export function renderActivityGroup(
             )
           : nothing}
       </div>
+      ${renderBrowserTabPreviews(groups, opts)}
     </div>
   `;
   return presentation === "continuation"
@@ -382,7 +395,7 @@ export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessa
     }
   }
   const who = resolveMessageGroupSenderLabel(group, opts);
-  return group.messages.map((item, index) => {
+  const messages = group.messages.map((item, index) => {
     const actionDetails = resolveMessageActionDetails({
       message: item.message,
       messageId: item.key,
@@ -412,6 +425,9 @@ export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessa
       opts.onOpenSidebar,
     );
   });
+  return html`${messages}${opts.showToolCalls === false
+    ? nothing
+    : renderBrowserTabPreviews([group], opts)}`;
 }
 
 export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
@@ -488,12 +504,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     }
   }
   const lastMessageIndex = group.messages.length - 1;
-  const runFrameActive = ownsRunFrame && Boolean(group.isStreaming || opts.activeContinuation);
-  const footerActionDetails = runFrameActive
-    ? null
-    : ownsRunFrame
-      ? (messageActionDetails[0] ?? null)
-      : (messageActionDetails[lastMessageIndex] ?? null);
+  const footerActionDetails = ownsRunFrame
+    ? (messageActionDetails[0] ?? null)
+    : (messageActionDetails[lastMessageIndex] ?? null);
   const footerActionMessageKey = ownsRunFrame
     ? opts.frameActionOwner?.key
     : group.messages[lastMessageIndex]?.key;
@@ -522,15 +535,20 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   // messages keep the accent skin.
   const senderHue =
     normalizedRole === "user" && group.sender ? resolveIdentityHue(group.sender) : null;
+  const sendFailure = readPendingSendFailure(group.messages.at(-1)?.message);
+  const sendAction =
+    opts.queuedMessageAction?.id === sendFailure?.id ? opts.queuedMessageAction : undefined;
   const replyToLabel =
     normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
   const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
 
   return html`
     <div
-      class="chat-group ${roleClass} chat-group--with-footer${isPeerGroup
-        ? " chat-group--peer"
-        : ""}${senderHue === null ? "" : " chat-group--sender-tint"}"
+      class="chat-group ${roleClass} chat-group--with-footer${opts.latestAssistant
+        ? " chat-group--latest-assistant"
+        : ""}${isPeerGroup ? " chat-group--peer" : ""}${senderHue === null
+        ? ""
+        : " chat-group--sender-tint"}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
@@ -582,6 +600,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               : nothing}
           `;
         })}
+        ${ownsRunFrame || opts.showToolCalls === false
+          ? nothing
+          : renderBrowserTabPreviews([group], opts)}
         ${opts.activeContinuation
           ? renderStreamGroupParts(
               opts.activeContinuation.parts,
@@ -592,12 +613,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             ? renderTurnRecapRow(opts.turnRecap, { presentation: "continuation" })
             : nothing}
       </div>
-      ${normalizedRole === "tool"
+      ${normalizedRole === "tool" || group.isStreaming || opts.activeContinuation
         ? nothing
         : html`<div
             class="chat-group-footer ${persistUserIdentity
               ? "chat-group-footer--persistent-identity"
-              : ""}"
+              : ""}${sendFailure ? " chat-group-footer--send-failure" : ""}"
           >
             <div class="chat-group-footer__meta">
               ${isPeerGroup ? nothing : userFooterActions}
@@ -607,9 +628,43 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               ${renderPersonName(
                 who,
                 // Only other people's messages: your own name links nowhere useful.
-                isPeerGroup ? personActivityLink(group.sender?.id, opts.personActivity) : null,
+                isPeerGroup && group.sender?.identity?.type === "profile"
+                  ? personActivityLink(group.sender.identity.id, opts.personActivity)
+                  : null,
                 "chat-sender-name",
               )}
+              ${sendFailure
+                ? html`<span
+                    class="chat-send-status"
+                    title=${sendFailure.error ?? nothing}
+                    data-send-state=${sendFailure.state}
+                  >
+                    <span aria-hidden="true">·</span>
+                    <span
+                      >${t(
+                        sendFailure.state === "unconfirmed"
+                          ? "chat.queue.deliveryUnconfirmed"
+                          : "chat.queue.notSent",
+                      )}</span
+                    >
+                    ${sendAction?.onAction || opts.onRetryQueuedMessage
+                      ? html`
+                          <span aria-hidden="true">·</span>
+                          <button
+                            class="chat-send-status__retry"
+                            type="button"
+                            aria-label=${sendAction?.label ?? t("chat.queue.retryQueuedMessage")}
+                            @click=${() =>
+                              sendAction?.onAction
+                                ? sendAction.onAction()
+                                : opts.onRetryQueuedMessage?.(sendFailure.id)}
+                          >
+                            ${sendAction?.label ?? t("chat.queue.retry")}
+                          </button>
+                        `
+                      : nothing}
+                  </span>`
+                : nothing}
               ${renderMessageMeta(group.timestamp, meta)}
             </div>
             ${isPeerGroup

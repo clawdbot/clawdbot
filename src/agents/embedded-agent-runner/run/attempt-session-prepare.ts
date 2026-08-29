@@ -445,6 +445,13 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
         ? SessionManager.open(
             attempt.sessionTarget as SessionTranscriptRuntimeTarget,
             input.effectiveCwd,
+            {
+              maxBytes: Math.min(
+                64 * 1024 * 1024,
+                Math.max(1024, (attempt.contextTokenBudget ?? 128_000) * 8),
+              ),
+              maxEvents: 10_000,
+            },
           )
         : SessionManager.inMemory(input.effectiveCwd)),
     {
@@ -467,6 +474,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
         attempt.suppressTranscriptOnlyAssistantPersistence,
       suppressAssistantErrorPersistence: attempt.suppressAssistantErrorPersistence,
       skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",
+      prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
       onUserMessagePreparingForPersistence: (_message, recorder) => {
         latestPersistedUserMessage = undefined;
         latestUserTurnTranscriptRecorder = recorder;

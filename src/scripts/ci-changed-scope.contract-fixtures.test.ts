@@ -9,6 +9,7 @@ describe("shared Apple contract fixture CI scope", () => {
     expect(detectChangedScope([fixturePath])).toEqual({
       runNode: true,
       runMacos: true,
+      runMacosNode: true,
       runIosBuild: false,
       runAndroid: false,
       runWindows: false,

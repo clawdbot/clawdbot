@@ -3,7 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.js";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { useWorkspaceMigrationTestFixture } from "./state-migrations.workspace-setup.test-support.js";
 
@@ -96,7 +96,7 @@ describe("recreated legacy workspace state migration", () => {
     const db = openOpenClawStateDatabase({ env: context.env }).db;
     expect(
       db
-        .prepare("SELECT attested_at_ms FROM workspace_attestations WHERE workspace_key = ?")
+        .prepare("SELECT attested_at_ms FROM workspace_setup_state WHERE workspace_key = ?")
         .get(identity.workspaceKey),
     ).toEqual({ attested_at_ms: recreatedMtime.getTime() });
     expect(
@@ -144,7 +144,7 @@ describe("recreated legacy workspace state migration", () => {
     const db = openOpenClawStateDatabase({ env: context.env }).db;
     expect(
       db
-        .prepare("SELECT attested_at_ms FROM workspace_attestations WHERE workspace_key = ?")
+        .prepare("SELECT attested_at_ms FROM workspace_setup_state WHERE workspace_key = ?")
         .get(identity.workspaceKey),
     ).toEqual({ attested_at_ms: originalMtime.getTime() });
     expect(

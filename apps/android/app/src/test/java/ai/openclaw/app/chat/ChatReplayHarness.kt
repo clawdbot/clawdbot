@@ -14,12 +14,13 @@ internal val chatControllerTestJson = Json { ignoreUnknownKeys = true }
 
 internal fun CoroutineScope.createChatController(
   requestGatewayForGateway: (suspend (gatewayId: String, method: String, paramsJson: String?) -> String)? = null,
-  captureSettingsRequestLease: ((gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease?)? = null,
+  captureRequestLease: ((gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease?)? = null,
   transcriptCache: ChatTranscriptCache? = null,
   cacheScope: () -> ChatCacheScope? = { null },
   currentDefaultAgentId: () -> String? = { "main" },
   currentDefaultAgentRevision: () -> Long = { 0L },
   gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
+  gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null },
   recordModelRecent: (String) -> Unit = {},
   onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   onOfflineDefaultAgentRestored: (String) -> Unit = {},
@@ -29,8 +30,9 @@ internal fun CoroutineScope.createChatController(
   val scopedRequest =
     requestGatewayForGateway ?: { _, method, paramsJson -> requestGateway(method, paramsJson) }
   val settingsLease =
-    captureSettingsRequestLease ?: { gatewayScope ->
-      GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _ ->
+    captureRequestLease ?: { gatewayScope ->
+      GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _, withEnqueue ->
+        withEnqueue {}
         if (gatewayScope == null) {
           requestGateway(method, paramsJson)
         } else {
@@ -43,12 +45,13 @@ internal fun CoroutineScope.createChatController(
     json = chatControllerTestJson,
     requestGateway = requestGateway,
     requestGatewayForGateway = scopedRequest,
-    captureSettingsRequestLease = settingsLease,
+    captureRequestLease = settingsLease,
     transcriptCache = transcriptCache,
     cacheScope = cacheScope,
     currentDefaultAgentId = currentDefaultAgentId,
     currentDefaultAgentRevision = currentDefaultAgentRevision,
     gatewayAdvertisesMethod = gatewayAdvertisesMethod,
+    gatewayAdvertisesCapability = gatewayAdvertisesCapability,
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
     onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
@@ -62,6 +65,7 @@ internal class ChatControllerTestSetup(
   val requests = mutableListOf<Pair<String, String?>>()
   var cacheScope: () -> ChatCacheScope? = { null }
   var gatewayAdvertisesMethod: (method: String) -> Boolean? = { null }
+  var gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null }
   var recordModelRecent: (String) -> Unit = {}
 
   private val handlers = mutableMapOf<String, suspend (String?) -> String>()
@@ -84,6 +88,7 @@ internal class ChatControllerTestSetup(
     scope.createChatController(
       cacheScope = cacheScope,
       gatewayAdvertisesMethod = gatewayAdvertisesMethod,
+      gatewayAdvertisesCapability = gatewayAdvertisesCapability,
       recordModelRecent = recordModelRecent,
       requestGateway = { method, paramsJson ->
         requests += method to paramsJson

@@ -72,11 +72,12 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  OCM_VERSION: v0.2.32
-  OCM_LINUX_X64_SHA256: 5b20c21b2825f69b89eb37baa657f0f0062124517e6e6828e9857c7e9bbd3070
+  OCM_VERSION: v0.2.33
+  OCM_LINUX_X64_SHA256: 06b0e46791e750eb044e4a898b6643ad5e7b20224fe0c64f160e35a42f08d00a
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: dfafaff9dcd49b9c76788c6260f1f72dd2ced593
-  KOVA_LEGACY_LIST_CONFIG_REF: dfafaff9dcd49b9c76788c6260f1f72dd2ced593
+  KOVA_CANONICAL_CONFIG_REF: 1fe2f4081877bb12b7f7ed355349f98b8a0a6882
+  KOVA_LEGACY_LIST_CONFIG_REF: 1fe2f4081877bb12b7f7ed355349f98b8a0a6882
+  KOVA_TRUSTED_LIVE_REF: 1fe2f4081877bb12b7f7ed355349f98b8a0a6882
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -173,7 +174,7 @@ jobs:
           echo "tested_sha=$resolved_sha" >> "$GITHUB_OUTPUT"
           echo "kova_ref=$kova_ref" >> "$GITHUB_OUTPUT"
           echo "kova_config_contract=$kova_config_contract" >> "$GITHUB_OUTPUT"
-          if [[ "$kova_ref" == "$KOVA_CANONICAL_CONFIG_REF" || "$kova_ref" == "$KOVA_LEGACY_LIST_CONFIG_REF" ]]; then
+          if [[ "$kova_ref" == "$KOVA_TRUSTED_LIVE_REF" ]]; then
             echo "kova_ref_trusted_for_live=true" >> "$GITHUB_OUTPUT"
           else
             echo "kova_ref_trusted_for_live=false" >> "$GITHUB_OUTPUT"

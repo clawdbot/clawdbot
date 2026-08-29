@@ -4,6 +4,7 @@ import {
   normalizeAccountId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
@@ -16,7 +17,6 @@ import {
   resolveDefaultSlackAccountId,
   type SlackTokenSource,
 } from "./accounts.js";
-import type { SlackAccountConfig } from "./runtime-api.js";
 
 export type SlackCredentialStatus = "available" | "configured_unavailable" | "missing";
 

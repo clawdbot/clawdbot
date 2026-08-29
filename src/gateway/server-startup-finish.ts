@@ -220,6 +220,7 @@ export async function finishGatewayStartup(params: {
     });
   };
   const { createGatewayServerActiveWorkInspectors } = await import("./server-active-work.js");
+  const activeWorkInspectors = createGatewayServerActiveWorkInspectors(gatewayRequestContext);
   const postAttachHandles = await startupTrace.measure("runtime.post-attach", () =>
     loadGatewayStartupPostAttachModule().then(({ startGatewayPostAttachRuntime }) =>
       startGatewayPostAttachRuntime({
@@ -324,7 +325,7 @@ export async function finishGatewayStartup(params: {
         startupTrace,
         sidecarStartup,
         waitForPostReadyWork: params.waitForPostReadyWork,
-        activeWorkInspectors: createGatewayServerActiveWorkInspectors(gatewayRequestContext),
+        activeWorkInspectors,
         providerAuthPrewarm: {
           getConfig: getRuntimeConfig,
         },
@@ -444,7 +445,7 @@ export async function finishGatewayStartup(params: {
         if (lifecycle.closePreludeStarted) {
           return null;
         }
-        return earlyRuntime.startMaintenance();
+        return earlyRuntime.startMaintenance(activeWorkInspectors);
       },
       applyMaintenance: async (maintenance) => {
         if (lifecycle.closePreludeStarted) {
@@ -469,9 +470,18 @@ export async function finishGatewayStartup(params: {
         startupTrace.detail("memory.post-ready", collectGatewayProcessMemoryUsageMb());
       },
     });
-    // The loop closes the previous server before this generation starts, so retired
-    // plugin installs are safe to remove. Wait for an idle window and resolve current
-    // install paths at execution time so cleanup cannot remove active code or delay a turn.
+    // This Gateway may still import boot-generation code after an install retires
+    // it. Capture those paths before the idle delay; cleanup also protects the new ledger.
+    const startupInstallPaths = [
+      ...Object.values(pluginMetadataSnapshot?.index.installRecords ?? {}).flatMap((record) =>
+        record.installPath ? [record.installPath] : [],
+      ),
+      ...(pluginMetadataSnapshot?.plugins.flatMap((record) =>
+        record.setupSource
+          ? [record.rootDir, record.source, record.setupSource]
+          : [record.rootDir, record.source],
+      ) ?? []),
+    ];
     postReadyState.retainedPluginCleanupHandle = gatewayRuntimeServices.scheduleGatewayIdleTask({
       delayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
       retryDelayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
@@ -480,7 +490,7 @@ export async function finishGatewayStartup(params: {
       run: async () => {
         const { cleanupRetainedPluginInstallGenerations } =
           await import("./server-retained-plugin-cleanup.js");
-        await cleanupRetainedPluginInstallGenerations({ log });
+        await cleanupRetainedPluginInstallGenerations({ log, startupInstallPaths });
       },
       log,
       errorMessage: "retained npm generation cleanup failed",

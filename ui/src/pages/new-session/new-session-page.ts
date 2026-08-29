@@ -5,12 +5,11 @@ import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { readPresenceEntries } from "../../app/user-profile.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/web-awesome-popover.ts";
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
-import { requestDevicePairJoinSetup, type DevicePairSetup } from "../../lib/device-pair-setup.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
@@ -19,18 +18,24 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "../../styles/new-session.css";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
+import { renderChatPermissionPicker } from "../chat/components/chat-permission-picker.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
-import { renderDraftError, renderNewSessionDraftComposer } from "./composer.ts";
-import { renderConnectMachineDialog } from "./connect-machine-dialog.ts";
+import { NewSessionDictationControl } from "./composer-dictation-control.ts";
+import { renderDraftError } from "./composer.ts";
+import { ConnectMachineSetupState, renderConnectMachineDialog } from "./connect-machine-dialog.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import { renderDetailChip, resolveDetailChip } from "./detail-chip.ts";
+import { renderNewSessionDraftComposer } from "./draft-composer.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import * as drafts from "./draft-navigation-handoff.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
-import { renderNewSessionIncognitoControl } from "./incognito-control.ts";
+import {
+  renderNewSessionIncognitoControl,
+  renderNewSessionIncognitoNotice,
+} from "./incognito-control.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import {
   closeAgentPicker,
@@ -39,7 +44,6 @@ import {
   handleSessionPickerEvent,
   isPlaceTopologyEvent,
   presenceStateSignature,
-  readPresenceEntries,
 } from "./new-session-runtime.ts";
 import { renderProjectChip, resolveProjectChip } from "./project-chip.ts";
 import type { SubmissionOutcomeReason } from "./session-placement-recovery-state.ts";
@@ -59,11 +63,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private openedAgentId = "";
   private messageOwnerKey = "";
   private presenceSignature = "";
-  private connectMachineOpen = false;
-  private connectMachineLoading = false;
-  private connectMachineError: string | null = null;
-  private connectMachineSetup: DevicePairSetup | null = null;
-  private connectMachineRequestId = 0;
+  private readonly connectMachine: ConnectMachineSetupState;
   @state() private imageLightbox: ImageLightboxItem | null = null;
   private readonly groupRouteRevalidation = new catalog.GroupRouteRevalidation(
     () => this.data,
@@ -73,6 +73,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private readonly browser: DraftPlaceBrowser;
   private readonly place: DraftPlaceState;
   private readonly submission: DraftSubmissionFlow;
+  private readonly dictation: NewSessionDictationControl;
   private readonly subscriptions: SubscriptionsController;
   private readonly flushDraft = () => this.submission.draftPersistence.persistNow();
 
@@ -156,6 +157,20 @@ export class NewSessionPage extends OpenClawLightDomElement {
         closeTransientUi: () => closeSessionMenus(this),
       },
     );
+    this.connectMachine = new ConnectMachineSetupState(
+      () => ({ client: this.gateway.client, connected: this.gateway.connected }),
+      () => this.requestUpdate(),
+    );
+    this.dictation = new NewSessionDictationControl({
+      textarea: this.submission.composerTextarea,
+      getClient: () => this.gateway.client,
+      isConnected: () => this.gateway.connected,
+      canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
+      onMessage: (message) => this.setMessageFromUser(message),
+      onError: (message) => this.submission.setError(message),
+      onSubmit: () => void this.submission.submit(),
+      requestUpdate: () => this.requestUpdate(),
+    });
     this.subscriptions = new SubscriptionsController(this)
       .watch(
         () => this.context?.gateway,
@@ -235,13 +250,14 @@ export class NewSessionPage extends OpenClawLightDomElement {
     this.gateway.disconnect();
     this.browser.disconnect();
     this.submission.disconnect();
-    this.closeConnectMachine();
+    this.dictation.dispose();
+    this.connectMachine.close();
     super.disconnectedCallback();
   }
 
   override updated() {
-    if (this.connectMachineOpen && !this.place.isAdmin()) {
-      this.closeConnectMachine();
+    if (this.connectMachine.open && !this.place.isAdmin()) {
+      this.connectMachine.close();
     }
     this.gateway.retryPendingCatalogTarget();
     void this.context?.agentIdentity.ensure(this.place.agents().map((agent) => agent.id));
@@ -258,9 +274,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       agentsReady && this.place.agentId ? (this.place.selectedAgent()?.id ?? "") : "",
       this.context?.config.current.cliAgentsEnabled === true && !catalog.isTarget(this.data),
     );
-    const openKey = this.data
-      ? catalog.routeKey(this.data)
-      : catalog.routeKeyFromSearch(window.location.search);
+    const openKey = this.routeOwnerKey();
     const resolvedAgentId = this.data?.agentId ?? "";
     const groupDefaults = catalog.groupDefaultsKey(this.data);
     if (this.openedFor !== openKey) {
@@ -306,7 +320,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
     if (resetHostSelection) {
       this.submission.clearError();
     }
-    this.closeConnectMachine();
+    this.connectMachine.close();
   }
 
   private resetDraft() {
@@ -316,11 +330,14 @@ export class NewSessionPage extends OpenClawLightDomElement {
     this.browser.clearPopoverHiding();
     closeAgentPicker(this);
     this.browser.close();
-    this.closeConnectMachine();
+    this.connectMachine.close();
     this.place.adoptAgentDefaults();
-    void this.updateComplete.then(() => {
-      this.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.focus();
-    });
+  }
+
+  private routeOwnerKey(): string {
+    return this.data
+      ? catalog.routeKey(this.data)
+      : catalog.routeKeyFromSearch(window.location.search);
   }
 
   private setMessage(message: string, ownerKey = catalog.routeKey(this.data)) {
@@ -329,7 +346,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private setMessageFromUser(message: string) {
-    this.setMessage(message, catalog.routeKeyFromSearch(window.location.search));
+    if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
+      this.setMessage(message, catalog.routeKeyFromSearch(window.location.search));
+    }
   }
 
   private renderAgentSelect() {
@@ -378,7 +397,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
       deviceId: this.place.deviceId,
       autoDevice: this.place.autoDevice,
       devicePlacement: this.place.devicePlacementRequirement(),
-      deviceDisabledReason: this.place.modelControl.devicePlacementUnsupportedReason(),
+      deviceDisabledReason:
+        this.place.modelControl.devicePlacementUnsupportedReason() ??
+        this.gateway.deviceCatalogDisabledReason,
     });
     const projectState = resolveProjectChip({
       folder: this.place.folder,
@@ -406,6 +427,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       machineClass: this.place.machineClass,
       deviceId: this.place.deviceId,
       autoDevice: this.place.autoDevice,
+      autoPlacementMode: this.place.modelControl.autoPlacementSelectionMode(),
       worktreeAvailable: this.place.worktreeAvailable(),
       cloudDisabledReason: this.submission.cloudDisabledReason(),
       cloudProfileDisabledReason: (profile) =>
@@ -460,7 +482,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       submitting,
       pendingPlacement,
       ...this.browser.popoverCallbacks("project"),
-      browserTarget: this.browser.browserTarget,
+      browserOpen: this.browser.browserOpen,
       browserListing: this.browser.browserListing,
       browserLoading: this.browser.browserLoading,
       browserError: this.browser.browserError,
@@ -475,11 +497,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
         this.place.applyFolder(folder, this.browser.browserListing?.path === folder),
       onBaseRefInput: (baseRef) => this.place.setBaseRef(baseRef),
       onWorktreeNameInput: (worktreeName) => this.place.setWorktreeName(worktreeName),
-      onBrowse: (target) =>
-        this.browser.selectGatewayBrowser(
-          target.label,
-          this.place.folder.trim() || this.place.workspacePath(),
-        ),
+      onBrowse: () =>
+        this.browser.selectGatewayBrowser(this.place.folder.trim() || this.place.workspacePath()),
       onBrowserPathDraftChange: (value) => {
         this.browser.browserPathDraft = value;
       },
@@ -512,72 +531,15 @@ export class NewSessionPage extends OpenClawLightDomElement {
       return;
     }
     this.browser.close();
-    this.connectMachineOpen = true;
-    this.connectMachineError = null;
-    this.connectMachineSetup = null;
-    this.requestUpdate();
-    void this.refreshConnectMachine();
-  }
-
-  private async refreshConnectMachine() {
-    if (!this.connectMachineOpen || this.connectMachineLoading) {
-      return;
-    }
-    const client = this.gateway.connected ? this.gateway.client : null;
-    if (!client) {
-      this.connectMachineError = t("newSession.connectMachineUnavailable");
-      this.requestUpdate();
-      return;
-    }
-    const requestId = ++this.connectMachineRequestId;
-    this.connectMachineLoading = true;
-    this.connectMachineError = null;
-    this.requestUpdate();
-    try {
-      const setup = await requestDevicePairJoinSetup(client);
-      if (
-        requestId !== this.connectMachineRequestId ||
-        client !== this.gateway.client ||
-        !this.gateway.connected ||
-        !this.connectMachineOpen
-      ) {
-        return;
-      }
-      if (!setup.joinUrl?.trim()) {
-        this.connectMachineSetup = null;
-        this.connectMachineError = t("newSession.connectMachineMissingUrl");
-        return;
-      }
-      this.connectMachineSetup = setup;
-    } catch (error) {
-      if (
-        requestId === this.connectMachineRequestId &&
-        client === this.gateway.client &&
-        this.gateway.connected &&
-        this.connectMachineOpen
-      ) {
-        this.connectMachineError = formatUiError(error);
-      }
-    } finally {
-      if (requestId === this.connectMachineRequestId) {
-        this.connectMachineLoading = false;
-        this.requestUpdate();
-      }
-    }
-  }
-
-  private closeConnectMachine() {
-    this.connectMachineRequestId += 1;
-    this.connectMachineOpen = false;
-    this.connectMachineLoading = false;
-    this.connectMachineError = null;
-    this.connectMachineSetup = null;
+    this.connectMachine.start();
   }
 
   private renderDraftBlock() {
     const worktreeNameInvalid =
       this.place.worktree && !isWorktreeNameValid(this.place.worktreeName);
     const capabilities = this.submission.capabilities;
+    const voiceControl = this.dictation.render(this.routeOwnerKey());
+    const dictationLocked = this.dictation.active;
     return html`
       <div class="new-session-page__draft" aria-busy=${String(this.submission.submitting)}>
         ${this.renderTargetBar()}
@@ -590,39 +552,61 @@ export class NewSessionPage extends OpenClawLightDomElement {
                   ? "newSession.createOutcomeUnknown"
                   : "newSession.placementSetupInterrupted",
               ),
+              this.submission.pendingPlacement.sessionKey
+                ? {
+                    label: t("common.reset"),
+                    onClick: () => this.submission.clearPendingPlacementRecovery(),
+                  }
+                : undefined,
             )
           : nothing}
         ${renderNewSessionDraftComposer({
           agent: this.place.selectedAgent(),
           agentId: this.place.agentId,
           attachmentDraft: this.submission.attachmentDraft,
-          canSubmit: !this.submission.submitting && this.submission.canSubmit(),
+          canSubmit: !this.submission.submitting && !dictationLocked && this.submission.canSubmit(),
           submitDisabledReason: this.submission.submitDisabledReason(),
           blockedSubmitNotice: this.submission.blockedSubmitNotice(),
+          dictationActive: this.dictation.active,
+          dictationPreview: this.dictation.previewDraft(),
+          dictationStatus: this.dictation.renderStatus(),
           context: this.context,
           isCatalogTarget: catalog.isTarget(this.data),
+          draftOwnerKey: this.routeOwnerKey(),
           message: this.submission.message,
           visibility: this.submission.visibility,
           draftAvailable: capabilities.canStartAsDraft(this.context),
           ...capabilities.composerProps(this.context, this.gateway, this.place.agentId),
           modelControl: this.place.modelControl,
+          permissionControl: catalog.isTarget(this.data)
+            ? undefined
+            : renderChatPermissionPicker({
+                canSelectFull: this.place.isAdmin(),
+                disabled:
+                  this.submission.submitting ||
+                  Boolean(this.submission.pendingPlacement.sessionKey),
+                disabledReason: this.submission.submitting ? t("newSession.starting") : undefined,
+                mode: this.submission.permission.value,
+                onSelect: (permissionMode) =>
+                  this.submission.permission.set(permissionMode ?? undefined),
+              }),
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           requestUpdate: () => this.requestUpdate(),
           submitting: this.submission.submitting,
           textareaController: this.submission.composerTextarea,
+          voiceControl,
           messageLocked: Boolean(this.submission.pendingPlacement.sessionKey),
           terminalAction: this.submission.showStartInTerminal()
             ? {
-                canStart: !this.submission.submitting && this.submission.canSubmit("terminal"),
+                canStart:
+                  !this.submission.submitting &&
+                  !dictationLocked &&
+                  this.submission.canSubmit("terminal"),
                 disabledReason: this.submission.submitBlock("terminal")?.reason,
                 onStart: () => void this.submission.startInTerminal(),
               }
             : undefined,
-          onInput: (message) => {
-            if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
-              this.setMessageFromUser(message);
-            }
-          },
+          onInput: (message) => this.setMessageFromUser(message),
           onOpenImage: (item) => {
             this.imageLightbox = item;
           },
@@ -633,6 +617,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           },
           onSubmit: () => void this.submission.submit(),
         })}
+        ${renderNewSessionIncognitoNotice(this.submission.visibility === "incognito")}
       </div>
     `;
   }
@@ -647,6 +632,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
       assistantAvatarUrl: agent?.identity?.avatarUrl ?? null,
       hint: t("newSession.hint"),
       composer: this.renderDraftBlock(),
+      hideSecondaryContent: this.submission.visibility === "incognito",
+      fadeSecondaryContent: this.submission.message.trim().length > 0,
       modelSetupRequired: this.submission.requiresModelSetup(),
       onModelSetup: () => this.context?.navigate("model-setup"),
       sessions: this.context?.sessions.state.result,
@@ -659,11 +646,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         agentsList: this.context?.agents.state.agentsList ?? null,
         hello: gateway?.hello ?? null,
       },
-      onDraftChange: (next) => {
-        if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
-          this.setMessageFromUser(next);
-        }
-      },
+      onDraftChange: (next) => this.setMessageFromUser(next),
       onSend: () => void this.submission.submit(),
       onOpenSession: (sessionKey) => {
         if (this.submission.submitting || this.submission.pendingPlacement.sessionKey) {
@@ -689,8 +672,15 @@ export class NewSessionPage extends OpenClawLightDomElement {
 
   override render() {
     return html`
-      <div class="new-session-page">
-        ${renderNewSessionIncognitoControl(this.submission)}
+      <div
+        class="new-session-page ${this.submission.visibility === "incognito"
+          ? "new-session-page--incognito"
+          : ""}"
+      >
+        ${renderNewSessionIncognitoControl(
+          this.submission,
+          this.submission.capabilities.canStartAsDraft(this.context),
+        )}
         <div
           class="new-session-page__scroll"
           ?inert=${this.submission.submitting}
@@ -700,17 +690,17 @@ export class NewSessionPage extends OpenClawLightDomElement {
           ${this.renderWelcome()}
         </div>
         ${renderConnectMachineDialog({
-          open: this.connectMachineOpen && this.place.isAdmin(),
-          loading: this.connectMachineLoading,
-          error: this.connectMachineError,
-          setup: this.connectMachineSetup,
-          onRefresh: () => void this.refreshConnectMachine(),
+          open: this.connectMachine.open && this.place.isAdmin(),
+          loading: this.connectMachine.loading,
+          error: this.connectMachine.error,
+          setup: this.connectMachine.setup,
+          onRefresh: () => void this.connectMachine.refresh(),
           onClose: () => {
-            this.closeConnectMachine();
+            this.connectMachine.close();
             this.requestUpdate();
           },
           onManageDevices: () => {
-            this.closeConnectMachine();
+            this.connectMachine.close();
             this.context?.navigate("devices");
           },
         })}

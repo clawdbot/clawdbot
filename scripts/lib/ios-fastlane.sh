@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 
+# BASH_SOURCE may be relative, so resolve it before callers change directories.
+_OPENCLAW_IOS_FASTLANE_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+
 run_ios_fastlane() {
   local gemfile=""
-  gemfile="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/apps/ios/Gemfile"
+  gemfile="${_OPENCLAW_IOS_FASTLANE_REPO_ROOT}/apps/ios/Gemfile"
 
   local setup_hint=""
   setup_hint="Install Ruby 3.4.10, then run: cd apps/ios && gem install bundler -v 2.6.9 && bundle _2.6.9_ install"

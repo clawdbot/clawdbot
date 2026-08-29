@@ -19,11 +19,7 @@ import {
   REMOTE_MODEL_CATALOG_TTL_MS,
 } from "../model-catalog/remote-refresh.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
@@ -31,11 +27,6 @@ import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
 } from "./gateway-supervision.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { readVerifiedGitUpdateReceipt, type VerifiedGitUpdateReceipt } from "./restart-sentinel.js";
 import {
@@ -64,7 +55,7 @@ import {
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "./update-control-plane-sentinel.js";
 import {
   applyDevUpdateTargetEnv,
-  devUpdateTargetFromGitCampaign,
+  devUpdateTargetFromGitTarget,
   type TrackedDevUpdateTarget,
 } from "./update-dev-target.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
@@ -148,7 +139,7 @@ export function resetUpdateAvailableStateForTest(): void {
   gatewayUpdateCampaign.resetForTest();
 }
 
-const UPDATE_CHECK_STATE_KEY = "default";
+const UPDATE_CHECK_STATE_KEY = "update.checkState";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const AUTO_UPDATE_COMMAND_TIMEOUT_MS = 45 * 60 * 1000;
@@ -158,8 +149,6 @@ const AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT = 1;
 const DEV_COMMIT_LIMIT = 5;
 const DEV_COMMIT_SUBJECT_MAX_LENGTH = 120;
 const DEV_COMMIT_LOG_MAX_OUTPUT_BYTES = 8 * 1024;
-
-type UpdateCheckStateDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
 
 function shouldSkipCheck(allowInTests: boolean): boolean {
   return !allowInTests && Boolean(process.env.VITEST || process.env.NODE_ENV === "test");
@@ -196,69 +185,12 @@ function resolveCheckIntervalMs(
   return UPDATE_CHECK_INTERVAL_MS;
 }
 
-function presentString(value: string | null): string | undefined {
-  return value ?? undefined;
-}
-
 async function readState(): Promise<UpdateCheckState> {
-  const database = openOpenClawStateDatabase();
-  const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    stateDb
-      .selectFrom("update_check_state")
-      .selectAll()
-      .where("state_key", "=", UPDATE_CHECK_STATE_KEY),
-  );
-  if (!row) {
-    return {};
-  }
-  return {
-    lastCheckedAt: presentString(row.last_checked_at),
-    lastNotifiedVersion: presentString(row.last_notified_version),
-    lastNotifiedTag: presentString(row.last_notified_tag),
-    lastAvailableVersion: presentString(row.last_available_version),
-    lastAvailableTag: presentString(row.last_available_tag),
-    autoInstallId: presentString(row.auto_install_id),
-    autoFirstSeenVersion: presentString(row.auto_first_seen_version),
-    autoFirstSeenTag: presentString(row.auto_first_seen_tag),
-    autoFirstSeenAt: presentString(row.auto_first_seen_at),
-    autoLastAttemptVersion: presentString(row.auto_last_attempt_version),
-    autoLastAttemptAt: presentString(row.auto_last_attempt_at),
-    autoLastSuccessVersion: presentString(row.auto_last_success_version),
-    autoLastSuccessAt: presentString(row.auto_last_success_at),
-  };
+  return readConfigMachineState<UpdateCheckState>(UPDATE_CHECK_STATE_KEY) ?? {};
 }
 
 async function writeState(state: UpdateCheckState): Promise<void> {
-  const updatedAtMs = Date.now();
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      stateDb.deleteFrom("update_check_state").where("state_key", "=", UPDATE_CHECK_STATE_KEY),
-    );
-    executeSqliteQuerySync(
-      db,
-      stateDb.insertInto("update_check_state").values({
-        state_key: UPDATE_CHECK_STATE_KEY,
-        last_checked_at: state.lastCheckedAt ?? null,
-        last_notified_version: state.lastNotifiedVersion ?? null,
-        last_notified_tag: state.lastNotifiedTag ?? null,
-        last_available_version: state.lastAvailableVersion ?? null,
-        last_available_tag: state.lastAvailableTag ?? null,
-        auto_install_id: state.autoInstallId ?? null,
-        auto_first_seen_version: state.autoFirstSeenVersion ?? null,
-        auto_first_seen_tag: state.autoFirstSeenTag ?? null,
-        auto_first_seen_at: state.autoFirstSeenAt ?? null,
-        auto_last_attempt_version: state.autoLastAttemptVersion ?? null,
-        auto_last_attempt_at: state.autoLastAttemptAt ?? null,
-        auto_last_success_version: state.autoLastSuccessVersion ?? null,
-        auto_last_success_at: state.autoLastSuccessAt ?? null,
-        updated_at_ms: updatedAtMs,
-      }),
-    );
-  });
+  writeConfigMachineState(UPDATE_CHECK_STATE_KEY, state);
 }
 
 function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {
@@ -1121,7 +1053,7 @@ export async function runGatewayUpdateCheck(params: {
               tag: "dev",
               forced,
               root: root ?? status.root ?? undefined,
-              devTarget: devUpdateTargetFromGitCampaign(target),
+              devTarget: devUpdateTargetFromGitTarget(target),
               log: params.log,
               runAuto,
             }),

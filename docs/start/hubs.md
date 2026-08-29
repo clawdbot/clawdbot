@@ -32,7 +32,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Docker](/install/docker)
 - [Nix](/install/nix)
 - [Updating / rollback](/install/updating)
-- [Bun workflow (experimental)](/install/bun)
+- [Bun workflow](/install/bun)
 
 ## Core concepts
 

@@ -1,15 +1,19 @@
 // Codex tests cover transport stdio plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createStdioTransport, resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const spawnMock = vi.hoisted(() => vi.fn(() => ({ pid: 1234 })));
+const prepareRegistration = vi.hoisted(() => vi.fn(async () => async () => {}));
 
 vi.mock("node:child_process", () => ({ spawn: spawnMock }));
+vi.mock("./transport-process-registration.js", () => ({
+  prepareCodexAppServerProcessRegistration: prepareRegistration,
+}));
 
 beforeEach(() => {
   spawnMock.mockClear();
+  prepareRegistration.mockReset().mockResolvedValue(async () => {});
 });
 
 function startOptions(command: string): CodexAppServerStartOptions {
@@ -22,8 +26,23 @@ function startOptions(command: string): CodexAppServerStartOptions {
 }
 
 describe("createStdioTransport", () => {
-  it("spawns a compatibility endpoint in its configured working directory", () => {
-    createStdioTransport({
+  it("rechecks authority after orphan cleanup before spawning", async () => {
+    let active = true;
+    prepareRegistration.mockImplementationOnce(async () => {
+      active = false;
+      return async () => {};
+    });
+    await expect(
+      createStdioTransport(startOptions("codex"), {}, () => {
+        if (!active) {
+          throw new Error("owner closed");
+        }
+      }),
+    ).rejects.toThrow("owner closed");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+  it("spawns a compatibility endpoint in its configured working directory", async () => {
+    await createStdioTransport({
       ...startOptions("codex"),
       cwd: "/srv/codex-project",
     });
@@ -35,28 +54,57 @@ describe("createStdioTransport", () => {
     );
   });
 
-  it("passes native context and auto-compaction arguments to Codex unchanged", () => {
+  it("preserves wrapper prefixes, root option values, and raw override ordering", async () => {
+    const overrides = ["-c", 'developer_instructions="app-server = literal"'];
     const args = [
+      "/wrapper.js",
+      ...overrides,
+      "--profile",
+      "app-server",
       "app-server",
       "--listen",
       "stdio://",
-      "-c",
-      "model_context_window=1000000",
-      "-c",
-      "model_auto_compact_token_limit=700000",
-      "-c",
-      "model_auto_compact_token_limit_scope=total",
+      "--config=model_reasoning_effort=high",
     ];
-    const runtime = resolveCodexAppServerRuntimeOptions({
-      pluginConfig: { appServer: { command: "codex", args } },
-      env: {},
-      requirementsToml: null,
-    });
+    await createStdioTransport({ ...startOptions("node"), args });
 
-    createStdioTransport(runtime.start);
-
-    expect(spawnMock).toHaveBeenCalledWith("codex", args, expect.any(Object));
+    expect(spawnMock).toHaveBeenCalledWith(
+      "node",
+      [
+        "/wrapper.js",
+        ...overrides,
+        "--profile",
+        "app-server",
+        "--config=model_reasoning_effort=high",
+        "app-server",
+        "--listen",
+        "stdio://",
+      ],
+      expect.any(Object),
+    );
+    expect(args[1]).toBe("-c");
   });
+
+  it("does not reinterpret a wrapper's positional arguments after --", async () => {
+    const args = ["/wrapper.js", "--", "-c", "opaque", "app-server"];
+    await createStdioTransport({ ...startOptions("node"), args });
+    expect(spawnMock).toHaveBeenCalledWith("node", args, expect.any(Object));
+  });
+
+  it.each(["--ws-issuer", "--ws-audience"])(
+    "preserves a subcommand-shaped %s value",
+    async (flag) => {
+      await createStdioTransport({
+        ...startOptions("codex"),
+        args: ["app-server", flag, "app-server", "-c", "model_reasoning_effort=high"],
+      });
+      expect(spawnMock).toHaveBeenCalledWith(
+        "codex",
+        ["-c", "model_reasoning_effort=high", "app-server", flag, "app-server"],
+        expect.any(Object),
+      );
+    },
+  );
 });
 
 describe("resolveCodexAppServerSpawnEnv", () => {

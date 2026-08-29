@@ -7,6 +7,11 @@ import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
+  getGatewaySuspendStatus,
+  prepareGatewaySuspend,
+  resumeGatewaySuspend,
+} from "../infra/gateway-suspend-coordinator.js";
+import {
   requestHeartbeat,
   setHeartbeatWakeHandler,
   type HeartbeatWakeRequest,
@@ -25,6 +30,8 @@ import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
@@ -68,6 +75,7 @@ import {
   getInspectableTaskAuditFindings,
   getInspectableTaskRegistrySummary,
   getInspectableTaskAuditSummary,
+  getTaskRegistryMaintenanceDiagnostics,
   previewTaskRegistryMaintenance,
   resetTaskRegistryMaintenanceRuntimeForTests,
   reconcileInspectableTasks,
@@ -178,6 +186,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   listAcpSessionEntries?: () => Promise<AcpSessionStoreEntry[]>;
   hasActiveAcpTurn?: (sessionKey: string) => boolean;
   isBackgroundExecSessionActive?: (sessionId: string) => boolean;
+  runtimeAuthoritative?: boolean;
   sessionBindings?: SessionBindingRecord[];
   closeAcpSession?: (params: {
     cfg: AcpSessionStoreEntry["cfg"];
@@ -261,7 +270,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
       params.currentTasks.set(patch.taskId, next);
       return next;
     },
-    isRuntimeAuthoritative: () => true,
+    isRuntimeAuthoritative: () => params.runtimeAuthoritative ?? true,
     listTaskRegistryRecordsByRuntimeSourceIdFromSqlite: () => [],
   });
 }
@@ -1924,7 +1933,10 @@ describe("task-registry", () => {
     });
   });
 
-  it("rejects parent flow links for terminal flows", async () => {
+  it.each([
+    { status: "cancelled" as const, endedAt: undefined },
+    { status: "blocked" as const, endedAt: 42 },
+  ])("rejects parent flow links for $status flows", async ({ status, endedAt }) => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
@@ -1934,7 +1946,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         controllerId: "tests/task-registry",
         goal: "Completed flow",
-        status: "cancelled",
+        status,
+        endedAt,
       });
 
       expect(() =>
@@ -1945,13 +1958,18 @@ describe("task-registry", () => {
           runId: "terminal-flow-link",
           task: "Should be denied",
         }),
-      ).toThrow("Parent flow is already cancelled.");
+      ).toThrow(`Parent flow is already ${status}.`);
     });
   });
 
   it("queues delegated ACP completion to the requester session when a delivery origin exists", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
+      const resolveTaskControlUiSessionUrl = vi.fn(() => "https://dashboard.example/chat/task");
+      setTaskRegistryDeliveryRuntimeForTests({
+        sendMessage: hoisted.sendMessageMock,
+        resolveTaskControlUiSessionUrl,
+      });
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "notifychat",
         to: "notifychat:123",
@@ -1987,6 +2005,8 @@ describe("task-registry", () => {
       expect(peekSystemEvents("agent:main:main")).toEqual([
         expect.stringContaining("Background task ready for review: ACP background task"),
       ]);
+      expect(peekSystemEvents("agent:main:main")[0]).not.toContain("Inspect:");
+      expect(resolveTaskControlUiSessionUrl).not.toHaveBeenCalled();
     });
   });
 
@@ -2031,21 +2051,43 @@ describe("task-registry", () => {
     );
   });
 
-  it("delivers non-delegated ACP completion to the requester channel when a delivery origin exists", async () => {
+  it.each([
+    {
+      name: "with an inspection link when the child session is linkable",
+      childSessionKey: "agent:worker:acp:child",
+      inspectUrl: "https://dashboard.example/chat/agent%3Aworker%3Aacp%3Achild",
+    },
+    {
+      name: "without an inspection link when no public Control UI is configured",
+      childSessionKey: "agent:worker:acp:child",
+      inspectUrl: undefined,
+    },
+    {
+      name: "without an inspection link when the task has no child session",
+      childSessionKey: undefined,
+      inspectUrl: "https://dashboard.example/chat/unused",
+    },
+  ])("delivers ACP completion directly to a requester thread $name", async (testCase) => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
+      const resolveTaskControlUiSessionUrl = vi.fn(() => testCase.inspectUrl);
+      setTaskRegistryDeliveryRuntimeForTests({
+        sendMessage: hoisted.sendMessageMock,
+        resolveTaskControlUiSessionUrl,
+      });
       hoisted.sendMessageMock.mockResolvedValue({
-        channel: "notifychat",
-        to: "notifychat:123",
+        channel: "discord",
+        to: "channel:123",
         via: "direct",
       });
 
       createTaskFixture("acp", {
         requesterOrigin: {
-          channel: "notifychat",
-          to: "notifychat:123",
+          channel: "discord",
+          to: "channel:123",
           threadId: "321",
         },
+        childSessionKey: testCase.childSessionKey,
         runId: "run-direct-delivery",
         task: "Investigate issue",
         deliveryStatus: "pending",
@@ -2070,11 +2112,28 @@ describe("task-registry", () => {
       await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1));
       const message = sentMessageCall();
       expectRecordFields(message, {
-        channel: "notifychat",
-        to: "notifychat:123",
+        channel: "discord",
+        to: "channel:123",
         threadId: "321",
       });
-      expect(String(message.content)).toContain("Background task done: ACP background task");
+      expect(String(message.content)).toContain(
+        testCase.childSessionKey
+          ? "Background task ready for review: ACP background task"
+          : "Background task done: ACP background task",
+      );
+      if (testCase.childSessionKey) {
+        expect(resolveTaskControlUiSessionUrl).toHaveBeenCalledWith({
+          sessionKey: testCase.childSessionKey,
+          fallbackAgentId: "worker",
+        });
+      } else {
+        expect(resolveTaskControlUiSessionUrl).not.toHaveBeenCalled();
+      }
+      if (testCase.childSessionKey && testCase.inspectUrl) {
+        expect(String(message.content).endsWith(`\nInspect: ${testCase.inspectUrl}`)).toBe(true);
+      } else {
+        expect(String(message.content)).not.toContain("Inspect:");
+      }
       expectRecordFields(message.mirror, {
         sessionKey: "agent:main:main",
       });
@@ -2880,6 +2939,88 @@ describe("task-registry", () => {
     });
   });
 
+  it("drains an admitted task through terminal delivery without admitting unrelated work", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      let releaseSend = () => {};
+      hoisted.sendMessageMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseSend = () =>
+              resolve({ channel: "notifychat", to: "notifychat:123", via: "direct" });
+          }),
+      );
+      const task = createTaskFixture("acp", {
+        requesterOrigin: NOTIFYCHAT_ORIGIN,
+        runId: "run-draining-terminal-delivery",
+        task: "Finish delivery behind the suspension fence",
+        deliveryStatus: "pending",
+        startedAt: Date.now(),
+      });
+      let finishTask = () => {};
+      const taskRun = runWithGatewayIndependentRootWorkAdmission(async () => {
+        await new Promise<void>((resolve) => {
+          finishTask = resolve;
+        });
+        finalizeTaskRecordByRunId({
+          runId: task.runId!,
+          runtime: "acp",
+          status: "succeeded",
+          endedAt: Date.now(),
+        });
+      });
+
+      const suspension = prepareGatewaySuspend({
+        requestId: "task-terminal-drain",
+        terminalPolicy: "preserve",
+        drain: true,
+        pauseScheduling: () => {},
+        resumeScheduling: () => {},
+      });
+      expect(suspension.status).toBe("draining");
+      if (suspension.status !== "draining") {
+        throw new Error("expected an active task to keep suspension draining");
+      }
+
+      try {
+        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+        finishTask();
+        await taskRun;
+        await waitForFast(() => expect(hoisted.sendMessageMock).toHaveBeenCalledOnce());
+        expectRecordFields(requireTaskById(task.taskId), {
+          status: "succeeded",
+          deliveryStatus: "pending",
+        });
+        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+        expect(getGatewaySuspendStatus(suspension.suspensionId)).toEqual(
+          expect.objectContaining({
+            status: "draining",
+            blockers: expect.arrayContaining([
+              expect.objectContaining({ kind: "root-request", count: 1 }),
+            ]),
+          }),
+        );
+        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+
+        releaseSend();
+        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        expectRecordFields(requireTaskById(task.taskId), {
+          status: "succeeded",
+          deliveryStatus: "delivered",
+        });
+        expect(getGatewaySuspendStatus(suspension.suspensionId)).toEqual({
+          status: "ready",
+          expiresAtMs: suspension.expiresAtMs,
+        });
+      } finally {
+        releaseSend();
+        finishTask();
+        resumeGatewaySuspend(suspension.suspensionId);
+        await taskRun;
+      }
+    });
+  });
+
   it("restores persisted tasks from disk on the next lookup", async () => {
     await withTaskRegistryTempDir(
       async () => {
@@ -3003,7 +3144,7 @@ describe("task-registry", () => {
           sourceId: session.id,
           runId: `exec:${session.id}`,
           task: "Background CLI command",
-          lastEventAt: Date.now() - 10 * 60_000,
+          lastEventAt: Date.now() - 40 * 60_000,
         });
         const currentTasks = new Map([[task.taskId, task]]);
         configureTaskRegistryMaintenanceRuntimeForTest({
@@ -3021,6 +3162,34 @@ describe("task-registry", () => {
         expectRecordFields(currentTasks.get(task.taskId), { status: "running" });
 
         markExited(session, null, "SIGTERM", "killed");
+
+        configureTaskRegistryMaintenanceRuntimeForTest({
+          currentTasks,
+          snapshotTasks: [task],
+          isBackgroundExecSessionActive,
+          runtimeAuthoritative: false,
+        });
+        expect(previewTaskRegistryMaintenance().reconciled).toBe(0);
+        expect(getTaskRegistryMaintenanceDiagnostics().staleRunningTasks).toContainEqual(
+          expect.objectContaining({
+            taskId: task.taskId,
+            decision: "retained",
+            reason: "cli_runtime_not_authoritative",
+          }),
+        );
+        expect(await runTaskRegistryMaintenance()).toEqual({
+          reconciled: 0,
+          recovered: 0,
+          cleanupStamped: 0,
+          pruned: 0,
+        });
+        expectRecordFields(currentTasks.get(task.taskId), { status: "running" });
+
+        configureTaskRegistryMaintenanceRuntimeForTest({
+          currentTasks,
+          snapshotTasks: [task],
+          isBackgroundExecSessionActive,
+        });
 
         expect(await runTaskRegistryMaintenance()).toEqual({
           reconciled: 1,
@@ -3561,6 +3730,35 @@ describe("task-registry", () => {
         status: "running",
       });
     });
+  });
+
+  it("prunes expired ended TaskFlows during scheduled maintenance", async () => {
+    await withTaskRegistryTempDir(
+      async () => {
+        vi.useFakeTimers();
+        const endedAt = Date.now() - 8 * 24 * 60 * 60_000;
+        const flow = createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/scheduled-task-flow-maintenance",
+          goal: "Completed without a usable result",
+          status: "blocked",
+          createdAt: endedAt,
+          updatedAt: endedAt,
+          endedAt,
+        });
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        try {
+          startTaskRegistryMaintenance();
+          await vi.advanceTimersByTimeAsync(5_000);
+          await waitForFast(() => expect(getTaskFlowById(flow.flowId)).toBeUndefined());
+        } finally {
+          stopTaskRegistryMaintenance();
+        }
+      },
+      { durableStore: true },
+    );
   });
 
   it("keeps scheduled maintenance root-admitted until session cleanup inspection settles", async () => {
@@ -4196,6 +4394,7 @@ describe("task-registry", () => {
         "Background task ready for review: ACP background task (run run-quie). Next: parent will review/verify before calling it done.",
       ]);
       relay.dispose();
+      await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     });
   });

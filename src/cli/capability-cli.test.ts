@@ -202,12 +202,15 @@ const mocks = vi.hoisted(() => ({
   getProviderEnvVars: vi.fn((providerId: string) => [
     `${providerId.toUpperCase().replaceAll("-", "_")}_API_KEY`,
   ]),
+  embedBatch: vi.fn(async (inputs: unknown[], options?: { inputType?: string }) =>
+    inputs.map(() => (options?.inputType === "document" ? [0.1, 0.2] : [9, 9])),
+  ),
   createEmbeddingProvider: vi.fn(async () => ({
     provider: {
       id: "openai",
       model: "text-embedding-3-small",
-      embedQuery: async () => [0.1, 0.2],
-      embedBatch: async (texts: string[]) => texts.map(() => [0.1, 0.2]),
+      embed: async () => [0.1, 0.2],
+      embedBatch: (...args: Parameters<typeof mocks.embedBatch>) => mocks.embedBatch(...args),
       close: closeEmbeddingProviderMock,
     },
   })),
@@ -565,6 +568,32 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 describe("capability cli", () => {
+  it.each(
+    [
+      { args: ["image", "edit", "--prompt", "crop the image"], option: "--file <path>" },
+      { args: ["image", "describe-many"], option: "--file <path>" },
+      { args: ["embedding", "create"], option: "--text <text>" },
+    ].flatMap(({ args, option }) =>
+      ["infer", "capability"].map((root) => ({ args, option, root })),
+    ),
+  )("rejects missing required repeatable input for $root $args", async ({ root, args, option }) => {
+    const argv = [root, ...args, "--json"];
+    const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+    await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
+
+    await expect(
+      program.parseAsync(argv, { from: "user" }).then(() => undefined),
+    ).rejects.toMatchObject({
+      code: "commander.missingMandatoryOptionValue",
+      message: `error: required option '${option}' not specified`,
+    });
+    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+    expect(mocks.describeImageFile).not.toHaveBeenCalled();
+    expect(mocks.createEmbeddingProvider).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
@@ -873,6 +902,16 @@ describe("capability cli", () => {
       ...(command === "providers" ? { agentId: "main" } : {}),
       readOnly: true,
     });
+  });
+
+  it("renders an explicit empty model list without changing JSON output", async () => {
+    mocks.loadModelCatalog.mockResolvedValue([]);
+
+    await runCapability("model", "list", "--json");
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith([]);
+
+    await runCapability("model", "list");
+    expect(mocks.runtime.log).toHaveBeenCalledWith("No results found.");
   });
 
   it("reports model providers configured through their environment key", async () => {
@@ -2404,6 +2443,8 @@ describe("capability cli", () => {
       "edit",
       "--file",
       inputPath,
+      "--file",
+      inputPath,
       "--prompt",
       "make three variants",
       "--count",
@@ -2412,6 +2453,7 @@ describe("capability cli", () => {
     );
 
     expect(firstImageGenerationCall()?.count).toBe(3);
+    expect(firstImageGenerationCall()?.inputImages).toHaveLength(2);
   });
 
   it("rejects unsupported image output format and background hints", async () => {
@@ -3665,13 +3707,20 @@ describe("capability cli", () => {
   );
 
   it("uses only embedding providers for embedding creation", async () => {
-    await runCapability("embedding", "create", "--text", "hello", "--json");
+    await runCapability("embedding", "create", "--text", "hello", "--text", "world", "--json");
 
     expect(firstEmbeddingProviderCall()?.provider).toBe("auto");
     expect(firstEmbeddingProviderCall()?.fallback).toBe("none");
     expect(firstJsonOutput()?.capability).toBe("embedding.create");
     expect(firstJsonOutput()?.provider).toBe("openai");
     expect(firstJsonOutput()?.model).toBe("text-embedding-3-small");
+    expect(firstJsonOutput()).toMatchObject({
+      outputs: [
+        { text: "hello", embedding: [0.1, 0.2] },
+        { text: "world", embedding: [0.1, 0.2] },
+      ],
+    });
+    expect(mocks.embedBatch).toHaveBeenCalledWith(["hello", "world"], { inputType: "document" });
     expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
   });
 
@@ -3681,7 +3730,7 @@ describe("capability cli", () => {
       provider: {
         id: "openai",
         model: "text-embedding-3-small",
-        embedQuery: async () => [0.1, 0.2],
+        embed: async () => [0.1, 0.2],
         embedBatch: async () => {
           throw new Error("embedding failed");
         },

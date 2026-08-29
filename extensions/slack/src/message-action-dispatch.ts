@@ -8,6 +8,7 @@ import {
   normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import {
   normalizeOptionalLowercaseString,
@@ -19,11 +20,13 @@ import { buildSlackPresentationBlocks, canRenderSlackPresentation } from "./bloc
 import { normalizeSlackOutboundText } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
+import { SLACK_SECTION_TEXT_MAX } from "./presentation.js";
 import {
   resolveSlackReplyBlockResolution,
   resolveSlackReplyDeliveryMessages,
   type SlackReplyDeliveryMessage,
 } from "./reply-blocks.js";
+import { resolveSlackThreadTsValue } from "./thread-ts.js";
 import { countSlackTextUtf8Bytes } from "./truncate.js";
 
 type SlackActionInvoke = (
@@ -59,9 +62,15 @@ function renderSlackActionPresentation(
   if (!presentation) {
     return { usesPresentationTextFallback: false };
   }
-  const renderedBlocks = canRenderSlackPresentation(presentation)
-    ? buildSlackPresentationBlocks(presentation)
-    : undefined;
+  const needsCompleteTextFallback = presentation.blocks.some(
+    (block) =>
+      (block.type === "text" || block.type === "context") &&
+      block.text.trim().length > SLACK_SECTION_TEXT_MAX,
+  );
+  const renderedBlocks =
+    !needsCompleteTextFallback && canRenderSlackPresentation(presentation)
+      ? buildSlackPresentationBlocks(presentation)
+      : undefined;
   const usesPresentationTextFallback = !renderedBlocks || renderedBlocks.length > SLACK_MAX_BLOCKS;
   const blocks = usesPresentationTextFallback ? undefined : renderedBlocks;
   return {
@@ -140,7 +149,7 @@ export async function handleSlackMessageAction(params: {
         mediaUrl: mediaUrl ?? undefined,
         ...(readSlackForceDocument(actionParams) ? { forceDocument: true } : {}),
         accountId,
-        threadTs: threadId ?? replyTo ?? undefined,
+        threadTs: resolveSlackThreadTsValue({ replyToId: replyTo, threadId }),
         ...(topLevel ? { topLevel: true } : {}),
         ...(replyBroadcast ? { replyBroadcast } : {}),
       },
@@ -224,9 +233,14 @@ export async function handleSlackMessageAction(params: {
     const accessibleContent = renderedPresentation.usesPresentationTextFallback
       ? renderSlackMessagePresentationFallbackText({ text: content, presentation })
       : resolveSlackPresentationText(content, presentation);
+    const tableMode = resolveMarkdownTableMode({
+      cfg,
+      channel: "slack",
+      accountId: accountId ?? resolveDefaultSlackAccountId(cfg),
+    });
     if (
       !blocks &&
-      countSlackTextUtf8Bytes(normalizeSlackOutboundText(accessibleContent)) >
+      countSlackTextUtf8Bytes(normalizeSlackOutboundText(accessibleContent, { tableMode })) >
         SLACK_EDIT_TEXT_MAX_BYTES
     ) {
       const editSubject = renderedPresentation.usesPresentationTextFallback

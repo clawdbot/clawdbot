@@ -5,6 +5,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
+import { resolveBrowserConfig } from "../browser/config.js";
 import {
   browserExtensionStatus,
   FOUNDATION_CHROME_WEB_STORE_URL,
@@ -30,7 +31,6 @@ import {
   defaultRuntime,
   getRuntimeConfig,
   info,
-  resolveBrowserConfig,
   runCommandWithRuntime,
   theme,
 } from "./core-api.js";
@@ -141,7 +141,7 @@ async function buildCdpEndpoint(options: {
 /** Register `openclaw browser extension` lifecycle and compatibility commands. */
 export function registerBrowserExtensionCommands(
   browser: Command,
-  _parentOpts: (cmd: Command) => BrowserParentOpts,
+  parentOpts: (cmd: Command) => BrowserParentOpts,
   pluginRoot?: string,
 ) {
   const extension = browser
@@ -168,13 +168,14 @@ export function registerBrowserExtensionCommands(
       "How long to wait after pre-registration for Chrome to verify the extension",
       String(30_000),
     )
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(
         defaultRuntime,
         async () => {
+          const json = opts.json === true || parentOpts(command).json === true;
           const waitMs = normalizeExtensionInstallWaitMs(opts.waitMs);
           const bundledDir = resolveChromeExtensionDir(pluginRoot);
-          if (opts.json !== true) {
+          if (!json) {
             defaultRuntime.log(
               info("Preparing the OpenClaw Chrome native bootstrap. Keep Chrome running…"),
             );
@@ -183,10 +184,9 @@ export function registerBrowserExtensionCommands(
             bundledDir,
             pluginRoot: resolveBrowserPluginRoot(pluginRoot),
             waitMs,
-            onProgress:
-              opts.json === true ? undefined : (message) => defaultRuntime.log(info(message)),
+            onProgress: json ? undefined : (message) => defaultRuntime.log(info(message)),
           });
-          if (opts.json === true) {
+          if (json) {
             defaultRuntime.writeJson(status);
           } else {
             for (const issue of status.issues) {
@@ -219,12 +219,13 @@ export function registerBrowserExtensionCommands(
     .command("status")
     .description("Inspect extension copies, Chrome IDs, and native-host registrations")
     .option("--json", "Print a machine-readable status report")
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const json = opts.json === true || parentOpts(command).json === true;
         const status = await browserExtensionStatus({
           bundledDir: resolveChromeExtensionDir(pluginRoot),
         });
-        if (opts.json === true) {
+        if (json) {
           defaultRuntime.writeJson(status);
           return;
         }
@@ -245,10 +246,11 @@ export function registerBrowserExtensionCommands(
     .command("uninstall-host")
     .description("Remove only OpenClaw-owned Chrome native-host registrations")
     .option("--json", "Print a machine-readable removal report")
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const json = opts.json === true || parentOpts(command).json === true;
         const result = await uninstallChromeExtensionNativeHosts();
-        if (opts.json === true) {
+        if (json) {
           defaultRuntime.writeJson(result);
           return;
         }
@@ -271,12 +273,13 @@ export function registerBrowserExtensionCommands(
       "--gateway-url <url>",
       "Print a remote pairing string for a Chrome on another machine (e.g. wss://gateway.example.com)",
     )
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(
         defaultRuntime,
         async () => {
+          const json = opts.json === true || parentOpts(command).json === true;
           const result = await buildPairingString(opts.gatewayUrl);
-          if (opts.json === true) {
+          if (json) {
             defaultRuntime.writeJson({
               pairingString: result.pairing,
               relayPort: result.relayPort,
@@ -319,10 +322,11 @@ export function registerBrowserExtensionCommands(
       "--legacy-bearer",
       "Print the legacy Bearer header while browser.extensionRelay.allowLegacyAuth is enabled",
     )
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(
         defaultRuntime,
         async () => {
+          const json = opts.json === true || parentOpts(command).json === true;
           const legacyBearer = opts.legacyBearer === true;
           const endpoint = await buildCdpEndpoint({ legacyBearer });
           if (legacyBearer) {
@@ -332,7 +336,7 @@ export function registerBrowserExtensionCommands(
               ),
             );
           }
-          if (opts.json === true) {
+          if (json) {
             defaultRuntime.writeJson(endpoint);
             return;
           }

@@ -3,6 +3,7 @@ import { coerceNativeSetting, normalizeAllowFromList } from "openclaw/plugin-sdk
 import type {
   DiscordGuildChannelConfig,
   DiscordGuildEntry,
+  OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
@@ -12,7 +13,6 @@ import {
 } from "openclaw/plugin-sdk/native-command-config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedDiscordAccount } from "./accounts.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 import { isDiscordMutableAllowEntry } from "./security-doctor.js";
 
 function isWildcardEntry(value: unknown): boolean {
@@ -56,22 +56,18 @@ function listBroadMemberTargetPaths(params: {
 }
 
 function addDiscordNameBasedEntries(params: {
-  target: Set<string>;
+  target: Map<string, number>;
   values: unknown;
   source: string;
 }) {
   if (!Array.isArray(params.values)) {
     return;
   }
-  for (const value of params.values) {
-    if (!isDiscordMutableAllowEntry(String(value))) {
-      continue;
-    }
-    const text = normalizeOptionalString(String(value)) ?? "";
-    if (!text) {
-      continue;
-    }
-    params.target.add(`${params.source}:${text}`);
+  const entries = new Set(
+    params.values.map((value) => String(value).trim()).filter(isDiscordMutableAllowEntry),
+  );
+  if (entries.size > 0) {
+    params.target.set(params.source, entries.size);
   }
 }
 
@@ -96,7 +92,7 @@ export async function collectDiscordSecurityAuditFindings(params: {
   const storeAllowFrom = await readChannelAllowFromStore("discord", process.env, accountId).catch(
     () => [],
   );
-  const discordNameBasedAllowEntries = new Set<string>();
+  const discordNameBasedAllowEntries = new Map<string, number>();
   const discordPathPrefix =
     params.orderedAccountIds.length > 1 || params.hasExplicitAccountPath
       ? `channels.discord.accounts.${accountId}`
@@ -136,7 +132,7 @@ export async function collectDiscordSecurityAuditFindings(params: {
   addDiscordNameBasedEntries({
     target: discordNameBasedAllowEntries,
     values: storeAllowFrom,
-    source: "~/.openclaw/credentials/discord-allowFrom.json",
+    source: "Discord pairing store",
   });
 
   const guildEntries = (discordCfg.guilds as Record<string, unknown> | undefined) ?? {};
@@ -168,11 +164,12 @@ export async function collectDiscordSecurityAuditFindings(params: {
   }
 
   if (discordNameBasedAllowEntries.size > 0) {
-    const examples = Array.from(discordNameBasedAllowEntries).slice(0, 5);
+    const counts = Array.from(discordNameBasedAllowEntries);
+    const entryCount = counts.reduce((total, [, count]) => total + count, 0);
+    const sources = counts.slice(0, 5).map(([source, count]) => `${source} (${count})`);
     const more =
-      discordNameBasedAllowEntries.size > examples.length
-        ? ` (+${discordNameBasedAllowEntries.size - examples.length} more)`
-        : "";
+      counts.length > sources.length ? ` (+${counts.length - sources.length} more sources)` : "";
+    const summary = `Found ${entryCount} name/tag entries: ${sources.join(", ")}${more}.`;
     findings.push({
       checkId: "channels.discord.allowFrom.name_based_entries",
       severity: dangerousNameMatchingEnabled ? "info" : "warn",
@@ -181,9 +178,9 @@ export async function collectDiscordSecurityAuditFindings(params: {
         : "Discord allowlist contains name or tag entries",
       detail: dangerousNameMatchingEnabled
         ? "Discord name/tag allowlist matching is explicitly enabled via dangerouslyAllowNameMatching. This mutable-identity mode is operator-selected break-glass behavior and out-of-scope for vulnerability reports by itself. " +
-          `Found: ${examples.join(", ")}${more}.`
+          summary
         : "Discord name/tag allowlist matching uses normalized slugs and can collide across users. " +
-          `Found: ${examples.join(", ")}${more}.`,
+          summary,
       remediation: dangerousNameMatchingEnabled
         ? "Prefer stable Discord IDs (or <@id>/user:<id>/pk:<id>), then disable dangerouslyAllowNameMatching."
         : "Prefer stable Discord IDs (or <@id>/user:<id>/pk:<id>) in channels.discord.allowFrom and channels.discord.guilds.*.users, or explicitly opt in with dangerouslyAllowNameMatching=true if you accept the risk.",

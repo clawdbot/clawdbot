@@ -1,4 +1,4 @@
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import type {
@@ -320,6 +320,7 @@ async function createOpenAIRealtimeBrowserSession(
     transport: "webrtc",
     clientSecret: clientSecret.value,
     offerUrl: "https://api.openai.com/v1/realtime/calls",
+    offerResponseMaxBytes: 256 * 1024,
     ...(offerHeaders ? { offerHeaders } : {}),
     model,
     voice,

@@ -1,13 +1,16 @@
 // Crabbox Wrapper tests cover crabbox wrapper script behavior.
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -22,6 +25,7 @@ import {
   isProviderAdvertised,
   parseProvidersFromHelp,
 } from "../../scripts/crabbox-wrapper-providers.mts";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
@@ -61,6 +65,8 @@ const fakeRunValueOptionHelp = [
 ]
   .map((option) => `  -${option}\n`)
   .join("");
+const fakeWarmupValueOptionHelp = `${fakeRunValueOptionHelp}  -lease-id string\n`;
+const fakeHydrateValueOptionHelp = `${fakeRunValueOptionHelp}  -field value\n  -job string\n`;
 const defaultGitResponses: Record<string, { status?: number; stdout?: string; stderr?: string }> = {
   [GIT_CONFIG_SPARSE_KEY]: { stdout: "false\n" },
   [GIT_SPARSE_LIST_KEY]: { status: 1 },
@@ -105,6 +111,8 @@ async function main() {
   if (process.env.OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG) fs.appendFileSync(process.env.OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG, JSON.stringify(args) + "\n");
   if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.22.1"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
+  if (args[0] === "warmup" && args[1] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeWarmupValueOptionHelp}`)}); return; }
+  if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
   if (args[0] === "doctor") {
     const provider = optionValue("provider"); const target = optionValue("target"); const windowsMode = optionValue("windows-mode");
     if (process.env.OPENCLAW_FAKE_CRABBOX_DOCTOR_PROGRESS) process.stderr.write(process.env.OPENCLAW_FAKE_CRABBOX_DOCTOR_PROGRESS + "\n");
@@ -167,6 +175,7 @@ async function main() {
     setInterval(() => {}, 1000); return;
   }
   const bundlePath = ".openclaw-crabbox-changed-gate.bundle";
+  if (process.env.OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO) fs.copyFileSync(bundlePath, process.env.OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO);
   if (Object.hasOwn(process.env, "OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE")) {
     const bundle = fs.existsSync(bundlePath) ? fs.readFileSync(bundlePath, "utf8") : null;
     if (bundle !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE) { process.stderr.write("changed-gate bundle mismatch\n"); process.exit(67); }
@@ -196,12 +205,20 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         `  printf '%s' ${shellQuote(runHelpText)}`,
         "  exit 0",
         "fi",
+        'if [ "$#" -eq 2 ] && [ "$1" = "warmup" ] && [ "$2" = "--help" ]; then',
+        `  printf '%s' ${shellQuote(`${helpText}${fakeWarmupValueOptionHelp}`)}`,
+        "  exit 0",
+        "fi",
+        'if [ "$#" -eq 3 ] && [ "$1" = "actions" ] && [ "$2" = "hydrate" ] && [ "$3" = "--help" ]; then',
+        `  printf '%s' ${shellQuote(`${helpText}${fakeHydrateValueOptionHelp}`)}`,
+        "  exit 0",
+        "fi",
         "fast_run=1",
         'for arg in "$@"; do',
         '  case "$arg" in --artifact-glob|-artifact-glob|--script|-script) fast_run=0 ;; esac',
         "done",
         'if { [ "$1" = "run" ] || [ "$1" = "warmup" ]; } && [ "$fast_run" -eq 1 ] &&',
-        '  [ -z "${OPENCLAW_FAKE_CRABBOX_CLAIM_PATH:-}${OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH:-}${OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID:-}${OPENCLAW_FAKE_CRABBOX_RUN_STATUS:-}${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_AND_EXIT:-}${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_ONCE:-}${OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH:-}${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE+x}${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES:-}${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD:-}" ]; then',
+        '  [ -z "${OPENCLAW_FAKE_CRABBOX_CLAIM_PATH:-}${OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH:-}${OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID:-}${OPENCLAW_FAKE_CRABBOX_RUN_STATUS:-}${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_AND_EXIT:-}${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_ONCE:-}${OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH:-}${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE+x}${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES:-}${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD:-}${OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO:-}" ]; then',
         `  printf '${fakeCrabboxProtocol}\\000%s\\000' "$#"`,
         "  printf '%s\\000' \"$@\"",
         "  printf '%s\\000\\000' \"$PWD\"",
@@ -343,15 +360,13 @@ if (args[0] === "-C" && args[2] === "rev-parse") {
   process.stdout.write(value + "\n"); process.exit(0);
 }
 if (args[0] === "-C" && args[2] === "-c" && args[6] === "commit-tree") {
-  if (process.env.OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER && args.includes("-p")) process.exit(68);
   if (process.env.OPENCLAW_FAKE_GIT_EXPECT_COMMIT_TREE && args[7] !== process.env.OPENCLAW_FAKE_GIT_EXPECT_COMMIT_TREE) process.exit(69);
-  touch("OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER"); touch("OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER");
+  touch("OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER");
   process.stdout.write((process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA || "synthetic789") + "\n"); process.exit(0);
 }
 if (args[0] === "-C" && args[2] === "update-ref" && args[3] === "HEAD") { touch("OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER"); process.exit(0); }
 if (args[0] === "-C" && args[2] === "bundle" && args[3] === "create") {
-  if (process.env.OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER && (args.length !== 6 || args[5] !== "HEAD")) process.exit(68);
-  touch("OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER"); const bytes = Number(process.env.OPENCLAW_FAKE_GIT_BUNDLE_BYTES || 0);
+  const bytes = Number(process.env.OPENCLAW_FAKE_GIT_BUNDLE_BYTES || 0);
   fs.writeFileSync(args[4], bytes ? "x".repeat(bytes) : process.env.OPENCLAW_FAKE_GIT_BUNDLE || "fake-bundle"); process.exit(0);
 }
 if (args[0] === "-C" && args[2] === "add" && args[3] === "-f") { touch("OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER"); process.exit(0); }
@@ -641,15 +656,6 @@ async function waitForProcessExit(
   ]);
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function runSignalCleanupProof(sendSignals: (pid: number) => Promise<void>): Promise<void> {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-descendant-"));
   tempDirs.push(root);
@@ -676,8 +682,8 @@ async function runSignalCleanupProof(sendSignals: (pid: number) => Promise<void>
     const runnerExit = waitForProcessExit(runner);
     await sendSignals(runner.pid!);
     await expect(runnerExit).resolves.toEqual({ status: 143, signal: null });
-    // The wrapper waits for the detached process group to disappear before exit.
-    // A live PID here would expose the cleanup-ordering regression this proves.
+    // Check immediately after wrapper exit for executing descendants.
+    // Linux zombies are already terminated even while their PIDs await reaping.
     expect(isProcessAlive(descendantPid)).toBe(false);
   } finally {
     if (runner.pid && isProcessAlive(runner.pid)) {
@@ -2091,21 +2097,38 @@ describe("scripts/crabbox-wrapper", () => {
     );
   });
 
-  it("repairs generic hydrate jobs for native Windows hydrate actions", () => {
-    const { output } = runSuccessfulWindowsHydrate("--job", "hydrate", "--id", "cbx_existing");
+  it.each([[], ["--field", "--job=custom"], ["--field", "--job"]])(
+    "repairs generic hydrate jobs for native Windows hydrate actions: %j",
+    (...prefix) => {
+      const { output } = runSuccessfulWindowsHydrate(
+        ...prefix,
+        "--job",
+        "hydrate",
+        "--id",
+        "cbx_existing",
+      );
 
-    expect(output.args).toEqual(
-      windowsHydrateArgs("--job", "hydrate-windows-daemon", "--id", "cbx_existing"),
-    );
-  });
+      expect(output.args).toEqual(
+        windowsHydrateArgs(...prefix, "--job", "hydrate-windows-daemon", "--id", "cbx_existing"),
+      );
+    },
+  );
 
-  it("repairs generic hydrate job assignments for native Windows hydrate actions", () => {
-    const { output } = runSuccessfulWindowsHydrate("--job=hydrate", "--id", "cbx_existing");
+  it.each([[], ["--field", "--job=custom"], ["--field", "--job"]])(
+    "repairs generic hydrate job assignments for native Windows hydrate actions: %j",
+    (...prefix) => {
+      const { output } = runSuccessfulWindowsHydrate(
+        ...prefix,
+        "--job=hydrate",
+        "--id",
+        "cbx_existing",
+      );
 
-    expect(output.args).toEqual(
-      windowsHydrateArgs("--job=hydrate-windows-daemon", "--id", "cbx_existing"),
-    );
-  });
+      expect(output.args).toEqual(
+        windowsHydrateArgs(...prefix, "--job=hydrate-windows-daemon", "--id", "cbx_existing"),
+      );
+    },
+  );
 
   it("keeps post-delimiter hydrate payloads untouched for native Windows hydrate actions", () => {
     const { output } = runSuccessfulWindowsHydrate(
@@ -2575,7 +2598,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain("--shell");
     expect(result.stderr).toContain("Node/Corepack/pnpm/Bun");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("bun_version=1.3.14");
+    expect(remoteCommand).toContain("bun_version=1.4.0");
     expect(remoteCommand).toContain('bun_root="$tool_root/bun-v${bun_version}"');
     expect(remoteCommand).toContain(
       'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
@@ -2871,7 +2894,7 @@ describe("scripts/crabbox-wrapper", () => {
   it("bootstraps Bun for AWS macOS script-stdin bun shebangs", () => {
     const script = ["#!/usr/bin/env bun", "console.log(Bun.version);"].join("\n");
     const { output } = runSuccessfulMacosScript(script);
-    expect(output.scriptContent).toContain("bun_version=1.3.14");
+    expect(output.scriptContent).toContain("bun_version=1.4.0");
     expect(output.scriptContent).toContain(
       'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
     );
@@ -3228,10 +3251,90 @@ describe("scripts/crabbox-wrapper", () => {
     }
   });
 
+  it.each([
+    ["run", "--help"],
+    ["warmup", "--help"],
+    ["actions", "hydrate", "--help"],
+    ["warmup", "--provider", "aws", "--help"],
+    ["actions", "hydrate", "--provider", "aws", "--help"],
+    ["warmup", "--keep", "--help"],
+    ["actions", "hydrate", "--reclaim", "--help"],
+    ["help", "actions", "hydrate"],
+    ["run", "--label", "--", "--help"],
+    ["warmup", "--lease-id", "--", "--help"],
+    ["actions", "hydrate", "--field", "--", "--help"],
+  ])("prints help without provider checks or sparse checkout preparation: %j", (...args) => {
+    const logPath = makeInvocationLog();
+    writeFileSync(logPath, "");
+    const syncRoot = path.join(path.dirname(logPath), "sync");
+    const result = runDefaultWrapper(args, {
+      ...cleanSparseSyncOptions,
+      configJson: managedBrokerConfig("aws"),
+      env: {
+        OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot,
+        OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: logPath,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    const commandLength = args[0] === "actions" ? 2 : 1;
+    if (args.length === commandLength + 1) {
+      const optionHelp =
+        args[0] === "run"
+          ? fakeRunValueOptionHelp
+          : args[0] === "warmup"
+            ? fakeWarmupValueOptionHelp
+            : fakeHydrateValueOptionHelp;
+      expect(result.stdout).toBe(`${defaultProviderHelp}${optionHelp}`);
+    } else {
+      expect(parseFakeCrabboxOutput(result).args).toEqual(args);
+    }
+    expect(existsSync(syncRoot)).toBe(false);
+    expect(
+      readInvocations(logPath).filter(([command]) => command === "config" || command === "doctor"),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["run", "--provider", "aws", "--label", "--help", "--", "echo ok"],
+    ["run", "--provider", "aws", "--", "--help"],
+    ["run", "--provider", "aws", "node", "--help"],
+    ["run", "--", "--help"],
+    ["warmup", "--", "--help"],
+    ["actions", "hydrate", "--", "--help"],
+    ["warmup", "--lease-id", "--help"],
+    ["actions", "hydrate", "--field", "--help"],
+    ["run", "--provider", "aws", "-", "--help"],
+    ["warmup", "--provider", "aws", "-", "--help"],
+    ["actions", "hydrate", "--provider", "aws", "-", "--help"],
+  ])("keeps provider gates when help belongs to a payload: %j", (...args) => {
+    const result = runDefaultWrapper(args, {
+      configJson: directBrokerConfig("aws"),
+      env: { OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS: "aws" },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=aws failed readiness for OpenClaw proof");
+  });
+
   it("keeps unsupported provider selections rejected", () => {
     const result = runDefaultWrapper(["run", "--provider", "bogus", "--", "echo ok"]);
 
     expect(result.status).toBe(2);
+    expect(result.stderr).toContain("selected binary does not advertise provider bogus");
+  });
+
+  it.each([
+    ["help", "run", "--", "echo ok"],
+    ["help", "actions", "hydrate", "--", "echo ok"],
+  ])("does not bypass preparation for a help alias containing a remote payload: %j", (...args) => {
+    const result = runDefaultWrapper(args, {
+      configJson: managedBrokerConfig("bogus"),
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
     expect(result.stderr).toContain("selected binary does not advertise provider bogus");
   });
 
@@ -3466,8 +3569,6 @@ describe("scripts/crabbox-wrapper", () => {
     const forceAddMarker = path.join(markerDir, "force-added");
     const syntheticCommitMarker = path.join(markerDir, "synthetic-commit");
     const syntheticHeadMarker = path.join(markerDir, "synthetic-head");
-    const rootCommitMarker = path.join(markerDir, "root-commit");
-    const selfContainedBundleMarker = path.join(markerDir, "self-contained-bundle");
     const result = runDefaultWrapper(
       ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
       {
@@ -3478,8 +3579,6 @@ describe("scripts/crabbox-wrapper", () => {
           OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER: forceAddMarker,
           OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER: syntheticCommitMarker,
           OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER: syntheticHeadMarker,
-          OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER: rootCommitMarker,
-          OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER: selfContainedBundleMarker,
         },
         gitResponses: {
           [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
@@ -3494,9 +3593,220 @@ describe("scripts/crabbox-wrapper", () => {
     expect(existsSync(forceAddMarker)).toBe(true);
     expect(existsSync(syntheticCommitMarker)).toBe(true);
     expect(existsSync(syntheticHeadMarker)).toBe(true);
-    expect(existsSync(rootCommitMarker)).toBe(true);
-    expect(existsSync(selfContainedBundleMarker)).toBe(true);
   });
+
+  it.skipIf(process.platform === "win32").each([true, false])(
+    "reuses the fetched base while transporting the exact dirty tree (shallow=%s)",
+    (shallow) => {
+      const root = makeTempDir(tempDirs, "openclaw-changed-gate-real-git-");
+      const origin = path.join(root, "origin");
+      const producer = path.join(root, "producer");
+      const capturedBundle = path.join(root, "captured.bundle");
+      const fakeBin = makeFakeCrabbox(defaultProviderHelp);
+      const env = {
+        ...testHomeEnv(path.join(root, "home")),
+        PATH: [fakeBin, path.dirname(process.execPath), process.env.PATH ?? ""].join(
+          path.delimiter,
+        ),
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_OPTIONAL_LOCKS: "0",
+        GIT_AUTHOR_NAME: "Transport fixture",
+        GIT_AUTHOR_EMAIL: "transport@example.invalid",
+        GIT_COMMITTER_NAME: "Transport fixture",
+        GIT_COMMITTER_EMAIL: "transport@example.invalid",
+        OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
+        OPENCLAW_CRABBOX_SYNC_TMPDIR: path.join(root, "sync"),
+        OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "0",
+        OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO: capturedBundle,
+      };
+      const git = (cwd: string, args: string[]) => {
+        const result = spawnSync("git", args, { cwd, env, encoding: "utf8", timeout: 10_000 });
+        expect(result.status, `${args.join(" ")}\n${result.stderr}`).toBe(0);
+        return result.stdout.trim();
+      };
+      mkdirSync(path.join(origin, "scripts"), { recursive: true });
+      git(origin, ["init", "-q", "-b", "main"]);
+      writeFileSync(path.join(origin, ".gitignore"), ".tmp/\n");
+      const restored = "old content beyond the receiver's shallow history\n";
+      mkdirSync(path.join(origin, "restored"));
+      writeFileSync(path.join(origin, "restored", "old.txt"), restored);
+      git(origin, ["add", "-A"]);
+      git(origin, ["commit", "-qm", "old content"]);
+      rmSync(path.join(origin, "restored"), { recursive: true });
+      git(origin, ["add", "-A"]);
+      git(origin, ["commit", "-qm", "remove old content"]);
+      git(origin, ["commit", "--allow-empty", "-qm", "advance history"]);
+      const unchanged = Buffer.concat(
+        Array.from({ length: 8192 }, (_, index) =>
+          createHash("sha256").update(`unchanged-${index}`).digest(),
+        ),
+      );
+      writeFileSync(path.join(origin, "unchanged.bin"), unchanged);
+      for (const file of ["owner.txt", "deleted.txt", "rename-before.txt", "mode.sh"]) {
+        writeFileSync(path.join(origin, file), "base\n");
+      }
+      symlinkSync("owner.txt", path.join(origin, "alias"));
+      // The leaf is deliberately inert: this test proves transport, not check lanes.
+      writeFileSync(
+        path.join(origin, "scripts/check-changed.mjs"),
+        'process.stdout.write("transport fixture reached\\n");\n',
+      );
+      git(origin, ["add", "-A"]);
+      git(origin, ["commit", "-qm", "base"]);
+      const base = git(origin, ["rev-parse", "HEAD"]);
+      git(root, ["clone", "-q", ...(shallow ? ["--depth=1"] : []), `file://${origin}`, producer]);
+      expect(git(producer, ["rev-parse", "--is-shallow-repository"])).toBe(String(shallow));
+      if (!shallow) {
+        git(producer, ["repack", "-adb"]);
+        expect(
+          readdirSync(path.join(producer, ".git", "objects", "pack")).some((file) =>
+            file.endsWith(".bitmap"),
+          ),
+        ).toBe(true);
+      }
+      const fixtureWrapper = path.join(producer, ".tmp", "crabbox-wrapper.mjs");
+      mkdirSync(path.dirname(fixtureWrapper), { recursive: true });
+      copyFileSync(bundledWrapperPath, fixtureWrapper);
+      const runSender = () => {
+        const result = spawnSync(
+          process.execPath,
+          [fixtureWrapper, "run", "--provider", "aws", "--", "node", "scripts/check-changed.mjs"],
+          { cwd: producer, env, encoding: "utf8", timeout: 10_000 },
+        );
+        const run = expectSuccessfulWrapperRun(result);
+        expect(existsSync(run.output.cwd)).toBe(false);
+        expect(readdirSync(path.join(root, "sync"))).toEqual([]);
+        return { remoteCommand: run.remoteCommand, bundle: readFileSync(capturedBundle) };
+      };
+      const receive = (name: string, remoteCommand: string, bundle?: Buffer, source = origin) => {
+        const receiver = path.join(root, name);
+        mkdirSync(receiver);
+        if (bundle) {
+          writeFileSync(path.join(receiver, ".openclaw-crabbox-changed-gate.bundle"), bundle);
+        }
+        const result = spawnSync("bash", ["-c", remoteCommand], {
+          cwd: receiver,
+          encoding: "utf8",
+          timeout: 10_000,
+          env: {
+            ...env,
+            GIT_CONFIG_COUNT: "2",
+            GIT_CONFIG_KEY_0: `url.file://${source}.insteadOf`,
+            GIT_CONFIG_VALUE_0: "https://github.com/openclaw/openclaw.git",
+            GIT_CONFIG_KEY_1: "protocol.file.allow",
+            GIT_CONFIG_VALUE_1: "always",
+          },
+        });
+        return { receiver, result };
+      };
+      const empty = runSender();
+      expect(empty.bundle.length).toBe(0);
+      const unchangedRun = receive("unchanged", empty.remoteCommand, empty.bundle);
+      expect(unchangedRun.result.status, unchangedRun.result.stderr).toBe(0);
+      expect(git(unchangedRun.receiver, ["rev-parse", "HEAD"])).toBe(base);
+
+      writeFileSync(path.join(producer, "owner.txt"), "committed\n");
+      git(producer, ["add", "owner.txt"]);
+      git(producer, ["commit", "-qm", "committed change"]);
+      writeFileSync(path.join(producer, "owner.txt"), "unstaged\n");
+      writeFileSync(path.join(producer, "untracked.txt"), "untracked\n");
+      mkdirSync(path.join(producer, "restored"));
+      writeFileSync(path.join(producer, "restored", "old.txt"), restored);
+      rmSync(path.join(producer, "deleted.txt"));
+      renameSync(path.join(producer, "rename-before.txt"), path.join(producer, "renamed.txt"));
+      chmodSync(path.join(producer, "mode.sh"), 0o755);
+      git(producer, ["add", "mode.sh", "rename-before.txt", "renamed.txt"]);
+      const headBefore = git(producer, ["rev-parse", "HEAD"]);
+      const indexBefore = readFileSync(path.join(producer, ".git", "index"));
+      const statusBefore = git(producer, ["status", "--porcelain=v1"]);
+      const shallowBefore = shallow
+        ? readFileSync(path.join(producer, ".git", "shallow"))
+        : undefined;
+      const candidate = runSender();
+      // A change must not resend the unchanged, incompressible base blob.
+      expect(candidate.bundle.length).toBeLessThan(unchanged.length);
+      expect(git(producer, ["rev-parse", "HEAD"])).toBe(headBefore);
+      expect(readFileSync(path.join(producer, ".git", "index"))).toEqual(indexBefore);
+      expect(git(producer, ["status", "--porcelain=v1"])).toBe(statusBefore);
+      expect(
+        shallow
+          ? readFileSync(path.join(producer, ".git", "shallow"))
+          : existsSync(path.join(producer, ".git", "shallow")),
+      ).toEqual(shallowBefore ?? false);
+
+      const imported = receive("candidate", candidate.remoteCommand, candidate.bundle);
+      expect(imported.result.status, imported.result.stderr).toBe(0);
+      expect(imported.result.stdout).toBe("transport fixture reached\n");
+      expect(git(imported.receiver, ["rev-parse", "HEAD^"])).toBe(base);
+      expect(git(imported.receiver, ["status", "--porcelain=v1"])).toBe("");
+      expect(readFileSync(path.join(imported.receiver, "unchanged.bin"))).toEqual(unchanged);
+      expect(readFileSync(path.join(imported.receiver, "owner.txt"), "utf8")).toBe("unstaged\n");
+      expect(readFileSync(path.join(imported.receiver, "untracked.txt"), "utf8")).toBe(
+        "untracked\n",
+      );
+      expect(existsSync(path.join(imported.receiver, "deleted.txt"))).toBe(false);
+      expect(existsSync(path.join(imported.receiver, "rename-before.txt"))).toBe(false);
+      expect(readFileSync(path.join(imported.receiver, "renamed.txt"), "utf8")).toBe("base\n");
+      expect(readFileSync(path.join(imported.receiver, "restored", "old.txt"), "utf8")).toBe(
+        restored,
+      );
+      expect(git(imported.receiver, ["ls-tree", "HEAD", "alias"])).toMatch(/^120000 blob /u);
+      expect(git(imported.receiver, ["ls-tree", "HEAD", "mode.sh"])).toMatch(/^100755 blob /u);
+      expect(git(imported.receiver, ["diff", "--no-renames", "--name-status", base, "HEAD"])).toBe(
+        [
+          "D\tdeleted.txt",
+          "M\tmode.sh",
+          "M\towner.txt",
+          "D\trename-before.txt",
+          "A\trenamed.txt",
+          "A\trestored/old.txt",
+          "A\tuntracked.txt",
+        ].join("\n"),
+      );
+
+      const corrupt = Buffer.from(candidate.bundle);
+      const lastIndex = corrupt.length - 1;
+      corrupt.writeUInt8(corrupt.readUInt8(lastIndex) ^ 1, lastIndex);
+      const wrongBase = git(imported.receiver, [
+        "commit-tree",
+        `${base}^{tree}`,
+        "-m",
+        "other base",
+      ]);
+      const wrongCarrier = git(imported.receiver, [
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        wrongBase,
+        "-m",
+        "other prerequisite",
+      ]);
+      git(imported.receiver, ["update-ref", "HEAD", wrongCarrier]);
+      const wrongBundle = path.join(root, "wrong-base.bundle");
+      git(imported.receiver, ["bundle", "create", wrongBundle, "HEAD", `^${wrongBase}`]);
+      for (const [name, bundle] of [
+        ["missing-bundle", undefined],
+        ["wrong-base-bundle", readFileSync(wrongBundle)],
+        ["corrupt-bundle", corrupt],
+      ] as const) {
+        const rejected = receive(name, candidate.remoteCommand, bundle);
+        expect(rejected.result.status).toBe(2);
+        expect(rejected.result.stdout).not.toContain("transport fixture reached");
+      }
+      const emptyOrigin = path.join(root, "empty-origin");
+      mkdirSync(emptyOrigin);
+      git(emptyOrigin, ["init", "-q", "--bare"]);
+      const missingBase = receive(
+        "missing-base",
+        candidate.remoteCommand,
+        candidate.bundle,
+        emptyOrigin,
+      );
+      expect(missingBase.result.status).toBe(2);
+      expect(missingBase.result.stdout).not.toContain("transport fixture reached");
+    },
+  );
 
   it("transports changed-gate bundles larger than the child-process buffer", () => {
     const bundleBytes = 2 * 1024 * 1024;

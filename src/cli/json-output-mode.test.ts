@@ -87,4 +87,30 @@ describe("json output mode", () => {
       },
     );
   });
+
+  it("retains stderr routing through preaction for plain machine output", async () => {
+    await withConsoleLogsRoutedToStderrForJson(
+      ["node", "openclaw", "models", "aliases", "list", "--plain"],
+      async () => {
+        expect(loggingState.forceConsoleToStderr).toBe(true);
+        applyResolvedCommandOutputMode(false, true);
+        expect(loggingState.forceConsoleToStderr).toBe(true);
+        expect(
+          isJsonOutputModeActive(["node", "openclaw", "models", "aliases", "list", "--plain"]),
+        ).toBe(false);
+      },
+      { machineOutput: true },
+    );
+  });
+
+  it("still restores stdout when preaction resolves neither JSON nor plain machine output", async () => {
+    await withConsoleLogsRoutedToStderrForJson(
+      ["node", "openclaw", "models", "aliases", "list", "--plain"],
+      async () => {
+        applyResolvedCommandOutputMode(false);
+        expect(loggingState.forceConsoleToStderr).toBe(false);
+      },
+      { machineOutput: true },
+    );
+  });
 });

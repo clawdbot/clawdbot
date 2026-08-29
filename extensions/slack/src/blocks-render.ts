@@ -14,6 +14,10 @@ import type {
   MessagePresentationChartBlock,
   MessagePresentationSelectBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  resolveAskUserQuestionOptionIndex,
+  type AskUserQuestionOptionIndices,
+} from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { encodeSlackApprovalAction } from "./approval-actions.js";
@@ -29,6 +33,7 @@ import {
   hasSlackDataVisualizationBlock,
   SLACK_DATA_VISUALIZATION_BLOCKS_MAX,
 } from "./data-visualization.js";
+import { chunkSlackMrkdwnText } from "./format.js";
 import { renderSlackMessagePresentationChartFallbackText } from "./presentation-fallback.js";
 import {
   SLACK_ACTION_BLOCK_ELEMENTS_MAX,
@@ -60,6 +65,7 @@ export type SlackBlockRenderOptions = {
   buttonIndexOffset?: number;
   dataTableCellCharacterCountOffset?: number;
   dataVisualizationCountOffset?: number;
+  questionOptionIndices?: AskUserQuestionOptionIndices;
   selectIndexOffset?: number;
 };
 
@@ -116,7 +122,7 @@ type SlackActionTarget =
 
 function resolveSlackActionTarget(
   action: MessagePresentationAction | undefined,
-  optionIndex?: number,
+  questionOptionIndices?: AskUserQuestionOptionIndices,
 ): SlackActionTarget | undefined {
   if (!action) {
     return undefined;
@@ -125,6 +131,14 @@ function resolveSlackActionTarget(
     return { kind: "approval", value: encodeSlackApprovalAction(action) };
   }
   if (action.type === "question") {
+    if ("intent" in action) {
+      return undefined;
+    }
+    const optionIndex = resolveAskUserQuestionOptionIndex({
+      questionOptionIndices,
+      questionId: action.questionId,
+      optionValue: action.optionValue,
+    });
     const value =
       optionIndex === undefined
         ? undefined
@@ -149,11 +163,11 @@ function resolveSlackActionTarget(
 
 function resolveSlackButtonTarget(
   button: MessagePresentationButtonsBlock["buttons"][number],
-  optionIndex?: number,
+  questionOptionIndices?: AskUserQuestionOptionIndices,
 ): SlackActionTarget | undefined {
   if (button.action !== undefined) {
     const action = resolveMessagePresentationButtonAction(button);
-    return action ? resolveSlackActionTarget(action, optionIndex) : undefined;
+    return action ? resolveSlackActionTarget(action, questionOptionIndices) : undefined;
   }
 
   // Legacy buttons could carry both a URL and callback fallback. Preserve the
@@ -169,6 +183,15 @@ function resolveSlackButtonTarget(
     return { kind: "reply", value: legacyValue };
   }
   return legacyUrl ? { kind: "link", url: legacyUrl } : undefined;
+}
+
+function isSlackTextFallbackButton(
+  button: MessagePresentationButtonsBlock["buttons"][number],
+): boolean {
+  // ask_user already names the free-text path in visible copy. Omitting only
+  // this action keeps declared choices native without a composer hook.
+  const action = resolveMessagePresentationButtonAction(button);
+  return action?.type === "question" && "intent" in action && action.intent === "custom-input";
 }
 
 function resolveSlackOptionTarget(
@@ -284,22 +307,12 @@ export function buildSlackPresentationBlocks(
       if (!text) {
         continue;
       }
-      if (block.type === "context") {
-        blocks.push({
-          type: "context",
-          elements: [
-            {
-              type: "mrkdwn",
-              text: truncateSlackText(text, SLACK_SECTION_TEXT_MAX),
-              verbatim: true,
-            },
-          ],
-        });
-      } else {
-        blocks.push({
-          type: "section",
-          text: { type: "mrkdwn", text: truncateSlackText(text, SLACK_SECTION_TEXT_MAX) },
-        });
+      for (const chunk of chunkSlackMrkdwnText(text, SLACK_SECTION_TEXT_MAX)) {
+        blocks.push(
+          block.type === "context"
+            ? { type: "context", elements: [{ type: "mrkdwn", text: chunk, verbatim: true }] }
+            : { type: "section", text: { type: "mrkdwn", text: chunk } },
+        );
       }
       continue;
     }
@@ -308,7 +321,11 @@ export function buildSlackPresentationBlocks(
       continue;
     }
     if (block.type === "buttons") {
-      const rendered = buildSlackPresentationButtonBlock(block, buttonIndex + 1);
+      const rendered = buildSlackPresentationButtonBlock(
+        block,
+        buttonIndex + 1,
+        options.questionOptionIndices,
+      );
       if (rendered) {
         buttonIndex += 1;
         blocks.push(rendered);
@@ -369,10 +386,11 @@ function buildSlackPresentationChartBlock(
 function buildSlackPresentationButtonBlock(
   block: MessagePresentationButtonsBlock,
   buttonIndex: number,
+  questionOptionIndices?: AskUserQuestionOptionIndices,
 ): SlackBlock | undefined {
   const elements = block.buttons
     .flatMap((button, choiceIndex) => {
-      const target = resolveSlackButtonTarget(button, choiceIndex);
+      const target = resolveSlackButtonTarget(button, questionOptionIndices);
       if (
         !target ||
         (target.kind === "link"
@@ -451,25 +469,26 @@ export function canRenderSlackPresentation(
   let dataVisualizationCount = options.dataVisualizationCountOffset ?? 0;
   for (const block of presentation.blocks) {
     if (block.type === "text" || block.type === "context") {
-      if (!isWithinSlackLimit(block.text.trim(), SLACK_SECTION_TEXT_MAX)) {
-        return false;
-      }
       continue;
     }
     if (block.type === "buttons") {
+      let nativeButtonCount = 0;
       const allButtonsRenderable =
-        block.buttons.length <= SLACK_ACTION_BLOCK_ELEMENTS_MAX &&
-        block.buttons.every((button, choiceIndex) => {
+        block.buttons.every((button) => {
+          if (isSlackTextFallbackButton(button)) {
+            return true;
+          }
+          nativeButtonCount += 1;
           if (!isWithinSlackLimit(button.label, SLACK_ACTION_LABEL_MAX)) {
             return false;
           }
-          const target = resolveSlackButtonTarget(button, choiceIndex);
+          const target = resolveSlackButtonTarget(button, options.questionOptionIndices);
           return target
             ? target.kind === "link"
               ? isWithinSlackLimit(target.url, SLACK_BUTTON_URL_MAX)
               : isWithinSlackLimit(target.value, SLACK_BUTTON_VALUE_MAX)
             : false;
-        });
+        }) && nativeButtonCount <= SLACK_ACTION_BLOCK_ELEMENTS_MAX;
       if (!allButtonsRenderable) {
         return false;
       }

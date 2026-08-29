@@ -188,15 +188,15 @@ export class WorkerProviderError extends Error {
   }
 }
 
-/** Plugin registrations declare exactly one mode; the internal paired-device owner can carry both. */
-export type WorkerProvider<Scope extends "plugin" | "internal" = "plugin"> = {
+/** Cloud-worker lifecycle capability shared by plugin and internal providers. */
+export type WorkerProvider = {
   id: string;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
   listMachineOptions?: (profile: WorkerProfile) => Promise<readonly WorkerMachineOption[]>;
-  /** Omission advertises no placement support; external providers declare one transport mode. */
-  supportedExecutionModes?: Scope extends "internal"
-    ? readonly [WorkerExecutionMode] | readonly ["worker-turn", "remote-exec"]
-    : readonly [WorkerExecutionMode];
+  /** Omission advertises no placement support; multiple modes use their canonical order. */
+  supportedExecutionModes?:
+    | readonly [WorkerExecutionMode]
+    | readonly ["worker-turn", "remote-exec"];
   /**
    * Provision before preparing an installation when the lease transport decides whether an
    * installation is needed. Defaults to false so SSH providers retain prepare-before-allocation.
@@ -205,6 +205,15 @@ export type WorkerProvider<Scope extends "plugin" | "internal" = "plugin"> = {
   /** Provider allocates a node host through the environment-owned enrollment callback. */
   requiresNodeEnrollment?: boolean;
   /**
+   * Resolve the exact cleanup handle for this operation, even if no machine was created.
+   * Must not provision, start, renew, run setup, enroll, or wait for transport readiness.
+   * Identity is not existence/readiness proof; destroy still owns teardown confirmation.
+   */
+  resolveAllocation: (
+    profile: WorkerProfile,
+    operationId: string,
+  ) => Promise<{ leaseId: string; sharedHost: boolean }>;
+  /**
    * Provision or adopt the lease for this operation id.
    * Repeating the same operation id must be idempotent across gateway restarts.
    */
@@ -212,13 +221,18 @@ export type WorkerProvider<Scope extends "plugin" | "internal" = "plugin"> = {
     profile: WorkerProfile,
     operationId: string,
     options?: {
+      executionMode?: WorkerExecutionMode;
       machineClass?: string;
       beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
     },
   ) => Promise<WorkerLease>;
   /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
   resolveProvisionTimeoutMs?: (profile: WorkerProfile) => number;
-  /** Throws on transient/indeterminate failures; `unknown` means authoritative absence. */
+  /**
+   * Throws on transient/indeterminate observation failures. `unknown` means the provider no
+   * longer recognizes a usable lease; core fences it and requests destroy. Only `destroyed`
+   * proves teardown complete and lets core skip destroy.
+   */
   inspect: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<WorkerLeaseStatus>;
   /**
    * Resolves provider-owned dynamic identities. When absent, the gateway uses its generic

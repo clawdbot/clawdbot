@@ -9,6 +9,7 @@ import {
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+import { createWorkerInferenceDrainService } from "./worker-environments/inference-control.test-helpers.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
@@ -111,7 +112,11 @@ test("sessions.patch reclaims the exact active cloud placement before archive me
 
   await reclaimStarted.promise;
   expect(reclaim).toHaveBeenCalledOnce();
-  expect(reclaim).toHaveBeenCalledWith({ sessionId, sessionKey, agentId: "main" });
+  expect(reclaim).toHaveBeenCalledWith(
+    { sessionId, sessionKey, agentId: "main" },
+    undefined,
+    expect.any(Function),
+  );
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
   reclaimGate.resolve();
 
@@ -139,16 +144,11 @@ test.each(["rejected", "unavailable"] as const)(
       { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
         context: {
-          workerEnvironmentService: {
-            beginInferenceSessionDrain: () => ({
-              drained: Promise.resolve(),
-              hasWork: () => false,
-              release,
-            }),
-            cancelInferenceForSession: vi.fn(() => []),
-            hasInferenceForSession: vi.fn(() => false),
-            resolveInferenceSessionForRunId: vi.fn(),
-          },
+          workerEnvironmentService: createWorkerInferenceDrainService(() => ({
+            drained: Promise.resolve(),
+            hasWork: () => false,
+            release,
+          })),
           workerSessionPlacementService: placementReader(() => placement),
           workerPlacementDispatchService,
         },
@@ -240,15 +240,10 @@ test("sessions.patch rejects a placement identity changed during the runtime dra
     { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
-        workerEnvironmentService: {
-          beginInferenceSessionDrain: () => {
-            drainStarted();
-            return { drained: drainGate.promise, hasWork: () => false, release };
-          },
-          cancelInferenceForSession: vi.fn(() => []),
-          hasInferenceForSession: vi.fn(() => false),
-          resolveInferenceSessionForRunId: vi.fn(),
-        },
+        workerEnvironmentService: createWorkerInferenceDrainService(() => {
+          drainStarted();
+          return { drained: drainGate.promise, hasWork: () => false, release };
+        }),
         workerSessionPlacementService: placementReader(() => placement),
         workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
       },

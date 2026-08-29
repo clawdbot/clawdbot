@@ -103,9 +103,7 @@ extension OnboardingView {
                         systemImage: "network",
                         selected: self.selectedConnectionMode == .remote)
                     {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                            self.showRemoteChoices.toggle()
-                        }
+                        self.handleRemoteSelection()
                     }
 
                     if self.showRemoteChoices || self.selectedConnectionMode == .remote {
@@ -828,11 +826,11 @@ extension OnboardingView {
             self.onboardingCard(spacing: 14, padding: 16) {
                 self.installStepRow(
                     title: "Install OpenClaw",
-                    detail: self.cliInstalled
+                    detail: self.cliExecutableReady
                         ? (self.cliInstallLocation ?? "Installed")
                         : "A private copy inside your user folder.",
                     state: self.installStepStateForInstall,
-                    monospacedDetail: self.cliInstalled && self.cliInstallLocation != nil)
+                    monospacedDetail: self.cliExecutableReady && self.cliInstallLocation != nil)
                 self.installStepRow(
                     title: remoteMode ? "Prepare the Mac node" : "Start the background service",
                     detail: remoteMode
@@ -877,22 +875,57 @@ extension OnboardingView {
     /// Exactly one spinner at a time: the install row finishes before the
     /// service row starts, mirroring the actual runCLIInstall phases.
     private var installStepStateForInstall: InstallStepState {
-        if self.cliInstalled { return .done }
-        if self.installingCLI {
-            if self.cliInstallPhase == .choosingTarget { return .pending }
-            return self.cliInstallPhase == .startingService ? .done : .running
-        }
-        if self.installFailed { return .failed }
-        return .running // status probe still deciding
+        Self.cliInstallStepStates(
+            executableReady: self.cliExecutableReady,
+            gatewayReady: self.cliInstalled,
+            statusKnown: self.cliStatusKnown,
+            installing: self.installingCLI,
+            phase: self.cliInstallPhase).install
     }
 
     private var installStepStateForService: InstallStepState {
-        if self.cliInstalled { return .done }
-        if self.installingCLI {
-            return self.cliInstallPhase == .startingService ? .running : .pending
+        Self.cliInstallStepStates(
+            executableReady: self.cliExecutableReady,
+            gatewayReady: self.cliInstalled,
+            statusKnown: self.cliStatusKnown,
+            installing: self.installingCLI,
+            phase: self.cliInstallPhase).service
+    }
+
+    static func cliInstallStepStates(
+        executableReady: Bool,
+        gatewayReady: Bool,
+        statusKnown: Bool,
+        installing: Bool,
+        phase: CLIInstallPhase) -> (install: InstallStepState, service: InstallStepState)
+    {
+        let install: InstallStepState = if executableReady || gatewayReady {
+            .done
+        } else if installing {
+            if phase == .choosingTarget {
+                .pending
+            } else if phase == .startingService {
+                .done
+            } else {
+                .running
+            }
+        } else if statusKnown {
+            .failed
+        } else {
+            .running
         }
-        if self.installFailed { return .failed }
-        return .pending
+
+        let service: InstallStepState = if gatewayReady {
+            .done
+        } else if installing {
+            phase == .startingService ? .running : .pending
+        } else if statusKnown, executableReady {
+            .failed
+        } else {
+            .pending
+        }
+
+        return (install, service)
     }
 
     enum InstallStepState {

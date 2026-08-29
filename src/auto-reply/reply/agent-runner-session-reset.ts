@@ -57,7 +57,6 @@ export async function resetReplyRunSession(params: {
   activeSessionEntry?: SessionEntry;
   activeSessionStore?: Record<string, SessionEntry>;
   storePath?: string;
-  messageThreadId?: string;
   followupRun: FollowupRun;
   onActiveSessionEntry: (entry: SessionEntry) => void;
   onNewSession: (newSessionId: string, nextSessionFile: string) => void;

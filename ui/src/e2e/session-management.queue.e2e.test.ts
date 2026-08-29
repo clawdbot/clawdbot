@@ -14,7 +14,7 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
-  it("shows admitted sessions waiting for a concurrency slot", async () => {
+  it("removes the concurrency subtitle while preserving queued state", async () => {
     const mainKey = "agent:main:main";
     const queuedKey = "agent:main:queued-repair";
     const context = await suite.browser.newContext({
@@ -45,12 +45,15 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainKey));
       const row = page.locator(`[data-session-key="${queuedKey}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
-      await row.getByText("Waiting for a concurrency slot", { exact: true }).waitFor();
+      expect(await row.getByText("Waiting for a concurrency slot", { exact: true }).count()).toBe(
+        0,
+      );
+      expect(await row.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
       const queuedIcon = row.locator(".sidebar-child-session__status--queued");
       await queuedIcon.waitFor();
       expect(await queuedIcon.getAttribute("aria-label")).toBe("Queued");
       expect(await row.getByRole("img", { name: "Active run" }).count()).toBe(0);
-      await captureUiProof(page, "queued-concurrency-session.png");
+      await captureUiProof(page, "queued-session-without-subtitle.png");
 
       const listRequests = (await gateway.getRequests("sessions.list")).length;
       await gateway.setMethodResponse(
@@ -73,15 +76,13 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBeGreaterThan(listRequests);
       await row.locator(".session-run-spinner").waitFor();
-      expect(await row.getByText("Waiting for a concurrency slot", { exact: true }).count()).toBe(
-        0,
-      );
+      expect(await row.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
       expect(await queuedIcon.count()).toBe(0);
-      await captureUiProof(page, "queued-concurrency-running.png");
+      await captureUiProof(page, "queued-session-running.png");
     } finally {
       await context.close();
       if (proofVideo) {
-        await proofVideo.saveAs(path.join(uiProofArtifactDir, "queued-concurrency-session.webm"));
+        await proofVideo.saveAs(path.join(uiProofArtifactDir, "queued-session.webm"));
       }
     }
   });

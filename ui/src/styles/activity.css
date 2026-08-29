@@ -451,6 +451,10 @@ openclaw-activity-page {
   white-space: nowrap;
 }
 
+.activity-feed__session-source {
+  white-space: nowrap;
+}
+
 .activity-feed__session-headline,
 .activity-feed__session-owner {
   min-width: 0;
@@ -561,9 +565,18 @@ openclaw-activity-page {
 /* The credit is a license term for the default database, so it stays visible
    next to the value it describes rather than living in a settings page. */
 .activity-feed__device-attribution {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
   color: var(--muted);
   text-decoration: none;
-  font-size: var(--control-ui-text-xs);
+}
+
+.activity-feed__device-attribution svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .activity-feed__device-attribution:hover,
@@ -597,6 +610,58 @@ openclaw-activity-page {
   font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.activity-live-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+
+.activity-live-autofollow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  white-space: nowrap;
+}
+
+.activity-live-filter-trigger {
+  width: var(--settings-control-height);
+  min-width: var(--settings-control-height);
+  height: var(--settings-control-height);
+  padding: 0;
+}
+
+.activity-live-filter-trigger svg {
+  width: 16px;
+  height: 16px;
+}
+
+.activity-live-filter-trigger.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.activity-live-filter-popover {
+  --max-width: min(280px, calc(100vw - 32px));
+}
+
+.activity-live-filter-popover::part(body) {
+  padding: 0;
+}
+
+.activity-live-filter-popover__panel {
+  width: min(260px, calc(100vw - 32px));
+  padding: var(--space-3);
+}
+
+.activity-live-filter-popover__panel .settings-select {
+  width: 100%;
 }
 
 .activity-status-filters {
@@ -798,6 +863,19 @@ openclaw-activity-page {
   .activity-feed__search {
     flex-basis: 100%;
     order: -1;
+  }
+
+  .activity-live-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .activity-live-search {
+    flex-basis: 100%;
+    order: -1;
+  }
+
+  .activity-live-filter-trigger {
+    margin-left: auto;
   }
 
   .activity-feed__time-filter .settings-segmented__btn {

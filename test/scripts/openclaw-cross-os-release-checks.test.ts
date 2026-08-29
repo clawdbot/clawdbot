@@ -66,6 +66,7 @@ import {
   normalizeWindowsCommandShimPath,
   normalizeWindowsInstalledCliPath,
   maybeBuildOptionalAgentTurnSkipResult,
+  parsePackagedUpgradeUpdateTimings,
   parsePositiveIntegerEnv,
   parseCrossOsSuiteFilter,
   parseArgs,
@@ -98,15 +99,11 @@ import {
   resolveStaticFileContentType,
   startStaticFileServer,
   trimForSummary,
-  shouldExerciseManagedGatewayLifecycleAfterInstall,
   shouldRunPackagedUpgradeStatusProbe,
   shouldRunWindowsInstalledBrowserOverrideImportSmoke,
-  shouldSkipInstallerDaemonHealthCheck,
-  shouldStopManagedGatewayBeforeManualFallback,
   shouldRunMainChannelDevUpdate,
   shouldRetryCrossOsAgentTurnError,
   shouldSkipOptionalCrossOsAgentTurnError,
-  shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
   verifyDashboardAssetUrls,
   verifyDevUpdateStatus,
@@ -114,8 +111,15 @@ import {
   verifyWindowsPackagedUpgradeFallbackInstall,
   waitForGatewayWithStartupMigrationRestart,
   writePackageDistInventoryForCandidate,
+  writeSummary,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
+
+const rootPackageManager = (
+  JSON.parse(readFileSync("package.json", "utf8")) as {
+    packageManager: string;
+  }
+).packageManager;
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -791,6 +795,90 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(freshLaneSource).toContain('runTimedLanePhase(lane, "install-candidate"');
     expect(freshLaneSource).toContain('runTimedLanePhase(lane, "agent-turn"');
     expect(freshLaneSource).toContain("phaseTimings: lane.phaseTimings");
+  });
+
+  it("retains only bounded allowlisted packaged-upgrade timings", () => {
+    expect(
+      parsePackagedUpgradeUpdateTimings(
+        JSON.stringify({
+          durationMs: 622_000,
+          root: String.raw`C:\private\openclaw`,
+          steps: [
+            {
+              name: "global update",
+              command: "npm install --global secret-package",
+              cwd: String.raw`C:\private\prefix`,
+              durationMs: 461_000,
+            },
+            { name: "global install swap", durationMs: 39_000 },
+            { name: "openclaw doctor", durationMs: 66_000 },
+            { name: "unknown internal step", durationMs: 123_000 },
+          ],
+        }),
+      ),
+    ).toEqual([
+      { name: "total", durationMs: 622_000 },
+      { name: "package-install", durationMs: 461_000 },
+      { name: "staged-swap", durationMs: 39_000 },
+      { name: "doctor", durationMs: 66_000 },
+    ]);
+  });
+
+  it("drops malformed, unsafe, and out-of-bounds packaged-upgrade timings", () => {
+    expect(parsePackagedUpgradeUpdateTimings("not json")).toEqual([]);
+    expect(parsePackagedUpgradeUpdateTimings("[]")).toEqual([]);
+    expect(
+      parsePackagedUpgradeUpdateTimings(
+        JSON.stringify({
+          durationMs: 3_600_001,
+          steps: [
+            { name: "global update", durationMs: -1 },
+            { name: "global install swap", durationMs: 1.5 },
+            { name: "openclaw doctor", durationMs: "66000" },
+          ],
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("renders runner, runtime, and sanitized updater timing evidence", () => {
+    withTempDir("openclaw-cross-os-summary-", (dir) => {
+      writeSummary(dir, {
+        platform: "win32",
+        runnerOs: "Windows",
+        runnerLabel: "blacksmith-32vcpu-windows-2025",
+        nodeVersion: "v24.15.0",
+        npmVersion: "11.8.0",
+        provider: "openai",
+        suite: "packaged-upgrade",
+        mode: "upgrade",
+        sourceSha: "abc123",
+        candidateVersion: "2026.8.28-beta.1",
+        baselineSpec: "openclaw@2026.8.27",
+        result: {
+          status: "pass",
+          updateFallback: {
+            reason: "timeout",
+            action: "direct-candidate-install",
+          },
+          updateTimings: [
+            { name: "total", durationMs: 622_000 },
+            { name: "package-install", durationMs: 461_000 },
+          ],
+        },
+      });
+
+      const json = readFileSync(join(dir, "summary.json"), "utf8");
+      const markdown = readFileSync(join(dir, "summary.md"), "utf8");
+      expect(json).toContain('"runnerLabel": "blacksmith-32vcpu-windows-2025"');
+      expect(markdown).toContain("- Runner: `blacksmith-32vcpu-windows-2025`");
+      expect(markdown).toContain("- Node: `v24.15.0`");
+      expect(markdown).toContain("- npm: `11.8.0`");
+      expect(markdown).toContain("- Updater fallback: `timeout/direct-candidate-install`");
+      expect(markdown).toContain("- `package-install`: 461s");
+      expect(markdown).not.toContain("private");
+      expect(markdown).not.toContain("npm install");
+    });
   });
 
   it("accepts OK agent output from the captured log when stdout is empty", () => {
@@ -1625,18 +1713,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       inputs: ["win32", "darwin", "linux"] as const,
       expected: [true, false, false],
     },
-    {
-      name: "stops the managed gateway before the manual fallback only on Windows",
-      decide: shouldStopManagedGatewayBeforeManualFallback,
-      inputs: ["win32", "darwin", "linux"] as const,
-      expected: [true, false, false],
-    },
-    {
-      name: "skips daemon health during installed onboarding only on native Windows",
-      decide: shouldSkipInstallerDaemonHealthCheck,
-      inputs: ["win32", "darwin", "linux"] as const,
-      expected: [true, false, false],
-    },
   ])("$name", ({ decide, inputs, expected }) => {
     expect(inputs.map((platform) => decide(platform))).toEqual(expected);
   });
@@ -1667,13 +1743,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "--json",
       "--skip-health",
     ]);
-  });
-
-  it("keeps the Windows installer runtime on the manual gateway after managed lifecycle checks", () => {
-    expect(shouldExerciseManagedGatewayLifecycleAfterInstall("win32")).toBe(true);
-    expect(shouldUseManagedGatewayForInstallerRuntime("win32")).toBe(false);
-    expect(shouldExerciseManagedGatewayLifecycleAfterInstall("darwin")).toBe(false);
-    expect(shouldUseManagedGatewayForInstallerRuntime("darwin")).toBe(false);
   });
 
   it("runs the installed browser override import smoke only on native Windows", () => {
@@ -2641,7 +2710,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(
         join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw-fixture", version: "0.0.0", files: ["dist/"] }),
+        JSON.stringify({
+          files: ["dist/"],
+          name: "openclaw-fixture",
+          packageManager: rootPackageManager,
+          version: "0.0.0",
+        }),
         "utf8",
       );
       writeFileSync(join(packageRoot, "dist", "index.js"), "export {};\n", "utf8");

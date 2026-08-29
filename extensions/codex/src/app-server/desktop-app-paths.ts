@@ -2,7 +2,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-type MacOSDesktopCodexAppPathCandidate = {
+export type MacOSDesktopCodexAppPathCandidate = {
   appName: "ChatGPT.app" | "Codex.app";
   appBundlePath: string;
   appServerCommandPath: string;
@@ -33,12 +33,26 @@ const MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES: readonly MacOSDesktopCodexAppPath
   },
 ] as const;
 
+export function resolveMacOSDesktopCodexAppPathCandidates(
+  platform: NodeJS.Platform = process.platform,
+): readonly MacOSDesktopCodexAppPathCandidate[] {
+  return platform === "darwin" ? MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES : [];
+}
+
+export function resolveMacOSDesktopCodexAppServerCommandCandidates(
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  return resolveMacOSDesktopCodexAppPathCandidates(platform).map(
+    (candidate) => candidate.appServerCommandPath,
+  );
+}
+
 export function resolveMacOSDesktopCodexBundledMarketplaceCandidates(
   platform: NodeJS.Platform = process.platform,
 ): string[] {
-  return platform === "darwin"
-    ? MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES.map((candidate) => candidate.bundledMarketplacePath)
-    : [];
+  return resolveMacOSDesktopCodexAppPathCandidates(platform).map(
+    (candidate) => candidate.bundledMarketplacePath,
+  );
 }
 
 export function resolveMacOSDesktopCodexComputerUseServiceAppCandidates(
@@ -48,20 +62,16 @@ export function resolveMacOSDesktopCodexComputerUseServiceAppCandidates(
   if (platform !== "darwin") {
     return [];
   }
+  const candidates = resolveMacOSDesktopCodexAppPathCandidates(platform);
   const matchingCandidate = appServerCommand
-    ? MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES.find(
+    ? candidates.find(
         (candidate) =>
           path.resolve(candidate.appServerCommandPath) === path.resolve(appServerCommand),
       )
     : undefined;
   const orderedCandidates = matchingCandidate
-    ? [
-        matchingCandidate,
-        ...MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES.filter(
-          (candidate) => candidate !== matchingCandidate,
-        ),
-      ]
-    : MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES;
+    ? [matchingCandidate, ...candidates.filter((candidate) => candidate !== matchingCandidate)]
+    : candidates;
   return [
     ...new Set(orderedCandidates.flatMap((candidate) => candidate.computerUseServiceAppPaths)),
   ];

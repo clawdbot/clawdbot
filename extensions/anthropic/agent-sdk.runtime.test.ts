@@ -53,6 +53,7 @@ function createContext(
     cwd: "/tmp/openclaw-workspace",
     env: {
       HOME: "/tmp/claude-login-home",
+      CLAUDE_CONFIG_DIR: "/tmp/claude-login-home/custom-config",
       PATH: "/usr/local/bin:/usr/bin",
       OPENCLAW_MCP_TOKEN: "test-grant-not-a-real-secret",
     },
@@ -138,6 +139,21 @@ function sdkPreToolUse(options: Record<string, unknown>): SdkPreToolUseCallback 
   return callback;
 }
 
+type SdkPromptHook = (
+  input: { hook_event_name: "UserPromptSubmit"; prompt: string },
+  toolUseId: undefined,
+  request: { signal: AbortSignal },
+) => Promise<unknown>;
+
+function sdkPromptHook(options = sdkOptions()): SdkPromptHook {
+  const hooks = options.hooks as { UserPromptSubmit?: Array<{ hooks: SdkPromptHook[] }> };
+  const callback = hooks.UserPromptSubmit?.[0]?.hooks[0];
+  if (!callback) {
+    throw new Error("Missing native private-context hook");
+  }
+  return callback;
+}
+
 function createLiveCapability(
   fingerprint = "matching-session-policy",
   state: { current?: CliBackendLiveSessionHandle } = {},
@@ -190,7 +206,7 @@ afterEach(async () => {
 });
 
 describe("Anthropic Agent SDK runtime ownership", () => {
-  it("keeps selected SDK credentials on their private descriptor and isolates side questions", () => {
+  it("pins SDK identity, keeps selected credentials private, and isolates side questions", () => {
     const backend = buildAnthropicCliBackend();
     const base = {
       workspaceDir: "/tmp/openclaw-workspace",
@@ -215,116 +231,130 @@ describe("Anthropic Agent SDK runtime ownership", () => {
 
     expect(credential).toEqual(
       expect.objectContaining({
-        env: { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3" },
+        env: {
+          CLAUDE_AGENT_SDK_VERSION: "0.3.239",
+          NoDefaultCurrentDirectoryInExePath: "1",
+          CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
+        },
         secretInput: expect.objectContaining({ fd: 3 }),
         execute: expect.any(Function),
       }),
     );
     expect(emptyCredential).toEqual(
-      expect.objectContaining({ env: {}, execute: expect.any(Function) }),
+      expect.objectContaining({
+        env: { CLAUDE_AGENT_SDK_VERSION: "0.3.239", NoDefaultCurrentDirectoryInExePath: "1" },
+        execute: expect.any(Function),
+      }),
     );
     expect(emptyCredential).not.toHaveProperty("secretInput");
     expect(sideQuestion).not.toHaveProperty("execute");
   });
 
-  it("owns the selected-credential process tree while keeping its descriptor private and zeroed", async () => {
-    const backend = buildAnthropicCliBackend();
-    const token = "selected-private-descriptor-fixture";
-    const prepared = (await backend.prepareExecution?.({
-      workspaceDir: "/tmp/openclaw-workspace",
-      provider: "claude-cli",
-      modelId: "claude-sonnet-4-6",
-      executionMode: "agent",
-      authCredential: { type: "token", token },
-    } as Parameters<NonNullable<typeof backend.prepareExecution>>[0])) as {
-      env: Record<string, string>;
-      secretInput: { fd: 3; createData: () => Buffer };
-      execute: CliBackendExecute;
-      cleanup?: () => Promise<void>;
-    };
-    let deliveredBuffer: Buffer | undefined;
-    const originalCreateData = prepared.secretInput.createData;
-    vi.spyOn(prepared.secretInput, "createData").mockImplementation(() => {
-      deliveredBuffer = originalCreateData();
-      return deliveredBuffer;
-    });
-    let descriptorOutput: { fd: number; digest: string } | undefined;
-    useSdkMessages([SUCCESS_RESULT], async (options) => {
-      const spawnProcess = options.spawnClaudeCodeProcess as
-        | ((input: ClaudeAgentSdkSpawnOptions) => ClaudeAgentSdkSpawnedProcess)
-        | undefined;
-      if (!spawnProcess) {
-        throw new Error("Selected Claude credentials require an SDK-private descriptor spawner.");
-      }
-      const args = [
-        "-e",
-        [
-          'const data = require("node:fs").readFileSync(3);',
-          'require("node:fs").writeSync(2, Buffer.alloc(1024 * 1024));',
-          'const digest = require("node:crypto").createHash("sha256").update(data).digest("hex");',
-          'const descendant = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {stdio: "ignore"});',
-          "process.stdout.write(JSON.stringify({fd: Number(process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR), digest, descendantPid: descendant.pid}));",
-          "data.fill(0);",
-          "setInterval(() => {}, 1000);",
-        ].join(""),
-      ];
-      const env = { PATH: process.env.PATH, ...prepared.env };
-      expect(JSON.stringify(args)).not.toContain(token);
-      expect(Object.values(env)).not.toContain(token);
-      const child = spawnProcess({
-        command: process.execPath,
-        args,
-        cwd: process.cwd(),
-        env,
-        signal: new AbortController().signal,
-      });
-      const output = await new Promise<string>((resolve, reject) => {
-        let stdout = "";
-        child.stdout.on("data", (chunk: Buffer | string) => {
-          stdout += chunk.toString();
-          child.kill("SIGTERM");
-        });
-        child.once("error", reject);
-        child.once("exit", (code, signal) => {
-          if (signal === "SIGTERM" || (process.platform === "win32" && code !== null)) {
-            resolve(stdout);
-          } else {
-            reject(new Error(`Credential descriptor proof exited ${String(code)}.`));
-          }
-        });
-      });
-      const { descendantPid, ...descriptor } = JSON.parse(output) as {
-        fd: number;
-        digest: string;
-        descendantPid: number;
+  it.each([
+    { type: "token" as const, descriptor: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR" },
+    { type: "api_key" as const, descriptor: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" },
+  ])(
+    "owns the selected $type process tree while keeping its descriptor private and zeroed",
+    async ({ type, descriptor: descriptorEnv }) => {
+      const backend = buildAnthropicCliBackend();
+      const token = "selected-private-descriptor-fixture";
+      const prepared = (await backend.prepareExecution?.({
+        workspaceDir: "/tmp/openclaw-workspace",
+        provider: "claude-cli",
+        modelId: "claude-sonnet-4-6",
+        executionMode: "agent",
+        authCredential: type === "token" ? { type, token } : { type, key: token },
+      } as Parameters<NonNullable<typeof backend.prepareExecution>>[0])) as {
+        env: Record<string, string>;
+        secretInput: { fd: 3; createData: () => Buffer };
+        execute: CliBackendExecute;
+        cleanup?: () => Promise<void>;
       };
-      descriptorOutput = descriptor;
-      try {
-        await vi.waitFor(() => expect(() => process.kill(descendantPid, 0)).toThrow());
-      } finally {
+      let deliveredBuffer: Buffer | undefined;
+      const originalCreateData = prepared.secretInput.createData;
+      vi.spyOn(prepared.secretInput, "createData").mockImplementation(() => {
+        deliveredBuffer = originalCreateData();
+        return deliveredBuffer;
+      });
+      let descriptorOutput: { fd: number; digest: string } | undefined;
+      useSdkMessages([SUCCESS_RESULT], async (options) => {
+        const spawnProcess = options.spawnClaudeCodeProcess as
+          | ((input: ClaudeAgentSdkSpawnOptions) => ClaudeAgentSdkSpawnedProcess)
+          | undefined;
+        if (!spawnProcess) {
+          throw new Error("Selected Claude credentials require an SDK-private descriptor spawner.");
+        }
+        const args = [
+          "-e",
+          [
+            `const data = require("node:fs").readFileSync(${JSON.stringify(process.platform === "win32" ? 3 : process.platform === "darwin" ? "/dev/fd/3" : "/proc/self/fd/3")});`,
+            'if (require("node:fs").readFileSync(3).length !== 0) throw new Error("credential replayed");',
+            'require("node:fs").writeSync(2, Buffer.alloc(1024 * 1024));',
+            'const digest = require("node:crypto").createHash("sha256").update(data).digest("hex");',
+            'const descendant = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {stdio: "ignore"});',
+            `process.stdout.write(JSON.stringify({fd: Number(process.env[${JSON.stringify(descriptorEnv)}]), digest, descendantPid: descendant.pid}));`,
+            "data.fill(0);",
+            "setInterval(() => {}, 1000);",
+          ].join(""),
+        ];
+        const env = { PATH: process.env.PATH, ...prepared.env };
+        expect(JSON.stringify(args)).not.toContain(token);
+        expect(Object.values(env)).not.toContain(token);
+        const child = spawnProcess({
+          command: process.execPath,
+          args,
+          cwd: process.cwd(),
+          env,
+          signal: new AbortController().signal,
+        });
+        const output = await new Promise<string>((resolve, reject) => {
+          let stdout = "";
+          child.stdout.on("data", (chunk: Buffer | string) => {
+            stdout += chunk.toString();
+            child.kill("SIGTERM");
+          });
+          child.once("error", reject);
+          child.once("exit", (code, signal) => {
+            if (signal === "SIGTERM" || (process.platform === "win32" && code !== null)) {
+              resolve(stdout);
+            } else {
+              reject(new Error(`Credential descriptor proof exited ${String(code)}.`));
+            }
+          });
+        });
+        const { descendantPid, ...descriptor } = JSON.parse(output) as {
+          fd: number;
+          digest: string;
+          descendantPid: number;
+        };
+        descriptorOutput = descriptor;
         try {
-          process.kill(descendantPid, "SIGKILL");
-        } catch {}
+          await vi.waitFor(() => expect(() => process.kill(descendantPid, 0)).toThrow());
+        } finally {
+          try {
+            process.kill(descendantPid, "SIGKILL");
+          } catch {}
+        }
+      });
+
+      const events: Record<string, unknown>[] = [];
+      for await (const event of prepared.execute(
+        createContext({ env: { ...createContext().env, ...prepared.env } }),
+      )) {
+        events.push(event);
       }
-    });
 
-    const events: Record<string, unknown>[] = [];
-    for await (const event of prepared.execute(
-      createContext({ env: { ...createContext().env, ...prepared.env } }),
-    )) {
-      events.push(event);
-    }
-
-    expect(events).toContainEqual(SUCCESS_RESULT);
-    expect(descriptorOutput).toEqual({
-      fd: 3,
-      digest: createHash("sha256").update(token).digest("hex"),
-    });
-    expect(deliveredBuffer).toBeDefined();
-    expect(deliveredBuffer?.every((byte) => byte === 0)).toBe(true);
-    await prepared.cleanup?.();
-    expect(() => prepared.secretInput.createData()).toThrow("no longer available");
-  });
+      expect(events).toContainEqual(SUCCESS_RESULT);
+      expect(descriptorOutput).toEqual({
+        fd: 3,
+        digest: createHash("sha256").update(token).digest("hex"),
+      });
+      expect(deliveredBuffer).toBeDefined();
+      expect(deliveredBuffer?.every((byte) => byte === 0)).toBe(true);
+      await prepared.cleanup?.();
+      expect(() => prepared.secretInput.createData()).toThrow("no longer available");
+    },
+  );
 
   it.each(
     [
@@ -490,6 +520,40 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(queryMock).not.toHaveBeenCalled();
   });
 
+  it.each([undefined, { prependContext: "private prefix", appendContext: "private suffix" }])(
+    "keeps one-shot user input separate from private prompt context %j",
+    async (promptContext) => {
+      let hookResult: unknown;
+      const context = createContext({ promptContext });
+      useSdkMessages([SUCCESS_RESULT], async (options) => {
+        hookResult = await sdkPromptHook(options)(
+          { hook_event_name: "UserPromptSubmit", prompt: context.prompt },
+          undefined,
+          { signal: new AbortController().signal },
+        );
+      });
+      await collect(context);
+      expect(queryMock.mock.calls[0]?.[0]?.prompt).toBe(context.prompt);
+      expect(hookResult).toEqual(
+        promptContext
+          ? {
+              hookSpecificOutput: {
+                hookEventName: "UserPromptSubmit",
+                additionalContext: "private prefix\n\nprivate suffix",
+              },
+            }
+          : {},
+      );
+      await expect(
+        sdkPromptHook()(
+          { hook_event_name: "UserPromptSubmit", prompt: context.prompt },
+          undefined,
+          { signal: new AbortController().signal },
+        ),
+      ).resolves.toEqual({});
+    },
+  );
+
   it("preserves native session identity across fresh and resumed turns", async () => {
     useSdkMessages();
 
@@ -503,12 +567,59 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(sdkOptions()).not.toHaveProperty("sessionId");
   });
 
+  it("preserves cache, effort, and checkpoint-fork controls through SDK options", async () => {
+    useSdkMessages();
+
+    await collect(
+      createContext({
+        args: [
+          "-p",
+          "--cache-system-prompt",
+          "--effort",
+          "max",
+          "--fork-session",
+          "--resume-session-at",
+          "assistant-before-stall",
+        ],
+        useResume: true,
+      }),
+    );
+
+    expect(sdkOptions()).toEqual(
+      expect.objectContaining({
+        resume: SESSION_ID,
+        effort: "max",
+        forkSession: true,
+        resumeSessionAt: "assistant-before-stall",
+        extraArgs: { "cache-system-prompt": null },
+      }),
+    );
+  });
+
   it("reuses one official SDK query and Claude process across compatible agent turns", async () => {
     const live = useLiveSdkStreams();
     const capability = createLiveCapability();
     const activate = vi.spyOn(capability, "activate");
-    const first = collect(createContext({ prompt: "Remember orange.", liveSession: capability }));
+    const first = collect(
+      createContext({
+        prompt: "Remember orange.",
+        promptContext: { prependContext: "private session note" },
+        liveSession: capability,
+      }),
+    );
     await vi.waitFor(() => expect(queryMock).toHaveBeenCalledOnce());
+    const hook = sdkPromptHook();
+    const hookRequest = { signal: new AbortController().signal };
+    for (const prompt of ["Remember orange.", "Rewritten orange prompt.", "Remember orange."]) {
+      await expect(
+        hook({ hook_event_name: "UserPromptSubmit", prompt }, undefined, hookRequest),
+      ).resolves.toEqual({
+        hookSpecificOutput: {
+          hookEventName: "UserPromptSubmit",
+          additionalContext: "private session note",
+        },
+      });
+    }
     live.streams[0]?.write({ ...SUCCESS_RESULT, result: "Remembered orange." });
 
     await expect(first).resolves.toContainEqual(
@@ -516,6 +627,13 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     );
     const firstHandle = capability.current();
     expect(firstHandle?.isIdle()).toBe(true);
+    await expect(
+      hook(
+        { hook_event_name: "UserPromptSubmit", prompt: "Remember orange." },
+        undefined,
+        hookRequest,
+      ),
+    ).resolves.toEqual({});
 
     const second = collect(
       createContext({
@@ -525,6 +643,13 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       }),
     );
     await vi.waitFor(() => expect(live.prompts[0]).toHaveLength(2));
+    await expect(
+      hook(
+        { hook_event_name: "UserPromptSubmit", prompt: "Which color did I mention?" },
+        undefined,
+        hookRequest,
+      ),
+    ).resolves.toEqual({});
     live.streams[0]?.write({ ...SUCCESS_RESULT, result: "Orange." });
 
     await expect(second).resolves.toContainEqual(expect.objectContaining({ result: "Orange." }));
@@ -535,6 +660,39 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       { role: "user", content: "Remember orange." },
       { role: "user", content: "Which color did I mention?" },
     ]);
+  });
+
+  it("keeps a terminal error turn's warm query reusable for the next turn", async () => {
+    const live = useLiveSdkStreams();
+    const capability = createLiveCapability();
+    const first = collect(createContext({ prompt: "Attempt the task.", liveSession: capability }));
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledOnce());
+    live.streams[0]?.write({
+      ...SUCCESS_RESULT,
+      subtype: "error_during_execution",
+      is_error: true,
+      result: "The native tool failed.",
+    });
+
+    await expect(first).resolves.toContainEqual(
+      expect.objectContaining({ is_error: true, result: "The native tool failed." }),
+    );
+    const firstHandle = capability.current();
+    expect(firstHandle?.isIdle()).toBe(true);
+
+    const second = collect(
+      createContext({
+        prompt: "Continue without repeating the failed action.",
+        useResume: true,
+        liveSession: capability,
+      }),
+    );
+    await vi.waitFor(() => expect(live.prompts[0]).toHaveLength(2));
+    live.streams[0]?.write({ ...SUCCESS_RESULT, result: "continued" });
+
+    await expect(second).resolves.toContainEqual(expect.objectContaining({ result: "continued" }));
+    expect(queryMock).toHaveBeenCalledOnce();
+    expect(capability.current()).toBe(firstHandle);
   });
 
   it("restarts the warm SDK query when its system prompt or execution fingerprint changes", async () => {
@@ -614,6 +772,21 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         },
       ),
     ).resolves.toEqual({ behavior: "deny", message: "The OpenClaw run is no longer active." });
+
+    const resumed = collect(
+      createContext({
+        prompt: "Resume after the interrupted turn.",
+        useResume: true,
+        liveSession: capability,
+      }),
+    );
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledTimes(2));
+    live.streams[1]?.write({ ...SUCCESS_RESULT, result: "resumed" });
+
+    await expect(resumed).resolves.toContainEqual(expect.objectContaining({ result: "resumed" }));
+    expect(queryMock.mock.calls[1]?.[0]?.options).toEqual(
+      expect.objectContaining({ resume: SESSION_ID }),
+    );
   });
 
   it("rebinds a persistent SDK approval callback to only the active admitted turn", async () => {

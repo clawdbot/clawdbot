@@ -2,9 +2,14 @@
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
+import type { DeferredEmbeddedRunLifecycleOwner } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError, type FallbackAttemptRecord } from "../../agents/failover-error.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/failover/user-copy.js";
+import {
+  initialModelFallbackAttemptOptions,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -54,12 +59,12 @@ const state = vi.hoisted(() => ({
   runEmbeddedAgentEntryMock: vi.fn(),
   runCliAgentMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
-  isCliProviderMock: vi.fn((_: unknown) => false),
-  isInternalMessageChannelMock: vi.fn((_: unknown) => false),
+  isCliProviderMock: vi.fn((_provider: unknown) => false),
+  isInternalMessageChannelMock: vi.fn((_channel: unknown) => false),
   createBlockReplyDeliveryHandlerMock: vi.fn(),
-  isCompactionFailureErrorMock: vi.fn((_: string | undefined) => false),
-  isContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
-  isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
+  isCompactionFailureErrorMock: vi.fn((_message: string | undefined) => false),
+  isContextOverflowErrorMock: vi.fn((_message: string | undefined) => false),
+  isLikelyContextOverflowErrorMock: vi.fn((_message: string | undefined) => false),
   updateSessionStoreMock: vi.fn(),
   resolveCurrentTurnImagesMock: vi.fn(),
   peekSessionMcpRuntimeMock: vi.fn(),
@@ -245,9 +250,7 @@ vi.mock("../../utils/message-channel.js", async () => ({
 vi.mock("../heartbeat.js", async () => {
   const actual = await vi.importActual<typeof import("../heartbeat.js")>("../heartbeat.js");
   return {
-    DEFAULT_HEARTBEAT_EVERY: actual.DEFAULT_HEARTBEAT_EVERY,
-    HEARTBEAT_CRON_TASK_GUIDANCE: actual.HEARTBEAT_CRON_TASK_GUIDANCE,
-    resolveHeartbeatPromptCore: actual.resolveHeartbeatPromptCore,
+    ...actual,
     stripHeartbeatToken: (text: string) => ({
       text,
       didStrip: false,
@@ -284,6 +287,7 @@ vi.mock("./agent-runner-utils.js", () => ({
           },
           senderContext: {},
           runBaseParams: {
+            runId: params.runId,
             provider: params.provider,
             model: params.model,
             thinkLevel: params.run.thinkLevel,
@@ -362,12 +366,9 @@ export async function loadActualRunCliAgentForTest(): Promise<RunCliAgent> {
   ).runCliAgent;
 }
 
-export type FallbackRunnerParams = {
-  provider: string;
-  model: string;
+export type FallbackRunnerParams = TestModelFallbackRunnerParams & {
   sessionId?: string;
   abortSignal?: AbortSignal;
-  run: (provider: string, model: string) => Promise<unknown>;
   classifyResult?: (params: {
     result: { payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }> };
     provider: string;
@@ -377,6 +378,12 @@ export type FallbackRunnerParams = {
   }) => Promise<unknown>;
 };
 
+export {
+  fallbackModelAttemptOptions as fallbackAttemptOptions,
+  initialModelFallbackAttemptOptions as initialFallbackAttemptOptions,
+  runInitialModelFallbackAttempt as runInitialFallbackAttempt,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+
 export type EmbeddedAgentParams = {
   runId: string;
   sessionId?: string;
@@ -384,6 +391,7 @@ export type EmbeddedAgentParams = {
   prompt?: string;
   transcriptPrompt?: string;
   lifecycleGeneration?: string;
+  onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (info: {
     phase:
@@ -474,6 +482,13 @@ export function createFollowupRun(): FollowupRun {
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
+      thinkingCatalog: [
+        { provider: "anthropic", id: "claude", input: ["text"] },
+        { provider: "claude-cli", id: "claude-sonnet-4-6", input: ["text", "image"] },
+        { provider: "claude-cli", id: "claude-opus-5", input: ["text", "image"] },
+        { provider: "claude-cli", id: "claude-opus-4-8", input: ["text", "image"] },
+        { provider: "codex-cli", id: "gpt-5.4", input: ["text", "image"] },
+      ],
       verboseLevel: "off",
       elevatedLevel: "off",
       bashElevated: {
@@ -660,7 +675,7 @@ export function setupAgentRunnerExecutionTestState() {
       }),
     );
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
-      result: await params.run("anthropic", "claude"),
+      result: await params.run("anthropic", "claude", initialModelFallbackAttemptOptions(params)),
       provider: "anthropic",
       model: "claude",
       attempts: [],

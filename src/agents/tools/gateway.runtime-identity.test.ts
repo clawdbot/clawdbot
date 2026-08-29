@@ -468,6 +468,7 @@ describe("gateway tool runtime identity", () => {
   it.each([
     ["exec.approval.request", undefined, false],
     ["plugin.approval.request", "codex", false],
+    ["secrets.store.delete", undefined, false],
     ["exec.approval.request", undefined, true],
     ["plugin.approval.request", "codex", true],
   ] as const)(

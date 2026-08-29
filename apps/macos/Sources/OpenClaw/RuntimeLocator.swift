@@ -148,6 +148,7 @@ enum RuntimeLocator {
                 arguments: ["--version"],
                 environment: ["PATH": pathEnv],
                 timeout: CommandResolver.versionProbeTimeout)
+            guard result.terminationStatus == 0 else { return nil }
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
                 self.logger.warning(

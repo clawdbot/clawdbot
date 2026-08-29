@@ -1,3 +1,4 @@
+import { preserveCompactionReplayWindow } from "@openclaw/ai/transports";
 /**
  * Prepares user-message boundaries, restored history, and transcript policy for an attempt.
  * It may assume normalized attempt and session inputs are ready.
@@ -37,6 +38,7 @@ import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.j
 import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
 import { prependSystemPromptAddition } from "./attempt-prompt-helpers.js";
+import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 import { estimateRenderedLlmBoundaryTokenPressure } from "./preemptive-compaction.js";
@@ -400,6 +402,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
   activeContextEngine?: AttemptContextEngine;
   cacheTrace: CacheTrace;
   capabilityToolNames: ReadonlySet<string>;
+  compactionReplayEnabled: boolean;
   effectiveWorkspace: string;
   isOpenAIResponsesApi: boolean;
   isRawModelRun: boolean;
@@ -456,7 +459,11 @@ export async function prepareEmbeddedAttemptHistory(input: {
       policy: input.transcriptPolicy,
     });
 
-    if (attempt.sessionKey && !isSettledTurnFinalization) {
+    if (
+      attempt.sessionKey &&
+      attempt.sessionPersistence !== "detached" &&
+      !isSettledTurnFinalization
+    ) {
       const storePath = resolveSessionStorePathCore(attempt.config?.session?.store, {
         agentId: input.sessionAgentId,
       });
@@ -532,9 +539,22 @@ export async function prepareEmbeddedAttemptHistory(input: {
         heartbeatSummary?.ackMaxChars,
         heartbeatSummary?.prompt,
       );
-      const truncated = limitHistoryTurns(
+      const truncated = preserveCompactionReplayWindow(
         heartbeatFiltered,
-        getHistoryLimitFromSessionKey(attempt.sessionKey, attempt.config),
+        limitHistoryTurns(
+          heartbeatFiltered,
+          getHistoryLimitFromSessionKey(attempt.sessionKey, attempt.config, {
+            accountId: attempt.agentAccountId,
+            peerId: attempt.conversationRoutePeerId,
+            chatType: attempt.chatType,
+          }),
+        ),
+        attempt.model,
+        {
+          sessionId: attempt.sessionId,
+          authProfileId: resolveAttemptStreamAuthProfileId(attempt),
+          enabled: input.compactionReplayEnabled,
+        },
       );
       // Truncation can orphan tool_result blocks by removing the assistant message
       // that contained the matching tool_use, so repair the pairs once more.

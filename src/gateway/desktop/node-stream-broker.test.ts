@@ -271,3 +271,54 @@ describe("node desktop stream tickets", () => {
     releaseCheck();
   });
 });
+
+describe("node portal stream tickets", () => {
+  it("pairs a ready portal stream and keeps desktop and portal tickets isolated", async () => {
+    const broker = createNodeDesktopStreamBroker();
+    const session = { connId: "conn-1", pairingGeneration: "generation-1" };
+    const baseUrl = await startBrokerServer({ broker, session });
+    const minted = broker.mintPortal({ nodeId: "node-1", ...session });
+
+    await expectUnauthorized(
+      `${baseUrl}${minted.attachPath.replace("/node-portal/", "/node-desktop/")}`,
+    );
+    const ws = await connectAndSend(`${baseUrl}${minted.attachPath}`, { ok: true });
+    const attached = await minted.attached;
+    const response = new Promise<Buffer>((resolve) => {
+      attached.stream.once("data", resolve);
+    });
+    ws.send(Buffer.from("HTTP/1.1 200 OK\r\n\r\n"), { binary: true });
+
+    await expect(response).resolves.toEqual(Buffer.from("HTTP/1.1 200 OK\r\n\r\n"));
+    attached.stream.destroy();
+    await expectUnauthorized(`${baseUrl}${minted.attachPath}`);
+  });
+
+  it("rejects unexpected portal readiness metadata", async () => {
+    const broker = createNodeDesktopStreamBroker();
+    const session = { connId: "conn-1", pairingGeneration: "generation-1" };
+    const baseUrl = await startBrokerServer({ broker, session });
+    const minted = broker.mintPortal({ nodeId: "node-1", ...session });
+
+    await connectAndSend(`${baseUrl}${minted.attachPath}`, { ok: true, auth: "vnc-password" });
+
+    await expect(minted.attached).rejects.toThrow("invalid node portal attach metadata");
+  });
+
+  it("rejects immediately when the node closes before the target is ready", async () => {
+    const broker = createNodeDesktopStreamBroker();
+    const session = { connId: "conn-1", pairingGeneration: "generation-1" };
+    const baseUrl = await startBrokerServer({ broker, session });
+    const minted = broker.mintPortal({ nodeId: "node-1", ...session });
+    const ws = new WebSocket(`${baseUrl}${minted.attachPath}`);
+    cleanups.push(async () => ws.terminate());
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", resolve);
+      ws.once("error", reject);
+    });
+
+    ws.close();
+
+    await expect(minted.attached).rejects.toThrow("node portal stream closed before attach");
+  });
+});

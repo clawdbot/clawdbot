@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -30,7 +31,10 @@ import {
   loadBundledProviderStaticCatalogContextModels,
 } from "./embedded-agent-runner/model.static-catalog.js";
 import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
-import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import {
+  buildConfiguredModelCatalog,
+  parseConfiguredModelVisibilityEntries,
+} from "./model-selection-shared.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
 import {
@@ -110,7 +114,7 @@ function prepareAgentFacts(
   });
   const credentials = authFacts.credentials;
   const templateAuthStorage = authFacts.authStorage;
-  const configuredModelRefs = collectPreparedModelRuntimeConfiguredRefs(
+  const rawConfiguredModelRefs = collectPreparedModelRuntimeConfiguredRefs(
     input.config,
     input.agentId,
   );
@@ -120,7 +124,12 @@ function prepareAgentFacts(
     authStore: authFacts.store,
     templateAuthStorage,
     credentials,
-    configuredModelRefs,
+    // Keep order and case-distinct refs: registry lookup remains exact-case even
+    // where static/dynamic completion deduplicates case-insensitive merge keys.
+    configuredModelRefs: rawConfiguredModelRefs.flatMap(({ value }) => {
+      const ref = parseModelCatalogRef(value);
+      return ref ? [ref] : [];
+    }),
     // Gateway startup prepares only providers named by config/model selection. An unrelated
     // stored credential must not pull that provider's complete catalog into the admission path.
     providerIds: [
@@ -129,8 +138,13 @@ function prepareAgentFacts(
           input.config,
           credentials,
           catalogMode === "live",
-          configuredModelRefs,
+          rawConfiguredModelRefs,
+          input.agentId,
         ),
+        ...parseConfiguredModelVisibilityEntries({
+          cfg: input.config,
+          agentId: input.agentId,
+        }).providerWildcards,
         ...additionalProviderIds.map(normalizeProviderId).filter(Boolean),
       ]),
     ].toSorted((left, right) => left.localeCompare(right)),
@@ -235,7 +249,16 @@ export async function prepareWorkspaceBuildGroup(
     };
     const configuredProviderIds = [
       ...new Set([
-        ...collectPreparedModelRuntimeProviderIds(input.config, {}, false),
+        ...inputs.flatMap(({ config, agentId }) => [
+          ...collectPreparedModelRuntimeProviderIds(
+            config,
+            {},
+            false,
+            collectPreparedModelRuntimeConfiguredRefs(config, agentId),
+            agentId,
+          ),
+          ...parseConfiguredModelVisibilityEntries({ cfg: config, agentId }).providerWildcards,
+        ]),
         ...(options.providerDiscoveryProviderIds ?? []).map(normalizeProviderId).filter(Boolean),
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
@@ -282,7 +305,7 @@ export async function prepareWorkspaceBuildGroup(
                 registryDiagnostics: pluginMetadataSnapshot.registryDiagnostics,
                 ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
               }),
-              options.providerDiscoveryProviderIds,
+              configuredProviderIds,
             ),
       ...(catalogMode === "static"
         ? {
@@ -334,7 +357,6 @@ export async function prepareWorkspaceBuildGroup(
     const agentFacts: PreparedModelRuntimeAgentFacts[] = [];
     for (const facts of agentBaseFacts) {
       const configuredRuntimeModels = prepareConfiguredRuntimeModels({
-        config: facts.input.config,
         configuredModelRefs: facts.configuredModelRefs,
         metadataSnapshot: pluginMetadataSnapshot,
         ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
@@ -363,18 +385,8 @@ export async function prepareWorkspaceBuildGroup(
       }
       const configuredGeneratedCatalogPluginIds = [
         ...new Set(
-          facts.configuredModelRefs.flatMap(({ value }) => {
-            const separator = value.indexOf("/");
-            if (separator <= 0 || separator >= value.length - 1) {
-              return [];
-            }
-            const provider = normalizeProviderId(value.slice(0, separator));
-            const modelId = value.slice(separator + 1).trim();
-            if (
-              !provider ||
-              !modelId ||
-              configuredEntryKeys.has(modelCatalogEntryKey({ provider, id: modelId }))
-            ) {
+          facts.configuredModelRefs.flatMap(({ provider, modelId }) => {
+            if (configuredEntryKeys.has(modelCatalogEntryKey({ provider, id: modelId }))) {
               return [];
             }
             const pluginId = resolvePluginModelCatalogOwnerPluginId({
@@ -602,6 +614,7 @@ export async function prepareAgentCatalogSource(
     );
   const options = {
     pluginMetadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+    providerDiscoveryProviderIds: sourceOptions.providerDiscoveryProviderIds ?? providerIds,
     ...(pluginGeneration.preparedStaticProviderCatalog
       ? { preparedStaticProviderCatalog: pluginGeneration.preparedStaticProviderCatalog }
       : {}),
@@ -610,13 +623,9 @@ export async function prepareAgentCatalogSource(
     ...(catalogMode === "static"
       ? {
           providerDiscoveryEntriesOnly: true as const,
-          providerDiscoveryProviderIds: sourceOptions.providerDiscoveryProviderIds ?? providerIds,
         }
       : {
           providerDiscoveryTimeoutMs: MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS,
-          ...(sourceOptions.providerDiscoveryProviderIds
-            ? { providerDiscoveryProviderIds: sourceOptions.providerDiscoveryProviderIds }
-            : {}),
         }),
   };
   if (!persist) {

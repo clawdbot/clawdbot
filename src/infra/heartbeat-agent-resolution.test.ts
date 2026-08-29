@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
-import { isHeartbeatOwnerUnresolved, resolveHeartbeatAgents } from "./heartbeat-runner-config.js";
+import { isHeartbeatOwnerUnresolved, resolveHeartbeatAgents } from "./heartbeat-config.js";
 import { isHeartbeatEnabledForAgent } from "./heartbeat-summary.js";
 
 describe("tryResolveAmbientHeartbeatAgentId", () => {
@@ -79,7 +79,7 @@ describe("resolveHeartbeatAgents", () => {
   });
 
   it.each([
-    { name: "system owner", cfg: systemOwnedConfig },
+    { name: "system owner", cfg: systemOwnedConfig, expectedAgentIds: ["ops"] },
     {
       name: "explicit heartbeat owner",
       cfg: {
@@ -89,16 +89,19 @@ describe("resolveHeartbeatAgents", () => {
           defaults: { heartbeat: { agentId: "ops" } },
         },
       } as OpenClawConfig,
+      expectedAgentIds: ["ops"],
     },
     {
       name: "legacy default marker",
       cfg: {
         agents: { entries: { main: { default: true }, ops: {} } },
       } as OpenClawConfig,
+      expectedAgentIds: ["main"],
     },
     {
       name: "sole agent",
       cfg: { agents: { ownership: "explicit", entries: { solo: {} } } } as OpenClawConfig,
+      expectedAgentIds: ["solo"],
     },
     {
       name: "per-agent heartbeat entries",
@@ -108,6 +111,18 @@ describe("resolveHeartbeatAgents", () => {
           entries: { main: {}, ops: { heartbeat: { every: "30m" } } },
         },
       } as OpenClawConfig,
+      expectedAgentIds: ["ops"],
+    },
+    {
+      name: "per-agent enrollment takes precedence over the default heartbeat owner",
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, ops: { heartbeat: { every: "30m" } } },
+          defaults: { heartbeat: { agentId: "main" } },
+        },
+      } as OpenClawConfig,
+      expectedAgentIds: ["ops"],
     },
     {
       name: "broadcast heartbeat defaults",
@@ -118,12 +133,13 @@ describe("resolveHeartbeatAgents", () => {
           defaults: { heartbeat: { every: "30m" } },
         },
       } as OpenClawConfig,
+      expectedAgentIds: ["main", "ops"],
     },
-  ])("keeps every enrolled agent runnable for the $name config", ({ cfg }) => {
+  ])("enrolls exactly the runnable agents for the $name config", ({ cfg, expectedAgentIds }) => {
     const agents = resolveHeartbeatAgents(cfg);
-    expect(agents.length).toBeGreaterThan(0);
-    for (const agent of agents) {
-      expect(isHeartbeatEnabledForAgent(cfg, agent.agentId)).toBe(true);
+    expect(agents.map((agent) => agent.agentId)).toEqual(expectedAgentIds);
+    for (const agentId of Object.keys(cfg.agents?.entries ?? {})) {
+      expect(isHeartbeatEnabledForAgent(cfg, agentId)).toBe(expectedAgentIds.includes(agentId));
     }
   });
 });

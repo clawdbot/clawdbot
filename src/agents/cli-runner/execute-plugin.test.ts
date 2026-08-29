@@ -104,6 +104,7 @@ function runPlugin(
     executionArgs: ["-p", "--permission-mode", "bypassPermissions"],
     env: { PATH: "/bin:/usr/bin", OPENCLAW_TEST_MARKER: "host-owned" },
     prompt: context.params.prompt,
+    promptContext: context.promptContext,
     useResume: options.useResume ?? false,
     sessionId: options.sessionId ?? "sdk-session",
     ...(options.forceNewSession ? { forceNewSession: true } : {}),
@@ -192,6 +193,10 @@ describe("plugin-owned CLI execution host boundary", () => {
   it("streams plugin events through the canonical host output boundary", async () => {
     const { context } = await createExecution();
     context.systemPrompt = `  Follow host policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}Keep credentials private.  `;
+    context.promptContext = {
+      prependContext: "private red prefix",
+      appendContext: "private red suffix",
+    };
     const output: string[] = [];
     let observedExecution: CliBackendExecuteContext | undefined;
     const execute: CliBackendExecute = async function* (execution) {
@@ -213,6 +218,10 @@ describe("plugin-owned CLI execution host boundary", () => {
         command: "/bin/sh",
         cwd: "/tmp",
         prompt: "hello",
+        promptContext: {
+          prependContext: "private red prefix",
+          appendContext: "private red suffix",
+        },
         modelId: "claude-sonnet-4-6",
         systemPrompt: "Follow host policy.\nKeep credentials private.",
         sessionId: "sdk-session",
@@ -229,7 +238,10 @@ describe("plugin-owned CLI execution host boundary", () => {
       runId: "plugin-user-input",
       nativeTools: ["AskUserQuestion"],
     });
-    const onBlockReply = vi.fn(async () => {});
+    let promptDelivered = createDeferred();
+    const onBlockReply = vi.fn(async () => {
+      promptDelivered.resolve();
+    });
     context.params.onBlockReply = onBlockReply;
     const requests = new Map<string, { questions: Array<{ questionId: string }> }>();
     mockCallGatewayTool.mockImplementation(async (method, _opts, rawParams) => {
@@ -240,9 +252,8 @@ describe("plugin-owned CLI execution host boundary", () => {
       }
       if (method === "question.waitAnswer") {
         const request = requests.get(params.id);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 5);
-        });
+        await promptDelivered.promise;
+        promptDelivered = createDeferred();
         return {
           status: "answered",
           answers: {

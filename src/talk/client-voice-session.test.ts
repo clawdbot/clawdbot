@@ -132,9 +132,9 @@ describe("client voice session", () => {
   });
 
   it("creates, resumes, and enforces ownership and open state", async () => {
+    const target = { agentId: "main", sessionKey: "agent:main:main" };
     const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
+      ...target,
       provider: "google",
       origin: "client",
       voiceSessionId: "voice-1",
@@ -142,8 +142,7 @@ describe("client voice session", () => {
     });
     expect(
       createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey: "agent:main:main",
+        ...target,
         origin: "client",
         voiceSessionId,
         now: 20,
@@ -154,8 +153,7 @@ describe("client voice session", () => {
     });
     expect(() =>
       createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey: "agent:main:main",
+        ...target,
         provider: "openai",
         origin: "client",
         voiceSessionId,
@@ -171,35 +169,45 @@ describe("client voice session", () => {
     ).toThrow("does not belong");
 
     await closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
+      ...target,
       voiceSessionId,
       config: {},
       now: 30,
     });
     expect(() =>
       createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey: "agent:main:main",
+        ...target,
         origin: "client",
         voiceSessionId,
       }),
     ).toThrow("already closed");
   });
 
-  it("stamps the agent session row when Talk creates it", async () => {
-    const sessionKey = "agent:main:talk:new";
-    const sessionId = await ensureClientVoiceAgentSessionEntry({ agentId: "main", sessionKey });
+  it.each([false, true])("stamps Talk creation once (required=%s)", async (required) => {
+    const target = { agentId: "main", sessionKey: "agent:main:talk:new" };
+    const actor = required
+      ? { type: "human" as const, source: "profile" as const, id: "profile-required" }
+      : { type: "human" as const, source: "unknown" as const };
+    const creation = required ? { actor, sandbox: "required" as const } : undefined;
+    const sessionId = await ensureClientVoiceAgentSessionEntry({ ...target, creation });
 
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+    const original = loadSessionEntry(target);
+    expect(original).toMatchObject({
       sessionId,
       createdVia: "talk",
-      createdActor: { type: "human" },
+      createdActor: actor,
       createdAt: expect.any(Number),
+      ...(required ? { sandbox: "required" } : {}),
     });
 
-    await ensureClientVoiceAgentSessionEntry({ agentId: "main", sessionKey });
-    expect(loadSessionEntry({ agentId: "main", sessionKey })?.createdVia).toBe("talk");
+    await ensureClientVoiceAgentSessionEntry({
+      ...target,
+      creation: {
+        actor: { type: "human", source: "profile", id: "another-profile" },
+        sandbox: "required",
+      },
+    });
+    expect(loadSessionEntry(target)).toEqual(original);
   });
 
   it("reads an existing agent session without creating a missing row", async () => {

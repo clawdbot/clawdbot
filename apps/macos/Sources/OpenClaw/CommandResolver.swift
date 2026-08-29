@@ -220,26 +220,17 @@ enum CommandResolver {
             return []
         }
 
-        func parseVersion(_ name: String) -> [Int] {
-            let trimmed = name.hasPrefix("v") ? String(name.dropFirst()) : name
-            return trimmed.split(separator: ".").compactMap { Int($0) }
-        }
-
-        let sorted = entries.sorted { a, b in
-            let va = parseVersion(a)
-            let vb = parseVersion(b)
-            let maxCount = max(va.count, vb.count)
-            for i in 0..<maxCount {
-                let ai = i < va.count ? va[i] : 0
-                let bi = i < vb.count ? vb[i] : 0
-                if ai != bi { return ai > bi }
-            }
-            // If identical numerically, keep stable ordering.
-            return a > b
+        let sorted = entries.compactMap { entry -> (name: String, version: RuntimeVersion)? in
+            guard let version = RuntimeVersion.from(string: entry),
+                  RuntimeLocator.isSupportedNodeVersion(version)
+            else { return nil }
+            return (entry, version)
+        }.sorted { first, second in
+            first.version == second.version ? first.name > second.name : first.version > second.version
         }
 
         var paths: [String] = []
-        for entry in sorted {
+        for (entry, _) in sorted {
             let binDir = base.appendingPathComponent(entry).appendingPathComponent(suffix)
             let node = binDir.appendingPathComponent("node")
             if FileManager().isExecutableFile(atPath: node.path) {
@@ -721,10 +712,4 @@ enum CommandResolver {
         args.append(contentsOf: remoteCommand)
         return args
     }
-
-    #if SWIFT_PACKAGE
-    static func _testNodeManagerBinPaths(home: URL) -> [String] {
-        self.nodeManagerBinPaths(home: home)
-    }
-    #endif
 }

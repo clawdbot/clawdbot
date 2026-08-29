@@ -14,6 +14,7 @@ import {
   ModelsProbeResultSchema,
   SkillProposalEvaluationSchema,
   SkillProposalLifecycleEventSchema,
+  SkillsCuratorStatusResultSchema,
   SkillsDetailResultSchema,
   SkillsProposalEvaluateParamsSchema,
   SkillsProposalEvaluateResultSchema,
@@ -261,6 +262,24 @@ describe("Models auth params schemas", () => {
 });
 
 describe("ModelsListResultSchema", () => {
+  it("accepts closed unavailability reasons and epoch-millisecond retry times", () => {
+    const model = { id: "test-model", name: "Test Model", provider: "custom", available: false };
+    for (const unavailableReason of ["missing-auth", "auth-failed", "cooldown"]) {
+      expectAccepted(ModelsListResultSchema, { models: [{ ...model, unavailableReason }] });
+    }
+    expectAccepted(ModelsListResultSchema, {
+      models: [{ ...model, unavailableReason: "cooldown", unavailableUntil: 2_000_000_000_000 }],
+    });
+    expectRejected(ModelsListResultSchema, {
+      models: [{ ...model, unavailableReason: "unknown" }],
+    });
+    for (const unavailableUntil of [-1, 1.5, "2033-05-18T03:33:20.000Z"]) {
+      expectRejected(ModelsListResultSchema, {
+        models: [{ ...model, unavailableReason: "cooldown", unavailableUntil }],
+      });
+    }
+  });
+
   it("accepts stable public input capabilities", () => {
     const model = {
       id: "gpt-image",
@@ -543,6 +562,46 @@ describe("SkillsProposalInspectResultSchema", () => {
       record: result.record,
       content: result.content,
     });
+  });
+});
+
+describe("SkillsCuratorStatusResultSchema", () => {
+  it("accepts typed collection and experience outcomes while rejecting invalid review records", () => {
+    const legacyResult = {
+      lastAttemptAtMs: 100,
+      lastSuccessAtMs: 101,
+      lastError: null,
+      counts: { active: 1, stale: 0, archived: 0 },
+      skills: [],
+      overlaps: [],
+    };
+    const result = {
+      ...legacyResult,
+      collectionReview: {
+        workspace: { attemptedAtMs: 100, succeededAtMs: 101 },
+      },
+      experienceReview: {
+        workspace: {
+          attemptedAtMs: 102,
+          outcome: "proposed",
+          proposalId: "proposal-1",
+          usage: { inputTokens: 40, cachedInputTokens: 20, outputTokens: 10 },
+        },
+      },
+    };
+
+    expectAccepted(SkillsCuratorStatusResultSchema, result, legacyResult);
+    expectRejected(
+      SkillsCuratorStatusResultSchema,
+      {
+        ...result,
+        collectionReview: { workspace: { attemptedAtMs: 100, unexpected: true } },
+      },
+      {
+        ...result,
+        experienceReview: { workspace: { attemptedAtMs: 102, outcome: "archived" } },
+      },
+    );
   });
 });
 

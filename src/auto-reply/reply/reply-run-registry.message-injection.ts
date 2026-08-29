@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasPromptImageInput } from "../../media/prompt-image-input.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   replyMessageInjectionTargetOperation,
@@ -52,7 +53,7 @@ export function resolveReplyBackendQueueMessageMismatch(
       return "tool_authority_mismatch";
     }
   }
-  if (options?.images?.length && backend.supportsQueueMessageImages !== true) {
+  if (hasPromptImageInput(options) && backend.supportsQueueMessageImages !== true) {
     return "image_input_unsupported";
   }
   if (
@@ -139,7 +140,7 @@ export function resolveReplyMessageInjectionRejection(params: {
   if (
     mismatch === "tool_authority_mismatch" &&
     pendingInputAuthorityProven &&
-    !params.options?.images?.length &&
+    !hasPromptImageInput(params.options) &&
     backend.claimPendingUserInputAnswer
   ) {
     return {
@@ -187,7 +188,7 @@ export function beginReplyMessageInjectionTarget(
     };
     const cancelPendingImage =
       options?.isInboundUserMessage === true &&
-      Boolean(options.images?.length) &&
+      hasPromptImageInput(options) &&
       (resolved.reason === "tool_authority_mismatch" ||
         resolved.reason === "image_input_unsupported")
         ? resolved.backend?.cancelPendingUserInput

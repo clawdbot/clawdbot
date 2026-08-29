@@ -481,6 +481,152 @@ describe("sessions_history redaction", () => {
     });
   });
 
+  it("preserves the Gateway replay cursor for projected siblings from the same row", async () => {
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(): Promise<T> =>
+        ({
+          messages: [
+            { role: "assistant", content: "projected sibling", __openclaw: { seq: 8 } },
+            { role: "assistant", content: "latest", __openclaw: { seq: 9 } },
+          ],
+          offset: 0,
+          nextOffset: 2,
+          hasMore: true,
+          totalMessages: 10,
+        }) as T,
+    });
+
+    const result = await tool.execute("projected-replay", { sessionKey: "main", offset: 0 });
+
+    expect(result.details).toMatchObject({
+      offset: 0,
+      nextOffset: 2,
+      hasMore: true,
+      totalMessages: 10,
+    });
+  });
+
+  it("keeps history pagination advancing past an already-returned row", async () => {
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(): Promise<T> =>
+        ({
+          messages: [{ role: "assistant", content: "visible", __openclaw: { seq: 7 } }],
+          offset: 4,
+          nextOffset: 5,
+          hasMore: true,
+          totalMessages: 10,
+        }) as T,
+    });
+
+    const result = await tool.execute("cursor-progress", { sessionKey: "main", offset: 4 });
+
+    expect(result.details).toMatchObject({
+      offset: 4,
+      nextOffset: 5,
+      hasMore: true,
+      totalMessages: 10,
+    });
+  });
+
+  it("reads an old child from its exact durable lineage row", async () => {
+    const requesterSessionKey = "agent:main:subagent:parent";
+    const targetSessionKey = "agent:main:subagent:old-child";
+    const expectedSessionId = "old-child-session";
+    const storePath = await writeSessionStore("old-child.json", {
+      [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
+    });
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: requesterSessionKey,
+      config: {
+        session: { store: storePath },
+        tools: { sessions: { visibility: "tree" } },
+      } as OpenClawConfig,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          const params = request.params as { spawnedBy?: unknown };
+          return ("spawnedBy" in params ? {} : { key: targetSessionKey, agentId: "main" }) as T;
+        }
+        if (request.method === "sessions.describe") {
+          return {
+            session: {
+              key: targetSessionKey,
+              sessionId: expectedSessionId,
+              parentSessionKey: requesterSessionKey,
+            },
+          } as T;
+        }
+        if (request.method === "chat.history") {
+          return {
+            messages: [{ role: "assistant", content: "durable child history" }],
+          } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await tool.execute("old-child-history", {
+      sessionKey: targetSessionKey,
+      limit: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      sessionKey: targetSessionKey,
+      messages: [{ role: "assistant", content: "durable child history" }],
+    });
+    expect(requests.map((request) => request.method)).toEqual([
+      "sessions.resolve",
+      "sessions.describe",
+      "chat.history",
+    ]);
+  });
+
+  it("rejects a durable history grant when the target incarnation changes", async () => {
+    const requesterSessionKey = "agent:main:subagent:parent";
+    const targetSessionKey = "agent:main:subagent:old-child-race";
+    const expectedSessionId = "old-child-session";
+    const storePath = await writeSessionStore("old-child-race.json", {
+      [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
+    });
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: requesterSessionKey,
+      config: {
+        session: { store: storePath },
+        tools: { sessions: { visibility: "tree" } },
+      } as OpenClawConfig,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          const params = request.params as { spawnedBy?: unknown };
+          return ("spawnedBy" in params ? {} : { key: targetSessionKey, agentId: "main" }) as T;
+        }
+        if (request.method === "sessions.describe") {
+          replaceSessionEntrySync(
+            { storePath, sessionKey: targetSessionKey },
+            { sessionId: "replacement-session", updatedAt: 2 },
+          );
+          return {
+            session: {
+              key: targetSessionKey,
+              sessionId: expectedSessionId,
+              parentSessionKey: requesterSessionKey,
+            },
+          } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    await expect(
+      tool.execute("old-child-history-race", { sessionKey: targetSessionKey }),
+    ).rejects.toThrow(`Session "${targetSessionKey}" changed after access was granted.`);
+    expect(requests.some((request) => request.method === "chat.history")).toBe(false);
+  });
+
   it("honors a scoped incarnation grant through the sandbox visibility clamp", async () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-proof";
     const targetSessionKey = "agent:main:main";

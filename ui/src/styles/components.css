@@ -24,18 +24,21 @@
 
 openclaw-session-owner-chip {
   display: inline-flex;
-  flex: 0 0 auto;
+  flex: none;
 }
 
 .session-owner-chip {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
+  width: 20px;
+  height: 20px;
   border: 1px solid hsl(var(--owner-hue) 52% 18% / 0.9);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: hsl(var(--owner-hue) 58% 26%);
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.24);
   color: white;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1;
   transition:
@@ -46,18 +49,6 @@ openclaw-session-owner-chip {
 .session-owner-chip--away {
   filter: grayscale(0.8);
   opacity: 0.45;
-}
-
-.session-owner-chip--row {
-  width: 20px;
-  height: 20px;
-  font-size: 10px;
-}
-
-.session-owner-chip--header {
-  width: 20px;
-  height: 20px;
-  font-size: 10px;
 }
 
 .session-owner-chip .viewer-avatar {
@@ -78,7 +69,6 @@ openclaw-session-owner-chip {
 
 .session-owner-stack__back {
   position: absolute;
-  z-index: 0;
   left: 0;
   display: inline-flex;
 }
@@ -174,8 +164,8 @@ openclaw-session-owner-chip {
   position: absolute;
   inset: -2px;
   box-sizing: border-box;
-  border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
-  border-top-color: var(--run);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
   border-radius: var(--radius-full);
   pointer-events: none;
 }
@@ -772,6 +762,19 @@ openclaw-session-owner-chip {
 /* A corner toast degenerates at phone widths, where it would span nearly the
  * whole viewport anyway. Use the full-width top idiom instead. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .shell--chat {
+    --app-toast-shell-top: calc(
+      var(--safe-area-top) + var(--shell-topbar-height) + var(--chat-mobile-pane-header-height) +
+        20px
+    );
+  }
+
+  /* The unanchored chat toast shares the viewport with shell and pane chrome.
+     Anchored permission toasts already carry a measured pane-header offset. */
+  openclaw-toast-host[data-toast-placement="shell"] .app-toast:not(.app-toast--anchored) {
+    top: var(--app-toast-shell-top, calc(20px + var(--safe-area-top)));
+  }
+
   .app-toast {
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
@@ -782,6 +785,10 @@ openclaw-session-owner-chip {
     left: var(--app-toast-anchor-center);
     right: auto;
     max-width: calc(var(--app-toast-anchor-width) - 24px);
+  }
+
+  .app-toast:not(.app-toast--anchored) .app-toast__message {
+    flex: 1 1 auto;
   }
 }
 
@@ -898,10 +905,12 @@ openclaw-session-progress-hovercard-provider {
   --session-hovercard-shift-y: 0;
 
   position: fixed;
+  inset: auto;
   z-index: 1990;
   width: min(296px, calc(100vw - 24px));
   max-height: min(520px, calc(100vh - 24px));
   padding: 0;
+  margin: 0;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -964,8 +973,249 @@ openclaw-session-progress-hovercard-provider {
   }
 }
 
+/* Explicit details remain interactive on touch devices as well as hover pointers. */
+.person-activity-hovercard[data-open="true"] {
+  pointer-events: auto;
+}
+
+.person-activity-hovercard {
+  width: min(304px, calc(100vw - 24px));
+}
+
+.person-activity-card {
+  font-size: calc(12px * var(--control-ui-text-scale));
+  line-height: 1.5;
+}
+
+.person-activity-card__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 16px 12px;
+}
+
+.person-activity-card__header > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.person-activity-card__header .viewer-avatar--footer {
+  flex-shrink: 0;
+  width: 34.5px;
+  height: 34.5px;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  /* The base ring color assumes the sidebar surface; blend with the popover. */
+  border-color: var(--session-hovercard-surface);
+}
+
+.person-activity-card h2,
+.person-activity-card h3,
+.person-activity-card p {
+  margin: 0;
+}
+
+.person-activity-card h2 {
+  overflow-wrap: anywhere;
+  font-size: calc(14px * var(--control-ui-text-scale));
+  font-weight: 600;
+  line-height: 1;
+}
+
+.person-activity-card__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.person-activity-card__status > span {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--ok);
+}
+
+.person-activity-card__facts {
+  display: grid;
+  gap: 12px;
+  padding: 0 16px 16px;
+  margin: 0;
+}
+
+.person-activity-card__facts > div {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.person-activity-card__facts dt,
+.person-activity-card h3 {
+  color: var(--muted);
+  font-size: inherit;
+  font-weight: 400;
+}
+
+.person-activity-card__muted,
+.person-activity-card small,
+.person-activity-card__session-age {
+  color: var(--muted);
+}
+
+.person-activity-card__facts dd {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.person-activity-card__facts dd > span {
+  font-weight: 500;
+}
+
+.person-activity-card__facts time,
+.person-activity-card__session-age {
+  font-variant-numeric: tabular-nums;
+}
+
+.person-activity-card small {
+  display: block;
+  font-size: calc(11px * var(--control-ui-text-scale));
+}
+
+.person-activity-card__section,
+.person-activity-card footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.person-activity-card h3 {
+  margin-bottom: 6px;
+}
+
+.person-activity-card__sessions {
+  display: grid;
+  gap: 2px;
+}
+
+.person-activity-card__session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  margin: 0 -6px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.person-activity-card__session-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: normal;
+}
+
+.person-activity-card__session-name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+}
+
+.person-activity-card__session-name--multiline {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.person-activity-card__session-name.hover-marquee {
+  white-space: nowrap;
+  color: var(--text);
+  text-overflow: clip;
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to right, black calc(100% - 18px), transparent 100%);
+}
+
+@media (hover: none), (pointer: coarse), (prefers-reduced-motion: reduce) {
+  .person-activity-card__session-name.hover-marquee {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    text-indent: 0;
+    transition: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
+
+.person-activity-card__session-age {
+  justify-self: end;
+  font-size: calc(11px * var(--control-ui-text-scale));
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.person-activity-card__session-icon {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.person-activity-card svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.person-activity-card footer {
+  padding: 0;
+}
+
+.person-activity-card footer a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 16px;
+  color: var(--text);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.person-activity-card a:hover {
+  background: var(--bg-hover);
+}
+
+.person-activity-card a:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@media (pointer: coarse) {
+  .person-activity-card a {
+    min-height: 44px;
+    align-items: center;
+  }
+}
+
 .github-link-hovercard {
   position: fixed;
+  inset: auto;
+  margin: 0;
   z-index: 1990;
   width: min(440px, calc(100vw - 24px));
   min-height: 112px;
@@ -1092,6 +1342,30 @@ openclaw-session-progress-hovercard-provider {
 .github-link-hovercard__metrics {
   display: inline-flex;
   align-items: center;
+}
+
+.github-link-hovercard__coauthors {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: 6px;
+}
+
+/* Overlap reads as one group; the ring keeps faces separable against the card. */
+.github-link-hovercard__coauthors .github-link-hovercard__avatar {
+  width: 21px;
+  height: 21px;
+  box-shadow: 0 0 0 2px var(--surface-1);
+}
+
+.github-link-hovercard__coauthors .github-link-hovercard__avatar + .github-link-hovercard__avatar {
+  margin-left: -7px;
+}
+
+.github-link-hovercard__coauthors-more {
+  margin-left: 5px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .github-link-hovercard__author {
@@ -1447,102 +1721,10 @@ select.input {
   height: 16px;
 }
 
-/* ===========================================
-   Cron Form
-   =========================================== */
-
-/* Stat strip used by the tasks page. */
-.summary-strip {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px 18px;
-  padding: 14px 16px;
-}
-
-.summary-strip__stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 28px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.summary-stat {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.summary-stat__icon {
-  width: 30px;
-  height: 30px;
-  color: var(--accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-md);
-  background: var(--accent-subtle);
-  padding: 6px;
-  flex-shrink: 0;
-}
-
-.summary-stat__icon svg {
-  width: 100%;
-  height: 100%;
-  stroke: currentColor;
-  fill: none;
-}
-
-.summary-stat--danger .summary-stat__icon {
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-}
-
-.summary-stat__copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.summary-stat__label {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.summary-stat__value {
-  color: var(--text-strong);
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.3;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  white-space: nowrap;
-}
-
 .field input[aria-invalid="true"],
 .field textarea[aria-invalid="true"],
 .field select[aria-invalid="true"] {
   border-color: var(--danger);
-}
-
-@media (max-width: 1100px) {
-  .summary-strip {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .summary-strip__stats {
-    width: 100%;
-    gap: 8px 18px;
-  }
 }
 
 :root[data-theme-mode="light"] .field input,
@@ -1585,13 +1767,6 @@ select.input {
   color: var(--text);
 }
 
-:root[data-theme-mode="light"] .chat-controls .btn--icon.active {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-  color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent-subtle);
-}
-
 /* Ghost stays chromeless in light mode too: without the border-color reset,
    the higher-specificity light .btn--icon override above re-adds a 1px border
    that dark mode never shows. Chrome appears on hover only. */
@@ -1630,6 +1805,7 @@ select.input {
   font-size: 13px;
   line-height: 1.5;
   position: relative;
+  user-select: text;
 }
 
 .callout--dismissible,
@@ -1670,49 +1846,6 @@ select.input {
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.scope-upgrade-status-trigger {
-  color: color-mix(in srgb, var(--warn) 82%, var(--text-strong));
-  background: color-mix(in srgb, var(--warn) 11%, transparent);
-}
-
-.scope-upgrade-status-trigger:hover {
-  background: color-mix(in srgb, var(--warn) 14%, var(--bg-elevated));
-}
-
-.scope-upgrade-status-trigger:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.scope-upgrade-details-popover {
-  --max-width: min(380px, calc(100vw - 32px));
-}
-
-.scope-upgrade-details-popover::part(body) {
-  padding: 0;
-}
-
-.scope-upgrade-details {
-  width: min(380px, calc(100vw - 32px));
-  box-shadow: var(--overlay-shadow);
-}
-
-.scope-upgrade-details-dialog .scope-upgrade-details {
-  width: 100%;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  box-shadow: 0 -18px 48px color-mix(in srgb, black 24%, transparent);
-}
-
-@media (max-width: 560px) {
-  .scope-upgrade-details {
-    flex-wrap: wrap;
-  }
-
-  .scope-upgrade-details .callout__content {
-    flex-basis: calc(100% - 38px);
-  }
 }
 
 .callout.danger {
@@ -2150,12 +2283,14 @@ openclaw-chat-session-rail {
   padding: 12px 14px 16px;
   overflow-y: auto;
   border-top: 1px solid var(--border);
+  user-select: text;
   overscroll-behavior-y: contain;
 }
 
-/* No digest means no digest block, so the thread would otherwise stack its own
-   border directly under the header's and open with a hanging 12px gap. */
-.chat-session-rail__header + .chat-session-rail__thread {
+/* No digest or embedded header means the thread would otherwise open with a
+   hanging divider and 12px gap. */
+.chat-session-rail__header + .chat-session-rail__thread,
+.chat-session-rail--embedded > .chat-session-rail__thread {
   margin-top: 0;
   border-top: 0;
 }
@@ -2262,16 +2397,6 @@ openclaw-chat-session-rail {
   50% {
     opacity: 0.45;
   }
-}
-
-.chat-session-rail__composer {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  padding: 10px 10px 11px 14px;
-  border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--secondary) 40%, transparent);
 }
 
 .chat-session-rail__prompt {
@@ -2705,12 +2830,6 @@ openclaw-chat-session-rail {
   background: var(--warn-subtle);
 }
 
-.chip-danger {
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
-  background: var(--danger-subtle);
-}
-
 /* ===========================================
    Data Table
    =========================================== */
@@ -3087,282 +3206,6 @@ td.data-table-key-col {
   flex: 1;
 }
 
-/* Chat queue: compact pending rows aligned with the composer shell width. */
-.chat-queue {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: calc(100% - 36px);
-  max-width: 48rem;
-  margin: 8px auto 0;
-}
-
-.chat-queue__item {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px 8px;
-  min-height: 30px;
-  padding: 3px 5px 3px 10px;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-  color: var(--muted);
-}
-
-/* The edited row keeps its slot so the operator can see where the corrected
-   message lands; the outline says the composer owns it right now.
-   Editing is an active state, not a failure, so it uses the informational
-   family: --accent is red in every shipped theme and sits on top of --danger
-   (see the --run token note in base.css), which reads as an error at a glance. */
-.chat-queue__item--editing {
-  background: var(--info-subtle);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 34%, transparent);
-}
-
-/* Drop target reads as an insertion edge rather than a selected row, so the
-   dragged message clearly lands at this position. */
-.chat-queue__item--drop-target {
-  box-shadow: inset 0 2px 0 0 var(--accent);
-}
-
-/* The handle owns reordering for both input methods: drag it, or focus it and
-   press the arrow keys. It stays a real button so keyboards can reach it. */
-.chat-queue__grip {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  width: 12px;
-  height: 16px;
-  margin-left: -5px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: color-mix(in srgb, var(--muted) 55%, transparent);
-  cursor: grab;
-}
-
-.chat-queue__item:hover .chat-queue__grip:not(:disabled),
-.chat-queue__grip:focus-visible {
-  color: var(--muted);
-}
-
-.chat-queue__grip:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-
-/* Still occupies the handle column so every row's pill and text share one x,
-   and stays visible but dimmer than a live handle: this row is holding its
-   place, not offering a drag. Hover leaves it alone for the same reason. */
-.chat-queue__grip:disabled {
-  color: color-mix(in srgb, var(--muted) 34%, transparent);
-  cursor: default;
-}
-
-.chat-queue__grip svg {
-  width: 12px;
-  height: 14px;
-}
-
-.chat-queue__item--failed {
-  background: color-mix(in srgb, var(--danger) 8%, transparent);
-}
-
-.chat-queue__icon {
-  display: inline-flex;
-  flex-shrink: 0;
-  width: 14px;
-  height: 14px;
-  color: var(--muted);
-}
-
-.chat-queue__icon svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.75px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.chat-queue__item--failed .chat-queue__icon {
-  color: var(--danger);
-}
-
-/* Reconnect rows mirror the connection pill's amber status dot so the queue
-   reads as quiet auto-retry status, not a failure needing action. */
-.chat-queue__dot {
-  flex-shrink: 0;
-  width: 7px;
-  height: 7px;
-  margin: 0 3.5px;
-  border-radius: var(--radius-full);
-  background: var(--warn);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 55%, transparent);
-  animation: pulse-subtle 2s ease-in-out infinite;
-}
-
-.chat-queue__item--reconnect .chat-queue__badge {
-  background: color-mix(in srgb, var(--warn) 14%, transparent);
-  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
-}
-
-.chat-queue__badge {
-  flex-shrink: 0;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--text) 12%, transparent);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.5;
-  white-space: nowrap;
-}
-
-.chat-queue__item--failed .chat-queue__badge {
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-  color: var(--danger);
-}
-
-/* Last of the state badges on purpose: editing outranks the send state it
-   pauses, so a reconnecting or failed row still reads as informational blue. */
-.chat-queue__item--editing .chat-queue__badge {
-  background: color-mix(in srgb, var(--info) 16%, transparent);
-  color: var(--info);
-}
-
-.chat-queue__text {
-  flex: 1 1 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--chat-text);
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.chat-queue__edit-input {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 26px;
-  margin: -1px 0;
-  padding: 4px 6px;
-  border: 1px solid color-mix(in srgb, var(--info) 42%, transparent);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--chat-text);
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.4;
-  resize: vertical;
-}
-
-.chat-queue__edit-input:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-
-/* Wraps onto its own flex line below the row (see renderChatQueueItem). */
-.chat-queue__error {
-  flex-basis: 100%;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 0 0 3px 22px;
-  color: var(--danger);
-  font-size: 11.5px;
-  line-height: 1.35;
-}
-
-.chat-queue__actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
-.chat-queue__action {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--accent);
-  font-size: 11.5px;
-  font-weight: 600;
-  line-height: 1;
-  cursor: var(--cursor-action);
-}
-
-.chat-queue__action svg {
-  width: 12px;
-  height: 12px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.75px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.chat-queue__action:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-.chat-queue__edit,
-.chat-queue__remove,
-.chat-queue__edit-submit,
-.chat-queue__edit-cancel {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--muted);
-  cursor: var(--cursor-action);
-}
-
-/* Inert instead of removed: an open edit keeps every action slot in place so the
-   rows below it never shift while the operator retypes. */
-.chat-queue__edit:disabled,
-.chat-queue__remove:disabled,
-.chat-queue__edit-submit:disabled,
-.chat-queue__edit-cancel:disabled {
-  color: color-mix(in srgb, var(--muted) 34%, transparent);
-  cursor: default;
-}
-
-.chat-queue__edit:hover:not(:disabled),
-.chat-queue__remove:hover:not(:disabled),
-.chat-queue__edit-submit:hover:not(:disabled),
-.chat-queue__edit-cancel:hover:not(:disabled) {
-  color: var(--text);
-  background: color-mix(in srgb, var(--text) 10%, transparent);
-}
-
-.chat-queue__edit svg,
-.chat-queue__remove svg,
-.chat-queue__edit-submit svg,
-.chat-queue__edit-cancel svg {
-  width: 13px;
-  height: 13px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 /* Chat lines */
 .chat-line {
   display: flex;
@@ -3561,6 +3404,12 @@ td.data-table-key-col {
   color: var(--text);
 }
 
+.exec-approval-scope {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .exec-approval-meta {
   margin-top: 12px;
   display: grid;
@@ -3748,8 +3597,7 @@ td.data-table-key-col {
   gap: 12px;
 }
 
-/* Same tile geometry as .summary-stat__icon, in the ok tone: the outcome is settled,
-   and the mark says so before any sentence is read. */
+/* The compact ok-tone tile makes the settled outcome visible before its copy. */
 .secret-reveal__status {
   width: 28px;
   height: 28px;
@@ -5240,7 +5088,6 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
-  animation: scale-in 0.15s ease-out;
 }
 
 .cmd-palette__label {
@@ -5809,30 +5656,15 @@ td.data-table-key-col {
   display: inline;
 }
 
-/* ── Session row primitives ──
-   Shared by the sidebar recents list and the chat session picker. Rows read
-   as plain text lines: attribute badges follow the title, and the trailing
-   aside stacks transient state, relative time, and management actions in one
-   grid cell, so hovering swaps state for actions without any layout shift. */
+/* Session row primitives shared by sidebar recents and the chat session picker.
+   Reserve hover-action width without moving the row or hiding trailing state. */
 .session-row-host {
-  /* One size and one stroke for every glyph the row draws. Seven different
-     values used to land on the same line, which read as broken alignment.
-     The row-scoped SVG rule below leaves other surfaces at their own sizes. */
-  /* One grid for everything in the trailing column. The 24px action target sets
-     the desktop pitch; 14px endcap glyphs use the remaining 10px as their gap
-     so both lines share one trailing axis. */
-  --row-action-size: 24px;
-  --row-glyph-gap: 10px;
-
-  /* What the title gives up so the actions have somewhere to land: both boxes
-     plus a hair of clearance from the ellipsis. */
-  --row-actions-reserve: calc(var(--row-action-size) * 2 + 3px);
-
+  --session-row-actions-reserve: 52px;
   position: relative;
 }
 
 .session-row-host[data-session-row-action-count="1"] {
-  --row-actions-reserve: calc(var(--row-action-size) + 3px);
+  --session-row-actions-reserve: 28px;
 }
 
 .session-row-host--draft {
@@ -5904,19 +5736,13 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
-/* Sized to its glyphs. The old 24px box matched the action button this used to
-   trade places with, which padded a 7px unread dot with 8.5px a side and broke
-   the endcap's even 6px rhythm. Nothing trades now, so it sizes to content. */
 .session-row-state {
-  display: inline-flex;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 14px;
   align-items: center;
-  justify-content: center;
-  gap: var(--row-glyph-gap, 6px);
-  /* The ring and the unread dot are bare shapes, not icons in a box, so
-     right-flush they hung 2-4px past the icon column above them. One glyph-wide
-     floor plus the centring above puts whatever the row is showing on the same
-     axis as the icons. */
-  min-width: 14px;
+  justify-items: center;
+  gap: 6px;
   pointer-events: none;
 }
 
@@ -5935,12 +5761,12 @@ td.data-table-key-col {
   stroke-width: 1.6px;
 }
 
-/* Attribute badges (attached automation, approval, cloud placement):
+/* Attribute badges (approval, cloud placement):
    muted metadata grouped in the row's second-line endcap. */
 .session-row-badges {
   display: inline-flex;
   align-items: center;
-  gap: var(--row-glyph-gap, 6px);
+  gap: 6px;
   flex: 0 0 auto;
 }
 
@@ -5964,7 +5790,7 @@ td.data-table-key-col {
 }
 
 .session-row-badge--pull-request[data-pull-request-state="merged"] {
-  color: var(--accent);
+  color: var(--pr-merged);
 }
 
 .session-row-badge--cloud[data-placement-state="failed"],
@@ -6000,14 +5826,16 @@ td.data-table-key-col {
 
 .session-row-actions {
   display: inline-flex;
+  align-items: center;
+  gap: 1px;
 }
 
 .session-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--row-action-size);
-  height: var(--row-action-size);
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
@@ -6015,9 +5843,13 @@ td.data-table-key-col {
   color: var(--muted);
   opacity: 0;
   pointer-events: none;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
 }
 
-.session-row-host svg {
+.session-action svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -6050,21 +5882,20 @@ td.data-table-key-col {
   pointer-events: auto;
 }
 
-/* Nothing in the row trades places with the actions any more. Two-line rows put
-   them on the title line; single-line rows reserve their width in the text
-   column, which slides the endcap clear. Fading state here used to prevent an
-   overlap that no longer happens, and it took the unread dot with it the moment
-   the pointer arrived — while the badges beside it stayed, which read as a
-   glitch rather than a deliberate swap. */
-
 /* Sidebar rows are now the direct management surface after removing the
    duplicate picker; touch users need pin/menu controls without hover. */
 @media (hover: none), (pointer: coarse) {
   .sidebar-recent-session.session-row-host {
-    --row-action-size: 44px;
+    --session-row-actions-reserve: 92px;
+  }
+
+  .sidebar-recent-session.session-row-host[data-session-row-action-count="1"] {
+    --session-row-actions-reserve: 48px;
   }
 
   .sidebar-recent-session .session-action {
+    width: 44px;
+    height: 44px;
     opacity: 1;
     pointer-events: auto;
   }
@@ -6081,11 +5912,11 @@ td.data-table-key-col {
 .session-run-spinner {
   box-sizing: border-box;
   display: inline-block;
-  width: 11px;
-  height: 11px;
+  width: 12px;
+  height: 12px;
   flex: 0 0 auto;
-  border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
-  border-top-color: var(--run);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
   border-radius: var(--radius-full);
 }
 
@@ -6104,7 +5935,7 @@ td.data-table-key-col {
   .session-run-spinner,
   .session-glyph__ring {
     animation: none;
-    border-color: var(--run);
+    border-color: var(--accent);
   }
 }
 

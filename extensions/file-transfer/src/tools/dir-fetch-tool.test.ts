@@ -133,7 +133,7 @@ describe("dir.fetch archive extraction", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "settles promptly when a Fleet-shaped archive contains a symlink",
+    "rejects a Fleet-shaped archive containing a symlink",
     async () => {
       const tarBuffer = await createTarBuffer({
         entries: ["data", "auth"],
@@ -147,20 +147,9 @@ describe("dir.fetch archive extraction", () => {
       });
       const { appendFileTransferAudit, archivePath, module } = await importTool(tarBuffer);
 
-      const settled = await Promise.race([
-        executeDirFetch(module).then(
-          () => ({ status: "resolved" as const }),
-          (error: unknown) => ({ status: "rejected" as const, error }),
-        ),
-        new Promise<{ status: "timeout" }>((resolve) => {
-          setTimeout(() => resolve({ status: "timeout" }), 2_000);
-        }),
-      ]);
-
-      expect(settled.status).toBe("rejected");
-      expect(settled.status === "rejected" ? String(settled.error) : "").toMatch(
-        /dir\.fetch UNSAFE_ARCHIVE:.*link/iu,
-      );
+      // A symlink entry used to hang extraction instead of rejecting; the test
+      // timeout bounds settling, so a hang regression fails without a wall-clock race.
+      await expect(executeDirFetch(module)).rejects.toThrow(/dir\.fetch UNSAFE_ARCHIVE:.*link/iu);
       await expect(fs.access(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
         expect.objectContaining({ decision: "error", errorCode: "UNSAFE_ARCHIVE" }),

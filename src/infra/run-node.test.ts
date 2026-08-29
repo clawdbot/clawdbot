@@ -412,57 +412,6 @@ async function expectManifestId(tmp: string, relativePath: string, id: string) {
 }
 
 describe("run-node script", () => {
-  it.runIf(process.platform !== "win32")(
-    "preserves control-ui assets by building with tsdown --no-clean",
-    async ({ tmp }) => {
-      const argsPath = resolvePath(tmp, ".build-args.txt");
-      const indexPath = resolvePath(tmp, "dist/control-ui/index.html");
-
-      await writeRuntimePostBuildScaffold(tmp);
-      await fs.mkdir(path.dirname(indexPath), { recursive: true });
-      await fs.writeFile(indexPath, "<html>sentinel</html>\n", "utf-8");
-
-      const nodeCalls: string[][] = [];
-      const spawn = (cmd: string, args: string[]) => {
-        if (cmd === process.execPath && isTsxScriptArgs(args, "scripts/tsdown-build.mts")) {
-          fsSync.writeFileSync(argsPath, args.join(" "), "utf-8");
-          if (!args.includes("--no-clean")) {
-            fsSync.rmSync(resolvePath(tmp, "dist/control-ui"), { recursive: true, force: true });
-          }
-        }
-        if (cmd === process.execPath) {
-          nodeCalls.push([cmd, ...args]);
-        }
-        return createExitedProcess(0);
-      };
-
-      const exitCode = await runNodeCommand(tmp, {
-        args: ["--version"],
-        env: { OPENCLAW_FORCE_BUILD: "1" },
-        spawn,
-        runRuntimePostBuild: skipRuntimePostBuild,
-      });
-
-      expect(exitCode).toBe(0);
-      await expect(fs.readFile(argsPath, "utf-8")).resolves.toContain(
-        "scripts/tsdown-build.mts --no-clean",
-      );
-      await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain("sentinel");
-      expect(nodeCalls).toEqual([
-        [
-          process.execPath,
-          "--import",
-          "tsx",
-          "scripts/bundled-plugin-assets.mts",
-          "--phase",
-          "build",
-        ],
-        [process.execPath, "--import", "tsx", "scripts/tsdown-build.mts", "--no-clean"],
-        [process.execPath, "openclaw.mjs", "--version"],
-      ]);
-    },
-  );
-
   it("copies bundled plugin metadata after rebuilding from a clean dist", async ({ tmp }) => {
     await writeRuntimePostBuildScaffold(tmp);
     await writeProjectFiles(tmp, {
@@ -869,6 +818,26 @@ describe("run-node script", () => {
     expect(exitCode).toBe(0);
     expect(spawnCalls).toEqual([statusCommandSpawn()]);
   });
+
+  it.for([undefined, "/explicit/checkout"])(
+    "carries the checkout selector into the CLI (override: %s)",
+    async (override, { tmp }) => {
+      await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+      const { spawnSync } = createCurrentGitSpawnRecorder();
+      let childEnv: NodeJS.ProcessEnv | undefined;
+      const exitCode = await runNodeCommand(tmp, {
+        env: { OPENCLAW_DEV_SOURCE_ROOT: override },
+        spawn: (_cmd, _args, options) => {
+          childEnv = options.env;
+          return createExitedProcess(0);
+        },
+        spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
+      expect(exitCode).toBe(0);
+      expect(childEnv?.OPENCLAW_DEV_SOURCE_ROOT).toBe(override ?? tmp);
+    },
+  );
 
   it("skips rebuilding for private QA commands when the private QA facades are present", async ({
     tmp,

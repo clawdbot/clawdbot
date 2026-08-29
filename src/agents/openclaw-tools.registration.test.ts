@@ -21,6 +21,7 @@ import {
   collectPresentOpenClawTools,
   shouldIncludeAskUserToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
+  shouldIncludeSecretsToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
 import { textResult, type AnyAgentTool } from "./tools/common.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
@@ -119,18 +120,21 @@ describe("openclaw-tools progress_card gating", () => {
     expect(defaultTools).not.toContain("ask_user");
   });
 
-  it("keeps ask_user on primary sessions and excludes spawned worker sessions", () => {
-    expect(shouldIncludeAskUserToolForOpenClawTools({})).toBe(false);
-    expect(shouldIncludeAskUserToolForOpenClawTools({ agentSessionKey: "agent:main:main" })).toBe(
-      true,
-    );
+  it("keeps human-question tools on permitted primary sessions", () => {
+    for (const includeTool of [
+      shouldIncludeAskUserToolForOpenClawTools,
+      shouldIncludeSecretsToolForOpenClawTools,
+    ]) {
+      expect(includeTool({})).toBe(false);
+      expect(includeTool({ agentSessionKey: "agent:main:main" })).toBe(true);
+      expect(includeTool({ agentSessionKey: "agent:main:subagent:worker" })).toBe(false);
+      expect(includeTool({ agentSessionKey: "agent:main:acp:worker" })).toBe(false);
+    }
     expect(
-      shouldIncludeAskUserToolForOpenClawTools({
-        agentSessionKey: "agent:main:subagent:worker",
+      shouldIncludeSecretsToolForOpenClawTools({
+        agentSessionKey: "agent:main:main",
+        pluginToolDenylist: ["secrets"],
       }),
-    ).toBe(false);
-    expect(
-      shouldIncludeAskUserToolForOpenClawTools({ agentSessionKey: "agent:main:acp:worker" }),
     ).toBe(false);
     // ask_user must not depend on the TUI embedded-host flag; normal gateway
     // runs are the primary consumer.
@@ -139,7 +143,7 @@ describe("openclaw-tools progress_card gating", () => {
         config: {} as OpenClawConfig,
         runSessionKey: "agent:main:non-embedded",
       }),
-    ).toContain("ask_user");
+    ).toEqual(expect.arrayContaining(["ask_user", "secrets"]));
     setEmbeddedMode(true);
 
     expect(

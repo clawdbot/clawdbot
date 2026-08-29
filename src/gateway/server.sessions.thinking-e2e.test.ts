@@ -10,6 +10,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -97,15 +98,7 @@ async function listMainSessionWithThinking(params: {
   agentRuntime?: "codex" | "openclaw";
   selectedByOverride?: boolean;
   thinkingLevel?: string;
-  readPreparedGatewayModelCatalog?: () => Promise<
-    Array<{
-      provider: string;
-      id: string;
-      name: string;
-      reasoning: boolean;
-      compat?: { supportedReasoningEfforts?: string[] };
-    }>
-  >;
+  readPreparedGatewayModelCatalog?: GatewayRequestContext["readPreparedGatewayModelCatalog"];
 }) {
   await createSessionStoreDir();
   testState.agentConfig = {
@@ -148,7 +141,8 @@ async function listMainSessionWithThinking(params: {
     isWebchatConnect: () => false,
     context: {
       getRuntimeConfig,
-      readPreparedGatewayModelCatalog: params.readPreparedGatewayModelCatalog ?? (async () => []),
+      readPreparedGatewayModelCatalog:
+        params.readPreparedGatewayModelCatalog ?? (async () => ({ entries: [] })),
     } as never,
   });
 
@@ -165,17 +159,19 @@ test("e2e #76482: session with different model gets its own thinking levels thro
     primaryModel: "openai/gpt-5.5",
     sessionModelProvider: "test-extended",
     sessionModel: "extended-reasoner",
-    readPreparedGatewayModelCatalog: async () => [
-      // Provide a catalog with xhigh support — simulates what a real gateway
-      // resolves for models like DeepSeek V4 Pro
-      {
-        provider: "test-extended",
-        id: "extended-reasoner",
-        name: "Extended Reasoner",
-        reasoning: true,
-        compat: { supportedReasoningEfforts: ["xhigh"] },
-      },
-    ],
+    readPreparedGatewayModelCatalog: async () => ({
+      entries: [
+        // Provide a catalog with xhigh support — simulates what a real gateway
+        // resolves for models like DeepSeek V4 Pro
+        {
+          provider: "test-extended",
+          id: "extended-reasoner",
+          name: "Extended Reasoner",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: ["xhigh"] },
+        },
+      ],
+    }),
   });
 
   // Gateway includes thinkingOptions for lightweight rows (needed by Control UI)
@@ -251,7 +247,7 @@ test("session rows keep the selected Codex Sol model when runtime metadata conta
     sessionModel: "gpt-5.6",
     agentRuntime: "codex",
     selectedByOverride: false,
-    readPreparedGatewayModelCatalog: loadSolCatalog,
+    readPreparedGatewayModelCatalog: async () => ({ entries: await loadSolCatalog() }),
   });
 
   expect(session).toMatchObject({
@@ -286,15 +282,17 @@ test("unsupported generic stored levels clamp through the current profile", asyn
     sessionModel: "reasoner",
     agentRuntime: "codex",
     thinkingLevel: "ultra",
-    readPreparedGatewayModelCatalog: async () => [
-      {
-        provider: "test-generic",
-        id: "reasoner",
-        name: "Generic Reasoner",
-        reasoning: true,
-        compat: { supportedReasoningEfforts: ["max"] },
-      },
-    ],
+    readPreparedGatewayModelCatalog: async () => ({
+      entries: [
+        {
+          provider: "test-generic",
+          id: "reasoner",
+          name: "Generic Reasoner",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: ["max"] },
+        },
+      ],
+    }),
   });
 
   expect(session?.thinkingOptions).not.toContain("ultra");

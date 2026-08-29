@@ -6,10 +6,15 @@ import {
 } from "../../agents/context-cache.js";
 import {
   loadManifestModelCatalog,
+  loadProviderScopedThinkingCatalog,
   loadPreparedModelCatalog as loadModelCatalogLocal,
 } from "../../agents/model-catalog.runtime.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import * as activeThinkingPolicy from "../../plugins/provider-thinking-active.js";
+import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thinking.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 type PersistReplySessionEntry =
@@ -70,7 +75,8 @@ vi.mock("../../channels/plugins/session-conversation.js", () => ({
     sessionKey?.replace(/:thread:[^:]+$/, "").replace(/:topic:[^:]+$/, "") ?? null,
 }));
 
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => ({ plugins: [] }),
 }));
 
@@ -142,6 +148,7 @@ afterEach(() => {
   vi.mocked(loadManifestModelCatalog).mockReset();
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
   authProfileStoreMock.reset();
+  vi.mocked(loadProviderScopedThinkingCatalog).mockReset().mockResolvedValue([]);
 });
 
 const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
@@ -306,7 +313,7 @@ describe("createModelSelectionState catalog loading", () => {
 
   it("hydrates runtime catalog metadata when the configured allowlist entry lacks reasoning", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
-    vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
+    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValueOnce([
       { provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: true },
     ]);
     const cfg = {
@@ -338,7 +345,13 @@ describe("createModelSelectionState catalog loading", () => {
     });
 
     await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("medium");
-    expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
+    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledWith({
+      config: cfg,
+      agentId: undefined,
+      provider: "openai",
+      model: "gpt-5.4",
+    });
   });
 
   it("uses the prepared gateway owner catalog without an exact-generation reload", async () => {
@@ -443,6 +456,74 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
     expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { hasModelDirective: false, capturedPolicy: true, expected: "ultra" },
+    { hasModelDirective: true, capturedPolicy: true, expected: "ultra" },
+    { hasModelDirective: false, capturedPolicy: false, expected: "medium" },
+    { hasModelDirective: true, capturedPolicy: false, expected: "medium" },
+  ])(
+    "keeps prepared thinking ownership through reply selection (directive=$hasModelDirective policy=$capturedPolicy)",
+    async ({ hasModelDirective, capturedPolicy, expected }) => {
+      const provider = "fixture-provider";
+      const model = "fixture-model";
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { models: { [`${provider}/${model}`]: { alias: "Fixture" } } } },
+        models: {
+          providers: {
+            [provider]: {
+              baseUrl: "https://fixture.invalid/v1",
+              models: [makeConfiguredModel({ id: model })],
+            },
+          },
+        },
+      };
+      const preparedModelCatalog: ModelCatalogSnapshot = {
+        entries: [{ provider, id: model, name: "Fixture", reasoning: true }],
+        routeVariants: [],
+      };
+      prepareModelCatalogThinkingPolicies({
+        catalog: preparedModelCatalog,
+        metadataSnapshot: createPluginMetadataSnapshotFixture(),
+        providers: [
+          {
+            provider: {
+              id: provider,
+              ...(capturedPolicy
+                ? {
+                    resolveThinkingProfile: () => ({
+                      levels: [{ id: "off" }, { id: "max" }, { id: "ultra" }],
+                      defaultLevel: "ultra",
+                    }),
+                  }
+                : {}),
+            },
+          },
+        ],
+      });
+      const ambient = vi
+        .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
+        .mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
+      try {
+        const state = await createModelSelectionState({
+          cfg,
+          agentCfg: cfg.agents?.defaults,
+          defaultProvider: provider,
+          defaultModel: model,
+          provider,
+          model,
+          hasModelDirective,
+          preparedModelCatalog,
+        });
+        await expect(
+          state.resolveDefaultThinkingLevel({ provider, model, agentRuntime: "codex" }),
+        ).resolves.toBe(expected);
+        expect(ambient).not.toHaveBeenCalled();
+      } finally {
+        ambient.mockRestore();
+      }
+    },
+  );
 
   it("uses manifest metadata before hydrating the runtime thinking catalog", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
@@ -2331,9 +2412,7 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
   });
 
   it("returns on when catalog model has reasoning true", async () => {
-    const { loadPreparedModelCatalog: loadModelCatalogForCase } =
-      await import("../../agents/model-catalog.runtime.js");
-    vi.mocked(loadModelCatalogForCase).mockResolvedValueOnce([
+    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValueOnce([
       { provider: "openrouter", id: "x-ai/grok-4.1-fast", name: "Grok", reasoning: true },
     ]);
     const state = await createModelSelectionState({

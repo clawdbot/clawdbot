@@ -3,13 +3,12 @@ import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline"
 
 type QaCrablineChannelDriverArtifactPaths = {
   capabilityMatrixPath: string;
-  providerReadinessArtifactPath?: string;
-  smokeArtifactPath: string;
+  providerReadinessArtifactPath: string;
 };
 
 export type QaSuiteChannelDriverSelection = Omit<
   OpenClawCrablineChannelDriverSelection,
-  "capabilityMatrixPath" | "providerReadinessArtifactPath" | "smokeArtifactPath"
+  "capabilityMatrixPath" | "providerReadinessArtifactPath"
 > &
   QaCrablineChannelDriverArtifactPaths;
 
@@ -31,14 +30,12 @@ export function resolveQaCrablineChannelDriverArtifactPaths(params: {
   if (!params.selection) {
     return undefined;
   }
-  const providerReadinessArtifactPath =
-    readArtifactPath(params.result?.providerReadinessArtifactPath) ??
-    params.selection.providerReadinessArtifactPath;
   return {
     capabilityMatrixPath:
       readArtifactPath(params.result?.capabilityMatrixPath) ??
       params.selection.capabilityMatrixPath,
-    providerReadinessArtifactPath,
-    smokeArtifactPath: providerReadinessArtifactPath,
+    providerReadinessArtifactPath:
+      readArtifactPath(params.result?.providerReadinessArtifactPath) ??
+      params.selection.providerReadinessArtifactPath,
   };
 }

@@ -228,6 +228,19 @@ Find yours with the [username to ID converter](https://www.streamweasels.com/too
 
 ## Troubleshooting
 
+### Execution identity audit
+
+With [execution identity collection](/gateway/audit#run-identity-inspection) enabled,
+a trusted native Twitch plugin attributes the run to the native Twitch sender,
+scoped to the configured account. The audit stores an opaque identity, not the raw
+Twitch user ID. Roles such as moderator authorize access; they do not replace
+the sender's identity. Missing native user IDs remain unknown even when a role or
+open policy allows a reply. External plugin installations do not gain trusted
+participant evidence through this path. Audit collection never changes these
+access decisions.
+
+### Connection and replies
+
 First, run diagnostic commands:
 
 ```bash
@@ -365,7 +378,7 @@ The agent can send Twitch messages through the message tool `send` action:
 }
 ```
 
-`to` is optional and defaults to the account's configured `channel`.
+When replying in a Twitch conversation, omit `to` to use the current conversation. Message-tool calls without a current conversation and CLI sends require an explicit target. Direct Gateway `message.action` sends can omit `to` to use the selected account's configured `channel`.
 
 ## Safety and ops
 
@@ -380,6 +393,7 @@ The agent can send Twitch messages through the message tool `send` action:
 
 - **500 characters** per message; longer replies are chunked at word boundaries.
 - Markdown is stripped before sending (Twitch chat is plain text; newlines become spaces).
+- Text that becomes empty after Markdown stripping, such as `---`, is recorded as intentionally not sent and does not count as a delivered message.
 - OpenClaw adds no rate limiting of its own; the Twurple chat client handles Twitch rate limits.
 
 ## Related

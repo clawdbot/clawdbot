@@ -19,12 +19,21 @@ async function assertPrepublishRequests(
   requestedPackage,
   version,
   securityMode = "required",
+  attempts = "1",
+  minimumAttempts = "1",
 ) {
   if (!baseUrl || !requestedPackage || !version) {
     throw new Error("assert-prepublish-requests requires <base-url> <package-name> <version>");
   }
   if (securityMode !== "required" && securityMode !== "absent") {
     throw new Error("assert-prepublish-requests security mode must be required or absent");
+  }
+  if (attempts !== "1" && attempts !== "2" && attempts !== "complete") {
+    throw new Error("assert-prepublish-requests attempts must be 1, 2, or complete");
+  }
+  const minimumCount = Number(minimumAttempts);
+  if (!Number.isInteger(minimumCount) || minimumCount < 1 || minimumCount > 16) {
+    throw new Error("assert-prepublish-requests minimum attempts must be an integer from 1 to 16");
   }
   const response = await fetch(new URL("/__fixture__/requests", baseUrl));
   if (!response.ok) {
@@ -42,9 +51,18 @@ async function assertPrepublishRequests(
     ...(securityMode === "required" ? [`GET ${versionPath}/security`] : []),
     `GET ${versionPath}/artifact/download`,
   ];
-  if (JSON.stringify(payload.requests) !== JSON.stringify(expected)) {
+  // Multi-command upgrade recovery can stage an artifact in several convergence
+  // phases. Every request must still belong to a complete authorized audit sequence.
+  const count =
+    attempts === "complete" ? payload.requests.length / expected.length : Number(attempts);
+  if (!Number.isInteger(count) || count < minimumCount || count > 16) {
+    throw new Error(`expected ${minimumCount}-16 complete ClawHub artifact audit sequences`);
+  }
+  const expectedRequests = Array.from({ length: count }, () => expected).flat();
+  if (JSON.stringify(payload.requests) !== JSON.stringify(expectedRequests)) {
     throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(payload.requests)}`);
   }
+  console.log(`Verified ${count} complete ClawHub artifact audit sequence(s).`);
 }
 
 async function assertNoRequests(baseUrl) {
@@ -61,73 +79,6 @@ async function assertNoRequests(baseUrl) {
   }
   if (payload.requests.length !== 0) {
     throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(payload.requests)}`);
-  }
-}
-
-function parkPrepublishAuthoredConfig(configPath, snapshotPath) {
-  if (!configPath || !snapshotPath) {
-    throw new Error("park-prepublish-auth-config requires <config-path> <snapshot-path>");
-  }
-  const authoredConfig = fs.readFileSync(configPath);
-  const config = JSON.parse(authoredConfig.toString("utf8"));
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    throw new Error("prepublish auth config must be a JSON object");
-  }
-  for (const key of ["plugins", "channels", "gateway"]) {
-    const value = config[key];
-    if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
-      throw new Error(`prepublish auth config ${key} must be an object`);
-    }
-  }
-  if (config.plugins?.allow !== undefined && !Array.isArray(config.plugins.allow)) {
-    throw new Error("prepublish auth config plugins.allow must be an array");
-  }
-  if (
-    config.plugins?.entries !== undefined &&
-    (!config.plugins.entries ||
-      typeof config.plugins.entries !== "object" ||
-      Array.isArray(config.plugins.entries))
-  ) {
-    throw new Error("prepublish auth config plugins.entries must be an object");
-  }
-  if (
-    config.gateway?.reload !== undefined &&
-    (!config.gateway.reload ||
-      typeof config.gateway.reload !== "object" ||
-      Array.isArray(config.gateway.reload))
-  ) {
-    throw new Error("prepublish auth config gateway.reload must be an object");
-  }
-  if (Array.isArray(config.plugins?.allow)) {
-    config.plugins.allow = config.plugins.allow.filter((id) => id !== "whatsapp");
-  }
-  if (config.plugins?.entries && typeof config.plugins.entries === "object") {
-    delete config.plugins.entries.whatsapp;
-  }
-  if (config.channels && typeof config.channels === "object") {
-    delete config.channels.whatsapp;
-  }
-  config.gateway ??= {};
-  config.gateway.reload = { ...config.gateway.reload, mode: "off" };
-  fs.writeFileSync(snapshotPath, authoredConfig, { mode: 0o600 });
-  replaceFileAtomically(configPath, Buffer.from(`${JSON.stringify(config, null, 2)}\n`));
-}
-
-function restorePrepublishAuthoredConfig(configPath, snapshotPath) {
-  if (!configPath || !snapshotPath) {
-    throw new Error("restore-prepublish-auth-config requires <config-path> <snapshot-path>");
-  }
-  replaceFileAtomically(configPath, fs.readFileSync(snapshotPath));
-}
-
-function replaceFileAtomically(filePath, contents) {
-  const tempPath = `${filePath}.tmp.${process.pid}`;
-  const mode = fs.statSync(filePath).mode;
-  try {
-    fs.writeFileSync(tempPath, contents, { mode });
-    fs.renameSync(tempPath, filePath);
-  } finally {
-    fs.rmSync(tempPath, { force: true });
   }
 }
 
@@ -251,6 +202,8 @@ function startPrepublishArtifactServer() {
           npmTarballName: entry.tarball,
           createdAt: 0,
         },
+        overview: "No security concerns found in the fixture release.",
+        securityAuditUrl: `http://${request.headers.host}${url.pathname}`,
         trust: {
           scanStatus: "clean",
           moderationState: null,
@@ -712,7 +665,14 @@ profiles["catalog-search"] = {
 };
 
 if (profile === "assert-prepublish-requests") {
-  assertPrepublishRequests(portFile, artifactManifestFile, process.argv[5], process.argv[6]).catch(
+  assertPrepublishRequests(
+    portFile,
+    artifactManifestFile,
+    process.argv[5],
+    process.argv[6],
+    process.argv[7],
+    process.argv[8],
+  ).catch(
     /** @param {unknown} error */ (error) => {
       console.error(error);
       process.exit(1);
@@ -728,16 +688,6 @@ if (profile === "assert-no-requests") {
       process.exit(1);
     },
   );
-  return;
-}
-
-if (profile === "park-prepublish-auth-config") {
-  parkPrepublishAuthoredConfig(portFile, artifactManifestFile);
-  return;
-}
-
-if (profile === "restore-prepublish-auth-config") {
-  restorePrepublishAuthoredConfig(portFile, artifactManifestFile);
   return;
 }
 
@@ -858,7 +808,11 @@ async function main() {
       url.pathname ===
       `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}/security`
     ) {
-      json(response, securityDetail);
+      json(response, {
+        ...securityDetail,
+        overview: "No security concerns found in the fixture release.",
+        securityAuditUrl: `http://${request.headers.host}${url.pathname}`,
+      });
       return;
     }
     if (

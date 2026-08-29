@@ -49,11 +49,9 @@ function resolveTask(entry: SubagentRunRecord): TaskRecord | undefined {
 }
 
 function findSubagentForTask(task: TaskRecord): SubagentRunRecord | undefined {
+  // Child sessions are reused; only the exact task run owns its retained result.
   for (const entry of subagentRuns.values()) {
-    if (
-      (entry.taskRunId ?? entry.runId) === task.runId ||
-      (task.childSessionKey && entry.childSessionKey === task.childSessionKey)
-    ) {
+    if ((entry.taskRunId ?? entry.runId) === task.runId) {
       return entry;
     }
   }

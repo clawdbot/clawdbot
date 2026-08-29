@@ -807,65 +807,6 @@ describe("models.authStatus", () => {
     expect(provider).toMatchObject({ provider: "minimax-portal", status: "expired" });
   });
 
-  it("does not publish a synthetic Anthropic missing row beside owned Claude CLI OAuth", async () => {
-    const profileId = "anthropic:claude-cli";
-    mocks.getRuntimeConfig.mockReturnValue({
-      auth: { profiles: { [profileId]: { provider: "anthropic", mode: "token" } } },
-    });
-    const profile = {
-      profileId,
-      provider: "claude-cli",
-      type: "oauth",
-      status: "expired",
-      expiresAt: 1,
-      remainingMs: -1,
-      source: "store",
-      label: profileId,
-    } satisfies AuthHealthSummary["profiles"][number];
-    setPreparedAuthStore(
-      Object.assign(
-        {
-          version: 1,
-          profiles: {
-            [profileId]: {
-              type: "oauth",
-              provider: "claude-cli",
-              access: "expired-access",
-              refresh: "cli-owned-refresh",
-              expires: 1,
-            } satisfies AuthProfileStore["profiles"][string],
-          },
-        },
-        { runtimeExternalCliProfileIds: [profileId] },
-      ),
-    );
-    mocks.buildAuthHealthSummary.mockReturnValue({
-      now: 2,
-      warnAfterMs: 0,
-      profiles: [profile],
-      providers: [
-        { provider: "anthropic", status: "missing", profiles: [] },
-        {
-          provider: "claude-cli",
-          status: "expired",
-          expiresAt: 1,
-          remainingMs: -1,
-          profiles: [profile],
-        },
-      ],
-    });
-
-    const result = await readAuthStatus();
-
-    expect(result.providers).toEqual([
-      expect.objectContaining({
-        provider: "claude-cli",
-        status: "ok",
-        profiles: [expect.anything()],
-      }),
-    ]);
-  });
-
   it("keeps a missing Anthropic row when its model route has independent auth config", async () => {
     const profileId = "anthropic:claude-cli";
     mocks.getRuntimeConfig.mockReturnValue({

@@ -312,7 +312,7 @@ export function createFindToolDefinition(
             // cannot split multibyte characters into U+FFFD replacement noise.
             child.stderr?.setEncoding("utf8");
             child.stderr?.on("data", (chunk: string) => {
-              stderr = appendBoundedTextTail(stderr, chunk);
+              stderr = appendBoundedTextTail(stderr, chunk).tail;
             });
             // Readline re-emits input failures, while the stream listener also catches
             // implementations that do not. settle() keeps the shared failure path one-shot.

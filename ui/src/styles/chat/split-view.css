@@ -111,7 +111,6 @@ openclaw-chat-pane {
 .chat-split-view__drop-indicator {
   position: absolute;
   z-index: 20;
-  box-sizing: border-box;
   pointer-events: none;
   border: 1px solid color-mix(in srgb, var(--accent) 65%, transparent);
   border-radius: var(--radius-sm);
@@ -197,6 +196,13 @@ openclaw-chat-pane {
   gap: 6px;
 }
 
+/* These groups become the two mobile identity rows. They stay transparent to
+   the desktop flex trail so its existing one-line geometry is unchanged. */
+.chat-pane__project-row,
+.chat-pane__session-trail {
+  display: contents;
+}
+
 /* Renaming needs the row's spare width, which the trail must pass through:
    without this the input is trapped inside a shrink-only container. */
 .chat-pane__crumbs:has(.chat-pane__session-title-input) {
@@ -215,6 +221,8 @@ openclaw-chat-pane {
    shared 8px gap provides the spacing); it may shrink with ellipsis
    when space runs out, and the action row pushes itself to the right edge. */
 .chat-pane__session-title {
+  display: inline-flex;
+  align-items: center;
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -224,7 +232,6 @@ openclaw-chat-pane {
 
 .chat-pane__session-title-button,
 .chat-pane__parent-session {
-  display: block;
   /* Hover padding is drawn outside the text box: the plain-span title (catalog
      and rename-disabled panes) has none, and without the pull-back the same
      title would start 5px further right the moment renaming is allowed. */
@@ -330,6 +337,10 @@ openclaw-chat-pane {
    unconditionally would cost every normal full-color icon, so if it ever
    matters in practice the escape hatch is a plate applied conditionally, not a
    blanket effect here. */
+.chat-pane__workspace-chip .workspace-icon-fallback {
+  display: contents;
+}
+
 .chat-pane__workspace-chip .workspace-icon {
   width: 14px;
   height: 14px;
@@ -384,6 +395,26 @@ openclaw-chat-pane {
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
+}
+
+.chat-pane__placement-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0 0 4px;
+  padding: 6px 8px 10px;
+  border-bottom: 1px solid var(--overlay-border);
+  font-size: 11px;
+}
+
+.chat-pane__placement-facts dt {
+  color: var(--muted);
+}
+
+.chat-pane__placement-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
 }
 
 .chat-pane__placement-note {
@@ -746,7 +777,7 @@ openclaw-chat-pane {
 
   /* The project name is gone at this width, so the separator would trail an
      icon-only pill and read as punctuation with nothing on its left. */
-  .chat-pane__workspace-menu + .chat-pane__crumb-sep {
+  .chat-pane__project-row + .chat-pane__session-trail > .chat-pane__crumb-sep:first-child {
     display: none;
   }
 
@@ -756,7 +787,8 @@ openclaw-chat-pane {
 }
 
 .chat-header-session-menu--compact .session-menu__item {
-  min-height: 44px;
+  flex: 0 0 34px;
+  min-height: 34px;
 }
 
 .chat-header-session-menu__trigger {
@@ -812,6 +844,10 @@ openclaw-chat-pane {
   overflow-y: auto;
 }
 
+.chat-header-session-menu--compact-sharing::part(menu) {
+  height: min(420px, 60vh);
+}
+
 .continue-in-terminal-dialog__card {
   display: grid;
   gap: 18px;
@@ -860,14 +896,10 @@ html.openclaw-native-nav .shell--nav-collapsed:not(.shell--mobile-nav) {
 }
 
 html.openclaw-native-web-chrome .shell--nav-collapsed:not(.shell--mobile-nav) {
-  --shell-titlebar-inset: calc(246px + var(--shell-access-width));
-}
-
-/* At the native 601/620px expanded-rail width, limited access remains in the
-   hosted titlebar just beyond the 258px rail edge. Clear its 28px control. */
-html.openclaw-native-web-chrome
-  .shell:not(.shell--mobile-nav, .shell--nav-collapsed):has(.scope-upgrade-shell-status) {
-  --shell-titlebar-inset: 24px;
+  --shell-titlebar-inset: calc(
+    var(--shell-native-titlebar-controls-inset) + var(--shell-native-titlebar-controls-width) +
+      var(--shell-chrome-controls-gap) + var(--shell-attention-width)
+  );
 }
 
 /* Apply the safe edge to whichever header occupies the first content row;
@@ -881,17 +913,6 @@ html.openclaw-native-web-chrome
     .sidebar-region--expanded .side-panel__header
   ) {
   padding-left: var(--shell-titlebar-inset);
-}
-
-.shell--mobile-nav:has(.scope-upgrade-shell-status)
-  :is(
-    .chat-split-view__column:first-child
-      > .chat-split-view__cell:first-child
-      :is(.chat-main__conversation-column, .chat-pane-primary-column)
-      > .chat-pane__header,
-    .sidebar-region--expanded .side-panel__header
-  ) {
-  padding-right: calc(max(58px, env(safe-area-inset-right)) + 48px);
 }
 
 /* Native macOS desktop shells: the pane header is the window's top surface,
@@ -913,27 +934,12 @@ html.openclaw-native-macos
    x=78; newer apps (openclaw-native-nav) also float the titlebar accessory
    (sidebar toggle + back/forward, DashboardWindowController) ending ~x=194.
    Drawer layouts reserve a 58px topbar row instead (layout.mobile.css). The
-   first column's min-width grows by the extra inset
-   (90/204 minus the 12px base padding): the header's action row cannot
+   first column's min-width grows by the extra inset above the 12px base
+   padding: the header's action row cannot
    shrink, and the cell's overflow:hidden would clip the close/split buttons
    at the 320px column minimum otherwise. */
 html.openclaw-native-macos
   .shell--nav-collapsed:not(.shell--mobile-nav)
   .chat-split-view__column:first-child {
-  min-width: 398px;
-}
-
-html.openclaw-native-nav
-  .shell--nav-collapsed:not(.shell--mobile-nav)
-  .chat-split-view__column:first-child {
-  min-width: 512px;
-}
-
-/* 246px = 78px traffic lights + (5 * 28px buttons + 4 * 4px gaps) + 12px.
-   The base minimum adds the 234px inset delta to the 320px column floor;
-   limited-access chrome contributes one more control. */
-html.openclaw-native-web-chrome
-  .shell--nav-collapsed:not(.shell--mobile-nav)
-  .chat-split-view__column:first-child {
-  min-width: calc(554px + var(--shell-access-width));
+  min-width: calc(308px + var(--shell-titlebar-inset));
 }

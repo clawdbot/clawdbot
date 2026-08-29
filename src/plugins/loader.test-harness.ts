@@ -224,6 +224,7 @@ export function writeBundledPlugin(params: {
 export function makeOpenClawDevSourceRoot() {
   const root = makePluginLoaderTempDir();
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
+  fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: [extensions/*]\n");
   mkdirSafe(path.join(root, "src"));
   mkdirSafe(path.join(root, "extensions"));
   return root;

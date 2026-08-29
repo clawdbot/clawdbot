@@ -51,11 +51,42 @@ describe("mattermost monitor resources", () => {
         body: "quarterly files",
         nativeMedia: [{}, {}],
         materializedMedia: [
-          { path: "/tmp/q1.pdf", contentType: "application/pdf" },
-          { kind: "audio" },
+          { path: "/tmp/q1.pdf", contentType: "application/pdf", fileName: "available.pdf" },
+          { kind: "audio", fileName: "quarterly recording.mp3" },
         ],
       }),
-    ).toBe("quarterly files\n\n[mattermost attachment unavailable]");
+    ).toBe('quarterly files\n\n[mattermost attachment unavailable] "quarterly recording.mp3"');
+  });
+
+  it.each([
+    {
+      fileName: '../../private/report]\u0000\n".pdf',
+      expected: '[mattermost attachment unavailable] "report].pdf"',
+    },
+    { fileName: "   ", expected: "[mattermost attachment unavailable]" },
+  ])("safely formats unavailable attachment names: $fileName", ({ fileName, expected }) => {
+    expect(
+      formatMattermostInboundMediaText({
+        body: "",
+        nativeMedia: [{}],
+        materializedMedia: [{ kind: "document", fileName }],
+      }),
+    ).toBe(expected);
+  });
+
+  it("bounds multiple unavailable attachment names without losing their count", () => {
+    const materializedMedia = Array.from({ length: 4 }, (_, index) => ({
+      kind: "document" as const,
+      fileName: `${index}-${"a".repeat(250)}.pdf`,
+    }));
+    const result = formatMattermostInboundMediaText({
+      body: "",
+      nativeMedia: materializedMedia.map(() => ({})),
+      materializedMedia,
+    });
+
+    expect(result).toContain("[mattermost 4 attachments unavailable]");
+    expect(result.length).toBeLessThanOrEqual(560);
   });
 
   it("keeps successfully materialized media-only text empty", () => {
@@ -93,6 +124,7 @@ describe("mattermost monitor resources", () => {
     const saveRemoteMedia = vi.fn(async () => ({
       path: "/tmp/file.png",
       contentType: "image/png",
+      fileName: "original screenshot.png",
     }));
 
     const resources = createMattermostMonitorResources({
@@ -113,6 +145,7 @@ describe("mattermost monitor resources", () => {
       {
         path: "/tmp/file.png",
         contentType: "image/png",
+        fileName: "original screenshot.png",
         kind: "image",
       },
     ]);
@@ -166,7 +199,7 @@ describe("mattermost monitor resources", () => {
       .mockRejectedValueOnce(new Error("download failed"));
     const request = vi.fn(async (requestPath: string) => {
       expect(requestPath).toBe("/files/file-audio/info");
-      return { mime_type: "audio/mpeg" };
+      return { mime_type: "audio/mpeg", name: "private-unavailable-recording.mp3" };
     });
     const resources = createMattermostMonitorResources({
       accountId: "default",
@@ -184,7 +217,11 @@ describe("mattermost monitor resources", () => {
 
     await expect(resources.resolveMattermostMedia(["file-image", "file-audio"])).resolves.toEqual([
       { path: "/tmp/file.png", contentType: "image/png", kind: "image" },
-      { contentType: "audio/mpeg", kind: "audio" },
+      {
+        contentType: "audio/mpeg",
+        fileName: "private-unavailable-recording.mp3",
+        kind: "audio",
+      },
     ]);
     expect(request).toHaveBeenCalledTimes(1);
   });
@@ -193,6 +230,8 @@ describe("mattermost monitor resources", () => {
     const saveRemoteMedia = vi.fn().mockRejectedValue(new Error("download failed"));
     const request = vi.fn(async (requestPath: string) => ({
       mime_type: requestPath.includes("video") ? "video/mp4" : "application/pdf",
+      // Blank server-side names must be omitted, not forwarded as empty strings.
+      name: requestPath.includes("video") ? "   " : undefined,
     }));
     const resources = createMattermostMonitorResources({
       accountId: "default",

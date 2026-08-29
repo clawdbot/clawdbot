@@ -79,7 +79,7 @@ struct IOSGatewayChatTransportTests {
               "type":"hello-ok",
               "protocol":4,
               "server":{"version":"test","connId":"test"},
-              "features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract"]},
+              "features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract","session-unread-ack-contract"]},
               "snapshot":{
                 "presence":[],
                 "health":{},
@@ -92,6 +92,7 @@ struct IOSGatewayChatTransportTests {
             """#.utf8)
         let hello = try JSONDecoder().decode(HelloOk.self, from: data)
         #expect(hello.supportsServerCapability(.chatSendRoutingContract))
+        #expect(hello.supportsServerCapability(.sessionUnreadAckContract))
     }
 
     @Test func `session mutations dispatch normalized selected agent targets`() async throws {
@@ -263,39 +264,6 @@ struct IOSGatewayChatTransportTests {
         #expect(requests[0].params["fastMode"]?.value as? Bool == true)
         #expect(requests[1].params["fastMode"]?.value is NSNull)
         #expect(requests.allSatisfy { $0.params["verboseLevel"] == nil })
-    }
-
-    @Test func `session groups lease uses the supplied pinned request path`() async throws {
-        let recorder = RequestRecorder()
-        let lease = IOSGatewayChatTransport.makeSessionGroupsRouteLease { request in
-            let response = if request.method == "sessions.groups.list" {
-                Data(#"{"groups":[{"name":"Work","position":0}]}"#.utf8)
-            } else {
-                Data(#"{"ok":true,"groups":[{"name":"Projects","position":0}]}"#.utf8)
-            }
-            return await recorder.record(request, response: response)
-        }
-
-        let listed = try await lease.listGroups()
-        let put = try await lease.putGroups(names: ["Work", "Personal"])
-        let renamed = try await lease.renameGroup(name: "Work", to: "Projects")
-        let deleted = try await lease.deleteGroup(name: "Personal")
-
-        #expect(listed?.groups.map(\.name) == ["Work"])
-        #expect(put.groups.map(\.name) == ["Projects"])
-        #expect(renamed.groups.map(\.name) == ["Projects"])
-        #expect(deleted.groups.map(\.name) == ["Projects"])
-        let requests = await recorder.all()
-        #expect(requests.map(\.method) == [
-            "sessions.groups.list",
-            "sessions.groups.put",
-            "sessions.groups.rename",
-            "sessions.groups.delete",
-        ])
-        #expect(requests[1].params["names"]?.value as? [String] == ["Work", "Personal"])
-        #expect(requests[2].params["name"]?.value as? String == "Work")
-        #expect(requests[2].params["to"]?.value as? String == "Projects")
-        #expect(requests[3].params["name"]?.value as? String == "Personal")
     }
 
     @Test func `requests fail fast when gateway not connected`() async {
@@ -536,6 +504,56 @@ struct IOSGatewayChatTransportTests {
 }
 
 struct LocalFixtureChatTransportTests {
+    @Test(arguments: [
+        (LocalChatFixture.appleReviewDemo, ["main"]),
+        (LocalChatFixture.appScreenshots, ["main", "research", "automation"]),
+    ])
+    func `new session options expose fixture agents and create the selected session`(
+        fixture: LocalChatFixture,
+        expectedAgentIDs: [String]) async throws
+    {
+        let transport = LocalFixtureChatTransport(fixture: fixture)
+        let route = try #require(await transport.acquireNewSessionRouteLease())
+        let catalog = try #require(try await route.listAgents())
+
+        #expect(catalog.defaultId == fixture.defaultAgentID)
+        #expect(catalog.agents.map(\.id) == expectedAgentIDs)
+        #expect(catalog.agents.allSatisfy { $0.workspaceGit == false })
+        let selectedAgentID = try #require(catalog.agents.last?.id)
+        let created = try await route.createSession(
+            key: "fixture-selected-agent",
+            label: nil,
+            agentID: selectedAgentID,
+            parentSessionKey: nil,
+            worktree: nil,
+            worktreeBaseRef: nil)
+        #expect(created.key == "fixture-selected-agent")
+    }
+
+    @Test func `new session options reject unavailable agents and worktrees`() async throws {
+        let transport = LocalFixtureChatTransport(fixture: .appScreenshots)
+        let route = try #require(await transport.acquireNewSessionRouteLease())
+
+        await #expect(throws: NSError.self) {
+            try await route.createSession(
+                key: "unknown-agent",
+                label: nil,
+                agentID: "missing",
+                parentSessionKey: nil,
+                worktree: nil,
+                worktreeBaseRef: nil)
+        }
+        await #expect(throws: NSError.self) {
+            try await route.createSession(
+                key: "unsupported-worktree",
+                label: nil,
+                agentID: "main",
+                parentSessionKey: nil,
+                worktree: true,
+                worktreeBaseRef: "main")
+        }
+    }
+
     @Test func `sent user turn carries gateway idempotency metadata`() async throws {
         let transport = LocalFixtureChatTransport(fixture: .appleReviewDemo)
 

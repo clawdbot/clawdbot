@@ -2,10 +2,24 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 
+export type WebRtcSdpE2eProof = {
+  bodyCancelCount: number;
+  bodyCancelResolvedCount: number;
+  fetchCount: number;
+  remoteDescriptionCount: number;
+  statuses: number[];
+};
+
+type WebRtcSdpResponseFixture = {
+  body: string;
+  status: number;
+};
+
 export function videoTalkCatalog(activeProvider: "google" | "openai") {
   return {
     realtime: {
       activeProvider,
+      ready: true,
       providers: [{ id: activeProvider, label: activeProvider, supportsVideoFrames: true }],
     },
   };
@@ -36,7 +50,10 @@ export async function installTalkBrowserFixtures(page: Page) {
         ],
         getUserMedia: async (constraints: unknown) => {
           state.constraints.push(constraints);
-          return { getTracks: () => [track] };
+          return {
+            getAudioTracks: () => [track],
+            getTracks: () => [track],
+          };
         },
       },
     });
@@ -91,6 +108,110 @@ export async function installTalkBrowserFixtures(page: Page) {
   });
 }
 
+async function installWebRtcSdpResponseFixture(page: Page, fixture: WebRtcSdpResponseFixture) {
+  await page.addInitScript(() => {
+    const proofWindow = window as Window & { openclawWebRtcSdpE2e?: WebRtcSdpE2eProof };
+    const microphoneTrack = { stop() {} };
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: async () => ({
+          getAudioTracks: () => [microphoneTrack],
+          getTracks: () => [microphoneTrack],
+        }),
+      },
+    });
+    proofWindow.openclawWebRtcSdpE2e = {
+      bodyCancelCount: 0,
+      bodyCancelResolvedCount: 0,
+      fetchCount: 0,
+      remoteDescriptionCount: 0,
+      statuses: [],
+    };
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const response = await originalFetch(input, init);
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.includes("api.openai.com/v1/realtime/calls")) {
+        return response;
+      }
+      const proof = proofWindow.openclawWebRtcSdpE2e;
+      if (!proof || !response.body) {
+        return response;
+      }
+      proof.fetchCount += 1;
+      proof.statuses.push(response.status);
+      const originalCancel = response.body.cancel.bind(response.body);
+      response.body.cancel = async (reason) => {
+        proof.bodyCancelCount += 1;
+        try {
+          return await originalCancel(reason);
+        } finally {
+          proof.bodyCancelResolvedCount += 1;
+        }
+      };
+      return response;
+    };
+
+    class FakeDataChannel extends EventTarget {
+      readyState = "open";
+      send() {}
+      close() {
+        this.readyState = "closed";
+      }
+    }
+
+    class FakePeerConnection extends EventTarget {
+      connectionState = "new";
+      sctp = { maxMessageSize: 256 * 1024 };
+      channel = new FakeDataChannel();
+      addTrack() {}
+      createDataChannel() {
+        return this.channel;
+      }
+      async createOffer() {
+        return { type: "offer" as const, sdp: "offer-sdp" };
+      }
+      async setLocalDescription() {}
+      async setRemoteDescription() {
+        const proof = proofWindow.openclawWebRtcSdpE2e;
+        if (proof) {
+          proof.remoteDescriptionCount += 1;
+        }
+      }
+      close() {
+        this.connectionState = "closed";
+      }
+    }
+
+    Object.defineProperty(window, "RTCPeerConnection", {
+      configurable: true,
+      value: FakePeerConnection,
+    });
+  });
+  await page.route("https://api.openai.com/v1/realtime/calls", async (route) => {
+    await route.fulfill({
+      status: fixture.status,
+      contentType: "application/sdp",
+      body: fixture.body,
+    });
+  });
+}
+
+export async function installWebRtcSdpFailureFixture(page: Page) {
+  await installWebRtcSdpResponseFixture(page, {
+    status: 502,
+    body: "provider failure",
+  });
+}
+
+export async function installOversizedWebRtcSdpFixture(page: Page) {
+  await installWebRtcSdpResponseFixture(page, {
+    status: 200,
+    body: "x".repeat(256 * 1024 + 1),
+  });
+}
+
 export async function captureComposerProof(page: Page, fileName: string) {
   const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "voice-controls");
   await mkdir(artifactDir, { recursive: true });
@@ -104,6 +225,14 @@ export async function captureVideoTalkProof(page: Page, fileName: string) {
   await mkdir(artifactDir, { recursive: true });
   await page
     .locator(".agent-chat__composer-shell")
+    .screenshot({ path: path.join(artifactDir, fileName) });
+}
+
+export async function captureWebRtcSdpAlertProof(page: Page, fileName: string) {
+  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "webrtc-sdp");
+  await mkdir(artifactDir, { recursive: true });
+  await page
+    .locator('.agent-chat__talk-status[role="alert"]')
     .screenshot({ path: path.join(artifactDir, fileName) });
 }
 

@@ -48,7 +48,6 @@ function firstCallOptions(mock: { mock: { calls: unknown[][] } }) {
 }
 
 type UpdateFinalizeCommandOptions = {
-  acknowledgeClawHubRisk?: boolean;
   channel?: string;
   json?: boolean;
   timeout?: string;
@@ -82,15 +81,7 @@ describe("update cli option collisions", () => {
     },
     {
       name: "forwards parent-captured options to hidden `update finalize`",
-      argv: [
-        "update",
-        "--acknowledge-clawhub-risk",
-        "finalize",
-        "--json",
-        "--timeout",
-        "17",
-        "--no-restart",
-      ],
+      argv: ["update", "finalize", "--json", "--timeout", "17", "--no-restart"],
       assert: () => {
         expect(updateFinalizeCommand).toHaveBeenCalledTimes(1);
         const opts = firstCallOptions(updateFinalizeCommand) as
@@ -99,7 +90,6 @@ describe("update cli option collisions", () => {
         expect(opts?.json).toBe(true);
         expect(opts?.timeout).toBe("17");
         expect(opts?.restart).toBe(false);
-        expect(opts?.acknowledgeClawHubRisk).toBe(true);
       },
     },
     {
@@ -162,6 +152,7 @@ describe("update cli option collisions", () => {
     { name: "repair", handler: updateFinalizeCommand },
     { name: "finalize", handler: updateFinalizeCommand },
     { name: "wizard", handler: updateWizardCommand },
+    { name: "status", handler: updateStatusCommand },
   ])("rejects parent --dry-run before running update $name", async ({ name, handler }) => {
     await runRegisteredCli({
       register: registerUpdateCli as (program: Command) => void,
@@ -239,22 +230,11 @@ describe("update cli option collisions", () => {
     async (name) => {
       await runRegisteredCli({
         register: registerUpdateCli as (program: Command) => void,
-        argv: [
-          "update",
-          "--json",
-          "--timeout",
-          "31",
-          "--acknowledge-clawhub-risk",
-          "--channel",
-          "beta",
-          "--yes",
-          name,
-        ],
+        argv: ["update", "--json", "--timeout", "31", "--channel", "beta", "--yes", name],
       });
 
       expect(updateFinalizeCommand).toHaveBeenCalledOnce();
       expect(firstCallOptions(updateFinalizeCommand)).toMatchObject({
-        acknowledgeClawHubRisk: true,
         channel: "beta",
         json: true,
         restart: false,

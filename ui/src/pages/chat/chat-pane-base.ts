@@ -13,6 +13,7 @@ import type {
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { applicationContext } from "../../app/context.ts";
 import { observeNativeGateway } from "../../app/native-editor-locality.runtime.ts";
 import type {
@@ -37,6 +38,7 @@ import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.t
 import type { BoardTab } from "../../lib/board/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -61,10 +63,12 @@ import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
+import { handleChatScrollTakeover } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout-types.ts";
@@ -74,10 +78,26 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // The first Lit update must render even while hidden; later hidden work parks.
   // Disconnect releases the waiter so reconnect can schedule in its new lifecycle.
   private hiddenUpdateResume: (() => void) | undefined;
-  private readonly handleVisibilityChange = () =>
-    document.visibilityState === "hidden" && this.state?.chatStreamRenderFrame != null
-      ? requestChatPageUpdate(this.state)
-      : this.hiddenUpdateResume?.();
+  private readonly handleVisibilityChange = () => {
+    if (document.visibilityState !== "hidden") {
+      this.hiddenUpdateResume?.();
+      return;
+    }
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const liveDraft = getChatComposerState(this.paneId).composerTextarea?.value;
+    const draftChanged = liveDraft !== undefined && liveDraft !== state.chatMessage;
+    if (draftChanged) {
+      // Page suspension can interrupt IME before compositionend; commit the
+      // live textarea while visibility change can still reach browser storage.
+      state.handleChatDraftChange(liveDraft);
+    }
+    if (draftChanged || state.chatStreamRenderFrame != null) {
+      requestChatPageUpdate(state);
+    }
+  };
   override connectedCallback() {
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     super.connectedCallback();
@@ -167,7 +187,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     face: BoardFace,
   ) => void;
   @property({ attribute: false }) onFocusPane?: (paneId: string) => void;
-  @property({ attribute: false }) onPaneSessionChange?: (
+  onPaneSessionChange?: (
     paneId: string,
     nextSessionKey: string,
     options?: PaneSessionChangeOptions,
@@ -176,6 +196,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     paneId: string,
     sessionKey: string,
     replacementSessionKey: string,
+    preserveDraft?: boolean,
   ) => void;
   @property({ attribute: false }) paneTitle = "";
   @property({ attribute: false }) narrow = false;
@@ -194,11 +215,15 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly composerCapabilities = new ChatComposerCapabilityHost(() =>
     this.requestUpdate(),
   );
-  protected readonly transcript = new ChatTranscriptController(this);
+  protected readonly transcript = new ChatTranscriptController(this, {
+    onViewportResize: () => this.chatState.handleTranscriptResize(),
+    onReaderScroll: () => this.state && handleChatScrollTakeover(this.state),
+  });
   protected readonly taskSidebarTranscript = new ChatTranscriptController(this);
   protected readonly progressCard = new SessionProgressCardController(this, {
     gateway: () => this.context?.gateway,
-    sessionKey: () => this.state?.sessionKey,
+    sessionKey: () =>
+      this.state && !this.isCurrentSessionArchived(this.state) ? this.state.sessionKey : undefined,
   });
   private boardFullscreenController: FullscreenController | null = null;
   protected get boardFullscreen(): FullscreenController {
@@ -222,6 +247,15 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   });
   protected questionPrompts: QuestionPrompt[] = [];
   protected state: ChatPageHost | undefined;
+
+  protected isCurrentSessionArchived(state: ChatPageHost): boolean {
+    return (
+      state.selectedChatSessionArchived ||
+      state.sessionsResult?.sessions.some(
+        (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
+      ) === true
+    );
+  }
   /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
    * the wide side-by-side layout instead of flashing the stacked one. */
   @litState() protected paneWidth = Number.POSITIVE_INFINITY;
@@ -287,7 +321,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (renderedLayout.columns[0]?.panels.some((panel) => panel.slot === "companion")) {
       this.setSessionObserverVisibility(open);
     }
-    state.updateSidebarLayout(setSidebarOpen(renderedLayout, open));
+    this.commitSidebarLayout(setSidebarOpen(renderedLayout, open));
   }
 
   protected requestSessionRail(intent: "open" | "toggle"): void {
@@ -297,11 +331,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     }
     const visible = this.selectedSessionRailMode(state.sessionKey) === "expanded";
     if (intent === "toggle" && visible) {
-      state.updateSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
+      this.commitSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
       this.setSessionObserverVisibility(false);
       return;
     }
-    state.updateSidebarLayout(openSlot(state.sidebarLayout, "companion"));
+    this.commitSidebarLayout(openSlot(state.sidebarLayout, "companion"));
     this.setSessionObserverVisibility(true);
   }
 
@@ -379,8 +413,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       config: SessionDiscussionPanelConfig;
     }
   >();
-  protected headerRenameInitialLabel: string | null = null;
-  protected headerRenameSessionKey = "";
+  protected headerRenameInitialValue = "";
+  protected headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null =
+    null;
   protected headerCopiedTimer: number | null = null;
   protected composerPrefillAttentionTimer: number | null = null;
   protected composerPrefillAttentionTarget: HTMLElement | null = null;
@@ -486,6 +521,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   }
 
   protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): Promise<void>;
+  protected abstract commitSidebarLayout(layout: SidebarLayout): void;
   protected abstract refreshSwarmRoster(): void;
   protected abstract resolveBoardProvider(): BoardProvider;
   protected abstract handleBoardCommand(event: BoardCommandEvent): void;

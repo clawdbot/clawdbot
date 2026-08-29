@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import type {
   WorkerDispatchEnvironmentService,
@@ -20,6 +21,7 @@ import { createWorkerPlacementRunnerAvailabilityReader } from "./placement-proje
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerTunnelHandle } from "./tunnel.js";
+import type { WorkerWorkspaceRecoveryFailureReport } from "./workspace-conflicts.js";
 import {
   createWorkerWorkspaceOperationCoordinator,
   type WorkerWorkspaceOperationCoordinator,
@@ -28,6 +30,9 @@ import {
 export function createHarness(
   placementStore: PlacementStore,
   options: {
+    runReclaimBarrier?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["runReclaimBarrier"];
     failAt?: DispatchStage;
     destroyFails?: boolean;
     destroyFailureCount?: number;
@@ -65,6 +70,9 @@ export function createHarness(
     afterReconcile?: () => Promise<void> | void;
     afterStopTunnel?: () => Promise<void> | void;
     deviceRunnerAvailable?: boolean;
+    isCurrentNodePlacement?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["isCurrentNodePlacement"];
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
@@ -74,6 +82,9 @@ export function createHarness(
   let verifyCalls = 0;
   const log: string[] = [];
   const reportWorkspaceResultConflict = vi.fn(async () => {});
+  const reportWorkspaceResultRecoveryFailure = vi.fn(
+    async (_recovery: WorkerWorkspaceRecoveryFailureReport) => {},
+  );
   const fail = (stage: DispatchStage) => {
     log.push(stage);
     if (options.failAt === stage) {
@@ -201,6 +212,7 @@ export function createHarness(
   const tunnelHandle = (ownerEpoch: number): WorkerTunnelHandle => ({
     environmentId: ready.environmentId,
     ownerEpoch,
+    measureLaunchTurn: vi.fn(),
     launchTurn: vi.fn(),
     quiesceWorkspace: vi.fn(async () => {
       log.push("workspace:quiesce");
@@ -325,6 +337,7 @@ export function createHarness(
     expiresAtMs: 10_000,
   };
   const environments: WorkerDispatchEnvironmentService = {
+    supportsProviderExecutionMode: vi.fn(() => true),
     create: vi.fn(async () => {
       fail("create");
       return currentEnvironment ?? ready;
@@ -443,19 +456,37 @@ export function createHarness(
             consumesWorkerSlot: false,
           }
         : { requiredNodeCommands: [], consumesWorkerSlot: true },
-    runReclaimBarrier: async ({ authorize, begin, reclaim }) => {
-      authorize?.();
-      return await reclaim(options.workspacePath ?? "/gateway/workspace", begin(), authorize);
-    },
-    runFailedReclaimBarrier: async ({ authorize, reclaim }) => {
-      authorize?.();
-      return await reclaim(authorize);
-    },
+    isCurrentNodePlacement: options.isCurrentNodePlacement ?? (() => true),
+    runReclaimBarrier:
+      options.runReclaimBarrier ??
+      (async ({ sessionId, sessionKey, authorize, beforeDrain, begin, reclaim }) =>
+        await runExclusiveSessionLifecycleMutation({
+          scope: options.workspacePath ?? "/gateway/workspace",
+          identities: [sessionId, sessionKey],
+          run: async () => {
+            authorize?.();
+            beforeDrain?.();
+            const placement = begin();
+            return placement.state === "reclaimed"
+              ? placement
+              : await reclaim(options.workspacePath ?? "/gateway/workspace", placement, authorize);
+          },
+        })),
+    runFailedReclaimBarrier: async ({ sessionId, sessionKey, authorize, reclaim }) =>
+      await runExclusiveSessionLifecycleMutation({
+        scope: options.workspacePath ?? "/gateway/workspace",
+        identities: [sessionId, sessionKey],
+        run: async () => {
+          authorize?.();
+          return await reclaim(authorize);
+        },
+      }),
     resolveWorkspacePath: async () => {
       fail("workspace");
       return options.workspacePath ?? "/gateway/workspace";
     },
     reportWorkspaceResultConflict,
+    reportWorkspaceResultRecoveryFailure,
     resolveWorkspaceResultConflict: vi.fn(async () => options.priorWorkspaceResultConflict),
     ...(options.prepareAcceptedWorkspacePublication
       ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }
@@ -489,6 +520,7 @@ export function createHarness(
     },
     environments,
     reportWorkspaceResultConflict,
+    reportWorkspaceResultRecoveryFailure,
     markEnvironmentDestroyed: () => {
       currentEnvironment = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
     },
@@ -507,7 +539,7 @@ export function createHarness(
       currentEnvironment = { ...attached, ownerEpoch };
     },
     markEnvironmentNodeDeviceId: (nodeDeviceId: string) => {
-      currentEnvironment = { ...attached, providerId: "device", nodeDeviceId };
+      currentEnvironment = { ...attached, providerId: "device", nodeDeviceId, sshEndpoint: null };
     },
     markEnvironmentAttachments: (attachedSessionIds: string[]) => {
       currentEnvironment = { ...attached, attachedSessionIds };

@@ -305,14 +305,14 @@ describe("resolveToolCallView", () => {
     expect(view.targetDetail).toBeUndefined();
     expect(view.stat).toEqual({ added: 2, removed: 1 });
     expect(view.diff).toEqual([
-      { kind: "file", text: "Update src/a.ts" },
+      { kind: "file", path: "src/a.ts", text: "Update src/a.ts" },
       { kind: "del", text: "old a" },
       { kind: "add", text: "new a" },
       { kind: "skip", text: "" },
-      { kind: "file", text: "Add src/b.ts" },
+      { kind: "file", path: "src/b.ts", text: "Add src/b.ts" },
       { kind: "add", lineNo: 1, text: "new b" },
       { kind: "skip", text: "" },
-      { kind: "file", text: "Delete src/c.ts" },
+      { kind: "file", path: "src/c.ts", text: "Delete src/c.ts" },
     ]);
   });
 
@@ -369,14 +369,14 @@ describe("resolveToolCallView", () => {
     expect(view.target).toBe("2 files");
     expect(view.stat).toEqual({ added: 3, removed: 2 });
     expect(view.diff).toEqual([
-      { kind: "file", text: "Update src/a.ts" },
+      { kind: "file", path: "src/a.ts", text: "Update src/a.ts" },
       { kind: "ctx", lineNo: 10, text: "context" },
       { kind: "del", lineNo: 11, text: "old" },
       { kind: "add", lineNo: 11, text: "new" },
       { kind: "add", lineNo: 12, text: "extra" },
       { kind: "ctx", lineNo: 13, text: "tail" },
       { kind: "skip", text: "" },
-      { kind: "file", text: "Update src/b.ts" },
+      { kind: "file", path: "src/b.ts", text: "Update src/b.ts" },
       { kind: "del", lineNo: 1, text: "before" },
       { kind: "add", lineNo: 1, text: "after" },
     ]);
@@ -422,8 +422,8 @@ describe("resolveToolCallView", () => {
       { operation: "add", path: "src/b.ts" },
     ]);
     expect(view.stat).toEqual({ added: 2, removed: 1 });
-    expect(view.diff).toContainEqual({ kind: "file", text: "Update src/a.ts" });
-    expect(view.diff).toContainEqual({ kind: "file", text: "Add src/b.ts" });
+    expect(view.diff).toContainEqual({ kind: "file", path: "src/a.ts", text: "Update src/a.ts" });
+    expect(view.diff).toContainEqual({ kind: "file", path: "src/b.ts", text: "Add src/b.ts" });
   });
 
   it("numbers structured Codex update hunks", () => {

@@ -3,8 +3,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   beginGatewayRestartSignalAdmission,
   beginGatewayRootWorkAdmissionWhenOpen,
+  captureGatewayRootWorkAdmissionContinuationScope,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
+  getGatewayRestartDrainSignal,
+  getGatewaySuspendAdmissionPhase,
   isGatewayRestartDrainError,
   isGatewaySubordinateWorkAdmissionClosed,
   isGatewayWorkAdmissionClosed,
@@ -26,6 +29,7 @@ afterEach(resetGatewayWorkAdmission);
 
 it("classifies draining errors only while an authoritative restart signal or drain is active", () => {
   const error = new GatewayDrainingError();
+  const firstDrainSignal = getGatewayRestartDrainSignal();
 
   expect(isGatewayRestartDrainError(error)).toBe(false);
   expect(isGatewayRestartDrainError(new Error("GatewayDrainingError"))).toBe(false);
@@ -42,6 +46,14 @@ it("classifies draining errors only while an authoritative restart signal or dra
 
   markGatewayRestartDraining();
   expect(isGatewayRestartDrainError(error)).toBe(true);
+  expect(firstDrainSignal.aborted).toBe(true);
+
+  resetGatewayWorkAdmission();
+  const nextDrainSignal = getGatewayRestartDrainSignal();
+  expect(nextDrainSignal).not.toBe(firstDrainSignal);
+  expect(nextDrainSignal.aborted).toBe(false);
+  markGatewayRestartDraining();
+  expect(nextDrainSignal.aborted).toBe(true);
 });
 
 it("counts one nested root chain once and excludes the preparing caller", async () => {
@@ -75,6 +87,55 @@ it("rolls back or releases a generation-bound suspension without resetting roots
   expect(prepared?.release()).toBe(true);
   expect(prepared?.release()).toBe(false);
   expect(invalidated).not.toHaveBeenCalled();
+  expect(isGatewayWorkAdmissionClosed()).toBe(false);
+});
+
+it("drains already-admitted work before promoting the same generation to prepared", async () => {
+  const root = tryBeginGatewayRootWorkAdmission();
+  expect(root?.ownsRoot).toBe(true);
+  expect(getGatewaySuspendAdmissionPhase()).toBe("accepting");
+
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  expect(getGatewaySuspendAdmissionPhase()).toBe("preparing");
+  expect(suspension?.drain()).toBe(true);
+  expect(getGatewaySuspendAdmissionPhase()).toBe("draining");
+  expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+  expect(tryBeginGatewayPreparedRestartRootWorkAdmission()).toBeNull();
+
+  await root?.run(async () => {
+    expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(false);
+    const subordinate = tryBeginGatewayRootWorkAdmission();
+    expect(subordinate?.ownsRoot).toBe(false);
+    subordinate?.release();
+    await runWithGatewayIndependentRootWorkContinuation(async () => {
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(false);
+    });
+  });
+  root?.release();
+
+  expect(suspension?.commit()).toBe(true);
+  expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
+  const targetedRestart = tryBeginGatewayPreparedRestartRootWorkAdmission();
+  expect(targetedRestart?.ownsRoot).toBe(true);
+  targetedRestart?.release();
+  expect(suspension?.release()).toBe(true);
+  expect(getGatewaySuspendAdmissionPhase()).toBe("accepting");
+});
+
+it("releases draining admission without allowing stale generations to reopen it", () => {
+  const first = tryBeginGatewaySuspendAdmission(() => {});
+  expect(first?.drain()).toBe(true);
+  expect(first?.rollback()).toBe(false);
+  expect(first?.release()).toBe(true);
+
+  const second = tryBeginGatewaySuspendAdmission(() => {});
+  expect(second?.drain()).toBe(true);
+  expect(first?.drain()).toBe(false);
+  expect(first?.commit()).toBe(false);
+  expect(first?.release()).toBe(false);
+  expect(getGatewaySuspendAdmissionPhase()).toBe("draining");
+  expect(second?.release()).toBe(true);
   expect(isGatewayWorkAdmissionClosed()).toBe(false);
 });
 
@@ -212,6 +273,37 @@ it("retains an admitted request root across its handler return", async () => {
   releaseContinuation();
   releaseContinuation();
   expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
+it("does not extend the creating root's lifetime when a continuation only borrows ownership", async () => {
+  const root = tryBeginGatewayRootWorkAdmission();
+  const borrowed = await root?.run(async () => captureGatewayRootWorkAdmissionContinuationScope());
+
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+  root?.release();
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  await expect(borrowed?.run(async () => {})).rejects.toThrow(
+    "gateway root work continuation is no longer active",
+  );
+  borrowed?.release();
+});
+
+it("keeps borrowed-root completion alive when its owner and original request settle", async () => {
+  const root = tryBeginGatewayRootWorkAdmission();
+  const borrowed = await root?.run(async () => captureGatewayRootWorkAdmissionContinuationScope());
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  expect(suspension?.drain()).toBe(true);
+
+  await borrowed?.run(async () => {
+    borrowed.release();
+    root?.release();
+    await Promise.resolve();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(false);
+  });
+
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  expect(suspension?.release()).toBe(true);
 });
 
 it("does not retire process-lifetime work with the request that started it", async () => {

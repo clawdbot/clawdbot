@@ -62,6 +62,8 @@ export type ToolSearchCatalogToolExecutor = (params: {
   sourceName?: string;
   toolCallId: string;
   parentToolCallId?: string;
+  /** Exact registered-instance classification resolved by the catalog owner. */
+  replaySafe?: boolean;
   input: unknown;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
@@ -69,17 +71,6 @@ export type ToolSearchCatalogToolExecutor = (params: {
     result: AgentToolResult<unknown>,
   ) => Promise<AgentToolResult<unknown>>;
 }) => Promise<AgentToolResult<unknown>>;
-
-/** Transcript projection for target tool calls made through Tool Search. */
-export type ToolSearchTargetTranscriptProjection = {
-  parentToolCallId?: string;
-  toolCallId: string;
-  toolName: string;
-  input: unknown;
-  result: AgentToolResult<unknown>;
-  isError: boolean;
-  timestamp?: number;
-};
 
 /** Resolved Tool Search config after defaults, limits, and runtime support checks. */
 export type ToolSearchConfig = {
@@ -102,6 +93,8 @@ export type ToolSearchToolContext = {
   abortSignal?: AbortSignal;
   executeTool?: ToolSearchCatalogToolExecutor;
   forceRestartSafeTools?: boolean;
+  /** Set when the run executes only these tools; swarm globals gate on `sessions_spawn`. */
+  toolExecutionAllow?: readonly string[];
   codeModeSkills?: readonly CodeModeSkill[];
 };
 
@@ -127,10 +120,17 @@ export type ToolSearchCatalogSession = {
   callCount: number;
 };
 
+export type ToolSearchCatalogTelemetry = Omit<ToolSearchCatalogSession, "entries"> & {
+  catalogSize: number;
+  sources: Record<CatalogSource, number>;
+};
+
 export type ToolSearchCatalogRef = {
   current?: ToolSearchCatalogSession;
+  closedTelemetry?: ToolSearchCatalogTelemetry;
   onChange?: () => void;
-  onDispose?: () => void;
+  disposeObserver?: () => void;
+  onDispose?: Set<() => void>;
 };
 
 export type CodeModeBridgeMethod = "search" | "describe" | "call";

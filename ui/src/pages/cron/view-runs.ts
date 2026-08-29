@@ -23,6 +23,7 @@ import {
 } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import { cronRunEntryMatchesLink } from "./route-model.ts";
 
 // Leaf contract: the slice of the cron view props this module needs. Keeping
 // it local (instead of importing CronProps from view.ts) avoids a module
@@ -31,6 +32,7 @@ type CronRunsSectionProps = {
   basePath: string;
   agentId: string;
   runs: CronRunLogEntry[];
+  highlightedRunId?: string | null;
   runsHasMore: boolean;
   runsLoadingMore: boolean;
   runsStatuses: CronRunsStatusValue[];
@@ -328,7 +330,13 @@ export function renderRunsSection(props: CronRunsSectionProps) {
         : html`
             <div class="cron-runs__list">
               ${runs.map((entry) =>
-                renderRun(entry, props.agentId, props.basePath, props.onNavigateToChat),
+                renderRun(
+                  entry,
+                  props.agentId,
+                  props.basePath,
+                  props.highlightedRunId,
+                  props.onNavigateToChat,
+                ),
               )}
             </div>
           `}
@@ -382,6 +390,7 @@ function renderRun(
   entry: CronRunLogEntry,
   fallbackAgentId: string,
   basePath: string,
+  highlightedRunId?: string | null,
   onNavigateToChat?: (sessionKey: string) => void,
 ) {
   const chatUrl =
@@ -405,9 +414,19 @@ function renderRun(
   const bodySource =
     entry.summary || formatUiExternalText(entry.error) || t("cron.runEntry.noSummary");
   const showErrorInMeta = Boolean(entry.error) && Boolean(entry.summary);
-  const facts = [delivery, entry.model, entry.provider, usageSummary].filter(Boolean);
+  const suppressionReason = formatUiExternalText(entry.deliverySuppressionReason);
+  const facts = [
+    delivery,
+    suppressionReason
+      ? t("cron.runEntry.deliverySuppression", { reason: suppressionReason })
+      : null,
+    entry.model,
+    entry.provider,
+    usageSummary,
+  ].filter(Boolean);
+  const highlighted = Boolean(highlightedRunId && cronRunEntryMatchesLink(highlightedRunId, entry));
   return html`
-    <div class="cron-run-entry">
+    <div class="cron-run-entry ${highlighted ? "cron-run-entry--highlighted" : ""}">
       <div class="cron-run-entry__header">
         <div class="cron-run-entry__main">
           <div class="cron-run-entry__title">

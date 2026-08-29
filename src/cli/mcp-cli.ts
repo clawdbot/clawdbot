@@ -11,7 +11,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { Command } from "commander";
 import { buildBundleMcpToolsFromCatalog } from "../agents/agent-bundle-mcp-materialize.js";
-import { createSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
+import {
+  createSessionMcpRuntime,
+  disposeAllSessionMcpRuntimes,
+} from "../agents/agent-bundle-mcp-runtime.js";
 import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
@@ -39,7 +42,6 @@ import {
   type OAuthLoopbackCallbackServer,
 } from "../infra/oauth-loopback-callback.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
-import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
@@ -331,7 +333,7 @@ async function collectMcpDoctorIssues(params: {
           }
         }
         const headers = asRecord(server.headers);
-        if (headers && "Authorization" in headers) {
+        if (headers && Object.keys(headers).some((key) => key.toLowerCase() === "authorization")) {
           issues.push(
             issue("warning", "OAuth is enabled and the static Authorization header is ignored"),
           );
@@ -670,6 +672,7 @@ export function registerMcpCli(program: Command) {
         ) {
           throw new Error('Invalid --claude-channel-mode value. Use "auto", "on", or "off".');
         }
+        const { serveOpenClawChannelMcp } = await import("../mcp/channel-server.js");
         await serveOpenClawChannelMcp({
           gatewayUrl: opts.url as string | undefined,
           gatewayToken,
@@ -1479,8 +1482,6 @@ export function registerMcpCli(program: Command) {
     .command("reload")
     .description("Dispose cached MCP runtimes so new config is used on the next turn")
     .action(async () => {
-      const { disposeAllSessionMcpRuntimes } =
-        await import("../agents/agent-bundle-mcp-runtime.js");
       await disposeAllSessionMcpRuntimes();
       defaultRuntime.log(
         "Disposed cached MCP runtimes. Active agents use new MCP config on their next runtime build.",

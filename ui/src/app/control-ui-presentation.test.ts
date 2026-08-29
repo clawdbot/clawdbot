@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it } from "vitest";
+import { controlUiAccentInk } from "./accent-contrast.ts";
 import { applyControlUiPresentation } from "./control-ui-environment-presentation.runtime.ts";
 import { applyControlUiAccent } from "./control-ui-presentation.ts";
 
@@ -58,6 +59,7 @@ describe("Control UI accent presentation", () => {
     ["#747474", "#ffffff"],
     ["#2563eb", "#ffffff"],
   ])("selects readable ink for accent %s", (accent, expectedInk) => {
+    expect(controlUiAccentInk(accent)).toBe(expectedInk);
     applyControlUiAccent(accent);
 
     expect(document.documentElement.style.getPropertyValue("--accent-foreground")).toBe(

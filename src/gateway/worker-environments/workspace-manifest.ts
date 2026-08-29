@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { isStagedInputPath, stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
 import {
   MAX_WORKSPACE_INVENTORY_ENTRIES,
   MAX_WORKSPACE_INVENTORY_PATH_BYTES,
@@ -142,6 +143,7 @@ function validateAndProjectEntries(values: unknown[]): {
     throw new Error("Worker workspace manifest has too many entries");
   }
   const rawEntries = values.map(parseRawEntry);
+  const stagedInputs = stagedInputDirectoriesFromEntries(rawEntries);
   let previous = "";
   let pathBytes = 0;
   let totalBytes = 0;
@@ -175,18 +177,27 @@ function validateAndProjectEntries(values: unknown[]): {
   return {
     entries: rawEntries.filter(
       (entry): entry is WorkerWorkspaceManifestEntry =>
-        entry.type !== "directory" && !isDerivedWorkspacePath(entry.path),
+        entry.type !== "directory" &&
+        !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
     ),
     directories: rawEntries
-      .filter((entry) => entry.type === "directory" && !isDerivedWorkspacePath(entry.path))
+      .filter(
+        (entry) =>
+          entry.type === "directory" &&
+          !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
+      )
       .map((entry) => entry.path),
   };
 }
 
 export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManifest): string {
+  const stagedInputs = stagedInputDirectoriesFromEntries(manifest.entries);
   const entries = [
     ...(manifest.directories ?? [])
-      .filter((entryPath) => !isDerivedWorkspacePath(entryPath))
+      .filter(
+        (entryPath) =>
+          !isDerivedWorkspacePath(entryPath, isStagedInputPath(entryPath, stagedInputs)),
+      )
       .map((entryPath) => ({
         path: entryPath,
         type: "directory" as const,
@@ -194,7 +205,9 @@ export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManife
         // manifests deterministic without creating a new mode contract.
         mode: 0o700,
       })),
-    ...manifest.entries.filter((entry) => !isDerivedWorkspacePath(entry.path)),
+    ...manifest.entries.filter(
+      (entry) => !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
+    ),
   ].toSorted(compareManifestPaths);
   if (entries.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
     throw new Error("Worker workspace manifest has too many entries");

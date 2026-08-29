@@ -2,12 +2,20 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import { readConfigMachineState } from "../src/state/config-machine-state.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../src/state/openclaw-state-schema.js";
 
-function runBuiltCli(tempHome: string, args: string[], envOverrides: NodeJS.ProcessEnv = {}) {
+function runBuiltCli(
+  tempHome: string,
+  args: string[],
+  envOverrides: NodeJS.ProcessEnv = {},
+  options: { inheritEnvironment?: boolean } = {},
+) {
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...(options.inheritEnvironment === false ? { PATH: process.env.PATH } : process.env),
     HOME: tempHome,
     USERPROFILE: tempHome,
     OPENCLAW_TEST_FAST: "1",
@@ -51,7 +59,323 @@ async function seedTrajectorySession(tempHome: string, sessionKey: string) {
   );
 }
 
+async function seedPendingStateMigration(stateDir: string) {
+  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  await fs.mkdir(path.dirname(databasePath), { recursive: true });
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(OPENCLAW_STATE_SCHEMA_SQL);
+    database.exec("PRAGMA user_version = 0;");
+  } finally {
+    database.close();
+  }
+}
+
 describe("cli json stdout contract", () => {
+  it.each([
+    {
+      name: "implicit JSON",
+      args: ["cron", "edit", "job-1", "--enable", "--disable"],
+    },
+    {
+      name: "explicit JSON",
+      args: ["cron", "edit", "job-1", "--enable", "--disable", "--json"],
+    },
+    {
+      name: "automation alias implicit JSON",
+      args: ["automations", "edit", "job-1", "--enable", "--disable"],
+    },
+    {
+      name: "ordinary local validation failure",
+      args: ["cron", "edit", "job-1", "--command-cwd", "", "--json"],
+      message: "--command-cwd must not be blank",
+    },
+    {
+      name: "Gateway failure implicit JSON",
+      args: ["cron", "edit", "job-1", "--enable", "--port", "29793", "--token", "fixture-token"],
+      gatewayRequest: true,
+    },
+    {
+      name: "Gateway failure explicit JSON",
+      args: [
+        "cron",
+        "edit",
+        "job-1",
+        "--enable",
+        "--port",
+        "29793",
+        "--token",
+        "fixture-token",
+        "--json",
+      ],
+      gatewayRequest: true,
+    },
+    {
+      name: "forced Commander JSON",
+      args: ["cron", "edit", "job-1", "--enable", "--disable", "--json"],
+      commander: true,
+    },
+    {
+      name: "dual-TTY implicit JSON",
+      args: ["cron", "edit", "job-1", "--enable", "--disable"],
+      tty: true,
+    },
+    {
+      name: "dual-TTY automation alias implicit JSON",
+      args: ["automations", "edit", "job-1", "--enable", "--disable"],
+      tty: true,
+    },
+    {
+      name: "dual-TTY implicit JSON command sibling",
+      args: ["cron", "runs", "--id", "job-1", "--limit", "invalid"],
+      message: "Invalid --limit (must be a positive integer).",
+      tty: true,
+    },
+    {
+      name: "dual-TTY raw-output command sibling",
+      args: ["cron", "scratch", "job-1", "--set", "updated", "--unset"],
+      message: "choose only one of --set, --file, or --unset",
+      tty: true,
+    },
+    {
+      name: "dual-TTY explicit JSON",
+      args: ["cron", "edit", "job-1", "--enable", "--disable", "--json"],
+      tty: true,
+    },
+    {
+      name: "human-output sibling",
+      args: ["cron", "list", "--agent", ""],
+      message: "--agent must not be blank",
+      human: true,
+    },
+    {
+      name: "dual-TTY human-output sibling",
+      args: ["cron", "list", "--agent", ""],
+      message: "--agent must not be blank",
+      human: true,
+      tty: true,
+    },
+  ])("renders cron edit failures through the shared owner for $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "missing-openclaw.json");
+        const stateDir = path.join(tempHome, "isolated-state");
+        const gatewayError = "AUTOQA_INJECTED_GATEWAY_FAILURE";
+        const preload = Buffer.from(
+          [
+            'import net from "node:net";',
+            `net.Socket.prototype.connect = function () { throw new Error(${JSON.stringify(gatewayError)}); };`,
+            ...("tty" in testCase
+              ? [
+                  'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
+                  'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+                ]
+              : []),
+          ].join("\n"),
+        ).toString("base64");
+        const result = runBuiltCli(tempHome, testCase.args, {
+          NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_STATE_DIR: stateDir,
+          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+          ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
+        });
+        const message =
+          "gatewayRequest" in testCase
+            ? gatewayError
+            : (testCase.message ?? "Choose --enable or --disable, not both");
+
+        expect(result.status, result.stderr).toBe(1);
+        if ("human" in testCase) {
+          if ("tty" in testCase) {
+            expect(result.stdout).toContain("OpenClaw");
+          } else {
+            expect(result.stdout).toBe("");
+          }
+        } else {
+          expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: { type: "cli_error", message },
+          });
+        }
+        expect(result.stderr).toContain(message);
+        if ("gatewayRequest" in testCase) {
+          expect(result.stderr).toContain(gatewayError);
+        } else {
+          expect(result.stderr).not.toContain(gatewayError);
+          await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        if ("tty" in testCase && !("human" in testCase)) {
+          expect(result.stderr).toContain("\u001B[?25h");
+        }
+        await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+      { prefix: "openclaw-cron-edit-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    {
+      name: "invalid call params in JSON mode",
+      args: ["gateway", "call", "system-presence", "--params", "not-json", "--json"],
+      message: "--params must be valid JSON.",
+    },
+    {
+      name: "invalid call params in human mode",
+      args: ["gateway", "call", "system-presence", "--params", "not-json"],
+      message: "--params must be valid JSON.",
+      human: true,
+    },
+    {
+      name: "invalid call params through forced Commander",
+      args: ["gateway", "call", "system-presence", "--params", "not-json", "--json"],
+      message: "--params must be valid JSON.",
+      commander: true,
+    },
+    {
+      name: "invalid call params with dual TTYs",
+      args: ["gateway", "call", "system-presence", "--params", "not-json", "--json"],
+      message: "--params must be valid JSON.",
+      tty: true,
+    },
+    {
+      name: "contradictory usage options in JSON mode",
+      args: ["gateway", "usage-cost", "--agent", "alpha", "--all-agents", "--json"],
+      message: "Use --agent or --all-agents, not both",
+    },
+    {
+      name: "contradictory usage options in human mode",
+      args: ["gateway", "usage-cost", "--agent", "alpha", "--all-agents"],
+      message: "Use --agent or --all-agents, not both",
+      human: true,
+    },
+    {
+      name: "contradictory usage options through forced Commander",
+      args: ["gateway", "usage-cost", "--agent", "alpha", "--all-agents", "--json"],
+      message: "Use --agent or --all-agents, not both",
+      commander: true,
+    },
+    {
+      name: "contradictory usage options with dual TTYs",
+      args: ["gateway", "usage-cost", "--agent", "alpha", "--all-agents", "--json"],
+      message: "Use --agent or --all-agents, not both",
+      tty: true,
+    },
+    {
+      name: "routed Gateway health config failure in JSON mode",
+      args: ["gateway", "health", "--port", "29793", "--json"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+    },
+    {
+      name: "Gateway health config failure in human mode",
+      args: ["gateway", "health", "--port", "29793"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+      human: true,
+    },
+    {
+      name: "Gateway health config failure through forced Commander",
+      args: ["gateway", "health", "--port", "29793", "--json"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+      commander: true,
+    },
+    {
+      name: "routed Gateway health config failure with dual TTYs",
+      args: ["gateway", "health", "--port", "29793", "--json"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+      tty: true,
+    },
+    {
+      name: "specialized explicit Gateway authentication failure",
+      args: ["gateway", "call", "system-presence", "--url", "ws://127.0.0.1:29793", "--json"],
+      specializedAuth: true,
+    },
+  ])("renders Gateway query failures through the Gateway owner for $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "missing-openclaw.json");
+        const stateDir = path.join(tempHome, "isolated-state");
+        const gatewayError = "AUTOQA_INJECTED_GATEWAY_FAILURE";
+        const preload = Buffer.from(
+          [
+            'import net from "node:net";',
+            `net.Socket.prototype.connect = function () { throw new Error(${JSON.stringify(gatewayError)}); };`,
+            ...("configReadFailure" in testCase
+              ? [
+                  'import fs from "node:fs";',
+                  "const originalExistsSync = fs.existsSync;",
+                  "fs.existsSync = function (target, ...args) {",
+                  '  if (String(target) === process.env.OPENCLAW_CONFIG_PATH && new Error().stack?.includes("readNonObservingHealthConfig")) {',
+                  `    throw new Error(${JSON.stringify(testCase.message)});`,
+                  "  }",
+                  "  return originalExistsSync.call(this, target, ...args);",
+                  "};",
+                ]
+              : []),
+            ...("tty" in testCase
+              ? [
+                  'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
+                  'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+                ]
+              : []),
+          ].join("\n"),
+        ).toString("base64");
+        const result = runBuiltCli(tempHome, testCase.args, {
+          NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_STATE_DIR: stateDir,
+          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+          ...("tty" in testCase ? { FORCE_COLOR: "1", NO_COLOR: undefined } : {}),
+        });
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+        expect(result.stdout).not.toContain(gatewayError);
+        expect(result.stderr).not.toContain(gatewayError);
+        if ("human" in testCase) {
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain(testCase.message);
+        } else if ("specializedAuth" in testCase) {
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: {
+              type: "gateway_credentials_required",
+              message: [
+                "gateway url override requires explicit credentials",
+                "Fix: pass --token or --password with --url (or gatewayToken in tools).",
+                "For the default local or SSH-tunneled Gateway, remove --url to use the configured target.",
+                `Config: ${configPath}`,
+              ].join("\n"),
+            },
+          });
+          expect(result.stderr).toBe("");
+        } else {
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: { type: "cli_error", message: testCase.message },
+          });
+          if ("configReadFailure" in testCase && !("commander" in testCase)) {
+            expect(result.stderr).toContain(testCase.message);
+          } else {
+            expect(result.stderr).not.toContain(testCase.message);
+          }
+        }
+        if ("tty" in testCase) {
+          expect(result.stderr).toContain("\u001B[?25h");
+        }
+        await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+      { prefix: "openclaw-gateway-query-json-failure-e2e-" },
+    );
+  });
+
   it.each([
     {
       name: "bare report with parent JSON",
@@ -107,6 +431,23 @@ describe("cli json stdout contract", () => {
       tty: true,
     },
     {
+      name: "configured remote Gateway missing its URL",
+      args: ["hooks", "list", "--json"],
+      message: "gateway remote mode misconfigured: gateway.remote.url missing",
+      remoteMissing: true,
+    },
+    ...[
+      { name: "default report", args: ["hooks", "--json"] },
+      { name: "list report", args: ["hooks", "list", "--json"] },
+      { name: "info report", args: ["hooks", "info", "demo", "--json"] },
+      { name: "check report", args: ["hooks", "check", "--json"] },
+    ].map(({ name, args }) => ({
+      name: `${name} after an explicit environment Gateway fails`,
+      args,
+      message: "AUTOQA_SELECTED_GATEWAY_FAILURE",
+      explicitGateway: true,
+    })),
+    {
       name: "injected local report failure",
       args: ["hooks", "list", "--json"],
       message: "injected hook report loading failure",
@@ -144,13 +485,22 @@ describe("cli json stdout contract", () => {
         const stateDir = path.join(tempHome, "isolated-state");
         const configPath = path.join(tempHome, "missing-openclaw.json");
         const workspaceHooksDir = path.join(stateDir, "workspace", "hooks");
+        if ("remoteMissing" in testCase) {
+          await fs.writeFile(configPath, JSON.stringify({ gateway: { mode: "remote" } }));
+        }
         if ("reportFailure" in testCase) {
           await fs.mkdir(workspaceHooksDir, { recursive: true });
         }
+        const socketError =
+          "explicitGateway" in testCase
+            ? "AUTOQA_SELECTED_GATEWAY_FAILURE"
+            : "AUTOQA_NETWORK_FORBIDDEN";
+        const socketErrorDetails =
+          "explicitGateway" in testCase ? "{}" : '{ code: "ECONNREFUSED" }';
         const preload = Buffer.from(
           [
             'import net from "node:net";',
-            'net.Socket.prototype.connect = function () { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
+            `net.Socket.prototype.connect = function () { throw Object.assign(new Error(${JSON.stringify(socketError)}), ${socketErrorDetails}); };`,
             'globalThis.fetch = async () => { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
             ...("reportFailure" in testCase
               ? [
@@ -173,12 +523,24 @@ describe("cli json stdout contract", () => {
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_GATEWAY_PORT: "29791",
           OPENCLAW_STATE_DIR: stateDir,
+          ...("explicitGateway" in testCase
+            ? {
+                OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:9",
+                OPENCLAW_GATEWAY_TOKEN: "fixture-token",
+              }
+            : {}),
           ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
           ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
         });
         const message =
-          testCase.message ??
-          'Unknown agent id "retired". Run openclaw agents list to see configured agents.';
+          "remoteMissing" in testCase
+            ? [
+                testCase.message,
+                `Config: ${configPath}`,
+                "Fix: set gateway.remote.url, or set gateway.mode=local.",
+              ].join("\n")
+            : (testCase.message ??
+              'Unknown agent id "retired". Run openclaw agents list to see configured agents.');
 
         expect(result.status, result.stderr).toBe(1);
         expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
@@ -203,7 +565,13 @@ describe("cli json stdout contract", () => {
         if ("tty" in testCase) {
           expect(result.stderr).toContain("\u001B[?25h");
         }
-        await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+        if ("remoteMissing" in testCase) {
+          await expect(fs.readFile(configPath, "utf8")).resolves.toBe(
+            JSON.stringify({ gateway: { mode: "remote" } }),
+          );
+        } else {
+          await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+        }
       },
       { prefix: "openclaw-hooks-json-failure-e2e-" },
     );
@@ -226,6 +594,385 @@ describe("cli json stdout contract", () => {
         expect(result.stderr).toBe("");
       },
       { prefix: "openclaw-hooks-json-success-e2e-" },
+    );
+  });
+
+  describe.each([
+    { context: "ordinary fresh home", env: {}, reason: "never-asked" },
+    { context: "automated fresh home", env: { CI: "1" }, reason: "automated-environment" },
+    {
+      context: "automation with an explicit endpoint",
+      env: {
+        CI: "1",
+        OPENCLAW_TELEMETRY_ENDPOINT: "https://telemetry.example.invalid/api/latest-version",
+      },
+      reason: "never-asked",
+    },
+  ])("telemetry inspection in $context", ({ env, reason }) => {
+    it.each([
+      { name: "piped stdout", tty: false, format: "JSON" },
+      { name: "stubbed dual TTYs", tty: true, format: "JSON" },
+      { name: "piped stdout", tty: false, format: "text" },
+      { name: "stubbed dual TTYs", tty: true, format: "text" },
+    ])("writes successful telemetry show $format to $name", async ({ tty, format }) => {
+      await withTempHome(
+        async (tempHome) => {
+          const preload = Buffer.from(
+            [
+              'import net from "node:net";',
+              'const denyNetwork = () => { throw new Error("TELEMETRY_NETWORK_FORBIDDEN"); };',
+              "net.Socket.prototype.connect = denyNetwork;",
+              "globalThis.fetch = async () => denyNetwork();",
+              ...(tty
+                ? [
+                    'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
+                    'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+                  ]
+                : []),
+            ].join("\n"),
+          ).toString("base64");
+          // CI and the endpoint are named inputs, independent of the test runner's environment.
+          const result = runBuiltCli(
+            tempHome,
+            ["telemetry", "show", ...(format === "JSON" ? ["--json"] : [])],
+            {
+              ...env,
+              NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
+              OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+              OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+              ...(tty ? { FORCE_COLOR: "1" } : {}),
+            },
+            { inheritEnvironment: false },
+          );
+
+          expect(result.status, result.stderr).toBe(0);
+          const endpoint =
+            env.OPENCLAW_TELEMETRY_ENDPOINT ?? "https://telemetry.openclaw.ai/api/latest-version";
+          if (format === "JSON") {
+            expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+            const payload = JSON.parse(result.stdout);
+            expect(payload).toEqual({
+              featureStatsEnabled: false,
+              reason,
+              endpoint,
+              lastPingAt: null,
+              request:
+                reason === "automated-environment"
+                  ? null
+                  : {
+                      method: "GET",
+                      userAgent: expect.stringMatching(/^openclaw\/[^ ]+ \(.+; gateway\)$/u),
+                    },
+            });
+            expect(result.stdout).toBe(`${JSON.stringify(payload)}\n`);
+          } else {
+            // Human TTY output includes the startup banner before the inspection report.
+            const report = result.stdout.slice(result.stdout.indexOf("Feature stats:"));
+            const lines = report.trimEnd().split("\n");
+            expect(lines).toEqual([
+              "Feature stats: disabled",
+              `Reason: ${reason === "automated-environment" ? "disabled in an automated environment (CI is set)" : "consent has not been requested"}`,
+              `Endpoint: ${endpoint}`,
+              "Last ping: never",
+              ...(reason === "automated-environment"
+                ? ["Request: none (disabled in an automated environment (CI is set))"]
+                : [
+                    `Request: GET ${endpoint}`,
+                    expect.stringMatching(/^User-Agent: openclaw\/[^ ]+ \(.+; gateway\)$/u),
+                  ]),
+            ]);
+          }
+          if (tty && format === "text") {
+            expect(result.stdout).toContain("OpenClaw");
+            expect(result.stderr).toContain("\u001B[?25h");
+            expect(result.stderr).not.toContain("TELEMETRY_NETWORK_FORBIDDEN");
+          } else {
+            expect(result.stderr).toBe("");
+          }
+        },
+        { prefix: "openclaw-telemetry-json-success-e2e-" },
+      );
+    });
+  });
+
+  it.each([
+    { name: "leaf JSON", args: ["models", "refresh", "--json"] },
+    { name: "parent JSON", args: ["models", "--json", "refresh"] },
+    { name: "human output", args: ["models", "refresh"], human: true },
+    {
+      name: "forced Commander JSON",
+      args: ["models", "refresh", "--json"],
+      commander: true,
+    },
+    {
+      name: "dual-TTY JSON",
+      args: ["models", "refresh", "--json"],
+      tty: true,
+    },
+  ])("renders model catalog refresh failures canonically for $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = Buffer.from(
+          [
+            'import net from "node:net";',
+            'net.Socket.prototype.connect = function () { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
+            'globalThis.fetch = async () => { throw new Error("offline fixture"); };',
+            "globalThis.fetch.mock = {};",
+            ...("tty" in testCase
+              ? [
+                  'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
+                  'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+                ]
+              : []),
+          ].join("\n"),
+        ).toString("base64");
+        const result = runBuiltCli(tempHome, testCase.args, {
+          NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+          ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
+        });
+        const message = "Remote catalog refresh failed: Error: offline fixture";
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+        if ("human" in testCase) {
+          expect(result.stdout).toBe("");
+        } else {
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: { type: "cli_error", message },
+          });
+        }
+        expect(result.stderr).toContain(message);
+        expect(result.stderr.split(message)).toHaveLength(2);
+        expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
+        if ("tty" in testCase) {
+          expect(result.stderr).toContain("\u001B[?25h");
+        }
+      },
+      { prefix: "openclaw-models-refresh-json-failure-e2e-" },
+    );
+  });
+
+  // Every case opens the state database: config-health observation
+  // (observeConfigSnapshot -> readConfigHealthStateFromStore) runs on any
+  // config read whose file exists, so the migration diagnostic always lands
+  // on stderr; the protected contract is that stdout stays exact.
+  it.each([
+    {
+      name: "aliases list",
+      args: ["models", "aliases", "list", "--plain"],
+      opensStateDatabase: true,
+      expectedStdout: "chat anthropic/claude-sonnet-4-6\n",
+    },
+    {
+      name: "fallbacks list",
+      args: ["models", "fallbacks", "list", "--plain"],
+      opensStateDatabase: true,
+      expectedStdout: "anthropic/claude-sonnet-4-6\n",
+    },
+    {
+      name: "image fallbacks list",
+      args: ["models", "image-fallbacks", "list", "--plain"],
+      opensStateDatabase: true,
+      expectedStdout: "anthropic/claude-sonnet-4-6\n",
+    },
+    {
+      name: "list control",
+      args: ["models", "list", "--plain"],
+      opensStateDatabase: true,
+      expectedStdout: "anthropic/claude-sonnet-4-6\n",
+    },
+    {
+      name: "status control",
+      args: ["models", "status", "--plain"],
+      opensStateDatabase: true,
+      expectedStdout: "anthropic/claude-sonnet-4-6\n",
+    },
+    {
+      name: "parent status control",
+      args: ["models", "--status-plain"],
+      opensStateDatabase: true,
+      expectedStdout: "anthropic/claude-sonnet-4-6\n",
+    },
+  ])("keeps $name stdout exact during a pending state migration", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const stateDir = path.join(tempHome, "isolated-state");
+        const configPath = path.join(tempHome, "openclaw.json");
+        const migrationDiagnostic = "state database schema migration pending";
+        await seedPendingStateMigration(stateDir);
+        await fs.writeFile(
+          configPath,
+          JSON.stringify({
+            agents: {
+              defaults: {
+                model: {
+                  primary: "anthropic/claude-sonnet-4-6",
+                  fallbacks: ["anthropic/claude-sonnet-4-6"],
+                },
+                imageModel: { fallbacks: ["anthropic/claude-sonnet-4-6"] },
+                models: { "anthropic/claude-sonnet-4-6": { alias: "chat" } },
+              },
+            },
+          }),
+        );
+
+        const result = runBuiltCli(
+          tempHome,
+          testCase.args,
+          {
+            CI: "1",
+            NO_COLOR: "1",
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: stateDir,
+          },
+          { inheritEnvironment: false },
+        );
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toBe(testCase.expectedStdout);
+        expect(result.stdout).not.toContain(migrationDiagnostic);
+        expect(result.stderr.includes(migrationDiagnostic), result.stderr).toBe(
+          testCase.opensStateDatabase,
+        );
+      },
+      { prefix: "openclaw-models-plain-stdout-e2e-" },
+    );
+  });
+
+  it.each(["--plain", "--json"])(
+    "keeps human auth-list output on stdout when provider value is %s",
+    async (provider) => {
+      await withTempHome(
+        async (tempHome) => {
+          const result = runBuiltCli(tempHome, ["models", "auth", "list", "--provider", provider], {
+            CI: "1",
+            NO_COLOR: "1",
+            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          });
+
+          expect(result.status, result.stderr).toBe(0);
+          expect(result.stdout).toContain("Agent: main\n");
+          expect(result.stdout).toContain(`Provider: ${provider}\n`);
+          expect(result.stdout).toContain("Profiles: (none)\n");
+          expect(result.stderr).not.toContain("Agent: main");
+          expect(result.stderr).not.toContain(`Provider: ${provider}`);
+        },
+        { prefix: "openclaw-models-output-option-value-e2e-" },
+      );
+    },
+  );
+
+  it("preserves model catalog refresh success payloads and persisted rows", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const stateDir = path.join(tempHome, "isolated-state");
+        const configPath = path.join(tempHome, "openclaw.json");
+        const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+        const generatedAt = Date.now() + 60_000;
+        const bundle = {
+          schemaVersion: 1,
+          generatedAt,
+          sourceCommit: "autoqa-model-catalog-fixture",
+          providers: { openai: { models: [{ id: "gpt-5.6-luna" }] } },
+        };
+        const updatedBundle = { ...bundle, generatedAt: generatedAt + 1_000 };
+        const preloadFor = (response: "initial" | "updated" | "unchanged" | "failure") => {
+          const fixture = response === "initial" ? bundle : updatedBundle;
+          const fetchResponse =
+            response === "failure"
+              ? 'throw new Error("offline fixture");'
+              : response === "unchanged"
+                ? "return new Response(null, { status: 304 });"
+                : `return new Response(JSON.stringify(${JSON.stringify(fixture)}), { headers: { etag: '\"fixture\"' } });`;
+          return Buffer.from(
+            [
+              'import net from "node:net";',
+              'import module from "node:module";',
+              'net.Socket.prototype.connect = function () { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
+              "const createRequire = module.createRequire;",
+              'module.createRequire = (...args) => new Proxy(createRequire(...args), { apply(target, receiver, request) { return String(request[0]).endsWith("/build-info.json") ? { builtAt: "2020-01-01T00:00:00.000Z" } : Reflect.apply(target, receiver, request); } });',
+              "module.syncBuiltinESMExports();",
+              `globalThis.fetch = async () => { ${fetchResponse} };`,
+              "globalThis.fetch.mock = {};",
+            ].join("\n"),
+          ).toString("base64");
+        };
+        const runRefresh = (
+          args: string[],
+          response: "initial" | "updated" | "unchanged" | "failure",
+        ) =>
+          runBuiltCli(tempHome, ["models", ...args], {
+            NODE_OPTIONS: `--import=data:text/javascript;base64,${preloadFor(response)}`,
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: stateDir,
+          });
+        const readCatalogRow = () =>
+          readConfigMachineState<{ generated_at: number; bundle_json: string }>(
+            "modelCatalog.remote",
+            { path: databasePath },
+          );
+
+        const human = runRefresh(["refresh"], "initial");
+        expect(human.status, human.stderr).toBe(0);
+        expect(human.stdout).toContain("Remote catalog refresh: updated (1 providers, 1 models;");
+        expect(human.stdout).toContain(
+          "A running Gateway applies the updated catalog after its next restart.",
+        );
+
+        const updated = runRefresh(["refresh", "--json"], "updated");
+        expect(updated.status, updated.stderr).toBe(0);
+        expect(JSON.parse(updated.stdout)).toEqual({
+          status: "updated",
+          generatedAt: updatedBundle.generatedAt,
+          providers: 1,
+          models: 1,
+        });
+
+        const unchanged = runRefresh(["--json", "refresh"], "unchanged");
+        expect(unchanged.status, unchanged.stderr).toBe(0);
+        expect(JSON.parse(unchanged.stdout)).toEqual({
+          status: "unchanged",
+          generatedAt: updatedBundle.generatedAt,
+          providers: 1,
+          models: 1,
+        });
+        const persistedRow = readCatalogRow();
+        expect(persistedRow).toMatchObject({
+          generated_at: updatedBundle.generatedAt,
+          bundle_json: JSON.stringify(updatedBundle),
+        });
+
+        const failure = runRefresh(["refresh", "--json"], "failure");
+        expect(failure.status, failure.stderr).toBe(1);
+        expect(JSON.parse(failure.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: "Remote catalog refresh failed: Error: offline fixture",
+          },
+        });
+        expect(readCatalogRow()).toEqual(persistedRow);
+
+        await fs.writeFile(
+          configPath,
+          `${JSON.stringify({ models: { catalogRefresh: { enabled: false } } })}\n`,
+          "utf8",
+        );
+        const disabled = runRefresh(["refresh", "--json"], "failure");
+        expect(disabled.status, disabled.stderr).toBe(0);
+        expect(JSON.parse(disabled.stdout)).toEqual({
+          status: "disabled",
+          providers: 0,
+          models: 0,
+        });
+        expect(readCatalogRow()).toEqual(persistedRow);
+      },
+      { prefix: "openclaw-models-refresh-persistence-e2e-" },
     );
   });
 
@@ -1775,6 +2522,98 @@ describe("cli json stdout contract", () => {
   });
 
   it.each([
+    { name: "a missing local marketplace", source: "local" },
+    {
+      name: "a missing local marketplace through forced Commander",
+      source: "local",
+      commander: true,
+    },
+    { name: "a missing local marketplace with dual TTYs", source: "local", tty: true },
+    { name: "an unavailable Git marketplace", source: "git" },
+    { name: "an unavailable Git marketplace with dual TTYs", source: "git", tty: true },
+    { name: "a missing local marketplace in human mode", source: "local", human: true },
+    { name: "an unavailable Git marketplace in human mode", source: "git", human: true },
+  ])("keeps $name failures on the canonical marketplace output boundary", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const stateDir = path.join(tempHome, "isolated-state");
+        const configPath = path.join(tempHome, "missing-openclaw.json");
+        const source =
+          testCase.source === "git"
+            ? "ssh://marketplace.invalid/openclaw/unavailable.git"
+            : path.join(tempHome, "missing-marketplace");
+        const ttyPreload = Buffer.from(
+          'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true }); Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+        ).toString("base64");
+
+        await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+
+        const result = runBuiltCli(
+          tempHome,
+          ["plugins", "marketplace", "list", source, ...("human" in testCase ? [] : ["--json"])],
+          {
+            GIT_SSH_COMMAND: `${JSON.stringify(process.execPath)} -e "process.exit(1)"`,
+            GIT_TERMINAL_PROMPT: "0",
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            OPENCLAW_STATE_DIR: stateDir,
+            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+            ...("tty" in testCase
+              ? { NODE_OPTIONS: `--import=data:text/javascript;base64,${ttyPreload}` }
+              : {}),
+          },
+          { inheritEnvironment: false },
+        );
+        const expectedMessage =
+          testCase.source === "git"
+            ? `failed to clone marketplace source ${source}:`
+            : `unsupported marketplace source: ${source}`;
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain(expectedMessage);
+
+        if ("human" in testCase) {
+          if (testCase.source === "git") {
+            expect(result.stdout).toContain(`Cloning marketplace source ${source}...`);
+          }
+        } else {
+          expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+          expect(result.stdout).not.toContain("Cloning marketplace source");
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: {
+              type: "cli_error",
+              message:
+                testCase.source === "git"
+                  ? expect.stringContaining(expectedMessage)
+                  : expectedMessage,
+            },
+          });
+          if ("tty" in testCase) {
+            expect(result.stderr).toContain("\u001B[?25h");
+          }
+        }
+
+        if (testCase.source === "git") {
+          expect(result.stderr).toContain("fatal: Could not read from remote repository.");
+          const clonePath = /Cloning into '([^']+)'\.\.\./u.exec(result.stderr)?.[1];
+          expect(clonePath).toBeDefined();
+          await expect(fs.stat(path.dirname(clonePath as string))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
+
+        await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(path.join(tempHome, ".claude"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      },
+      { prefix: "openclaw-marketplace-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
     {
       name: "search with a leaf JSON flag",
       args: ["skills", "search", "fixture", "--json"],
@@ -1826,14 +2665,41 @@ describe("cli json stdout contract", () => {
       message: "--agent must not be blank",
     },
     {
-      name: "curator mutation",
+      name: "list with a configured remote Gateway missing its URL",
+      args: ["skills", "list", "--json"],
+      message: "gateway remote mode misconfigured: gateway.remote.url missing",
+      remoteMissing: true,
+    },
+    ...[
+      { name: "the default report", args: ["skills", "--json"] },
+      { name: "list", args: ["skills", "list", "--json"] },
+      { name: "info", args: ["skills", "info", "fixture", "--json"] },
+      { name: "check", args: ["skills", "check", "--json"] },
+      { name: "curator status", args: ["skills", "curator", "status", "--json"] },
+      { name: "curator pin", args: ["skills", "curator", "pin", "fixture", "--json"] },
+      { name: "curator unpin", args: ["skills", "curator", "unpin", "fixture", "--json"] },
+      { name: "curator restore", args: ["skills", "curator", "restore", "fixture", "--json"] },
+      {
+        name: "workshop apply",
+        args: ["skills", "workshop", "apply", "fixture-proposal", "--json"],
+      },
+    ].map(({ name, args }) => ({
+      name: `${name} after an explicit environment Gateway fails`,
+      args,
+      message: "AUTOQA_SELECTED_GATEWAY_FAILURE",
+      explicitGateway: true,
+    })),
+    {
+      name: "retired curator mutation",
       args: ["skills", "curator", "pin", "missing-skill", "--json"],
-      message: "Curated skill not found: missing-skill",
+      message:
+        "Skill lifecycle curation is retired. The weekly collection review manages the skill collection; pin, unpin, and restore no longer exist.",
     },
     {
-      name: "curator mutation with parent JSON",
+      name: "retired curator mutation with parent JSON",
       args: ["skills", "curator", "--json", "pin", "missing-skill"],
-      message: "Curated skill not found: missing-skill",
+      message:
+        "Skill lifecycle curation is retired. The weekly collection review manages the skill collection; pin, unpin, and restore no longer exist.",
     },
     {
       name: "workshop workspace validation with parent JSON",
@@ -1853,24 +2719,51 @@ describe("cli json stdout contract", () => {
   ])("returns one canonical JSON document when skills $name fails", async (testCase) => {
     await withTempHome(
       async (tempHome) => {
+        const configPath = path.join(tempHome, "missing-openclaw.json");
+        if ("remoteMissing" in testCase) {
+          await fs.writeFile(configPath, JSON.stringify({ gateway: { mode: "remote" } }));
+        }
         const preload = `data:text/javascript,${encodeURIComponent(
-          'globalThis.fetch = async () => new Response("offline fixture", { status: 400 });',
+          [
+            'globalThis.fetch = async () => new Response("offline fixture", { status: 400 });',
+            ...("explicitGateway" in testCase
+              ? [
+                  'import net from "node:net";',
+                  'net.Socket.prototype.connect = function () { throw new Error("AUTOQA_SELECTED_GATEWAY_FAILURE"); };',
+                ]
+              : []),
+          ].join("\n"),
         )}`;
         const result = runBuiltCli(tempHome, testCase.args, {
           NODE_OPTIONS: `--import=${preload}`,
           OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_GATEWAY_PORT: "1",
+          ...("explicitGateway" in testCase
+            ? {
+                OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:9",
+                OPENCLAW_GATEWAY_TOKEN: "fixture-token",
+              }
+            : {}),
         });
+        const message =
+          "remoteMissing" in testCase
+            ? [
+                testCase.message,
+                `Config: ${configPath}`,
+                "Fix: set gateway.remote.url, or set gateway.mode=local.",
+              ].join("\n")
+            : testCase.message;
 
         expect(result.status, result.stderr).toBe(1);
         expect(JSON.parse(result.stdout)).toEqual({
           ok: false,
           error: {
             type: "cli_error",
-            message: testCase.message,
+            message,
           },
         });
-        expect(result.stderr).toContain(testCase.message);
+        expect(result.stderr).toContain(message);
         expect(result.stderr.length).toBeLessThan(2_048);
       },
       { prefix: "openclaw-skills-json-failure-e2e-" },

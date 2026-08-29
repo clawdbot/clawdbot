@@ -79,6 +79,21 @@ describe("check-assertion-safety-ratchet", () => {
     expect(isGovernedAssertionSourcePath("scripts/example.ts")).toBe(false);
   });
 
+  it("recognizes SAFETY comments after template substitutions and division", () => {
+    // A raw skipTrivia scanner never re-scans the `}` ending a template
+    // substitution, so the closing backtick opened a phantom template that
+    // swallowed every later comment; this pins the line-text approach.
+    const source = [
+      "const label = `count ${total} items`;",
+      "const half = total / 2;",
+      "// SAFETY: the schema parser established Shape.",
+      "const safe = value as Shape;",
+      "const unsafe = value as Shape;",
+    ].join("\n");
+
+    expect(countUnsafeAssertions(source, "src/example.ts")).toBe(1);
+  });
+
   it("blocks new debt, accepts SAFETY comments, and prunes reduced counts", () => {
     const root = tempDirs.make("openclaw-assertion-safety-");
     fs.mkdirSync(path.join(root, "config"), { recursive: true });

@@ -15,7 +15,7 @@ import {
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
+import { chatSendHoldReason, OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { recordChatSendTiming, schedulePendingSendPaintTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
 import { storedChatOutboxScopeKey, type StoredChatOutboxScope } from "./composer-persistence.ts";
@@ -42,18 +42,20 @@ export function enqueuePendingSendMessage(
   replyToId?: string,
   resumedOrderKey?: number,
   queueMode?: ChatQueueItem["queueMode"],
+  intent?: ChatQueueItem["intent"],
+  expectedLeafEntryId?: string | null,
 ): ChatQueueItem | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
   if (!trimmed && !hasAttachments) {
     return null;
   }
-  const sender = resolveCurrentUserIdentity(host.hello, host.client?.instanceId);
+  const sender = resolveCurrentUserIdentity(host.hello, host.client?.instanceId, host.selfUser);
   // A send that resumes an edited row inherits its place; the row itself is
   // retired by the write that admits this replacement, not here.
   const pending: ChatQueueItem = {
     id: generateUUID(),
-    text: trimmed,
+    text: intent ? text : trimmed,
     createdAt: Date.now(),
     ...(resumedOrderKey !== undefined ? { orderKey: resumedOrderKey } : {}),
     attachments: hasAttachments ? attachments : undefined,
@@ -62,6 +64,10 @@ export function enqueuePendingSendMessage(
     sendRunId: generateUUID(),
     sendState,
     ...(queueMode ? { queueMode } : {}),
+    ...(intent
+      ? { intent, ...(host.currentSessionId ? { sessionId: host.currentSessionId } : {}) }
+      : {}),
+    ...(intent && expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
     sendSubmittedAtMs: submittedAtMs,
     sessionKey: host.sessionKey,
     agentId: scopedAgentIdForSession(host, host.sessionKey),
@@ -139,19 +145,13 @@ export function finishChatDeliveryAdmission(
   if (!current) {
     return "failed";
   }
-  if (options?.routingSessionKey && !routeVisible(current.agentId)) {
-    const parked = setState(host.connected && host.client ? "waiting-idle" : "waiting-reconnect");
-    if (!parked) {
-      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-      return "failed";
-    }
-    return "pending";
-  }
   const sendsDuringActiveRun = Boolean(current.queueMode || options?.allowActiveRunSend);
   if (
-    !sendsDuringActiveRun &&
-    routeVisible(current.agentId) &&
-    (isChatBusy(host) || hasDirectSessionRun(host))
+    chatSendHoldReason(host, route) ||
+    (options?.routingSessionKey && !routeVisible(current.agentId)) ||
+    (!sendsDuringActiveRun &&
+      routeVisible(current.agentId) &&
+      (isChatBusy(host) || hasDirectSessionRun(host)))
   ) {
     const parked = setState(host.connected && host.client ? "waiting-idle" : "waiting-reconnect");
     if (!parked) {

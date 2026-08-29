@@ -2,6 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
+import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
@@ -146,11 +147,40 @@ function renderChip(kind: "plugin" | "agent", id?: string | null) {
     : nothing;
 }
 
+function summarizeScopeLabel(scope: ApprovalScope): string {
+  switch (scope.kind) {
+    case "standing-grant":
+      return scope.expiresInDays !== undefined
+        ? t("execApproval.scope.standingGrantDays", {
+            automation: scope.automation,
+            count: String(scope.expiresInDays),
+          })
+        : t("execApproval.scope.standingGrant", { automation: scope.automation });
+    case "message-send":
+      return t("execApproval.scope.messageSend", {
+        count: String(scope.recipientCount),
+        target: scope.target,
+      });
+    case "payment":
+      return t("execApproval.scope.payment", {
+        amount: scope.amount,
+        currency: scope.currency,
+        target: scope.target,
+      });
+    case "external-post":
+      return t("execApproval.scope.externalPost", { target: scope.target });
+  }
+  return scope satisfies never;
+}
+
 function renderExecBody(
   request: ExecApprovalRequestPayload,
   variant: ExecApprovalCardProps["variant"],
 ) {
   return html` ${renderCommandWithSpans(request)}
+    ${request.scope
+      ? html`<div class="exec-approval-scope">${summarizeScopeLabel(request.scope)}</div>`
+      : nothing}
     <div class="exec-approval-meta">
       ${renderMetaRow(t("execApproval.labels.host"), request.host)}
       ${renderMetaRow(t("execApproval.labels.cwd"), request.cwd, { path: true })}
@@ -181,12 +211,14 @@ export function compactApprovalCommand(command: string): string {
   return singleLine.length > 64 ? `${truncateUtf16Safe(singleLine, 61)}…` : singleLine;
 }
 
-function approvalDecisionLabel(decision: ExecApprovalDecision) {
+function approvalDecisionLabel(decision: ExecApprovalDecision, kind: ExecApprovalRequest["kind"]) {
   return t(
     decision === "allow-once"
       ? "execApproval.allowOnce"
       : decision === "allow-always"
-        ? "execApproval.alwaysAllow"
+        ? kind === "exec"
+          ? "execApproval.alwaysAllowHere"
+          : "execApproval.alwaysAllow"
         : "execApproval.deny",
   );
 }
@@ -258,13 +290,18 @@ export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
       <div class="sidebar-approval-row__command mono" title=${approval.request.command}>
         <span aria-hidden="true">$ </span>${command}
       </div>
+      ${approval.request.scope
+        ? html`<div class="exec-approval-scope">
+            ${summarizeScopeLabel(approval.request.scope)}
+          </div>`
+        : nothing}
       <div
         class="sidebar-approval-row__actions"
         role="group"
         aria-label=${t("approvalPage.actionsLabel")}
       >
         ${resolveApprovalDecisions(approval).map((decision) => {
-          const label = approvalDecisionLabel(decision);
+          const label = approvalDecisionLabel(decision, approval.kind);
           return html`<button
             type="button"
             class="btn btn--xs ${decision === "deny"
@@ -344,6 +381,13 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
           </div>`
         : nothing}
     </div>
+    ${props.variant === "inline" && active.sourceSessionKey
+      ? html`<div class="exec-approval-warning" role="note">
+          ${t("execApproval.requestedBySession", {
+            session: resolveSessionDisplayName(active.sourceSessionKey),
+          })}
+        </div>`
+      : nothing}
     ${active.kind === "exec"
       ? renderExecBody(active.request, props.variant)
       : renderPluginBody(active, props.variant)}
@@ -363,7 +407,7 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
       : nothing}
     <div class="exec-approval-actions">
       ${decisions.map((decision) => {
-        const label = approvalDecisionLabel(decision);
+        const label = approvalDecisionLabel(decision, props.approval.kind);
         return html`<button
           class=${decisionClass(decision)}
           type="button"

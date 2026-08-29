@@ -43,8 +43,8 @@ command handling is enabled for the surface.
     - In **normal chat** messages with other text, they act as inline hints and
       do **not** persist session settings.
       Model selection is the exception: an authorized inline `/model` or
-      configured `/<alias>` persists the session selection, and an owner/admin
-      selection without `-s` may also request a configured-default update.
+      configured `/<alias>` persists the session selection. Owner/admin `-a`
+      and `-g` scopes also request an update for the selected default.
     - Directives only apply for **authorized senders**. If `commands.allowFrom`
       is set, it is the only allowlist used; otherwise authorization comes from
       channel allowlists, pairing, and always-on access-group enforcement. Unauthorized
@@ -130,11 +130,9 @@ command handling is enabled for the surface.
   `commands.allowFrom` and DM pairing access.
 </ParamField>
 
-<ParamField path="channels.<channel>.commands.enforceOwnerForCommands" type="boolean" default="false">
-  Per-channel: requires owner identity for owner-only commands. When `true`,
-  sender must match `commands.ownerAllowFrom` or hold internal `operator.admin`
-  scope. A wildcard `allowFrom` entry is **not** sufficient.
-</ParamField>
+Channel plugins can enforce owner-only command access through their
+`enforceOwnerForCommands` policy. This is plugin behavior, not an
+`openclaw.json` setting. A wildcard command allowlist does not bypass it.
 
 <ParamField path="commands.allowFrom" type="object">
   Per-provider allowlist for command authorization. When configured, it is the
@@ -146,6 +144,14 @@ When `commands.allowFrom` is not configured, command authorization follows
 the channel's allowlists and pairing state. Access-group entries referenced by
 channel allowlists are resolved automatically; there is no command-level
 access-group toggle.
+
+Session commands `/new` and `/reset` (including `/reset soft`) remain available
+to channel-authorized senders on channels that do not enforce owner-only
+commands, even when those senders are not in `commands.ownerAllowFrom`.
+An applicable `commands.allowFrom` policy remains authoritative: a denied
+sender or an explicitly empty list cannot fall back to channel admission.
+Reset access does not grant other command or owner-only authority. Internal
+Gateway callers with explicit scopes still need `operator.admin` to reset.
 
 ## Command list
 
@@ -199,7 +205,7 @@ plugins.
     | `/elevated [on\|off\|ask\|full]` | Toggle elevated mode. Alias: `/elev` |
     | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show or set exec defaults |
     | `/login [codex\|openai\|openai-codex]` | Pair Codex/OpenAI login from a private chat or Web UI session. Owner/admin only |
-    | `/model [name\|#\|status] [-s\|--session]` | Show or select a model. Direct owner/admin selections request a configured-default update; `-s` changes only this session |
+    | `/model [name\|default\|list\|status] [-s\|--session\|-a\|--agent\|-g\|--global]` | Show or select a model. `-s` changes only this session; owner/admin `-a` and `-g` also update configured defaults |
     | `/models [provider] [page] [limit=<n>\|all]` | List configured/auth-available providers or models |
     | `/queue <mode>` | Manage active-run queue behavior. See [Queue](/concepts/queue) and [Queue steering](/concepts/queue-steering) |
     | `/steer <message>` | Inject guidance into the active run. Alias: `/tell`. See [Steer](/tools/steer) |
@@ -216,17 +222,18 @@ plugins.
       <Accordion title="Model switching details">
         - Prefer choosing the model when creating a session. Changing it in an established session is an advanced operation because model context limits, prompt/tool behavior, and prompt-cache behavior can differ. See [Choose a model for a session](/concepts/models#choose-a-model-for-a-session).
 
-        **Scope in one line:** a direct owner/admin `/model <model>` changes the session and requests a best-effort configured-default update; `-s` changes only the current session. When an agent inherits `agents.defaults.model`, the update target is that shared global fallback.
+        **Scope in one line:** `-s` changes only this session, `-a` also updates the agent default, and `-g` also updates the shared global default. Without a flag, `agents.defaults.modelSelectionScope` applies when set; omission preserves existing behavior.
 
-        Configured `/<alias>` shorthands accept the same trailing `--runtime`, `-s`, and `--session` options as `/model <alias>`.
+        Configured `/<alias>` shorthands accept the same trailing scope and `--runtime` options as `/model <alias>`.
 
         | Goal | Command | Effect |
         | --- | --- | --- |
-        | Request a configured-default change | `/model <model>` as owner/admin | Changes this session and starts a best-effort update of the agent's effective configured default. If the agent has no explicit primary, the target is the shared `agents.defaults.model` fallback |
-        | Change only this session | `/model <model> -s` (or `--session`) | Changes this session; configured defaults remain unchanged |
-        | Use the configured default again | `/model default` (with or without `-s`) | Clears this session's model selection so it inherits the current configured default; compatible auth pins remain and incompatible pins clear |
+        | Change only this session | `/model <model> -s` (or `--session`) | Changes this session. Configured defaults remain unchanged |
+        | Update the agent default | `/model <model> -a` (or `--agent`) | Changes this session and requests an update for the selected agent |
+        | Update the global default | `/model <model> -g` (or `--global`) | Changes this session and requests an update for `agents.defaults.model` |
+        | Use the configured default again | `/model default -s` | Clears this session's model selection without writing defaults; compatible auth pins remain and incompatible pins clear |
 
-        A non-owner `/model <model>` selection is also session-only because it cannot write configured defaults. Immutable configuration stays unchanged, and asynchronous write failures are logged without reverting the session selection. Valid explicit user model/profile pins survive `/new`, `/reset`, session rollover, compaction, and cooldown windows; automatic profile pins may rotate or clear. Resetting with `/model default -s` clears the session model selection, retains a compatible auth pin, and clears an incompatible pin. It does not recover a configured default that an earlier owner/admin selection replaced.
+        With `modelSelectionScope` unset, a direct owner/admin `/model <model>` also requests an update to the agent's existing explicit primary, or to the shared global fallback if there is none. Without owner/admin authority, bare commands remain session-only and explicit `-a` and `-g` requests are rejected. Selecting the effective configured default clears the session model pin, but agent/global scope still requests the configured-default write. Immutable configuration stays unchanged. Asynchronous write errors do not revert the session selection.
 
         - If the agent is idle, the next run uses it right away.
         - If a run is active, the switch is marked pending and applied at the next clean retry point.
@@ -371,26 +378,52 @@ use the Control UI Tools panel or config surfaces.
 
 ## `/model`: model selection
 
-Direct owner/admin `/model <model>` requests **default scope**: it changes this session and starts a best-effort configured-default update. Adding `-s` uses **session scope**: only this session changes. For agents without an explicit primary model, the update target is the shared global `agents.defaults.model` fallback.
+Use `-s` to change only the current session, `-a` to also update the agent default, or `-g` to also update the shared global default. The long forms are `--session`, `--agent`, and `--global`; an explicit scope overrides `agents.defaults.modelSelectionScope`.
+
+Without a flag or that optional setting, direct owner/admin `/model <model>` commands keep their existing behavior: change the session and request a best-effort update of the agent's explicit primary, or the shared global fallback when the agent has none. To make unqualified selections session-only, opt in with:
+
+```json5
+{
+  agents: { defaults: { modelSelectionScope: "session" } },
+}
+```
+
+The setting also accepts `"agent"` and `"global"`; it does not grant permission to write configured defaults. See [Model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
+
+In text commands, select a model by `provider/model` or a configured alias.
+Numeric selections such as `/model 3` are not supported.
 
 ```text
-/model             # show model picker
-/model list        # same
-/model 3           # select by number from picker
-/model openai/gpt-5.4    # direct owner/admin: session + default update request
-/model openai/gpt-5.4 -s # this session only; configured default unchanged
+/model             # show current model and usage guidance
+/model list        # browse providers (same as /models)
+/models openai     # list models from a provider
+/model openai/gpt-5.4    # configured scope, or existing behavior when unset
+/model openai/gpt-5.4 -s # explicit session scope
+/model openai/gpt-5.4 -a # session + agent default update request
+/model openai/gpt-5.4 -g # session + global default update request
 /model default -s        # clear this session's model selection; use configured default
 /model opus@anthropic:default -s # pin this profile for the current session
-/model default     # same reset; does not restore an older configured default
+/model default     # use configured default, following the selected scope
 /model status      # detailed view with endpoint and API mode
 ```
 
-On Discord, `/model` and `/models` open an interactive picker with provider and
-model dropdowns and follow the direct command flow. Owner/admin submissions
-request a best-effort configured-default update. Telegram callback-picker
-selections are session-only. The picker respects `agents.defaults.modelPolicy.allow`,
+On Discord, the bare native `/model` and `/models` commands open an interactive
+picker. Choose a provider and model from the dropdowns, then select **Submit**.
+Discord follows the direct command behavior, including `modelSelectionScope`.
+Telegram model browsing uses callback buttons; selections always remain session-only.
+The picker respects `agents.defaults.modelPolicy.allow`,
 including `provider/*` entries. Without an explicit allowlist, model entries and
 aliases do not restrict selection.
+
+`-a` updates only the current agent's configured primary, even when it previously
+inherited the global default. `-g` updates the shared fallback, not every agent's
+explicit primary. Other session pins remain unchanged, but unpinned sessions
+and cron jobs that inherit the changed default can use it on their next run.
+Selecting the effective configured default clears the session model pin, but
+agent/global scope still requests the configured-default write. Use
+`/model default -s` to inherit the configured default without writing it.
+Without owner/admin authority, bare commands remain session-only and explicit
+`-a` or `-g` requests are rejected.
 
 ## `/config`: on-disk config writes
 
@@ -465,14 +498,25 @@ chat.
 `/plugins enable|disable` updates plugin config and hot-reloads the Gateway
 plugin runtime for new agent turns. `/plugins install` restarts managed
 Gateways automatically because plugin source modules changed. Trusted ClawHub
-and official-catalog installs do not need extra acknowledgement. Arbitrary npm,
+and official-catalog installs do not need a provenance acknowledgement. Arbitrary npm,
 git, archive, `npm-pack:`, and local path sources show a provenance warning and
 require a trailing `--force` after you review the source. This flag acknowledges
 the source and permits replacement of an existing install; it does not bypass
-`security.installPolicy` or installer security checks. ClawHub releases with
-risk warnings still require the separate shell-only
-`--acknowledge-clawhub-risk` flag. Marketplace, linked, and pinned installs also
-remain shell-only.
+`security.installPolicy` or installer security checks. ClawHub Review outcomes
+are printed informationally; blocked releases remain non-installable.
+Marketplace, linked, and pinned installs remain shell-only.
+
+When `/plugins install` or `/plugins enable` requires capability consent, it
+returns the plugin's declared capabilities and an exact retry command. Review
+that reply, then rerun with `--accept-capabilities`:
+
+```text
+/plugins install clawhub:<package> --accept-capabilities
+/plugins enable <plugin-id> --accept-capabilities
+```
+
+Capability consent also applies to official external plugins and is separate
+from the source acknowledgement provided by `--force`.
 
 ## `/trace`: plugin trace output
 
@@ -529,6 +573,9 @@ See [BTW side questions](/tools/btw) for the full behavior.
   <Accordion title="Fast path and inline shortcuts">
     - Command-only messages from allowlisted senders are handled immediately (bypass queue + model).
     - Inline shortcuts (`/help`, `/commands`, `/status`, `/whoami`) also work embedded in normal messages and are stripped before the model sees the remaining text.
+    - In Control UI, every non-skill slash command can be selected in the middle of a draft. The command runs separately, only the command invocation is removed, and the surrounding draft remains unsent.
+    - In Control UI (WebChat), selecting a skill from slash completion inserts the existing `$skill-name` reference into the message (for example, `Please use $weather to check Sydney`).
+    - Inline command dispatch follows the same connection, permission, and confirmation checks as sending that command by itself. Typing slash-like prose without selecting or submitting the completion does not execute it.
     - Unauthorized command-only messages are silently ignored; inline `/...` tokens are treated as plain text.
 
   </Accordion>

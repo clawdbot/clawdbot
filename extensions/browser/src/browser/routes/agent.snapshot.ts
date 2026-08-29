@@ -59,7 +59,10 @@ import {
   withPlaywrightRouteContext,
   withRouteTabContext,
 } from "./agent.shared.js";
-import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
+import {
+  captureBrowserOperationTarget,
+  resolveOperationTargetOutcome,
+} from "./agent.snapshot-target.js";
 import {
   resolveSnapshotPlan,
   shouldUsePlaywrightForAriaSnapshot,
@@ -374,19 +377,25 @@ export function registerBrowserAgentSnapshotRoutes(
         if (!pw) {
           return;
         }
+        const resolveRelayTarget = captureBrowserOperationTarget({
+          ctx,
+          profileName: profileCtx.profile.name,
+          targetId: tab.targetId,
+        });
         const result = await pw.navigateViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
           url,
           timeoutMs,
+          ...(resolveRelayTarget ? { resolveOperationTarget: resolveRelayTarget } : {}),
           ...browserNavigationPolicyForProfile(ctx, profileCtx),
         });
-        const currentTargetId = await resolveTargetIdAfterNavigate({
-          oldTargetId: tab.targetId,
-          navigatedUrl: result.url,
-          listTabs: () => profileCtx.listTabs(),
+        const currentTargetId = resolveOperationTargetOutcome({
+          actedOnTargetId: tab.targetId,
+          operationTargetId: result.targetId,
+          resolveRelayTarget,
         });
-        res.json({ ok: true, targetId: currentTargetId, ...result });
+        res.json({ ok: true, ...result, targetId: currentTargetId });
       },
     });
   });
@@ -585,6 +594,7 @@ export function registerBrowserAgentSnapshotRoutes(
             format: type,
             quality: type === "jpeg" ? 85 : undefined,
             timeoutMs,
+            headless: ctx.state().profiles.get(profileCtx.profile.name)?.running?.headless,
           });
         }
 

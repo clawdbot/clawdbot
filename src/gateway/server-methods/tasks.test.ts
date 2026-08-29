@@ -512,7 +512,7 @@ describe("tasks gateway handlers", () => {
           {
             sessionId: `session-${sessionKey}`,
             updatedAt: 1,
-            createdActor: { type: "human", id: actorId },
+            createdActor: { type: "human", source: "profile", id: actorId },
             visibility: "shared",
             ...(access === "incognito" && sessionKey === foreignKey ? { incognito: true } : {}),
           },
@@ -1044,6 +1044,7 @@ describe("tasks gateway handlers", () => {
       cfg: {},
       sessionKey: "agent:codex:acp:child",
       reason: "operator requested stop",
+      expectedRunId: "run-cancel-acp-gateway",
     });
     expect(payload?.found).toBe(true);
     expect(payload?.cancelled).toBe(true);

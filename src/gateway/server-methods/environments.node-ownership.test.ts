@@ -2,12 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
-import {
-  collectNodeRunnerIssuesByNodeId,
-  collectNodeWorkerBundleStatusByNodeId,
-  collectNodeWorkerCapacityByNodeId,
-  isNodeRunnerSessionHost,
-} from "../node-registry-private.js";
+import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
 import type {
   WorkerEnvironmentServiceContract,
   WorkerEnvironmentServiceRecord,
@@ -24,10 +19,12 @@ vi.mock("../../infra/device-pairing-node.js", () => ({
 }));
 
 vi.mock("../node-registry-private.js", () => ({
-  collectNodeRunnerIssuesByNodeId: vi.fn(() => new Map()),
-  collectNodeWorkerBundleStatusByNodeId: vi.fn(() => new Map()),
-  collectNodeWorkerCapacityByNodeId: vi.fn(() => new Map()),
-  isNodeRunnerSessionHost: vi.fn(() => false),
+  collectNodeCatalogRuntimeState: vi.fn(() => ({
+    sessionHostNodeIds: new Set(),
+    issuesByNodeId: new Map(),
+    workerSlotsByNodeId: new Map(),
+    workerBundleByNodeId: new Map(),
+  })),
 }));
 
 type TestWorkerService = Pick<WorkerEnvironmentServiceContract, "get" | "list">;
@@ -48,6 +45,7 @@ function workerRecord(
   return {
     environmentId: "worker-1",
     providerId: "static-ssh",
+    profileId: "development",
     leaseId: "lease-1",
     sharedHost: false,
     state: "ready",
@@ -96,10 +94,12 @@ async function callEnvironmentMethod(
 }
 
 beforeEach(() => {
-  vi.mocked(isNodeRunnerSessionHost).mockReturnValue(false);
-  vi.mocked(collectNodeRunnerIssuesByNodeId).mockReturnValue(new Map());
-  vi.mocked(collectNodeWorkerCapacityByNodeId).mockReturnValue(new Map());
-  vi.mocked(collectNodeWorkerBundleStatusByNodeId).mockReturnValue(new Map());
+  vi.mocked(collectNodeCatalogRuntimeState).mockReturnValue({
+    sessionHostNodeIds: new Set(),
+    issuesByNodeId: new Map(),
+    workerSlotsByNodeId: new Map(),
+    workerBundleByNodeId: new Map(),
+  });
   vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
   vi.mocked(listNodePairing).mockResolvedValue({ paired: [] } as never);
 });

@@ -440,7 +440,7 @@ Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw`, `OPE
 That mounted config directory holds:
 
 - `openclaw.json` for behavior config
-- `agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
+- `state/openclaw.sqlite` for shared provider auth and `agents/<agentId>/agent/openclaw-agent.sqlite` for agent-local OAuth/API-key profiles
 - `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
 
 The auth-profile secret directory stores the local encryption key for OAuth-backed auth profile token material. Keep it with your Docker host state, but separate from `OPENCLAW_CONFIG_DIR`.
@@ -526,10 +526,16 @@ If you installed from the older `scripts/shell-helpers/clawdock-helpers.sh` path
   <Accordion title="Faster rebuilds">
     Use the repo-root `Dockerfile` instead of replacing it with a shortened
     single-stage example. Its `workspace-deps` stage extracts the package
-    manifests required by `pnpm-workspace.yaml`, then the build stage copies
-    those manifests before `pnpm install --frozen-lockfile`. This keeps the
-    dependency layer cacheable without omitting `packages/*`, selected
+    manifests required by `pnpm-workspace.yaml`. Build and production dependency
+    stages share those inputs and run separate frozen-lockfile installs. This
+    keeps both dependency layers cacheable without omitting `packages/*`, selected
     `extensions/*`, or other required workspace metadata.
+
+    Runtime assembly replaces the build dependency trees with the fresh production
+    install while retaining compiled workspace packages and native addon outputs.
+    It does not run `pnpm prune` on dependencies inherited from an image layer;
+    pnpm 12 can fail that operation with `EXDEV` on OverlayFS. The `build` target
+    retains development dependencies for live-test containers.
 
     The same Dockerfile preserves the production runtime contract: digest-pinned
     Node and Bun bases, non-root uid 1000, `tini`, the built-in health check, and
@@ -583,7 +589,7 @@ Sandbox scope can be per-agent (default), per-session, or shared; each scope get
 For full configuration, images, security notes, and multi-agent profiles:
 
 - [Sandboxing](/gateway/sandboxing) -- complete sandbox reference
-- [OpenShell](/gateway/openshell) -- interactive shell access to sandbox containers
+- [OpenShell](/gateway/openshell) -- OpenShell-managed local or remote sandbox backend
 - [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides
 
 ### Quick enable

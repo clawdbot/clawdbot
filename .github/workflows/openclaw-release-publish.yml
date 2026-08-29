@@ -128,6 +128,8 @@ jobs:
       preflight_tarball_sha256: ${{ steps.manifest.outputs.tarball_sha256 }}
       full_release_validation_run_attempt: ${{ steps.full_run.outputs.attempt }}
       focused_release_evidence_run_attempt: ${{ steps.focused_run.outputs.attempt }}
+      focused_release_evidence_workflow_full_ref: ${{ steps.focused_run.outputs.workflow_full_ref }}
+      focused_release_evidence_workflow_sha: ${{ steps.focused_run.outputs.workflow_sha }}
       windows_node_installer_digests: ${{ steps.windows_source.outputs.installer_digests }}
     steps:
       - name: Validate inputs
@@ -527,16 +529,26 @@ jobs:
             --jq .content | base64 --decode > "${tooling_dir}/validate-full-release-validation-evidence.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/release-ci-summary.mjs?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/release-ci-summary.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/full-release-validation-policy.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/full-release-validation-policy.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/full-release-candidate-contract.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/full-release-candidate-contract.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/canonical-json.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/lib/canonical-json.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/plain-gh.mjs?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/lib/plain-gh.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/plugin-sdk-api-release-evidence.mjs?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/plugin-sdk-api-release-evidence.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/validate-authorized-beta-focused-evidence.mts?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/validate-authorized-beta-focused-evidence.mts"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/verify-authorized-beta-focused-candidate.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/verify-authorized-beta-focused-candidate.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/authorized-beta-focused-policy.json?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/authorized-beta-focused-policy.json"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/record-shared.mjs?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/lib/record-shared.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/upgrade-survivor-policy.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/lib/upgrade-survivor-policy.mjs"
 
       - name: Checkout release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -662,20 +674,19 @@ jobs:
             ls -la "${RUNNER_TEMP}/full-release-validation-manifest" >&2 || true
             exit 1
           fi
-          trusted_workflow_commit_ref="refs/remotes/origin/main"
+          trusted_main_ref="refs/remotes/origin/main"
           if [[ "${TRUSTED_WORKFLOW_FULL_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
-            trusted_workflow_commit_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"
+            trusted_publisher_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"
             git fetch --no-tags origin \
-              "+${TRUSTED_WORKFLOW_FULL_REF}:${trusted_workflow_commit_ref}"
-            if [[ "$(git rev-parse "${trusted_workflow_commit_ref}^{commit}")" != "${GITHUB_SHA}" ]]; then
+              "+${TRUSTED_WORKFLOW_FULL_REF}:${trusted_publisher_ref}"
+            if [[ "$(git rev-parse "${trusted_publisher_ref}^{commit}")" != "${GITHUB_SHA}" ]]; then
               echo "Trusted release-publish tag moved after workflow dispatch." >&2
               exit 1
             fi
-          else
-            git fetch --no-tags origin \
-              +refs/heads/main:refs/remotes/origin/main
           fi
-          TRUSTED_MAIN_REF="${trusted_workflow_commit_ref}" \
+          git fetch --no-tags origin \
+            "+refs/heads/main:${trusted_main_ref}"
+          TRUSTED_MAIN_REF="${trusted_main_ref}" \
             MANIFEST_FILE="$manifest" \
             node "$VALIDATOR_FILE" < "$RUN_JSON_FILE"
           node "$STRICT_VALIDATOR_FILE" \
@@ -726,17 +737,63 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ inputs.focused_release_evidence_run_attempt }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          run_attempt="$(
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
-              --jq '.run_attempt'
-          )"
-          if [[ "${run_attempt}" != "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" ]]; then
-            echo "Focused evidence run attempt mismatch: expected ${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}, got ${run_attempt}." >&2
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FOCUSED_RELEASE_EVIDENCE_RUN_ID}")"
+          if ! jq -e \
+            --arg run_id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
+            --arg attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
+            '.id == ($run_id | tonumber) and .run_attempt == ($attempt | tonumber) and
+             .name == "Authorized Beta Focused Validation" and
+             .path == ".github/workflows/authorized-beta-focused-validation.yml" and
+             .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success"' \
+            <<<"${run_json}" >/dev/null; then
+            echo "Focused evidence producer must be the exact successful authorized workflow run and attempt." >&2
             exit 1
           fi
-          echo "attempt=${run_attempt}" >> "$GITHUB_OUTPUT"
+          producer_ref="$(jq -r '.head_branch // empty' <<<"${run_json}")"
+          producer_sha="$(jq -r '.head_sha // empty' <<<"${run_json}")"
+          if [[ ! "${producer_ref}" =~ ^release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
+            echo "Focused evidence producer must use a protected release-publish tag." >&2
+            exit 1
+          fi
+          producer_prefix="${BASH_REMATCH[1]}"
+          if [[ ! "${producer_sha}" =~ ^[a-f0-9]{40}$ || "${producer_sha:0:12}" != "${producer_prefix}" ]]; then
+            echo "Focused evidence producer tag does not match its workflow SHA." >&2
+            exit 1
+          fi
+          remote_producer_sha="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${producer_ref}" \
+              --jq '.object | select(.type == "commit") | .sha'
+          )"
+          if [[ "${remote_producer_sha}" != "${producer_sha}" ]]; then
+            echo "Focused evidence producer tag is missing, moved, or annotated." >&2
+            exit 1
+          fi
+          producer_workflow_path=".github/workflows/authorized-beta-focused-validation.yml"
+          producer_policy_path="scripts/authorized-beta-focused-policy.json"
+          for trusted_path in "${producer_workflow_path}" "${producer_policy_path}"; do
+            producer_blob="$(git rev-parse "${producer_sha}:${trusted_path}")"
+            consumer_blob="$(git rev-parse "${WORKFLOW_SHA}:${trusted_path}")"
+            if [[ "${producer_blob}" != "${consumer_blob}" ]]; then
+              echo "Focused evidence producer does not match the trusted ${trusted_path}." >&2
+              exit 1
+            fi
+          done
+          historical_tooling_sha="$(
+            git show "${WORKFLOW_SHA}:${producer_policy_path}" |
+              jq -er '.historicalToolingSha | select(type == "string" and test("^[a-f0-9]{40}$"))'
+          )"
+          if ! git merge-base --is-ancestor "${historical_tooling_sha}" "${producer_sha}"; then
+            echo "Focused evidence producer is not descended from the fixed authorized tooling." >&2
+            exit 1
+          fi
+          {
+            echo "attempt=${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}"
+            echo "workflow_full_ref=refs/tags/${producer_ref}"
+            echo "workflow_sha=${producer_sha}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Download focused release evidence
         if: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' }}
@@ -754,25 +811,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ steps.focused_run.outputs.attempt }}
-          WORKFLOW_FULL_REF: ${{ github.ref }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PRODUCER_WORKFLOW_FULL_REF: ${{ steps.focused_run.outputs.workflow_full_ref }}
+          PRODUCER_WORKFLOW_SHA: ${{ steps.focused_run.outputs.workflow_sha }}
         run: |
           set -euo pipefail
           evidence="${RUNNER_TEMP}/authorized-beta-focused-evidence/evidence.json"
           gh attestation verify "${evidence}" \
             --repo "${GITHUB_REPOSITORY}" \
             --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/authorized-beta-focused-validation.yml" \
-            --signer-digest "${WORKFLOW_SHA}" \
-            --source-digest "${WORKFLOW_SHA}" \
-            --source-ref "${WORKFLOW_FULL_REF}" \
+            --signer-digest "${PRODUCER_WORKFLOW_SHA}" \
+            --source-digest "${PRODUCER_WORKFLOW_SHA}" \
+            --source-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
             --deny-self-hosted-runners
-          node "${RUNNER_TEMP}/release-validation-tooling/validate-authorized-beta-focused-evidence.mts" verify \
-            --candidate-root . \
+          tooling_dir="${RUNNER_TEMP}/release-validation-tooling"
+          node "${tooling_dir}/verify-authorized-beta-focused-candidate.mjs" \
+            --repository-root . \
+            --validator "${tooling_dir}/validate-authorized-beta-focused-evidence.mts" \
+            --policy "${tooling_dir}/authorized-beta-focused-policy.json" \
             --artifact "${evidence}" \
             --producer-run-id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
             --producer-run-attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
-            --producer-workflow-full-ref "${WORKFLOW_FULL_REF}" \
-            --producer-workflow-sha "${WORKFLOW_SHA}"
+            --producer-workflow-full-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
+            --producer-workflow-sha "${PRODUCER_WORKFLOW_SHA}"
 
       - name: Validate release tag is reachable from a trusted release branch
         env:
@@ -890,25 +950,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}
-          WORKFLOW_FULL_REF: ${{ github.ref }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PRODUCER_WORKFLOW_FULL_REF: ${{ needs.resolve_release_target.outputs.focused_release_evidence_workflow_full_ref }}
+          PRODUCER_WORKFLOW_SHA: ${{ needs.resolve_release_target.outputs.focused_release_evidence_workflow_sha }}
         run: |
           set -euo pipefail
           evidence="${RUNNER_TEMP}/authorized-beta-focused-evidence/evidence.json"
           gh attestation verify "${evidence}" \
             --repo "${GITHUB_REPOSITORY}" \
             --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/authorized-beta-focused-validation.yml" \
-            --signer-digest "${WORKFLOW_SHA}" \
-            --source-digest "${WORKFLOW_SHA}" \
-            --source-ref "${WORKFLOW_FULL_REF}" \
+            --signer-digest "${PRODUCER_WORKFLOW_SHA}" \
+            --source-digest "${PRODUCER_WORKFLOW_SHA}" \
+            --source-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
             --deny-self-hosted-runners
-          node .release-harness/scripts/validate-authorized-beta-focused-evidence.mts verify \
-            --candidate-root . \
+          node .release-harness/scripts/verify-authorized-beta-focused-candidate.mjs \
+            --repository-root . \
+            --validator .release-harness/scripts/validate-authorized-beta-focused-evidence.mts \
+            --policy .release-harness/scripts/authorized-beta-focused-policy.json \
             --artifact "${evidence}" \
             --producer-run-id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
             --producer-run-attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
-            --producer-workflow-full-ref "${WORKFLOW_FULL_REF}" \
-            --producer-workflow-sha "${WORKFLOW_SHA}"
+            --producer-workflow-full-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
+            --producer-workflow-sha "${PRODUCER_WORKFLOW_SHA}"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -940,31 +1002,87 @@ jobs:
         id: clawhub_plan
         env:
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
-          BOOTSTRAP_WORKFLOW_REF: ${{ startsWith(github.ref, 'refs/tags/release-publish/') && github.ref_name || 'main' }}
           GH_TOKEN: ${{ github.token }}
           PARENT_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          PARENT_WORKFLOW_FULL_REF: ${{ github.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
+          WORKFLOW_FULL_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          plan_path="${RUNNER_TEMP}/openclaw-release-clawhub-plan.json"
-          if [[ "${BOOTSTRAP_WORKFLOW_REF}" == "main" ]]; then
+
+          resolve_child_workflow_ref() {
+            local workflow_full_ref="$1"
+            local workflow_sha="$2"
+            local workflow_prefix="${workflow_sha:0:12}"
+            local child_workflow_ref matching_ref_prefix matching_refs
+
+            if [[ "${workflow_full_ref}" =~ ^refs/tags/(release-publish/[a-f0-9]{12}-[1-9][0-9]*)$ ]]; then
+              # Request validation already proves this is the exact live
+              # lightweight tag; dispatch revalidates it immediately before use.
+              printf '%s\n' "${BASH_REMATCH[1]}"
+              return 0
+            fi
+
+            if [[ "${workflow_full_ref}" =~ ^refs/heads/(tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z)$ ]]; then
+              printf '%s\n' "${BASH_REMATCH[1]}"
+              return 0
+            fi
+
+            if [[ "${workflow_full_ref}" != "refs/heads/main" ]]; then
+              echo "Publish children require trusted main, a protected release-publish tag, or a validated Tideclaw alpha branch." >&2
+              return 1
+            fi
+
+            matching_ref_prefix="$(
+              jq -rn --arg value "tags/release-publish/${workflow_prefix}-" '$value | @uri'
+            )"
+            matching_refs="$(
+              gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/${matching_ref_prefix}"
+            )"
+            if ! child_workflow_ref="$(
+              jq -er \
+                --arg prefix "${workflow_prefix}" \
+                --arg sha "${workflow_sha}" \
+                '[.[] |
+                  select(.ref | test("^refs/tags/release-publish/" + $prefix + "-[1-9][0-9]*$")) |
+                  select(.object.type == "commit" and .object.sha == $sha) |
+                  .ref | sub("^refs/tags/"; "")
+                ] | sort | last | select(type == "string" and length > 0)' \
+                <<<"${matching_refs}"
+            )"; then
+              echo "Trusted main publication requires a direct protected release-publish tag for ${workflow_sha}." >&2
+              return 1
+            fi
+            printf '%s\n' "${child_workflow_ref}"
+          }
+
+          # Regular publication binds every child to the exact parent revision.
+          # Tideclaw retains its validated branch child and main bootstrap split.
+          CHILD_WORKFLOW_REF="$(
+            resolve_child_workflow_ref "${WORKFLOW_FULL_REF}" "${GITHUB_SHA}"
+          )"
+          if [[ "${WORKFLOW_FULL_REF}" == refs/heads/tideclaw/alpha/* ]]; then
+            BOOTSTRAP_WORKFLOW_REF="main"
             bootstrap_workflow_sha="$(
               gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
                 --jq '.object.sha | select(test("^[a-f0-9]{40}$"))'
             )"
           else
-            # Protected release-publish tags bind every child to this exact
-            # parent revision, so unrelated main movement cannot change tooling.
+            BOOTSTRAP_WORKFLOW_REF="${CHILD_WORKFLOW_REF}"
             bootstrap_workflow_sha="${GITHUB_SHA}"
           fi
+          echo "child_workflow_ref=${CHILD_WORKFLOW_REF}" >> "${GITHUB_OUTPUT}"
+
+          plan_path="${RUNNER_TEMP}/openclaw-release-clawhub-plan.json"
           plan_args=(
             --bootstrap-workflow-ref "${BOOTSTRAP_WORKFLOW_REF}"
             --bootstrap-workflow-sha "${bootstrap_workflow_sha}"
             --release-tag "${RELEASE_TAG}"
             --release-sha "${TARGET_SHA}"
             --release-publish-branch "${PARENT_WORKFLOW_BRANCH}"
+            --release-publish-full-ref "${PARENT_WORKFLOW_FULL_REF}"
             --release-publish-run-attempt "${GITHUB_RUN_ATTEMPT}"
             --release-publish-run-id "${GITHUB_RUN_ID}"
             --plugin-publish-scope "${PLUGIN_PUBLISH_SCOPE}"
@@ -1114,9 +1232,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
-          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          CHILD_WORKFLOW_REF: ${{ steps.clawhub_plan.outputs.child_workflow_ref }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
           PARENT_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          PARENT_WORKFLOW_FULL_REF: ${{ github.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -1867,29 +1986,6 @@ jobs:
             echo "- GitHub release draft: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
           }
 
-          publish_github_release() {
-            local expected_prerelease release_json
-            verify_release_tag_target
-            if is_android_release; then
-              verify_android_release_asset_contract
-            fi
-            if is_stable_release; then
-              verify_windows_release_asset_contract
-            fi
-            gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --draft=false
-            release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)"
-            expected_prerelease="false"
-            if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
-              expected_prerelease="true"
-            fi
-            if [[ "$(printf '%s' "${release_json}" | jq -r '.isDraft')" != "false" ]] ||
-              [[ "$(printf '%s' "${release_json}" | jq -r '.isPrerelease')" != "${expected_prerelease}" ]]; then
-              echo "Published GitHub release state does not match the requested draft/prerelease classification." >&2
-              exit 1
-            fi
-            echo "- GitHub release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
-          }
-
           verify_android_release_asset_contract() {
             local actual_android_assets actual_digest expected_android_assets expected_digest expected_hash release_json verify_dir
             local -a required_assets=(
@@ -2435,7 +2531,7 @@ jobs:
             if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
               echo "- Workflow completion waits for ClawHub"
             else
-              echo "- Workflow completion does not wait for ClawHub; monitor the dispatched ClawHub run separately"
+              echo "- Workflow does not wait for ClawHub; monitor its run separately"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -2457,7 +2553,7 @@ jobs:
             bootstrap_workflow_sha="$(verify_bootstrap_workflow_sha)"
           fi
 
-          npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}")
+          npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" -f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}")
           if [[ -n "${PLUGINS}" ]]; then
             npm_args+=(-f plugins="${PLUGINS}")
           fi
@@ -2469,7 +2565,7 @@ jobs:
             append_clawhub_dispatch_args normal
             plugin_clawhub_run_id="$(dispatch_workflow_at_ref \
               "$(jq -r '.normal.ref' "${clawhub_plan_path}")" \
-              "${TARGET_SHA}" \
+              "${PARENT_WORKFLOW_SHA}" \
               "$(jq -r '.normal.workflow' "${clawhub_plan_path}")" \
               "${clawhub_dispatch_args[@]}")"
           else
@@ -2544,6 +2640,8 @@ jobs:
                 -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
                 -f release_publish_run_id="${GITHUB_RUN_ID}" \
                 -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" \
+                -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" \
+                -f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}" \
                 -f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}" \
                 -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}" \
                 "${evidence_args[@]}")"
@@ -2561,7 +2659,7 @@ jobs:
             if [[ -n "${plugin_clawhub_run_id}" ]]; then
               clawhub_result="$RUNNER_TEMP/clawhub-result.txt"
               wait_run_pid=""
-              wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${TARGET_SHA}" "${clawhub_result}"
+              wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${PARENT_WORKFLOW_SHA}" "${clawhub_result}"
               clawhub_pid="${wait_run_pid}"
             fi
             if [[ -n "${plugin_clawhub_bootstrap_run_id}" ]]; then
@@ -2743,10 +2841,16 @@ jobs:
     with:
       tag: ${{ inputs.tag }}
       release_sha: ${{ needs.resolve_release_target.outputs.sha }}
+      focused_release_evidence_run_id: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && inputs.focused_release_evidence_run_id || '' }}
+      focused_release_evidence_run_attempt: ${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}
+      focused_release_evidence_workflow_full_ref: ${{ needs.resolve_release_target.outputs.focused_release_evidence_workflow_full_ref }}
+      focused_release_evidence_workflow_sha: ${{ needs.resolve_release_target.outputs.focused_release_evidence_workflow_sha }}
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     permissions:
+      actions: read
+      attestations: read
       contents: read
       packages: write
 
@@ -2756,8 +2860,9 @@ jobs:
     if: ${{ always() && needs.publish_docker.result == 'success' }}
     uses: ./.github/workflows/vercel-container-registry-publish.yml
     with:
+      advisory: true
       include_browser: ${{ needs.publish_docker.outputs.include_browser == 'true' }}
-      source_refs: ${{ needs.publish_docker.outputs.vcr_source_refs }}
+      source_digests: ${{ needs.publish_docker.outputs.vcr_source_digests }}
       version: ${{ needs.publish_docker.outputs.version }}
     secrets:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}

@@ -6,9 +6,11 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ExecMode } from "../infra/exec-approvals.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
+import type { ExecPolicyOverrides, ExecSessionDefaults } from "./exec-defaults.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
@@ -24,6 +26,12 @@ export type OpenClawToolsOptions = {
   runSessionKey?: string;
   agentChannel?: string;
   runId?: string;
+  /** Exact admitted session policy shared with terminal-input authorization. */
+  execSession?: ExecSessionDefaults;
+  /** Effective run-local exec overrides, including prepared permission mode. */
+  execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
+  /** Trusted operator devices allowed to review this run's terminal input. */
+  approvalReviewerDeviceIds?: string[];
   agentAccountId?: string;
   /** Trusted account used for authorization; delivery keeps agentAccountId. */
   gatewayCallerAccountId?: string;
@@ -43,9 +51,13 @@ export type OpenClawToolsOptions = {
   sandboxRoot?: string;
   sandboxContainerWorkdir?: string;
   sandboxFsBridge?: SandboxFsBridge;
+  /** Prepared effective read authorization for exporting sandbox workspace media. */
+  sandboxWorkspaceMediaReadAllowed?: boolean;
   fsPolicy?: ToolFsPolicy;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  /** Gateway-owned session policy follows runtime updates; explicit overrides stay pinned. */
+  sessionConfigSource?: "runtime" | "pinned";
   webFetchHostnameAllowlistRef?: { value?: string[] };
   webSearchEnabled?: boolean;
   /** Capabilities declared by the gateway client that originated this run. */

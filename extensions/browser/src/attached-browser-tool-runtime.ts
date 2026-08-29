@@ -105,7 +105,6 @@ export async function createAttachedBrowserToolRuntime(
   };
   resolved.extensionRelayPorts = {};
   resolved.extensionRelayInternalTokens = {};
-  delete resolved.extensionRelayToken;
 
   const bridge = await startBrowserBridgeServer({
     resolved,

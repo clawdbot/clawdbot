@@ -14,6 +14,26 @@ public struct OpenClawChatGatewayRequest: Sendable, Equatable {
     }
 }
 
+public enum OpenClawChatSessionUnreadPatch: Sendable, Equatable {
+    case markUnread
+    case read
+    case automaticRead(expectedMarkedUnreadAt: Double?)
+
+    public static func routed(
+        unread: Bool?,
+        expectedMarkedUnreadAt: Double??,
+        supportsReadContract: Bool) -> Self?
+    {
+        guard let unread else { return nil }
+        guard !unread else { return .markUnread }
+        guard supportsReadContract else { return .read }
+        if let expectedMarkedUnreadAt {
+            return .automaticRead(expectedMarkedUnreadAt: expectedMarkedUnreadAt)
+        }
+        return .read
+    }
+}
+
 public enum OpenClawChatSessionTargetPolicy: Sendable {
     case preserveBareKeys
     case scopeBareKeysToSelectedAgent
@@ -172,6 +192,7 @@ public enum OpenClawChatGatewayRequests {
         limit: Int?,
         search: String?,
         archived: Bool,
+        agentID: String? = nil,
         includeGlobal: Bool = true,
         includeUnknown: Bool = false,
         activeMinutes: Int? = nil,
@@ -184,6 +205,9 @@ public enum OpenClawChatGatewayRequests {
             "includeGlobal": AnyCodable(includeGlobal),
             "includeUnknown": AnyCodable(includeUnknown),
         ]
+        if let agentID = normalized(agentID) {
+            params["agentId"] = AnyCodable(agentID)
+        }
         if let limit {
             params["limit"] = AnyCodable(limit)
         }
@@ -340,9 +364,10 @@ public enum OpenClawChatGatewayRequests {
         expectedSessionID: String? = nil,
         label: String??,
         category: String??,
+        color: String?? = nil,
         pinned: Bool?,
         archived: Bool?,
-        unread: Bool?) -> OpenClawChatGatewayRequest
+        unreadPatch: OpenClawChatSessionUnreadPatch?) -> OpenClawChatGatewayRequest
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID)
         if let expectedSessionID = expectedSessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -356,14 +381,25 @@ public enum OpenClawChatGatewayRequests {
         if let category {
             params["category"] = category.map(AnyCodable.init) ?? AnyCodable(NSNull())
         }
+        if let color {
+            params["color"] = color.map(AnyCodable.init) ?? AnyCodable(NSNull())
+        }
         if let pinned {
             params["pinned"] = AnyCodable(pinned)
         }
         if let archived {
             params["archived"] = AnyCodable(archived)
         }
-        if let unread {
-            params["unread"] = AnyCodable(unread)
+        switch unreadPatch {
+        case .markUnread:
+            params["unread"] = AnyCodable(true)
+        case .read:
+            params["unread"] = AnyCodable(false)
+        case let .automaticRead(expectedMarkedUnreadAt):
+            params["unread"] = AnyCodable(false)
+            params["expectedMarkedUnreadAt"] = expectedMarkedUnreadAt.map(AnyCodable.init) ?? AnyCodable(NSNull())
+        case nil:
+            break
         }
         return OpenClawChatGatewayRequest(
             method: "sessions.patch",
@@ -380,7 +416,7 @@ public enum OpenClawChatGatewayRequests {
         return OpenClawChatGatewayRequest(
             method: "sessions.delete",
             params: params,
-            timeoutMs: self.mutationTimeoutMs)
+            timeoutMs: self.archiveMutationTimeoutMs)
     }
 
     public static func forkSession(

@@ -11,6 +11,9 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
     const pnpmSpec = script.match(/^pnpm_spec="([^"]+)"$/mu)?.[1];
 
     expect(pnpmSpec).toBe(packageJson.packageManager);
+    const warmup = script.indexOf('"$install_root/bin/corepack" "$pnpm_spec" --version');
+    expect(warmup).toBeGreaterThan(script.indexOf('cd "$install_root"'));
+    expect(warmup).toBeLessThan(script.indexOf("actual_package_manager="));
   });
 
   it("bounds both IMDSv2 identity requests", () => {

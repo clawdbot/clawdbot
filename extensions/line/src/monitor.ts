@@ -31,12 +31,11 @@ import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
+import { prepareLineReplyPayload } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
 import {
   createFlexMessage,
   createLocationMessage,
-  createQuickReplyItems,
-  getUserDisplayName,
   pushMessagesLine,
   replyMessageLine,
   showLoadingAnimation,
@@ -167,10 +166,6 @@ export async function monitorLineProvider(
 
       const shouldShowLoading = Boolean(ctx.userId && !ctx.isGroup);
 
-      const displayNamePromise = ctx.userId
-        ? getUserDisplayName(ctx.userId, { cfg: config, accountId: ctx.accountId })
-        : Promise.resolve(ctxPayload.From);
-
       const stopLoading = shouldShowLoading
         ? startLineLoadingKeepalive({
             cfg: config,
@@ -179,8 +174,11 @@ export async function monitorLineProvider(
           })
         : null;
 
-      const displayName = await displayNamePromise;
-      logVerbose(`line: received message from ${displayName} (${ctxPayload.From})`);
+      // The inbound context already resolved the sender's name for the agent;
+      // reading it back costs nothing instead of asking LINE a second time.
+      logVerbose(
+        `line: received message from ${ctxPayload.SenderName ?? ctx.userId ?? ctxPayload.From} (${ctxPayload.From})`,
+      );
       let replyTokenUsed = false;
       let turnAdopted = false;
       const ingressLifecycle = deliveryControl.turnAdoptionLifecycle;
@@ -217,6 +215,9 @@ export async function monitorLineProvider(
                 ? { replyOptions: { abortSignal: ingressLifecycle.abortSignal } }
                 : {}),
               delivery: {
+                // Core renders presentations inside the outbound send pipeline only,
+                // so this path resolves them before either branch reads channelData.
+                preparePayload: prepareLineReplyPayload,
                 durable: (payload, info) =>
                   resolveLineDurableReplyOptions({
                     payload,
@@ -249,7 +250,6 @@ export async function monitorLineProvider(
                       processLineMessage,
                       chunkMarkdownText,
                       replyMessageLine,
-                      createQuickReplyItems,
                       pushMessagesLine,
                       createFlexMessage,
                       buildMediaMessage: buildLineMediaMessage,

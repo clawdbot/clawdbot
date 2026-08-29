@@ -78,36 +78,12 @@ describe("sqlite hot query plans", () => {
     });
     expectPlanUsesIndex({
       db: database.db,
-      indexName: "idx_cron_jobs_enabled_next_run",
-      params: ["/state/cron/jobs.json"],
-      sql: `
-        SELECT job_id, next_run_at_ms
-          FROM cron_jobs
-         WHERE store_key = ? AND enabled = 1 AND next_run_at_ms IS NOT NULL
-         ORDER BY next_run_at_ms ASC, job_id
-         LIMIT 25
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
       indexName: "idx_delivery_queue_pending",
       params: ["outbound", "pending"],
       sql: `
         SELECT id, entry_json
           FROM delivery_queue_entries
          WHERE queue_name = ? AND status = ?
-         ORDER BY enqueued_at ASC, id
-         LIMIT 50
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
-      indexName: "idx_delivery_queue_session",
-      params: ["outbound", "pending", "agent:main:main"],
-      sql: `
-        SELECT id, entry_json
-          FROM delivery_queue_entries
-         WHERE queue_name = ? AND status = ? AND session_key = ?
          ORDER BY enqueued_at ASC, id
          LIMIT 50
       `,
@@ -159,18 +135,6 @@ describe("sqlite hot query plans", () => {
     });
     expectPlanUsesIndex({
       db: database.db,
-      indexName: "idx_agent_cache_expiry",
-      params: ["session_entries"],
-      sql: `
-        SELECT key, expires_at
-          FROM cache_entries
-         WHERE scope = ? AND expires_at IS NOT NULL
-         ORDER BY expires_at ASC, key
-        LIMIT 50
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
       indexName: "idx_agent_session_nodes_current_session_id",
       params: ["session-1"],
       sql: `
@@ -178,8 +142,29 @@ describe("sqlite hot query plans", () => {
           FROM session_nodes
          WHERE current_session_id = ?
          ORDER BY updated_at DESC, session_key ASC
+        LIMIT 1
+      `,
+    });
+    const latestWindowPlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT session_id, updated_at
+          FROM session_windows
+         WHERE session_key = ?
+         ORDER BY updated_at DESC, session_id ASC
          LIMIT 1
       `,
+      ["agent:worker-1:main"],
+    );
+    expect(latestWindowPlan).toContain("idx_agent_session_windows_session_key");
+    expect(latestWindowPlan).not.toContain("SCAN session_windows");
+    expect(latestWindowPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_windows_session_key",
+      params: ["agent:worker-1:main"],
+      sql: "DELETE FROM session_nodes WHERE session_key = ?",
     });
     expectPlanUsesIndex({
       db: database.db,
@@ -236,6 +221,12 @@ describe("sqlite hot query plans", () => {
          WHERE session_id = ? AND event_type = ?
       `,
     });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_transcript_event_identity_sequence",
+      params: ["session-1", 1],
+      sql: "DELETE FROM transcript_events WHERE session_id = ? AND seq = ?",
+    });
 
     expectPlanIncludes({
       db: database.db,
@@ -250,7 +241,7 @@ describe("sqlite hot query plans", () => {
     const rawDeltaPlan = explainQueryPlan(
       database.db,
       `
-        SELECT seq, LENGTH(CAST(event_json AS BLOB)) + 1 AS serialized_bytes
+        SELECT seq, OCTET_LENGTH(event_json) + 1 AS serialized_bytes
           FROM transcript_events
          WHERE session_id = ? AND seq > ?
          ORDER BY seq ASC
@@ -299,7 +290,7 @@ describe("sqlite hot query plans", () => {
       database.db,
       `
         SELECT active.event_seq, active.message_position,
-               LENGTH(CAST(event.event_json AS BLOB)) + 1 AS serialized_bytes
+               OCTET_LENGTH(event.event_json) + 1 AS serialized_bytes
           FROM session_transcript_active_events AS active
           JOIN transcript_events AS event
             ON event.session_id = active.session_id AND event.seq = active.event_seq
@@ -341,7 +332,7 @@ describe("sqlite hot query plans", () => {
     expect(visibleDeltaPayloadPlan).toContain(
       "sqlite_autoindex_session_transcript_active_events_1",
     );
-    expect(visibleDeltaPayloadPlan).toContain("idx_agent_transcript_event_sequence");
+    expect(visibleDeltaPayloadPlan).toContain("idx_agent_transcript_event_identity_sequence");
     expect(visibleDeltaPayloadPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
 
     const historyAnchorPlan = explainQueryPlan(

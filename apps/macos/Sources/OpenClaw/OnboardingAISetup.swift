@@ -22,18 +22,7 @@ final class OnboardingAISetupModel {
     static let providerAuthRequestTimeoutMs: Double = 1_200_000
 
     private(set) var phase: Phase = .idle {
-        didSet {
-            // Close-guard: quitting mid-test is confirmable, not silent.
-            OnboardingController.shared.busyReason = if self.phase == .testing {
-                "OpenClaw is testing your AI connection."
-            } else if self.activeAuthOption != nil {
-                self.isPreparingModel
-                    ? "OpenClaw is preparing a local model."
-                    : "OpenClaw is completing provider sign-in."
-            } else {
-                nil
-            }
-        }
+        didSet { self.updateBusyReason() }
     }
 
     private(set) var candidates: [Candidate] = []
@@ -49,15 +38,7 @@ final class OnboardingAISetupModel {
     private(set) var authStep: WizardStep?
     private(set) var authError: Failure?
     private(set) var authBusy = false {
-        didSet {
-            if self.activeAuthOption != nil {
-                OnboardingController.shared.busyReason = self.isPreparingModel
-                    ? "OpenClaw is preparing a local model."
-                    : "OpenClaw is completing provider sign-in."
-            } else if self.phase != .testing {
-                OnboardingController.shared.busyReason = nil
-            }
-        }
+        didSet { self.updateBusyReason() }
     }
 
     var authText = ""
@@ -76,7 +57,10 @@ final class OnboardingAISetupModel {
 
     var manualProviderID = ""
     var manualKey: String = ""
-    private(set) var manualTesting = false
+    private(set) var manualTesting = false {
+        didSet { self.updateBusyReason() }
+    }
+
     private(set) var manualError: Failure?
     var showManualEntry = false
 
@@ -119,6 +103,21 @@ final class OnboardingAISetupModel {
         self.connectionModeProvider = connectionModeProvider
     }
 
+    private func updateBusyReason() {
+        // Every connection attempt must make quitting mid-setup confirmable.
+        OnboardingController.shared.busyReason = if self.phase == .testing || self.manualTesting ||
+            self.phase == .detecting && self.pendingActivationVerification
+        {
+            "OpenClaw is testing your AI connection."
+        } else if self.activeAuthOption != nil {
+            self.isPreparingModel
+                ? "OpenClaw is preparing a local model."
+                : "OpenClaw is completing provider sign-in."
+        } else {
+            nil
+        }
+    }
+
     func startIfNeeded() {
         if self.waitingForPendingActivationDeadline {
             self.resetForGatewayChange(clearPendingHandoff: false)
@@ -136,6 +135,8 @@ final class OnboardingAISetupModel {
         guard self.configuredGatewayBlocker == nil else { return }
         guard !self.waitingForPendingActivationDeadline else { return }
         if self.pendingActivationVerification {
+            self.detectError = nil
+            self.phase = .detecting
             Task { await self.verifyPendingConfiguredInference() }
             return
         }
@@ -349,8 +350,7 @@ final class OnboardingAISetupModel {
                     }
                     finishConnected(
                         kind: "existing-model",
-                        activationOwner: self.pendingActivationOwner,
-                        requireExistingReceipt: true)
+                        activationOwner: receiptOwner)
                     if self.connected {
                         return .connected
                     }
@@ -493,14 +493,14 @@ final class OnboardingAISetupModel {
         }
     }
 
-    /// Complete a receipt-backed restored handoff after route-bound live inference.
+    /// Live verification without an activation owner reopens pre-existing inference.
     func acceptVerifiedPendingInference(modelRef: String) {
         let model = modelRef.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.pendingActivationVerification, !model.isEmpty else { return }
         guard self.pendingActivationOwner == nil else { return }
         finishConnected(
             kind: "existing-model",
-            activationOwner: self.pendingActivationOwner)
+            handoff: .dashboard)
     }
 
     /// Clear only the completed receipt created by this setup attempt.
@@ -1006,7 +1006,7 @@ extension OnboardingAISetupModel {
             } catch {
                 guard let supersededAttemptDeadline = context.supersededAttemptDeadline,
                       Date() < supersededAttemptDeadline,
-                      Self.activationAdmissionIsBusy(error)
+                      Self.setupAdmissionIsBusy(error)
                 else { throw error }
                 try await Task.sleep(nanoseconds: retryDelayMs * 1_000_000)
                 retryDelayMs = min(retryDelayMs * 2, 5000)
@@ -1207,6 +1207,17 @@ extension OnboardingAISetupModel {
                     error: result.error,
                     preparedModelRef: result.preparedmodelref)
             } catch {
+                if Self.setupAdmissionIsBusy(error) {
+                    guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
+                    // No session was admitted; cancelling or reconciling could adopt another operation.
+                    self.applyAuthWizardResult(
+                        done: true,
+                        step: nil,
+                        status: "error",
+                        error: error.localizedDescription,
+                        preparedModelRef: nil)
+                    return
+                }
                 // The Gateway session survives socket loss; cancel by its known
                 // id before reporting failure so it cannot persist config later.
                 let cancellation = await self.gateway.cancelWizardSession(
@@ -1258,7 +1269,8 @@ extension OnboardingAISetupModel {
             let cancellation = await self.gateway.cancelWizardSession(
                 sessionID,
                 on: authServerLease)
-            guard authAttemptID == self.authAttemptID else { return }
+            // The wizard may finish while cancellation is in flight; keep its terminal outcome.
+            guard authAttemptID == self.authAttemptID, self.authSessionID == sessionID else { return }
             if cancellation == .absent,
                await self.reconcileProviderAuthAfterUnknownOutcome(
                    token: token,
@@ -1267,7 +1279,11 @@ extension OnboardingAISetupModel {
             {
                 return
             }
-            if cancellation != .unresolved {
+            if cancellation == .unresolved {
+                self.authError = Failure(
+                    summary: "OpenClaw couldn’t confirm cancellation. Setup may still be running. Try Cancel again.",
+                    detail: nil)
+            } else {
                 self.authAttemptID = UUID()
                 self.providerAuthReconciliationPending = false
                 self.clearProviderAuth()
@@ -1613,14 +1629,14 @@ extension OnboardingAISetupModel {
     private func finishConnected(
         kind: String,
         activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner? = nil,
-        requireExistingReceipt: Bool = false)
+        handoff: OnboardingDashboardHandoff = .custodianOnboarding)
     {
         let routeIdentity = self.routeIdentityProvider()?.trimmingCharacters(in: .whitespacesAndNewlines)
         let completedReceipt = OnboardingSystemAgentResumeStore.markCompleted(
             ifOwnedBy: routeIdentity,
             activationOwner: activationOwner,
             defaults: self.defaults)
-        if activationOwner != nil || requireExistingReceipt {
+        if activationOwner != nil {
             guard completedReceipt else {
                 self.pendingActivationVerification = false
                 self.statuses[kind] = .failed(Self.transportFailure(
@@ -1632,7 +1648,9 @@ extension OnboardingAISetupModel {
         self.pendingActivationVerification = false
         self.waitingForPendingActivationDeadline = false
         self.selectedKind = kind
-        self.phase = .connected
+        // Verification labels and completion receipts do not encode setup intent.
+        // Keep the destination in the completion itself, including after receipt cleanup.
+        self.phase = .connected(handoff)
         self.pendingActivationOwner = activationOwner
         self.completedHandoff = completedReceipt ? routeIdentity.flatMap { routeIdentity in
             routeIdentity.isEmpty ? nil : CompletedHandoff(

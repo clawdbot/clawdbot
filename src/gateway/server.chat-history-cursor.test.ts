@@ -1,9 +1,10 @@
 import path from "node:path";
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { composeTranscriptDisplay } from "../chat/transcript-display-position.js";
 import { clearConfigCache } from "../config/config.js";
 import {
   appendTranscriptEvent,
@@ -18,7 +19,9 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import * as managedOutgoingMedia from "./managed-image-attachments.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { installGatewayTestHooks, testState, writeSessionStore } from "./test-helpers.js";
@@ -128,6 +131,86 @@ afterEach(() => {
 });
 
 describe("chat.history cursor catch-up", () => {
+  test.each(["chat.history", "chat.startup"] as const)(
+    "%s does not launch managed outgoing media garbage collection",
+    async (method) => {
+      const { context } = await createCursorSession();
+      const cleanup = vi
+        .spyOn(managedOutgoingMedia, "cleanupManagedOutgoingMediaRecords")
+        .mockResolvedValue({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
+
+      try {
+        const result = await callChat(context, method);
+
+        expect(result.ok).toBe(true);
+        expect(cleanup).not.toHaveBeenCalled();
+      } finally {
+        cleanup.mockRestore();
+      }
+    },
+  );
+
+  test("composes nested completions identically after cursor catch-up and fresh history", async () => {
+    const { context, storePath } = await createCursorSession();
+    const cached = await callChat<{ deltaCursor?: string; messages?: unknown[] }>(
+      context,
+      "chat.history",
+    );
+    let parentId = "cached";
+    for (const [id, afterEntryId, startOrder] of [
+      ["exec", undefined, 0],
+      ["wait", undefined, 0],
+      ["second", "exec", 1],
+      ["first", "exec", 0],
+      ["later", "second", 2],
+    ] as const) {
+      const message =
+        afterEntryId === undefined
+          ? { role: "assistant", content: id }
+          : createNestedToolActivity({
+              runId: "nested-run",
+              scopeId: "attempt",
+              afterEntryId,
+              startOrder,
+              parentToolCallId: "exec",
+              toolCallId: id,
+              toolName: "read",
+              input: {},
+              result: { content: [{ type: "text", text: id }] },
+              isError: false,
+              startedAt: 1,
+              timestamp: 2,
+            });
+      await appendTranscriptMessage(currentScope(storePath), { eventId: id, parentId, message });
+      parentId = id;
+    }
+    const delta = await callChat<{
+      kind?: string;
+      messages?: Array<{ message?: unknown; messageId?: unknown; messageSeq?: unknown }>;
+    }>(context, "chat.history", { cursor: cached.payload?.deltaCursor });
+    const fresh = await callChat<{ messages?: unknown[] }>(context, "chat.history");
+    expect(delta).toMatchObject({ ok: true, payload: { kind: "delta" } });
+    expect(fresh.ok).toBe(true);
+    let projection = createSessionProjection(
+      { sessionId, sessionKey },
+      cached.payload?.messages ?? [],
+    );
+    for (const envelope of delta.payload?.messages ?? []) {
+      projection = reduceSessionProjection(projection, {
+        type: "messagePersisted",
+        message: envelope.message,
+        envelope,
+        sessionId,
+        sessionKey,
+      });
+    }
+    const composed = composeTranscriptDisplay([...projection.messages]);
+    expect(renderedMessages(composed)).toEqual(renderedMessages(fresh.payload?.messages ?? []));
+    expect(
+      composed.map((message) => asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id),
+    ).toEqual(["cached", "exec", "first", "second", "wait", "later"]);
+  });
+
   test("returns an empty delta at the cached head", async () => {
     const { context } = await createCursorSession();
     const page = await callChat<{ deltaCursor?: string; messages?: unknown[] }>(
@@ -157,6 +240,42 @@ describe("chat.history cursor catch-up", () => {
       },
     });
   });
+
+  test.each(["chat.history", "chat.startup"] as const)(
+    "%s returns the active run snapshot with an empty cached delta",
+    async (method) => {
+      const { context } = await createCursorSession();
+      context.chatAbortControllers.set("run-active", {
+        controller: new AbortController(),
+        sessionId,
+        sessionKey: "main",
+        startedAtMs: 1_000,
+        expiresAtMs: Date.now() + 60_000,
+        projectSessionActive: true,
+      });
+      context.chatRunState.getOrCreate("run-active").buffer = "still working";
+      const page = await callChat<{ deltaCursor?: string }>(context, method);
+
+      const delta = await callChat<{
+        inFlightRun?: unknown;
+        kind?: string;
+        messages?: unknown[];
+      }>(context, method, { cursor: page.payload?.deltaCursor });
+
+      expect(delta).toMatchObject({
+        ok: true,
+        payload: {
+          kind: "delta",
+          messages: [],
+          inFlightRun: {
+            runId: "run-active",
+            text: "still working",
+            startedAt: 1_000,
+          },
+        },
+      });
+    },
+  );
 
   test("does not advance a cursor past messages appended after the projection check", async () => {
     const { context, storePath } = await createCursorSession();

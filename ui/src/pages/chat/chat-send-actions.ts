@@ -113,14 +113,22 @@ const resetRetryState = (
 ): ChatQueueItem => ({
   ...entry,
   sendAttempts: 0,
-  sendError: undefined,
+  // A failed delivery keeps its diagnostic while an explicit retry waits for
+  // run admission; the transcript uses it to retain the same optimistic row.
+  sendError: entry.sendState === "failed" ? entry.sendError : undefined,
   sendRequestStartedAtMs: undefined,
   sendRunId:
-    entry.sendState === "failed" && entry.queueMode !== "steer" ? generateUUID() : entry.sendRunId,
+    entry.sendState === "failed" && entry.queueMode !== "steer" && !entry.intent
+      ? generateUUID()
+      : entry.sendRunId,
   sendState,
 });
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string): Promise<void> {
+  if (readQueuedMessageById(host, id)?.intent) {
+    setChatError(host, t("chat.goals.admissionImmutable"));
+    return;
+  }
   if (isQueuedMessageBeingEdited(host, id)) {
     setChatError(host, QUEUED_MESSAGE_STEER_CONFLICT_ERROR);
     return;
@@ -217,6 +225,7 @@ export function moveQueuedChatMessage(
 
 export async function retryQueuedChatMessage(host: ChatHost, id: string) {
   const item = host.chatQueue.find((entry) => entry.id === id);
+  const retriesFailedDelivery = item?.sendState === "failed" && !item.localCommandName;
   if (isQueuedMessageRetryBlocked(host, id)) {
     setChatError(host, QUEUED_MESSAGE_RETRY_CONFLICT_ERROR);
     return;
@@ -274,8 +283,13 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     host,
     outbox,
     chatOutboxDrainDependencies,
-    retry.queueMode ? retry.id : undefined,
-    retry.queueMode ? { routingSessionKey: host.sessionKey } : undefined,
+    retry.queueMode || retriesFailedDelivery ? retry.id : undefined,
+    retry.queueMode || retriesFailedDelivery
+      ? {
+          routingSessionKey: host.sessionKey,
+          ...(retriesFailedDelivery ? { allowActiveRunSend: true } : {}),
+        }
+      : undefined,
   );
   if (host.chatSending && host.chatSendingScopeKey === storedChatOutboxScopeKey(outbox)) {
     void drain;

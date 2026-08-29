@@ -17,6 +17,7 @@ import {
   switchChatModel,
   switchChatThinkingLevel,
 } from "./chat-session.ts";
+import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import type { ChatProps } from "./chat-view.ts";
@@ -30,7 +31,7 @@ type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
 type SessionActionCallbacks = Pick<
   ChatProps,
-  "onAbort" | "onClearHistory" | "onCompact" | "onForkMessage" | "onRewindMessage"
+  "onAbort" | "onClearHistory" | "onForkMessage" | "onRewindMessage"
 >;
 
 export function readChatPaneMutationAccess(
@@ -57,7 +58,7 @@ export function readChatPaneMutationAccess(
   };
 }
 
-export function resolveChatModelCatalogState(
+function resolveChatModelCatalogState(
   state: Pick<
     ChatPageHost,
     "chatModelCatalog" | "chatModelCatalogError" | "chatModelsLoading" | "connected"
@@ -72,9 +73,7 @@ export function resolveChatModelCatalogState(
       : state.chatModelCatalogError
         ? "error"
         : state.chatModelsLoading
-          ? hasSnapshot
-            ? "refreshing"
-            : "loading"
+          ? "loading"
           : "ready",
   };
 }
@@ -105,6 +104,13 @@ export function renderChatPaneComposerControls(params: {
     onModelSetup,
   } = params;
   const modelCatalogState = resolveChatModelCatalogState(state);
+  const thinkingLevelOverride = state.sessions.think(
+    state.sessionKey,
+    scopedAgentParamsForSession(state, state.sessionKey).agentId,
+  );
+  const thinkingSession = thinkingLevelOverride
+    ? { ...selectedSession, thinkingLevel: thinkingLevelOverride }
+    : selectedSession;
   return {
     composerControls: html`
       <div class="chat-composer-model-control">
@@ -117,8 +123,10 @@ export function renderChatPaneComposerControls(params: {
           modelCatalog: state.chatModelCatalog,
           modelCatalogState,
           modelOverrides: state.sessions.state.modelOverrides,
+          thinkingSession,
           modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
           modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
+          modelPickerOpen: state.chatModelPickerOpenSessionKey === state.sessionKey,
           modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
           modelsLoading: state.chatModelsLoading,
           modelMutationDisabledReason: modelAccess.allowed ? undefined : modelAccess.reason,
@@ -138,6 +146,9 @@ export function renderChatPaneComposerControls(params: {
               ? switchChatContextWindow(state, next, targetSessionKey)
               : Promise.resolve(false),
           onModelPickerOpen: () => refreshChatModelCatalogOnDemand(state),
+          onModelPickerOpenChange: (open) => {
+            state.chatModelPickerOpenSessionKey = open ? state.sessionKey : null;
+          },
           onModelSelect: (next, targetSessionKey) =>
             modelAccess.allowed
               ? switchChatModel(state, next, targetSessionKey)
@@ -154,7 +165,6 @@ export function renderChatPaneComposerControls(params: {
       disabled: !permissionAccess.allowed,
       disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
       mode: selectedSession?.permissionMode,
-      sessionRoot: selectedSession?.sessionRoot,
       onSelect: async (permissionMode) => {
         if (!permissionAccess.allowed) {
           return;
@@ -162,13 +172,30 @@ export function renderChatPaneComposerControls(params: {
         const runWasActive =
           Boolean(state.chatRunId) ||
           Boolean(selectedSession && isSessionRunActive(selectedSession));
+        const sessionKey = state.sessionKey;
+        const client = state.client;
+        const connectionEpoch = state.connectionEpoch;
+        const agentScope = scopedAgentParamsForSession(state, sessionKey);
+        const ownsSelection = () =>
+          state.connected &&
+          state.sessionKey === sessionKey &&
+          state.client === client &&
+          state.connectionEpoch === connectionEpoch &&
+          scopedAgentParamsForSession(state, sessionKey).agentId === agentScope.agentId;
         try {
-          state.chatError = null;
-          await state.sessions.patch(
-            state.sessionKey,
+          state.chatError = state.lastError = null;
+          const patched = await patchChatSessionSettings(
+            state,
+            sessionKey,
             { permissionMode },
-            scopedAgentParamsForSession(state, state.sessionKey),
+            agentScope,
           );
+          if (!ownsSelection()) {
+            return;
+          }
+          if (!patched) {
+            throw new Error("Session capability is unavailable");
+          }
           if (runWasActive) {
             const topbarHeight = toastAnchor
               .querySelector(".chat-pane__header")
@@ -182,7 +209,10 @@ export function renderChatPaneComposerControls(params: {
             });
           }
         } catch (error) {
-          state.chatError = t("chat.permissionControls.updateFailed", {
+          if (!ownsSelection()) {
+            return;
+          }
+          state.chatError = state.lastError = t("chat.permissionControls.updateFailed", {
             error: String(error),
           });
           state.requestUpdate?.();
@@ -197,7 +227,6 @@ export function createChatPaneSessionActionCallbacks(params: {
   hasLocalRun: () => boolean;
   sessionParticipationBlocked: boolean;
   onDenied: (reason: string) => void;
-  onCompact: () => void;
   onAbort: () => void;
   onRewind: (entryId: string) => Promise<boolean>;
   onFork: (entryId: string) => Promise<void>;
@@ -213,13 +242,6 @@ export function createChatPaneSessionActionCallbacks(params: {
     return false;
   };
   return {
-    onCompact: access.compact.allowed
-      ? () => {
-          if (requireCurrent("compact")) {
-            params.onCompact();
-          }
-        }
-      : undefined,
     onAbort:
       params.sessionParticipationBlocked || !access.abort.allowed
         ? undefined

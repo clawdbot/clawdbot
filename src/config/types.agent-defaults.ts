@@ -28,6 +28,8 @@ export type EmbeddedAgentExecutionContract = "default" | "strict-agentic";
 export type SubagentDelegationMode = "suggest" | "prefer";
 /** Image compression/detail preference used before sending image inputs to models. */
 export type AgentImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
+/** Scope of an interactive model selection when no explicit scope is supplied. */
+export type ModelSelectionScope = "session" | "agent" | "global";
 /** Canonical thinking levels accepted by agent defaults and compaction overrides. */
 export type AgentThinkingLevel =
   | "off"
@@ -47,6 +49,8 @@ export type AgentModelEntryConfig = {
   params?: Record<string, unknown>;
   /** Optional agent execution runtime for this specific provider/model entry. */
   agentRuntime?: AgentRuntimePolicyConfig;
+  /** OpenClaw Code Mode override; omitted inherits the enclosing activation policy. */
+  codeMode?: boolean;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
 };
@@ -125,6 +129,8 @@ export type AgentDefaultsConfig = {
   params?: Record<string, unknown>;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
+  /** Optional model-selection scope. Omitted preserves each surface's existing behavior. */
+  modelSelectionScope?: ModelSelectionScope;
   /** Optional lower-cost model for short internal tasks such as generated session titles. */
   utilityModel?: string;
   /**

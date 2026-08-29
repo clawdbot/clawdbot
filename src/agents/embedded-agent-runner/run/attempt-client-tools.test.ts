@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { setPluginToolMeta } from "../../../plugins/tools.js";
 import { setChannelAgentToolMeta } from "../../channel-tool-metadata.js";
 import { createCodeModeCatalogProjection } from "../../code-mode-catalog.js";
+import { markCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "../../code-mode.js";
 import { runUntilCompleted } from "../../code-mode.test-support.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
@@ -122,20 +123,44 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     ).toEqual([true, false, false]);
   });
 
-  it("hides client tools behind the code-mode catalog when code mode is engaged", () => {
-    const catalogRef = seedCatalog("code-mode", CODE_MODE_CONFIG);
+  it("collects only the marked Code Mode exec as a code-mode exec tool name", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const markedExec = markCodeModeControlTool(createStubTool("exec"));
+    const plainExec = createStubTool("exec");
 
-    const result = prepare({
-      codeModeControlsEnabledForRun: true,
-      attemptConfig: CODE_MODE_CONFIG,
-      // Deliberately catalog-disabled: the code-mode branch must not read this.
-      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
-      catalogRef,
-    });
-
-    expect(result.clientToolDefs).toEqual([]);
-    expect(result.allCustomTools).toEqual([]);
+    expect(
+      [markedExec, plainExec].map((tool) =>
+        Array.from(
+          prepare({
+            codeModeControlsEnabledForRun: true,
+            attemptConfig: CATALOGS_DISABLED_CONFIG,
+            toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+            catalogRef,
+            effectiveTools: [tool],
+            uncompactedEffectiveTools: [],
+          }).codeModeExecToolNames,
+        ),
+      ),
+    ).toEqual([["exec"], []]);
   });
+
+  it.each([CODE_MODE_CONFIG, CATALOGS_DISABLED_CONFIG])(
+    "hides client tools when the attempt engages code mode",
+    (config) => {
+      const catalogRef = seedCatalog("code-mode", config);
+
+      const result = prepare({
+        codeModeControlsEnabledForRun: true,
+        attemptConfig: config,
+        // Deliberately catalog-disabled: the code-mode branch must not read this.
+        toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+        catalogRef,
+      });
+
+      expect(result.clientToolDefs).toEqual([]);
+      expect(result.allCustomTools).toEqual([]);
+    },
+  );
 
   it("advertises and invokes final callable owners after a normalized client collision", async () => {
     const catalogRef = createToolSearchCatalogRef();

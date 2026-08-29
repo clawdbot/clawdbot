@@ -25,6 +25,12 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
       `Gateway version mismatch: expected ${snapshot.versionMismatch.expected}, running gateway reported ${actual}.`,
     );
   }
+  if (snapshot.buildIdMismatch) {
+    const actual = snapshot.buildIdMismatch.actual ?? "unavailable";
+    lines.push(
+      `Gateway build mismatch: expected ${snapshot.buildIdMismatch.expected}, running gateway reported ${actual}.`,
+    );
+  }
   if (snapshot.activatedPluginErrors?.length) {
     lines.push("Activated plugin load errors:");
     for (const plugin of snapshot.activatedPluginErrors) {

@@ -65,6 +65,19 @@ function buildUserSource(code: string): string {
   return `globalThis.__openclawResult = (async () => {\n${code}\n})()`;
 }
 
+function trackPromiseRejection(
+  promise: JSValueHandle,
+  reason: JSValueHandle,
+  handled: boolean,
+): void {
+  const vm = promise.vm;
+  vm.global
+    .getProp("__openclawTrackRejection")
+    .consume((track) =>
+      vm.callFunction(track, vm.undefined, promise, reason, handled ? vm.true : vm.false).dispose(),
+    );
+}
+
 function createHostRequestHandler(params: {
   vm: QuickJS;
   pendingRequests: PendingBridgeRequest[];
@@ -152,13 +165,14 @@ async function createVm(params: {
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
 }): Promise<VmRun> {
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   let timedOut = false;
-  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
+  const deadlineReached = () => performance.now() - startedAt >= params.config.timeoutMs;
   const vm = await QuickJS.create({
     wasm: params.wasmModule,
     memoryLimit: params.config.memoryLimitBytes,
     timezoneOffset: 0,
+    onUnhandledRejection: trackPromiseRejection,
     interruptHandler: () => {
       timedOut = deadlineReached();
       return timedOut;
@@ -200,14 +214,15 @@ async function restoreVm(params: {
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
 }): Promise<VmRun> {
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   let timedOut = false;
-  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
+  const deadlineReached = () => performance.now() - startedAt >= params.config.timeoutMs;
   const snapshot = QuickJS.deserializeSnapshot(params.snapshotBytes);
   const vm = await QuickJS.restore(snapshot, {
     wasm: params.wasmModule,
     memoryLimit: params.config.memoryLimitBytes,
     timezoneOffset: 0,
+    onUnhandledRejection: trackPromiseRejection,
     interruptHandler: () => {
       timedOut = deadlineReached();
       return timedOut;
@@ -252,12 +267,17 @@ function boundWorkerResult(
   const bounded = boundCodeModeResult({
     output: result.output,
     ...(result.status === "completed" ? { value: result.value } : {}),
+    ...(result.status === "failed" ? { error: result.error } : {}),
     maxOutputBytes: config.maxOutputBytes,
   });
   if (result.status === "completed") {
     return { ...result, output: bounded.output, value: bounded.value };
   }
-  return { ...result, output: bounded.output };
+  return {
+    ...result,
+    output: bounded.output,
+    ...(bounded.error !== undefined ? { error: bounded.error } : {}),
+  };
 }
 
 function failedWorkerResult(
@@ -393,6 +413,12 @@ async function runVmExecution(params: {
         });
       }
       const value = await readCompletedResult(params.vm, resultHandle);
+      // Check only after all host work and microtasks settle. Catches attached
+      // after an await (including a restored snapshot) still own their errors.
+      using rejection = params.vm.global
+        .getProp("__openclawUnhandledRejection")
+        .consume((read) => params.vm.callFunction(read, params.vm.undefined));
+      await readCompletedResult(params.vm, rejection);
       return { status: "completed", value, output };
     } finally {
       resultHandle.dispose();
@@ -528,7 +554,10 @@ async function main(): Promise<CodeModeWorkerResult> {
       : error instanceof CodeModeWorkerFailure
         ? error.code
         : "internal_error";
-    return failedWorkerResult(code, timedOut ? "code mode timeout exceeded" : errorMessage(error));
+    return boundWorkerResult(
+      failedWorkerResult(code, timedOut ? "code mode timeout exceeded" : errorMessage(error)),
+      config,
+    );
   }
 }
 

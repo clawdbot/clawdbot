@@ -61,12 +61,22 @@ export const ModelChoiceSchema = closedObject({
   alias: Type.Optional(NonEmptyString),
   tags: Type.Optional(Type.Array(NonEmptyString)),
   available: Type.Optional(Type.Boolean()),
+  unavailableReason: Type.Optional(
+    Type.Union([
+      Type.Literal("missing-auth"),
+      Type.Literal("auth-failed"),
+      Type.Literal("cooldown"),
+    ]),
+  ),
+  /** Earliest known retry time in epoch milliseconds, only for unavailable models. */
+  unavailableUntil: Type.Optional(Type.Integer({ minimum: 0 })),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
   contextWindows: Type.Optional(Type.Array(GatewayContextWindowOptionSchema)),
   contextWindowDefault: Type.Optional(NonEmptyString),
   reasoning: Type.Optional(Type.Boolean()),
   thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingDefault: Type.Optional(NonEmptyString),
+  effectiveFastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
   supportsTools: Type.Optional(Type.Boolean()),
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   apiKeySupported: Type.Optional(Type.Boolean()),
@@ -434,7 +444,6 @@ export const SkillsInstallParamsSchema = Type.Union([
     slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
     version: Type.Optional(NonEmptyString),
     force: Type.Optional(Type.Boolean()),
-    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
   }),
   closedObject({
@@ -462,7 +471,6 @@ export const SkillsUpdateParamsSchema = Type.Union([
     slug: Type.Optional(NonEmptyString),
     all: Type.Optional(Type.Boolean()),
     force: Type.Optional(Type.Boolean()),
-    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
   }),
 ]);
 
@@ -1005,13 +1013,40 @@ const SkillOverlapCandidateSchema = closedObject({
   score: Type.Number(),
 });
 
-/** Reads persisted skill lifecycle curation state. */
+const SkillCollectionReviewStatusSchema = closedObject({
+  attemptedAtMs: Type.Number(),
+  succeededAtMs: Type.Optional(Type.Number()),
+  error: Type.Optional(Type.String()),
+});
+
+const SkillExperienceReviewStatusSchema = closedObject({
+  attemptedAtMs: Type.Number(),
+  outcome: Type.Union([
+    Type.Literal("applied"),
+    Type.Literal("proposed"),
+    Type.Literal("nothing"),
+    Type.Literal("failed"),
+  ]),
+  proposalId: Type.Optional(Type.String()),
+  error: Type.Optional(Type.String()),
+  usage: Type.Optional(
+    closedObject({
+      inputTokens: Type.Number(),
+      cachedInputTokens: Type.Number(),
+      outputTokens: Type.Number(),
+    }),
+  ),
+});
+
+/** Reads persisted skill usage and collection review state. */
 export const SkillsCuratorStatusParamsSchema = closedObject({});
 
 export const SkillsCuratorStatusResultSchema = closedObject({
   lastAttemptAtMs: Type.Union([Type.Number(), Type.Null()]),
   lastSuccessAtMs: Type.Union([Type.Number(), Type.Null()]),
   lastError: Type.Union([Type.String(), Type.Null()]),
+  collectionReview: Type.Optional(Type.Record(NonEmptyString, SkillCollectionReviewStatusSchema)),
+  experienceReview: Type.Optional(Type.Record(NonEmptyString, SkillExperienceReviewStatusSchema)),
   counts: closedObject({
     active: Type.Number(),
     stale: Type.Number(),
@@ -1021,7 +1056,7 @@ export const SkillsCuratorStatusResultSchema = closedObject({
   overlaps: Type.Array(SkillOverlapCandidateSchema),
 });
 
-/** Pins, unpins, or explicitly restores one curated skill. */
+/** Preserves retired curator action methods so clients receive an actionable error. */
 export const SkillsCuratorActionParamsSchema = closedObject({ skill: NonEmptyString });
 
 export const SkillsCuratorActionResultSchema = SkillCuratorEntrySchema;

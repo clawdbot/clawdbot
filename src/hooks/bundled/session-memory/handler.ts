@@ -17,12 +17,6 @@ import { resolveUserTimezone } from "../../../agents/date-time.js";
 import { createMemoryWriteProvenanceObserver } from "../../../agents/memory-write-provenance.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import {
-  loadTranscriptEvents,
-  readSessionTranscriptBoundedMessageTailPage,
-  type TranscriptEvent,
-} from "../../../config/sessions/session-accessor.js";
-import { selectVisibleTranscriptEvents } from "../../../config/sessions/transcript-visible-events.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { root } from "../../../infra/fs-safe.js";
@@ -31,24 +25,12 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
-import { formatHookErrorForLog } from "../../fire-and-forget.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import { isSessionAutoResetReason } from "../../session-auto-reset.js";
-import {
-  countSessionMemoryMessages,
-  getRecentSessionProjectionFromEvents,
-  type SessionMemoryProjection,
-} from "./transcript.js";
+import { captureSessionMemoryTranscript, type SessionMemoryTranscript } from "./capture.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
-const SESSION_MEMORY_CAPTURE_MAX_BYTES = 8 * 1024 * 1024;
-const SESSION_MEMORY_CAPTURE_PAGE_MESSAGES = 256;
-const SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES = 4_096;
-
-type SessionMemoryTranscript =
-  | ({ status: "available" } & (SessionMemoryProjection | { content: null; originClass: "agent" }))
-  | { status: "unavailable"; reason: string };
 
 function pickDateTimePart(
   parts: Intl.DateTimeFormatPart[],
@@ -111,83 +93,6 @@ async function resolveAvailableMemoryFilename(params: {
   }
 }
 
-async function getRecentSqliteSessionContent(
-  scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
-  messageCount: number,
-  capturedEvents?: TranscriptEvent[],
-): Promise<SessionMemoryProjection | null> {
-  const events = capturedEvents ?? (await loadTranscriptEvents({ ...scope }));
-  const latestResetIndex = capturedEvents
-    ? -1
-    : events.findLastIndex(
-        (event) =>
-          Boolean(event) &&
-          typeof event === "object" &&
-          !Array.isArray(event) &&
-          (event as { type?: unknown }).type === "reset",
-      );
-  const retiredEvents = latestResetIndex >= 0 ? events.slice(0, latestResetIndex) : events;
-  return getRecentSessionProjectionFromEvents(
-    selectVisibleTranscriptEvents(retiredEvents),
-    messageCount,
-  );
-}
-
-// The bounded reader already projects the active branch, but message pages
-// omit intervening control ancestors. Relink this snapshot so the shared
-// visibility selector can validate it without dropping active messages.
-function relinkCapturedActiveMessageEvents(events: TranscriptEvent[]): TranscriptEvent[] {
-  let parentId: string | null = null;
-  return events.map((event, index) => {
-    if (!event || typeof event !== "object" || Array.isArray(event)) {
-      return event;
-    }
-    const record = event as Record<string, unknown>;
-    if (record.type !== "message") {
-      return event;
-    }
-    const id = typeof record.id === "string" ? record.id : `session-memory-${index + 1}`;
-    const linked = { ...record, id, parentId } as TranscriptEvent;
-    parentId = id;
-    return linked;
-  });
-}
-
-function captureRecentSessionMemoryEvents(
-  scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
-  messageCount: number,
-): TranscriptEvent[] {
-  const captured: TranscriptEvent[] = [];
-  let capturedBytes = 0;
-  let offset = 0;
-  let totalMessages = Number.POSITIVE_INFINITY;
-  while (
-    offset < totalMessages &&
-    offset < SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES &&
-    capturedBytes < SESSION_MEMORY_CAPTURE_MAX_BYTES &&
-    countSessionMemoryMessages(
-      selectVisibleTranscriptEvents(relinkCapturedActiveMessageEvents(captured)),
-    ) < messageCount
-  ) {
-    const page = readSessionTranscriptBoundedMessageTailPage(scope, {
-      maxBytes: SESSION_MEMORY_CAPTURE_MAX_BYTES - capturedBytes,
-      maxMessages: Math.min(
-        SESSION_MEMORY_CAPTURE_PAGE_MESSAGES,
-        SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES - offset,
-      ),
-      offset,
-    });
-    totalMessages = page.totalMessages;
-    if (page.scannedMessages === 0) {
-      break;
-    }
-    captured.unshift(...page.events.map(({ event }) => event));
-    capturedBytes += page.serializedBytes;
-    offset += page.scannedMessages;
-  }
-  return relinkCapturedActiveMessageEvents(captured);
-}
-
 function resolveDisplaySessionKey(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -224,7 +129,7 @@ export async function flushSessionMemoryWritesForTest(): Promise<void> {
 async function saveSessionMemoryNow(
   event: Parameters<HookHandler>[0],
   agentId: string,
-  capturedEvents?: TranscriptEvent[],
+  transcript: SessionMemoryTranscript,
 ): Promise<void> {
   try {
     log.debug("Session memory hook triggered", { action: event.action, type: event.type });
@@ -234,10 +139,6 @@ async function saveSessionMemoryNow(
     const contextWorkspaceDir =
       typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
         ? context.workspaceDir
-        : undefined;
-    const contextStorePath =
-      typeof context.storePath === "string" && context.storePath.trim()
-        ? context.storePath.trim()
         : undefined;
     const workspaceDir =
       contextWorkspaceDir ||
@@ -275,49 +176,15 @@ async function saveSessionMemoryNow(
       hasCfg: Boolean(cfg),
     });
 
-    // Read message count from hook config (default: 15)
     const hookConfig = resolveHookConfig(cfg, "session-memory");
-    const messageCount =
-      typeof hookConfig?.messages === "number" && hookConfig.messages > 0
-        ? hookConfig.messages
-        : 15;
-
     let slug: string | null = null;
-    let transcript: SessionMemoryTranscript = {
-      status: "available",
-      content: null,
-      originClass: "agent",
-    };
-
-    if (currentSessionId) {
-      try {
-        const projection = await getRecentSqliteSessionContent(
-          {
-            agentId,
-            sessionId: currentSessionId,
-            sessionKey: event.sessionKey,
-            storePath:
-              contextStorePath ?? resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
-          },
-          messageCount,
-          capturedEvents,
-        );
-        transcript = projection
-          ? { status: "available", ...projection }
-          : { status: "available", content: null, originClass: "agent" };
-      } catch (error) {
-        const reason = formatHookErrorForLog(error);
-        transcript = { status: "unavailable", reason };
-        log.warn("Session transcript unavailable for memory capture", {
-          sessionKey: event.sessionKey,
-          error: reason,
-        });
-      }
-      log.debug("Session content loaded", {
-        length: transcript.status === "available" ? (transcript.content?.length ?? 0) : 0,
-        messageCount,
+    if (transcript.status === "unavailable") {
+      log.warn("Session transcript unavailable for memory capture", {
+        sessionKey: event.sessionKey,
+        error: transcript.reason,
       });
-
+    }
+    if (currentSessionId) {
       // Avoid calling the model provider in unit tests; keep hooks fast and deterministic.
       const isTestEnv = isVitestRuntimeEnv();
       const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
@@ -391,6 +258,8 @@ async function saveSessionMemoryNow(
       workspaceDir,
       resolveOriginClass: () =>
         transcript.status === "available" ? transcript.originClass : "agent",
+      sessionId: currentSessionId,
+      sessionKey: event.sessionKey,
       now: () => now.getTime(),
     });
     const commit = () => memoryRoot.write(filename, entry, { encoding: "utf-8" });
@@ -432,43 +301,35 @@ const saveSessionToMemory: HookHandler = (event) => {
   }
   const agentId = requireSessionMemoryAgentId(event);
 
-  let capturedEvents: TranscriptEvent[] | undefined;
-  try {
-    const context = event.context || {};
-    const sessionEntry = (
-      event.type === "command"
-        ? context.previousSessionEntry || context.sessionEntry || {}
-        : context.sessionEntry || {}
-    ) as Record<string, unknown>;
-    const sessionId =
-      typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
-        ? sessionEntry.sessionId.trim()
-        : undefined;
-    if (sessionId) {
-      const cfg = context.cfg as OpenClawConfig | undefined;
-      const storePath =
-        typeof context.storePath === "string" && context.storePath.trim()
-          ? context.storePath.trim()
-          : resolveSessionStorePathCore(cfg?.session?.store, { agentId });
-      const hookConfig = resolveHookConfig(cfg, "session-memory");
-      const messageCount =
-        typeof hookConfig?.messages === "number" && hookConfig.messages > 0
-          ? hookConfig.messages
-          : 15;
-      capturedEvents = captureRecentSessionMemoryEvents(
-        { agentId, sessionId, sessionKey: event.sessionKey, storePath },
-        messageCount,
-      );
-    }
-  } catch {
-    // Projection reads verify indexedSeq against the latest committed seq in
-    // one transaction. An in-flight rebuild throws here and schedules repair,
-    // so the async writer falls back to the authoritative transcript rows.
-  }
+  const context = event.context;
+  const sessionEntry = (
+    event.type === "command"
+      ? (context.previousSessionEntry ?? context.sessionEntry)
+      : context.sessionEntry
+  ) as { sessionId?: string } | undefined;
+  const cfg = context.cfg as OpenClawConfig | undefined;
+  // Gateway and soft-reset hooks already run before mutation; chat resets carry
+  // the snapshot captured by session initialization before closing the window.
+  const transcript =
+    (context.previousSessionMemory as SessionMemoryTranscript | undefined) ??
+    (sessionEntry?.sessionId
+      ? captureSessionMemoryTranscript(
+          {
+            agentId,
+            sessionId: sessionEntry.sessionId,
+            sessionKey: event.sessionKey,
+            storePath:
+              typeof context.storePath === "string" && context.storePath.trim()
+                ? context.storePath.trim()
+                : resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
+          },
+          cfg,
+        )
+      : ({ status: "available", content: null, originClass: "agent" } as const));
   const writePromise = isAutoReset
-    ? saveSessionMemoryNow(event, agentId, capturedEvents)
+    ? saveSessionMemoryNow(event, agentId, transcript)
     : runWithGatewayIndependentRootWorkContinuation(() =>
-        saveSessionMemoryNow(event, agentId, capturedEvents),
+        saveSessionMemoryNow(event, agentId, transcript),
       );
   pendingSessionMemoryWrites.add(writePromise);
   void writePromise.finally(() => {

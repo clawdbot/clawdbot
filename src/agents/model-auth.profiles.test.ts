@@ -10,14 +10,20 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import {
+  inspectPersistedAuthProfileStoreRaw,
+  writePersistedAuthProfileStoreRaw,
+} from "./auth-profiles/sqlite.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import type {
   AuthProfileCredential,
   AuthProfileStore,
   OAuthCredential,
+  RuntimeAuthProfileStore,
 } from "./auth-profiles/types.js";
+import { upsertAuthProfileWithLockOrThrow } from "./auth-profiles/upsert-with-lock.js";
 import { resolveInlineProviderApiKeyUsageId } from "./auth-profiles/usage.js";
-import type { ClaudeCliCredential } from "./cli-credentials.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import {
   createRuntimeProviderAuthLookup,
   getApiKeyForModelCore,
@@ -206,6 +212,12 @@ vi.mock("./model-auth-env-vars.js", () => {
   };
 });
 
+const resolveProviderDeprecatedAuthProfileIdsMock = vi.hoisted(() =>
+  vi.fn(({ provider }: { provider: string }) =>
+    provider === "anthropic" || provider === "claude-cli" ? ["anthropic:claude-cli"] : [],
+  ),
+);
+
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: (params: {
     provider: string;
@@ -218,6 +230,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   },
   formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
   refreshProviderOAuthCredentialWithPlugin: async () => null,
+  resolveProviderDeprecatedAuthProfileIds: resolveProviderDeprecatedAuthProfileIdsMock,
   resolveProviderSyntheticAuthWithPlugin: (params: {
     provider: string;
     context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
@@ -257,9 +270,6 @@ vi.mock("../plugins/providers.js", () => ({
 }));
 
 const cliCredentialMocks = vi.hoisted(() => ({
-  readClaudeCliCredentialsCached: vi.fn<(options?: unknown) => ClaudeCliCredential | null>(
-    () => null,
-  ),
   readCodexCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
   readMiniMaxCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
 }));
@@ -268,7 +278,7 @@ vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
 beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
-  cliCredentialMocks.readClaudeCliCredentialsCached.mockReset().mockReturnValue(null);
+  resolveProviderDeprecatedAuthProfileIdsMock.mockClear();
   cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
   cliCredentialMocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
 });
@@ -410,6 +420,92 @@ async function resolveDemoLocalApiKey(params: {
   });
 }
 
+describe("shared auth profile read-through", () => {
+  it.each([
+    {
+      name: "resolves a freshly pasted shared API key without an agent-local profile",
+      baseKey: "shared-state-key",
+      legacy: false,
+      localKey: undefined,
+    },
+    {
+      name: "keeps the populated legacy main store authoritative before relocation",
+      baseKey: "legacy-main-key",
+      legacy: true,
+      localKey: undefined,
+    },
+    {
+      name: "lets an agent-local profile override its shared read-through base",
+      baseKey: "shared-state-key",
+      legacy: false,
+      localKey: "agent-local-key",
+    },
+  ])("$name", async ({ baseKey, legacy, localKey }) => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-read-through-",
+        agentEnv: "main",
+        env: { OPENAI_API_KEY: undefined },
+      },
+      async (state) => {
+        const profileId = "openai:manual";
+        const mainAgentDir = state.agentDir();
+        const agentDir = state.agentDir("worker");
+        const credential = {
+          type: "api_key" as const,
+          provider: "openai",
+          key: baseKey,
+        };
+
+        if (legacy) {
+          writePersistedAuthProfileStoreRaw(
+            { version: 1, profiles: { [profileId]: credential } },
+            mainAgentDir,
+          );
+        }
+        await upsertAuthProfileWithLockOrThrow({
+          profileId,
+          credential,
+          agentDir: mainAgentDir,
+        });
+        if (localKey) {
+          writePersistedAuthProfileStoreRaw(
+            {
+              version: 1,
+              profiles: { [profileId]: { ...credential, key: localKey } },
+            },
+            agentDir,
+          );
+        }
+
+        expect(inspectPersistedAuthProfileStoreRaw(mainAgentDir).status).toBe(
+          legacy ? "readable" : "missing",
+        );
+        expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe(
+          localKey ? "readable" : "missing",
+        );
+
+        const inheritedAuthDir = resolveLegacyInheritedAuthDir({}, state.env);
+        const store = ensureAuthProfileStore(agentDir, {
+          allowKeychainPrompt: false,
+          syncExternalCli: false,
+          ...(inheritedAuthDir ? { inheritedAuthDir } : {}),
+        });
+        const resolved = await resolveApiKeyForProviderCore({
+          provider: "openai",
+          cfg: {},
+          agentDir,
+          store,
+        });
+
+        expect(resolved.apiKey).toBe(localKey ?? baseKey);
+        expect(resolved.source).toBe(`profile:${profileId}`);
+      },
+    );
+  });
+});
+
 describe("getApiKeyForModelCore", () => {
   it("reads oauth auth-profiles entries from auth-profiles.json via explicit profile", async () => {
     await withOpenClawTestState(
@@ -520,6 +616,28 @@ describe("getApiKeyForModelCore", () => {
         store,
       }),
     ).rejects.toThrow(/requires an OpenAI API key profile/);
+  });
+
+  it("skips incompatible OpenAI OAuth profiles before loading provider retirement policy", async () => {
+    await withEnvAsync({ OPENAI_API_KEY: "direct-openai-audio-key" }, async () => {
+      const resolved = await resolveApiKeyForProviderCore({
+        provider: "openai",
+        modelApi: "openai-audio-transcriptions",
+        store: {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "oauth",
+              provider: "openai",
+              ...oauthFixture,
+            },
+          },
+        },
+      });
+
+      expect(resolved).toMatchObject({ apiKey: "direct-openai-audio-key", mode: "api-key" });
+      expect(resolveProviderDeprecatedAuthProfileIdsMock).not.toHaveBeenCalled();
+    });
   });
 
   it("rejects an explicit OpenAI API-key profile for the Codex transport", async () => {
@@ -715,14 +833,6 @@ describe("getApiKeyForModelCore", () => {
   });
 
   it("does not read unrelated external CLI credentials when resolving provider auth", async () => {
-    cliCredentialMocks.readClaudeCliCredentialsCached.mockReturnValue({
-      type: "oauth",
-      provider: "anthropic",
-      access: "claude-cli-access",
-      refresh: "claude-cli-refresh",
-      expires: createUsableOAuthExpiry(),
-    });
-
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -753,20 +863,11 @@ describe("getApiKeyForModelCore", () => {
       },
     );
 
-    expect(cliCredentialMocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
     expect(cliCredentialMocks.readCodexCliCredentialsCached).toHaveBeenCalled();
     expect(cliCredentialMocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
 
-  it("reads Claude CLI credentials when the Claude CLI provider is resolved", async () => {
-    cliCredentialMocks.readClaudeCliCredentialsCached.mockReturnValue({
-      type: "oauth",
-      provider: "anthropic",
-      access: "claude-cli-access",
-      refresh: "claude-cli-refresh",
-      expires: createUsableOAuthExpiry(),
-    });
-
+  it("does not read Claude CLI credentials when the Claude CLI provider is resolved", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -774,18 +875,46 @@ describe("getApiKeyForModelCore", () => {
         agentEnv: "main",
       },
       async () => {
-        const resolved = await resolveApiKeyForProviderCore({ provider: "claude-cli" });
-        expect(resolved.apiKey).toBe("claude-cli-access");
-        expect(resolved.profileId).toBe("anthropic:claude-cli");
-        expect(resolved.source).toBe("profile:anthropic:claude-cli");
-        expect(resolved.mode).toBe("oauth");
+        const error = await resolveApiKeyForProviderCore({ provider: "claude-cli" }).catch(
+          (caught: unknown) => caught,
+        );
+        expect(error).toMatchObject({
+          code: "missing-provider-auth",
+          provider: "claude-cli",
+        });
       },
     );
+  });
 
-    const options = cliCredentialMocks.readClaudeCliCredentialsCached.mock.calls.at(0)?.[0] as
-      | { allowKeychainPrompt?: boolean }
-      | undefined;
-    expect(options?.allowKeychainPrompt).toBe(false);
+  it("keeps the native Claude CLI profile out of Anthropic SDK auth resolution", async () => {
+    await withEnvAsync(
+      {
+        ANTHROPIC_API_KEY: "current-anthropic-key",
+        ANTHROPIC_OAUTH_TOKEN: undefined,
+      },
+      async () => {
+        const store: RuntimeAuthProfileStore = {
+          version: 1,
+          profiles: {
+            "anthropic:claude-cli": {
+              type: "oauth",
+              provider: "claude-cli",
+              access: "copied-native-access",
+              refresh: "copied-native-refresh",
+              expires: createUsableOAuthExpiry(),
+            },
+          },
+          runtimeExternalCliProfileIds: ["anthropic:claude-cli"],
+        };
+        const resolved = await resolveApiKeyForProviderCore({
+          provider: "anthropic",
+          store,
+        });
+
+        expect(resolved.apiKey).toBe("current-anthropic-key");
+        expect(resolved.source).toContain("ANTHROPIC_API_KEY");
+      },
+    );
   });
 
   it("throws when ZAI API key is missing", async () => {
@@ -1919,6 +2048,38 @@ describe("getApiKeyForModelCore", () => {
 });
 
 describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID reference", () => {
+  it("rejects a retired profile reference before resolving its copied credential", async () => {
+    await expect(
+      resolveApiKeyForProviderCore({
+        provider: "anthropic",
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                api: "anthropic-messages",
+                baseUrl: "https://api.anthropic.com",
+                apiKey: "anthropic:claude-cli",
+                models: [],
+              },
+            },
+          },
+        },
+        store: {
+          version: 1,
+          profiles: {
+            "anthropic:claude-cli": {
+              type: "oauth",
+              provider: "anthropic",
+              access: "copied-native-access",
+              refresh: "copied-native-refresh",
+              expires: createUsableOAuthExpiry(),
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(/anthropic:claude-cli.*retired.*doctor --fix/);
+  });
+
   it("resolves actual credential when per-entry apiKey matches a profile ID in the store", async () => {
     // Scenario from #67423: openrouter-minimax.apiKey = "openrouter:key-b"
     // should resolve the actual key from that profile, not use the string literally.

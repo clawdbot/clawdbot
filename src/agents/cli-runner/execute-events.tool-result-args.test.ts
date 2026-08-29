@@ -33,6 +33,7 @@ function buildContext(runId: string): PreparedCliRunContext {
     workspaceDir: "/tmp",
     backendResolved: { id: "claude-cli", config: backend, bundleMcp: false },
     preparedBackend: { backend, env: {} },
+    executionTarget: { kind: "process" },
     reusableCliSession: { mode: "none" },
     hadSessionFile: false,
     contextEngineConfig: {},
@@ -40,7 +41,6 @@ function buildContext(runId: string): PreparedCliRunContext {
     normalizedModel: "claude-haiku-4-5",
     systemPrompt: "system",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    bootstrapPromptWarningLines: [],
     claudeSkillsPluginArgs: [],
     authEpochVersion: 2,
   } as PreparedCliRunContext;

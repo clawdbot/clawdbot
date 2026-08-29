@@ -44,10 +44,10 @@ const getUpdateScheduleMock = vi.fn<
   () => import("../../../packages/gateway-protocol/src/index.js").UpdateScheduleState | null
 >(() => null);
 const refreshGatewayUpdateStatusMock = vi.fn(async () => {});
-type UpdateCampaignAdoption = NonNullable<
-  ReturnType<import("../../infra/update-campaign.js").UpdateCampaignController["adopt"]>
+type UpdateCampaignAdoption = ReturnType<
+  import("../../infra/update-campaign.js").UpdateCampaignController["adopt"]
 >;
-const adoptUpdateCampaignMock = vi.fn<() => UpdateCampaignAdoption | undefined>(() => undefined);
+const adoptUpdateCampaignMock = vi.fn<() => UpdateCampaignAdoption>(() => ({ status: "absent" }));
 const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
 type ManagedServiceUpdateHandoffResult = Awaited<
   ReturnType<
@@ -235,7 +235,7 @@ beforeEach(() => {
   getUpdateScheduleMock.mockReset();
   getUpdateScheduleMock.mockReturnValue(null);
   adoptUpdateCampaignMock.mockReset();
-  adoptUpdateCampaignMock.mockReturnValue(undefined);
+  adoptUpdateCampaignMock.mockReturnValue({ status: "absent" });
   readConfigFileSnapshotMock.mockReset();
   readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/openclaw.json",

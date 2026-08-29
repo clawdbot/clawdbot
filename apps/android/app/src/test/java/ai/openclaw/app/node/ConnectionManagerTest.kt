@@ -139,6 +139,7 @@ class ConnectionManagerTest {
       listOf(
         ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY,
         ConnectionManager.INLINE_WIDGETS_CLIENT_CAPABILITY,
+        ConnectionManager.USAGE_REFRESHING_CLIENT_CAPABILITY,
       ),
       options.caps,
     )
@@ -148,7 +149,13 @@ class ConnectionManagerTest {
   fun buildOperatorConnectOptions_omitsInlineWidgetsWithoutIsolatedWebViews() {
     val options = newManager(inlineWidgetsAvailable = false).buildOperatorConnectOptions()
 
-    assertEquals(listOf(ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY), options.caps)
+    assertEquals(
+      listOf(
+        ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY,
+        ConnectionManager.USAGE_REFRESHING_CLIENT_CAPABILITY,
+      ),
+      options.caps,
+    )
   }
 
   @Test

@@ -1,16 +1,14 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
-import { LOBSTER_PALETTE_LORE } from "../../components/lobster-pet-lore.ts";
 import {
-  LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
   lobsterLookStyle,
-  lobsterPaletteName,
   renderLobsterSvg,
-} from "../../components/lobster-pet.ts";
+} from "../../components/lobster-pet-look.ts";
+import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
+import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { i18n, t } from "../../i18n/index.ts";
-import "../../styles/lobster-pet.css";
 
 type LobsterdexViewEntry = {
   firstSeenAt: number | null;

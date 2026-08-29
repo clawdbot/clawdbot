@@ -364,6 +364,7 @@ describe("agent runtime identity token", () => {
       sessionKey: "agent:main:main",
       operationalRunInstance: run.operationalRunInstance,
       cronToolsAllowCapture: "final-executable-surface",
+      cronExecToolTarget: { host: "gateway", ask: "always" },
     });
 
     await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
@@ -372,6 +373,7 @@ describe("agent runtime identity token", () => {
       sessionKey: "agent:main:main",
       operationalRunInstance: run.operationalRunInstance,
       cronToolsAllowCapture: "final-executable-surface",
+      cronExecToolTarget: { host: "gateway", ask: "always" },
     });
   });
 

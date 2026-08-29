@@ -25,7 +25,7 @@ scenario:
   execution:
     kind: playwright
     path: ui/src/e2e/service-worker-update.e2e.test.ts
-    testNamePattern: activates the next production worker and serves its refreshed build asset
+    testNamePattern: refreshes a same-version build on reconnect before restoring an owned terminal
     summary: >-
       Real Chromium proof across two production Control UI builds, native worker
       update and activation, page takeover, reload, and refreshed hashed assets.

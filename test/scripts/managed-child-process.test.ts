@@ -1,6 +1,7 @@
 // Managed Child Process tests cover managed child process script behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -13,6 +14,13 @@ import {
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "../../scripts/lib/managed-child-process.mts";
+import {
+  runNodeStep,
+  runNodeStepsInParallel,
+} from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
+import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -47,7 +55,205 @@ function expectProcessPid(pid: number | undefined): number {
   return pid;
 }
 
+async function killFixturePid(pid: number, processGroup = false): Promise<void> {
+  if (!Number.isSafeInteger(pid) || pid <= 1) {
+    throw new Error("Invalid owned fixture PID");
+  }
+  await runQaGatewayFixture(
+    async () => {
+      try {
+        process.kill(processGroup ? -pid : pid, "SIGKILL");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+          throw error;
+        }
+      }
+    },
+    () => waitForDead(pid, 2_000),
+  );
+}
+
+// Call after installing handlers and keepalive: existence must mean a complete, ready PID.
+function publishReadyPidScript(argIndex: number): string {
+  return `
+const pidPath = process.argv[${argIndex}];
+fs.writeFileSync(pidPath + ".tmp", String(process.pid));
+fs.renameSync(pidPath + ".tmp", pidPath);
+`;
+}
+
 describe("managed-child-process", () => {
+  it.runIf(process.platform === "linux")(
+    "accepts exited tooling descendants still awaiting reaping",
+    async () => {
+      const dir = createTempDir("openclaw-managed-zombie-");
+      const childPath = path.join(dir, "child.mts");
+      const runnerPath = path.join(dir, "runner.mjs");
+      fs.writeFileSync(childPath, 'const value: number = 7; console.log("typed-child", value);');
+      fs.writeFileSync(
+        runnerPath,
+        `
+import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
+process.exitCode = await runManagedCommand({
+  bin: process.execPath,
+  args: ["--import", ${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)}, ${JSON.stringify(childPath)}],
+  requireProcessTreeExit: true,
+});
+`,
+      );
+      // Linux may reap orphaned tool services after the leader's close. Adopt
+      // them here and defer reaping until the real supervisor has settled.
+      const reaper = `
+import ctypes, os, subprocess, sys
+if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
+    raise OSError(ctypes.get_errno(), "PR_SET_CHILD_SUBREAPER failed")
+try:
+    result = subprocess.run(sys.argv[1:])
+finally:
+    reaped = 0
+    while True:
+        try:
+            pid, code = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            break
+        if pid == 0 or code != 0:
+            raise RuntimeError("tool descendant did not exit successfully")
+        reaped += 1
+    print("successfully reaped:", reaped)
+    if reaped == 0:
+        raise RuntimeError("fixture did not retain an exited descendant")
+sys.exit(result.returncode)
+`;
+      let output = "";
+      const code = await runManagedCommand({
+        bin: "python3",
+        args: ["-c", reaper, process.execPath, runnerPath],
+        stdio: ["ignore", "pipe", "pipe"],
+        timeoutMs: 10_000,
+        onReady(child) {
+          for (const pipe of [child.stdout, child.stderr]) {
+            pipe?.on("data", (chunk) => (output += String(chunk)));
+          }
+        },
+      });
+      expect(code, output).toBe(0);
+      expect(output).toContain("typed-child 7");
+      expect(output).toMatch(/successfully reaped: [1-9]/u);
+    },
+  );
+
+  posixIt.each([
+    { runner: "managed", resistant: false, abort: false },
+    { runner: "managed", resistant: true, abort: false },
+    { runner: "managed-inherit", resistant: true, abort: false },
+    { runner: "preparation", resistant: false, abort: false },
+    { runner: "preparation", resistant: true, abort: false },
+    { runner: "preparation", resistant: false, abort: true },
+    { runner: "preparation", resistant: true, abort: true },
+  ])(
+    "joins nested $runner cleanup (resistant=$resistant, abort=$abort)",
+    async ({ runner, resistant, abort }) => {
+      const dir = fs.realpathSync(createTempDir("openclaw-nested-timeout-"));
+      const moduleUrl = (file: string) => pathToFileURL(path.resolve(file)).href;
+      const pidPaths = ["wrapper", "implementation", "leaf"].map((role) =>
+        path.join(dir, `${role}.pid`),
+      );
+      const publish = (index: number) =>
+        `fs.writeFileSync(${JSON.stringify(pidPaths[index])} + '.tmp', String(process.pid)); fs.renameSync(${JSON.stringify(pidPaths[index])} + '.tmp', ${JSON.stringify(pidPaths[index])});`;
+      const wrapper = path.join(dir, "wrapper.mjs");
+      fs.writeFileSync(
+        wrapper,
+        `
+import fs from 'node:fs';
+import { runTsxCliShim } from ${JSON.stringify(moduleUrl("scripts/lib/tsx-cli-shim.mjs"))};
+${publish(0)}
+await runTsxCliShim(import.meta.url, { implementation: './implementation.mts', forceKillDelayMs: 10000 });
+`,
+      );
+      fs.writeFileSync(
+        path.join(dir, "implementation.mts"),
+        `
+import fs from 'node:fs';
+import { runManagedCommand } from ${JSON.stringify(moduleUrl("scripts/lib/managed-child-process.mts"))};
+${publish(1)}
+process.exitCode = await runManagedCommand({ bin: process.execPath, args: [${JSON.stringify(path.join(dir, "leaf.mjs"))}], shell: false });
+`,
+      );
+      fs.writeFileSync(
+        path.join(dir, "leaf.mjs"),
+        `
+import fs from 'node:fs';
+process.on('SIGTERM', () => { process.stdout.write('shutdown-tail'); ${resistant ? "" : "process.exit(0);"} });
+setInterval(() => {}, 1000);
+${publish(2)}
+`,
+      );
+      const abortController = new AbortController();
+      const stdout = vi.spyOn(process.stdout, "write");
+      let output = "";
+      const releaseAndWait = startProcessWatchdogFixture(() => {
+        const command =
+          runner === "preparation"
+            ? runNodeStep("nested", [wrapper], 100, { abortController })
+            : runManagedCommand({
+                bin: process.execPath,
+                args: [wrapper],
+                stdio: runner === "managed-inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
+                timeoutMs: 100,
+                onReady: (child) =>
+                  child.stdout?.on("data", (chunk) => {
+                    output += String(chunk);
+                  }),
+              });
+        return command.then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      });
+      const pids: number[] = [];
+      // Finish cleanup before the harness afterEach removes PID evidence, retaining all failures.
+      await runQaGatewayFixture(
+        async () => {
+          for (const pidPath of pidPaths) {
+            pids.push(await waitForPidFile(pidPath, 10_000));
+          }
+          expect(pids.every(isProcessAlive)).toBe(true);
+          if (abort) {
+            abortController.abort();
+          }
+          expect(await releaseAndWait()).toMatchObject({
+            message: expect.stringContaining(
+              abort ? "canceled after sibling failure" : "timed out after 100ms",
+            ),
+          });
+          expect(
+            pids.filter(isProcessAlive),
+            "timeout must join every nested child before rejection",
+          ).toEqual([]);
+          if (runner === "preparation") {
+            expect(
+              stdout.mock.calls.some(([chunk]) => String(chunk) === "[nested] shutdown-tail"),
+            ).toBe(true);
+          } else if (runner === "managed-inherit") {
+            expect(stdout.mock.calls.some(([chunk]) => String(chunk) === "shutdown-tail")).toBe(
+              true,
+            );
+          } else {
+            expect(output).toBe("shutdown-tail");
+          }
+        },
+        releaseAndWait,
+        () => stdout.mockRestore(),
+        ...pidPaths.toReversed().map((pidPath) => async () => {
+          if (fs.existsSync(pidPath)) {
+            await killFixturePid(Number(fs.readFileSync(pidPath, "utf8")));
+          }
+        }),
+      );
+    },
+    20_000,
+  );
+
   it("maps forwarded signals to shell-compatible exit codes", () => {
     expect(signalExitCode("SIGHUP")).toBe(129);
     expect(signalExitCode("SIGINT")).toBe(130);
@@ -82,7 +288,7 @@ describe("managed-child-process", () => {
   it("uses Windows shell normalization when the platform override is win32", () => {
     expect(
       createManagedCommandSpawnSpec({
-        args: ["-p", "tsconfig.plugin-sdk.dts.json", "--listFilesOnly", "--noEmit"],
+        args: ["-p", "packages/plugin-sdk/tsconfig.json", "--listFilesOnly", "--noEmit"],
         bin: "C:\\repo\\node_modules\\.bin\\tsgo",
         comSpec: "C:\\Windows\\System32\\cmd.exe",
         env: {},
@@ -93,7 +299,7 @@ describe("managed-child-process", () => {
         "/d",
         "/s",
         "/c",
-        "C:\\repo\\node_modules\\.bin\\tsgo -p tsconfig.plugin-sdk.dts.json --listFilesOnly --noEmit",
+        "C:\\repo\\node_modules\\.bin\\tsgo -p packages/plugin-sdk/tsconfig.json --listFilesOnly --noEmit",
       ],
       command: "C:\\Windows\\System32\\cmd.exe",
       options: {
@@ -379,39 +585,93 @@ describe("managed-child-process", () => {
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
-  it("shares process signal listeners across parallel managed commands", async () => {
-    const signals = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
-    const baseline = new Map(signals.map((signal) => [signal, process.listenerCount(signal)]));
-    const children: Array<Parameters<typeof terminateManagedChild>[0]> = [];
-    let readyCount = 0;
-    const commands = Array.from({ length: 12 }, () =>
-      runManagedCommand({
-        args: ["-e", "setTimeout(() => {}, 10_000)"],
-        bin: process.execPath,
-        shell: false,
-        stdio: "ignore",
-        onReady: (child) => {
-          children.push(child);
-          readyCount += 1;
-        },
-      }),
-    );
+  it.each(["ignore", "inherit"] as const)(
+    "shares listeners across parallel %s commands even when another spawn throws",
+    async (stdio) => {
+      const signals = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
+      const baseline = new Map(signals.map((signal) => [signal, process.listenerCount(signal)]));
+      const warnings: string[] = [];
+      const onWarning = (warning: Error) => {
+        if (warning.name === "MaxListenersExceededWarning") {
+          warnings.push(warning.message);
+        }
+      };
+      process.on("warning", onWarning);
+      const stdout = vi.spyOn(process.stdout, "write");
+      const stderr = vi.spyOn(process.stderr, "write");
+      const children: Array<Parameters<typeof terminateManagedChild>[0]> = [];
+      let readyCount = 0;
+      const commands = Array.from({ length: 12 }, (_, index) =>
+        runManagedCommand({
+          args: [
+            "-e",
+            `process.stdout.write('managed-parallel-out-${index}-π\\n'); process.stderr.write('managed-parallel-err-${index}-π\\n'); setTimeout(() => {}, 10_000);`,
+          ],
+          bin: process.execPath,
+          shell: false,
+          stdio,
+          onReady: (child) => {
+            children.push(child);
+            readyCount += 1;
+          },
+        }),
+      );
 
-    try {
-      await waitFor(() => readyCount === commands.length);
+      try {
+        await waitFor(() => readyCount === commands.length);
+        await expect(runManagedCommand({ bin: "invalid\0command" })).rejects.toMatchObject({
+          code: "ERR_INVALID_ARG_VALUE",
+        });
+        for (const signal of signals) {
+          expect(process.listenerCount(signal)).toBe((baseline.get(signal) ?? 0) + 1);
+        }
+        if (stdio === "inherit" && process.platform !== "win32") {
+          for (const [output, kind] of [
+            [stdout, "out"],
+            [stderr, "err"],
+          ] as const) {
+            const lines = () =>
+              output.mock.calls
+                .map(([chunk]) => String(chunk))
+                .join("")
+                .split("\n")
+                .filter((line) => line.startsWith(`managed-parallel-${kind}-`))
+                .toSorted();
+            await waitFor(() => lines().length === commands.length);
+            expect(lines()).toEqual(
+              Array.from(
+                { length: 12 },
+                (_, index) => `managed-parallel-${kind}-${index}-π`,
+              ).toSorted(),
+            );
+          }
+        }
+      } finally {
+        for (const child of children) {
+          terminateManagedChild(child, "SIGTERM");
+        }
+        await Promise.all(commands);
+        process.off("warning", onWarning);
+        stdout.mockRestore();
+        stderr.mockRestore();
+      }
+
+      expect(warnings).toEqual([]);
+      expect(children.every((child) => !child.pid || !isProcessAlive(child.pid))).toBe(true);
       for (const signal of signals) {
-        expect(process.listenerCount(signal)).toBe((baseline.get(signal) ?? 0) + 1);
+        expect(process.listenerCount(signal)).toBe(baseline.get(signal) ?? 0);
       }
-    } finally {
-      for (const child of children) {
-        terminateManagedChild(child, "SIGTERM");
-      }
-      await Promise.all(commands);
-    }
+    },
+  );
 
-    for (const signal of signals) {
-      expect(process.listenerCount(signal)).toBe(baseline.get(signal) ?? 0);
-    }
+  it.each([
+    { bin: "invalid\0command", code: "ERR_INVALID_ARG_VALUE" },
+    { bin: "/missing/openclaw-test-command", code: "ENOENT" },
+  ])("restores signal listeners after a $code spawn failure", async ({ bin, code }) => {
+    const signals = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
+    const baseline = signals.map((signal) => process.listenerCount(signal));
+    await expect(runManagedCommand({ bin, shell: false })).rejects.toMatchObject({ code });
+    expect(signals.map((signal) => process.listenerCount(signal))).toEqual(baseline);
   });
 
   it("times out and kills managed command descendants", async () => {
@@ -425,22 +685,25 @@ describe("managed-child-process", () => {
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
-spawn(process.execPath, [
-  "-e",
-  "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5_000); setInterval(() => {}, 1000);",
-  process.argv[3],
-], { stdio: "ignore" });
-fs.writeFileSync(process.argv[2], String(process.pid));
 process.on("SIGTERM", () => {});
 setInterval(() => {}, 1_000);
+spawn(process.execPath, [
+  "-e",
+  ${JSON.stringify(`
+const fs = require("node:fs");
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1000);
+${publishReadyPidScript(1)}
+`)},
+  process.argv[3],
+], { stdio: "ignore" });
+${publishReadyPidScript(2)}
 `,
       "utf8",
     );
 
-    let childPid = 0;
-    let descendantPid = 0;
-    try {
-      await expect(
+    const releaseAndWait = startProcessWatchdogFixture(() =>
+      expect(
         runManagedCommand({
           bin: process.execPath,
           args: [childPath, childPidPath, descendantPidPath],
@@ -448,18 +711,38 @@ setInterval(() => {}, 1_000);
           stdio: "ignore",
           timeoutMs: 500,
         }),
-      ).rejects.toMatchObject({ code: "ETIMEDOUT" });
-
-      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
-      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+      ).rejects.toMatchObject({ code: "ETIMEDOUT" }),
+    );
+    const killSpy = vi.spyOn(process, "kill");
+    let childPid = 0;
+    let descendantPid = 0;
+    try {
+      childPid = await waitForPidFile(childPidPath, 2_000);
+      descendantPid = await waitForPidFile(descendantPidPath, 2_000);
+      expect(isProcessAlive(childPid)).toBe(true);
+      expect(isProcessAlive(descendantPid)).toBe(true);
+      await releaseAndWait();
+      if (process.platform !== "win32") {
+        expect(killSpy).toHaveBeenCalledWith(-childPid, "SIGKILL");
+      }
       expect(isProcessAlive(childPid)).toBe(false);
       expect(isProcessAlive(descendantPid)).toBe(false);
     } finally {
-      if (childPid && isProcessAlive(childPid)) {
-        process.kill(childPid, "SIGKILL");
-      }
-      if (descendantPid && isProcessAlive(descendantPid)) {
-        process.kill(descendantPid, "SIGKILL");
+      try {
+        await releaseAndWait();
+      } finally {
+        killSpy.mockRestore();
+        try {
+          if (childPid && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+            await waitForDead(childPid, 2_000);
+          }
+        } finally {
+          if (descendantPid && isProcessAlive(descendantPid)) {
+            process.kill(descendantPid, "SIGKILL");
+            await waitForDead(descendantPid, 2_000);
+          }
+        }
       }
     }
   });
@@ -570,6 +853,261 @@ setInterval(() => {}, 1_000);
     expect(isProcessAlive(childPid)).toBe(false);
   });
 
+  posixIt.each(["before", "after"])(
+    "applies the strict wall deadline only before output closure (deadline %s close)",
+    async (deadline) => {
+      const dir = fs.realpathSync(createTempDir("openclaw-managed-deadline-"));
+      const controllerPath = path.join(dir, "controller.mjs");
+      const helperUrl = pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href;
+      // Only this controller mocks time; child I/O and concurrent tests keep real clocks.
+      fs.writeFileSync(
+        controllerPath,
+        `
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import fs from "node:fs";
+import { mock } from "node:test";
+
+const [role, helperUrl, deadline] = process.argv.slice(2);
+const file = (name) => new URL(name, import.meta.url);
+if (role === "leaf") {
+  const timer = setInterval(() => {
+    if (fs.existsSync(file("release"))) clearInterval(timer);
+  }, 5);
+  process.send("ready");
+  process.disconnect();
+} else if (role === "leader") {
+  const child = spawn(process.execPath, [import.meta.filename, "leaf", helperUrl], {
+    detached: true,
+    stdio: ["ignore", "inherit", "inherit", "ipc"],
+  });
+  fs.writeFileSync(file("leaf.pid"), String(child.pid));
+  child.once("message", () => process.exit(0));
+} else {
+  const { inspectManagedProcessGroup, runManagedCommand } = await import(helperUrl);
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    let child, exited, closed;
+    const result = runManagedCommand({
+      bin: process.execPath,
+      args: [import.meta.filename, "leader", helperUrl],
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeoutMs: 1_000,
+      requireProcessTreeExit: true,
+      onReady(owned) {
+        child = owned;
+        fs.writeFileSync(file("leader.pid"), String(child.pid));
+        exited = once(child, "exit");
+        closed = once(child, "close");
+      },
+    }).catch((error) => error.code);
+    await exited;
+    await new Promise(setImmediate);
+    assert.equal(child.exitCode, 0);
+    assert.equal(inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }), "dead");
+    assert.equal(child.stdout.closed, false);
+    assert.equal(child.stderr.closed, false);
+    mock.timers.tick(deadline === "before" ? 1_000 : 975);
+    fs.writeFileSync(file("release"), "release");
+    await closed;
+    mock.timers.tick(25);
+    const outcome = await result;
+    console.log(JSON.stringify({ outcome, stdoutClosed: child.stdout.closed, stderrClosed: child.stderr.closed }));
+    assert.equal(outcome, deadline === "before" ? "ETIMEDOUT" : 0);
+  } finally {
+    mock.timers.reset();
+  }
+}
+`,
+      );
+      const controller = spawn(
+        process.execPath,
+        [controllerPath, "controller", helperUrl, deadline],
+        { stdio: ["ignore", "ignore", "pipe"] },
+      );
+      let stderr = "";
+      controller.stderr!.on("data", (chunk) => {
+        stderr += String(chunk);
+      });
+      await runQaGatewayFixture(
+        async () => {
+          expect(await waitForChildClose(controller), stderr).toEqual({ code: 0, signal: null });
+        },
+        () => {
+          if (controller.exitCode === null && controller.signalCode === null) {
+            controller.kill("SIGKILL");
+          }
+        },
+        () => waitForDead(expectProcessPid(controller.pid), 2_000),
+        ...["leader", "leaf"].map((role) => async () => {
+          const pidPath = path.join(dir, `${role}.pid`);
+          if (fs.existsSync(pidPath)) {
+            await killFixturePid(Number(fs.readFileSync(pidPath, "utf8")), true);
+          }
+        }),
+      );
+    },
+  );
+
+  posixIt.concurrent.for(["timeout", "sibling failure", "normal exit", "normal drainage"])(
+    "joins escaped output or fails closed within the cleanup budget after $0",
+    { timeout: 25_000 },
+    async (mode, { expect: expectCase }) => {
+      // Concurrent rows own their roots; the shared afterEach can run while a sibling is alive.
+      const dir = fs.mkdtempSync(
+        path.join(fs.realpathSync(os.tmpdir()), "openclaw-managed-held-output-"),
+      );
+      const pidPath = path.join(dir, "escaped.pid");
+      const parentPidPath = path.join(dir, "parent.pid");
+      const failPath = path.join(dir, "fail");
+      const normalExit = mode === "normal exit" || mode === "normal drainage";
+      const leaf = `
+const fs = require('node:fs');
+process.on('SIGTERM', () => {});
+const keepAlive = setInterval(() => {
+  if (${mode === "normal drainage"} && fs.existsSync(${JSON.stringify(failPath)})) {
+    clearInterval(keepAlive);
+    process.stdout.write('drained-out');
+    process.stderr.write('drained-err');
+  }
+}, ${mode === "normal drainage" ? 5 : 1000});
+fs.writeFileSync(${JSON.stringify(pidPath)} + '.tmp', String(process.pid));
+fs.renameSync(${JSON.stringify(pidPath)} + '.tmp', ${JSON.stringify(pidPath)});
+process.send('ready');
+process.disconnect();
+`;
+      const args = [
+        "-e",
+        `
+require('node:fs').writeFileSync(${JSON.stringify(parentPidPath)}, String(process.pid));
+const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(leaf)}], { detached: true, stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
+`,
+      ];
+      let child: ReturnType<typeof spawn> | undefined;
+      let escapedPid = 0;
+      let exitedAt = 0;
+      let settledAt = 0;
+      let stdout = "";
+      let stderr = "";
+      const abortController = new AbortController();
+      let outcome!: Promise<unknown>;
+      const releaseAndWait = startProcessWatchdogFixture(() => {
+        const command =
+          mode !== "sibling failure"
+            ? runManagedCommand({
+                bin: process.execPath,
+                args,
+                stdio: ["ignore", "pipe", "pipe"],
+                timeoutMs: mode === "timeout" ? 100 : undefined,
+                requireProcessTreeExit: normalExit,
+                signal: abortController.signal,
+                onReady: (owned) => {
+                  child = owned;
+                  child.stdout?.on("data", (chunk) => {
+                    stdout += String(chunk);
+                  });
+                  child.stderr?.on("data", (chunk) => {
+                    stderr += String(chunk);
+                  });
+                  child.once("exit", () => {
+                    exitedAt = Date.now();
+                  });
+                },
+              })
+            : runNodeStepsInParallel([
+                { label: "blocked", args, timeoutMs: 100 },
+                {
+                  label: "primary",
+                  args: [
+                    "-e",
+                    `setInterval(() => { if (require('node:fs').existsSync(${JSON.stringify(failPath)})) process.exit(2); }, 5);`,
+                  ],
+                  timeoutMs: 30_000,
+                },
+              ]);
+        // Observe sibling cancellation without releasing the blocked watchdog.
+        outcome = command
+          .catch((error: unknown) => error)
+          .finally(() => {
+            settledAt = Date.now();
+          });
+        return outcome;
+      });
+      try {
+        escapedPid = await waitForPidFile(pidPath, 10_000);
+        const parentPid = await waitForPidFile(parentPidPath, 10_000);
+        const canceledAt = Date.now();
+        if (mode === "normal drainage") {
+          await waitFor(() => exitedAt !== 0);
+          expectCase(child?.exitCode).toBe(0);
+          expectCase(child?.stdout?.closed).toBe(false);
+          expectCase(child?.stderr?.closed).toBe(false);
+          expectCase(settledAt).toBe(0);
+          fs.writeFileSync(failPath, "drain");
+        }
+        if (mode === "sibling failure") {
+          fs.writeFileSync(failPath, "fail");
+        } else if (mode === "timeout") {
+          await releaseAndWait();
+        } else {
+          await waitFor(() => settledAt !== 0, 7_000);
+        }
+        const failure = await outcome;
+        const cleanupFailure = {
+          code: "EPROCESSGROUP_CLEANUP_FAILED",
+          processTreeState: "indeterminate",
+        };
+        if (mode === "normal drainage") {
+          expectCase(failure).toBe(0);
+          expectCase(stdout).toBe("drained-out");
+          expectCase(stderr).toBe("drained-err");
+          expectCase(child?.stdout?.closed).toBe(true);
+          expectCase(child?.stderr?.closed).toBe(true);
+        } else if (mode !== "sibling failure") {
+          expectCase(failure).toMatchObject(cleanupFailure);
+          expectCase(child?.stdout?.destroyed).toBe(true);
+          expectCase(child?.stderr?.destroyed).toBe(true);
+          if (mode === "normal exit") {
+            expectCase(child?.exitCode).toBe(0);
+            expectCase(settledAt - exitedAt).toBeGreaterThanOrEqual(5_000);
+            expectCase(settledAt - exitedAt).toBeLessThan(7_000);
+          }
+        } else {
+          expectCase(failure).toBeInstanceOf(AggregateError);
+          expectCase(failure).toMatchObject({
+            message: "primary failed with exit code 2; sibling cleanup could not be verified",
+            errors: [{ message: "primary failed with exit code 2" }, cleanupFailure],
+          });
+        }
+        expectCase(Date.now() - canceledAt).toBeLessThan(12_000);
+        expectCase(isProcessAlive(parentPid)).toBe(false);
+        if (mode === "normal drainage") {
+          await waitForDead(escapedPid, 2_000);
+        }
+        expectCase(isProcessAlive(escapedPid)).toBe(mode !== "normal drainage");
+      } finally {
+        fs.writeFileSync(failPath, "fail");
+        abortController.abort();
+        await releaseAndWait();
+        if (!escapedPid && fs.existsSync(pidPath)) {
+          escapedPid = Number(fs.readFileSync(pidPath, "utf8"));
+        }
+        if (escapedPid && isProcessAlive(escapedPid)) {
+          process.kill(escapedPid, "SIGKILL");
+          await waitForDead(escapedPid, 2_000);
+        }
+        if (child?.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+          await waitForDead(expectProcessPid(child.pid), 2_000);
+        }
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   posixIt("waits through transient indeterminate process-group state", async () => {
     const originalKill = process.kill.bind(process);
     let childPid = 0;
@@ -637,7 +1175,7 @@ setInterval(() => {}, 1_000);
     expect(isProcessAlive(childPid)).toBe(false);
   });
 
-  it("allows bounded retry output and normal long-running work to complete", async () => {
+  it("allows bounded retry output to complete", async () => {
     await expect(
       runManagedCommand({
         bin: process.execPath,
@@ -650,6 +1188,9 @@ setInterval(() => {}, 1_000);
         timeoutMs: 1_000,
       }),
     ).resolves.toBe(0);
+  });
+
+  posixIt("allows strict normal long-running work to complete", async () => {
     await expect(
       runManagedCommand({
         bin: process.execPath,
@@ -679,41 +1220,64 @@ setInterval(() => {}, 1_000);
     expect(isProcessAlive(childPid)).toBe(false);
   });
 
-  posixIt("rejects and drains descendants left after a successful leader exit", async () => {
-    const dir = createTempDir("openclaw-managed-lingering-");
-    const descendantPidPath = path.join(dir, "descendant.pid");
-    let descendantPid = 0;
-    try {
-      await expect(
-        runManagedCommand({
-          bin: process.execPath,
-          args: [
-            "-e",
-            `
+  posixIt.each([
+    { runner: "managed", output: "ignore" },
+    { runner: "managed", output: "inherit" },
+    { runner: "preparation", output: "ignore" },
+    { runner: "preparation", output: "inherit" },
+  ] as const)(
+    "rejects and drains descendants left after a successful leader exit through $runner ($output output)",
+    async ({ runner, output }) => {
+      const dir = createTempDir("openclaw-managed-lingering-");
+      const descendantPidPath = path.join(dir, "descendant.pid");
+      const args = [
+        "-e",
+        `
 const { spawn } = require("node:child_process");
 const child = spawn(process.execPath, [
   "-e",
   "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); process.send('ready'); process.disconnect(); setInterval(() => {}, 1000)",
   process.argv[1],
-], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+], { stdio: ["ignore", ${JSON.stringify(output)}, ${JSON.stringify(output)}, "ipc"] });
 child.once("message", () => process.exit(0));
 `,
-            descendantPidPath,
-          ],
-          requireProcessTreeExit: true,
-          shell: false,
-          stdio: "ignore",
-          timeoutMs: 1_000,
-        }),
-      ).rejects.toMatchObject({ code: "EPROCESSGROUP_CLEANUP_FAILED" });
-      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
-      expect(isProcessAlive(descendantPid)).toBe(false);
-    } finally {
-      if (descendantPid && isProcessAlive(descendantPid)) {
-        process.kill(descendantPid, "SIGKILL");
+        descendantPidPath,
+      ];
+      try {
+        const command =
+          runner === "preparation"
+            ? runNodeStep("lingering-prep", args, 1_000)
+            : runManagedCommand({
+                bin: process.execPath,
+                args,
+                requireProcessTreeExit: true,
+                shell: false,
+                stdio: output,
+                timeoutMs: 1_000,
+              });
+        const failure = await command.catch((error: unknown) => error);
+        const descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        expect.soft(failure).toMatchObject({ code: "EPROCESSGROUP_CLEANUP_FAILED" });
+        expect
+          .soft(
+            isProcessAlive(descendantPid),
+            `descendant ${descendantPid} must be absent at settlement`,
+          )
+          .toBe(false);
+      } finally {
+        // Recover the recorded PID even when an unexpected success fails the assertion.
+        if (fs.existsSync(descendantPidPath)) {
+          const descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+          if (Number.isSafeInteger(descendantPid) && descendantPid > 1) {
+            if (isProcessAlive(descendantPid)) {
+              process.kill(descendantPid, "SIGKILL");
+            }
+            await waitForDead(descendantPid, 2_000);
+          }
+        }
       }
-    }
-  });
+    },
+  );
 
   posixIt(
     "kills managed child process group descendants when the runner is terminated",
@@ -734,14 +1298,19 @@ child.once("message", () => process.exit(0));
 
 	spawn(process.execPath, [
 	  "-e",
-	  "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+	  ${JSON.stringify(`
+const fs = require("node:fs");
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1000);
+${publishReadyPidScript(1)}
+`)},
 	  process.argv[3],
 	], { stdio: "ignore" });
-	fs.writeFileSync(process.argv[2], String(process.pid));
 	for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
 	  process.on(signal, () => process.exit(0));
 	}
 setInterval(() => {}, 1_000);
+${publishReadyPidScript(2)}
 `,
         "utf8",
       );

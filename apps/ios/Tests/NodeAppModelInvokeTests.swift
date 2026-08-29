@@ -1012,6 +1012,90 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 }
 
 @Suite(.serialized) struct NodeAppModelInvokeTests {
+    @Test @MainActor func `throttled silent push reports no data while background refresh remains successful`() async {
+        let lastSuccessKey = "gateway.backgroundAlive.lastSuccessAtMs"
+        let previousSuccess = UserDefaults.standard.object(forKey: lastSuccessKey)
+        defer {
+            if let previousSuccess {
+                UserDefaults.standard.set(previousSuccess, forKey: lastSuccessKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: lastSuccessKey)
+            }
+        }
+        UserDefaults.standard.set(Date().timeIntervalSince1970 * 1000, forKey: lastSuccessKey)
+
+        let appModel = NodeAppModel()
+        appModel.isBackgrounded = true
+        appModel.gatewayConnected = true
+        let delegate = OpenClawAppDelegate()
+        delegate.appModel = appModel
+
+        let result = await withCheckedContinuation { continuation in
+            delegate.application(
+                UIApplication.shared,
+                didReceiveRemoteNotification: ["aps": ["content-available": 1]],
+                fetchCompletionHandler: { continuation.resume(returning: $0) })
+        }
+
+        #expect(result == .noData)
+        #expect(await appModel.handleBackgroundRefreshWake())
+
+        let expiredRefresh = Task { @MainActor in
+            await appModel.handleBackgroundRefreshWake()
+        }
+        expiredRefresh.cancel()
+        #expect(await expiredRefresh.value == false)
+    }
+
+    @Test @MainActor func `expired background refresh settles unsuccessful exactly once`() {
+        let wakeTask = Task { true }
+        var completions: [Bool] = []
+        let attempt = BackgroundWakeRefreshAttempt(wakeTask: wakeTask) {
+            completions.append($0)
+        }
+
+        attempt.expire()
+        attempt.complete(success: true)
+        attempt.expire()
+
+        #expect(completions == [false])
+        #expect(wakeTask.isCancelled)
+    }
+
+    @Test @MainActor func `completed background refresh ignores later expiration`() {
+        let wakeTask = Task { true }
+        var completions: [Bool] = []
+        let attempt = BackgroundWakeRefreshAttempt(wakeTask: wakeTask) {
+            completions.append($0)
+        }
+
+        attempt.complete(success: true)
+        attempt.expire()
+
+        #expect(completions == [true])
+        #expect(!wakeTask.isCancelled)
+    }
+
+    @Test @MainActor func `replaced background refresh settles before its successor`() {
+        let replacedTask = Task { true }
+        let replacementTask = Task { true }
+        var completions: [Bool] = []
+        let replaced = BackgroundWakeRefreshAttempt(wakeTask: replacedTask) {
+            completions.append($0)
+        }
+        let replacement = BackgroundWakeRefreshAttempt(wakeTask: replacementTask) {
+            completions.append($0)
+        }
+
+        replaced.expire()
+        replacement.complete(success: true)
+        replaced.complete(success: true)
+
+        #expect(completions == [false, true])
+        #expect(replacedTask.isCancelled)
+        #expect(!replacementTask.isCancelled)
+    }
+
     @Test func `network status timeout never invents offline network facts`() async {
         await #expect(throws: URLError(.timedOut)) {
             try await NetworkStatusService().currentStatus(timeoutMs: 0)
@@ -1083,18 +1167,24 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.chatDeliveryAgentId == nil)
     }
 
-    @Test @MainActor func `chat delivery owner requires persisted or gateway ownership`() {
+    @Test @MainActor func `chat delivery owner and refresh identity follow gateway ownership`() {
         let appModel = NodeAppModel()
+        let ownerlessIdentity = appModel.chatViewModelIdentityID
         #expect(appModel.chatDeliveryAgentId == nil)
 
         appModel.gatewayDefaultAgentId = " Agent-A "
+        let defaultIdentity = appModel.chatViewModelIdentityID
         #expect(appModel.chatDeliveryAgentId == "agent-a")
+        #expect(defaultIdentity != ownerlessIdentity)
 
         appModel.setSelectedAgentId(" Agent-B ")
+        let selectedIdentity = appModel.chatViewModelIdentityID
         #expect(appModel.chatDeliveryAgentId == "agent-b")
+        #expect(selectedIdentity != defaultIdentity)
 
         appModel.openChat(sessionKey: "agent:Agent-C:incident")
         #expect(appModel.chatDeliveryAgentId == "agent-c")
+        #expect(appModel.chatViewModelIdentityID != selectedIdentity)
     }
 
     @Test @MainActor func `init preserves saved talk mode preference`() {
@@ -3805,6 +3895,37 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.gatewayStatusText != "Background idle")
     }
 
+    @Test @MainActor func `retired foreground health probe cannot reconnect after rebackgrounding`() async throws {
+        let firstURL = try #require(URL(string: "ws://127.0.0.1:1"))
+        let secondURL = try #require(URL(string: "ws://127.0.0.1:2"))
+        let (config, _) = try makeGatewayPair(firstURL: firstURL, secondURL: secondURL)
+        let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
+        defer {
+            appModel.disconnectGateway()
+            appModel.setScenePhase(.active)
+        }
+        appModel.activeGatewayConnectConfig = config
+        appModel.gatewayConnected = true
+        appModel.gatewayStatusText = "Connected"
+        appModel.setOperatorConnected(true)
+
+        appModel.setScenePhase(.background)
+        try await Task.sleep(for: .milliseconds(3100))
+        appModel.setScenePhase(.active)
+        appModel.setScenePhase(.background)
+
+        for _ in 0..<80 {
+            await Task.yield()
+        }
+
+        #expect(appModel.isBackgrounded)
+        #expect(appModel.gatewayConnected)
+        #expect(appModel.isOperatorGatewayConnected)
+        #expect(appModel.gatewayStatusText == "Connected")
+        #expect(!appModel._test_hasGatewayLoopTasks().node)
+        #expect(!appModel._test_hasGatewayLoopTasks().operator)
+    }
+
     @Test @MainActor func `stale foreground resume cannot reopen Talk after rebackgrounding`() async {
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()
@@ -4302,6 +4423,14 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel()
+        let (snapshotEvents, snapshotEventContinuation) = AsyncStream.makeStream(
+            of: OpenClawWatchExecApprovalSnapshotMessage.self)
+        defer { snapshotEventContinuation.finish() }
+        watchService.syncExecApprovalSnapshotHandler = { message in
+            snapshotEventContinuation.yield(message)
+            return watchService.nextSendResult
+        }
+        var snapshots = snapshotEvents.makeAsyncIterator()
         let futureExpiryMs = Int64(Date().timeIntervalSince1970 * 1000) + 60000
         try appModel._test_presentExecApprovalPrompt(
             #require(
@@ -4314,29 +4443,14 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             "approval-watch-snapshot",
             commandText: "echo from watch",
             agentID: nil))
-        let initialSnapshotPublished = await waitForMainActorWork {
-            watchService.sentExecApprovalSnapshots.contains { snapshot in
-                snapshot.requestId == nil &&
-                    snapshot.approvals.map(\.id) == ["approval-watch-snapshot"]
-            }
-        }
-        try #require(initialSnapshotPublished)
+        let initialSnapshot = try #require(await snapshots.next())
+        #expect(initialSnapshot.requestId == nil)
+        #expect(initialSnapshot.approvals.map(\.id) == ["approval-watch-snapshot"])
 
         appModel.setScenePhase(.background)
-        let snapshotCount = watchService.sentExecApprovalSnapshots.count
         watchService.emitExecApprovalSnapshotRequest(
             makeWatchApprovalSnapshotRequest("snapshot-1", sentAt: 111))
-        let correlatedSnapshotPublished = await waitForMainActorWork {
-            watchService.sentExecApprovalSnapshots.dropFirst(snapshotCount).contains { snapshot in
-                snapshot.requestId == "snapshot-1" &&
-                    snapshot.requestGatewayStableID == "test-gateway"
-            }
-        }
-        try #require(correlatedSnapshotPublished)
-
-        let snapshot = try #require(watchService.sentExecApprovalSnapshots
-            .dropFirst(snapshotCount)
-            .first { $0.requestId == "snapshot-1" })
+        let snapshot = try #require(await snapshots.next())
         #expect(snapshot.approvals.map(\.id) == ["approval-watch-snapshot"])
         #expect(snapshot.requestId == "snapshot-1")
         #expect(snapshot.requestGatewayStableID == "test-gateway")

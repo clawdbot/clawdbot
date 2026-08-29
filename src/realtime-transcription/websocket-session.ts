@@ -1,6 +1,6 @@
 // Realtime transcription websocket session streams audio to transcription providers.
 import { randomUUID } from "node:crypto";
-import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { toErrorObject, toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import WebSocket from "ws";
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
@@ -74,7 +74,6 @@ function defaultParseMessage(payload: Buffer): unknown {
 class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscriptionSession {
   private closeTimer: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
-  private connected = false;
   private currentUrl = "";
   private queuedAudio: Array<Buffer | undefined> = [];
   private queuedAudioHead = 0;
@@ -134,7 +133,6 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     }
     this.closed = true;
     this.cancelConnecting?.();
-    this.connected = false;
     this.ready = false;
     this.readySinceMs = undefined;
     this.reconnectSupervisor.cancel();
@@ -158,7 +156,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   }
 
   isConnected(): boolean {
-    return this.connected && this.ready;
+    return this.ready;
   }
 
   private get closeTimeoutMs(): number {
@@ -216,11 +214,16 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           finishClosedConnect();
           return;
         }
-        settled = true;
-        clearConnectTimeout();
         this.ready = true;
         this.readySinceMs = Date.now();
-        this.flushQueuedAudio(transport);
+        try {
+          this.flushQueuedAudio(transport);
+        } catch (error) {
+          failConnect(toErrorObject(error, "Realtime audio send failed"));
+          return;
+        }
+        settled = true;
+        clearConnectTimeout();
         resolve();
       };
 
@@ -326,7 +329,6 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
             return;
           }
           opened = true;
-          this.connected = true;
           this.captureLocalOpen();
           try {
             this.options.onOpen?.(transport);
@@ -375,7 +377,6 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           clearConnectTimeout();
           this.captureClose(code, reasonBuffer);
           const readyForMs = this.readySinceMs === undefined ? 0 : Date.now() - this.readySinceMs;
-          this.connected = false;
           this.ready = false;
           this.readySinceMs = undefined;
           if (readyForMs >= RECONNECT_STABLE_RESET_MS) {
@@ -468,11 +469,14 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   }
 
   private flushQueuedAudio(transport: RealtimeTranscriptionWebSocketTransport): void {
-    for (let index = this.queuedAudioHead; index < this.queuedAudio.length; index += 1) {
-      const audio = this.queuedAudio[index];
+    while (this.queuedAudioHead < this.queuedAudio.length) {
+      const audio = this.queuedAudio[this.queuedAudioHead];
       if (audio) {
         this.options.sendAudio(audio, transport);
+        this.queuedBytes -= audio.byteLength;
       }
+      this.queuedAudio[this.queuedAudioHead] = undefined;
+      this.queuedAudioHead += 1;
     }
     this.clearQueuedAudio();
   }
@@ -539,7 +543,6 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       clearTimeout(this.closeTimer);
       this.closeTimer = undefined;
     }
-    this.connected = false;
     this.ready = false;
     this.readySinceMs = undefined;
     this.ws = null;

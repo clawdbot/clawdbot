@@ -6,6 +6,7 @@ import {
   readActiveTranscriptEntryAnchor,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -105,7 +106,7 @@ describe("embedded attempt phase lifecycle state", () => {
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 0,
-      toolSearchTargetTranscriptProjections: [],
+      nestedToolActivities: [],
       cache: {
         observabilityEnabled: false,
         changesForTurn: null,
@@ -180,7 +181,7 @@ describe("embedded attempt phase lifecycle state", () => {
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 0,
-      toolSearchTargetTranscriptProjections: [],
+      nestedToolActivities: [],
       cache: {
         observabilityEnabled: false,
         changesForTurn: null,
@@ -268,8 +269,12 @@ describe("embedded attempt phase lifecycle state", () => {
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 1,
-      toolSearchTargetTranscriptProjections: [
-        {
+      nestedToolActivities: [
+        createNestedToolActivity({
+          runId: "run-test",
+          scopeId: "scope-test",
+          afterEntryId: null,
+          startOrder: 0,
           parentToolCallId: "outer-exec",
           toolCallId: "tool_search_code:outer-exec:read:1",
           toolName: "read",
@@ -279,7 +284,9 @@ describe("embedded attempt phase lifecycle state", () => {
             details: { status: "error", error: "ENOENT" },
           },
           isError: true,
-        },
+          startedAt: 1,
+          timestamp: 2,
+        }),
       ],
       cache: {
         observabilityEnabled: false,
@@ -293,17 +300,7 @@ describe("embedded attempt phase lifecycle state", () => {
     expect(result.currentAttemptAssistant).toBe(modelAssistant);
     expect(result.currentAttemptCompletedAssistant).toEqual(modelAssistant);
     expect(result.successfulNestedToolNames).toEqual([]);
-    expect(result.messagesSnapshot).toHaveLength(5);
-    expect(result.messagesSnapshot.at(-2)).toMatchObject({
-      role: "assistant",
-      stopReason: "toolUse",
-      content: [{ name: "read" }],
-    });
-    expect(result.messagesSnapshot.at(-1)).toMatchObject({
-      role: "toolResult",
-      toolName: "read",
-      isError: true,
-    });
+    expect(result.messagesSnapshot).toEqual(messages);
   });
 
   it("emits the persisted terminal boundary to the outer fallback owner", async () => {
@@ -538,6 +535,52 @@ describe("embedded attempt phase lifecycle state", () => {
     await completeEmbeddedAttemptAfterTurn({
       attempt: {
         operation: "settled-tool-finalization",
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+      } as never,
+      activeSession: {} as never,
+      sessionManager: { appendCustomEntry: vi.fn() } as never,
+      withOwnedTranscriptWrite: async (operation) => await operation(),
+      state: {
+        promptError: null,
+        yieldAborted: false,
+        sessionIdUsed: "session-1",
+        messagesSnapshot: [],
+        prePromptMessageCount: 0,
+        contextEngineAfterTurnCheckpoint: null,
+        compactionOccurredThisAttempt: false,
+      },
+      readLifecycleState: () => ({
+        aborted: false,
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+      }),
+      runtime: {
+        effectiveWorkspace: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        sessionAgentId: "main",
+        resolveActiveContextEnginePluginId: () => undefined,
+        shouldRecordCompletedBootstrapTurn: false,
+        cacheTrace: null,
+        anthropicPayloadLogger: null,
+        hookAgentId: "main",
+        diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never,
+        skillWorkshopAvailable: false,
+        hookRunner: null,
+        promptStartedAt: Date.now(),
+      },
+    });
+
+    expect(hoisted.runAgentEndSideEffects).not.toHaveBeenCalled();
+  });
+
+  it("skips agent_end side effects for a detached run", async () => {
+    await completeEmbeddedAttemptAfterTurn({
+      attempt: {
+        sessionPersistence: "detached",
+        sessionKey: "agent:main:telegram:group:1",
         runId: "run-1",
         sessionId: "session-1",
         sessionFile: "/tmp/session.jsonl",

@@ -59,16 +59,16 @@ function renderSessionRowBadge(
 export function renderSessionRowBadges(params: {
   isChild?: boolean;
   incognito?: boolean;
-  hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   hasApproval?: boolean;
   outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   placementState?: SessionPlacementState;
+  placementProviderId?: string;
+  placementProfileId?: string;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
 }) {
-  const hasAutomation = !params.isChild && params.hasAutomation;
   const pullRequestLabel = params.pullRequest
     ? formatSessionPullRequestSummary(params.pullRequest)
     : undefined;
@@ -103,7 +103,6 @@ export function renderSessionRowBadges(params: {
       : "";
   if (
     !params.incognito &&
-    !hasAutomation &&
     !pullRequestLabel &&
     !params.hasApproval &&
     attentionCount === 0 &&
@@ -113,14 +112,19 @@ export function renderSessionRowBadges(params: {
   ) {
     return nothing;
   }
+  const placementLabel = displayedPlacementState
+    ? params.placementProviderId && params.placementProfileId
+      ? `${params.placementProviderId} · ${params.placementProfileId} · ${displayedPlacementState}`
+      : t("sessionsView.cloudWorkerPlacement", { state: displayedPlacementState })
+    : "";
   const cloudPlacementLabel = hasWorkspaceConflict
     ? displayedPlacementState
       ? t(
           workspaceConflictCount === 1
-            ? "sessionsView.cloudWorkerPlacementConflict"
-            : "sessionsView.cloudWorkerPlacementConflicts",
+            ? "sessionsView.placementWorkspaceConflict"
+            : "sessionsView.placementWorkspaceConflicts",
           {
-            state: displayedPlacementState,
+            placement: placementLabel,
             count: String(workspaceConflictCount),
           },
         )
@@ -130,9 +134,7 @@ export function renderSessionRowBadges(params: {
             : "sessionsView.cloudWorkerDescendantConflicts",
           { count: String(workspaceConflictCount) },
         )
-    : displayedPlacementState
-      ? t("sessionsView.cloudWorkerPlacement", { state: displayedPlacementState })
-      : "";
+    : placementLabel;
   const cloudLabel = [cloudPlacementLabel, diskSpaceLabel].filter(Boolean).join(" · ");
   return html`<span class="session-row-badges">
     ${params.incognito
@@ -142,13 +144,10 @@ export function renderSessionRowBadges(params: {
           "session-row-badge--incognito",
         )
       : nothing}
-    ${hasAutomation
-      ? renderSessionRowBadge(t("sessionsView.automationAttached"), icons.clock)
-      : nothing}
     ${pullRequestLabel
       ? renderSessionRowBadge(
           pullRequestLabel,
-          icons.gitPullRequest,
+          pullRequestState === "merged" ? icons.gitMerge : icons.gitPullRequest,
           "session-row-badge--pull-request",
           0,
           pullRequestState,
@@ -191,14 +190,24 @@ export function renderSessionRowBadges(params: {
   </span>`;
 }
 
-export function renderOfflineSidebarStatus(props: {
-  queuedOutboxCount: number;
-  reconnecting: string;
+export function renderSidebarConnectionStatus(props: {
+  kind: "offline" | "restarting";
+  queuedOutboxCount?: number;
   title?: string;
   onRetry: () => void;
 }) {
+  if (props.kind === "restarting") {
+    return html`<span
+      class="sidebar-footer-bar__status sidebar-footer-bar__status--restarting"
+      role="status"
+      aria-live="polite"
+      ><span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
+        "connection.restarting",
+      )}</span
+    >`;
+  }
   const offline = t("common.offline");
-  const count = props.queuedOutboxCount;
+  const count = props.queuedOutboxCount ?? 0;
   const queued = count ? t("connection.queuedCount", { count: String(count) }) : null;
   return html`<openclaw-tooltip .content=${props.title ?? ""}>
     <button
@@ -210,7 +219,7 @@ export function renderOfflineSidebarStatus(props: {
     >
       <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${offline}<span
         class="sidebar-footer-bar__status-detail"
-        >· ${props.reconnecting}</span
+        >· ${t("connection.reconnecting")}</span
       >${queued
         ? html`<span class="sidebar-footer-bar__status-detail">· ${queued}</span>`
         : nothing}

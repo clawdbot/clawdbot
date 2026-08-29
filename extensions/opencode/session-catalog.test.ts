@@ -269,6 +269,7 @@ function captureOpenCodeContinuationCatalog() {
       pluginOwnerId: "opencode",
       initializationPending: true as const,
       ...(params.label ? { label: params.label } : {}),
+      ...(params.displayName ? { displayName: params.displayName } : {}),
       ...(params.spawnedCwd ? { spawnedCwd: params.spawnedCwd } : {}),
       pluginExtensions: params.initialEntry.pluginExtensions,
     };
@@ -362,7 +363,15 @@ if (args[0] === "--pure" && args[1] === "db" && args.includes("--format") && arg
   process.exitCode = 2;
 }
 `;
-  await fs.writeFile(executable, script);
+  // Flush and close the executable before exec: a still-open write handle makes
+  // the immediately following spawn fail with ETXTBSY under parallel CI shards.
+  const executableHandle = await fs.open(executable, "w");
+  try {
+    await executableHandle.writeFile(script);
+    await executableHandle.sync();
+  } finally {
+    await executableHandle.close();
+  }
   if (process.platform === "win32") {
     await fs.writeFile(path.join(directory, "opencode.js"), script);
     // This exact direct-forwarder shape is parsed into a Node entrypoint;
@@ -583,9 +592,10 @@ describe("OpenCode session catalog", () => {
       },
     });
     expect(createSessionEntry).toHaveBeenCalledTimes(1);
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
-        label: "Catalog session",
+        displayName: "Catalog session",
         spawnedCwd: "/workspace",
         initialEntry: {
           acpBackendId: "acpx",

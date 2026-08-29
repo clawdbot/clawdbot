@@ -65,6 +65,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   model?: { compat?: unknown };
   modelId?: string;
   modelProvider?: string;
+  codeModeOverride?: boolean | "auto";
   modelToolsEnabled: boolean;
   prompt?: string;
   runId?: string;
@@ -73,7 +74,6 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   sessionKey?: string;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   sourceReplyDeliveryMode?: string;
-  skillWorkshopProposalOnly?: boolean;
   toolsAllow?: readonly string[];
 }): AgentHarnessToolSurfaceRuntime {
   const forceDirectMessageTool = messageToolOwnsVisibleReply(params);
@@ -88,10 +88,12 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
     sessionKey: params.sessionKey,
     forceDirectMessageTool,
     model: params.model,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+    codeModeOverride: params.codeModeOverride,
     toolsEnabled: params.modelToolsEnabled,
     disableTools: params.disableTools,
     isRawModelRun: params.isRawModelRun === true,
-    skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
     toolsAllow: params.toolsAllow,
   });
   const toolSearchCatalogRef =

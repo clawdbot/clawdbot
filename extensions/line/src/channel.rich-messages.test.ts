@@ -3,7 +3,12 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { linePlugin } from "./channel.js";
 import { lineOutboundAdapter } from "./outbound.js";
-import { createLineQuickReply, lineMessageActions, renderLineCard } from "./rich-messages.js";
+import {
+  createLineQuickReply,
+  lineMessageActions,
+  prepareLineReplyPayload,
+  renderLineCard,
+} from "./rich-messages.js";
 import type { LineRichCard } from "./types.js";
 
 function resolveChannelDataSchema() {
@@ -76,6 +81,156 @@ describe("LINE rich-message boundaries", () => {
       ],
     });
   });
+
+  it("resolves a reply's presentation into LINE controls before delivery reads it", () => {
+    const prepared = prepareLineReplyPayload({
+      text: "Approve this run?",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Approve", action: { type: "callback", value: "approve" } }],
+          },
+          {
+            type: "select",
+            options: [{ label: "Deny", action: { type: "callback", value: "deny" } }],
+          },
+        ],
+      },
+    });
+
+    expect(prepared.presentation).toBeUndefined();
+    expect(prepared.text).toBe("Approve this run?");
+    const line = prepared.channelData?.line as {
+      flexMessage?: { contents?: { footer?: { contents?: Array<{ action?: unknown }> } } };
+      quickReplyItems?: unknown[];
+    };
+    expect(line.flexMessage?.contents?.footer?.contents).toMatchObject([
+      { action: { type: "postback", data: "approve" } },
+    ]);
+    expect(createLineQuickReply(line.quickReplyItems as never)).toMatchObject({
+      items: [{ action: { type: "postback", data: "deny" } }],
+    });
+  });
+
+  it("keeps fallback text when only quick replies render", () => {
+    const prepared = prepareLineReplyPayload({
+      text: "Agent needs input:\n1. Alpha",
+      presentationTextMode: "fallback",
+      presentation: {
+        blocks: [
+          {
+            type: "select",
+            options: [{ label: "Alpha", action: { type: "callback", value: "alpha" } }],
+          },
+        ],
+      },
+    });
+
+    const line = prepared.channelData?.line as
+      | { quickReplyItems?: unknown[]; flexMessage?: unknown }
+      | undefined;
+    // A select alone renders no Flex body, so the prose is still the only thing
+    // carrying the question. Clearing it delivers bare option labels.
+    expect(prepared.text).toBe("Agent needs input:\n1. Alpha");
+    expect(line?.flexMessage).toBeUndefined();
+    expect(line?.quickReplyItems).toHaveLength(1);
+  });
+
+  it("replaces fallback text once a Flex body renders the same controls", () => {
+    const prepared = prepareLineReplyPayload({
+      text: "Agent needs input:\n1. Approve",
+      presentationTextMode: "fallback",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Approve", action: { type: "callback", value: "approve" } }],
+          },
+        ],
+      },
+    });
+
+    const line = prepared.channelData?.line as { flexMessage?: unknown } | undefined;
+    expect(line?.flexMessage).toBeDefined();
+    expect(prepared.text).toBeUndefined();
+  });
+
+  it("keeps a presentation LINE has no native controls for in the visible text", () => {
+    const prepared = prepareLineReplyPayload({
+      text: "Here are today's runs",
+      presentation: {
+        blocks: [
+          // Nothing here maps to a Flex action or a quick reply.
+          { type: "table", caption: "Runs", headers: ["Agent"], rows: [["main"]] },
+        ],
+      },
+    });
+
+    expect(prepared.channelData?.line).toBeUndefined();
+    expect(prepared.presentation).toBeUndefined();
+    expect(prepared.text).toContain("Here are today's runs");
+    expect(prepared.text).toContain("main");
+  });
+
+  it.each([
+    {
+      kind: "command",
+      action: { type: "command", command: "/status" },
+      expected: { type: "message", text: "/status" },
+    },
+    {
+      kind: "callback",
+      action: { type: "callback", value: "action=status" },
+      expected: { type: "postback", data: "action=status" },
+    },
+    {
+      kind: "url",
+      action: { type: "url", url: "https://example.com/status" },
+      expected: { type: "uri", uri: "https://example.com/status" },
+    },
+    {
+      kind: "web-app",
+      action: { type: "web-app", url: "https://example.com/app" },
+      expected: { type: "uri", uri: "https://example.com/app" },
+    },
+  ] as const)(
+    "preserves 40-character Flex $kind labels while quick replies stay bounded",
+    async ({ action, expected }) => {
+      const label = "x".repeat(40);
+      const result = await lineOutboundAdapter.renderPresentation?.({
+        payload: { text: "Choose one" },
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label, action },
+                { label: `${label}y`, action },
+              ],
+            },
+            {
+              type: "select",
+              options: [{ label, action: { type: "callback", value: "quick" } }],
+            },
+          ],
+        },
+        ctx: {} as never,
+      });
+      const line = result?.channelData?.line as {
+        flexMessage: { contents: { footer: { contents: Array<{ action: { label: string } }> } } };
+        quickReplyItems: unknown[];
+      };
+
+      expect(line.flexMessage.contents.footer.contents).toMatchObject([
+        { action: { ...expected, label } },
+        { action: { ...expected, label } },
+      ]);
+      expect(createLineQuickReply(line.quickReplyItems as never)).toMatchObject({
+        items: [{ action: { type: "postback", data: "quick", label: "x".repeat(20) } }],
+      });
+    },
+  );
 
   it("validates every typed LINE-specific rich-message shape", () => {
     const schema = resolveChannelDataSchema();

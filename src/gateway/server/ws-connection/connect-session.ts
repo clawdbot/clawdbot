@@ -18,6 +18,7 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { resolveLocalNodeId } from "../../../node-host/local-id.js";
+import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
 import {
@@ -50,10 +51,10 @@ import {
   setClientPluginNodeCapability,
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
-import { MAX_PAYLOAD_BYTES } from "../../server-constants.js";
+import { MAX_PAYLOAD_BYTES, WEBSOCKET_OPEN_READY_STATE } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import { incrementPresenceVersion } from "../health-state.js";
+import { broadcastPresenceSnapshot } from "../presence-events.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { resolveEffectiveConnectionScopes } from "./connect-admission.js";
 import { sendGatewayHello } from "./connect-hello.js";
@@ -214,7 +215,7 @@ export async function attachAuthenticatedGatewayConnect(
           : ensureProfileForEmail(authenticatedUserId);
       const profileId = "profileId" in profile ? profile.profileId : profile.id;
       const display = getUserProfileDisplay(profileId);
-      // User edits become visible after reconnect; detached provider-avatar adoption refreshes below.
+      // The live profile callback refreshes edits and detached provider-avatar adoption.
       authenticatedUserProfile = {
         profileId: display.id,
         displayName: display.displayName,
@@ -250,7 +251,11 @@ export async function attachAuthenticatedGatewayConnect(
       ? []
       : rolePolicy
         ? effectiveScopes.scopes.filter((scope) =>
-            rolePolicy.scopes.some((allowedScope) => allowedScope === scope),
+            roleScopesAllow({
+              role: "operator",
+              requestedScopes: [scope],
+              allowedScopes: rolePolicy.scopes,
+            }),
           )
         : effectiveScopes.scopes;
   state.scopes = scopes;
@@ -434,6 +439,14 @@ export async function attachAuthenticatedGatewayConnect(
   };
   attachGatewayLocalUserIngress(nextClient, localUserIngress);
   const attachAuthenticatedProfile = (profileId: string, updatedAt: number) => {
+    if (
+      isClosed() ||
+      context.handler.getClient() !== nextClient ||
+      nextClient.invalidated ||
+      socket.readyState !== WEBSOCKET_OPEN_READY_STATE
+    ) {
+      return;
+    }
     const display = getUserProfileDisplay(profileId);
     const profile = {
       profileId: display.id,
@@ -599,7 +612,9 @@ export async function attachAuthenticatedGatewayConnect(
       ...(authenticatedPresenceUser ? { user: authenticatedPresenceUser } : {}),
       reason: "connect",
     });
-    incrementPresenceVersion();
+    // Publish the completed row before hello snapshots it; existing readers do
+    // not receive this connection's hello and must not wait for later activity.
+    broadcastPresenceSnapshot(buildRequestContext());
   }
   if (admittedNodePairing) {
     const pairingGeneration = admittedNodePairing.generation?.key;

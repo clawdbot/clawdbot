@@ -9,6 +9,8 @@ import { type ChildProcess, spawn } from "node:child_process";
 import process from "node:process";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { releaseChildProcessOutputAfterExit } from "../process/child-process.js";
+import { formatCommandResult } from "../process/command-error.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { hasBinary } from "../skills/loading/config.js";
@@ -36,13 +38,6 @@ let currentConfig: GmailHookRuntimeConfig | null = null;
 let respawnTimeout: ReturnType<typeof setTimeout> | null = null;
 
 /**
- * Check if gog binary is available
- */
-function isGogAvailable(): boolean {
-  return hasBinary("gog");
-}
-
-/**
  * Start the Gmail watch (registers with Gmail API)
  */
 async function startGmailWatch(
@@ -56,8 +51,7 @@ async function startGmailWatch(
       signal: options.signal,
     });
     if (result.code !== 0) {
-      const message = result.stderr || result.stdout || "gog watch start failed";
-      log.error(`watch start failed: ${message}`);
+      log.error(formatCommandResult("gog gmail watch start", result));
       return false;
     }
     log.info(`watch started for ${cfg.account}`);
@@ -124,13 +118,19 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
     log.error(`gog process error: ${String(err)}`);
   });
 
-  // `close` follows stdio drain, so late stderr participates in restart classification.
-  child.on("close", (code, signal) => {
-    // If a newer watcher has replaced this child, do not respawn.
-    if (watcherProcess !== null && watcherProcess !== child) {
-      return;
+  const releaseOutput = releaseChildProcessOutputAfterExit(child);
+  child.once("exit", () => {
+    // The detached POSIX group remains ours after its leader dies. Windows
+    // taskkill requires a live root PID; only bound inherited-pipe drain there.
+    if (!shuttingDown && watcherProcess === child && process.platform !== "win32" && child.pid) {
+      killProcessTree(child.pid, { force: true, detached: true });
     }
-    if (shuttingDown) {
+  });
+
+  // `close` follows bounded stdio drain, so late stderr still classifies bind failures.
+  child.once("close", (code, signal) => {
+    releaseOutput();
+    if (shuttingDown || watcherProcess !== child) {
       return;
     }
     if (spawnFailed) {
@@ -164,6 +164,11 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
  * and resolve on exit/close/error or a final 8 s safety timeout.
  */
 function settleProcess(proc: ChildProcess): Promise<void> {
+  // A Windows root PID can be reused after exit, even while inherited pipes
+  // delay close. The spawn owner's bounded drain releases those pipes safely.
+  if (process.platform === "win32" && (proc.exitCode != null || proc.signalCode != null)) {
+    return Promise.resolve();
+  }
   return new Promise<void>((resolve) => {
     let settled = false;
     let processSettled = false;
@@ -180,6 +185,9 @@ function settleProcess(proc: ChildProcess): Promise<void> {
       if (finalTimeout) {
         clearTimeout(finalTimeout);
       }
+      proc.removeListener("exit", settleAfterEscalation);
+      proc.removeListener("close", settleAfterEscalation);
+      proc.removeListener("error", settleAfterEscalation);
       resolve();
     };
     const settleAfterEscalation = () => {
@@ -256,14 +264,7 @@ type GmailWatcherStartResult = {
   reason?: string;
 };
 
-type GmailWatcherCancellation = {
-  dispose: () => void;
-  isCancelled: () => boolean;
-  signal?: AbortSignal;
-};
-
 type GmailWatcherStartOptions = {
-  isCancelled?: () => boolean;
   signal?: AbortSignal;
 };
 
@@ -274,56 +275,6 @@ function cancelledGmailWatcherStart(
     currentConfig = null;
   }
   return { started: false, reason: "startup cancelled" };
-}
-
-function isGmailWatcherStartCancelled(options: GmailWatcherStartOptions): boolean {
-  return options.signal?.aborted === true || options.isCancelled?.() === true;
-}
-
-function createGmailWatcherCancellation(
-  options: GmailWatcherStartOptions,
-): GmailWatcherCancellation {
-  if (!options.signal && !options.isCancelled) {
-    return {
-      dispose: () => {},
-      isCancelled: () => false,
-    };
-  }
-
-  const abortController = new AbortController();
-  const abort = () => {
-    if (!abortController.signal.aborted) {
-      abortController.abort();
-    }
-  };
-  const onAbort = () => abort();
-  options.signal?.addEventListener("abort", onAbort, { once: true });
-
-  let cancelPoll: ReturnType<typeof setInterval> | null = null;
-  if (options.isCancelled) {
-    cancelPoll = setInterval(() => {
-      if (options.isCancelled?.()) {
-        abort();
-      }
-    }, 100);
-    cancelPoll.unref?.();
-  }
-
-  if (isGmailWatcherStartCancelled(options)) {
-    abort();
-  }
-
-  return {
-    dispose: () => {
-      if (cancelPoll) {
-        clearInterval(cancelPoll);
-        cancelPoll = null;
-      }
-      options.signal?.removeEventListener("abort", onAbort);
-    },
-    isCancelled: () => abortController.signal.aborted || isGmailWatcherStartCancelled(options),
-    signal: abortController.signal,
-  };
 }
 
 /**
@@ -344,8 +295,7 @@ export async function startGmailWatcher(
   }
 
   // Check if gog is available
-  const gogAvailable = isGogAvailable();
-  if (!gogAvailable) {
+  if (!hasBinary("gog")) {
     return { started: false, reason: "gog binary not found" };
   }
 
@@ -355,8 +305,15 @@ export async function startGmailWatcher(
     return { started: false, reason: resolved.error };
   }
 
-  const runtimeConfig = resolved.value;
-  if (isGmailWatcherStartCancelled(options)) {
+  return startGmailWatcherService(resolved.value, options);
+}
+
+/** Start the shared watcher lifecycle after the caller resolves config and prerequisites. */
+export async function startGmailWatcherService(
+  runtimeConfig: GmailHookRuntimeConfig,
+  options: GmailWatcherStartOptions = {},
+): Promise<GmailWatcherStartResult> {
+  if (options.signal?.aborted) {
     return cancelledGmailWatcherStart(runtimeConfig);
   }
   currentConfig = runtimeConfig;
@@ -376,33 +333,28 @@ export async function startGmailWatcher(
       const oldProcess = watcherProcess;
       watcherProcess = null;
       await settleProcess(oldProcess);
-      // Remove lingering spawnGogServe listeners so a late exit (after the
-      // settleProcess timeout) cannot trigger a duplicate respawn while
-      // watcherProcess is null and shuttingDown is false.
-      oldProcess.removeAllListeners();
     }
     shuttingDown = false;
   }
 
   // Set up Tailscale endpoint if needed
   if (runtimeConfig.tailscale.mode !== "off") {
-    const cancellation = createGmailWatcherCancellation(options);
     try {
       await ensureTailscaleEndpoint({
         mode: runtimeConfig.tailscale.mode,
         path: runtimeConfig.tailscale.path,
         port: runtimeConfig.serve.port,
-        signal: cancellation.signal,
+        signal: options.signal,
         target: runtimeConfig.tailscale.target,
       });
       log.info(
         `tailscale ${runtimeConfig.tailscale.mode} configured for port ${runtimeConfig.serve.port}`,
       );
-      if (cancellation.isCancelled()) {
+      if (options.signal?.aborted) {
         return cancelledGmailWatcherStart(runtimeConfig);
       }
     } catch (err) {
-      if (cancellation.isCancelled()) {
+      if (options.signal?.aborted) {
         return cancelledGmailWatcherStart(runtimeConfig);
       }
       log.error(`tailscale setup failed: ${String(err)}`);
@@ -410,16 +362,12 @@ export async function startGmailWatcher(
         started: false,
         reason: `tailscale setup failed: ${String(err)}`,
       };
-    } finally {
-      cancellation.dispose();
     }
   }
 
   // Start the Gmail watch (register with Gmail API)
-  const cancellation = createGmailWatcherCancellation(options);
-  const watchStarted = await startGmailWatch(runtimeConfig, { signal: cancellation.signal });
-  cancellation.dispose();
-  if (cancellation.isCancelled()) {
+  const watchStarted = await startGmailWatch(runtimeConfig, { signal: options.signal });
+  if (options.signal?.aborted) {
     return cancelledGmailWatcherStart(runtimeConfig);
   }
   if (!watchStarted) {
@@ -427,9 +375,6 @@ export async function startGmailWatcher(
   }
 
   // Spawn the gog serve process
-  if (isGmailWatcherStartCancelled(options)) {
-    return cancelledGmailWatcherStart(runtimeConfig);
-  }
   shuttingDown = false;
   watcherProcess = spawnGogServe(runtimeConfig);
   const renewMs = runtimeConfig.renewEveryMinutes * 60_000;

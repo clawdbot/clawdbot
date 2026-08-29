@@ -138,12 +138,25 @@ function buildExecProofConfig(): OpenClawConfig {
   };
 }
 
-async function writeConfig(stateDir: string): Promise<void> {
-  await fs.writeFile(
-    path.join(stateDir, "openclaw.json"),
-    JSON.stringify(buildExecProofConfig()),
-    "utf8",
-  );
+async function writeConfig(
+  stateDir: string,
+  config: OpenClawConfig = buildExecProofConfig(),
+): Promise<void> {
+  await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify(config), "utf8");
+}
+
+function buildChildEnv(stateDir: string): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_STATE_DIR: stateDir,
+  };
+  delete childEnv.NODE_ENV;
+  delete childEnv.OPENCLAW_RUN_NODE_OUTPUT_LOG;
+  delete childEnv.VITEST;
+  delete childEnv.VITEST_POOL_ID;
+  delete childEnv.VITEST_WORKER_ID;
+  return childEnv;
 }
 
 function buildCliSource(args: string[]): string {
@@ -159,16 +172,7 @@ describe("agent exec installed plugin isolation", () => {
     await writeHarnessPlugin(stateDir);
     await writeConfig(stateDir);
     const source = buildCliSource(["agent", "exec", "prove plugin discovery", "--json"]);
-    const childEnv: NodeJS.ProcessEnv = {
-      ...process.env,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    delete childEnv.NODE_ENV;
-    delete childEnv.OPENCLAW_RUN_NODE_OUTPUT_LOG;
-    delete childEnv.VITEST;
-    delete childEnv.VITEST_POOL_ID;
-    delete childEnv.VITEST_WORKER_ID;
+    const childEnv = buildChildEnv(stateDir);
 
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
@@ -228,5 +232,62 @@ describe("agent exec installed plugin isolation", () => {
     expect(registryFiles).toContain("openclaw.sqlite");
     expect(registryFiles.every((file) => file.startsWith("openclaw.sqlite"))).toBe(true);
     await expect(fs.stat(path.join(stateDir, "agents"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("exits naturally after a one-shot ingress turn with workspace skills", async () => {
+    const stateDir = tempDirs.make("openclaw-agent-ingress-one-shot-");
+    const workspace = path.join(stateDir, "workspace");
+    const skillDir = path.join(workspace, "skills", "exit-proof");
+    const outputPath = path.join(stateDir, "ingress-result.json");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: exit-proof\ndescription: One-shot ingress proof\n---\nUse the fixture.\n",
+      "utf8",
+    );
+    await writeHarnessPlugin(stateDir);
+    const config = buildExecProofConfig();
+    config.agents = {
+      defaults: { ...config.agents?.defaults, workspace, skipBootstrap: true },
+    };
+    await writeConfig(stateDir, config);
+    const source = `
+      import fs from "node:fs";
+      import { agentCommandFromIngress } from "./src/plugin-sdk/agent-runtime.ts";
+      const result = await agentCommandFromIngress({
+        agentId: "main",
+        sessionId: "ingress-one-shot-session",
+        message: "prove one-shot ingress completion",
+        model: "exec-proof/proof-model",
+        allowModelOverride: true,
+        json: true,
+        cleanupBundleMcpOnRunEnd: true,
+        cleanupCliLiveSessionOnRunEnd: true,
+        oneShotCliRun: true,
+      }, {
+        log() {},
+        error: (...args) => console.error(...args),
+        exit: (code) => { throw new Error("unexpected runtime exit " + code); },
+      });
+      fs.writeFileSync(${JSON.stringify(outputPath)}, JSON.stringify(result));
+    `;
+    const [completion] = await Promise.allSettled([
+      execFileAsync(
+        process.execPath,
+        ["--import", "tsx", "--input-type=module", "--eval", source],
+        {
+          cwd: path.resolve(import.meta.dirname, "../.."),
+          encoding: "utf8",
+          env: buildChildEnv(stateDir),
+          timeout: 30_000,
+        },
+      ),
+    ]);
+
+    // A completed result followed by a timeout identifies retained process resources.
+    expect(JSON.parse(await fs.readFile(outputPath, "utf8"))).toMatchObject({
+      payloads: [{ text: "PLUGIN_HARNESS_OK" }],
+    });
+    expect(completion).toMatchObject({ status: "fulfilled" });
   });
 });
