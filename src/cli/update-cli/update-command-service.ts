@@ -655,13 +655,22 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       return;
     }
     try {
-      // Fresh state can diverge after the pre-restart revalidate (drop-in,
-      // profile, unit, or install root). Re-check immediately before the
-      // unguarded start; a stale identity must not ride the version-guard exception.
+      // Recovery is the future-config exception, not an ordinary refresh:
+      // pin the stopped command fingerprint even for writable definitions.
+      const recoveryStop =
+        before.serviceUpdateVerdict.kind === "owned"
+          ? {
+              serviceEnv: before.serviceEnv,
+              serviceUpdateVerdict: {
+                ...before.serviceUpdateVerdict,
+                refreshDefinition: false,
+              },
+            }
+          : before;
       await revalidateManagedGatewayServiceAfterUpdate({
         state,
         root: params.root ?? before.serviceUpdateVerdict.root,
-        preManagedServiceStop: before,
+        preManagedServiceStop: recoveryStop,
       });
       await startGatewayServiceAfterFailedUpdate({
         env: before.serviceEnv,

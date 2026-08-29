@@ -58,6 +58,8 @@ vi.mock("../../runtime.js", async (importOriginal) => {
   };
 });
 
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service.js";
 
 const VERSION_GUARD_ERROR = new Error(
@@ -69,10 +71,14 @@ const NON_GUARD_ERROR = new Error("Something else went wrong.");
 
 const serviceEnv = { OPENCLAW_PROFILE: "default" };
 const OWNED_ROOT = mocks.ownedRoot;
+const OWNED_COMMAND = {
+  programArguments: ["/usr/bin/node", `${OWNED_ROOT}/dist/index.js`, "gateway"],
+};
+const OWNED_FINGERPRINT = sha256Hex(stableStringify(OWNED_COMMAND));
 const OWNED_VERDICT = {
   kind: "owned" as const,
   root: OWNED_ROOT,
-  fingerprint: "owned",
+  fingerprint: OWNED_FINGERPRINT,
   refreshDefinition: true,
 };
 const OWNED_STATE = {
@@ -80,9 +86,8 @@ const OWNED_STATE = {
   loadState: { status: "loaded" as const },
   running: false,
   env: serviceEnv,
-  command: {
-    programArguments: ["/usr/bin/node", `${OWNED_ROOT}/dist/index.js`, "gateway"],
-  },
+  command: OWNED_COMMAND,
+  definitionMutationCapability: { kind: "writable" as const },
   runtime: { status: "stopped" as const },
 };
 
@@ -219,6 +224,31 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
         ...OWNED_STATE,
         command: {
           programArguments: ["/usr/bin/node", "/other/dist/index.js", "gateway"],
+        },
+      },
+    },
+    {
+      change: "same-root command",
+      state: {
+        ...OWNED_STATE,
+        command: {
+          programArguments: [
+            "/usr/bin/node",
+            `${OWNED_ROOT}/dist/index.js`,
+            "gateway",
+            "--port",
+            "9",
+          ],
+        },
+      },
+    },
+    {
+      change: "same-root drop-in",
+      state: {
+        ...OWNED_STATE,
+        command: {
+          ...OWNED_COMMAND,
+          environment: { OPENCLAW_GATEWAY_PORT: "9" },
         },
       },
     },
