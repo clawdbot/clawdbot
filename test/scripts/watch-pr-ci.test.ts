@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildFindRunArgs,
   classifyAttachedCiRun,
@@ -14,36 +14,47 @@ import {
   sanitizeCheckName,
   selectRunAfter,
 } from "../../scripts/watch-pr-ci.mts";
+import { withTempDir } from "../../src/test-utils/temp-dir.js";
 import placeholderFixture from "../fixtures/watch-pr-ci-queued-placeholder.json" with { type: "json" };
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const sha = "a".repeat(40);
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runWatcher(ghScript: string, headSha = sha, options: string[] = []) {
-  const binDir = tempDirs.make("openclaw-watch-pr-ci-");
-  const ghPath = join(binDir, "gh");
-  writeFileSync(ghPath, ghScript);
-  chmodSync(ghPath, 0o755);
-  return spawnSync(
-    process.execPath,
-    [
-      "scripts/watch-pr-ci.mjs",
-      "42",
-      headSha,
-      "--attach-timeout",
-      "1",
-      "--timeout",
-      "1",
-      "--interval",
-      "1",
-      ...options,
-    ],
-    {
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
-    },
-  );
+  return withTempDir("openclaw-watch-pr-ci-", async (binDir) => {
+    const ghPath = join(binDir, "gh");
+    writeFileSync(ghPath, ghScript);
+    chmodSync(ghPath, 0o755);
+    return await new Promise<{ status: number; stdout: string; stderr: string }>(
+      (resolve, reject) => {
+        execFile(
+          process.execPath,
+          [
+            "scripts/watch-pr-ci.mjs",
+            "42",
+            headSha,
+            "--attach-timeout",
+            "1",
+            "--timeout",
+            "1",
+            "--interval",
+            "1",
+            ...options,
+          ],
+          {
+            encoding: "utf8",
+            env: { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
+          },
+          (error, stdout, stderr) => {
+            if (error && typeof error.code !== "number") {
+              reject(error);
+              return;
+            }
+            resolve({ status: error?.code ?? 0, stdout, stderr });
+          },
+        );
+      },
+    );
+  });
 }
 
 function replayPlaceholder(
@@ -59,15 +70,15 @@ function replayPlaceholder(
     afterAliasScan?: unknown;
   } = {},
 ) {
-  const root = tempDirs.make("openclaw-watch-pr-ci-replay-");
-  const payload = join(root, "payload.json");
-  const calls = join(root, "calls.jsonl");
-  // The live capture is merged. Only lifecycle is reopened for the historical watch.
-  if (!evidence.merged) fixture.graphql.data.repository.pullRequest.state = "OPEN";
-  writeFileSync(payload, JSON.stringify({ ...fixture, ...evidence }));
-  writeFileSync(calls, "");
-  const result = runWatcher(
-    `#!/usr/bin/env node
+  return withTempDir("openclaw-watch-pr-ci-replay-", async (root) => {
+    const payload = join(root, "payload.json");
+    const calls = join(root, "calls.jsonl");
+    // The live capture is merged. Only lifecycle is reopened for the historical watch.
+    if (!evidence.merged) fixture.graphql.data.repository.pullRequest.state = "OPEN";
+    writeFileSync(payload, JSON.stringify({ ...fixture, ...evidence }));
+    writeFileSync(calls, "");
+    const result = await runWatcher(
+      `#!/usr/bin/env node
 const fs = require("node:fs");
 const fixture = JSON.parse(fs.readFileSync(${JSON.stringify(payload)}, "utf8"));
 const args = process.argv.slice(2);
@@ -103,10 +114,11 @@ else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/")) {
 else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 console.log(JSON.stringify(value));
 `,
-    placeholderFixture.run.head_sha,
-    evidence.watchTimeout === undefined ? [] : ["--timeout", String(evidence.watchTimeout)],
-  );
-  return { ...result, calls: readFileSync(calls, "utf8") };
+      placeholderFixture.run.head_sha,
+      evidence.watchTimeout === undefined ? [] : ["--timeout", String(evidence.watchTimeout)],
+    );
+    return { ...result, calls: readFileSync(calls, "utf8") };
+  });
 }
 
 describe("watch-pr-ci", () => {
@@ -201,8 +213,8 @@ describe("watch-pr-ci", () => {
 
   it.skipIf(process.platform === "win32")(
     "attaches to real CI when a newer draft workflow was skipped",
-    () => {
-      const result = runWatcher(
+    async () => {
+      const result = await runWatcher(
         `#!/usr/bin/env bash
 case "$1 $2" in
   "pr view") printf '{"state":"OPEN","mergeable":true,"headRefOid":"${sha}"}\\n' ;;
@@ -239,7 +251,7 @@ esac
       { state: "FAILURE", observed: 2 },
     ])(
       "reconciles the captured queued group with aggregate $state and $observed observed checks",
-      ({ state, observed }) => {
+      async ({ state, observed }) => {
         const fixture = structuredClone(placeholderFixture);
         const rollup = fixture.graphql.data.repository.pullRequest.statusCheckRollup;
         rollup.state = state;
@@ -252,7 +264,7 @@ esac
           rollup.contexts.nodes.push({ ...queuedCheck, databaseId: 98802098559 });
           rollup.contexts.totalCount += 1;
         }
-        const result = replayPlaceholder(fixture, { watchTimeout: 5 });
+        const result = await replayPlaceholder(fixture, { watchTimeout: 5 });
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
         expect(result.stdout).toContain(`pending=0 superseded=${observed}`);
         expect(result.stdout).toContain("GREEN");
@@ -284,32 +296,35 @@ esac
     it.each([
       { aliasCount: 32, exitCode: 0 },
       { aliasCount: 33, exitCode: 16 },
-    ])("bounds direct verification of a $aliasCount-alias group", ({ aliasCount, exitCode }) => {
-      const fixture = structuredClone(placeholderFixture);
-      const alias = fixture.directJobs[0];
-      assert(alias);
-      for (let index = fixture.directJobs.length; index < aliasCount; index += 1) {
-        const extra = { ...alias, id: 1_000_000 + index };
-        fixture.jobs.jobs.push(extra);
-        fixture.directJobs.push(extra);
-      }
-      fixture.jobs.total_count = fixture.jobs.jobs.length;
-      const result = replayPlaceholder(fixture, { watchTimeout: exitCode === 0 ? 5 : 1 });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-      const calls: string[][] = result.calls
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      const directReads = calls.filter((call) => call[1]?.includes("/actions/jobs/"));
-      expect(directReads).toHaveLength(exitCode === 0 ? aliasCount : 0);
-      if (exitCode !== 0) {
-        expect(result.stdout).toContain("pending=1");
-        expect(result.stdout).not.toContain("GREEN");
-      }
-    });
+    ])(
+      "bounds direct verification of a $aliasCount-alias group",
+      async ({ aliasCount, exitCode }) => {
+        const fixture = structuredClone(placeholderFixture);
+        const alias = fixture.directJobs[0];
+        assert(alias);
+        for (let index = fixture.directJobs.length; index < aliasCount; index += 1) {
+          const extra = { ...alias, id: 1_000_000 + index };
+          fixture.jobs.jobs.push(extra);
+          fixture.directJobs.push(extra);
+        }
+        fixture.jobs.total_count = fixture.jobs.jobs.length;
+        const result = await replayPlaceholder(fixture, { watchTimeout: exitCode === 0 ? 5 : 1 });
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
+        const calls: string[][] = result.calls
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        const directReads = calls.filter((call) => call[1]?.includes("/actions/jobs/"));
+        expect(directReads).toHaveLength(exitCode === 0 ? aliasCount : 0);
+        if (exitCode !== 0) {
+          expect(result.stdout).toContain("pending=1");
+          expect(result.stdout).not.toContain("GREEN");
+        }
+      },
+    );
 
-    it("bounds a slow alias read by the remaining watcher deadline", () => {
-      const result = replayPlaceholder(structuredClone(placeholderFixture), {
+    it("bounds a slow alias read by the remaining watcher deadline", async () => {
+      const result = await replayPlaceholder(structuredClone(placeholderFixture), {
         delayFirstAlias: true,
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
@@ -336,12 +351,12 @@ esac
         exitCode: 14,
         output: "CONFLICTING-MID-WAIT",
       },
-    ])("rechecks a $label after alias verification", ({ patch, exitCode, output }) => {
+    ])("rechecks a $label after alias verification", async ({ patch, exitCode, output }) => {
       const fixture = structuredClone(placeholderFixture);
       const afterAliasScan = structuredClone(fixture.graphql);
       afterAliasScan.data.repository.pullRequest.state = "OPEN";
       Object.assign(afterAliasScan.data.repository.pullRequest, patch);
-      const result = replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
+      const result = await replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
       expect(result.stdout).toContain(output);
       expect(result.stdout).not.toContain("GREEN");
@@ -352,7 +367,7 @@ esac
       { label: "failed", status: "COMPLETED", conclusion: "FAILURE", exitCode: 15 },
     ])(
       "observes a new $label required check after alias verification",
-      ({ status, conclusion, exitCode }) => {
+      async ({ status, conclusion, exitCode }) => {
         const fixture = structuredClone(placeholderFixture);
         const afterAliasScan = structuredClone(fixture.graphql);
         afterAliasScan.data.repository.pullRequest.state = "OPEN";
@@ -364,7 +379,7 @@ esac
             { kind: "CheckRun", name: "new required check", status, conclusion },
           ],
         });
-        const result = replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
+        const result = await replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
         expect(result.stdout).not.toContain("GREEN");
       },
@@ -379,7 +394,7 @@ esac
         exitCode: 16,
       },
       { label: "is renamed", patch: { name: "different required check" }, exitCode: 16 },
-    ])("does not reuse proof when an alias $label", ({ patch, exitCode }) => {
+    ])("does not reuse proof when an alias $label", async ({ patch, exitCode }) => {
       const fixture = structuredClone(placeholderFixture);
       const afterAliasScan = structuredClone(fixture.graphql);
       afterAliasScan.data.repository.pullRequest.state = "OPEN";
@@ -389,7 +404,7 @@ esac
         );
       assert(alias);
       Object.assign(alias, patch);
-      const result = replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
+      const result = await replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
       expect(result.stdout).not.toContain("GREEN");
     });
@@ -403,7 +418,7 @@ esac
       ),
     )(
       "keeps a changed lower-ID alias blocking ($status, initially visible: $initiallyVisible)",
-      ({ status, conclusion, exitCode, initiallyVisible }) => {
+      async ({ status, conclusion, exitCode, initiallyVisible }) => {
         const fixture = structuredClone(placeholderFixture);
         const contexts = fixture.graphql.data.repository.pullRequest.statusCheckRollup.contexts;
         const queued = contexts.nodes.find((check) => check.databaseId === 98802098786);
@@ -423,7 +438,7 @@ esac
         const changed = refreshed.nodes.find((check) => check.databaseId === lower.databaseId);
         assert(changed);
         Object.assign(changed, { status, conclusion });
-        const result = replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
+        const result = await replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
         expect(result.stdout).not.toContain("GREEN");
       },
@@ -431,7 +446,7 @@ esac
 
     it.each([33155056361, 33155056360])(
       "still supersedes an older failed check from run %s",
-      (runId) => {
+      async (runId) => {
         const fixture = structuredClone(placeholderFixture);
         const contexts = fixture.graphql.data.repository.pullRequest.statusCheckRollup.contexts;
         const queued = contexts.nodes.find((check) => check.databaseId === 98802098786);
@@ -445,15 +460,15 @@ esac
         older.checkSuite.workflowRun.databaseId = runId;
         contexts.nodes.push(older);
         contexts.totalCount += 1;
-        const result = replayPlaceholder(fixture, { watchTimeout: 5 });
+        const result = await replayPlaceholder(fixture, { watchTimeout: 5 });
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
         expect(result.stdout).toContain("GREEN");
       },
     );
 
-    it("rechecks the attached run after refreshing the PR snapshot", () => {
+    it("rechecks the attached run after refreshing the PR snapshot", async () => {
       const fixture = structuredClone(placeholderFixture);
-      const result = replayPlaceholder(fixture, {
+      const result = await replayPlaceholder(fixture, {
         runViewSnapshots: [fixture.run, fixture.run, { status: "in_progress", conclusion: null }],
         watchTimeout: 5,
       });
@@ -461,8 +476,8 @@ esac
       expect(result.stdout).not.toContain("GREEN");
     });
 
-    it("keeps the captured merged PR closed", () => {
-      const result = replayPlaceholder(structuredClone(placeholderFixture), { merged: true });
+    it("keeps the captured merged PR closed", async () => {
+      const result = await replayPlaceholder(structuredClone(placeholderFixture), { merged: true });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(10);
       expect(result.stdout).toContain("PR-CLOSED state=MERGED");
       expect(result.calls).not.toContain("/actions/");
@@ -477,18 +492,21 @@ esac
       ["another run", { run_id: 33155056362 }],
       ["another head", { head_sha: sha }],
       ["missing attempt", { run_attempt: undefined }],
-    ])("keeps pending for %s in the attempt list", (_label, patch) => {
+    ])("keeps pending for %s in the attempt list", async (_label, patch) => {
       const fixture = structuredClone(placeholderFixture);
       Object.assign(
         fixture.jobs.jobs.find((job) => job.id === 98802098754)!,
         patch,
       );
-      const result = replayPlaceholder(fixture);
+      const result = await replayPlaceholder(fixture);
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
       expect(result.stdout).not.toContain("GREEN");
+      expect(result.calls).toContain("/attempts/3/jobs?per_page=100&page=1");
     });
 
-    it.each([
+    // Independent rejection fixtures can overlap their real deadline waits.
+    // Keep successful scans and short-deadline job scans serial.
+    it.concurrent.each([
       ["assigned queued job", { runner_id: 123 }],
       ["executed steps", { steps: [{ status: "completed", conclusion: "success" }] }],
       ["missing steps", { steps: undefined }],
@@ -500,9 +518,9 @@ esac
       ["different attempt", { run_attempt: 4 }],
       ["active job", { status: "in_progress" }],
       ["failed job", { conclusion: "failure" }],
-    ])("requires direct unexecuted-job proof: %s", (_label, patch) => {
+    ])("requires direct unexecuted-job proof: %s", async (_label, patch) => {
       const fixture = structuredClone(placeholderFixture);
-      const result = replayPlaceholder(fixture, {
+      const result = await replayPlaceholder(fixture, {
         watchTimeout: 5,
         directJobs: fixture.directJobs.map((job) =>
           job.id === 98802098786 ? { ...job, ...patch } : job,
@@ -510,6 +528,7 @@ esac
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
       expect(result.stdout).not.toContain("GREEN");
+      expect(result.calls).toContain('"repos/openclaw/openclaw/actions/jobs/98802098786"');
     });
 
     it.each([
@@ -517,18 +536,19 @@ esac
       ["active", { status: "in_progress", runner_id: 123 }],
       ["failed", { status: "completed", conclusion: "failure" }],
       ["malformed", { run_attempt: undefined }],
-    ])("keeps the group pending when a non-rollup sibling is %s", (_label, patch) => {
+    ])("keeps the group pending when a non-rollup sibling is %s", async (_label, patch) => {
       const fixture = structuredClone(placeholderFixture);
-      const result = replayPlaceholder(fixture, {
+      const result = await replayPlaceholder(fixture, {
         directJobs: fixture.directJobs.map((job) =>
           job.id === 98802098559 ? { ...job, ...patch } : job,
         ),
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
       expect(result.stdout).not.toContain("GREEN");
+      expect(result.calls).toContain('"repos/openclaw/openclaw/actions/jobs/98802098559"');
     });
 
-    it.each([
+    it.concurrent.each([
       ["missing ID", { id: undefined }],
       ["missing head", { head_sha: undefined }],
       ["missing workflow", { workflow_id: undefined }],
@@ -541,27 +561,31 @@ esac
       ["failed newer attempt", { run_attempt: 4, conclusion: "failure" }],
       ["cancelled newer attempt", { run_attempt: 4, conclusion: "cancelled" }],
       ["successful newer attempt", { run_attempt: 4 }],
-    ])("rejects changed run evidence after collecting jobs: %s", (_label, patch) => {
+    ])("rejects changed run evidence after collecting jobs: %s", async (_label, patch) => {
       const fixture = structuredClone(placeholderFixture);
-      const result = replayPlaceholder(fixture, {
+      const result = await replayPlaceholder(fixture, {
         watchTimeout: 5,
         runSnapshots: [fixture.run, { ...fixture.run, ...patch }],
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
       expect(result.stdout).not.toContain("GREEN");
+      const runReads = result.calls
+        .split("\n")
+        .filter((call) => call.includes('"repos/openclaw/openclaw/actions/runs/33155056361"'));
+      expect(runReads.length).toBeGreaterThanOrEqual(2);
     });
 
-    it.each([
+    it.concurrent.each([
       { status: "in_progress", conclusion: null },
       { status: "completed", conclusion: "failure" },
       { status: "completed", conclusion: "success" },
     ])(
       "does not ignore an extra $status/$conclusion same-name sibling",
-      ({ status, conclusion }) => {
+      async ({ status, conclusion }) => {
         const fixture = structuredClone(placeholderFixture);
         const replacement = fixture.jobs.jobs.find((job) => job.id === 98802098754);
         assert(replacement);
-        const result = replayPlaceholder(fixture, {
+        const result = await replayPlaceholder(fixture, {
           jobPages: [
             {
               total_count: fixture.jobs.total_count + 1,
@@ -570,10 +594,11 @@ esac
           ],
         });
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+        expect(result.calls).toContain("/attempts/3/jobs?per_page=100&page=1");
       },
     );
 
-    it.each([
+    it.concurrent.each([
       [
         "unrelated workflow",
         { checkSuite: { workflowRun: { databaseId: 33155056361, workflow: { databaseId: 1 } } } },
@@ -593,7 +618,7 @@ esac
         "required status context",
         { kind: "StatusContext", context: "required status", state: "PENDING" },
       ],
-    ])("does not reconcile %s", (_label, patch) => {
+    ])("does not reconcile %s", async (_label, patch) => {
       const fixture = structuredClone(placeholderFixture);
       const queuedCheck =
         fixture.graphql.data.repository.pullRequest.statusCheckRollup.contexts.nodes.find(
@@ -601,12 +626,13 @@ esac
         );
       assert(queuedCheck);
       Object.assign(queuedCheck, patch);
-      const result = replayPlaceholder(fixture);
+      const result = await replayPlaceholder(fixture);
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
       expect(result.calls).not.toContain("/attempts/");
+      expect(result.calls).toContain('["api","graphql",');
     });
 
-    it.each([
+    it.concurrent.each([
       [
         "pending required App check",
         { kind: "CheckRun", name: "required App", status: "QUEUED" },
@@ -632,7 +658,7 @@ esac
         { kind: "CheckRun", name: "required App", status: "COMPLETED" },
         16,
       ],
-    ] as const)("keeps %s independently blocking", (_label, sibling, exitCode) => {
+    ] as const)("keeps %s independently blocking", async (_label, sibling, exitCode) => {
       const fixture = structuredClone(placeholderFixture);
       const contexts = fixture.graphql.data.repository.pullRequest.statusCheckRollup.contexts;
       // Synthetic counterexamples add a separate, lineage-less required context.
@@ -640,14 +666,15 @@ esac
         totalCount: contexts.totalCount + 1,
         nodes: [...contexts.nodes, sibling],
       });
-      const result = replayPlaceholder(fixture, { watchTimeout: 5 });
+      const result = await replayPlaceholder(fixture, { watchTimeout: 5 });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
       expect(result.stdout).not.toContain("GREEN");
+      if (exitCode === 16) expect(result.stdout).toContain("superseded=1");
     });
 
-    it.each(["unknown", "truncated", "unfinished pagination", "missing count"])(
+    it.concurrent.each(["unknown", "truncated", "unfinished pagination", "missing count"])(
       "does not green an %s rollup",
-      (scenario) => {
+      async (scenario) => {
         const fixture = structuredClone(placeholderFixture);
         const rollup = fixture.graphql.data.repository.pullRequest.statusCheckRollup;
         if (scenario === "unknown") rollup.state = "UNKNOWN";
@@ -655,16 +682,17 @@ esac
         else if (scenario === "missing count")
           Object.assign(rollup.contexts, { totalCount: undefined });
         else rollup.contexts.pageInfo.hasNextPage = true;
-        const result = replayPlaceholder(fixture);
+        const result = await replayPlaceholder(fixture);
         expect(result.status, `${result.stdout}\n${result.stderr}`).not.toBe(0);
         expect(result.stdout).not.toContain("GREEN");
         expect(result.calls).not.toContain("/attempts/");
+        expect(result.calls).toContain('["api","graphql",');
       },
     );
 
     it.each(["in_progress", "queued", "completed"])(
       "avoids evidence scans on routine %s polls",
-      (status) => {
+      async (status) => {
         const fixture = structuredClone(placeholderFixture);
         fixture.run.status = status;
         if (status === "completed") {
@@ -673,7 +701,7 @@ esac
           rollup.contexts.nodes = rollup.contexts.nodes.slice(0, 1);
           rollup.contexts.totalCount = 1;
         }
-        const result = replayPlaceholder(fixture);
+        const result = await replayPlaceholder(fixture);
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(
           status === "completed" ? 0 : 16,
         );
@@ -684,7 +712,7 @@ esac
 
     it.each(["complete", "missing page", "changed count", "duplicate IDs", "over limit"])(
       "requires complete bounded attempt pagination: %s",
-      (scenario) => {
+      async (scenario) => {
         const fixture = structuredClone(placeholderFixture);
         // Synthetic pagination padding from the captured successful sibling; IDs/names
         // are deliberately unique so the target group only appears on the second page.
@@ -699,7 +727,7 @@ esac
         if (scenario === "missing page") jobPages.pop();
         if (scenario === "changed count") lastPage.total_count += 1;
         if (scenario === "over limit") firstPage.total_count = 1_001;
-        const result = replayPlaceholder(fixture, {
+        const result = await replayPlaceholder(fixture, {
           jobPages,
           watchTimeout: scenario === "complete" ? 5 : 1,
         });
