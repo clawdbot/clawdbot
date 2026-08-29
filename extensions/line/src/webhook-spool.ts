@@ -108,9 +108,20 @@ async function waitForActiveDeliveriesBeforeDispose(
 }
 
 /** The imageSet a LINE inbound event belongs to, when it reported one. */
+// A set is one person's single send. In a group the lane is the whole room, so
+// the sender is what separates two members' sets - without it, a member the
+// group policy denies could have their image carried into an allowed member's
+// turn, which is authorized once for its holder and then downloads every part.
+function senderKeyFor(event: webhook.Event): string {
+  const source = event.source;
+  return source && "userId" in source && source.userId ? `user:${source.userId}` : "anonymous";
+}
+
 function resolveLineInboundImageSet(
   event: webhook.Event,
-): { setId: string; messageId: string; index?: number; total?: number } | undefined {
+):
+  | { setId: string; senderKey: string; messageId: string; index?: number; total?: number }
+  | undefined {
   if (event.type !== "message" || event.message.type !== "image") {
     return undefined;
   }
@@ -118,6 +129,7 @@ function resolveLineInboundImageSet(
   return imageSet?.id
     ? {
         setId: imageSet.id,
+        senderKey: senderKeyFor(event),
         messageId: event.message.id,
         ...(imageSet.index === undefined ? {} : { index: imageSet.index }),
         ...(imageSet.total === undefined ? {} : { total: imageSet.total }),
@@ -199,6 +211,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         const set = await imageSets.admit({
           laneKey,
           setId: imageSet.setId,
+          senderKey: imageSet.senderKey,
           messageId: imageSet.messageId,
           event,
           lifecycle,

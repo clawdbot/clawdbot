@@ -21,12 +21,14 @@ describe("createLineImageSetIngressBuffer", () => {
     total?: number;
     laneKey?: string;
     setId?: string;
+    senderKey?: string;
     event?: string;
     flushDelayMs?: number;
   }) =>
     buffer.admit({
       laneKey: params.laneKey ?? "user:U1",
       setId: params.setId ?? "set-1",
+      senderKey: params.senderKey ?? "user:U1",
       messageId: `m${params.index}`,
       index: params.index,
       event: params.event ?? `image-${params.index}`,
@@ -58,6 +60,7 @@ describe("createLineImageSetIngressBuffer", () => {
       buffer.admit({
         laneKey: "user:U1",
         setId: "set-1",
+        senderKey: "user:U1",
         messageId: "m-unindexed",
         event: "image-unindexed",
         lifecycle: "claim-unindexed",
@@ -86,6 +89,7 @@ describe("createLineImageSetIngressBuffer", () => {
       buffer.admit({
         laneKey: "user:U1",
         setId: "set-1",
+        senderKey: "user:U1",
         messageId: "m1",
         index: 1,
         total: 2,
@@ -116,28 +120,48 @@ describe("createLineImageSetIngressBuffer", () => {
     await expect(senderB).resolves.toMatchObject({ events: ["image-1"] });
   });
 
-  it("keeps two senders apart when LINE reuses a set id", async () => {
-    // A set id identifies a send inside one conversation. Keyed on its own it
-    // would fold a second sender's image into this turn, answering it in a
-    // conversation it was never sent to.
-    const senderA = arrive({ index: 1, total: 2, laneKey: "user:UA", setId: "shared-id" });
-    const senderB = arrive({
+  it("keeps two members of one group apart when LINE reuses a set id", async () => {
+    // A group lane is shared by every member, and the combined turn is
+    // authorized once for its holder. Keyed without the sender, a member the
+    // group denies would have their image downloaded into an allowed member's
+    // turn instead of being admitted, and refused, on its own.
+    const group = "group:Cshared";
+    const memberA = arrive({
       index: 1,
       total: 2,
-      laneKey: "user:UB",
+      laneKey: group,
+      senderKey: "user:UA",
+      setId: "shared-id",
+    });
+    const memberB = arrive({
+      index: 1,
+      total: 2,
+      laneKey: group,
+      senderKey: "user:UB",
       setId: "shared-id",
       event: "b-image-1",
     });
 
     await expect(
-      arrive({ index: 2, total: 2, laneKey: "user:UA", setId: "shared-id" }),
+      arrive({ index: 2, total: 2, laneKey: group, senderKey: "user:UA", setId: "shared-id" }),
     ).resolves.toBeNull();
-    await expect(senderA).resolves.toMatchObject({ events: ["image-1", "image-2"] });
+    const deliveredA = await memberA;
+    expect(deliveredA).toMatchObject({ events: ["image-1", "image-2"] });
+    // The holder owns the lane until its turn is delivered; the second member
+    // takes it next rather than joining the first.
+    deliveredA?.finish();
 
     await expect(
-      arrive({ index: 2, total: 2, laneKey: "user:UB", setId: "shared-id", event: "b-image-2" }),
+      arrive({
+        index: 2,
+        total: 2,
+        laneKey: group,
+        senderKey: "user:UB",
+        setId: "shared-id",
+        event: "b-image-2",
+      }),
     ).resolves.toBeNull();
-    await expect(senderB).resolves.toMatchObject({ events: ["b-image-1", "b-image-2"] });
+    await expect(memberB).resolves.toMatchObject({ events: ["b-image-1", "b-image-2"] });
   });
 
   it("takes a total that only a later part reports", async () => {

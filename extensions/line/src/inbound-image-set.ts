@@ -85,6 +85,8 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
   admit: (input: {
     laneKey: string;
     setId: string;
+    /** Whose send this set is: a group lane is shared by every member. */
+    senderKey: string;
     messageId: string;
     index?: number;
     total?: number;
@@ -93,12 +95,13 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     flushDelayMs?: number;
   }) => Promise<LineImageSetDelivery<TEvent, TLifecycle> | null>;
 } {
-  // Sets still open to their remaining parts. The lane is part of the key: a set
-  // id identifies a send within one conversation, not across the account, so
-  // keying on it alone would let another sender's parts join this turn and be
-  // answered in a conversation they were never sent to.
+  // Sets still open to their remaining parts, keyed by the send they belong to:
+  // the conversation, the sender inside it, and the set id. A group lane is
+  // shared by every member, so the sender is what keeps one member's parts out
+  // of another's turn - the turn is authorized once, for its holder.
   const pendingBySet = new Map<string, PendingImageSet<TEvent, TLifecycle>>();
-  const pendingKey = (laneKey: string, setId: string) => `${laneKey}\u0000${setId}`;
+  const pendingKey = (laneKey: string, senderKey: string, setId: string) =>
+    `${laneKey}\u0000${senderKey}\u0000${setId}`;
   // Tail of each lane's queue: everything that deferred waits behind it in turn.
   const laneChain = new Map<string, Promise<void>>();
 
@@ -122,6 +125,7 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
   const admit = async (input: {
     laneKey: string;
     setId: string;
+    senderKey: string;
     messageId: string;
     index?: number;
     total?: number;
@@ -136,7 +140,7 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
       lifecycle: input.lifecycle,
     };
 
-    const key = pendingKey(input.laneKey, input.setId);
+    const key = pendingKey(input.laneKey, input.senderKey, input.setId);
     const forming = pendingBySet.get(key);
     if (forming) {
       forming.parts.set(input.messageId, part);
