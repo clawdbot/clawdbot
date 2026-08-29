@@ -480,7 +480,13 @@ async function waitForTerminal(runIds, client, operationDeadline, minimumAttempt
   throw new Error(`timed out waiting for runs: ${runIds.join(", ")}`);
 }
 
-async function reconcileAttemptStarts(minimumAttempts, client, mutationResults, operationDeadline) {
+async function reconcileAttemptStarts(
+  minimumAttempts,
+  priorRuns,
+  client,
+  mutationResults,
+  operationDeadline,
+) {
   validateOperationDeadline(operationDeadline);
   const reconcileStartedAt = Date.now();
   const reconcileTimeoutMs = configuredTimeout(
@@ -496,8 +502,19 @@ async function reconcileAttemptStarts(minimumAttempts, client, mutationResults, 
     const runs = await Promise.all([...pending].map((runId) => client.getRun(runId)));
     for (const run of runs) {
       const runId = String(run.id);
+      const priorRun = priorRuns.get(runId);
+      if (JSON.stringify(runIdentity(run)) !== JSON.stringify(runIdentity(priorRun))) {
+        throw new Error(`rerun source ${runId} changed during mutation reconciliation`);
+      }
       if (Number(run.run_attempt) >= minimumAttempts.get(runId)) {
         pending.delete(runId);
+        continue;
+      }
+      if (
+        JSON.stringify(exactTerminalRunState(run, runId)) !==
+        JSON.stringify(exactTerminalRunState(priorRun, runId))
+      ) {
+        throw new Error(`rerun source ${runId} changed during mutation reconciliation`);
       }
     }
     if (pending.size > 0) {
@@ -533,16 +550,22 @@ async function reconcileAttemptStarts(minimumAttempts, client, mutationResults, 
   }
 }
 
-function exactTerminalRunState(run, runId) {
-  const state = {
+function runIdentity(run) {
+  return {
     displayTitle: String(run.display_title ?? ""),
-    conclusion: run.conclusion ?? null,
     event: String(run.event ?? ""),
     headBranch: String(run.head_branch ?? ""),
     headSha: String(run.head_sha ?? ""),
     id: String(run.id),
     path: String(run.path ?? ""),
     repository: String(run.repository?.full_name ?? run.repository ?? ""),
+  };
+}
+
+function exactTerminalRunState(run, runId) {
+  const state = {
+    ...runIdentity(run),
+    conclusion: run.conclusion ?? null,
     runAttempt: positiveInteger(run.run_attempt, `${runId} run attempt`),
     status: String(run.status ?? ""),
     triggeringActor: String(run.triggering_actor?.login ?? ""),
@@ -551,35 +574,6 @@ function exactTerminalRunState(run, runId) {
     throw new Error(`rerun source ${runId} is no longer the exact terminal run`);
   }
   return state;
-}
-
-async function rerunWithTransientRetry(runId, priorRun, mutation, client, operationDeadline) {
-  const prior = exactTerminalRunState(priorRun, runId);
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    remainingOperationTime(operationDeadline);
-    try {
-      await mutation(runId);
-      return;
-    } catch (error) {
-      if (classifyReleaseGhTransportError(error) !== "transient") {
-        throw error;
-      }
-      const observedRun = await client.getRun(runId);
-      const observedAttempt = positiveInteger(observedRun.run_attempt, `${runId} run attempt`);
-      if (observedAttempt > prior.runAttempt) {
-        return;
-      }
-      const observed = exactTerminalRunState(observedRun, runId);
-      if (JSON.stringify(observed) !== JSON.stringify(prior)) {
-        throw new Error(`rerun source ${runId} changed after a rejected mutation`, {
-          cause: error,
-        });
-      }
-      if (attempt === 2) {
-        throw error;
-      }
-    }
-  }
 }
 
 export async function continueFailed(plan, rootRunId, client, options = {}) {
@@ -619,18 +613,17 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
     const minimumAttempts = new Map(
       status.failed.map((child) => [child.runId, child.effectiveRunAttempt + 1]),
     );
+    remainingOperationTime(operationDeadline);
     const mutationResults = await Promise.allSettled(
-      status.failed.map((child) =>
-        rerunWithTransientRetry(
-          child.runId,
-          priorRuns.get(child.runId),
-          client.rerunFailed.bind(client),
-          client,
-          operationDeadline,
-        ),
-      ),
+      status.failed.map((child) => client.rerunFailed(child.runId)),
     );
-    await reconcileAttemptStarts(minimumAttempts, client, mutationResults, operationDeadline);
+    await reconcileAttemptStarts(
+      minimumAttempts,
+      priorRuns,
+      client,
+      mutationResults,
+      operationDeadline,
+    );
     await waitForTerminal(
       status.failed.map((child) => child.runId),
       client,
@@ -658,16 +651,15 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
     const minimumAttempts = new Map([
       [rootRunId, positiveInteger(completedParent.run_attempt, "parent run attempt") + 1],
     ]);
-    const mutationResults = await Promise.allSettled([
-      rerunWithTransientRetry(
-        rootRunId,
-        completedParent,
-        client.rerunParent.bind(client),
-        client,
-        operationDeadline,
-      ),
-    ]);
-    await reconcileAttemptStarts(minimumAttempts, client, mutationResults, operationDeadline);
+    remainingOperationTime(operationDeadline);
+    const mutationResults = await Promise.allSettled([client.rerunParent(rootRunId)]);
+    await reconcileAttemptStarts(
+      minimumAttempts,
+      new Map([[rootRunId, completedParent]]),
+      client,
+      mutationResults,
+      operationDeadline,
+    );
     parentReran = true;
     await waitForTerminal([rootRunId], client, operationDeadline, minimumAttempts);
   }

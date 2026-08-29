@@ -60,6 +60,7 @@ function requiredChildren() {
 
 function plan(children = requiredChildren()) {
   return {
+    attemptEvidenceVersion: 2,
     children,
     parentRunAttempt: 1,
     parentRunId: "77",
@@ -417,7 +418,7 @@ describe("FRV same-parent recovery", () => {
     expect(reruns).toBe(0);
   });
 
-  it("reruns failed children concurrently, preserves green children, then reruns the parent", async () => {
+  it("reruns current v2 failed children concurrently, preserves green children, then reruns the parent once", async () => {
     const first = child("normalCi", "101");
     const second = child("pluginPrerelease", "202");
     const green = child("releaseChecks", "303");
@@ -428,6 +429,7 @@ describe("FRV same-parent recovery", () => {
     ]);
     const parent = { attempt: 1, conclusion: "failure" as string | null };
     const events: string[] = [];
+    let parentReruns = 0;
     const client = {
       ...controllerClient([first, second, green], childRuns, parent),
       rerunFailed: async (runId: string) => {
@@ -436,6 +438,7 @@ describe("FRV same-parent recovery", () => {
         await Promise.resolve();
       },
       rerunParent: async () => {
+        parentReruns += 1;
         events.push("parent");
         parent.attempt = 2;
         parent.conclusion = "success";
@@ -451,9 +454,139 @@ describe("FRV same-parent recovery", () => {
     expect(events).not.toContain("child:303");
     expect(events.indexOf("parent")).toBeGreaterThan(events.indexOf("child:202"));
     expect(events.at(-1)).toBe("verify");
+    expect(parentReruns).toBe(1);
   });
 
-  it("reconciles an ambiguous rerun response without dispatching twice", async () => {
+  it("reconciles an accepted child POST through stale reads without dispatching twice", async () => {
+    const selected = child("normalCi", "101");
+    const parent = { attempt: 1, conclusion: "success" as string | null };
+    let dispatched = false;
+    let visibleReads = 0;
+    let reruns = 0;
+    const client = {
+      ...preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
+      getAttemptJobs: async (_runId: string, attempt: number) => [
+        job("test", attempt === 1 ? "failure" : "success"),
+      ],
+      getRun: async (runId: string) => {
+        if (runId === "77") {
+          return rootRun(parent.attempt, parent.conclusion);
+        }
+        if (!dispatched || visibleReads++ < 2) {
+          return runFor(selected, 1, "failure");
+        }
+        return runFor(selected, 2, "success");
+      },
+      repository: REPOSITORY,
+      rerunFailed: async () => {
+        reruns += 1;
+        dispatched = true;
+        throw new Error("HTTP 502 after dispatch");
+      },
+      rerunParent: async () => {
+        parent.attempt = 2;
+        parent.conclusion = "success";
+      },
+      verify: async () => "{}",
+    };
+    const previousPoll = process.env.OPENCLAW_FRV_POLL_MS;
+    process.env.OPENCLAW_FRV_POLL_MS = "1";
+    try {
+      await expect(continueFailed(plan([selected]), "77", client)).resolves.toMatchObject({
+        action: "reran-parent",
+      });
+    } finally {
+      if (previousPoll === undefined) {
+        delete process.env.OPENCLAW_FRV_POLL_MS;
+      } else {
+        process.env.OPENCLAW_FRV_POLL_MS = previousPoll;
+      }
+    }
+    expect(reruns).toBe(1);
+  });
+
+  it("fails closed when an ambiguous child POST never becomes visible", async () => {
+    const selected = child("normalCi", "101");
+    let reruns = 0;
+    const client = {
+      ...preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
+      getAttemptJobs: async () => [job("test", "failure")],
+      getRun: async (runId: string) =>
+        runId === "77" ? rootRun(1, "success") : runFor(selected, 1, "failure"),
+      repository: REPOSITORY,
+      rerunFailed: async () => {
+        reruns += 1;
+        throw new Error("HTTP 502 after dispatch");
+      },
+      rerunParent: async () => {},
+      verify: async () => "{}",
+    };
+    const previousPoll = process.env.OPENCLAW_FRV_POLL_MS;
+    const previousReconcile = process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS;
+    process.env.OPENCLAW_FRV_POLL_MS = "1";
+    process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS = "5";
+    try {
+      await expect(continueFailed(plan([selected]), "77", client)).rejects.toThrow(
+        "rerun mutation did not produce an observable newer attempt for 101",
+      );
+    } finally {
+      if (previousPoll === undefined) {
+        delete process.env.OPENCLAW_FRV_POLL_MS;
+      } else {
+        process.env.OPENCLAW_FRV_POLL_MS = previousPoll;
+      }
+      if (previousReconcile === undefined) {
+        delete process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS = previousReconcile;
+      }
+    }
+    expect(reruns).toBe(1);
+  });
+
+  it("reconciles an accepted parent POST through stale reads without dispatching twice", async () => {
+    const selected = child("normalCi", "101");
+    let dispatched = false;
+    let visibleReads = 0;
+    let reruns = 0;
+    const client = {
+      ...preflightMethods([selected], (entry) => runFor(entry, 1, "success")),
+      getAttemptJobs: async () => [job("test")],
+      getRun: async (runId: string) => {
+        if (runId !== "77") {
+          return runFor(selected, 1, "success");
+        }
+        if (!dispatched || visibleReads++ < 2) {
+          return rootRun(1, "failure");
+        }
+        return rootRun(2, "success");
+      },
+      repository: REPOSITORY,
+      rerunFailed: async () => {},
+      rerunParent: async () => {
+        reruns += 1;
+        dispatched = true;
+        throw new Error("HTTP 502 after dispatch");
+      },
+      verify: async () => "{}",
+    };
+    const previousPoll = process.env.OPENCLAW_FRV_POLL_MS;
+    process.env.OPENCLAW_FRV_POLL_MS = "1";
+    try {
+      await expect(continueFailed(plan([selected]), "77", client)).resolves.toMatchObject({
+        action: "reran-parent",
+      });
+    } finally {
+      if (previousPoll === undefined) {
+        delete process.env.OPENCLAW_FRV_POLL_MS;
+      } else {
+        process.env.OPENCLAW_FRV_POLL_MS = previousPoll;
+      }
+    }
+    expect(reruns).toBe(1);
+  });
+
+  it("reconciles one ambiguous child response while distinct failed children rerun concurrently", async () => {
     const first = child("normalCi", "101");
     const second = child("pluginPrerelease", "202");
     const childRuns = new Map([
@@ -483,7 +616,7 @@ describe("FRV same-parent recovery", () => {
     expect(calls.toSorted()).toEqual(["101", "202"]);
   });
 
-  it("does not retry an ambiguous mutation after the source run provenance changes", async () => {
+  it("fails closed without another POST when provenance changes during reconciliation", async () => {
     const selected = child("normalCi", "101");
     let drifted = false;
     let reruns = 0;
@@ -512,7 +645,7 @@ describe("FRV same-parent recovery", () => {
     process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS = "5";
     try {
       await expect(continueFailed(plan([selected]), "77", client)).rejects.toThrow(
-        "rerun source 101 changed after a rejected mutation",
+        "rerun source 101 changed during mutation reconciliation",
       );
     } finally {
       if (previousPoll === undefined) {
