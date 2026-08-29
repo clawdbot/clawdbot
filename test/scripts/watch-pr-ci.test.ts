@@ -45,11 +45,12 @@ function runWatcher(ghScript: string, headSha = sha, options: string[] = []) {
             env: { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
           },
           (error, stdout, stderr) => {
-            if (error && typeof error.code !== "number") {
+            const exitCode = error ? error.code : 0;
+            if (typeof exitCode !== "number") {
               reject(error);
               return;
             }
-            resolve({ status: error?.code ?? 0, stdout, stderr });
+            resolve({ status: exitCode, stdout, stderr });
           },
         );
       },
