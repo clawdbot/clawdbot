@@ -60,6 +60,27 @@ function expectQaLabPluginEnabled(cfg: ReturnType<typeof buildQaGatewayConfig>) 
 }
 
 describe("buildQaGatewayConfig", () => {
+  it.each([false, true])("requires explicit ACP fixture selection (selected=%s)", (selected) => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      workspaceDir: "/tmp/qa-workspace",
+      transportPluginIds: ["telegram"],
+      enabledPluginIds: selected ? ["acpx"] : [],
+    });
+
+    expect(cfg.plugins?.allow?.includes("acpx")).toBe(selected);
+    expect(cfg.plugins?.entries?.acpx).toEqual(
+      selected
+        ? {
+            enabled: true,
+            config: { pluginToolsMcpBridge: true, openClawToolsMcpBridge: true },
+          }
+        : undefined,
+    );
+  });
+
   it("stamps fresh QA configs with the current OpenClaw version", () => {
     const cfg = buildQaGatewayConfig({
       bind: "loopback",
@@ -70,7 +91,7 @@ describe("buildQaGatewayConfig", () => {
     });
 
     expect(cfg.meta).toEqual({ lastTouchedVersion: OPENCLAW_VERSION });
-    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "qa-channel"]);
+    expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab", "qa-channel"]);
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.6-luna");
     expect(cfg.agents?.entries?.qa).not.toHaveProperty("default");
     expect(cfg.channels?.["qa-channel"]?.baseUrl).toBe("http://127.0.0.1:43124");
@@ -113,16 +134,10 @@ describe("buildQaGatewayConfig", () => {
         apiKey: "test",
       },
     });
-    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "qa-channel"]);
+    expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab", "qa-channel"]);
     expectQaLabPluginEnabled(cfg);
     expect(cfg.plugins?.slots?.memory).toBe("memory-core");
-    expect(cfg.plugins?.entries?.acpx).toEqual({
-      enabled: true,
-      config: {
-        pluginToolsMcpBridge: true,
-        openClawToolsMcpBridge: true,
-      },
-    });
+    expect(cfg.plugins?.entries?.acpx).toBeUndefined();
     expect(cfg.plugins?.entries?.["memory-core"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.["qa-channel"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.openai).toBeUndefined();
@@ -185,7 +200,7 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.anthropic?.models.map((model) => model.id)).toContain(
       "claude-opus-4-8",
     );
-    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab"]);
+    expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab"]);
   });
 
   it("falls back to provider defaults for blank model refs", () => {
@@ -236,7 +251,7 @@ describe("buildQaGatewayConfig", () => {
       transportConfig: {},
     });
 
-    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab"]);
+    expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab"]);
     expect(cfg.plugins?.entries?.["qa-channel"]).toBeUndefined();
     expect(cfg.channels?.["qa-channel"]).toBeUndefined();
   });
@@ -252,13 +267,7 @@ describe("buildQaGatewayConfig", () => {
       ...createQaChannelTransportParams(),
     });
 
-    expect(cfg.plugins?.allow).toEqual([
-      "acpx",
-      "memory-core",
-      "qa-lab",
-      "active-memory",
-      "qa-channel",
-    ]);
+    expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab", "active-memory", "qa-channel"]);
     expect(cfg.plugins?.entries?.["active-memory"]).toEqual({ enabled: true });
   });
 
@@ -281,7 +290,7 @@ describe("buildQaGatewayConfig", () => {
     expect(getModelFallbacks(cfg.agents?.entries?.qa?.model)).toEqual(["openai/gpt-5.6-sol"]);
     expect(cfg.models).toBeUndefined();
     expect(cfg.memory?.search?.remote).toBeUndefined();
-    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "openai", "qa-channel"]);
+    expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab", "openai", "qa-channel"]);
     expect(cfg.plugins?.allow).not.toContain("anthropic");
     expect(cfg.plugins?.entries?.openai).toEqual({ enabled: true });
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"]).toEqual({
@@ -325,7 +334,6 @@ describe("buildQaGatewayConfig", () => {
     });
 
     expect(cfg.plugins?.allow).toEqual([
-      "acpx",
       "memory-core",
       "qa-lab",
       "active-memory",
@@ -411,14 +419,7 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.openai?.models.map((model) => model.id)).toContain(
       "gpt-5.6-luna-alt",
     );
-    expect(cfg.plugins?.allow).toEqual([
-      "acpx",
-      "memory-core",
-      "qa-lab",
-      "codex",
-      "openai",
-      "qa-channel",
-    ]);
+    expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab", "codex", "openai", "qa-channel"]);
     expect(cfg.plugins?.entries?.codex).toEqual({
       enabled: true,
       config: { appServer: { sandbox: "workspace-write" } },
@@ -444,7 +445,6 @@ describe("buildQaGatewayConfig", () => {
     });
 
     expect(cfg.plugins?.allow).toEqual([
-      "acpx",
       "memory-core",
       "qa-lab",
       "anthropic",
@@ -472,7 +472,7 @@ describe("buildQaGatewayConfig", () => {
     });
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("codex-cli/test-model");
-    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "openai", "qa-channel"]);
+    expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab", "openai", "qa-channel"]);
     expect(cfg.plugins?.entries?.openai).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.["codex-cli"]).toBeUndefined();
   });
@@ -512,7 +512,7 @@ describe("buildQaGatewayConfig", () => {
 
     expect(cfg.models?.mode).toBe("merge");
     expect(cfg.models?.providers?.["custom-openai"]?.api).toBe("openai-responses");
-    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "openai", "qa-channel"]);
+    expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab", "openai", "qa-channel"]);
   });
 
   it("can set a QA default thinking level for judge turns", () => {
