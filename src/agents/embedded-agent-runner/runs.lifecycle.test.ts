@@ -163,7 +163,7 @@ describe("embedded-agent runner run lifecycle", () => {
   });
 
   it("waits for a replacement run under the same session id", async () => {
-    const firstHandle = createRunHandle();
+    const firstHandle = createRunHandle({ runId: "run-first" });
     const replacementHandle = createRunHandle();
     setActiveEmbeddedRun("session-replaced", firstHandle);
 
@@ -290,10 +290,43 @@ describe("embedded-agent runner run lifecycle", () => {
       }),
     ).toBe(true);
 
-    expect(markEmbeddedRunRecoveringTimeout("session-recovering")).toBe(true);
+    const recoveryMarker = markEmbeddedRunRecoveringTimeout({ sessionId: "session-recovering" });
+    expect(recoveryMarker).toMatchObject({ sessionId: "session-recovering" });
     expect(isEmbeddedRunAbandoned({ sessionId: "session-recovering" })).toBe(false);
-    expect(restoreEmbeddedRunTimeoutAbandonment("session-recovering")).toBe(true);
+    expect(restoreEmbeddedRunTimeoutAbandonment(recoveryMarker!)).toBe(true);
     expect(isEmbeddedRunAbandoned({ sessionId: "session-recovering" })).toBe(true);
+  });
+
+  it("does not let a stale recovery marker mutate a replacement timeout", () => {
+    const firstHandle = createRunHandle();
+    setActiveEmbeddedRun("session-recovery-replaced", firstHandle, "agent:main:replaced");
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-recovery-replaced",
+        handle: firstHandle,
+        sessionKey: "agent:main:replaced",
+        reason: "timeout",
+      }),
+    ).toBe(true);
+    const staleMarker = markEmbeddedRunRecoveringTimeout({
+      sessionId: "session-recovery-replaced",
+      runId: "run-first",
+    });
+    expect(staleMarker).toBeDefined();
+
+    const replacementHandle = createRunHandle({ runId: "run-second" });
+    setActiveEmbeddedRun("session-recovery-replaced", replacementHandle, "agent:main:replaced");
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-recovery-replaced",
+        handle: replacementHandle,
+        sessionKey: "agent:main:replaced",
+        reason: "timeout",
+      }),
+    ).toBe(true);
+
+    expect(restoreEmbeddedRunTimeoutAbandonment(staleMarker!)).toBe(false);
+    expect(isEmbeddedRunAbandoned({ sessionId: "session-recovery-replaced" })).toBe(true);
   });
 
   it("ignores timeout abandonment from a stale replaced handle", () => {

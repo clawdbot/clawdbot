@@ -55,65 +55,76 @@ export async function recoverEmbeddedRunTimeout(
   // A recoverable timeout is a non-terminal lifecycle phase. Release the
   // terminal abandonment gate for the duration of compaction so completions
   // arriving in this window are not discarded as requester_abandoned.
-  const recoveryMarker = markEmbeddedRunRecoveringTimeout(input.runParams.sessionId);
-  const timeoutDiagId = createRunRecoveryDiagId();
-  input.state.timeoutCompactionAttempts += 1;
-  log.warn(
-    `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
-      `attempting compaction before retry (attempt ${input.state.timeoutCompactionAttempts}/${MAX_TIMEOUT_COMPACTION_ATTEMPTS}) diagId=${timeoutDiagId}`,
-  );
-  const { result: timeoutCompactResult, previousSessionId } = await compactEmbeddedRunForRecovery(
-    input,
-    {
-      tokenBudget: input.contextTokenBudget,
-      trigger: "timeout_recovery",
-      diagId: timeoutDiagId,
-      attempt: input.state.timeoutCompactionAttempts,
-      maxAttempts: MAX_TIMEOUT_COMPACTION_ATTEMPTS,
-    },
-  );
-  input.assertRecoveryActive();
-  await input.runOwnsCompactionAfterHook(
-    "timeout recovery",
-    timeoutCompactResult,
-    previousSessionId,
-  );
-  input.assertRecoveryActive();
-  if (!timeoutCompactResult.compacted) {
-    if (recoveryMarker) {
-      restoreEmbeddedRunTimeoutAbandonment(input.runParams.sessionId);
-    }
+  const recoveryMarker = markEmbeddedRunRecoveringTimeout({
+    sessionId: input.runParams.sessionId,
+    runId: input.runParams.runId,
+  });
+  try {
+    const timeoutDiagId = createRunRecoveryDiagId();
+    input.state.timeoutCompactionAttempts += 1;
     log.warn(
-      `[timeout-compaction] compaction did not reduce context for ${input.provider}/${input.modelId}; falling through to normal handling`,
+      `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
+        `attempting compaction before retry (attempt ${input.state.timeoutCompactionAttempts}/${MAX_TIMEOUT_COMPACTION_ATTEMPTS}) diagId=${timeoutDiagId}`,
     );
-    return false;
-  }
-
-  input.runParams.onAutoCompactionSucceeded?.(input.state.autoCompactionCount);
-  input.assertRecoveryActive();
-  // Detached recovery still compacts and retries its local context, but cannot
-  // publish a durable session update or start session-memory index writes.
-  if (
-    timeoutCompactResult.ok &&
-    input.contextEngine.info.ownsCompaction === true &&
-    input.runParams.sessionPersistence !== "detached"
-  ) {
-    const activeSession = input.getActiveSession();
-    await runPostCompactionSideEffects({
-      config: input.runParams.config,
-      sessionKey: input.runParams.sessionKey,
-      sessionId: activeSession.id,
-      agentId: input.sessionAgentId,
-      sessionFile: activeSession.file,
-      assertActive: input.assertRecoveryActive,
-    });
+    const { result: timeoutCompactResult, previousSessionId } =
+      await compactEmbeddedRunForRecovery(input, {
+        tokenBudget: input.contextTokenBudget,
+        trigger: "timeout_recovery",
+        diagId: timeoutDiagId,
+        attempt: input.state.timeoutCompactionAttempts,
+        maxAttempts: MAX_TIMEOUT_COMPACTION_ATTEMPTS,
+      });
     input.assertRecoveryActive();
+    await input.runOwnsCompactionAfterHook(
+      "timeout recovery",
+      timeoutCompactResult,
+      previousSessionId,
+    );
+    input.assertRecoveryActive();
+    if (!timeoutCompactResult.compacted) {
+      if (recoveryMarker) {
+        restoreEmbeddedRunTimeoutAbandonment(recoveryMarker);
+      }
+      log.warn(
+        `[timeout-compaction] compaction did not reduce context for ${input.provider}/${input.modelId}; falling through to normal handling`,
+      );
+      return false;
+    }
+
+    input.runParams.onAutoCompactionSucceeded?.(input.state.autoCompactionCount);
+    input.assertRecoveryActive();
+    // Detached recovery still compacts and retries its local context, but cannot
+    // publish a durable session update or start session-memory index writes.
+    if (
+      timeoutCompactResult.ok &&
+      input.contextEngine.info.ownsCompaction === true &&
+      input.runParams.sessionPersistence !== "detached"
+    ) {
+      const activeSession = input.getActiveSession();
+      await runPostCompactionSideEffects({
+        config: input.runParams.config,
+        sessionKey: input.runParams.sessionKey,
+        sessionId: activeSession.id,
+        agentId: input.sessionAgentId,
+        sessionFile: activeSession.file,
+        assertActive: input.assertRecoveryActive,
+      });
+      input.assertRecoveryActive();
+    }
+    log.info(
+      `[timeout-compaction] compaction succeeded for ${input.provider}/${input.modelId}; retrying prompt`,
+    );
+    input.armPostCompactionGuard();
+    await input.prepareCompactedTranscriptRetry(input.assertRecoveryActive);
+    input.assertRecoveryActive();
+    return true;
+  } catch (err) {
+    // Any exception after marking recovery is terminal for this attempt. Do
+    // not leave the requester in a non-abandoned state that admits late
+    // completions after recovery can no longer retry.
+    if (recoveryMarker) {
+      restoreEmbeddedRunTimeoutAbandonment(recoveryMarker);
+    }
+    throw err;
   }
-  log.info(
-    `[timeout-compaction] compaction succeeded for ${input.provider}/${input.modelId}; retrying prompt`,
-  );
-  input.armPostCompactionGuard();
-  await input.prepareCompactedTranscriptRetry(input.assertRecoveryActive);
-  input.assertRecoveryActive();
-  return true;
 }

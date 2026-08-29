@@ -84,6 +84,13 @@ type EmbeddedAgentQueueFailureReason =
   | "transcript_commit_wait_unsupported"
   | "runtime_rejected";
 
+export type EmbeddedRunTimeoutRecoveryMarker = {
+  sessionId: string;
+  recoveryId: number;
+};
+
+let nextEmbeddedRunTimeoutRecoveryId = 0;
+
 export type EmbeddedAgentQueueMessageOutcome =
   | {
       queued: true;
@@ -252,6 +259,7 @@ function clearEmbeddedRunAbandonment(params: {
 
 function markEmbeddedRunAbandoned(params: {
   sessionId: string;
+  runId?: string;
   sessionKey?: string;
   sessionFile?: string;
   reason: AbandonedEmbeddedRun["reason"];
@@ -268,6 +276,7 @@ function markEmbeddedRunAbandoned(params: {
   const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
   const abandonedRun: AbandonedEmbeddedRun = {
     sessionId,
+    ...(params.runId?.trim() ? { runId: params.runId.trim() } : {}),
     abandonedAtMs: Date.now(),
     reason: params.reason,
     ...(params.sessionKey?.trim() ? { sessionKey: params.sessionKey.trim() } : {}),
@@ -293,7 +302,7 @@ export function markActiveEmbeddedRunAbandoned(params: {
   if (!sessionId || ACTIVE_EMBEDDED_RUNS.get(sessionId) !== params.handle) {
     return false;
   }
-  markEmbeddedRunAbandoned(params);
+  markEmbeddedRunAbandoned({ ...params, runId: params.handle.runId });
   return true;
 }
 
@@ -331,22 +340,38 @@ export function isEmbeddedRunAbandoned(params: {
  * Temporarily releases terminal-timeout delivery suppression while a timed-out
  * attempt is performing an eligible compaction-and-retry recovery.
  */
-export function markEmbeddedRunRecoveringTimeout(sessionId: string): boolean {
-  const abandoned = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId.trim());
-  if (!abandoned || abandoned.reason !== "timeout") {
-    return false;
+export function markEmbeddedRunRecoveringTimeout(params: {
+  sessionId: string;
+  runId?: string;
+}): EmbeddedRunTimeoutRecoveryMarker | undefined {
+  const abandoned = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(params.sessionId.trim());
+  if (
+    !abandoned ||
+    abandoned.reason !== "timeout" ||
+    (abandoned.runId && abandoned.runId !== params.runId?.trim())
+  ) {
+    return undefined;
   }
+  const recoveryId = ++nextEmbeddedRunTimeoutRecoveryId;
   abandoned.reason = "recovering_timeout";
-  return true;
+  abandoned.recoveryId = recoveryId;
+  return { sessionId: abandoned.sessionId, recoveryId };
 }
 
 /** Restores terminal-timeout suppression when recovery cannot continue. */
-export function restoreEmbeddedRunTimeoutAbandonment(sessionId: string): boolean {
-  const abandoned = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId.trim());
-  if (!abandoned || abandoned.reason !== "recovering_timeout") {
+export function restoreEmbeddedRunTimeoutAbandonment(
+  marker: EmbeddedRunTimeoutRecoveryMarker,
+): boolean {
+  const abandoned = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(marker.sessionId.trim());
+  if (
+    !abandoned ||
+    abandoned.reason !== "recovering_timeout" ||
+    abandoned.recoveryId !== marker.recoveryId
+  ) {
     return false;
   }
   abandoned.reason = "timeout";
+  delete abandoned.recoveryId;
   return true;
 }
 
