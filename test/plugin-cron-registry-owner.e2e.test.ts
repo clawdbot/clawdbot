@@ -10,6 +10,8 @@ import {
   disconnectGatewayClient,
   getGatewayE2ePortBlock,
 } from "../src/gateway/test-helpers.e2e.js";
+import { upsertSessionEntry } from "../src/plugin-sdk/session-store-runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../src/plugin-sdk/sqlite-runtime-testing.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -269,39 +271,41 @@ async function listCronJobs(client: {
 }
 
 describe("plugin cron registry ownership e2e", () => {
-  it(
-    "prepares a job-selected provider and fallback under per-agent defaults",
-    async () => {
+  it.each(["cron", "subagent"] as const)(
+    "prepares distinct selected and fallback providers for %s under per-agent defaults",
+    async (route) => {
       const fixtureDir = await mkdtemp(path.join(tmpdir(), "openclaw-cron-selection-e2e-"));
       cleanupDirs.push(fixtureDir);
       const bundledRoot = path.join(fixtureDir, "bundled");
-      const pluginId = "selected-cron-provider";
-      const pluginDir = path.join(bundledRoot, pluginId);
       const provider = "selected-cron";
-      const providerMarker = "SELECTED_CRON_PROVIDER_RUNTIME";
-      await mkdir(pluginDir, { recursive: true });
-      await writeFile(
-        path.join(pluginDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: pluginId,
-          providers: [provider],
-          activation: { onStartup: false, onProviders: [provider] },
-          configSchema: { type: "object", additionalProperties: false },
-        }),
-      );
-      await writeFile(
-        path.join(pluginDir, "index.js"),
-        `module.exports = {
-      id: ${JSON.stringify(pluginId)},
-      register(api) {
-        api.registerProvider({
-          id: ${JSON.stringify(provider)}, label: "Selected cron provider", auth: [],
-          resolveSyntheticAuth: () => ({ apiKey: "cron-fixture", source: "fixture", mode: "api-key" }),
-          transformSystemPrompt: ({ systemPrompt }) => systemPrompt + "\\n" + ${JSON.stringify(providerMarker)},
-        });
-      },
-    };\n`,
-      );
+      const fallbackProvider = "selected-fallback";
+      const pluginIds = [provider, fallbackProvider];
+      for (const pluginId of pluginIds) {
+        const pluginDir = path.join(bundledRoot, pluginId);
+        await mkdir(pluginDir, { recursive: true });
+        await writeFile(
+          path.join(pluginDir, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: pluginId,
+            providers: [pluginId],
+            activation: { onStartup: false, onProviders: [pluginId] },
+            configSchema: { type: "object", additionalProperties: false },
+          }),
+        );
+        await writeFile(
+          path.join(pluginDir, "index.js"),
+          `module.exports = {
+        id: ${JSON.stringify(pluginId)},
+        register(api) {
+          api.registerProvider({
+            id: ${JSON.stringify(pluginId)}, label: "Selected provider", auth: [],
+            resolveSyntheticAuth: () => ({ apiKey: "cron-fixture", source: "fixture", mode: "api-key" }),
+            transformSystemPrompt: ({ systemPrompt }) => systemPrompt + "\\n" + ${JSON.stringify(`PROVIDER_HOOK_${pluginId}`)},
+          });
+        },
+      };\n`,
+        );
+      }
       const server = await startMockModelServer("unavailable");
       modelServers.push(server);
       const model = (id: string) => ({
@@ -314,12 +318,25 @@ describe("plugin cron registry ownership e2e", () => {
         maxTokens: 4_096,
       });
       const config: OpenClawConfig = {
-        plugins: { entries: { [pluginId]: { enabled: true } }, slots: { memory: "none" } },
+        plugins: {
+          entries: Object.fromEntries(pluginIds.map((id) => [id, { enabled: true }])),
+          slots: { memory: "none" },
+        },
         agents: {
           defaults: {
             workspace: path.join(fixtureDir, "workspace"),
             model: { primary: "cron-owner/default" },
             skills: [],
+            ...(route === "subagent"
+              ? {
+                  subagents: {
+                    model: {
+                      primary: `${provider}/unavailable`,
+                      fallbacks: [`${fallbackProvider}/available`],
+                    },
+                  },
+                }
+              : {}),
           },
           entries: { main: { model: { primary: "cron-owner/agent-default" } } },
         },
@@ -338,7 +355,13 @@ describe("plugin cron registry ownership e2e", () => {
               baseUrl: `${server.baseUrl}/v1`,
               api: "openai-responses",
               request: { allowPrivateNetwork: true },
-              models: [model("unavailable"), model("available")],
+              models: [model("unavailable")],
+            },
+            [fallbackProvider]: {
+              baseUrl: `${server.baseUrl}/v1`,
+              api: "openai-responses",
+              request: { allowPrivateNetwork: true },
+              models: [model("available")],
             },
           },
         },
@@ -356,6 +379,24 @@ describe("plugin cron registry ownership e2e", () => {
         },
       });
       instances.push(instance);
+      const sessionKey = "agent:main:subagent:provider-fallback";
+      if (route === "subagent") {
+        instance.state.applyEnv();
+        await upsertSessionEntry({
+          agentId: "main",
+          sessionKey,
+          entry: {
+            sessionId: randomUUID(),
+            updatedAt: Date.now(),
+            providerOverride: provider,
+            modelOverride: "unavailable",
+            modelOverrideSource: "auto",
+            modelOverrideFallbackOriginProvider: provider,
+            modelOverrideFallbackOriginModel: "unavailable",
+          },
+        });
+        closeOpenClawAgentDatabasesForTest();
+      }
       await instance.startGateway();
       const client = await connectGatewayClient({
         url: instance.url,
@@ -363,47 +404,65 @@ describe("plugin cron registry ownership e2e", () => {
       });
       let jobId: string | undefined;
       try {
-        const job = await client.request<{ id: string }>("cron.add", {
-          name: "Selected provider fallback",
-          agentId: "main",
-          enabled: true,
-          schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-          sessionTarget: "isolated",
-          wakeMode: "now",
-          delivery: { mode: "none" },
-          payload: {
-            kind: "agentTurn",
-            message: "Prove the selected provider runtime.",
-            model: `${provider}/unavailable`,
-            fallbacks: [`${provider}/available`],
-          },
-        });
-        jobId = job.id;
-        const run = await client.request<{ runId: string }>("cron.run", {
-          id: jobId,
-          mode: "force",
-        });
-        let terminal: { status?: string; summary?: string; error?: string } | undefined;
-        await expect
-          .poll(async () => {
-            const history = await client.request<{
-              entries: Array<{ status?: string; summary?: string; error?: string }>;
-            }>("cron.runs", { id: jobId, runId: run.runId, limit: 1 });
-            terminal = history.entries[0];
-            return terminal?.status;
-          }, WAIT_OPTIONS)
-          .toBeDefined();
-        expect(terminal?.error).toBeUndefined();
-        expect(terminal).toMatchObject({
-          status: "ok",
-          summary: expect.stringContaining("CRON_OWNER_RESPONSE_"),
-        });
+        if (route === "subagent") {
+          expect(
+            await client.request(
+              "agent",
+              {
+                sessionKey,
+                idempotencyKey: randomUUID(),
+                message: "Prove the selected provider runtime.",
+                deliver: false,
+                timeout: 45,
+              },
+              { expectFinal: true, timeoutMs: 45_000 },
+            ),
+          ).toMatchObject({
+            status: "ok",
+            result: { payloads: [{ text: expect.stringContaining("CRON_OWNER_RESPONSE_") }] },
+          });
+        } else {
+          const job = await client.request<{ id: string }>("cron.add", {
+            name: "Selected provider fallback",
+            agentId: "main",
+            enabled: true,
+            schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            delivery: { mode: "none" },
+            payload: {
+              kind: "agentTurn",
+              message: "Prove the selected provider runtime.",
+              model: `${provider}/unavailable`,
+              fallbacks: [`${fallbackProvider}/available`],
+            },
+          });
+          jobId = job.id;
+          const run = await client.request<{ runId: string }>("cron.run", {
+            id: jobId,
+            mode: "force",
+          });
+          let terminal: { status?: string; summary?: string; error?: string } | undefined;
+          await expect
+            .poll(async () => {
+              const history = await client.request<{
+                entries: Array<{ status?: string; summary?: string; error?: string }>;
+              }>("cron.runs", { id: jobId, runId: run.runId, limit: 1 });
+              terminal = history.entries[0];
+              return terminal?.status;
+            }, WAIT_OPTIONS)
+            .toBeDefined();
+          expect(terminal?.error).toBeUndefined();
+          expect(terminal).toMatchObject({
+            status: "ok",
+            summary: expect.stringContaining("CRON_OWNER_RESPONSE_"),
+          });
+        }
         const models = server.requests.map(({ body }) => body.model);
         expect(models).toContain("unavailable");
         expect(models.at(-1)).toBe("available");
-        expect(
-          server.requests.every((request) => requestText(request).includes(providerMarker)),
-        ).toBe(true);
+        expect(requestText(server.requests[0]!)).toContain(`PROVIDER_HOOK_${provider}`);
+        expect(requestText(server.requests.at(-1)!)).toContain(`PROVIDER_HOOK_${fallbackProvider}`);
       } finally {
         if (jobId) await client.request("cron.remove", { id: jobId });
         await disconnectGatewayClient(client);

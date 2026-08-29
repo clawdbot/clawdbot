@@ -196,6 +196,8 @@ const agentScopeMocks = vi.hoisted(() => ({
     config.agents?.list?.find((entry) => entry.id === agentId),
   resolveAgentEffectiveModelPrimary: () => undefined,
   resolveAgentModelFallbacksOverride: () => undefined,
+  resolveEffectiveModelFallbacks: () => undefined,
+  resolveSubagentSpawnModelFallbacksOverride: () => undefined,
   resolveRunModelFallbacksOverride: () => undefined,
   resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
     defaultAgentId: "default",
