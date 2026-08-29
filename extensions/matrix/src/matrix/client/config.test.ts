@@ -1,6 +1,6 @@
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 // Matrix tests cover config plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixScopedEnvVarNames } from "../../env-vars.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import type { CoreConfig } from "../../types.js";
@@ -30,6 +30,36 @@ function resolveDefaultMatrixAuthContext(
 beforeEach(() => {
   installMatrixTestRuntime();
 });
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+function createEnvSecretRefConfig(params: {
+  field: "accessToken" | "password";
+  accountId?: string;
+  provider?: string;
+  secrets?: CoreConfig["secrets"];
+}): CoreConfig {
+  const account = {
+    homeserver: "https://matrix.example.org",
+    userId: "@bot:example.org",
+    [params.field]: {
+      source: "env",
+      provider: params.provider ?? "default",
+      id: "MATRIX_TEST_SECRET",
+    },
+  };
+  return {
+    channels: {
+      matrix:
+        params.accountId && params.accountId !== "default"
+          ? { accounts: { [params.accountId]: account } }
+          : account,
+    },
+    secrets: params.secrets,
+  };
+}
 
 describe("Matrix auth/config live surfaces", () => {
   it("prefers config over env", () => {
@@ -104,76 +134,42 @@ describe("Matrix auth/config live surfaces", () => {
     expect(resolved.initialSyncLimit).toBeUndefined();
   });
 
-  it("resolves accessToken SecretRef against the provided env", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://cfg.example.org",
-          accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
+  it.each([
+    ["default", "accessToken", "default", undefined],
+    ["default", "password", "default", undefined],
+    ["ops", "accessToken", "default", undefined],
+    ["ops", "password", "default", undefined],
+    ["default", "accessToken", "default", "file"],
+    ["default", "password", "default", "exec"],
+    ["ops", "accessToken", "default", "store"],
+    ["ops", "password", "default", "file"],
+    ["default", "accessToken", "shared", "exec"],
+    ["default", "password", "shared", "store"],
+    ["ops", "accessToken", "shared", "file"],
+    ["ops", "password", "shared", "exec"],
+  ] as const)(
+    "resolves %s %s from supplied env with alias %s and declaration %s",
+    (accountId, field, provider, declaredSource) => {
+      const declarations = {
+        file: { source: "file", path: "/unused/matrix-secret.json" },
+        exec: { source: "exec", command: "/unused/matrix-secret-command" },
+        store: { source: "store" },
+      } as const;
+      const cfg = createEnvSecretRefConfig({
+        accountId,
+        field,
+        provider,
+        secrets: {
+          defaults: provider === "shared" ? { env: "shared" } : undefined,
+          providers: declaredSource ? { [provider]: declarations[declaredSource] } : undefined,
         },
-      },
-      secrets: {
-        defaults: {
-          env: "default",
-        },
-      },
-    } as CoreConfig;
-    const env = {
-      MATRIX_ACCESS_TOKEN: "env-token",
-    } as NodeJS.ProcessEnv;
+      });
+      const env = { MATRIX_TEST_SECRET: " supplied-secret " };
 
-    const resolved = resolveDefaultMatrixAuthContext(cfg, env).resolved;
-    expect(resolved.accessToken).toBe("env-token");
-  });
-
-  it("resolves password SecretRef against the provided env", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://cfg.example.org",
-          userId: "@cfg:example.org",
-          password: { source: "env", provider: "default", id: "MATRIX_PASSWORD" },
-        },
-      },
-      secrets: {
-        defaults: {
-          env: "default",
-        },
-      },
-    } as CoreConfig;
-    const env = {
-      MATRIX_PASSWORD: "env-pass",
-    } as NodeJS.ProcessEnv;
-
-    const resolved = resolveDefaultMatrixAuthContext(cfg, env).resolved;
-    expect(resolved.password).toBe("env-pass");
-  });
-
-  it("resolves account accessToken SecretRef against the provided env", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              homeserver: "https://ops.example.org",
-              accessToken: { source: "env", provider: "default", id: "MATRIX_OPS_ACCESS_TOKEN" },
-            },
-          },
-        },
-      },
-      secrets: {
-        defaults: {
-          env: "default",
-        },
-      },
-    } as CoreConfig;
-    const env = {
-      MATRIX_OPS_ACCESS_TOKEN: "ops-token",
-    } as NodeJS.ProcessEnv;
-
-    const resolved = resolveMatrixConfigForAccount(cfg, "ops", env);
-    expect(resolved.accessToken).toBe("ops-token");
-  });
+      const resolved = resolveMatrixAuthContext({ cfg, accountId, env }).resolved;
+      expect(resolved[field]).toBe("supplied-secret");
+    },
+  );
 
   it("does not resolve account password SecretRefs when scoped token auth is configured", () => {
     const cfg = {
@@ -187,11 +183,7 @@ describe("Matrix auth/config live surfaces", () => {
           },
         },
       },
-      secrets: {
-        defaults: {
-          env: "default",
-        },
-      },
+      secrets: { providers: { default: { source: "env", allowlist: [] } } },
     } as CoreConfig;
     const env = {
       MATRIX_OPS_ACCESS_TOKEN: "ops-token",
@@ -202,50 +194,80 @@ describe("Matrix auth/config live surfaces", () => {
     expect(resolved.password).toBeUndefined();
   });
 
-  it("keeps unresolved accessToken SecretRef errors when env fallback is missing", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://cfg.example.org",
-          accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
-        },
-      },
-      secrets: {
-        defaults: {
-          env: "default",
-        },
-      },
-    } as CoreConfig;
+  it.each([
+    ["accessToken", undefined],
+    ["accessToken", "   "],
+    ["password", undefined],
+    ["password", "   "],
+  ] as const)("rejects %s SecretRefs with missing/blank env value %j", (field, value) => {
+    vi.stubEnv("MATRIX_ACCESS_TOKEN", "ambient-token");
+    vi.stubEnv("MATRIX_PASSWORD", "ambient-password");
+    vi.stubEnv("MATRIX_TEST_SECRET", "ambient-secret");
+    const cfg = createEnvSecretRefConfig({ field });
+    const env = {
+      MATRIX_TEST_SECRET: value,
+      ...(field === "accessToken" ? { MATRIX_ACCESS_TOKEN: "fallback-token" } : {}),
+    };
 
-    expect(() => resolveDefaultMatrixAuthContext(cfg, {} as NodeJS.ProcessEnv)).toThrow(
-      /channels\.matrix\.accessToken: unresolved SecretRef "env:default:MATRIX_ACCESS_TOKEN"/i,
+    expect(() => resolveDefaultMatrixAuthContext(cfg, env)).toThrow(
+      `channels.matrix.${field}: unresolved SecretRef "env:default:MATRIX_TEST_SECRET"`,
     );
   });
 
-  it("does not bypass env provider allowlists during startup fallback", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://cfg.example.org",
-          accessToken: { source: "env", provider: "matrix-env", id: "MATRIX_ACCESS_TOKEN" },
+  it.each([
+    ["accessToken", "default", undefined, true],
+    ["password", "shared", ["MATRIX_TEST_SECRET"], true],
+    ["accessToken", "default", ["OTHER_MATRIX_SECRET"], false],
+    ["password", "shared", ["OTHER_MATRIX_SECRET"], false],
+    ["accessToken", "default", [], false],
+    ["password", "shared", [], false],
+  ] as const)(
+    "honors explicit env policy for %s at %s with allowlist %j (allowed: %s)",
+    (field, provider, allowlist, allowed) => {
+      const cfg = createEnvSecretRefConfig({
+        field,
+        provider,
+        secrets: {
+          defaults: { env: provider },
+          providers: { [provider]: { source: "env", allowlist: allowlist && [...allowlist] } },
         },
-      },
-      secrets: {
-        providers: {
-          "matrix-env": {
-            source: "env",
-            allowlist: ["OTHER_MATRIX_ACCESS_TOKEN"],
-          },
-        },
-      },
-    } as CoreConfig;
+      });
+      const resolve = () =>
+        resolveDefaultMatrixAuthContext(cfg, { MATRIX_TEST_SECRET: "env-secret" });
 
-    expect(() =>
-      resolveDefaultMatrixAuthContext(cfg, {
-        MATRIX_ACCESS_TOKEN: "env-token",
-      } as NodeJS.ProcessEnv),
-    ).toThrow(/not allowlisted in secrets\.providers\.matrix-env\.allowlist/i);
-  });
+      if (allowed) {
+        expect(resolve().resolved[field]).toBe("env-secret");
+      } else {
+        expect(resolve).toThrow(`not allowlisted in secrets.providers.${provider}.allowlist`);
+      }
+    },
+  );
+
+  it.each([
+    ["other", { source: "file", path: "/unused/matrix-secret.json" }, undefined],
+    ["other", undefined, undefined],
+    ["default", undefined, "shared"],
+  ] as const)(
+    "rejects non-default alias %s with declaration %j and env default %s",
+    (provider, declaration, envDefault) => {
+      const cfg = createEnvSecretRefConfig({
+        field: "accessToken",
+        provider,
+        secrets: {
+          defaults: { env: envDefault },
+          providers: declaration ? { [provider]: declaration } : undefined,
+        },
+      });
+
+      expect(() =>
+        resolveDefaultMatrixAuthContext(cfg, { MATRIX_TEST_SECRET: "env-secret" }),
+      ).toThrow(
+        declaration
+          ? `Secret provider "${provider}" has source "file" but ref requests "env".`
+          : `Secret provider "${provider}" is not configured (ref: env:${provider}:MATRIX_TEST_SECRET).`,
+      );
+    },
+  );
 
   it("leaves non-env SecretRef access tokens unresolved", () => {
     const cfg = {
@@ -556,35 +578,39 @@ describe("Matrix auth/config live surfaces", () => {
     ).toThrow(/Matrix account id "!!!" is invalid/i);
   });
 
-  it("rejects explicitly selected disabled accounts before resolving their secrets", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://legacy.example.org",
-          accessToken: "legacy-token",
-          accounts: {
-            disabled: {
-              enabled: false,
-              homeserver: "https://disabled.example.org",
-              accessToken: {
-                source: "env",
-                provider: "default",
-                id: "MATRIX_DISABLED_ACCESS_TOKEN",
+  it.each(["channel", "account"])(
+    "rejects a disabled %s before resolving secrets",
+    (disabledScope) => {
+      const cfg = {
+        channels: {
+          matrix: {
+            enabled: disabledScope !== "channel",
+            homeserver: "https://legacy.example.org",
+            accessToken: "legacy-token",
+            accounts: {
+              disabled: {
+                enabled: disabledScope !== "account",
+                homeserver: "https://disabled.example.org",
+                accessToken: {
+                  source: "env",
+                  provider: "default",
+                  id: "MATRIX_DISABLED_ACCESS_TOKEN",
+                },
               },
             },
           },
         },
-      },
-    } as CoreConfig;
+      } as CoreConfig;
 
-    expect(() =>
-      resolveMatrixAuthContext({
-        cfg,
-        env: {} as NodeJS.ProcessEnv,
-        accountId: "disabled",
-      }),
-    ).toThrow(/Matrix account "disabled" is disabled/i);
-  });
+      expect(() =>
+        resolveMatrixAuthContext({
+          cfg,
+          env: {} as NodeJS.ProcessEnv,
+          accountId: "disabled",
+        }),
+      ).toThrow(/Matrix account "disabled" is disabled/i);
+    },
+  );
 
   it("allows explicit non-default account ids backed only by scoped env vars", () => {
     const cfg = {
