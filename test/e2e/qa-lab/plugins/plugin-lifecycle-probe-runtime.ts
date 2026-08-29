@@ -676,7 +676,7 @@ async function runPluginLifecycleMatrix() {
       summaryTsv,
       "install-v1",
       "node",
-      [entry, "plugins", "install", `npm:${packageName}@1.0.0`, "--force"],
+      [entry, "plugins", "install", `npm:${packageName}@1.0.0`, "--force", "--accept-capabilities"],
       runEnv,
     );
     assertVersion(pluginId, "1.0.0", runEnv);
@@ -790,7 +790,14 @@ async function runPluginLifecycleMatrix() {
       summaryTsv,
       "pack-install-v1",
       "node",
-      [entry, "plugins", "install", `npm:${packPackageName}@latest`, "--force"],
+      [
+        entry,
+        "plugins",
+        "install",
+        `npm:${packPackageName}@latest`,
+        "--force",
+        "--accept-capabilities",
+      ],
       runEnv,
     );
     assertVersion(packOwner, "1.0.0", runEnv);
