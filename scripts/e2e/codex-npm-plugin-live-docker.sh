@@ -70,6 +70,7 @@ fi
 run_log=""
 
 cleanup() {
+  local cleanup_status="$?"
   if [ -n "${CODEX_PLUGIN_PACK_DIR:-}" ]; then
     rm -rf "$CODEX_PLUGIN_PACK_DIR"
   fi
@@ -77,8 +78,13 @@ cleanup() {
     docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
   fi
   if [ -n "${run_log:-}" ]; then
+    # Harness signal handlers exit before the outer failure branch can print.
+    if [ "$cleanup_status" -ne 0 ]; then
+      docker_e2e_print_log "$run_log" || true
+    fi
     rm -f "$run_log"
   fi
+  return "$cleanup_status"
 }
 trap cleanup EXIT
 
@@ -542,7 +548,6 @@ node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs assert-agent-error "$p
 
 echo "Codex npm plugin live Docker E2E passed"
 EOF
-  docker_e2e_print_log "$run_log"
   exit 1
 fi
 
