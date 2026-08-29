@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
+  accelerateCiCheckoutFetchClock,
   expectCiCheckoutCleanup,
   readCiCheckoutStep,
   withCiCheckoutFixture,
@@ -74,16 +75,18 @@ function accelerate(run: string, timeoutReadyFile?: string) {
   // For cancellation, advance this copy's timeout only after full tree readiness
   // and retain the real TERM grace so the signal reaches drain, not startup.
   const timeoutCheck = "if deadline is not None and time.monotonic() >= deadline:";
-  const readyCheck = timeoutReadyFile
-    ? `if deadline is not None and os.path.isfile(${JSON.stringify(timeoutReadyFile)}):`
-    : timeoutCheck;
+  const accelerated = timeoutReadyFile
+    ? run.replace(
+        timeoutCheck,
+        `if deadline is not None and os.path.isfile(${JSON.stringify(timeoutReadyFile)}):`,
+      )
+    : accelerateCiCheckoutFetchClock(run);
   const killAt = timeoutReadyFile
     ? "kill_at = deadline - cleanup_seconds / 2"
     : "kill_at = time.monotonic()";
   return (
-    run
+    accelerated
       .replace(/fetch_timeout_seconds = [^\n]+/u, "fetch_timeout_seconds = 2")
-      .replace(timeoutCheck, readyCheck)
       .replace("kill_at = deadline - cleanup_seconds / 2", killAt)
       .replace(/retry_at = time\.monotonic\(\) \+ [^\n]+/u, "retry_at = time.monotonic() + 0.05")
       .replaceAll("--git 120", "--git 2")
