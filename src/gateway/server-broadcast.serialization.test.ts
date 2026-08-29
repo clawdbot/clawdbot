@@ -265,7 +265,8 @@ describe("presence recipient projection", () => {
             sessionId: `${agentId}-${sessionKey}`,
             updatedAt: 1,
             visibility,
-            createdActor: { type: "human", id: "creator" },
+            createdVia: "operator",
+            createdActor: { type: "human", source: "profile", id: "creator" },
           },
         );
       }
@@ -373,7 +374,8 @@ describe("presence recipient projection", () => {
           sessionId: "private",
           updatedAt: 1,
           visibility: "draft",
-          createdActor: { type: "human", id: "creator" },
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "creator" },
         },
       );
       const person = {

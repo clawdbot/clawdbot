@@ -30,6 +30,7 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -42,7 +43,6 @@ import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
 import {
-  hasSessionCreatorProfileProvenance,
   projectSessionActor,
   projectSessionOwner,
   projectSessionParticipants,
@@ -455,7 +455,7 @@ export function buildGatewaySessionRow(params: {
       entry?.createdActor,
       rowContext?.userProfileIdentityById,
       cfg,
-      hasSessionCreatorProfileProvenance(entry),
+      Boolean(sessionCreatorProfileId(entry?.createdActor)),
     ),
     owner,
     participants: participants.size ? [...participants.values()].slice(0, 4) : undefined,

@@ -3,8 +3,8 @@
   "version": "2026.8.1",
   "openclaw": {
     "schemaVersions": {
-      "state": 13,
-      "agent": 18
+      "state": 14,
+      "agent": 19
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",

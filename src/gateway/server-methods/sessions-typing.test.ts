@@ -157,7 +157,7 @@ describe("session typing handler", () => {
         {
           sessionId: "session-preview",
           updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
+          createdActor: { type: "human", source: "profile", id: "owner" },
           visibility: "shared",
         },
       );
@@ -207,7 +207,7 @@ describe("session typing handler", () => {
         {
           sessionId: "session-shared-preview",
           updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
+          createdActor: { type: "human", source: "profile", id: "owner" },
           visibility: "shared",
         },
       );
@@ -259,7 +259,7 @@ describe("session typing handler", () => {
         {
           sessionId: `session-${agentId}`,
           updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
+          createdActor: { type: "human", source: "profile", id: "owner" },
           visibility: "shared",
         },
       );
@@ -297,7 +297,7 @@ describe("session typing handler", () => {
         {
           sessionId: "session-main",
           updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
+          createdActor: { type: "human", source: "profile", id: "owner" },
           visibility: "shared",
         },
       );
@@ -351,7 +351,7 @@ describe("session typing handler", () => {
           {
             sessionId,
             updatedAt,
-            createdActor: { type: "human" as const, id: "owner" },
+            createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
             visibility: "shared" as const,
           },
         );
@@ -422,7 +422,7 @@ describe("session typing handler", () => {
       await upsertSessionEntryCore(scope, {
         sessionId: "session-before-reset",
         updatedAt: 1,
-        createdActor: { type: "human", id: "owner" },
+        createdActor: { type: "human", source: "profile", id: "owner" },
         visibility: "shared",
       });
       mocks.presence = [
@@ -451,7 +451,7 @@ describe("session typing handler", () => {
       await upsertSessionEntryCore(scope, {
         sessionId: "session-after-reset",
         updatedAt: 2,
-        createdActor: { type: "human", id: "owner" },
+        createdActor: { type: "human", source: "profile", id: "owner" },
         visibility: "shared",
       });
       await vi.advanceTimersByTimeAsync(900);
@@ -469,7 +469,7 @@ describe("session typing handler", () => {
       const entry = {
         sessionId: "typing-activity",
         updatedAt: 1,
-        createdActor: { type: "human" as const, id: "owner" },
+        createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
       };
       await upsertSessionEntryCore(scope, { ...entry, visibility: "draft" });
       const requestContext = context();

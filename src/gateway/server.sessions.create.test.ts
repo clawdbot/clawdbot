@@ -359,7 +359,7 @@ test.each([
       expect(created.payload?.outcomes).toEqual([{ ok: true, key }]);
     }
     expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
-      createdActor: { type: "human", id: profile.id },
+      createdActor: { type: "human", source: "profile", id: profile.id },
       sandbox: "required",
     });
 
@@ -444,7 +444,7 @@ test("operator role agent allowlists protect creation without blocking existing 
   await writeSessionStore({
     entries: {
       [existingKey]: sessionStoreEntry("role-existing-session", {
-        createdActor: { type: "human", id: profile.id },
+        createdActor: { type: "human", source: "profile", id: profile.id },
       }),
     },
   });
@@ -503,7 +503,7 @@ test("sessions.create revalidates parent participation before committing a fork 
     entries: {
       [parentSessionKey]: sessionStoreEntry(parentSessionId, {
         visibility: "read-only",
-        createdActor: { type: "human", id: "owner" },
+        createdActor: { type: "human", source: "profile", id: "owner" },
       }),
     },
   });
@@ -4759,7 +4759,7 @@ test("sessions.create stamps trusted operator provenance and records created", a
   expect(created.ok).toBe(true);
   expect(created.payload?.entry).toMatchObject({
     createdVia: "operator",
-    createdActor: { type: "human", id: profileId },
+    createdActor: { type: "human", source: "profile", id: profileId },
     createdAt: expect.any(Number),
   });
   expect(created.payload?.entry).not.toHaveProperty("createdActor.label");
@@ -4794,7 +4794,10 @@ test("sessions.create stamps trusted operator provenance and records created", a
 
   for (const { actor, sandbox } of [
     { actor: { type: "agent", id: "main" }, sandbox: undefined },
-    { actor: { type: "human", id: "profile-delegated-creator" }, sandbox: "required" },
+    {
+      actor: { type: "human", source: "profile", id: "profile-delegated-creator" },
+      sandbox: "required",
+    },
   ] as const) {
     // The required parent's creation policy survives removal of gateway.roles.
     const hinted = await directSessionReq<{
@@ -4835,7 +4838,7 @@ test("sessions.create reset-in-place preserves the node creation stamp", async (
     entries: {
       main: sessionStoreEntry("existing-main", {
         createdVia: "channel",
-        createdActor: { type: "human", id: "telegram:42" },
+        createdActor: { type: "human", source: "channel", id: "telegram:42" },
         createdAt: 1234,
       }),
     },
@@ -4860,12 +4863,12 @@ test("sessions.create reset-in-place preserves the node creation stamp", async (
   expect(reset.ok).toBe(true);
   expect(reset.payload?.entry).toMatchObject({
     createdVia: "channel",
-    createdActor: { type: "human", id: "telegram:42" },
+    createdActor: { type: "human", source: "channel", id: "telegram:42" },
     createdAt: 1234,
   });
   expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
     createdVia: "channel",
-    createdActor: { type: "human", id: "telegram:42" },
+    createdActor: { type: "human", source: "channel", id: "telegram:42" },
     createdAt: 1234,
   });
 });

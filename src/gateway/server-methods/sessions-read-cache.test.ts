@@ -91,7 +91,7 @@ async function seedSessions(): Promise<OpenClawConfig> {
       {
         sessionId: `${agentId}-${name}`,
         updatedAt,
-        createdActor: { type: "human", id: owner },
+        createdActor: { type: "human", source: "profile", id: owner },
         visibility: "shared",
         ...overrides,
       },
@@ -330,7 +330,7 @@ describe("sessions.list single-flight", () => {
         {
           sessionId: "registry-only",
           updatedAt: 500,
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
           visibility: "shared",
         },
       );
@@ -554,7 +554,7 @@ describe("sessions.list single-flight", () => {
         {
           sessionId: "main-external",
           updatedAt: 500,
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
           visibility: "shared",
         },
       );
@@ -910,7 +910,11 @@ describe("sessions.list single-flight", () => {
               sessionId: `profile-${index}`,
               updatedAt: index + 1,
               createdVia: "operator",
-              createdActor: { type: "human", id: client.authenticatedUserProfile!.profileId },
+              createdActor: {
+                type: "human",
+                source: "profile",
+                id: client.authenticatedUserProfile!.profileId,
+              },
             },
           );
         }
@@ -992,7 +996,7 @@ describe("sessions.list single-flight", () => {
           {
             sessionId: `page-${name}`,
             updatedAt,
-            createdActor: { type: "human", id: "owner@example.com" },
+            createdActor: { type: "human", source: "profile", id: "owner@example.com" },
             visibility: "shared",
           },
         );

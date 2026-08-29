@@ -22,6 +22,7 @@ import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { VERSION } from "../version.js";
+import { migrateSessionCreatorNamespaces } from "./creator-namespace-migration.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
@@ -562,7 +563,7 @@ function ensureAgentSchema(
       : OPENCLAW_AGENT_SCHEMA_SQL;
   const identityMigration =
     targetVersion >= 18 &&
-    readSqliteUserVersion(db) < 18 &&
+    readSqliteUserVersion(db) < targetVersion &&
     (readSqliteUserVersion(db) > 0 || readExistingAgentSchemaMeta(db) !== null);
   if (identityMigration) {
     assertAgentDatabaseMaintenanceAuthority();
@@ -629,8 +630,11 @@ function ensureAgentSchema(
       migrateSessionNodesAndWindows(db, previousVersion);
       ensureSessionAdditiveColumns(db);
       ensureSessionEntryValidityProjection(db);
-      if (targetVersion >= 18) {
+      if (targetVersion >= 18 && previousVersion < 18) {
         migrateSessionParticipantsSchema(db, pathname);
+      }
+      if (targetVersion >= 19) {
+        migrateSessionCreatorNamespaces(db, previousVersion);
       }
       db.exec(schemaSql);
       migrateMemoryChunkMetadataSchema(db);
@@ -689,7 +693,7 @@ function ensureAgentSchema(
       if (identityMigration) {
         if (db.prepare("PRAGMA foreign_key_check").all().length > 0) {
           throw new Error(
-            `Agent participant migration failed foreign key validation for ${pathname}.`,
+            `Agent identity migration failed foreign key validation for ${pathname}.`,
           );
         }
         assertAgentDatabaseMaintenanceAuthority();

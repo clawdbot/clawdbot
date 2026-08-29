@@ -268,14 +268,19 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     });
   });
 
-  it.each([false, true])(
-    "stamps both cron owners before running the authenticated creator's work (%s)",
-    async (required) => {
+  it.each([
+    { required: false, source: "profile" },
+    { required: true, source: "profile" },
+    { required: true, source: "channel" },
+    { required: true, source: "unknown" },
+  ] as const)(
+    "retains $source provenance on both cron owners before running (required=$required)",
+    async ({ required, source }) => {
       await useRealCronSessionState();
       await withTempHome(async (home) => {
         const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
         const profile = ensureProfileForEmail("cron-creator@example.test");
-        const createdActor = { type: "human" as const, id: profile.id };
+        const createdActor = { type: "human" as const, source, id: profile.id };
         const job: CronStoredJob = {
           ...makeJob({ kind: "agentTurn", message: "persist this turn" }),
           createdActor,

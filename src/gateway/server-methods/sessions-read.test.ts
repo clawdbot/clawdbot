@@ -335,7 +335,7 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
       {
         sessionId,
         updatedAt: 42,
-        createdActor: { type: "human", id: actorId },
+        createdActor: { type: "human", source: "profile", id: actorId },
         visibility: "shared",
       },
     );

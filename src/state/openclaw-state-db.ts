@@ -37,6 +37,7 @@ import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { VERSION } from "../version.js";
+import { migrateCronCreatorNamespaces } from "./creator-namespace-migration.js";
 import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import {
@@ -211,6 +212,9 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
           ensureAdditiveStateColumns(db);
           if (migrateJsonCanonicalWideRowsV13(db, previousVersion)) {
             applied.push("Consolidated shared state tables (v13)");
+          }
+          if (migrateCronCreatorNamespaces(db, previousVersion)) {
+            applied.push("Qualified historical cron creator attribution as unknown (v14)");
           }
           executeCanonicalStateSchema(db, {
             includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
@@ -394,6 +398,7 @@ function ensureSchema(
         const pathMigration: AgentPathSummary = migrateAgentPaths(db, previousVersion, pathname);
         ensureAdditiveStateColumns(db);
         migrateJsonCanonicalWideRowsV13(db, previousVersion);
+        migrateCronCreatorNamespaces(db, previousVersion);
         sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);
         executeCanonicalStateSchema(db, {

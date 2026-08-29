@@ -837,7 +837,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       cfg,
       operatorRoleActor: { kind: "system" },
       ...opts,
-      creation: { via: "operator", actor: { type: "human" } },
+      creation: { via: "operator", actor: { type: "human", source: "unknown" } },
       armSessionDiffBaselineCapture: true,
       emitCommandHooks: Boolean(opts.parentSessionKey),
       commandSource: "tui:embedded",

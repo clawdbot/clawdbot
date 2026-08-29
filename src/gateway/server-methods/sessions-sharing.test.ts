@@ -156,7 +156,13 @@ describe("session sharing handlers", () => {
             updatedAt: 1,
             visibility: "shared",
             ...(item.name === "present"
-              ? { createdActor: { type: "human" as const, id: "profile-ada" } }
+              ? {
+                  createdActor: {
+                    type: "human" as const,
+                    source: "profile" as const,
+                    id: "profile-ada",
+                  },
+                }
               : {}),
           },
         );
@@ -371,7 +377,7 @@ describe("session sharing handlers", () => {
           updatedAt: 2,
           incognito: true,
           visibility: "shared",
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
 
@@ -401,7 +407,7 @@ describe("session sharing handlers", () => {
           updatedAt: 2,
           incognito: true,
           visibility: "shared",
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
       const previewFor = async (client: GatewayClient) => {
@@ -478,7 +484,7 @@ describe("session sharing handlers", () => {
         {
           sessionId: "session-main",
           updatedAt: 1,
-          createdActor: { type: "human", ...owner },
+          createdActor: { type: "human", source: "profile", ...owner },
           visibility: "read-only",
         },
       );
@@ -522,7 +528,7 @@ describe("session sharing handlers", () => {
         {
           sessionId: "session-shared-member",
           updatedAt: 1,
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
           visibility: "shared",
         },
       );
@@ -561,7 +567,7 @@ describe("session sharing handlers", () => {
         {
           sessionId: "session-mid-await",
           updatedAt: 1,
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
           visibility: "shared",
         },
       );
@@ -643,7 +649,7 @@ describe("session sharing handlers", () => {
         {
           sessionId: "session-mid-await-paged-draft",
           updatedAt: 2,
-          createdActor: { type: "human", id: "hidden-owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "hidden-owner@example.com" },
           visibility: "shared",
         },
       );
@@ -652,7 +658,7 @@ describe("session sharing handlers", () => {
         {
           sessionId: "session-mid-await-paged-visible",
           updatedAt: 1,
-          createdActor: { type: "human", id: "visible-owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "visible-owner@example.com" },
           visibility: "shared",
         },
       );
@@ -742,7 +748,7 @@ describe("session sharing handlers", () => {
         {
           sessionId: "session-member-transition",
           updatedAt: 1,
-          createdActor: { type: "human", ...owner },
+          createdActor: { type: "human", source: "profile", ...owner },
           visibility: "shared",
         },
       );

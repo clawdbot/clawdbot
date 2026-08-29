@@ -581,6 +581,11 @@ export function writeSessionEntry(
         { agentId: database.agentId, sessionKey },
       );
     }
+  }
+  // Doctor/import owners validate and select a whole creator stamp across aliases.
+  // Preserve their selection unless this canonical node already owns required isolation;
+  // ordinary writes cannot restamp a logical node's creator.
+  if (!options.allowStoredAliases || canonicalPreviousEntry?.sandbox === "required") {
     normalizedEntry = preserveCreationStamp(normalizedEntry, canonicalPreviousEntry);
   }
   const previousEntry =

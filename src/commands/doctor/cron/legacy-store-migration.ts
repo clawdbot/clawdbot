@@ -582,6 +582,10 @@ export async function loadLegacyCronStoreForMigration(
         // The source position distinguishes identical id-less rows, while the raw digest
         // prevents an edited retry from being mistaken for the row previously imported.
         markLegacyCronMigrationIdentity(row, index);
+        // File-era jobs discarded origin before persistence, just like pre-v14 SQLite jobs.
+        if (isRecord(row.createdActor) && row.createdActor.type === "human") {
+          row.createdActor = { ...row.createdActor, source: "unknown" };
+        }
         configJobIndexes.push(index);
         configRows.push(row);
       } else {

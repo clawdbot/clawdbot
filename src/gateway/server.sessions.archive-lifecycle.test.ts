@@ -359,7 +359,8 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
   await writeSessionStore({
     entries: {
       [sessionKey]: sessionStoreEntry(sessionId, {
-        createdActor: { type: "human", id: "archive-owner" },
+        createdVia: "operator",
+        createdActor: { type: "human", source: "profile", id: "archive-owner" },
         visibility: "shared",
       }),
     },
@@ -482,7 +483,8 @@ test("archive retains the lifecycle fence until drain and commit before sharing 
   await writeSessionStore({
     entries: {
       [sessionKey]: sessionStoreEntry(sessionId, {
-        createdActor: { type: "human", id: "archive-owner" },
+        createdVia: "operator",
+        createdActor: { type: "human", source: "profile", id: "archive-owner" },
         visibility: "shared",
       }),
     },

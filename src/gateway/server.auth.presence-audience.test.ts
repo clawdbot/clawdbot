@@ -111,7 +111,8 @@ describe("gateway presence audience", () => {
           {
             sessionId: sessionKey === sharedKey ? sharedSessionId : randomUUID(),
             updatedAt: Date.now(),
-            createdActor: { type: "human", id: profileId },
+            createdVia: "operator",
+            createdActor: { type: "human", source: "profile", id: profileId },
             visibility,
             ...(incognito ? { incognito: true } : {}),
           },

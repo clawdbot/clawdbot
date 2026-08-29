@@ -341,7 +341,7 @@ describe("session accessor seam", () => {
     expect(countSessionEntryRowsReadOnly({ agentId: "main", storePath })).toBe(1);
   });
 
-  it("retains legacy createdBy actor projections across rewrites", async () => {
+  it("does not project retired createdBy input into canonical creator fields", async () => {
     const sessionKey = "agent:main:created-by";
     await replaceSessionEntry({ sessionKey, storePath }, {
       createdBy: { id: "legacy-human" },
@@ -361,7 +361,7 @@ describe("session accessor seam", () => {
           "SELECT created_actor_type, created_actor_id FROM session_nodes WHERE session_key = ?",
         )
         .get(sessionKey),
-    ).toEqual({ created_actor_type: "human", created_actor_id: "legacy-human" });
+    ).toEqual({ created_actor_type: null, created_actor_id: null });
   });
 
   it("lists retained transcript instances across same-key session rotation", async () => {
@@ -760,7 +760,7 @@ describe("session accessor seam", () => {
     expect(recorded).toMatchObject({
       chatType: "direct",
       createdVia: "channel",
-      createdActor: { type: "human", id: "webchat:user-1" },
+      createdActor: { type: "human", source: "channel", id: "webchat:user-1" },
       createdAt: expect.any(Number),
     });
     const creationStamp = {
@@ -791,13 +791,13 @@ describe("session accessor seam", () => {
         SessionKey: operatorKey,
         SessionCreation: {
           via: "operator",
-          actor: { type: "human", id: "profile-ada" },
+          actor: { type: "human", source: "profile", id: "profile-ada" },
         },
       },
     });
     expect(operator).toMatchObject({
       createdVia: "operator",
-      createdActor: { type: "human", id: "profile-ada" },
+      createdActor: { type: "human", source: "profile", id: "profile-ada" },
       createdAt: expect.any(Number),
     });
 
@@ -915,7 +915,7 @@ describe("session accessor seam", () => {
     });
     expect(participant).toMatchObject({
       createdVia: "channel",
-      createdActor: { type: "human", id: "webchat:person-1" },
+      createdActor: { type: "human", source: "channel", id: "webchat:person-1" },
     });
 
     const senderlessKey = "agent:main:webchat:dm:route-senderless";
