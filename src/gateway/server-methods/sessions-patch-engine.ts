@@ -297,6 +297,11 @@ async function executeSessionPatchMutations(params: {
           for (const target of prepared) {
             target.archivePreparation?.drain.handoffToMutation();
           }
+          await Promise.all(
+            prepared
+              .filter((target) => target.fullPatch.reasoningLevel !== undefined)
+              .map((target) => loadModelCatalog(target.targetAgentId).catch(() => undefined)),
+          );
         },
         finalize: releaseArchiveDrains,
         run: async () => {

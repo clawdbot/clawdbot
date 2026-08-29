@@ -60,6 +60,28 @@ describe("preserveRosterPresentationMetadata", () => {
   });
 });
 
+test("sessions.changed replaces a prior effective reasoning value", () => {
+  const result = buildResult([
+    {
+      key: "agent:main:reasoning-peer",
+      kind: "direct",
+      sessionId: "reasoning-peer-session",
+      updatedAt: 1,
+      effectiveReasoningLevel: "on",
+    },
+  ]);
+
+  const reconciled = reconcileSessionChanged(result, {
+    sessionKey: "agent:main:reasoning-peer",
+    reason: "patch",
+    updatedAt: 2,
+    effectiveReasoningLevel: "off",
+  });
+
+  expect(reconciled.applied).toBe(true);
+  expect(reconciled.result?.sessions[0]?.effectiveReasoningLevel).toBe("off");
+});
+
 test("sessions.changed removes a label when the event carries null", () => {
   const result: SessionsListResult = {
     ts: 1,

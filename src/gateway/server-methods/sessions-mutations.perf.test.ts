@@ -12,6 +12,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -163,6 +164,56 @@ test("sessions.patch does not load model metadata after committing an unrelated 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
     expect(loadSessionEntry({ agentId: "main", sessionKey: targetKey })).toHaveProperty("pinnedAt");
+  });
+});
+
+test("reasoning override clears broadcast an authoritative effective value", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const targetKey = "agent:main:reasoning-clear-target";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: targetKey },
+      {
+        sessionId: "session-reasoning-clear-target",
+        updatedAt: 1,
+        reasoningLevel: "on",
+      },
+    );
+    const modelCatalog = [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: false }];
+    const loadGatewayModelCatalog = vi.fn(async () => modelCatalog);
+    const broadcastToConnIds = vi.fn();
+    const context = {
+      getRuntimeConfig: () => ({
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      }),
+      loadGatewayModelCatalog,
+      broadcastToConnIds,
+      getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
+      dedupe: new Map(),
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn();
+
+    await sessionMutationHandlers["sessions.patch"]!({
+      params: { key: targetKey, reasoningLevel: null },
+      respond,
+      context,
+      client: humanClient(),
+    } as never);
+    flushPendingSessionsChangedEvents(context);
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "main" });
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: targetKey,
+        reason: "patch",
+        effectiveReasoningLevel: "off",
+      }),
+      new Set(["conn-1"]),
+      expect.objectContaining({ dropIfSlow: true, sessionKeys: [targetKey] }),
+    );
   });
 });
 
