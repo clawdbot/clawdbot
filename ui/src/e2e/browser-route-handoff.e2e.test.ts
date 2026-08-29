@@ -355,6 +355,16 @@ suite.define(() => {
           });
           await page.goto(`${suite.server.baseUrl}chat`);
           await page.getByText("The pages are ready.", { exact: true }).waitFor();
+          const hostCard = page
+            .locator("openclaw-browser-tab-card")
+            .filter({ hasText: "Managed tab" });
+          // Card thumbnails legitimately capture both routes before the panel opens.
+          await hostCard.locator(".shot img").waitFor();
+          await page
+            .locator("openclaw-browser-tab-card")
+            .filter({ hasText: "Node tab" })
+            .locator(".shot img")
+            .waitFor();
           expect(await page.locator("section.bp").count()).toBe(0);
           expect(
             (await gateway.getRequests("browser.request")).some(
@@ -379,9 +389,7 @@ suite.define(() => {
                 body: { targetId: "t1" },
               });
           }
-          const hostCard = page
-            .locator("openclaw-browser-tab-card")
-            .filter({ hasText: "Managed tab" });
+          const beforeHostOpen = (await gateway.getRequests("browser.request")).length;
           await hostCard.getByRole("button", { name: "Open", exact: true }).click();
           await panel.locator('.bp-shot[alt="Managed tab"]').waitFor();
           expect(await panel.locator(".bp-profile").textContent()).toBe("managed");
@@ -396,6 +404,14 @@ suite.define(() => {
               query: { profile: "managed" },
               body: { targetId: "t1", type: "png" },
             });
+          const hostRequests = (await gateway.getRequests("browser.request")).slice(beforeHostOpen);
+          expect(hostRequests.map((request) => asNullableRecord(request.params)?.path)).toEqual(
+            expect.arrayContaining(["/tabs", "/tabs/focus", "/screenshot", "/act"]),
+          );
+          for (const request of hostRequests) {
+            expect(request.params).toMatchObject({ target: "host", query: { profile: "managed" } });
+            expect(request.params).not.toHaveProperty("node");
+          }
           expect(await gateway.getRequests("config.set")).toEqual([]);
           expect(await gateway.getRequests("config.patch")).toEqual([]);
         },

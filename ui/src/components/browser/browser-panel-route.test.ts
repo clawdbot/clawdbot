@@ -180,6 +180,43 @@ describe("browser panel route handoff", () => {
     ).toBe(true);
   });
 
+  it("defers a retained panel refresh to its pending card choice", async () => {
+    const gateway = browserGateway();
+    const panel = await mountPanel(gateway.client);
+    await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    vi.useFakeTimers();
+    const controller = controllerFor(panel);
+    controller.handleViewportResize(640, 480);
+    panel.presented = false;
+    await panel.updateComplete;
+    const beforePresentation = gateway.request.mock.calls.length;
+
+    // The current preference was already consumed; reopening must also defer
+    // the fallback refresh while the pane is handing off an explicit card.
+    panel.refreshOnPresentation = false;
+    panel.presented = true;
+    await panel.updateComplete;
+    expect(gateway.request).toHaveBeenCalledTimes(beforePresentation);
+
+    chooseCard(panel, nodeTab);
+    panel.refreshOnPresentation = true;
+    await waitForFast(() => expect(pageTitle(panel)).toBe("work"));
+    controller.handleViewportResize(700, 500);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const requests = gateway.request.mock.calls
+      .slice(beforePresentation)
+      .map(([, value]) => value as BrowserRequestEnvelope);
+    expect(requests.some((request) => request.body?.kind === "resize")).toBe(true);
+    for (const request of requests) {
+      expect(request).toMatchObject({
+        target: "node",
+        node: "node-a",
+        query: { profile: "work" },
+      });
+    }
+    expect(pageTitle(panel)).toBe("work");
+  });
+
   it("keeps a raw target selection when its stable tab alias is not the first tab", async () => {
     const gateway = browserGateway();
     const panel = await mountPanel(gateway.client, false);

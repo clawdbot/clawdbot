@@ -33,6 +33,7 @@ type SidebarPanelDefinitionParams = {
   themeMode: "dark" | "light";
   agentId: string | null;
   browserPresented: boolean;
+  browserRefreshOnPresentation: boolean;
   preferredBrowserTab?: BrowserTabSelection;
   desktopPresented: boolean;
   desktopRefreshOnPresentation: boolean;
@@ -132,6 +133,7 @@ export function sidebarPanelDefinitions(
           .client=${state.connected ? state.client : null}
           .available=${state.browserPanelAvailable}
           .presented=${params?.browserPresented ?? false}
+          .refreshOnPresentation=${params?.browserRefreshOnPresentation ?? true}
           .sessionKey=${state.sessionKey}
           .preferredTab=${params?.preferredBrowserTab}
           .resourceBasePath=${state.resourceBasePath}

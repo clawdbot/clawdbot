@@ -54,6 +54,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   @property({ type: Boolean }) embedded = false;
   /** This embedded instance is the active pane's visible Browser presenter. */
   @property({ type: Boolean }) presented = false;
+  /** Whether presentation owns initial work instead of a pending explicit toggle. */
+  @property({ type: Boolean }) refreshOnPresentation = true;
 
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) preferredTab?: BrowserTabSelection;
@@ -118,13 +120,16 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     const presentationChanged =
       this.embedded && (changed.has("embedded") || changed.has("presented"));
     const contextChanged = this.synchronizeBrowserContext();
-    const followedPreferred = this.followPreferredTab();
+    // Keep preferred metadata for the explicit handler to consume, but let the
+    // pending toggle choose its route before any automatic follow or refresh.
+    const followedPreferred = this.refreshOnPresentation && this.followPreferredTab();
     if (this.embedded) {
       if (!this.presented || !this.available || !this.client) {
         if (presentationChanged || gatewayAvailabilityChanged) {
           this.browserPanelController.hostDisconnected();
         }
       } else if (
+        this.refreshOnPresentation &&
         !followedPreferred &&
         (contextChanged || presentationChanged || gatewayAvailabilityChanged)
       ) {

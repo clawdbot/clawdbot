@@ -101,6 +101,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
       browserPresented,
+      browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
       preferredBrowserTab: [
         ...latestBrowserTabCards(chatProps.messages, chatProps.toolMessages).values(),
       ].at(-1),
