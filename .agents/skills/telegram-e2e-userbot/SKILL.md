@@ -52,8 +52,13 @@ Use two unused ports for every run on a shared host:
 export TELEGRAM_GATEWAY_PORT TELEGRAM_MOCK_PORT
 ```
 
-Team and ClawSweeper runs use Convex. Confirm the CI role is available without
-printing it:
+Team and ClawSweeper runs use Convex. A maintainer with Convex CLI access to the
+OpenClaw broker project needs no local broker settings. The lease helper uses
+`qa/convex-credential-broker` in the checkout, reads the production site and
+CI role through the authenticated CLI, and keeps them in process memory. Run
+the same doctor and runner commands below; no credential export is required.
+
+CI or another non-interactive worker can instead provide the broker pair:
 
 ```bash
 : "${OPENCLAW_QA_CONVEX_SITE_URL:?missing Convex QA site}"
@@ -61,8 +66,9 @@ printing it:
 ```
 
 Done when the checkout contains `scripts/e2e/mock-openai-server.mjs`, the skill
-directory resolves, the exact runtime can start without setup work, and the
-Convex broker settings are present.
+directory resolves, the exact runtime can start without setup work, and either
+the Convex CLI can access the production broker project or the broker pair is
+present.
 
 ## 2. Select the proof
 
