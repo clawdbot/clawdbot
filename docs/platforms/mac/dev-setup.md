@@ -84,12 +84,19 @@ bundle loads. The full suite explicitly selects the default profile, preserving
 its local Gateway lifecycle contracts. AppState isolation tests run separately
 with a unique named profile; no test is run twice. The child environment excludes
 inherited app settings and credentials while retaining toolchain and runtime
-loader paths. Resources remain available for process-lifetime singletons and
-retained windows; the launcher removes its files after the managed process group
-finishes. The disposable runner owns default preferences and system-service
+loader paths. Before Swift starts, the launcher creates an empty-password test
+Keychain under its private `HOME/Library/Keychains`, unlocks it, disables automatic
+locking for that resource, and sets the user-domain default and search list to
+that file. This lets real catalog migration save without an interactive
+login-Keychain creation prompt. Its Security preferences live in the private
+`HOME/Library/Preferences`; common and dynamic Keychain domains remain unchanged.
+Resources remain available for process-lifetime singletons and retained windows;
+the launcher deletes its Keychain and files after the managed process group and
+output pipes close. The disposable runner owns default preferences and system-service
 state; named-profile preferences use a fresh domain and are also discarded with
 the runner.
-If process cleanup cannot be verified, the launcher fails and retains its files.
+If process cleanup cannot be verified or Keychain deletion fails, the launcher
+fails and retains its files for inspection.
 CI environment markers only catch accidental invocation; they do not enforce
 isolation or make an operator desktop safe.
 

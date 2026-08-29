@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import Testing
 @testable import OpenClaw
 
@@ -11,6 +12,21 @@ struct AppStateIsolationTests {
         try #require(profile.hasPrefix("test-"))
         let suiteName = try #require(AppProfile.current.defaultsSuiteName)
         let fm = FileManager()
+        let home = try #require(OpenClawEnv.path("HOME"))
+        // Check the platform's actual default before any fixture or catalog writes.
+        // A profile name alone cannot keep Security away from an operator's Keychain.
+        var defaultKeychain: SecKeychain?
+        try #require(SecKeychainCopyDefault(&defaultKeychain) == errSecSuccess)
+        let keychain = try #require(defaultKeychain)
+        var pathBytes = [CChar](repeating: 0, count: 4096)
+        var pathLength = UInt32(pathBytes.count)
+        try #require(SecKeychainGetPath(keychain, &pathLength, &pathBytes) == errSecSuccess)
+        let keychainPath = try #require(String(
+            bytes: pathBytes.prefix(Int(pathLength)).map { UInt8(bitPattern: $0) },
+            encoding: .utf8))
+        let keychainURL = URL(fileURLWithPath: keychainPath).resolvingSymlinksInPath()
+        try #require(keychainURL.deletingLastPathComponent().path ==
+            URL(fileURLWithPath: home).appendingPathComponent("Library/Keychains").resolvingSymlinksInPath().path)
         let fixture = fm.temporaryDirectory.appendingPathComponent("app-state-\(UUID().uuidString)")
         try fm.createDirectory(at: fixture, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: fixture) }
@@ -84,6 +100,15 @@ struct AppStateIsolationTests {
             #expect(configured.remoteTransport == .direct)
             #expect(configured.remoteUrl == "wss://fixture.example.invalid:9443")
             #expect(AppProfile.current.name == profile)
+
+            // Catalog reads commit legacy migration through SecItemAdd on a fresh Keychain.
+            let catalog = try await MacGatewayProfileStore().catalogProfiles()
+            #expect(catalog.count == 1)
+            let migrated = try #require(catalog.first)
+            #expect(migrated.profile.url.absoluteString == "wss://fixture.example.invalid:9443/")
+            #expect(!migrated.canPromote)
+            // A fresh store must read the committed registry, not the first actor's cache.
+            #expect(try await MacGatewayProfileStore().catalogProfiles() == catalog)
 
             // Preview still reads config; malformed input must keep its snapshot and audit in owned paths.
             try Data("{ invalid fixture".utf8).write(to: configURL)

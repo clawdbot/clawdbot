@@ -66,7 +66,12 @@ The `macos-swift` CI job builds tests once, then runs them through
 `scripts/test-macos-native.mts`. The full suite retains default-profile behavior;
 named-profile AppState isolation tests run separately. Each process gets private
 home, config/state paths, and a short temporary directory before the test bundle
-loads. The launcher keeps those resources until the test process group exits.
+loads. The launcher also creates an unlocked, disposable Keychain in that home
+and selects it as the user-domain default and search list, so catalog migration
+can save without prompting to create a login Keychain. It disables automatic
+locking only for that test resource and deletes it after the test process group
+and output pipes close. Failed or unverified cleanup retains resources and fails
+the launch.
 The disposable runner owns default preferences and system-service state; a named
 profile gets a fresh preferences domain. The launcher itself is not a sandbox.
 Local `scripts/prepush-ci.sh` keeps Swift lint/build checks but reports native

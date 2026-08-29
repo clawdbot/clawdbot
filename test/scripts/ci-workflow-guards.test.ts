@@ -6688,6 +6688,21 @@ test_count="$(grep -c '^test ' "$SWIFT_CALLS")"
         "utf8",
       );
       chmodSync(path.join(binDir, "swift"), 0o755);
+      // This fixture executes the real launcher: never fall through to host Security.
+      writeFileSync(
+        path.join(binDir, "security"),
+        `#!${process.execPath}
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+assert.notEqual(process.env.HOME, ${JSON.stringify(root)});
+assert.equal(path.dirname(args.at(-1)), path.join(process.env.HOME, 'Library/Keychains'));
+if (args[0] === 'create-keychain') fs.writeFileSync(args.at(-1), 'inert keychain');
+if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
+`,
+        { mode: 0o755 },
+      );
       const result = runWorkflowShellScript(testStep.run, {
         cwd: root,
         env: {

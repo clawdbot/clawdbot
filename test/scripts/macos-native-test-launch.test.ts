@@ -14,7 +14,12 @@ const swiftStep = workflow.jobs["macos-swift"].steps.find(
   (step: { name?: string }) => step.name === "Swift test",
 ).run as string;
 
-function fixture(defaultExitCode = 0, waitForSignal = false, namedExitCode = 0) {
+function fixture(
+  defaultExitCode = 0,
+  waitForSignal: false | "swift" | "security" = false,
+  namedExitCode = 0,
+  securityFailure = "",
+) {
   const root = temps.make("native-launch-");
   const bin = path.join(root, "bin");
   const home = path.join(root, "ambient-home");
@@ -30,6 +35,7 @@ function fixture(defaultExitCode = 0, waitForSignal = false, namedExitCode = 0) 
   const fake = `#!${process.execPath}
 const fs = require('node:fs');
 const path = require('node:path');
+const assert = require('node:assert/strict');
 const tool = path.basename(process.argv[1]);
 const args = process.argv.slice(2);
 const env = process.env;
@@ -37,7 +43,47 @@ const resources = ['HOME', 'CFFIXED_USER_HOME', 'TMPDIR', 'OPENCLAW_STATE_DIR', 
 const present = Object.fromEntries(resources.map(key => [key, !!env[key] && fs.existsSync(env[key])]));
 const cachePath = path.join(env.HOME, 'Library/Caches/org.swift.swiftpm/fixture-cache');
 const cache = fs.existsSync(cachePath) ? fs.readFileSync(cachePath, 'utf8') : null;
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({tool, args, env, present, cache}) + '\\n');
+const preferences = path.join(env.HOME, 'Library/Preferences');
+const keychains = path.join(env.HOME, 'Library/Keychains');
+const settingsPath = path.join(preferences, 'fixture-keychain.json');
+const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
+const keychain = settings.default && fs.existsSync(settings.default) ? JSON.parse(fs.readFileSync(settings.default, 'utf8')) : null;
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({tool, args, env, present, cache, settings, keychain, pid: process.pid}) + '\\n');
+function awaitSignal(ownedKeychain) {
+  process.on('SIGTERM', () => {
+    fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({tool: 'shutdown', resourcesPresent: fs.existsSync(env.HOME) && fs.existsSync(env.OPENCLAW_STATE_DIR), keychainPresent: !!ownedKeychain && fs.existsSync(ownedKeychain)}) + '\\n');
+    process.exit(0);
+  });
+  console.log('fake-child-ready');
+  setInterval(() => {}, 1000);
+}
+if (tool === 'security') {
+  assert.notEqual(env.HOME, ${JSON.stringify(home)});
+  for (const dir of [preferences, keychains]) assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+  const owned = args.at(-1);
+  assert.equal(path.dirname(owned), keychains);
+  const operation = args[0];
+  if (operation === 'create-keychain' || operation === 'unlock-keychain') {
+    assert.deepEqual(args.slice(1, -1), ['-p', '']);
+  } else if (operation === 'list-keychains' || operation === 'default-keychain') {
+    assert.deepEqual(args.slice(1, -1), ['-d', 'user', '-s']);
+  } else {
+    assert.ok(['set-keychain-settings', 'delete-keychain'].includes(operation));
+    assert.equal(args.length, 2);
+  }
+  // A failed create may already have left its owned database behind.
+  if (operation === 'create-keychain') fs.writeFileSync(owned, JSON.stringify({locked: true, autoLock: true}));
+  if (${JSON.stringify(waitForSignal)} === 'security' && operation === 'create-keychain') awaitSignal(owned);
+  if (operation === ${JSON.stringify(securityFailure)}) process.exit(29);
+  const data = JSON.parse(fs.readFileSync(owned, 'utf8'));
+  if (operation === 'unlock-keychain') data.locked = false;
+  if (operation === 'set-keychain-settings') data.autoLock = false;
+  if (operation === 'list-keychains') settings.search = [owned];
+  if (operation === 'default-keychain') settings.default = owned;
+  if (operation === 'delete-keychain') fs.unlinkSync(owned);
+  else fs.writeFileSync(owned, JSON.stringify(data));
+  fs.writeFileSync(settingsPath, JSON.stringify(settings));
+}
 if (tool === 'uname') console.log('Darwin');
 if (tool === 'rg') console.log('apps/macos/Sources/Fixture.swift');
 if (tool === 'git' && args[0] === 'rev-parse' && args[1] === '--show-toplevel') console.log(${JSON.stringify(root)});
@@ -46,17 +92,11 @@ if (tool === 'swift' && args[0] === 'test') {
   if (env.OPENCLAW_STATE_DIR !== ${JSON.stringify(path.join(root, "ambient-state"))}) {
     fs.writeFileSync(path.join(env.OPENCLAW_STATE_DIR, 'child-owned'), 'fixture');
   }
-  if (${waitForSignal}) {
-    process.on('SIGTERM', () => {
-      fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({tool: 'shutdown', resourcesPresent: fs.existsSync(env.HOME) && fs.existsSync(env.OPENCLAW_STATE_DIR)}) + '\\n');
-      process.exit(0);
-    });
-    console.log('fake-swift-ready');
-    setInterval(() => {}, 1000);
-  } else process.exit(env.OPENCLAW_PROFILE === 'default' ? ${defaultExitCode} : ${namedExitCode});
+  if (${JSON.stringify(waitForSignal)} === 'swift') awaitSignal(settings.default);
+  else process.exit(env.OPENCLAW_PROFILE === 'default' ? ${defaultExitCode} : ${namedExitCode});
 }
 `;
-  for (const tool of ["swift", "pnpm", "node", "git", "uname", "rg"]) {
+  for (const tool of ["security", "swift", "pnpm", "node", "git", "uname", "rg"]) {
     if (tool === "node") {
       fs.symlinkSync(process.execPath, path.join(bin, tool));
     } else {
@@ -173,6 +213,18 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
           expect(test.env[key]).toBe(f.env[key]);
         }
         expect(test.env.CFFIXED_USER_HOME).toBe(test.env.HOME);
+        expect(test.keychain).toEqual({ locked: false, autoLock: false });
+        const ownedKeychain = test.settings.default;
+        expect(path.dirname(ownedKeychain)).toBe(path.join(test.env.HOME, "Library/Keychains"));
+        expect(test.settings.search).toEqual([ownedKeychain]);
+        const partition = f.calls().filter((call) => call.env?.HOME === test.env.HOME);
+        expect(partition[0].args[0]).toBe("create-keychain");
+        expect(partition.at(-2).tool).toBe("swift");
+        expect(partition.at(-1).args).toEqual(["delete-keychain", ownedKeychain]);
+        for (const call of partition.filter((entry) => entry.tool === "security")) {
+          expect(call.env).toEqual(test.env);
+          expect(call.args.at(-1)).toBe(ownedKeychain);
+        }
         expect(test.cache).toBe("reusable build cache");
         const ownedRoot = path.dirname(test.env.HOME);
         roots.add(ownedRoot);
@@ -201,7 +253,7 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
       const result = f.run("node scripts/test-macos-native.mts named --skip-build");
       expect(result.status, result.stderr).toBe(0);
     }
-    const calls = f.calls();
+    const calls = f.calls().filter((call) => call.tool === "swift");
     expect(calls).toHaveLength(2);
     expect(calls[0].env.OPENCLAW_PROFILE).not.toBe(calls[1].env.OPENCLAW_PROFILE);
     expect(calls[0].env.HOME).not.toBe(calls[1].env.HOME);
@@ -224,8 +276,83 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
     expect(fs.existsSync(f.log)).toBe(false);
   });
 
-  it("keeps resources alive until an interrupted child has stopped", async () => {
-    const f = fixture(0, true);
+  it.each(["security", "swift"] as const)(
+    "keeps resources alive until interrupted %s has stopped",
+    async (tool) => {
+      const f = fixture(0, tool);
+      const child = spawn(
+        process.execPath,
+        ["scripts/test-macos-native.mts", "named", "--skip-build"],
+        {
+          cwd: repo,
+          env: f.env,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      const completion = once(child, "close");
+      try {
+        const ready = new Promise<void>((resolve) => {
+          let output = "";
+          child.stdout.on("data", (chunk) => {
+            output += String(chunk);
+            if (output.includes("fake-child-ready")) {
+              resolve();
+            }
+          });
+        });
+        await Promise.race([
+          ready,
+          completion.then(() => {
+            throw new Error("launcher exited before fake child was ready");
+          }),
+        ]);
+        const ownedRoot = path.dirname(f.calls()[0].env.HOME);
+        expect(fs.existsSync(ownedRoot)).toBe(true);
+        expect(fs.statSync(ownedRoot).mode & 0o777).toBe(0o700);
+        child.kill("SIGTERM");
+        const [code] = await completion;
+        expect(code).toBe(143);
+        expect(f.calls().at(-2)).toEqual({
+          tool: "shutdown",
+          resourcesPresent: true,
+          keychainPresent: true,
+        });
+        expect(f.calls().at(-1).args[0]).toBe("delete-keychain");
+        if (tool === "security") {
+          expect(f.calls().some((call) => call.tool === "swift")).toBe(false);
+        }
+        expect(fs.existsSync(ownedRoot)).toBe(false);
+      } finally {
+        child.kill("SIGTERM");
+        await completion;
+      }
+    },
+  );
+
+  it.each(["drained", "retained"])("holds the Keychain through %s child output", async (mode) => {
+    const f = fixture();
+    const release = path.join(f.root, "release-output");
+    const leafPidPath = path.join(f.root, "leaf.pid");
+    // The Swift stand-in exits, but its escaped child keeps both output pipes open.
+    const leaf = `
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(leafPidPath)}, String(process.pid));
+process.on('disconnect', () => console.log('fake-output-held'));
+const timer = setInterval(() => {
+  if (!fs.existsSync(${JSON.stringify(release)})) return;
+  clearInterval(timer);
+  const settings = JSON.parse(fs.readFileSync(process.env.HOME + '/Library/Preferences/fixture-keychain.json', 'utf8'));
+  fs.appendFileSync(${JSON.stringify(f.log)}, JSON.stringify({tool: 'output-close', keychainPresent: fs.existsSync(settings.default)}) + '\\n');
+}, 10);
+process.send('ready');
+`;
+    fs.writeFileSync(
+      path.join(f.root, "bin/swift"),
+      `#!${process.execPath}
+const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(leaf)}], {detached: true, stdio: ['ignore', 'inherit', 'inherit', 'ipc']});
+child.once('message', () => process.exit(0));
+`,
+    );
     const child = spawn(
       process.execPath,
       ["scripts/test-macos-native.mts", "named", "--skip-build"],
@@ -236,31 +363,106 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
       },
     );
     const completion = once(child, "close");
-    try {
-      const ready = new Promise<void>((resolve) => {
-        let output = "";
-        child.stdout.on("data", (chunk) => {
-          output += String(chunk);
-          if (output.includes("fake-swift-ready")) resolve();
-        });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    const held = new Promise<void>((resolve) => {
+      let stdout = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += String(chunk);
+        if (stdout.includes("fake-output-held")) {
+          resolve();
+        }
       });
+    });
+    let ownedRoot: string | undefined;
+    try {
       await Promise.race([
-        ready,
+        held,
         completion.then(() => {
-          throw new Error("launcher exited before fake Swift was ready");
+          throw new Error(stderr || "launcher exited before output fixture");
         }),
       ]);
-      const ownedRoot = path.dirname(f.calls()[0].env.HOME);
-      expect(fs.existsSync(ownedRoot)).toBe(true);
-      expect(fs.statSync(ownedRoot).mode & 0o777).toBe(0o700);
-      child.kill("SIGTERM");
+      const calls = f.calls();
+      ownedRoot = path.dirname(calls[0].env.HOME);
+      const ownedKeychain = calls[0].args.at(-1);
+      expect(fs.existsSync(ownedKeychain)).toBe(true);
+      expect(calls.some((call) => call.args?.[0] === "delete-keychain")).toBe(false);
+      if (mode === "drained") {
+        fs.writeFileSync(release, "release");
+      }
       const [code] = await completion;
-      expect(code).toBe(143);
-      expect(f.calls().at(-1)).toEqual({ tool: "shutdown", resourcesPresent: true });
-      expect(fs.existsSync(ownedRoot)).toBe(false);
+      expect(code, stderr).toBe(mode === "drained" ? 0 : 1);
+      if (mode === "drained") {
+        expect(f.calls().at(-2)).toEqual({ tool: "output-close", keychainPresent: true });
+        expect(f.calls().at(-1).args).toEqual(["delete-keychain", ownedKeychain]);
+        expect(fs.existsSync(ownedRoot)).toBe(false);
+      } else {
+        expect(fs.existsSync(ownedKeychain)).toBe(true);
+        expect(f.calls().some((call) => call.args?.[0] === "delete-keychain")).toBe(false);
+        expect(stderr).toContain("EPROCESSGROUP_CLEANUP_FAILED");
+        expect(stderr).toContain(ownedRoot);
+      }
     } finally {
+      fs.writeFileSync(release, "release");
       child.kill("SIGTERM");
       await completion;
+      if (fs.existsSync(leafPidPath)) {
+        const pid = Number(fs.readFileSync(leafPidPath, "utf8"));
+        await expect
+          .poll(() => {
+            try {
+              process.kill(pid, 0);
+              return false;
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+                return true;
+              }
+              throw error;
+            }
+          })
+          .toBe(true);
+      }
+      if (ownedRoot) {
+        fs.rmSync(ownedRoot, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it.each([
+    "create-keychain",
+    "unlock-keychain",
+    "set-keychain-settings",
+    "list-keychains",
+    "default-keychain",
+  ])("cleans a completed %s failure without starting Swift", (command) => {
+    const f = fixture(0, false, 0, command);
+    const result = f.run("node scripts/test-macos-native.mts named --skip-build");
+    expect(result.status, result.stderr).not.toBe(0);
+    const calls = f.calls();
+    expect(calls.every((call) => call.tool === "security")).toBe(true);
+    expect(calls.at(-2).args[0]).toBe(command);
+    expect(calls.at(-1).args[0]).toBe("delete-keychain");
+    expect(fs.existsSync(path.dirname(calls[0].env.HOME))).toBe(false);
+    expect(result.stderr).toContain("[macos-native] FAILED");
+  });
+
+  it("retains resources and reports Keychain cleanup failure", () => {
+    const f = fixture(0, false, 0, "delete-keychain");
+    const result = f.run("node scripts/test-macos-native.mts named --skip-build");
+    expect(result.status, result.stderr).not.toBe(0);
+    const calls = f.calls();
+    const ownedRoot = path.dirname(calls[0].env.HOME);
+    try {
+      expect(calls.at(-2).tool).toBe("swift");
+      expect(calls.at(-1).args[0]).toBe("delete-keychain");
+      expect(fs.existsSync(calls.at(-1).args.at(-1))).toBe(true);
+      expect(result.stderr).toContain(ownedRoot);
+      expect(result.stderr).toContain("delete-keychain");
+      expect(result.stderr).toContain("[macos-native] FAILED");
+    } finally {
+      fs.rmSync(ownedRoot, { recursive: true, force: true });
     }
   });
 
@@ -272,8 +474,9 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
       expect(result.status, result.stderr).toBe(historical ? 0 : 1);
       const calls = f.calls().filter((call) => call.tool === "swift");
       expect(calls.map((call) => call.args[0])).toEqual(historical ? ["build", "test"] : ["build"]);
-      if (!historical)
+      if (!historical) {
         expect(result.stderr).toContain("must provide scripts/test-macos-native.mts");
+      }
     },
   );
 
