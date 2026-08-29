@@ -319,7 +319,9 @@ export class AcpTranslatorAgentEvents {
   /** Retries a relay's recorded user decision; completes the relay once it lands. */
   private async retryApprovalRelayDecision(relay: AcpPendingApprovalRelay): Promise<void> {
     const decision = relay.pendingDecision;
-    if (!decision || relay.state !== "active") {
+    // Prompt cleanup revokes relay ownership. A detached stored decision must
+    // never race its cleanup denial at the Gateway authorization boundary.
+    if (!decision || !this.isApprovalRelayActive(relay)) {
       return;
     }
     const resolved = await this.resolveGatewayApproval(relay.approvalId, decision);
