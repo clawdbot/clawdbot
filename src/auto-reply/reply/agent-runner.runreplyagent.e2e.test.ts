@@ -1804,7 +1804,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
               resetTriggered: false,
             })
           : undefined;
-      const deliveryStarted = createDeferred<void>();
+      const deliveryStarted = createDeferred();
       let blockFlush: Promise<void> | undefined;
       const onBlockReply = vi.fn(async () => {
         deliveryStarted.resolve();
