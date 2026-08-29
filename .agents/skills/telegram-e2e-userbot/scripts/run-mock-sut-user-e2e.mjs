@@ -351,6 +351,26 @@ function writePrivateJson(pathname, data) {
   fs.chmodSync(pathname, 0o600);
 }
 
+function markScenarioBarrier(directory, index) {
+  fs.writeFileSync(path.join(directory, String(index)), "", { mode: 0o600 });
+}
+
+export async function applyScenarioConfigPatch({
+  configPath,
+  patch,
+  gateway,
+  stopGateway,
+  startGateway,
+  markApplied,
+}) {
+  const current = readJson(configPath);
+  writePrivateJson(configPath, mergeConfig(current, patch));
+  await stopGateway(gateway);
+  const restarted = await startGateway();
+  markApplied();
+  return restarted;
+}
+
 async function readTester(driverEnv, leaseFailure, repoRoot) {
   let result;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -1019,9 +1039,13 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     : path.join(temp.root, "mock-openai-requests.ndjson");
   const outputPath = args.output ? resolve(args.output) : path.join(temp.root, "probe-result.json");
   const normalizedScenarioPath = args.scenario ? path.join(temp.root, "scenario.json") : "";
+  const scenarioBarrierDir = args.scenario ? path.join(temp.root, "scenario-barriers") : "";
   const followupControlCommandPath = path.join(temp.root, "followup-control-command.json");
   const followupControlStatusPath = path.join(temp.root, "followup-control-status.json");
-  if (args.scenario) writePrivateJson(normalizedScenarioPath, args.scenario);
+  if (args.scenario) {
+    writePrivateJson(normalizedScenarioPath, args.scenario);
+    fs.mkdirSync(scenarioBarrierDir, { recursive: true, mode: 0o700 });
+  }
 
   let mock;
   let gateway;
@@ -1150,7 +1174,14 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     const probeArgs = recording ? ["run", USER_RECORD_PATH] : ["run", USER_DRIVER_PATH, "probe"];
     if (recording) {
       if (args.scenario) {
-        probeArgs.push("--scenario", normalizedScenarioPath, "--ready-file", recorderReadyPath);
+        probeArgs.push(
+          "--scenario",
+          normalizedScenarioPath,
+          "--ready-file",
+          recorderReadyPath,
+          "--barrier-dir",
+          scenarioBarrierDir,
+        );
       } else if (args.photos.length) {
         probeArgs.push("--send-caption", args.caption);
         for (const photo of args.photos) probeArgs.push("--send-photo", photo);
@@ -1255,7 +1286,8 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     };
     const gatewayControl = (async () => {
       const actions = (args.scenario?.actions ?? [])
-        .filter((action) =>
+        .map((action, index) => ({ action, index }))
+        .filter(({ action }) =>
           [
             "restartGateway",
             "patchConfig",
@@ -1270,9 +1302,9 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
             "followupDrainRelease",
           ].includes(action.type),
         )
-        .toSorted((left, right) => left.atMs - right.atMs);
+        .toSorted((left, right) => left.action.atMs - right.action.atMs);
       const backgroundActions = [];
-      for (const action of actions) {
+      for (const { action, index } of actions) {
         if (!(await waitForScenarioOffset(scenarioStartedAt, action.atMs, () => controlsStopped))) {
           break;
         }
@@ -1316,9 +1348,16 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
             if (controlsStopped) throw new Error("Gateway restart cancelled after lease loss.");
             creds.assertLeaseHealthy();
             gateway = await startGateway();
+            markScenarioBarrier(scenarioBarrierDir, index);
           } else if (action.type === "patchConfig") {
-            const current = readJson(temp.configPath);
-            writePrivateJson(temp.configPath, mergeConfig(current, action.patch));
+            gateway = await applyScenarioConfigPatch({
+              configPath: temp.configPath,
+              patch: action.patch,
+              gateway,
+              stopGateway: stopChild,
+              startGateway,
+              markApplied: () => markScenarioBarrier(scenarioBarrierDir, index),
+            });
           } else if (action.type === "systemEvent") {
             const result = await runCommand(
               "pnpm",

@@ -23,6 +23,16 @@ class FakeClient:
 
 
 class CallbackScenarioTest(unittest.TestCase):
+    def test_waits_for_prior_gateway_barriers(self):
+        actions = [
+            {"type": "patchConfig", "atMs": 0},
+            {"type": "send", "atMs": 0, "text": "after patch"},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertFalse(record.scenario_barriers_ready(actions, 1, directory))
+            (Path(directory) / "0").touch()
+            self.assertTrue(record.scenario_barriers_ready(actions, 1, directory))
+
     def test_publishes_atomic_recorder_ready_artifact(self):
         recorder = record.EventRecorder(FakeClient(), -1001, "", 42)
         recorder.started_at = 1_786_900_000.125

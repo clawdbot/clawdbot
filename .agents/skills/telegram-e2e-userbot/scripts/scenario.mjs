@@ -163,7 +163,10 @@ export function parseScenario(value) {
       timeoutMs: positiveInteger(value.health.timeoutMs, "scenario.health.timeoutMs", 1_000),
     };
   }
-  return { actions, ...(health ? { health } : {}) };
+  return {
+    actions: actions.toSorted((left, right) => left.atMs - right.atMs),
+    ...(health ? { health } : {}),
+  };
 }
 
 export function readScenarioFile(pathname) {

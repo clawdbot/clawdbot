@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  applyScenarioConfigPatch,
   assertSutMatchesLease,
   assertTesterMatchesLease,
   cleanupOwnedRuntime,
@@ -35,6 +36,29 @@ function exited(child) {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   return new Promise((resolve) => child.once("exit", resolve));
 }
+
+test("config patches restart before releasing their scenario barrier", async (context) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-config-patch-"));
+  context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const configPath = path.join(temp, "openclaw.json");
+  fs.writeFileSync(configPath, JSON.stringify({ channels: { telegram: { historyLimit: 5 } } }));
+  const calls = [];
+  const restarted = { pid: 2 };
+  const result = await applyScenarioConfigPatch({
+    configPath,
+    patch: { channels: { telegram: { historyLimit: 9 } } },
+    gateway: { pid: 1 },
+    stopGateway: async () => calls.push("stop"),
+    startGateway: async () => {
+      calls.push("start");
+      return restarted;
+    },
+    markApplied: () => calls.push("mark"),
+  });
+  assert.equal(result, restarted);
+  assert.deepEqual(calls, ["stop", "start", "mark"]);
+  assert.equal(JSON.parse(fs.readFileSync(configPath, "utf8")).channels.telegram.historyLimit, 9);
+});
 
 test("runner rejects a live tester identity that differs from the lease", () => {
   assert.throws(

@@ -383,16 +383,35 @@ def build_driver():
     return config, bot_config, user_driver
 
 
-def run_scenario(recorder, driver_obj, sut, actions, seconds):
-    telegram_actions = [action for action in actions if action["type"] in {"send", "click"}]
+def scenario_barriers_ready(actions, action_index, barrier_dir):
+    if not barrier_dir:
+        return True
+    return all(
+        (Path(barrier_dir) / str(index)).exists()
+        for index, action in enumerate(actions[:action_index])
+        if action["type"] in {"restartGateway", "patchConfig"}
+    )
+
+
+def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
+    telegram_actions = sorted(
+        (
+            (index, action)
+            for index, action in enumerate(actions)
+            if action["type"] in {"send", "click"}
+        ),
+        key=lambda item: item[1]["atMs"],
+    )
     sent_ids = []
     next_action = 0
     deadline = recorder.started_at + seconds
     while time.time() < deadline:
         now_ms = int((time.time() - recorder.started_at) * 1000)
         if next_action < len(telegram_actions):
-            action = telegram_actions[next_action]
-            if now_ms >= action["atMs"]:
+            action_index, action = telegram_actions[next_action]
+            if now_ms >= action["atMs"] and scenario_barriers_ready(
+                actions, action_index, barrier_dir
+            ):
                 if action["type"] == "send":
                     text, _run = driver.apply_template(action["text"], sut)
                     result = driver_obj.send_text(recorder.chat_id, text)
@@ -484,6 +503,7 @@ def main():
     parser.add_argument("--send-caption", default="", help="caption for the first photo")
     parser.add_argument("--scenario", default="", help="normalized scenario JSON from the runner")
     parser.add_argument("--ready-file", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--barrier-dir", default="", help=argparse.SUPPRESS)
     parser.add_argument("--seconds", type=float, default=30.0)
     parser.add_argument("--record", default="/tmp/tg-user-events.ndjson")
     parser.add_argument("--output", default="")
@@ -493,6 +513,8 @@ def main():
         parser.error("use only one of --send, --send-photo, or --scenario")
     if args.ready_file and not args.scenario:
         parser.error("--ready-file requires --scenario")
+    if args.barrier_dir and not args.scenario:
+        parser.error("--barrier-dir requires --scenario")
 
     config, bot_config, driver_obj = build_driver()
 
@@ -510,7 +532,14 @@ def main():
         if args.scenario:
             scenario = json.loads(Path(args.scenario).read_text())
             sent_ids.extend(
-                run_scenario(recorder, driver_obj, sut, scenario["actions"], args.seconds)
+                run_scenario(
+                    recorder,
+                    driver_obj,
+                    sut,
+                    scenario["actions"],
+                    args.seconds,
+                    args.barrier_dir,
+                )
             )
         elif args.send:
             text, _run = driver.apply_template(args.send, sut)

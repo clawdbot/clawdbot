@@ -25,10 +25,10 @@ test("normalizes Telegram and gateway actions", () => {
         { type: "telegramApiHold", atMs: 980, method: "sendMessage", skip: 1 },
         { type: "telegramApiWaitHeld", atMs: 990, method: "sendMessage" },
         { type: "telegramApiRelease", atMs: 1_000 },
+        { type: "restartGateway", atMs: 1_000, graceMs: 20_000 },
         { type: "followupDrainHold", atMs: 1_100, sessionKey: "agent:main:main" },
         { type: "followupDrainWaitHeld", atMs: 1_200 },
         { type: "followupDrainRelease", atMs: 1_400 },
-        { type: "restartGateway", atMs: 1_000, graceMs: 20_000 },
       ],
       health: {},
     }),
@@ -64,6 +64,7 @@ test("normalizes Telegram and gateway actions", () => {
           timeoutMs: 30_000,
         },
         { type: "telegramApiRelease", atMs: 1_000 },
+        { type: "restartGateway", atMs: 1_000, graceMs: 20_000 },
         {
           type: "followupDrainHold",
           atMs: 1_100,
@@ -72,10 +73,26 @@ test("normalizes Telegram and gateway actions", () => {
         },
         { type: "followupDrainWaitHeld", atMs: 1_200, timeoutMs: 60_000 },
         { type: "followupDrainRelease", atMs: 1_400, timeoutMs: 60_000 },
-        { type: "restartGateway", atMs: 1_000, graceMs: 20_000 },
       ],
       health: { intervalMs: 250, timeoutMs: 1_000 },
     },
+  );
+});
+
+test("stably sorts actions by timestamp", () => {
+  assert.deepEqual(
+    parseScenario({
+      actions: [
+        { type: "send", atMs: 1_000, text: "late" },
+        { type: "send", atMs: 0, text: "early" },
+        { type: "send", atMs: 1_000, text: "same-time" },
+      ],
+    }).actions,
+    [
+      { type: "send", atMs: 0, text: "early" },
+      { type: "send", atMs: 1_000, text: "late" },
+      { type: "send", atMs: 1_000, text: "same-time" },
+    ],
   );
 });
 
