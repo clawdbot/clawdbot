@@ -170,8 +170,10 @@ The example profile above prepares OpenClaw worker turns only. To make the same 
 gateway_version="$(openclaw --version | awk '{print $2}')"
 existing_setup="$(openclaw config get cloudWorkers.profiles.aws.settings.setup)"
 openclaw config set cloudWorkers.profiles.aws.settings.setup \
-  "${existing_setup}; sudo npm install -g openclaw@${gateway_version}; openclaw plugins install npm:@openclaw/codex@${gateway_version} --pin --force"
+  "${existing_setup}; sudo sh -c 'umask 022 && npm install -g openclaw@${gateway_version}' && openclaw plugins install npm:@openclaw/codex@${gateway_version} --pin --force"
 ```
+
+The root shell scopes `umask 022` to the global install so the node user can read and execute the package. A restrictive inherited mask can otherwise leave a successful root install inaccessible to that user. Verify `openclaw --version` on the box as the same user that runs enrollment, without `sudo`; a root-only probe does not establish that enrollment can use it. Keep enrollment credentials and state private.
 
 `--force` allows setup replay to converge when the plugin is already installed. After upgrading the Gateway, update both appended package versions to match it while preserving the rest of the setup. This recipe requires both exact versions to exist in the registry. For unreleased source builds, use a complete custom node package as described below; a standalone local plugin tarball does not carry official npm provenance.
 
@@ -193,6 +195,15 @@ shasum -a 256 ".artifacts/cloud-node/openclaw-cloud-${source_sha}.tgz"
 Run this in a clean, trusted checkout with dependencies installed. The builder compiles the runtime, includes the selected plugin's built entrypoints and import closure, and regenerates the installation inventory. It temporarily adds the plugin's exact runtime dependency pins to the distribution manifest, rejecting conflicting or unpinned dependencies, then restores the source manifest and inventory. Repeat `--bundle-plugin <id>` for additional source plugins. Without that option, the ordinary core package and external plugin publication contracts are unchanged.
 
 Publish the resulting archive through your existing immutable artifact delivery path and make `settings.setup` verify its SHA-256 before installing it globally with normal npm lifecycle scripts enabled. Record both source SHA and archive digest: different unreleased builds can share a version. Do not copy a plugin into an installed release or substitute a standalone `npm-pack:` plugin archive for this distribution.
+
+After verifying the downloaded archive, install it with the mask scoped to the root command, then verify the version as the enrollment user:
+
+```bash
+sudo sh -c 'umask 022 && npm install -g /tmp/openclaw-cloud.tgz'
+openclaw --version
+```
+
+Use the path of your verified archive in place of `/tmp/openclaw-cloud.tgz`. Changing the install mask does not repair existing root-only parent directories; if an earlier install was inaccessible, correct access to that package and its parent directories before retrying enrollment.
 
 Native dependencies are declared at the distribution root and installed for the target operating system and CPU; the archive does not copy the build host's plugin `node_modules`. Target installation still needs registry access and is not an offline dependency bundle. Verify each target architecture you deploy. Use `--skip-build` only when reusing a complete build from that same source revision with all selected plugin outputs present.
 
