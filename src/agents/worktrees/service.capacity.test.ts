@@ -222,7 +222,9 @@ describe("ManagedWorktreeService capacity", () => {
     expect(await fs.readFile(path.join(created.path, "uncommitted.txt"), "utf8")).toBe(
       "only copy\n",
     );
-    expect(await git(repo, "branch", "--list", created.branch)).toBe(created.branch);
+    expect(await git(repo, "branch", "--list", "--format=%(refname)", created.branch)).toBe(
+      `refs/heads/${created.branch}`,
+    );
   });
 
   it("rejects reuse of a broken Git link without destroying its work", async () => {

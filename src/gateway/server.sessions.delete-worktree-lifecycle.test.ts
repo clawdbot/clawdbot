@@ -219,8 +219,9 @@ test("automatic session archive snapshots the checkout after committing metadata
       lastActivityAt: old,
       sessionStartedAt: old,
     }),
-    { skipMaintenance: true },
+    { skipMaintenance: true, replaceEntry: true },
   );
+  expect(loadSessionEntry({ storePath, sessionKey: key })?.updatedAt).toBe(old);
   const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
   await fs.writeFile(path.join(worktree.path, "draft.txt"), "automatic archive keeps work\n");
 
@@ -260,14 +261,17 @@ test.each(["unarchived", "rearchived"] as const)(
         lastActivityAt: old,
         sessionStartedAt: old,
       }),
-      { skipMaintenance: true },
+      { skipMaintenance: true, replaceEntry: true },
     );
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.updatedAt).toBe(old);
     const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
     const successorArchive = change === "rearchived" ? Date.now() + 1000 : undefined;
+    let archivedBeforeCleanup: number | undefined;
     const originalRemove = ManagedWorktreeService.prototype.remove;
     const remove = vi
       .spyOn(ManagedWorktreeService.prototype, "remove")
       .mockImplementationOnce(async function (this: ManagedWorktreeService, params) {
+        archivedBeforeCleanup = loadSessionEntry({ storePath, sessionKey: key })?.archivedAt;
         await patchSessionEntryCore(
           { storePath, sessionKey: key },
           () => ({ archivedAt: successorArchive }),
@@ -276,12 +280,14 @@ test.each(["unarchived", "rearchived"] as const)(
         return await originalRemove.call(this, params);
       });
     try {
-      await applySessionEntryLifecycleMutation({
+      const result = await applySessionEntryLifecycleMutation({
         agentId: "main",
         storePath,
         removals: [],
         maintenanceOverride: { mode: "enforce", archiveDashboardAfterMs: 1 },
       });
+      expect(result.archived).toBe(1);
+      expect(archivedBeforeCleanup).toEqual(expect.any(Number));
       expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(successorArchive);
       expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
       await expect(fs.access(worktree.path)).resolves.toBeUndefined();
