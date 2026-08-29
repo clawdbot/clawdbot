@@ -1,5 +1,7 @@
 import { once } from "node:events";
+import { runInNewContext } from "node:vm";
 // Qa Lab tests cover server plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
@@ -6921,8 +6923,31 @@ Update and merge these partial structured summaries.`,
       expect(execArgs).toMatchObject({ language: "javascript", restartSafe: true });
       expect(execArgs.code).toContain("qa_restart_wait");
       expect(execArgs.code).toContain('catalog.search("qa_restart_wait")');
-      expect(execArgs.code).toContain("await target({})");
       expect(execArgs.code).toContain(`CHECKPOINT-${checkpoint}`);
+
+      const started = createDeferred<void>();
+      const released = createDeferred<void>();
+      let yielded = false;
+      const target = Object.assign(
+        () => {
+          started.resolve();
+          return released.promise;
+        },
+        { toolName: "qa_restart_wait" },
+      );
+      const execution = runInNewContext(`(async () => { ${String(execArgs.code)} })()`, {
+        catalog: { search: async () => [target] },
+        yield_control: () => {
+          yielded = true;
+        },
+      }) as Promise<unknown>;
+      try {
+        await started.promise;
+        expect(yielded).toBe(true);
+      } finally {
+        released.resolve();
+        await expect(execution).resolves.toBe(`CHECKPOINT-${checkpoint}`);
+      }
 
       const runId = `restart-checkpoint-${checkpoint}`;
       input.push(
