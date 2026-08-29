@@ -69,7 +69,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Low-memory installs:** stop parsing installed package JavaScript during bundled-plugin postinstall pruning, preventing multi-gigabyte transient heap use and OOMs on low-memory ARM hosts while retaining release-time package import validation.
 - Gateway/subagents: keep plugin completion turns bound to the owning Gateway runtime so successful native subagents can finish delivery without losing the published reply runtime.
 - **Upgrade config repair:** retain plugin-owned channel configuration migrations alongside core schemas so `doctor --fix` can repair older settings before an external plugin is installed or granted capabilities, while preserving installed-plugin ownership and state-migration boundaries.
 
