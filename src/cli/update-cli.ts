@@ -269,6 +269,10 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     )
     .action(async (opts, command) => {
       try {
+        if (rejectUnsupportedInheritedUpdateDryRun(command)) {
+          return;
+        }
+
         await updateStatusCommand({
           json: Boolean(opts.json) || inheritedUpdateJson(command),
           timeout: inheritedUpdateTimeout(opts, command),
