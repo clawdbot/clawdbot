@@ -111,6 +111,17 @@ Reauthentication preserves an existing explicit primary model, including
 
 ## "Model is not allowed" (and why replies stop)
 
+When `modelPolicy.allow` is omitted or empty, you can select an explicit
+`provider/model` even when it is absent from the finite `/model` picker catalog.
+The catalog supplies browse choices and model metadata; it is not an implicit
+allowlist. Provider availability, runtime compatibility, and authentication are
+validated independently. An unrestricted policy does not make an unknown
+provider or an unsupported runtime usable. If the policy is omitted, unmigrated
+legacy model-map restrictions described above still apply.
+
+The same policy applies to explicit `provider/model` and configured-alias hints
+after `/new` or `/reset`. Unrecognized leading text stays in the prompt.
+
 If `agents.defaults.modelPolicy.allow` is non-empty, it becomes the allowlist for `/model`, session overrides, and `--model`. Selecting a model outside that allowlist returns before any normal reply is generated. A per-agent `agents.entries.*.modelPolicy.allow` replaces the default policy for that agent.
 
 ```text
@@ -169,6 +180,12 @@ openclaw config set agents.defaults.modelPolicy.allow '["openai/gpt-5.4","anthro
 
 ## Choose a model for a session
 
+Gateway `sessions.create` and `sessions.patch` resolve model aliases and
+`modelPolicy.allow` in the target session's agent scope. An explicit per-agent
+allowlist replaces the shared default, including `[]` to allow any model.
+Policy permission does not supply provider credentials or guarantee that the
+selected model is available to its runtime.
+
 Choose the model when you create a session whenever possible. The Control UI's
 **New Chat** composer includes the model picker for this reason: a fresh session
 gives the selected model a clean conversation boundary.
@@ -200,7 +217,7 @@ Without a scope flag, `agents.defaults.modelSelectionScope` can opt into `"sessi
 ```text
 /model
 /model list
-/model 3
+/model Opus
 /model openai/gpt-5.4
 /model openai/gpt-5.4 -s
 /model openai/gpt-5.4 -a
@@ -210,7 +227,11 @@ Without a scope flag, `agents.defaults.modelSelectionScope` can opt into `"sessi
 /model status
 ```
 
-- `/model` and `/model list` show a compact numbered picker. `/model <#>` selects from it. Discord pickers follow the direct command behavior, including `modelSelectionScope`. Telegram callback pickers always stay session-only. `/models add` is deprecated and returns a message instead of registering models from chat.
+- In text chat, `/model` shows the current selection. `/model list` (or `/models`) browses providers; `/models <provider>` lists model refs.
+- Select with `/model <provider/model>` or `/model <alias>` (for example, `/model Opus` with the alias configured above). Numeric selections such as `/model 3` are not supported.
+- On Discord, native `/model` and `/models` without arguments open an interactive picker. Choose a provider and model, then press **Submit**. Discord pickers follow the direct command behavior, including `modelSelectionScope`.
+- On Telegram, `/model` offers a **Browse providers** button; `/model list` and `/models` open the provider menu directly. Tap a provider, then a model. Telegram callback selections always stay session-only.
+- `/models add` is deprecated and returns a message instead of registering models from chat.
 - **Current session:** `/model <model> -s` (or `--session`) changes only this session, regardless of `modelSelectionScope`. Neither configured default changes.
 - **Agent default:** Owner/admin `/model <model> -a` (or `--agent`) selects the model for this session and requests an update for `agents.entries.<agent>.model`. It creates an explicit primary for that configured agent when needed and never falls through to the shared global default.
 - **Global default:** Owner/admin `/model <model> -g` (or `--global`) changes this session and requests an update for the shared `agents.defaults.model` fallback. It does not overwrite other agents' explicit primaries or other sessions' model pins. New and existing unpinned sessions, and cron jobs that inherit this default, can use the changed model on their next run.
@@ -288,6 +309,7 @@ Custom providers configured under `models.providers` are written into `models.js
     - SecretRef-managed `apiKey` values refresh from source markers instead of persisting resolved secrets: the env variable name for env refs, `secretref-managed` for file/exec/store refs.
     - SecretRef-managed header values refresh the same way, using `secretref-env:ENV_VAR_NAME` for env refs.
     - Empty or missing `apiKey`/`baseUrl` in `models.json` fall back to config `models.providers`.
+    - Explicit model lists control membership. For matching rows, an explicit `input` wins; when the source row omits `input`, plugin discovery can fill that capability metadata.
     - Other provider fields refresh from config and normalized catalog data.
 
   </Accordion>

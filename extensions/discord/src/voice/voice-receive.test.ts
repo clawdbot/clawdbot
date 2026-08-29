@@ -1,9 +1,10 @@
 import type { Readable } from "node:stream";
-import type { MockCallSource, TestRealtimeSessionEntry } from "./manager.e2e.test-support.js";
+import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(
   ({
+    PassThrough,
     VoiceOpcodes,
     expect,
     it,
@@ -27,6 +28,7 @@ defineDiscordVoiceTests(
     createFollowManager,
     expectConnectedStatus,
     getSessionEntry,
+    getLastAudioPlayer,
     getVoiceReceive,
     getVoiceFollowing,
     emitDecryptFailure,
@@ -79,7 +81,7 @@ defineDiscordVoiceTests(
         throw new Error("expected voice session for guild g1");
       }
       expect(entry.player.state.status).toBe("idle");
-      entry.player.state.status = "playing";
+      getLastAudioPlayer().state.status = "playing";
 
       await handleSpeakingStart(manager, entry, "u-denied");
 
@@ -207,9 +209,7 @@ defineDiscordVoiceTests(
       const manager = createManager();
 
       await manager.join({ guildId: "g1", channelId: "1001" });
-      const entry = getSessionEntry(manager) as TestRealtimeSessionEntry & {
-        sessionLifecycle: { status: "active" } | { status: "stopped"; reason: string };
-      };
+      const entry = getSessionEntry(manager);
       entry.sessionLifecycle = { status: "stopped", reason: "test" };
 
       emitDecryptFailure(manager);
@@ -839,7 +839,8 @@ defineDiscordVoiceTests(
 
         const entry = getSessionEntry(manager);
 
-        const firstStream = { destroy: vi.fn() };
+        const firstStream = new PassThrough();
+        const destroyFirstStream = vi.spyOn(firstStream, "destroy");
         entry.capture.activeSpeakers.add("u1");
         entry.capture.captureGenerations.set("u1", 1);
         entry.capture.activeCaptureStreams.set("u1", { generation: 1, stream: firstStream });
@@ -848,7 +849,7 @@ defineDiscordVoiceTests(
 
         await vi.advanceTimersByTimeAsync(2_500);
 
-        expect(firstStream.destroy).toHaveBeenCalledTimes(1);
+        expect(destroyFirstStream).toHaveBeenCalledTimes(1);
         expect(entry?.capture.activeSpeakers.has("u1")).toBe(false);
 
         const secondStream = {

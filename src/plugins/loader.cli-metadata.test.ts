@@ -27,6 +27,22 @@ afterAll(() => {
 });
 
 describe("plugin loader CLI metadata", () => {
+  it("keeps an explicit empty CLI metadata registry authoritative", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "empty-scope",
+      filename: "index.cjs",
+      body: 'module.exports = { id: "empty-scope", register(api) { api.registerCli(() => {}, { commands: ["empty-scope"] }); } };',
+    });
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: { plugins: { load: { paths: [plugin.file] }, allow: [plugin.id] } },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+      installRecords: {},
+    });
+    expect(registry.plugins).toEqual([]);
+    expect(registry.cliRegistrars).toEqual([]);
+  });
+
   it.each([
     {
       id: "wrong-cli-channel-entry",

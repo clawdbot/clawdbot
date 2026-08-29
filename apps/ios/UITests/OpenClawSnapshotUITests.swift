@@ -169,27 +169,49 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
     }
 
-    func testSidebarMoreAgentsMenuShowsAvatarsAndKeepsFooterVisible() throws {
+    func testSidebarAgentSelectorShowsAllAgentsAndKeepsFooterVisible() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat",
             initialDestination: "chat",
-            name: "sidebar-more-agents"))
+            name: "sidebar-agent-selector"))
 
         let showSidebar = try XCTUnwrap(self.app?.buttons["RootTabs.Sidebar.Show"])
         XCTAssertTrue(showSidebar.waitForExistence(timeout: 8))
         showSidebar.tap()
 
-        let moreAgents = try XCTUnwrap(self.app?.buttons["More Agents"])
-        XCTAssertTrue(moreAgents.waitForExistence(timeout: 5))
+        let agentSelector = try XCTUnwrap(self.app?.buttons["RootTabs.Sidebar.AgentSelector"])
+        XCTAssertTrue(agentSelector.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(agentSelector.frame.height, 44)
+        XCTAssertEqual(agentSelector.value as? String, "Molty")
+
+        let newChat = try XCTUnwrap(self.app?.buttons["New Chat"])
+        XCTAssertTrue(newChat.exists)
+        XCTAssertGreaterThanOrEqual(newChat.frame.height, 44)
+        XCTAssertGreaterThan(newChat.frame.minY, agentSelector.frame.maxY)
+
         let gatewayFooter = try XCTUnwrap(self.app?.buttons.matching(
             NSPredicate(format: "label CONTAINS %@", "OpenClaw Gateway")).firstMatch)
         XCTAssertTrue(gatewayFooter.exists)
-        moreAgents.tap()
+        let settings = try XCTUnwrap(self.app?.buttons["RootTabs.Sidebar.Destination.settings"])
+        XCTAssertTrue(settings.exists)
+        XCTAssertGreaterThan(settings.frame.midX, gatewayFooter.frame.midX)
+        XCTAssertEqual(settings.frame.midY, gatewayFooter.frame.midY, accuracy: 2)
+        self.attachScreenshot(named: "sidebar-agent-selector")
 
+        agentSelector.tap()
+
+        XCTAssertTrue(self.app?.buttons["Molty"].waitForExistence(timeout: 5) == true)
         XCTAssertTrue(self.app?.buttons["Research"].waitForExistence(timeout: 5) == true)
         XCTAssertTrue(self.app?.buttons["Automation"].exists == true)
-        self.attachScreenshot(named: "sidebar-more-agents")
+        self.attachScreenshot(named: "sidebar-agent-selector-open")
+
+        self.app?.buttons["Research"].tap()
+        XCTAssertEqual(agentSelector.value as? String, "Research")
+        agentSelector.tap()
+        XCTAssertTrue(self.app?.buttons["Molty"].waitForExistence(timeout: 5) == true)
+        XCTAssertTrue(self.app?.buttons["Research"].exists == true)
+        XCTAssertTrue(self.app?.buttons["Automation"].exists == true)
     }
 
     func testSidebarSlowEdgeDragOpensFromEveryRootDestination() throws {
@@ -1047,6 +1069,206 @@ final class OpenClawSnapshotUITests: XCTestCase {
 }
 
 extension OpenClawSnapshotUITests {
+    func testChatActionsModelRowsScreenshot() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "-openclaw.chat.modelFavorites", "",
+                "-openclaw.chat.modelRecents", "",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let actions = app.buttons["Chat actions"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 8))
+        self.assertMinimumTouchTarget(actions)
+        self.assertMinimumTouchTarget(app.buttons["RootTabs.Sidebar.Show"])
+        self.attachScreenshot(named: "chat-actions-header")
+        actions.tap()
+
+        let popover = app.descendants(matching: .any)["chat-actions-popover"]
+        XCTAssertTrue(popover.waitForExistence(timeout: 5))
+        XCTAssertFalse(popover.buttons["New Chat"].exists)
+        XCTAssertFalse(popover.buttons["Sessions…"].exists)
+        XCTAssertFalse(popover.buttons["Dashboard"].exists)
+        XCTAssertTrue(popover.buttons["New session options…"].exists)
+        let defaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
+        XCTAssertTrue(defaultModel.waitForExistence(timeout: 5))
+        let defaultLogo = defaultModel.images["chat-model-provider-icon-openai"]
+        XCTAssertTrue(defaultLogo.exists)
+
+        let providerDrawer = app.buttons["chat-model-provider-drawer-openai"]
+        XCTAssertTrue(providerDrawer.waitForExistence(timeout: 5))
+        self.assertMinimumTouchTarget(providerDrawer)
+        XCTAssertEqual(providerDrawer.value as? String, "Collapsed")
+        let explicitModel = app.buttons["openai/gpt-5.6-sol"]
+        let initialExplicitModelCount = app.buttons.matching(
+            NSPredicate(format: "label == %@", "openai/gpt-5.6-sol")).count
+        providerDrawer.tap()
+        XCTAssertEqual(providerDrawer.value as? String, "Expanded")
+        XCTAssertTrue(explicitModel.exists)
+        XCTAssertTrue(explicitModel.images["chat-model-provider-icon-openai"].exists)
+        XCTAssertGreaterThan(
+            app.buttons.matching(NSPredicate(format: "label == %@", "openai/gpt-5.6-sol")).count,
+            initialExplicitModelCount)
+        let explicitIsSelected = explicitModel.value as? String == "Selected"
+        let selectedModel = explicitIsSelected ? explicitModel : defaultModel
+        self.assertMinimumTouchTarget(selectedModel)
+        let selectedCheckmark = selectedModel.images["chat-menu-selection-checkmark"]
+        XCTAssertTrue(selectedCheckmark.exists)
+        XCTAssertGreaterThan(selectedCheckmark.frame.minX, selectedModel.frame.midX)
+        self.attachScreenshot(named: "chat-actions-model-rows")
+
+        let expandedProviderDrawer = app.buttons["chat-model-provider-drawer-openai"]
+        XCTAssertTrue(expandedProviderDrawer.waitForExistence(timeout: 5))
+        expandedProviderDrawer.tap()
+        let collapsedProviderDrawer = app.buttons["chat-model-provider-drawer-openai"]
+        self.waitForValue("Collapsed", of: collapsedProviderDrawer)
+        let anthropicDrawer = app.buttons["chat-model-provider-drawer-anthropic"]
+        XCTAssertTrue(anthropicDrawer.waitForExistence(timeout: 5))
+        self.assertMinimumTouchTarget(anthropicDrawer)
+        XCTAssertEqual(anthropicDrawer.value as? String, "Collapsed")
+        anthropicDrawer.tap()
+        let expandedAnthropicDrawer = app.buttons["chat-model-provider-drawer-anthropic"]
+        self.waitForValue("Expanded", of: expandedAnthropicDrawer)
+        let nonDefaultModel = app.buttons["anthropic/claude-opus-4-1"]
+        XCTAssertTrue(nonDefaultModel.waitForExistence(timeout: 5))
+        XCTAssertTrue(nonDefaultModel.images["chat-model-provider-icon-anthropic"].exists)
+        self.assertMinimumTouchTarget(nonDefaultModel)
+        nonDefaultModel.tap()
+        XCTAssertTrue(popover.waitForNonExistence(timeout: 3))
+
+        actions.tap()
+        let selectedNextModel = app.buttons["anthropic/claude-opus-4-1"]
+        XCTAssertTrue(selectedNextModel.waitForExistence(timeout: 5))
+        XCTAssertEqual(selectedNextModel.value as? String, "Selected")
+        XCTAssertGreaterThan(
+            selectedNextModel.images["chat-menu-selection-checkmark"].frame.minX,
+            selectedNextModel.frame.midX)
+        let restoredDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
+        XCTAssertTrue(restoredDefaultModel.waitForExistence(timeout: 5))
+        restoredDefaultModel.tap()
+        XCTAssertTrue(popover.waitForNonExistence(timeout: 3))
+
+        actions.tap()
+        let reselectedDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
+        XCTAssertTrue(reselectedDefaultModel.waitForExistence(timeout: 5))
+        XCTAssertEqual(reselectedDefaultModel.value as? String, "Selected")
+        XCTAssertGreaterThan(
+            reselectedDefaultModel.images["chat-menu-selection-checkmark"].frame.minX,
+            reselectedDefaultModel.frame.midX)
+
+        let thinkingSlider = app.sliders["chat-thinking-slider"]
+        XCTAssertTrue(thinkingSlider.waitForExistence(timeout: 5))
+        self.assertMinimumTouchTarget(app.descendants(matching: .any)["chat-thinking-slider-hit-target"])
+        let thinkingNotches = app.descendants(matching: .any)["chat-thinking-notches"]
+        XCTAssertTrue(thinkingNotches.waitForExistence(timeout: 5))
+        XCTAssertEqual(thinkingNotches.value as? String, "4 stops")
+        let thinkingValues = ["Default (Auto)", "Low", "Medium", "High"]
+        self.waitForValue(thinkingValues[0], of: thinkingSlider)
+        for (index, expectedValue) in thinkingValues.enumerated().dropFirst() {
+            thinkingSlider.adjust(
+                toNormalizedSliderPosition: CGFloat(index) / CGFloat(thinkingValues.count - 1))
+            self.waitForValue(expectedValue, of: thinkingSlider)
+        }
+        let thinkingDefault = app.buttons["chat-thinking-use-default"]
+        XCTAssertTrue(thinkingDefault.waitForExistence(timeout: 5))
+        self.assertMinimumTouchTarget(thinkingDefault)
+        self.waitForEnabled(thinkingSlider)
+        let selectedThinkingValue = try XCTUnwrap(thinkingSlider.value as? String)
+        XCTAssertFalse(selectedThinkingValue.hasPrefix("Default"))
+        XCTAssertTrue(popover.exists)
+
+        let fastMode = app.switches["chat-fast-mode-toggle"]
+        XCTAssertTrue(fastMode.waitForExistence(timeout: 5))
+        self.assertMinimumTouchTarget(app.descendants(matching: .any)["chat-fast-mode-hit-target"])
+        self.assertMinimumTouchTarget(fastMode)
+        self.waitForEnabled(fastMode)
+        XCTAssertFalse(app.buttons["chat-fast-mode-use-default"].exists)
+        fastMode.tap()
+        self.waitForValue("1", of: fastMode)
+        let fastModeDefault = app.buttons["chat-fast-mode-use-default"]
+        XCTAssertTrue(fastModeDefault.waitForExistence(timeout: 5))
+        self.assertMinimumTouchTarget(fastModeDefault)
+        self.waitForEnabled(fastModeDefault)
+        self.attachScreenshot(named: "chat-actions-compact-controls")
+        XCTAssertTrue(popover.exists)
+
+        let verbosity = app.segmentedControls["chat-verbosity-control"]
+        XCTAssertTrue(verbosity.waitForExistence(timeout: 5))
+        self.assertMinimumTouchTarget(app.descendants(matching: .any)["chat-verbosity-hit-target"])
+        XCTAssertEqual(verbosity.buttons.count, 3)
+        verbosity.buttons["Full"].tap()
+        let verbosityDefault = app.buttons["chat-verbosity-use-default"]
+        XCTAssertTrue(verbosityDefault.waitForExistence(timeout: 5))
+        self.assertMinimumTouchTarget(verbosityDefault)
+        self.waitForEnabled(verbosityDefault)
+        verbosityDefault.tap()
+        XCTAssertTrue(verbosityDefault.waitForNonExistence(timeout: 5))
+        let restoredVerbosity = app.segmentedControls["chat-verbosity-control"]
+        XCTAssertTrue(restoredVerbosity.waitForExistence(timeout: 5))
+        self.waitForEnabled(restoredVerbosity)
+        let settledDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
+        XCTAssertTrue((settledDefaultModel.value as? String)?.contains("Selected") == true)
+        XCTAssertTrue(popover.exists)
+
+        let toolDetails = app.staticTexts["Tool details"]
+        let reasoning = app.buttons["chat-show-reasoning-toggle"]
+        let backgroundTasks = popover.buttons["Background tasks"]
+        XCTAssertTrue(toolDetails.exists)
+        XCTAssertTrue(reasoning.exists)
+        XCTAssertTrue(backgroundTasks.exists)
+        XCTAssertGreaterThan(reasoning.frame.minY, toolDetails.frame.maxY)
+        XCTAssertGreaterThanOrEqual(backgroundTasks.frame.minY, reasoning.frame.maxY)
+
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).tap()
+        XCTAssertTrue(popover.waitForNonExistence(timeout: 3))
+        let reopenedActions = app.buttons["Chat actions"]
+        XCTAssertTrue(reopenedActions.waitForExistence(timeout: 5))
+        self.waitForHittable(true, of: reopenedActions)
+        reopenedActions.tap()
+        let reopenedDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
+        XCTAssertTrue(reopenedDefaultModel.waitForExistence(timeout: 5))
+        XCTAssertEqual(reopenedDefaultModel.label, "Default: openai/gpt-5.6-sol")
+        XCTAssertTrue((reopenedDefaultModel.value as? String)?.contains("Selected") == true)
+        let reopenedThinkingSlider = app.sliders["chat-thinking-slider"]
+        XCTAssertTrue(reopenedThinkingSlider.waitForExistence(timeout: 5))
+        self.waitForValue(selectedThinkingValue, of: reopenedThinkingSlider)
+        XCTAssertTrue(app.buttons["chat-thinking-use-default"].exists)
+        let reopenedFastMode = app.switches["chat-fast-mode-toggle"]
+        XCTAssertTrue(reopenedFastMode.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["chat-fast-mode-use-default"].exists)
+        XCTAssertFalse(app.buttons["chat-verbosity-use-default"].exists)
+
+        let sidebarFrame = app.buttons["RootTabs.Sidebar.Show"].frame
+        let thinkingHitTargetFrame = app.descendants(matching: .any)["chat-thinking-slider-hit-target"].frame
+        let fastHitTargetFrame = app.descendants(matching: .any)["chat-fast-mode-hit-target"].frame
+        let verbosityHitTargetFrame = app.descendants(matching: .any)["chat-verbosity-hit-target"].frame
+        let receipt = XCTAttachment(string: [
+            "header.sidebar=\(sidebarFrame)",
+            "header.chatActions=\(reopenedActions.frame)",
+            "provider.openai=collapsed-expanded-collapsed",
+            "provider.anthropic=collapsed-expanded",
+            "model.nonDefault=selected-with-trailing-checkmark",
+            "model.default=restored-selected-with-trailing-checkmark",
+            "thinking.stops=4;exercised=\(thinkingValues.joined(separator: ","));selected=\(selectedThinkingValue)",
+            "thinking.hitTarget=\(thinkingHitTargetFrame)",
+            "fast.hitTarget=\(fastHitTargetFrame)",
+            "toolDetails.hitTarget=\(verbosityHitTargetFrame)",
+            "reopen=thinking-and-fast-selected-tool-details-default",
+        ].joined(separator: "\n"))
+        receipt.name = "chat-actions-observations"
+        receipt.lifetime = .keepAlways
+        self.add(receipt)
+
+        popover.buttons["New session options…"].tap()
+        XCTAssertTrue(app.staticTexts["New Thread Options"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["No agents are available on this gateway."].exists)
+        let create = app.buttons["Create"]
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        self.waitForEnabled(create)
+        create.tap()
+        XCTAssertTrue(app.staticTexts["New Thread Options"].waitForNonExistence(timeout: 5))
+    }
+
     private func verifyApprovalNotificationsNavigation(fromOverview: Bool) async throws {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_APPROVAL_FIXTURE_URL"] != nil,

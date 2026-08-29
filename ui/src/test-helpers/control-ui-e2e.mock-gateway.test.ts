@@ -99,8 +99,8 @@ describe("mock gateway stateful config", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -185,8 +185,8 @@ describe("mock gateway stateful config", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -221,8 +221,8 @@ describe("mock gateway stateful config", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
     socket.send(JSON.stringify({ type: "req", id: "get-1", method: "config.get", params: {} }));
@@ -246,8 +246,8 @@ describe("mock gateway stateful sessions", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -275,8 +275,8 @@ describe("mock gateway stateful sessions", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -324,8 +324,8 @@ describe("mock gateway stateful sessions", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -390,8 +390,8 @@ describe("mock gateway stateful sessions", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -431,8 +431,8 @@ describe("mock gateway stateful sessions", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -486,8 +486,8 @@ describe("mock gateway stateful sessions", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -570,8 +570,8 @@ describe("mock gateway stateful sessions", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -663,8 +663,8 @@ describe("mock gateway stateful sessions", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 
@@ -708,8 +708,8 @@ describe("mock gateway stateful sessions", () => {
 
     const socket = new window.WebSocket("ws://mock-gateway");
     const frames: ResponseFrame[] = [];
-    socket.addEventListener("message", (event) => {
-      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    socket.addEventListener("message", (event: MessageEvent) => {
+      frames.push(JSON.parse(String(event.data)) as ResponseFrame);
     });
     await flushMockTimers();
 

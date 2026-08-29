@@ -9,6 +9,7 @@ type AssistantStreamDataParams = {
   replace?: boolean;
   mediaUrls?: string[];
   mediaUrl?: string;
+  managedMediaUrls?: string[];
   phase?: AssistantPhase;
   itemId?: string;
 };
@@ -18,6 +19,7 @@ type AssistantStreamData = {
   delta: string;
   replace?: true;
   mediaUrls?: string[];
+  managedMediaUrls?: string[];
   phase?: AssistantPhase;
   itemId?: string;
 };

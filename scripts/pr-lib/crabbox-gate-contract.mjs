@@ -101,39 +101,76 @@ export function formatCrabboxGateCheckSummary({
   planDigest,
   runId,
   targetCount,
+  workflowSha,
 }) {
   if (
     !SHA_PATTERN.test(baseSha) ||
     !SHA_PATTERN.test(headSha) ||
+    !SHA_PATTERN.test(workflowSha) ||
     !SHA256_PATTERN.test(planDigest) ||
     !Number.isSafeInteger(targetCount) ||
     targetCount < 0
   ) {
     throw new Error("Crabbox gate summary binding is malformed");
   }
-  return `Trusted Crabbox AWS proof ${requiredString(runId, "run id")} / ${requiredString(leaseId, "lease id")}; build, check, and PR-derived tests passed for base ${baseSha}, head ${headSha}, plan ${planDigest} (${targetCount} targets).`;
+  return `Trusted Crabbox AWS proof ${requiredString(runId, "run id")} / ${requiredString(leaseId, "lease id")}; build, check, and PR-derived tests passed for base ${baseSha}, head ${headSha}, workflow ${workflowSha}, plan ${planDigest} (${targetCount} targets).`;
 }
 
 export function parseCrabboxGateCheckSummary(summary) {
   const match = requiredString(summary, "Crabbox gate check summary").match(
-    /^Trusted Crabbox AWS proof (run_[a-z0-9]+) \/ (cbx_[a-z0-9]+); build, check, and PR-derived tests passed for base ([0-9a-f]{40}), head ([0-9a-f]{40}), plan ([0-9a-f]{64}) \((\d+) targets\)\.$/u,
+    /^Trusted Crabbox AWS proof (run_[a-z0-9]+) \/ (cbx_[a-z0-9]+); build, check, and PR-derived tests passed for base ([0-9a-f]{40}), head ([0-9a-f]{40}), workflow ([0-9a-f]{40}), plan ([0-9a-f]{64}) \((\d+) targets\)\.$/u,
   );
   if (!match) {
     throw new Error("openclaw/crabbox-gate summary binding is malformed");
   }
-  const targetCount = Number(match[6]);
+  const targetCount = Number(match[7]);
   const binding = {
     baseSha: match[3],
     headSha: match[4],
     leaseId: match[2],
-    planDigest: match[5],
+    planDigest: match[6],
     runId: match[1],
     targetCount,
+    workflowSha: match[5],
   };
   if (formatCrabboxGateCheckSummary(binding) !== summary) {
     throw new Error("openclaw/crabbox-gate summary binding is not canonical");
   }
   return binding;
+}
+
+export function validateForwardAncestry(comparisonValue, { baseSha, headSha }, label) {
+  const ancestryLabel = requiredString(label, "ancestry label");
+  if (
+    !SHA_PATTERN.test(baseSha) ||
+    !SHA_PATTERN.test(headSha) ||
+    comparisonValue === null ||
+    typeof comparisonValue !== "object" ||
+    Array.isArray(comparisonValue)
+  ) {
+    throw new Error(`${ancestryLabel} is malformed`);
+  }
+  const comparison = comparisonValue;
+  const aheadBy = comparison.ahead_by;
+  const behindBy = comparison.behind_by;
+  const validCounts =
+    Number.isSafeInteger(aheadBy) &&
+    aheadBy >= 0 &&
+    Number.isSafeInteger(behindBy) &&
+    behindBy === 0;
+  const validStatus =
+    baseSha === headSha
+      ? comparison.status === "identical" && aheadBy === 0
+      : comparison.status === "ahead" && aheadBy >= 1;
+  if (
+    comparison.base_commit?.sha !== baseSha ||
+    comparison.merge_base_commit?.sha !== baseSha ||
+    !validCounts ||
+    !validStatus
+  ) {
+    throw new Error(`${ancestryLabel} is not identical or forward`);
+  }
+  return { baseSha, headSha };
 }
 
 export function isProtectedMainWorkflowPath(value, workflowPath) {

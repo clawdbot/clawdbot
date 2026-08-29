@@ -1,7 +1,6 @@
 // Codex tests cover transport stdio plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createStdioTransport, resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const spawnMock = vi.hoisted(() => vi.fn(() => ({ pid: 1234 })));
@@ -35,27 +34,53 @@ describe("createStdioTransport", () => {
     );
   });
 
-  it("passes native context and auto-compaction arguments to Codex unchanged", () => {
+  it("preserves wrapper prefixes, root option values, and raw override ordering", () => {
+    const overrides = ["-c", 'developer_instructions="app-server = literal"'];
     const args = [
+      "/wrapper.js",
+      ...overrides,
+      "--profile",
+      "app-server",
       "app-server",
       "--listen",
       "stdio://",
-      "-c",
-      "model_context_window=1000000",
-      "-c",
-      "model_auto_compact_token_limit=700000",
-      "-c",
-      "model_auto_compact_token_limit_scope=total",
+      "--config=model_reasoning_effort=high",
     ];
-    const runtime = resolveCodexAppServerRuntimeOptions({
-      pluginConfig: { appServer: { command: "codex", args } },
-      env: {},
-      requirementsToml: null,
+    createStdioTransport({ ...startOptions("node"), args });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "node",
+      [
+        "/wrapper.js",
+        ...overrides,
+        "--profile",
+        "app-server",
+        "--config=model_reasoning_effort=high",
+        "app-server",
+        "--listen",
+        "stdio://",
+      ],
+      expect.any(Object),
+    );
+    expect(args[1]).toBe("-c");
+  });
+
+  it("does not reinterpret a wrapper's positional arguments after --", () => {
+    const args = ["/wrapper.js", "--", "-c", "opaque", "app-server"];
+    createStdioTransport({ ...startOptions("node"), args });
+    expect(spawnMock).toHaveBeenCalledWith("node", args, expect.any(Object));
+  });
+
+  it.each(["--ws-issuer", "--ws-audience"])("preserves a subcommand-shaped %s value", (flag) => {
+    createStdioTransport({
+      ...startOptions("codex"),
+      args: ["app-server", flag, "app-server", "-c", "model_reasoning_effort=high"],
     });
-
-    createStdioTransport(runtime.start);
-
-    expect(spawnMock).toHaveBeenCalledWith("codex", args, expect.any(Object));
+    expect(spawnMock).toHaveBeenCalledWith(
+      "codex",
+      ["-c", "model_reasoning_effort=high", "app-server", flag, "app-server"],
+      expect.any(Object),
+    );
   });
 });
 

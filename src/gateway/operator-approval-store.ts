@@ -1671,7 +1671,7 @@ export function resolveOperatorApproval(params: {
   nowMs?: number;
   databaseOptions?: OpenClawStateDatabaseOptions;
   /** Cron-context allow-always mints this scoped grant in the same transaction. */
-  standingGrant?: CronStandingGrantMintSpec;
+  standingGrant?: CronStandingGrantMintSpec & { expiresAtMs: number | null };
 }): ResolveOperatorApprovalResult {
   const id = requireApprovalId(params.id);
   const resolverId = normalizeNullableString(params.resolver.id);

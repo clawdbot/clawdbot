@@ -3,11 +3,7 @@ import type { WorktreesRemoveResult } from "../../../packages/gateway-protocol/s
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import {
-  buildAgentMainSessionKey,
-  parseAgentSessionKey,
-  resolveUiConfiguredMainKey,
-} from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import {
   formatPreservedWorktreeConfirmation,
   formatPreservedWorktreesNotice,
@@ -311,6 +307,9 @@ export async function deleteSessionsBatch(
   try {
     const result = await scope.sessions.deleteMany(requests);
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (result.preservedWorktrees.length > 0) {
+        showToast({ message: formatPreservedWorktreesNotice(result.preservedWorktrees) });
+      }
       return;
     }
     if (host.sidebarSessionStatusFilter() !== "active") {
@@ -324,18 +323,6 @@ export async function deleteSessionsBatch(
       if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
       }
-    }
-    const deletedActive = rows.find((row) => row.active && result.deleted.includes(row.key));
-    if (deletedActive) {
-      host.replaceCurrentSession(
-        buildAgentMainSessionKey({
-          agentId: parseAgentSessionKey(deletedActive.key)?.agentId ?? scope.selectedAgentId,
-          mainKey: resolveUiConfiguredMainKey({
-            agentsList: scope.context.agents.state.agentsList,
-            hello: scope.gateway.snapshot.hello,
-          }),
-        }),
-      );
     }
     if (result.errors.length > 0) {
       host.sessionData.publishSessionMutationError(scope, result.errors.join("; "));
@@ -607,6 +594,9 @@ export async function deleteSession(
   try {
     const outcome = await scope.sessions.delete(session.key, deleteParams);
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (outcome.worktreePreserved) {
+        showToast({ message: formatPreservedWorktreesNotice([outcome.worktreePreserved]) });
+      }
       return;
     }
     if (host.sidebarSessionStatusFilter() !== "active") {
@@ -623,9 +613,6 @@ export async function deleteSession(
       });
       if (!removeAccess.allowed) {
         window.alert(formatPreservedWorktreesNotice([preserved]));
-        if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-          return;
-        }
       } else {
         const removeWorktree = await showConfirmDialog({
           message: formatPreservedWorktreeConfirmation(preserved),
@@ -633,10 +620,8 @@ export async function deleteSession(
           danger: true,
           signal: scope.signal,
         });
-        // Cancel needs this guard too: the delete already landed, so a scope
-        // retired while the modal was open must not drive the navigation below.
-        // A retired scope leaves the worktree exactly like the no-access branch
-        // above, so it earns the same visible outcome instead of vanishing quietly.
+        // Reconnect cancels the worktree prompt, not the confirmed deletion.
+        // Report the preserved worktree without using the retired client.
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
           showToast({
             message: formatPreservedWorktreesNotice([preserved]),
@@ -655,24 +640,9 @@ export async function deleteSession(
           } catch (error) {
             host.sessionData.publishSessionMutationError(scope, error);
           }
-          if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-            return;
-          }
         }
       }
     }
-    if (!outcome.deleted || !session.active) {
-      return;
-    }
-    host.replaceCurrentSession(
-      buildAgentMainSessionKey({
-        agentId,
-        mainKey: resolveUiConfiguredMainKey({
-          agentsList: scope.context.agents.state.agentsList,
-          hello: scope.gateway.snapshot.hello,
-        }),
-      }),
-    );
   } catch (error) {
     host.sessionData.publishSessionMutationError(scope, error);
   }

@@ -1,7 +1,7 @@
 // Plugin HTTP auth tests cover protected route canonicalization, operator scope
 // checks, hook/plugin route precedence, and unauthorized variant handling.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, test, vi } from "vitest";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { canonicalizePathVariant } from "./security-path.js";
@@ -210,6 +210,12 @@ async function expectPluginRequestOk(
 }
 
 describe("gateway plugin HTTP auth boundary", () => {
+  beforeAll(async () => {
+    // Compile the real Control UI owner before the request deadline starts;
+    // this suite verifies route/auth ownership, not source-loader startup latency.
+    await import("./control-ui.js");
+  });
+
   test("applies default security headers and optional strict transport security", async () => {
     await withGatewayTempConfig("openclaw-plugin-http-security-headers-test-", async () => {
       const withoutHsts = createTestGatewayServer({ resolvedAuth: AUTH_NONE });

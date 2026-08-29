@@ -41,6 +41,12 @@ Configure a profile under `cloudWorkers.profiles` and the bundled Crabbox plugin
 
 See [Cloud Workers](/gateway/cloud-workers) for profiles, requirements, dispatching, moving sessions between destinations, and the security model.
 
+## Viewing the session desktop
+
+Open **Desktop** from a session to view its execution machine. Cloud sessions select their worker desktop; sessions on paired devices select that device. The pop-out window keeps the session in its link. Both viewers follow placement changes and disconnect from the previous machine when the session moves or stops. A stopped cloud session does not switch either viewer to the Gateway desktop.
+
+The machine must already support desktop viewing. For cloud workers, enable the [Cloud Worker Desktop lab and desktop profile setting](/gateway/cloud-workers#desktop-interactive). Opening Desktop starts in view-only mode and does not change the machine's permissions or the agent's tool policy. The global Desktop command in the command palette still opens the machine picker, including on chat pages.
+
 ## Automatic load balancing across devices
 
 You do not have to pick a device. Choosing **Auto** (least-busy device) in the Place picker — or dispatching with `autoDevice: true` — selects a paired session host automatically and retries up to three ranked hosts if provisioning fails before a machine is allocated. OpenClaw `worker-turn` placements rank hosts by most free worker slots, breaking ties by device ID; Codex `remote-exec` placements do not consume worker slots, so eligible hosts are ranked by device ID alone. When no host qualifies, the error says exactly why: no session hosts paired, all disconnected, or all at capacity.
@@ -52,7 +58,9 @@ See [Nodes](/nodes#host-openclaw-sessions) for the selection rules and [Control 
 Two profile settings turn cloud workers from always-on machines into compute that sleeps when idle:
 
 - `suspendAfter: "2h"` — after the session has been idle for the duration, the Gateway performs the same safe stop as **Stop cloud worker…**: it reconciles the workspace first, then releases the machine. While suspended, you pay for retained snapshot storage only. The next message provisions a replacement automatically — no button to press.
-- `settings.warmImage: true` — capture a scrubbed machine image when a worker stops, and start later workers for the same profile from that image instead of provisioning cold. Paired with `suspendAfter`, a suspended session wakes on a warm machine in a fraction of the cold provisioning time.
+- `settings.warmImage` — capture a scrubbed machine image when a worker stops, and start later workers for the same profile from that image instead of provisioning cold. On by default, so a suspended session wakes on a warm machine in a fraction of the cold provisioning time. Profiles that forward host environment into setup (`setupEnv`) capture only when you opt in explicitly, and `settings.warmImage: false` keeps any profile cold.
+
+With warm images enabled, repeat sessions for the same repository can also avoid a fresh clone. For clean workspaces eligible for the published-origin path, node-tunnel sync copies the machine's per-repository Git seed, fetches only the Git delta, and checks out the requested commit. Other workspaces keep the normal sync path.
 
 Suspension never interrupts work: sessions with an active turn, queued messages, or unreconciled results are skipped and re-checked on the next sweep. See the profile fields in [Cloud Workers](/gateway/cloud-workers#configuration) for costs, capture boundaries, and prerequisites.
 

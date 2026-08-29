@@ -53,7 +53,7 @@ describe("AppSidebar viewer presence", () => {
         },
         {
           instanceId: "alice-instance",
-          user: { id: "alice", name: "Alice" },
+          user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
           lastInputSeconds: 600,
           ts: 1,
         },
@@ -127,13 +127,15 @@ describe("AppSidebar viewer presence", () => {
       row.label = row.key === "global" ? "Research global" : `Visible ${index}`;
       row.updatedAt = Date.now() - index * 60_000;
       if (index === 2) {
-        row.participants = [{ type: "human", id: "alice", label: "Alice" }];
+        row.participants = [{ identity: { type: "profile", id: "alice" }, label: "Alice" }];
       }
       if (index === 3) {
         row.createdActor = { type: "agent", id: "alice" };
       }
       if (index >= 4) {
-        row.owner = { actor: { type: "human", id: "alice" } };
+        row.owner = {
+          actor: { type: "human", id: "alice", identity: { type: "profile", id: "alice" } },
+        };
       }
     });
     sessions.publishList({ result });
@@ -150,7 +152,7 @@ describe("AppSidebar viewer presence", () => {
         platform: tab === 3 ? "iOS" : "macOS",
         mode: "webchat",
         timeZone: "Europe/Paris",
-        user: { id: "alice", name: "Alice" },
+        user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
         watchedSessions: [
           "AGENT:research:watched",
           "agent:research:watched",
@@ -167,21 +169,22 @@ describe("AppSidebar viewer presence", () => {
       expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
     );
     const card = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
-    expect(card.querySelectorAll("dt")).toHaveLength(3);
+    expect(card.querySelectorAll("dt")).toHaveLength(2);
+    expect(card.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe("Online");
     const facts = card.querySelectorAll("dd");
-    expect(facts[0]?.textContent?.trim()).toBe("Not observed yet");
-    expect([...facts[1]!.querySelectorAll("span")].map((node) => node.textContent)).toEqual([
+    expect([...facts[0]!.querySelectorAll("span")].map((node) => node.textContent)).toEqual([
       "Mac · macOS · Control UI",
       "iPhone · iOS · Control UI",
     ]);
-    expect(facts[1]?.querySelector("small")?.textContent).toBe("Reported time zone: Europe/Paris");
-    expect(facts[2]?.textContent?.trim()).toBe("Not observed yet");
+    expect(facts[0]?.querySelector("small")?.textContent).toBe("Reported time zone: Europe/Paris");
+    expect(facts[1]?.textContent?.trim()).toBe("Not observed yet");
     const sections = card.querySelectorAll("section");
     expect(sections[0]?.querySelectorAll("a")).toHaveLength(1);
     expect(sections[0]?.textContent).toContain("Visible 0");
     expect(sections[0]?.querySelector("a")?.getAttribute("href")).toBe("/chat/research/watched");
     expect(sections[1]?.querySelectorAll("a")).toHaveLength(3);
-    expect(sections[1]?.textContent).toContain("Session updated");
+    expect(sections[1]?.textContent).not.toContain("Session updated");
+    expect(sections[1]?.querySelectorAll(".person-activity-card__session-age")).toHaveLength(3);
     for (const hidden of [
       "secret-title",
       "private-tab",
@@ -206,7 +209,11 @@ describe("AppSidebar viewer presence", () => {
         ...result,
         sessions: result.sessions.map((row) => ({
           ...row,
-          createdActor: { type: "human" as const, id: "alice" },
+          createdActor: {
+            type: "human" as const,
+            id: "alice",
+            identity: { type: "profile" as const, id: "alice" },
+          },
         })),
       },
     });
@@ -215,7 +222,7 @@ describe("AppSidebar viewer presence", () => {
     const now = Date.now();
     const alice = {
       ts: now,
-      user: { id: "alice", name: "Alice" },
+      user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
       watchedSessions: ["agent:main:work"],
       onlineSince: now - 60_000,
       lastActivityAt: now - 10_000,
@@ -231,6 +238,11 @@ describe("AppSidebar viewer presence", () => {
       expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
     );
     const card = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
+    await vi.waitFor(() =>
+      expect(card.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe(
+        "Online for 1m",
+      ),
+    );
     const sessionLink = card.querySelector<HTMLAnchorElement>(".person-activity-card__session")!;
     sessionLink.focus();
     gateway.publishEvent("presence", {
@@ -248,6 +260,9 @@ describe("AppSidebar viewer presence", () => {
     );
     gateway.publishEvent("presence", { presence: [{ ...alice, watchedSessions: [] }, bob] });
     await sidebar.updateComplete;
+    expect([...card.querySelectorAll("h3")].map((heading) => heading.textContent)).toEqual([
+      "Recent sessions",
+    ]);
     expect(document.activeElement?.getAttribute("href")).toBe(sessionLink.getAttribute("href"));
     expect(document.activeElement?.closest("section")?.querySelector("h3")?.textContent).toBe(
       "Recent sessions",
@@ -272,7 +287,7 @@ describe("AppSidebar viewer presence", () => {
       sidebar.connected = true;
       const person = {
         ts: Date.now(),
-        user: { id: "alice", name: "Alice" },
+        user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
         onlineSince: Date.now() - 90_000,
       };
       gateway.publishEvent("presence", {
@@ -352,7 +367,10 @@ describe("AppSidebar viewer presence", () => {
     gatewayHarness.publishEvent("presence", {
       presence: [
         { instanceId: "self-instance", user: { id: "self", name: "Self" } },
-        { instanceId: "alice-instance", user: { id: "alice", name: "Alice" } },
+        {
+          instanceId: "alice-instance",
+          user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
+        },
         { instanceId: "bob-instance", user: { id: "bob", name: "Bob" } },
         { instanceId: "carol-instance", user: { id: "carol", name: "Carol" } },
         { instanceId: "dave-instance", user: { id: "dave", name: "Dave" } },
@@ -426,12 +444,17 @@ describe("AppSidebar viewer presence", () => {
         },
         {
           instanceId: "alice-1",
-          user: { id: "alice", name: "Alice", avatarUrl: "/api/users/alice/avatar" },
+          user: {
+            id: "alice",
+            identity: { type: "profile", id: "alice" },
+            name: "Alice",
+            avatarUrl: "/api/users/alice/avatar",
+          },
           watchedSessions: ["agent:main:work"],
         },
         {
           instanceId: "alice-2",
-          user: { id: "alice", name: "Alice" },
+          user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
           watchedSessions: ["agent:main:main"],
         },
         {
@@ -527,7 +550,10 @@ describe("AppSidebar viewer presence", () => {
     gatewayHarness.publishEvent("presence", {
       presence: [
         { instanceId: "anonymous-self", watchedSessions: ["agent:main:main"] },
-        { instanceId: "alice", user: { id: "alice", name: "Alice" } },
+        {
+          instanceId: "alice",
+          user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
+        },
       ],
     });
     await sidebar.updateComplete;

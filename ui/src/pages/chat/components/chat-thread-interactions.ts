@@ -67,9 +67,11 @@ export type ChatThreadProps = {
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;
   loading: boolean;
-  historyLoading?: boolean;
+  /** Older-history pagination is active; render its auto-load sentinel. */
+  historySentinel?: boolean;
   messages: unknown[];
   toolMessages: unknown[];
+  browserTabPreviewsActive?: boolean;
   guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
@@ -122,6 +124,7 @@ export type ChatThreadProps = {
   onDraftChange: (next: string) => void;
   onSend: () => void;
   onRetryQueuedMessage?: (id: string) => void;
+  queuedMessageAction?: { id: string; label?: string; onAction?: () => void };
   onSetReply?: (target: MessageReplyTarget) => void;
   replyMessageAccess?: ReplyMessageAccess;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;

@@ -233,7 +233,6 @@ struct RootTabsSourceGuardTests {
         #expect(skillsSource.contains("method: \"skills.detail\""))
         #expect(skillsSource.contains("method: \"skills.install\""))
         #expect(skillsSource.contains("method: \"skills.update\""))
-        #expect(skillsSource.contains(".disabled(!self.warningExpanded || self.isInstalling)"))
         #expect(skillsSource.contains("SkillManagementContract.installed"))
         #expect(skillsSource.contains("ifCurrentRoute: route"))
         #expect(skillsSource.contains("distinguishPreDispatchRouteChange: true"))

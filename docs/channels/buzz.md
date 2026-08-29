@@ -76,21 +76,28 @@ openclaw channels add --channel buzz
 
 The setup flow walks through the following steps:
 
-1. Enter the Buzz relay URL if one is not already configured.
-2. OpenClaw reuses the configured bot identity or generates one automatically.
-3. If the bot does not have room access yet, give the displayed public key to a
+1. Choose an existing Buzz account or add a named account.
+2. Enter the Buzz relay URL if one is not already configured for that account.
+3. OpenClaw reuses that account's bot identity or generates one automatically.
+4. If the bot does not have room access yet, give the displayed public key to a
    Buzz room owner or admin.
-4. OpenClaw waits for Buzz to confirm the **Bot** role and continues
+5. OpenClaw waits for Buzz to confirm the **Bot** role and continues
    automatically. If the automatic wait expires, retry authenticated discovery
    or go back without changing the generated identity.
-5. If Buzz returns one room, OpenClaw selects it. If Buzz returns several,
+6. If Buzz returns one room, OpenClaw selects it. If Buzz returns several,
    select the rooms to use and the default outbound room.
-6. OpenClaw saves the configuration and silently verifies the authenticated
+7. OpenClaw saves the configuration and silently verifies the authenticated
    room when the Gateway is running.
 
 Fresh setup accepts normal messages from current members of the configured
 rooms without requiring a composer mention. Existing explicit mention and
 sender-allowlist settings are preserved when setup is rerun.
+
+Setup resolves the selected account's `privateKey` and `authTag` SecretRefs
+without replacing the references in your configuration. If a configured secret
+is unavailable, setup reports the error without saving account changes. Make
+the secret available and rerun setup; existing accounts are not disabled.
+Select at least one authorized room to complete setup, or go back to leave it.
 
 The automatic room-access wait is bounded. If access is not granted in time,
 setup remains open and offers authenticated Retry/Back controls. Every retry
@@ -126,12 +133,16 @@ preserves an existing agent-directory profile and channel-add policy; for a new
 profile it allows authorized Buzz users to add the identity. This lets Buzz
 assign the **Bot** role when the identity is invited to additional rooms
 instead of treating it as a normal member. OpenClaw still receives messages
-only from rooms explicitly selected in `channels.buzz.groups`.
+only from rooms explicitly selected in that account's `groups`: use
+`channels.buzz.groups` for the implicit root identity or
+`channels.buzz.accounts.<id>.groups` for a nested identity.
 
 Buzz displays `owner unavailable` when the bot profile has no valid NIP-OA
-owner attestation. This does not mean room access failed. When
-`channels.buzz.authTag` is configured, OpenClaw includes that attestation in the
-published profile so Buzz can show the verified human owner.
+owner attestation. This does not mean room access failed. Configure the selected
+identity's `authTag` at `channels.buzz.authTag` for the implicit root identity or
+`channels.buzz.accounts.<id>.authTag` for a nested identity. OpenClaw includes
+that attestation in the published profile so Buzz can show the verified human
+owner.
 
 While the Gateway is connected, OpenClaw publishes and refreshes the bot's
 ephemeral Buzz presence every 30 seconds. Buzz removes the presence when the
@@ -378,6 +389,17 @@ Membership is checked against the latest received roster when context is used.
 If the same identity leaves and rejoins before then, its previously authorized
 messages can remain in the window; leaving does not erase conversation history.
 
+### Reply placement
+
+Buzz keeps automatic replies threaded by default (`channels.buzz.replyToMode: "all"`).
+Set `replyToMode: "off"` to send automatic replies at the top level of the room,
+including replies to messages inside existing threads. Typing indicators follow
+the same placement, including heartbeat typing.
+
+This changes delivery only: inbound thread context and session identity remain
+intact. Explicit message-tool or CLI sends with a thread or reply target still
+honor that target. To restore the default, use `"all"` or remove the setting.
+
 ## Manual configuration
 
 Guided setup is recommended. The equivalent configuration looks like:
@@ -446,26 +468,93 @@ example `"[Support]"`. Use `"auto"` for the routed agent's identity name,
 `"[{model}]"` for its selected model, or `""` to disable an inherited global
 prefix. Explicit `message` tool and CLI text sends also apply literal and
 identity prefixes; see [shared prefix behavior](/concepts/messages#prefixes-threading-and-replies)
-for model-dependent templates. Buzz uses one account per Gateway, so there is
-no nested `accounts` override.
+for model-dependent templates. A named account can override the root prefix
+with `channels.buzz.accounts.<id>.responsePrefix`.
+CLI sends that omit `--account` use the selected default account's prefix too;
+an account-level `""` suppresses the inherited root prefix.
+
+### Multiple bot identities
+
+One Gateway can run independent Buzz accounts, each with its own relay, bot key,
+authorization value, and selected rooms. Run `openclaw channels add --channel buzz`
+and choose a new account to configure it interactively. Adding a named account
+does not move or replace the existing root identity.
+
+```json5
+{
+  channels: {
+    buzz: {
+      relayUrl: "wss://buzz.example.com",
+      privateKey: { source: "env", provider: "default", id: "BUZZ_ROOT_KEY" },
+      groupPolicy: "allowlist",
+      groups: { "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {} },
+      accounts: {
+        ada: {
+          name: "Ada",
+          relayUrl: "wss://buzz.example.com",
+          privateKey: { source: "env", provider: "default", id: "BUZZ_ADA_KEY" },
+          groups: { "940d0c32-4eb7-46d7-9d5b-d975aaef87f7": {} },
+        },
+      },
+    },
+  },
+}
+```
+
+Named accounts inherit root policy and delivery settings, but never root
+`name`, `relayUrl`, `privateKey`, `authTag`, `groups`, or `defaultTo`. Set those
+identity and room fields on each account. An explicit `accounts.default` also
+owns a complete identity and replaces the implicit root identity; it does not
+borrow root credentials or `BUZZ_*` environment variables.
+
+Set `defaultAccount` to select the account used when a command omits `--account`.
+Otherwise the implicit root/default identity is preferred, then the first
+configured account in sorted order. Account keys use lowercase letters, digits,
+hyphens, and underscores, start with a letter or digit, and are at most 64
+characters; `constructor` and `prototype` are reserved.
+
+Use `--account ada` with message and directory commands, and add `accountId: "ada"`
+to a binding's `match` object when routing that bot to an agent. Set
+`channels.buzz.accounts.ada.enabled: false` to disable only Ada;
+`channels.buzz.enabled: false` disables all Buzz accounts. Buzz does not yet
+support account disabling or deletion through `channels remove`.
+
+Editing an existing named account reloads only that account, leaving healthy
+sibling accounts connected. Changes to shared Buzz settings, `accounts.default`,
+or removed accounts reload the whole channel. Account shutdown waits for admitted
+message work and pending profile synchronization before starting a replacement.
 
 ### Bot key storage
 
 The default guided path reuses the current bot identity or generates a private
-key and stores it in `channels.buzz.privateKey`, following OpenClaw's current
+key and stores it in the selected account's `privateKey`, following OpenClaw's current
 plaintext config convention.
 
 For an existing key, setup can use plaintext or an existing `env`, `file`, or
 `exec` SecretRef. See [Secrets management](/gateway/secrets) for provider setup.
-The default account can also read:
+The implicit root default identity can also read:
 
 ```bash
 export BUZZ_RELAY_URL="wss://buzz.example.com"
 export BUZZ_PRIVATE_KEY="nsec1..."
 ```
 
+With `BUZZ_PRIVATE_KEY` set, non-interactive setup can also save an account name:
+
+```bash
+openclaw channels add --channel buzz --name "Support bot" \
+  --relay-url wss://buzz.example.com --use-env
+```
+
+Omitting `--name` or supplying a blank name preserves the existing name. This
+command saves credentials and settings; use guided setup to discover and select
+rooms before starting a new bot.
+
 If a hosted workspace operator gives you an identity authorization value, set
-`channels.buzz.authTag` or `BUZZ_AUTH_TAG`. It can use the same plaintext or
+the selected identity's `authTag`. The implicit root identity uses
+`channels.buzz.authTag` and can fall back to `BUZZ_AUTH_TAG`. Nested identities,
+including `accounts.default`, use `channels.buzz.accounts.<id>.authTag` and
+never borrow that environment fallback. The field accepts the same plaintext or
 SecretRef forms as the private key. Treat this delegated, reusable value as a
 secret: keep it out of logs, screenshots, chat, and source control, and prefer a
 SecretRef for persistent deployments. Request a replacement and revoke the old

@@ -21,6 +21,10 @@ import {
   sleep,
 } from "./restart-health.test-helpers.js";
 
+// Load the real client's dependency graph before timing its socket/probe behavior.
+const actualProbe =
+  await vi.importActual<typeof import("../../gateway/probe.js")>("../../gateway/probe.js");
+
 describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
@@ -61,11 +65,7 @@ describe("restart health", () => {
           }
         });
       });
-      probeGateway.mockImplementation(async (...args: unknown[]) => {
-        const actual =
-          await vi.importActual<typeof import("../../gateway/probe.js")>("../../gateway/probe.js");
-        return actual.probeGateway(...(args as Parameters<typeof actual.probeGateway>));
-      });
+      probeGateway.mockImplementation(actualProbe.probeGateway);
       inspectPortUsage.mockResolvedValue({
         port,
         status: "busy",

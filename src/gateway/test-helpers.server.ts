@@ -12,8 +12,8 @@ import "./test-helpers.mocks.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
-import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
-import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
+import { getRuntimeConfig, parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
+import { resolveSystemMainSessionKey, type SessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
@@ -112,7 +112,8 @@ let activeSuiteHookScopeCount = 0;
 const DEFAULT_GATEWAY_TEST_BIND = "loopback" as const;
 
 function resolveGatewayTestMainSessionKeys(): string[] {
-  const resolved = resolveMainSessionKeyFromConfig();
+  // Use the fixture's config seam; transitive runtime readers can retain real IO bindings.
+  const resolved = resolveSystemMainSessionKey(getRuntimeConfig());
   const keys = new Set<string>();
   if (resolved) {
     keys.add(resolved);
@@ -1249,11 +1250,9 @@ export async function rpcReq<T extends Record<string, unknown>>(
   if (hasUnsyncedGatewayTestSessionConfig()) {
     await persistTestSessionConfig();
   }
-  // Gateway suites often mutate testState-backed config/session inputs between
-  // RPCs while reusing one server instance; flush caches so the next request
-  // observes the updated test fixture state.
+  // Refresh mutable config fixtures, but leave in-flight session writers owned
+  // by the running Gateway; their producers publish SQLite cache updates.
   resetConfigRuntimeState();
-  clearSessionStoreCacheForTest();
   if (method === "agent" || method === "chat.send") {
     await prepareGatewayReplyRuntimeForTest();
   }

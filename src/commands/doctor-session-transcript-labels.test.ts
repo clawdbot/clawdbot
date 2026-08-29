@@ -203,6 +203,7 @@ function findEventJson(
 
 describe("doctor SQLite session transcript label migration", () => {
   let state: OpenClawTestState;
+  let transcriptDatabaseOptions: OpenClawAgentDatabaseOptions;
 
   beforeEach(async () => {
     note.mockClear();
@@ -210,11 +211,12 @@ describe("doctor SQLite session transcript label migration", () => {
       layout: "state-only",
       prefix: "openclaw-doctor-transcript-labels-",
     });
+    transcriptDatabaseOptions = { agentId: AGENT_ID, env: state.env };
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    await waitForSessionTranscriptIndexReconcile({ agentId: AGENT_ID, env: state.env });
+    await waitForSessionTranscriptIndexReconcile(transcriptDatabaseOptions);
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
@@ -370,41 +372,50 @@ describe("doctor SQLite session transcript label migration", () => {
     expect(stripInboundMetadata(repairedContent as string)).toBe("What should I grab?");
   });
 
-  it("discovers and rewrites legacy labels in a custom session store", async () => {
-    const customStorePath = state.path("custom-session-store", "sessions.json");
-    const customSqlitePath = resolveSqliteTargetFromSessionStorePath(customStorePath, {
-      agentId: AGENT_ID,
-    }).path;
-    const cfg: OpenClawConfig = {
-      agents: { list: [{ id: AGENT_ID }] },
-      session: { store: customStorePath },
-    };
-    const databaseOptions = {
-      agentId: AGENT_ID,
-      env: state.env,
-      path: customSqlitePath,
-    };
-    const database = seedLegacyLabelTranscript(databaseOptions);
+  it.each([false, true])(
+    "rewrites legacy labels in a custom store (shared owner: %s)",
+    async (shared) => {
+      const customStorePath = state.path(
+        "custom-session-store",
+        shared ? "shared.sqlite" : "sessions.json",
+      );
+      const customSqlitePath = resolveSqliteTargetFromSessionStorePath(customStorePath, {
+        agentId: AGENT_ID,
+      }).path;
+      const cfg: OpenClawConfig = {
+        agents: { entries: { [shared ? "beta" : AGENT_ID]: {} } },
+        session: { store: customStorePath },
+      };
+      const databaseOptions = {
+        agentId: shared ? "alpha" : AGENT_ID,
+        env: state.env,
+        path: customSqlitePath,
+      };
+      transcriptDatabaseOptions = databaseOptions;
+      const database = appendTranscriptFixture(databaseOptions, createLegacyLabelEvents().events, {
+        sessionKey: shared ? `agent:beta:${SESSION_ID}` : SESSION_KEY,
+      });
 
-    await runTranscriptLabelHealth(state, false, cfg);
+      await runTranscriptLabelHealth(state, false, cfg);
 
-    expect(note).toHaveBeenCalledWith(
-      '- Found 1 session with legacy inbound-context labels.\n- Run "openclaw doctor --fix" to rewrite them.',
-      "Session transcript labels",
-    );
+      expect(note).toHaveBeenCalledWith(
+        '- Found 1 session with legacy inbound-context labels.\n- Run "openclaw doctor --fix" to rewrite them.',
+        "Session transcript labels",
+      );
 
-    note.mockClear();
-    await runTranscriptLabelHealth(state, true, cfg);
+      note.mockClear();
+      await runTranscriptLabelHealth(state, true, cfg);
 
-    const repaired = readTranscriptSnapshot(database, SESSION_ID);
-    const repairedContent = findMessageContent(repaired.events, "legacy-user");
-    expect(repairedContent).toContain("Conversation info:");
-    expect(repairedContent).not.toContain("Conversation info (untrusted metadata):");
-    expect(note).toHaveBeenCalledWith(
-      "- Rewrote legacy inbound-context labels in 1 session (1 event).",
-      "Session transcript labels",
-    );
-  });
+      const repaired = readTranscriptSnapshot(database, SESSION_ID);
+      const repairedContent = findMessageContent(repaired.events, "legacy-user");
+      expect(repairedContent).toContain("Conversation info:");
+      expect(repairedContent).not.toContain("Conversation info (untrusted metadata):");
+      expect(note).toHaveBeenCalledWith(
+        "- Rewrote legacy inbound-context labels in 1 session (1 event).",
+        "Session transcript labels",
+      );
+    },
+  );
 
   it("does not corrupt user prose ending with legacy label suffixes (anti-corruption test)", async () => {
     const databaseOptions = { agentId: AGENT_ID, env: state.env };

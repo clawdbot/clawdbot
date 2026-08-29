@@ -67,6 +67,8 @@ Password-based (token is cached after first login):
 }
 ```
 
+Token and password SecretRefs follow the shared [source-specific provider-alias rules](/gateway/secrets#provider-config), including for named accounts. An explicit matching `env` provider still enforces its allowlist; an empty allowlist denies all variables.
+
 ### Auto-join
 
 `channels.matrix.autoJoin` defaults to `"off"`: the bot will not appear in new rooms or DMs from fresh invites until you join manually. OpenClaw cannot tell at invite time whether an invite is a DM or a group, so every invite goes through `autoJoin` first; `dm.policy` only applies later, after the bot has joined and the room is classified.

@@ -18,17 +18,24 @@ private actor DashboardReconnectAuthGate {
 @MainActor
 struct DashboardReconnectTests {
     @Test func `authenticated control reconnect recovers unchanged ready route`() async throws {
-        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=route-a-device-token"))
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let replacementServer = try await DashboardHTTPFixture.start()
+        defer { replacementServer.stop() }
+        let url = server.url("/#token=route-a-device-token")
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(
-                gatewayUrl: "ws://127.0.0.1:60001/",
+                gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "route-a-device-token",
                 password: nil),
-            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
         controller.show()
         let authGate = DashboardReconnectAuthGate()
-        let socketURL = try #require(URL(string: "ws://127.0.0.1:60002"))
+        let socketURL = replacementServer.websocketURL("")
         let endpointState = GatewayEndpointState.ready(
             mode: .remote,
             url: socketURL,
@@ -59,6 +66,6 @@ struct DashboardReconnectTests {
         #expect(recoveredController !== failureController)
         #expect(!failureController.isWindowOpen)
         #expect(recoveredController.currentURL.absoluteString ==
-            "http://127.0.0.1:60002/#token=route-b-device-token")
+            replacementServer.url("/#token=route-b-device-token").absoluteString)
     }
 }

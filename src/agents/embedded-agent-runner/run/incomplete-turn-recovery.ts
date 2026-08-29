@@ -95,6 +95,7 @@ function shouldSkipNonVisibleTurnRetry(params: {
   return Boolean(
     params.aborted ||
     params.timedOut ||
+    params.attempt.terminal.kind === "failed" ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||

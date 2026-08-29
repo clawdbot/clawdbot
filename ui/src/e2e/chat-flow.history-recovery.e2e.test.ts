@@ -75,7 +75,12 @@ suite.define(() => {
         );
       await sessionLink(sessionB).click();
       await page.getByText(sessionBText, { exact: true }).waitFor({ timeout: 10_000 });
-      const historyRequestsBeforePeerDelete = (await gateway.getRequests("chat.history")).length;
+      const retainedHistoryRequests = async () =>
+        (await gateway.getRequests("chat.history")).filter(({ params }) => {
+          const { sessionKey } = requireRecord(params);
+          return sessionKey === sessionA || sessionKey === sessionB;
+        });
+      const historyRequestsBeforePeerDelete = (await retainedHistoryRequests()).length;
       const startupRequestsBeforePeerDelete = (await gateway.getRequests("chat.startup")).length;
       await page.evaluate(() => {
         window.addEventListener("storage", (event) => {
@@ -117,10 +122,10 @@ suite.define(() => {
 
       await sessionLink(sessionA).click();
       await page.getByText(sessionAText, { exact: true }).waitFor({ timeout: 10_000 });
-      await Promise.all([
-        expectRequestCountStable(gateway, "chat.history", historyRequestsBeforePeerDelete),
-        expectRequestCountStable(gateway, "chat.startup", startupRequestsBeforePeerDelete),
-      ]);
+      // Prefetch may warm C without reloading either retained pane. Request capture is
+      // append-only, so checking history after the startup window covers the same interval.
+      await expectRequestCountStable(gateway, "chat.startup", startupRequestsBeforePeerDelete);
+      expect(await retainedHistoryRequests()).toHaveLength(historyRequestsBeforePeerDelete);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -608,7 +613,7 @@ suite.define(() => {
           const rows = Array.from(pane?.querySelectorAll<HTMLElement>("[data-chat-row-key]") ?? []);
           samples.push({
             hiddenNotice: pane?.textContent?.includes("Showing last") ?? false,
-            loading: pane?.querySelector(".chat-history-loading") !== null,
+            loading: pane?.querySelector('.chat-history-available[aria-busy="true"]') !== null,
             messageCount: pane?.state?.chatMessages?.length ?? 0,
             minOpacity: rows.reduce(
               (minimum, row) => Math.min(minimum, Number.parseFloat(getComputedStyle(row).opacity)),

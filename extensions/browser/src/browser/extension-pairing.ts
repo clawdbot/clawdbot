@@ -1,5 +1,6 @@
-import { isLoopbackHost } from "../gateway/net.js";
-import { type BrowserConfig, type OpenClawConfig, resolveGatewayPort } from "../sdk-config.js";
+import type { BrowserConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/core";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveBrowserConfig } from "./config.js";
 import { ensureExtensionRelayToken } from "./extension-relay/relay-auth.js";
 

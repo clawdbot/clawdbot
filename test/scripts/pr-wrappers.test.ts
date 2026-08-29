@@ -252,9 +252,9 @@ describe("scripts/pr wrappers", () => {
     expect(review).toContain('gh_plain pr edit "$pr" --add-assignee "$reviewer"');
     expect(push).toContain('gh_plain api graphql --input - <<< "$payload"');
     expect(merge).toContain('gh_plain pr merge "$pr"');
-    expect(merge).toContain('"repos/{owner}/{repo}/issues/$pr/comments"');
+    expect(merge).toContain('"repos/$repo_nwo/issues/$pr/comments"');
     expect(merge).toContain("--jq '.html_url // empty'");
-    expect(merge).toContain("gh_plain api -X DELETE");
+    expect(merge).toContain('git push --force-with-lease="refs/heads/$head_ref:$PREP_HEAD_SHA"');
   });
 
   itPosix("fails loudly at preflight when ripgrep is unavailable", () => {

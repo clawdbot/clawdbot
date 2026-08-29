@@ -56,6 +56,7 @@ import {
   readGatewayRestartHandoffSync,
   type GatewayRestartHandoff,
 } from "../../infra/restart-handoff.js";
+import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import {
   inspectWindowsGatewayFirewall,
   type WindowsGatewayFirewallDiagnostic,
@@ -70,7 +71,7 @@ import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { VERSION } from "../../version.js";
 import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
-import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
+import { normalizeListenerAddress, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
 
 type ConfigSummary = {
@@ -404,7 +405,7 @@ async function resolveGatewayStatusSummary(params: {
   rpcUrlOverride?: string;
   localPortOverride?: number;
 }): Promise<ResolvedGatewayStatus> {
-  const portFromArgs = parsePortFromArgs(params.commandProgramArguments);
+  const portFromArgs = parseTcpPortFromArgs(params.commandProgramArguments);
   const daemonPort =
     params.localPortOverride ??
     portFromArgs ??
@@ -796,10 +797,21 @@ export async function gatherDaemonStatus(
       notLoadedText: service.notLoadedText,
       targetRole: serviceTargetsProbe ? "target" : "diagnostic-only",
       command,
-      runtime,
+      runtime: runtime?.inspectionFailure
+        ? {
+            ...runtime,
+            detail: `${runtime.detail}; retry with openclaw gateway status --deep`,
+          }
+        : runtime,
       configAudit,
       ...(command
-        ? { gatewayHeap: inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS) }
+        ? {
+            gatewayHeap: inspectGatewayHeapLimit(
+              command.environment?.NODE_OPTIONS,
+              {},
+              command.programArguments,
+            ),
+          }
         : {}),
       ...(restartHandoff ? { restartHandoff } : {}),
       ...(staleUpdateLaunchdJobs.length > 0 ? { staleUpdateLaunchdJobs } : {}),

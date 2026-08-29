@@ -10,7 +10,9 @@ import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
 import {
   buildWebhookConfig,
+  createFeishuWebhookTestAccount,
   getFreePort,
+  signFeishuPayload,
   waitUntilServerReady,
   withRunningWebhookMonitor,
 } from "./monitor.webhook.test-helpers.js";
@@ -38,47 +40,9 @@ import { httpServers } from "./monitor.state.js";
 import { monitorWebhook } from "./monitor.transport.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
-function createFeishuWebhookTestAccount(
-  accountId: string,
-  port: number,
-  webhookPath: string,
-): ResolvedFeishuAccount {
-  return {
-    accountId,
-    encryptKey: "encrypt_key",
-    config: {
-      enabled: true,
-      connectionMode: "webhook",
-      webhookHost: "127.0.0.1",
-      webhookPort: port,
-      webhookPath,
-    },
-  } as ResolvedFeishuAccount;
-}
-
 beforeAll(async () => {
   await import("./monitor.account.js");
 });
-
-function signFeishuPayload(params: {
-  encryptKey: string;
-  rawBody: string;
-  timestamp?: string;
-  nonce?: string;
-}): Record<string, string> {
-  const timestamp = params.timestamp ?? "1711111111";
-  const nonce = params.nonce ?? "nonce-test";
-  const signature = crypto
-    .createHash("sha256")
-    .update(timestamp + nonce + params.encryptKey + params.rawBody)
-    .digest("hex");
-  return {
-    "content-type": "application/json",
-    "x-lark-request-timestamp": timestamp,
-    "x-lark-request-nonce": nonce,
-    "x-lark-signature": signature,
-  };
-}
 
 function encryptFeishuPayload(encryptKey: string, payload: Record<string, unknown>): string {
   const iv = crypto.randomBytes(16);
@@ -400,6 +364,7 @@ describe("Feishu webhook signed-request e2e", () => {
 
   it("accepts signed non-challenge events and reaches the dispatcher", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+    const statusSink = vi.fn();
 
     await withRunningWebhookMonitor(
       {
@@ -407,9 +372,11 @@ describe("Feishu webhook signed-request e2e", () => {
         path: "/hook-e2e-signed-dispatch",
         verificationToken: "verify_token",
         encryptKey: "encrypt_key",
+        statusSink,
       },
       monitorFeishuProvider,
       async (url) => {
+        statusSink.mockClear();
         const payload = {
           schema: "2.0",
           header: { event_type: "unknown.event" },
@@ -420,6 +387,9 @@ describe("Feishu webhook signed-request e2e", () => {
         expect(response.status).toBe(200);
         expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
         expect(await response.text()).toContain("no unknown.event event handle");
+        expect(statusSink.mock.calls).toEqual([
+          [{ lastEventAt: expect.any(Number), lastTransportActivityAt: expect.any(Number) }],
+        ]);
       },
     );
   });

@@ -7,11 +7,21 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  createPluginManifestRecordFixture as createPluginManifestRecord,
+  createPluginMetadataSnapshotFixture as createPluginMetadataSnapshot,
+} from "../plugins/plugin-metadata.test-support.js";
 import type { ConfigSetDryRunResult } from "./config-set-dryrun.js";
 import { applyCliProfileEnv } from "./profile.js";
-import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
+
+// The metadata fixture can reach the runtime mock before ordinary imports finish.
+const { defaultRuntime, resetRuntimeCapture, mockRuntimeModule } = await vi.hoisted(async () => {
+  const runtimeHelpers = await import("./test-runtime-capture.js");
+  return {
+    ...runtimeHelpers.createCliRuntimeCapture(),
+    mockRuntimeModule: runtimeHelpers.mockRuntimeModule,
+  };
+});
 
 /**
  * Test for issue #6070:
@@ -197,7 +207,8 @@ vi.mock("../gateway/config-reload-plan.js", () => ({
   },
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
   resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
     mockLoadPluginMetadataSnapshot(params.config),
@@ -212,7 +223,6 @@ vi.mock("../secrets/channel-contract-api.js", () => ({
   loadChannelSecretContractApiForRecord: () => undefined,
 }));
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 const mockLog = defaultRuntime.log;
 const mockWriteStdout = defaultRuntime.writeStdout;
 const mockError = defaultRuntime.error;
@@ -294,67 +304,6 @@ function withRuntimeDefaults(resolved: OpenClawConfig): OpenClawConfig {
         model: "gpt-5.4",
       } as never,
     } as never,
-  };
-}
-
-function createPluginManifestRecord(
-  overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
-): PluginManifestRecord {
-  return {
-    channels: [],
-    cliBackends: [],
-    hooks: [],
-    manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
-    origin: "bundled",
-    providers: [],
-    rootDir: `/tmp/${overrides.id}`,
-    skills: [],
-    source: `/tmp/${overrides.id}/index.js`,
-    ...overrides,
-  };
-}
-
-function createPluginMetadataSnapshot(
-  manifestRegistry: PluginManifestRegistry = { diagnostics: [], plugins: [] },
-): PluginMetadataSnapshot {
-  const plugins = manifestRegistry.plugins;
-  return {
-    policyHash: "test-policy",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test-policy",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
-    registryDiagnostics: [],
-    manifestRegistry,
-    plugins,
-    diagnostics: manifestRegistry.diagnostics,
-    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
-    normalizePluginId: (pluginId: string) => pluginId.trim().toLowerCase(),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: plugins.length,
-    },
   };
 }
 
@@ -1445,10 +1394,12 @@ describe("config cli", () => {
     ])("reports a $name to the operator", async (testCase) => {
       setGatewaySnapshot();
 
-      await expect(runConfigCommand(["config", "get", testCase.path])).rejects.toThrow(ExitError);
+      await expect(runConfigCommand(["config", "get", testCase.path])).rejects.toMatchObject({
+        name: "ExitError",
+        code: 1,
+      });
 
       expectErrorIncludes(testCase.message);
-      expect(mockExit).toHaveBeenCalledWith(1);
       expect(mockLog).not.toHaveBeenCalled();
     });
 
@@ -1468,9 +1419,9 @@ describe("config cli", () => {
     ])("outputs a JSON error for a $name", async (testCase) => {
       setGatewaySnapshot();
 
-      await expect(runConfigCommand(["config", "get", testCase.path, "--json"])).rejects.toThrow(
-        ExitError,
-      );
+      await expect(
+        runConfigCommand(["config", "get", testCase.path, "--json"]),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
 
       expect(mockError).not.toHaveBeenCalled();
       expect(parseLastLogPayload()).toEqual({
@@ -1480,7 +1431,6 @@ describe("config cli", () => {
           message: testCase.message,
         },
       });
-      expect(mockExit).toHaveBeenCalledWith(1);
     });
 
     it.each([
@@ -2309,8 +2259,9 @@ describe("config cli", () => {
           "--provider-timeout-ms",
           "1e3",
         ]),
-      ).rejects.toThrow("--provider-timeout-ms must be a positive integer.");
+      ).rejects.toThrow(ExitError);
 
+      expectErrorIncludes("--provider-timeout-ms must be a positive integer.");
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
@@ -2342,7 +2293,7 @@ describe("config cli", () => {
           entry,
           "--dry-run",
         ]),
-      ).rejects.toThrow(message);
+      ).rejects.toThrow(ExitError);
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
@@ -3785,9 +3736,10 @@ describe("config cli", () => {
         new ConfigMutationConflictError("included config changed since last load"),
       );
 
-      await expect(runConfigSet("gateway.port", "19000")).rejects.toThrow(ExitError);
-
-      expect(mockExit).toHaveBeenCalledWith(1);
+      await expect(runConfigSet("gateway.port", "19000")).rejects.toMatchObject({
+        name: "ExitError",
+        code: 1,
+      });
       expectErrorIncludes(
         "The config file changed while this command was writing (included config changed since last load), so nothing was changed. Re-run the same command to pick up the new file and try again.",
       );
@@ -3800,9 +3752,7 @@ describe("config cli", () => {
 
       await expect(
         runConfigCommand(["config", "set", "gateway.port", "19000", "--dry-run", "--json"]),
-      ).rejects.toThrow(ExitError);
-
-      expect(mockExit).toHaveBeenCalledWith(1);
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
       expect(parseLastLogPayload()).toMatchObject({
         ok: false,
         errors: [
@@ -3818,9 +3768,10 @@ describe("config cli", () => {
     it("preserves non-conflict config mutation errors", async () => {
       mockWriteConfigFile.mockRejectedValueOnce(new Error("permission denied"));
 
-      await expect(runConfigSet("gateway.port", "19000")).rejects.toThrow(ExitError);
-
-      expect(mockExit).toHaveBeenCalledWith(1);
+      await expect(runConfigSet("gateway.port", "19000")).rejects.toMatchObject({
+        name: "ExitError",
+        code: 1,
+      });
       expectErrorIncludes("permission denied");
       expect(mockError.mock.calls.flat().join("\n")).not.toContain(
         "The config file changed while this command was writing",
@@ -4278,7 +4229,8 @@ describe("config cli", () => {
         const resolved = { agents: { list } } as unknown as OpenClawConfig;
         setSnapshot(resolved, resolved);
       }
-      await expect(runConfigCommand(args)).rejects.toThrow(error);
+      await expect(runConfigCommand(args)).rejects.toThrow(ExitError);
+      expectErrorIncludes(error);
       if (!list) {
         expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       }
@@ -4320,9 +4272,8 @@ describe("config cli", () => {
         ],
       ],
     ])("rejects malformed bracket paths for config %s", async (_command, args) => {
-      await expect(runConfigCommand(args)).rejects.toThrow(
-        "Invalid path (missing separator after bracket): agents.list[0]id",
-      );
+      await expect(runConfigCommand(args)).rejects.toThrow(ExitError);
+      expectErrorIncludes("Invalid path (missing separator after bracket): agents.list[0]id");
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
@@ -4669,7 +4620,6 @@ describe("config cli", () => {
         },
       };
       setSnapshot(resolved, resolved);
-      setSnapshot(resolved, resolved);
       mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
         refsChecked: 1,
         refsTotal: 1,
@@ -4711,7 +4661,6 @@ describe("config cli", () => {
           alsoAllow: ["agents_list"],
         },
       };
-      setSnapshot(resolved, resolved);
       setSnapshot(resolved, resolved);
 
       await runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run", "--json"]);
@@ -4862,7 +4811,6 @@ describe("config cli", () => {
         },
       };
       setSnapshot(resolved, resolved);
-      setSnapshot(resolved, resolved);
       mockResolveSecretRefValue.mockRejectedValueOnce(new Error("provider removed"));
 
       await expect(
@@ -4894,7 +4842,6 @@ describe("config cli", () => {
           },
         },
       } as OpenClawConfig;
-      setSnapshot(resolved, resolved);
       setSnapshot(resolved, resolved);
 
       await runConfigCommand(["config", "unset", "secrets.defaults", "--dry-run"]);

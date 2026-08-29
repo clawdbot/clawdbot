@@ -198,7 +198,10 @@ class SessionPrefetcher {
     }
     await Promise.all(
       selection.candidates.map(async (candidate) => {
-        if (!this.isCurrent(snapshot) || this.isOpen(candidate.snapshotKey, this.snapshot)) {
+        if (
+          !this.isCurrent(snapshot, candidate.snapshotKey) ||
+          this.isOpen(candidate.snapshotKey, this.snapshot)
+        ) {
           return;
         }
         this.lastAttemptAt.set(candidate.snapshotKey, Date.now());
@@ -208,7 +211,7 @@ class SessionPrefetcher {
           });
           if (!existing && this.snapshotStore.readSavedAt(candidate.snapshotKey) !== null) {
             existing = await this.snapshotStore.read(candidate.snapshotKey);
-            if (!this.isCurrent(snapshot)) {
+            if (!this.isCurrent(snapshot, candidate.snapshotKey)) {
               return;
             }
             if (existing) {
@@ -224,10 +227,10 @@ class SessionPrefetcher {
             client,
             candidate.snapshotKey,
             this,
-            () => this.isCurrent(snapshot),
+            () => this.isCurrent(snapshot, candidate.snapshotKey),
             existing?.deltaCursor,
           );
-          if (!this.isCurrent(snapshot)) {
+          if (!this.isCurrent(snapshot, candidate.snapshotKey)) {
             return;
           }
           if (result.kind === "reset") {
@@ -242,9 +245,9 @@ class SessionPrefetcher {
               existing = withoutCursor;
             }
             result = await requestChatSessionSnapshot(client, candidate.snapshotKey, this, () =>
-              this.isCurrent(snapshot),
+              this.isCurrent(snapshot, candidate.snapshotKey),
             );
-            if (!this.isCurrent(snapshot)) {
+            if (!this.isCurrent(snapshot, candidate.snapshotKey)) {
               return;
             }
           }
@@ -356,12 +359,20 @@ class SessionPrefetcher {
     return { candidates, deferMs };
   }
 
-  private isCurrent(snapshot: SessionPrefetchSnapshot): boolean {
+  private isCurrent(snapshot: SessionPrefetchSnapshot, snapshotKey?: string): boolean {
     return (
       this.connected &&
       document.visibilityState !== "hidden" &&
       this.snapshot?.client === snapshot.client &&
-      this.snapshot.listRevision === snapshot.listRevision
+      this.snapshot.listRevision === snapshot.listRevision &&
+      (snapshotKey === undefined ||
+        this.snapshot.rows?.some(
+          (row) =>
+            resolveChatSnapshotKey(this.snapshot!.snapshotHost, {
+              sessionKey: row.key,
+              agentId: row.agentId,
+            }) === snapshotKey,
+        ) === true)
     );
   }
 
@@ -445,7 +456,10 @@ class SessionPrefetchController implements ReactiveController {
       this.clearSubscriptions();
       this.context = context;
       if (context) {
-        this.subscriptions = [context.gateway.subscribe(this.sync)];
+        this.subscriptions = [
+          context.gateway.subscribe(this.sync),
+          context.sessions.subscribe(this.sync),
+        ];
       }
     }
     if (!context) {

@@ -570,6 +570,7 @@ export function applyContextPruningDefaults(
       config: cfg,
       env: process.env,
       manifestRegistry: options.manifestRegistry,
+      loadManifestRegistry: options.loadManifestRegistry,
     }) ?? cfg
   );
 }

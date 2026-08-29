@@ -275,6 +275,17 @@ uses the shared typing keepalive/cleanup lifecycle. Add
 
 ### Media source params
 
+Resolve account media limits with `resolveChannelMediaMaxBytes(...)` from
+`openclaw/plugin-sdk/account-helpers`. Pass the already-merged account's
+`mediaMaxMb` through `resolveChannelLimitMb`; the helper applies the agent
+default only when the account/channel limit is absent. Its optional byte result
+must reach the actual media loader, capped by any transport ceiling. Preserve
+the loader's existing default when no limit is configured.
+
+The focused account-helper import keeps setup and account resolution free of
+media analysis runtimes. The old `media-runtime` export remains available for
+existing external plugins, but new and bundled callers should use the focused import.
+
 If your channel adds message-tool params that carry media sources, expose
 those param names through `plugin.actions.describeMessageTool(...).mediaSourceParams`.
 Core uses that explicit list for sandbox path normalization and outbound

@@ -282,7 +282,7 @@ export async function sendDiscordComponentMessage(
       token: opts.token,
       rest: opts.rest,
       mediaUrl: opts.mediaUrl,
-      filename: opts.filename,
+      filename: opts.filename?.trim() || extractComponentAttachmentNames(spec)[0],
       mediaLocalRoots: opts.mediaLocalRoots,
       mediaReadFile: opts.mediaReadFile,
       mediaAccess: opts.mediaAccess,

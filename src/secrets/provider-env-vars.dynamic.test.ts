@@ -805,7 +805,9 @@ describe("provider env vars dynamic manifest metadata", () => {
       },
     });
 
-    const lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
+    const lookupMaps = resolveProviderAuthLookupMaps({
+      config: { plugins: { entries: { "disabled-setup-owner": { enabled: false } } } },
+    });
 
     expect(lookupMaps.setupProviderFallbackRefs).toEqual([]);
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);

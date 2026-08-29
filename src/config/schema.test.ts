@@ -113,6 +113,12 @@ describe("config schema", () => {
     expect(gatewayPortSchema?.description).toContain("TCP port used by the gateway listener");
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
+    for (const path of [
+      "agents.defaults.models.*.codeMode",
+      "agents.entries.*.models.*.codeMode",
+    ]) {
+      expect(res.uiHints[path]).toMatchObject({ label: "Code Mode", placeholder: "Default" });
+    }
     expect(res.uiHints["security.installPolicy.exec.env.*"]?.sensitive).toBe(true);
     const groupPolicyLabel = res.uiHints["channels.defaults.groupPolicy"]?.label;
     expect(groupPolicyLabel).toBeTypeOf("string");

@@ -12,19 +12,18 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewaySigusr1RestartPolicy } from "../infra/restart.js";
-import type { ChannelKind } from "./config-reload-plan.js";
+import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 import {
   shouldRefreshContextWindowCache,
   shouldRewarmProviderAuthState,
 } from "./config-reload-recovery.js";
-import type { GatewayReloadPlan } from "./config-reload.js";
 import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService, type GatewayCronExitWatcherHandoff } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import {
   restartGatewayChannels,
-  startGatewayChannelFromActiveRegistry,
+  rollbackStoppedGatewayChannels,
 } from "./server-reload-channel-restart.js";
 import {
   assertReloadPublicationCurrent,
@@ -365,45 +364,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       }
     };
     if (plan.reloadPlugins) {
-      const restartStoppedPluginAccounts = async (reason: string): Promise<string[]> => {
-        const failures: string[] = [];
-        for (const [channel, accountIds] of accountsStoppedBeforePluginReload) {
-          for (const accountId of accountIds) {
-            try {
-              params.logChannels.info(`restarting ${channel} account ${accountId} after ${reason}`);
-              await startGatewayChannelFromActiveRegistry(params, channel, accountId);
-              accountIds.delete(accountId);
-            } catch (err) {
-              failures.push(`${channel}[${accountId}]`);
-              params.logChannels.error(
-                `failed to restart ${channel} account ${accountId} after ${reason}: ${formatErrorMessage(err)}`,
-              );
-            }
-          }
-          if (accountIds.size === 0) {
-            accountsStoppedBeforePluginReload.delete(channel);
-          }
-        }
-        return failures;
-      };
-      const restartStoppedPluginChannels = async (reason: string) =>
-        await collectChannelOperationFailures({
-          channels: [...channelsStoppedBeforePluginReload],
-          run: async (channel) => {
-            params.logChannels.info(`restarting ${channel} channel after ${reason}`);
-            await startGatewayChannelFromActiveRegistry(params, channel);
-            channelsStoppedBeforePluginReload.delete(channel);
-          },
-          onFailure: (channel, err) => {
-            params.logChannels.error(
-              `failed to restart ${channel} channel after ${reason}: ${formatErrorMessage(err)}`,
-            );
-          },
-        });
-      const rollbackStoppedPluginTargets = async (reason: string): Promise<string[]> => [
-        ...(await restartStoppedPluginAccounts(reason)),
-        ...(await restartStoppedPluginChannels(reason)),
-      ];
+      const rollbackStoppedPluginTargets = (reason: string) =>
+        rollbackStoppedGatewayChannels(
+          params,
+          channelsStoppedBeforePluginReload,
+          accountsStoppedBeforePluginReload,
+          reason,
+        );
       const failPluginChannelRollback = (reason: string, failures: string[]): never => {
         const error = new Error(
           `plugin reload cancellation rollback failed for: ${failures.join(", ")}`,
@@ -590,7 +557,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     // Plugin replacement can admit new agent work while an account monitor stays live.
     // Recheck that work here; durable ingress replay remains owned by the fresh monitor drain.
     if (!pluginReloadAborted && hasLiveChannelTargets && !shouldSkipChannelRestart) {
-      pluginReloadAborted = await waitForActiveWorkBeforeChannelReload(channelTargets, isCurrent);
+      const waitCancelled = await waitForActiveWorkBeforeChannelReload(channelTargets, isCurrent);
+      // A committed owner must finish its model/channel tail before the next config runs.
+      // Supersession ends this wait: a newer writer may itself be awaiting that next reload.
+      pluginReloadAborted =
+        waitCancelled &&
+        (!runtimeCommitted || isRestartRetryStopped() || isLifecycleReloadAborted());
     }
     if (pluginReloadAborted) {
       // Only an uncommitted reload can transfer its receipt to the watcher. After
@@ -690,7 +662,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       shouldSkipChannelRestart,
       skipChannelRestartLogMessage:
         "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
-      pluginReloadAborted,
       isLifecycleReloadAborted,
       getChannelAutostartSuppression,
       channelReloadTargets,

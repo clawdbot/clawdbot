@@ -1,9 +1,16 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { i18n, t } from "../i18n/index.ts";
+import {
+  restartHoverMarqueeIfActive,
+  startHoverMarqueeFromEvent,
+  stopHoverMarqueeFromEvent,
+} from "../lib/hover-marquee.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import type { PresenceViewer } from "../lib/presence-users.ts";
+import { presenceMatchesProfile, type PresenceViewer } from "../lib/presence-users.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   resolveSessionPreferredFace,
@@ -90,13 +97,20 @@ function observedTimestamp(values: (number | undefined)[], order: "first" | "las
   return known.length ? (order === "first" ? Math.min(...known) : Math.max(...known)) : undefined;
 }
 
-function elapsed(timestamp: number) {
+function elapsed(
+  timestamp: number,
+  display: "compact" | "minute-compact" | "single-unit" = "compact",
+) {
   const date = new Date(timestamp);
   return html`<time
     datetime=${date.toISOString()}
     title=${date.toLocaleString(i18n.getLocale())}
-    aria-label=${date.toLocaleString(i18n.getLocale())}
-    ><openclaw-elapsed-time .startMs=${timestamp}></openclaw-elapsed-time
+    aria-label=${display === "minute-compact" ? nothing : date.toLocaleString(i18n.getLocale())}
+    ><openclaw-elapsed-time
+      .startMs=${timestamp}
+      .minimumUnit=${display === "minute-compact" ? "minute" : "second"}
+      .singleUnit=${display === "single-unit"}
+    ></openclaw-elapsed-time
   ></time>`;
 }
 
@@ -132,6 +146,9 @@ function renderSessions(
   input: PersonCardInput,
   recent: boolean,
 ) {
+  if (!recent && sessions.length === 0) {
+    return nothing;
+  }
   const title = t(recent ? "presence.card.recentSessions" : "presence.card.viewingNow");
   return html`<section class="person-activity-card__section">
     <h3>${title}</h3>
@@ -141,6 +158,16 @@ function renderSessions(
             sessions.slice(0, 3),
             ({ row, agentId }) => sessionIdentity(row.key, agentId, input),
             ({ row, agentId }) => {
+              const displayName = resolveSessionDisplayName(row.key, row);
+              const name = html`<span
+                ${recent ? ref(restartHoverMarqueeIfActive) : nothing}
+                class="person-activity-card__session-name ${recent
+                  ? "hover-marquee"
+                  : "person-activity-card__session-name--multiline"}"
+                data-hover-marquee-delay=${recent ? "250" : nothing}
+                data-hover-marquee-extra-shift=${recent ? "18" : nothing}
+                >${displayName}</span
+              >`;
               const target = sessionNavigationTarget({
                 face: resolveSessionPreferredFace(row),
                 sessionKey: row.key,
@@ -150,8 +177,12 @@ function renderSessions(
                 mainKey: input.mainKey,
               });
               return html`<a
-                class="person-activity-card__session"
+                class="person-activity-card__session session-row-host"
                 href=${target.href}
+                @mouseenter=${startHoverMarqueeFromEvent}
+                @mouseleave=${stopHoverMarqueeFromEvent}
+                @focusin=${startHoverMarqueeFromEvent}
+                @focusout=${stopHoverMarqueeFromEvent}
                 @click=${(event: MouseEvent) => {
                   if (!shouldHandleNavigationClick(event)) {
                     return;
@@ -163,11 +194,10 @@ function renderSessions(
                   >${icons.messageSquare}</span
                 >
                 <span class="person-activity-card__session-copy"
-                  ><span>${resolveSessionDisplayName(row.key, row)}</span> ${recent &&
-                  row.updatedAt != null
-                    ? html`<small
-                        >${t("presence.card.sessionUpdated")} ${elapsed(row.updatedAt)}
-                        ${t("presence.card.ago")}</small
+                  >${recent ? keyed(displayName, name) : name}
+                  ${row.updatedAt != null
+                    ? html`<span class="person-activity-card__session-age"
+                        >${elapsed(row.updatedAt, "single-unit")}</span
                       >`
                     : nothing}</span
                 >
@@ -220,11 +250,11 @@ export function renderPersonActivityCard(input: PersonCardInput) {
   const recent = sessions.filter(
     ({ row, agentId }) =>
       !watched.has(sessionIdentity(row.key, agentId, input)) &&
-      [row.owner?.actor, row.createdActor].some(
-        (actor) => actor?.type === "human" && actor.id === user.id,
+      [row.owner?.actor, row.createdActor].some((actor) =>
+        presenceMatchesProfile(user, actor?.identity),
       ),
   );
-  const activity = personActivityLink(user.id, input.routing)!;
+  const activity = personActivityLink(user.identity?.id, input.routing);
   return html`<div class="person-activity-card">
     <header class="person-activity-card__header">
       <openclaw-viewer-avatar
@@ -236,17 +266,13 @@ export function renderPersonActivityCard(input: PersonCardInput) {
       <div>
         <h2>${user.name ?? user.email ?? t("presence.card.person")}</h2>
         <span class="person-activity-card__status"
-          ><span aria-hidden="true"></span>${t("presence.rosterTitle")}</span
+          ><span aria-hidden="true"></span>${onlineSince === undefined
+            ? t("presence.rosterTitle")
+            : html`${t("presence.card.onlineFor")} ${elapsed(onlineSince, "minute-compact")}`}</span
         >
       </div>
     </header>
     <dl class="person-activity-card__facts">
-      <div>
-        <dt>${t("presence.card.onlineFor")}</dt>
-        <dd>
-          ${onlineSince === undefined ? t("presence.card.notObserved") : elapsed(onlineSince)}
-        </dd>
-      </div>
       ${where.length || zones.length
         ? html`<div>
             <dt>${t("presence.card.where")}</dt>
@@ -267,10 +293,14 @@ export function renderPersonActivityCard(input: PersonCardInput) {
       </div>
     </dl>
     ${renderSessions(viewing, input, false)}${renderSessions(recent, input, true)}
-    <footer>
-      <a href=${activity.href} @click=${activity.open}
-        >${t("presence.card.viewActivity")}<span aria-hidden="true">${icons.chevronRight}</span></a
-      >
-    </footer>
+    ${activity
+      ? html`<footer>
+          <a href=${activity.href} @click=${activity.open}
+            >${t("presence.card.viewActivity")}<span aria-hidden="true"
+              >${icons.chevronRight}</span
+            ></a
+          >
+        </footer>`
+      : nothing}
   </div>`;
 }

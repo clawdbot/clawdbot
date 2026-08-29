@@ -55,7 +55,6 @@ type SessionCatalogRenderSnapshot = {
 function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
-  nativeSessionsHaveMore?: boolean;
 }) {
   const { host, section } = params;
   const totalRowCount = section.totalRowCount;
@@ -163,6 +162,7 @@ function renderSessionSection(params: {
                 </span>
                 ${personOwner
                   ? html`<openclaw-viewer-avatar
+                      .identity=${personOwner.identity}
                       .user=${{
                         id: personOwner.id,
                         name: personOwner.label,
@@ -246,24 +246,55 @@ function renderSessionSection(params: {
                   )}
                 </div>`
               : nothing}
-            ${renderSessionPagination({
-              host,
-              section,
-              nativeSessionsHaveMore: params.nativeSessionsHaveMore ?? false,
-            })}
+            ${renderSessionPagination({ host, section })}
           `}
     </div>
   `;
 }
 
+/** Fetching a page is useless if the new rows land behind a section's local cap,
+ *  so an explicit roster load reveals a page in every section too -- otherwise
+ *  the click can look like nothing happened. */
+function renderRosterLoadMore(
+  host: SidebarSessionListHost,
+  sections: RenderableSessionSection[],
+  hasMore: boolean | undefined,
+) {
+  if (!hasMore) {
+    return nothing;
+  }
+  return html`
+    <div class="sidebar-session-pagination sidebar-session-pagination--roster">
+      <button
+        type="button"
+        class="sidebar-session-pagination__button"
+        aria-label=${t("chat.selectors.loadMoreRosterSessions")}
+        @click=${() => {
+          void host.loadMoreSidebarSessions().then(() => {
+            for (const section of sections) {
+              host.setVisibleSessionLimit(
+                section.id,
+                section.visibleLimit + SIDEBAR_SESSION_PAGE_SIZE,
+              );
+            }
+          });
+        }}
+      >
+        ${t("chat.selectors.loadMoreRosterSessions")}
+      </button>
+    </div>
+  `;
+}
+
+/** Section paging only reveals rows the roster already holds. Fetching the next
+ *  roster page is a list-level action because it feeds every section at once --
+ *  bolting it to one section left the others unable to recover missing rows. */
 function renderSessionPagination(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
-  nativeSessionsHaveMore: boolean;
 }) {
   const { host, section } = params;
-  const canLoadMore = section.id === "ungrouped" && params.nativeSessionsHaveMore;
-  const canShowMore = section.visibleRowCount < section.totalRowCount || canLoadMore;
+  const canShowMore = section.visibleRowCount < section.totalRowCount;
   const canShowLess =
     section.visibleRowCount > SIDEBAR_SESSION_SEE_LESS_THRESHOLD &&
     section.visibleRowCount > section.collapsedVisibleRowCount;
@@ -278,11 +309,10 @@ function renderSessionPagination(params: {
             class="sidebar-session-pagination__button"
             aria-label=${t("chat.selectors.loadMoreSessions")}
             @click=${() => {
-              const nextLimit = section.visibleLimit + SIDEBAR_SESSION_PAGE_SIZE;
-              host.setVisibleSessionLimit(section.id, nextLimit);
-              if (canLoadMore && nextLimit > section.totalRowCount) {
-                void host.loadMoreSidebarSessions();
-              }
+              host.setVisibleSessionLimit(
+                section.id,
+                section.visibleLimit + SIDEBAR_SESSION_PAGE_SIZE,
+              );
             }}
           >
             ${t("chat.selectors.loadMoreSessions")}
@@ -412,11 +442,7 @@ function renderSessionListBody(params: {
         ) {
           return nothing;
         }
-        return renderSessionSection({
-          host,
-          section,
-          nativeSessionsHaveMore: params.nativeSessionsHaveMore,
-        });
+        return renderSessionSection({ host, section });
       },
     )}
   `;
@@ -504,6 +530,7 @@ export function renderSessionList(params: {
           catalogs: params.catalogs,
           catalogRenderer: params.catalogRenderer,
         })}
+        ${renderRosterLoadMore(host, params.sections, params.nativeSessionsHaveMore)}
         ${host.sessionsStatusFilter === "archived" && params.empty
           ? html`<span class="sidebar-session-empty-hint"
               >${t("sessionsView.noArchivedSessions")}</span

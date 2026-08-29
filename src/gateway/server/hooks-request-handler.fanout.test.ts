@@ -45,13 +45,16 @@ function createGmailHooksConfig(): HooksConfigResolved {
 }
 
 function createFanOutHandler(params?: {
+  dispatchWakeHook?: Parameters<typeof createHooksRequestHandler>[0]["dispatchWakeHook"];
   dispatchAgentHook?: (
     value: HookAgentDispatchPayload,
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
   hooksConfig?: HooksConfigResolved;
   fanoutResponseDeadlineMs?: number;
 }) {
-  const dispatchWakeHook = vi.fn();
+  const dispatchWakeHook = vi.fn(
+    params?.dispatchWakeHook ?? (() => ({ eventOutcome: "queued" as const })),
+  );
   const dispatchAgentHook = vi.fn(
     params?.dispatchAgentHook ??
       ((value: HookAgentDispatchPayload) => ({
@@ -238,7 +241,13 @@ describe("hook fan-out dispatch", () => {
       fs.mkdirSync(path.join(transformsDir, "hooks", "transforms"), { recursive: true });
       fs.writeFileSync(
         path.join(transformsDir, "hooks", "transforms", "mixed.mjs"),
-        'export default (ctx) => ctx.payload.messages[0].kind === "wake" ? { kind: "wake", text: `wake:${ctx.payload.messages[0].id}` } : {};',
+        [
+          'export default (ctx) => ctx.payload.messages[0].kind === "wake"',
+          ' ? { kind: "wake", text: `wake:${ctx.payload.messages[0].id}` }',
+          ' : ctx.payload.messages[0].kind === "invalid-agent"',
+          '   ? { channel: "missing-channel" }',
+          "   : {};",
+        ].join(""),
       );
       const canonical = createHooksConfig();
       const hooksConfig: HooksConfigResolved = {
@@ -267,23 +276,58 @@ describe("hook fan-out dispatch", () => {
           allowedSessionKeyPrefixes: ["hook:gmail:"],
         },
       };
-      const { handler, dispatchAgentHook, dispatchWakeHook } = createFanOutHandler({ hooksConfig });
+      let coalesceWakes = false;
+      const { handler, dispatchAgentHook, dispatchWakeHook } = createFanOutHandler({
+        hooksConfig,
+        dispatchWakeHook: (value) => ({
+          eventOutcome: coalesceWakes || value.text === "wake:w1" ? "coalesced" : "queued",
+        }),
+      });
 
       const response = await postGmailPayload(handler, {
         messages: [
           { id: "w1", kind: "wake" },
+          { id: "w2", kind: "wake" },
           { id: "a1", kind: "agent" },
         ],
       });
 
       expect(response.res.statusCode).toBe(200);
-      expect(dispatchWakeHook).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(response.getBody())).toMatchObject({ eventOutcome: "queued" });
+      expect(dispatchWakeHook).toHaveBeenCalledTimes(2);
       expect(dispatchWakeHook.mock.calls[0]?.[0]).toMatchObject({ text: "wake:w1" });
       expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
       expect(dispatchAgentHook.mock.calls[0]?.[0]).toMatchObject({
         message: "agent:a1",
         sessionKey: "hook:gmail:a1",
       });
+
+      coalesceWakes = true;
+      const replay = await postGmailPayload(handler, {
+        messages: [
+          { id: "w1", kind: "wake" },
+          { id: "w2", kind: "wake" },
+          { id: "a1", kind: "agent" },
+        ],
+      });
+      expect(JSON.parse(replay.getBody())).toMatchObject({ eventOutcome: "coalesced" });
+      expect(dispatchWakeHook).toHaveBeenCalledTimes(4);
+      expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
+
+      coalesceWakes = false;
+      const invalid = await postGmailPayload(handler, {
+        messages: [
+          { id: "w3", kind: "wake" },
+          { id: "a2", kind: "invalid-agent" },
+        ],
+      });
+      expect(invalid.res.statusCode).toBe(400);
+      expect(JSON.parse(invalid.getBody())).toMatchObject({
+        ok: false,
+        eventOutcome: "queued",
+      });
+      expect(dispatchWakeHook).toHaveBeenCalledTimes(5);
+      expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
     } finally {
       fs.rmSync(transformsDir, { recursive: true, force: true });
     }

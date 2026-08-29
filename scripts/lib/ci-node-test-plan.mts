@@ -24,6 +24,7 @@ import { boundaryTestFiles, isUnitConfigTestFile } from "../../test/vitest/vites
 import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import { listTrackedTestFiles } from "./list-test-files.mts";
 import {
+  listVitestRuntimeConsumerFiles,
   resolveVitestPretestBuildMode,
   type VitestPretestBuildMode as NodeTestPretestBuildMode,
 } from "./vitest-build-prerequisites.mts";
@@ -267,6 +268,12 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-control-plane-startup-core", 31],
   ["agentic-control-plane-startup-health-runtime", 11],
   ["agentic-control-plane-startup-restart-close", 10],
+  // This group is small, but its job also runs `pnpm build:ci-artifacts`
+  // (~275s measured, run 33215955822). Weight it near the packing cap so the
+  // packer stops stacking partners onto the one job that pays that build, and
+  // keep it under COMPACT_GITHUB_MAX_PREDICTED_SECONDS so it is never striped
+  // into two jobs that would each build.
+  ["agentic-gateway-core-runtime", 145],
   ["agentic-gateway-core-1", 99],
   ["agentic-gateway-core-2", 99],
   ["agentic-gateway-core-3", 99],
@@ -468,6 +475,12 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-control-plane-startup-core", 51],
   ["agentic-control-plane-startup-health-runtime", 31],
   ["agentic-control-plane-startup-restart-close", 28],
+  // This group is small, but its job also runs `pnpm build:ci-artifacts`
+  // (~275s measured, run 33215955822). Weight it near the packing cap so the
+  // packer stops stacking partners onto the one job that pays that build, and
+  // keep it under COMPACT_GITHUB_MAX_PREDICTED_SECONDS so it is never striped
+  // into two jobs that would each build.
+  ["agentic-gateway-core-runtime", 145],
   ["agentic-gateway-core-1", 128],
   ["agentic-gateway-core-2", 149],
   ["agentic-gateway-core-3", 141],
@@ -636,7 +649,7 @@ const COMPACT_PUSH_EXCLUDED_SHARDS = new Set([
 // concurrent sibling Vitest run competes for the 4 vCPU runner. Pack them
 // into bins the shard runner executes at concurrency 1.
 const EXCLUSIVE_COMPACT_GROUP_RE =
-  /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$/u;
+  /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$|^agentic-gateway-core-runtime$/u;
 // Exclusive bins run serially, so their packed estimate is their wall clock.
 const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
 
@@ -1687,15 +1700,35 @@ function createAgenticGatewayCoreSplitShards(): NodeTestSplitShard[] {
   const packageFiles = ["packages/gateway-client/src", "packages/gateway-protocol/src"]
     .flatMap((rootDir) => listTestFiles(rootDir))
     .filter((file) => isStripeEligibleTestFile(file, unitFastFiles));
-  return createStripedSplitShards({
-    configs: [
-      "test/vitest/vitest.gateway-core.config.ts",
-      "test/vitest/vitest.gateway-client.config.ts",
-    ],
-    files: [...gatewayFiles, ...packageFiles],
-    shardName: "agentic-gateway-core",
-    stripeCount: AGENTIC_GATEWAY_CORE_STRIPES,
-  });
+  const configs = [
+    "test/vitest/vitest.gateway-core.config.ts",
+    "test/vitest/vitest.gateway-client.config.ts",
+  ];
+  // The pretest runtime build is charged per job, so a stripe holding one of
+  // these files pays it for the whole stripe. Striping spreads them, which made
+  // every gateway-core job pay a 275s build to run ~120s of tests. Keep them in
+  // one shard so exactly one job builds.
+  const runtimeFiles = new Set(listVitestRuntimeConsumerFiles(configs));
+  const allFiles = [...gatewayFiles, ...packageFiles];
+  const runtimeShardFiles = allFiles.filter((file) => runtimeFiles.has(file));
+  return [
+    ...createStripedSplitShards({
+      configs,
+      files: allFiles.filter((file) => !runtimeFiles.has(file)),
+      shardName: "agentic-gateway-core",
+      stripeCount: AGENTIC_GATEWAY_CORE_STRIPES,
+    }),
+    ...(runtimeShardFiles.length > 0
+      ? [
+          {
+            configs,
+            includePatterns: runtimeShardFiles,
+            requiresDist: false,
+            shardName: "agentic-gateway-core-runtime",
+          },
+        ]
+      : []),
+  ];
 }
 
 const SPLIT_NODE_SHARDS = new Map<string, NodeTestSplitShard[]>([

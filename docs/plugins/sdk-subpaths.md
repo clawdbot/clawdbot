@@ -23,6 +23,14 @@ inventory of every internal runtime helper. Four files define the boundary:
 - `scripts/lib/plugin-sdk-entries.mts`: derived public/private export metadata,
   supported bundled facades, and plugin-owned public surfaces.
 
+After changing the entrypoint inventories, run `pnpm plugin-sdk:sync-exports`,
+then `pnpm plugin-sdk:check-exports`. The same registration command maintains
+package exports and private workspace declaration aliases in
+`extensions/tsconfig.package-boundary.paths.json` and `extensions/xai/tsconfig.json`.
+It preserves unrelated mappings and XAI's intentional private-alias omissions.
+These local declaration aliases do not add types to JavaScript-only published
+SDK exports; test-only entries remain unexported.
+
 Maintainers audit the public export count with `pnpm plugin-sdk:surface` and
 the compatibility queue with `pnpm plugins:boundary-report:summary`.
 
@@ -216,7 +224,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
     | `plugin-sdk/ssrf-dispatcher` | Private-local after July 2026; Narrow pinned-dispatcher helpers without the broad infra runtime surface |
     | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, `SsrFBlockedError` and `GuardedFetchRedirectError`, SSRF policy helpers, and loopback/private host classification |
-    | `plugin-sdk/secret-input` | Secret input parsing helpers |
+    | `plugin-sdk/secret-input` | Secret input parsing helpers and `isBuiltInDefaultSecretProviderRef(config, ref)`, which returns true when the built-in `env` or `store` provider owns its source's selected default alias, and false for a same-source explicit provider entry |
     | `plugin-sdk/secret-input-runtime` | Secret input normalization, SecretRef coercion, and configured secret resolution helpers |
     | `plugin-sdk/secret-ref-readonly` | Closed available/missing/blocked resolution and provider-policy checks for read-only env SecretRefs |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers and raw websocket/body coercion |
@@ -230,6 +238,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | --- | --- |
     | `plugin-sdk/runtime` | Runtime/logging/backup helpers, plugin install-path warnings, and process helpers |
     | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
+    | `plugin-sdk/browser-cdp` | Private host runtime; `parseBrowserHttpUrl` and `redactCdpUrl` for Browser URL handling. JavaScript-only package export, not a typed third-party SDK contract. |
     | `plugin-sdk/browser-config` | Private-local after July 2026; Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
     | `plugin-sdk/agent-harness-task-runtime` | Private-local after July 2026; Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
     | `plugin-sdk/agent-harness-runtime` | Agent-harness runtime helpers, including the bounded `agentHarnessStructuredInput` form/URL compilation and execution surface. `acquireSessionWriteLock`, `resolveSessionWriteLockAcquireTimeoutMs`, `resolveSessionWriteLockOptions`, and `SessionWriteLockAcquireTimeoutConfig` are deprecated no-op compatibility exports scheduled for removal in the 2026.10 release train. They no longer block or create lock sidecars; harnesses should rely on OpenClaw's per-session lane plus the durable writer claim and in-transaction fence. |

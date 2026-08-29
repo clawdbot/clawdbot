@@ -27,6 +27,7 @@ import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
 import {
   applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
+  operatorWriteCliClient,
   makeContext,
   type AgentHandlerArgs,
   type AgentCommandCall,
@@ -2472,7 +2473,7 @@ describe("gateway agent handler", () => {
         context,
         client: {
           connId: "conn-1",
-          connect: { caps: ["tool-events"] },
+          connect: { ...operatorWriteCliClient().connect, caps: ["tool-events"] },
         } as never,
       },
     );

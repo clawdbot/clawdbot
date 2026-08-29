@@ -761,11 +761,7 @@ export async function prepareCliRunContext(
   let openClawHistoryMessages: unknown[] | undefined;
   const loadOpenClawHistoryMessages = async () => {
     openClawHistoryMessages ??= await loadCliSessionHistoryMessages({
-      sessionId: params.sessionId,
-      sessionFile: params.sessionFile,
-      sessionKey: params.sessionKey,
-      agentId: sessionAgentId,
-      config: params.config,
+      sessionTarget: params.sessionTarget,
     });
     return openClawHistoryMessages;
   };
@@ -1730,11 +1726,7 @@ export async function prepareCliRunContext(
     const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
       ? buildCliSessionHistoryPrompt({
           messages: await loadCliSessionReseedMessages({
-            sessionId: params.sessionId,
-            sessionFile: params.sessionFile,
-            sessionKey: params.sessionKey,
-            agentId: sessionAgentId,
-            config: params.config,
+            sessionTarget: params.sessionTarget,
             allowRawTranscriptReseed,
             rawTranscriptReseedReason,
           }),
@@ -1891,11 +1883,7 @@ export async function prepareCliRunContext(
       });
     }
     const hadSessionFile = await hasCliSessionTranscript({
-      sessionId: params.sessionId,
-      sessionFile: params.sessionFile,
-      sessionKey: params.sessionKey,
-      agentId: sessionAgentId,
-      config: contextEngineConfig,
+      sessionTarget: params.sessionTarget,
     });
     const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
     const preparedParams = await admitPreparedParams({

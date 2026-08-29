@@ -1,5 +1,5 @@
 name: PR Crabbox Gate Publisher
-run-name: PR Crabbox gate #${{ inputs.pr_number }} / ${{ inputs.crabbox_run_id }}
+run-name: "PR Crabbox gate #${{ inputs.pr_number }} / ${{ inputs.head_sha }}"
 
 on:
   workflow_dispatch:
@@ -16,18 +16,6 @@ on:
         description: Exact lowercase 40-character pull request base SHA
         required: true
         type: string
-      crabbox_run_id:
-        description: Immutable broker run id
-        required: true
-        type: string
-      crabbox_lease_id:
-        description: Released AWS lease id
-        required: true
-        type: string
-      bootstrap_sha256:
-        description: Trusted canonical bootstrap SHA-256
-        required: true
-        type: string
 
 permissions: {}
 
@@ -37,10 +25,10 @@ concurrency:
 
 jobs:
   publish:
-    name: Validate AWS proof and publish gate
+    name: Run AWS proof and publish gate
     runs-on: ubuntu-24.04
     environment: qa-live-shared
-    timeout-minutes: 10
+    timeout-minutes: 270
     permissions:
       checks: write
       contents: read
@@ -57,6 +45,28 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
+
+      - name: Install checksum-pinned Crabbox v0.46.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          asset=crabbox_0.46.0_linux_amd64.tar.gz
+          checksum=6a9341e810307356361dbed4c4b84be28a036b5cc291af1566d2ccd376570d90
+          install_dir="$RUNNER_TEMP/crabbox-v0.46.0"
+          mkdir -p "$install_dir"
+          gh release download v0.46.0 \
+            --repo openclaw/crabbox \
+            --pattern "$asset" \
+            --pattern checksums.txt \
+            --dir "$install_dir"
+          test "$(sha256sum "$install_dir/$asset" | awk '{print $1}')" = "$checksum"
+          awk -v checksum="$checksum" -v asset="$asset" \
+            '$1 == checksum && $2 == asset { found = 1 } END { exit !found }' \
+            "$install_dir/checksums.txt"
+          tar -xzf "$install_dir/$asset" -C "$install_dir"
+          test "$("$install_dir/crabbox" version | awk '{print $NF}')" = "0.46.0"
+          printf 'CRABBOX_BIN=%s\n' "$install_dir/crabbox" >> "$GITHUB_ENV"
 
       - name: Create organization membership token
         id: app-token
@@ -77,7 +87,7 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
           permission-members: read
 
-      - name: Validate immutable Crabbox proof and publish exact-head check
+      - name: Run immutable Crabbox proof and publish exact-head check
         env:
           CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
           CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}

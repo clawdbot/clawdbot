@@ -27,9 +27,11 @@ struct ChatProTab: View {
         let fileURL: URL
     }
 
-    private struct SessionDashboardPresentation: Identifiable {
-        let id = UUID()
-        let sessionKey: String
+    private enum PendingChatAction {
+        case backgroundTasks
+        case exportTranscript
+        case gatewaySettings
+        case newSessionOptions
     }
 
     @Environment(NodeAppModel.self) private var appModel
@@ -40,9 +42,9 @@ struct ChatProTab: View {
     @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsTranscriptExportError = false
     @State private var showsBackgroundTasks = false
-    @State private var showsSessions = false
     @State private var showsNewSessionOptions = false
-    @State private var sessionDashboardPresentation: SessionDashboardPresentation?
+    @State private var showsChatActions = false
+    @State private var pendingChatAction: PendingChatAction?
     // Transport can start unscoped while the UI uses its "main" fallback.
     // Track the real agent so gateway metadata replaces the captured transport.
     @State private var viewModelTransportAgentID = ""
@@ -151,8 +153,15 @@ struct ChatProTab: View {
                         self.headerGatewayStatus
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    self.chatActionsMenu
+                if #available(iOS 26.0, *) {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        self.chatActionsMenu
+                    }
+                    .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        self.chatActionsMenu
+                    }
                 }
             }
             .sheet(item: self.$transcriptShareItem) { item in
@@ -161,11 +170,6 @@ struct ChatProTab: View {
             .sheet(isPresented: self.$showsBackgroundTasks) {
                 BackgroundTasksScreen(agentID: self.currentAgentID)
             }
-            .sheet(isPresented: self.$showsSessions) {
-                if let viewModel {
-                    ChatSessionsSheet(viewModel: viewModel)
-                }
-            }
             .sheet(isPresented: self.$showsNewSessionOptions) {
                 if let viewModel {
                     ChatNewSessionOptionsPopover(viewModel: viewModel) {
@@ -173,11 +177,6 @@ struct ChatProTab: View {
                     }
                     .presentationDetents([.medium])
                     .presentationDragIndicator(.visible)
-                }
-            }
-            .sheet(item: self.$sessionDashboardPresentation) { presentation in
-                NavigationStack {
-                    SessionDashboardScreen(sessionKey: presentation.sessionKey)
                 }
             }
             .alert(
@@ -582,126 +581,123 @@ struct ChatProTab: View {
     }
 
     private var chatActionsMenu: some View {
-        Menu {
-            Button {
-                Task { await self.viewModel?.startNewSession() }
-            } label: {
-                Label {
-                    Text("New Chat")
-                        .font(OpenClawType.body)
-                } icon: {
-                    Image(systemName: "plus.bubble")
-                }
-            }
-            .disabled(self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
-
-            if self.activeAgent?.workspacegit == true {
-                Button {
-                    Task { await self.viewModel?.startNewSession(worktree: true) }
-                } label: {
-                    Label {
-                        Text("New Chat in Worktree")
-                            .font(OpenClawType.body)
-                    } icon: {
-                        Image(systemName: "arrow.triangle.branch")
-                    }
-                }
-                .disabled(self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
-            }
-
-            Button {
-                self.showsNewSessionOptions = true
-            } label: {
-                Label {
-                    Text("New Session Options…")
-                        .font(OpenClawType.body)
-                } icon: {
-                    Image(systemName: "slider.horizontal.3")
-                }
-            }
-            .disabled(self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
-
-            Button {
-                self.showsSessions = true
-            } label: {
-                Label {
-                    Text(String(localized: "Sessions…"))
-                        .font(OpenClawType.body)
-                } icon: {
-                    Image(systemName: "rectangle.stack")
-                }
-            }
-
-            Button {
-                guard let sessionKey = self.viewModel?.sessionKey else { return }
-                self.sessionDashboardPresentation = SessionDashboardPresentation(sessionKey: sessionKey)
-            } label: {
-                Label {
-                    Text("Dashboard")
-                        .font(OpenClawType.body)
-                } icon: {
-                    Image(systemName: "rectangle.grid.2x2")
-                }
-            }
-            .disabled(self.viewModel == nil)
-
-            Divider()
-
-            if let viewModel {
-                ChatModelControlsMenuItems(viewModel: viewModel)
-                Divider()
-            }
-
-            Button {
-                self.showsBackgroundTasks = true
-            } label: {
-                Label {
-                    Text("Background Tasks")
-                        .font(OpenClawType.body)
-                } icon: {
-                    Image(systemName: "clock.arrow.circlepath")
-                }
-            }
-            .disabled(!self.appModel.isOperatorGatewayConnected)
-
-            Button {
-                self.exportTranscript()
-            } label: {
-                Label {
-                    Text("Export Transcript")
-                        .font(OpenClawType.body)
-                } icon: {
-                    Image(systemName: "square.and.arrow.up")
-                }
-            }
-            .disabled(self.viewModel == nil)
-
-            if let openSettings {
-                Divider()
-
-                Button(action: openSettings) {
-                    Label {
-                        Text("Gateway Settings")
-                            .font(OpenClawType.body)
-                    } icon: {
-                        Image(systemName: "network")
-                    }
-                }
-                .accessibilityIdentifier("chat-gateway-settings")
-            }
-
-            Toggle(isOn: self.$showsAssistantTrace) {
-                Label {
-                    Text(String(localized: "Show reasoning & tool activity"))
-                        .font(OpenClawType.body)
-                } icon: {
-                    Image(systemName: "brain.head.profile")
-                }
-            }
+        Button {
+            self.showsChatActions.toggle()
         } label: {
             Image(systemName: "ellipsis.circle")
+                .foregroundStyle(OpenClawBrand.accent)
         }
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+        .buttonStyle(.plain)
         .accessibilityLabel("Chat actions")
+        .popover(isPresented: self.$showsChatActions, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+            self.chatActionsPopover
+                .onDisappear {
+                    self.performPendingChatAction()
+                }
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private var chatActionsPopover: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                if self.activeAgent?.workspacegit == true {
+                    self.chatActionButton(
+                        title: "New chat in worktree",
+                        systemImage: "arrow.triangle.branch",
+                        disabled: self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+                    {
+                        Task { await self.viewModel?.startNewSession(worktree: true) }
+                    }
+                }
+
+                self.chatActionButton(
+                    title: "New session options…",
+                    systemImage: "slider.horizontal.3",
+                    disabled: self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+                {
+                    self.pendingChatAction = .newSessionOptions
+                }
+                if let viewModel {
+                    ChatModelControlsMenuItems(
+                        viewModel: viewModel,
+                        agentModelReference: self.activeAgentModelReference)
+                    {
+                        self.showsChatActions = false
+                    }
+                }
+
+                Button {
+                    self.showsAssistantTrace.toggle()
+                } label: {
+                    ChatActionSystemRow(
+                        title: String(localized: "Show reasoning & tool activity"),
+                        systemImage: "brain.head.profile",
+                        isSelected: self.showsAssistantTrace)
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(self.showsAssistantTrace ? .isSelected : [])
+                .accessibilityIdentifier("chat-show-reasoning-toggle")
+
+                self.chatActionButton(
+                    title: "Background tasks",
+                    systemImage: "clock.arrow.circlepath",
+                    disabled: !self.appModel.isOperatorGatewayConnected)
+                {
+                    self.pendingChatAction = .backgroundTasks
+                }
+                self.chatActionButton(
+                    title: "Export transcript",
+                    systemImage: "square.and.arrow.up",
+                    disabled: self.viewModel == nil)
+                {
+                    self.pendingChatAction = .exportTranscript
+                }
+
+                if self.openSettings != nil {
+                    self.chatActionButton(title: "Gateway settings", systemImage: "network") {
+                        self.pendingChatAction = .gatewaySettings
+                    }
+                    .accessibilityIdentifier("chat-gateway-settings")
+                }
+            }
+            .padding(.vertical, 8)
+        }
+        .frame(width: 286, height: 560)
+        .accessibilityIdentifier("chat-actions-popover")
+    }
+
+    private func chatActionButton(
+        title: String,
+        systemImage: String,
+        disabled: Bool = false,
+        action: @escaping @MainActor () -> Void) -> some View
+    {
+        Button {
+            action()
+            self.showsChatActions = false
+        } label: {
+            ChatActionSystemRow(title: title, systemImage: systemImage)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+    }
+
+    private func performPendingChatAction() {
+        guard let pendingChatAction = self.pendingChatAction else { return }
+        self.pendingChatAction = nil
+        switch pendingChatAction {
+        case .backgroundTasks:
+            self.showsBackgroundTasks = true
+        case .exportTranscript:
+            self.exportTranscript()
+        case .gatewaySettings:
+            self.openSettings?()
+        case .newSessionOptions:
+            self.showsNewSessionOptions = true
+        }
     }
 
     private func exportTranscript() {
@@ -865,6 +861,13 @@ struct ChatProTab: View {
 
     private var activeAgent: AgentSummary? {
         self.appModel.gatewayAgents.first { $0.id == self.activeAgentID }
+    }
+
+    private var activeAgentModelReference: String? {
+        guard let activeAgent else { return nil }
+        let modelID = RootSidebar.agentModelLabel(activeAgent)
+        let providerID = activeAgent.model?["provider"]?.value as? String
+        return ChatModelMenuPresentation.qualifiedModelReference(modelID: modelID, providerID: providerID)
     }
 
     private var currentAgentDisplayName: String {

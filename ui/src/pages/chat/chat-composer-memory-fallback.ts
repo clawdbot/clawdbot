@@ -1,4 +1,4 @@
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
 import {
   DEFAULT_MAIN_KEY,
   buildAgentMainSessionKey,
@@ -123,6 +123,7 @@ export function storeChatComposerMemoryFallback(
   scope: StoredChatOutboxScope,
   composer: {
     message: string;
+    goalMode?: ChatGoalDraftMode | null;
     attachments: ChatAttachment[];
     draftRetry?: ChatComposerDraftRetry;
   },
@@ -132,6 +133,7 @@ export function storeChatComposerMemoryFallback(
     ...state.chatComposerFallbackByScope,
     [storedChatOutboxScopeKey(scope)]: {
       message: composer.message,
+      ...(composer.goalMode ? { goalMode: composer.goalMode } : {}),
       attachments: [...composer.attachments],
       storageFailed: composer.draftRetry !== undefined,
       sequence,

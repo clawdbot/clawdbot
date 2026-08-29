@@ -1,8 +1,8 @@
 /** Selects built plugin artifacts without importing active runtime state. */
-import fs from "node:fs";
 import path from "node:path";
-import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
+import { getPluginCacheRoot } from "./plugin-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 function rewriteBundledRuntimeArtifactRelativePath(relativePath: string): string {
@@ -72,8 +72,8 @@ function resolvePackageLocalDistRuntimeArtifact(params: {
     relativeSource,
   )) {
     const artifactSource = path.join(artifactRoot, artifactRelativePath);
-    if (fs.existsSync(artifactSource)) {
-      return resolveRealpathOrAbsolute(artifactSource);
+    if (pluginCacheExistsSync(artifactSource)) {
+      return pluginCacheRealpathSync(artifactSource) ?? path.resolve(artifactSource);
     }
   }
   return null;
@@ -109,10 +109,10 @@ function resolvePreferredBundledRootArtifactFromCanonicalPaths(params: {
       path.basename(rootDir),
     );
     const artifactSource = path.join(artifactRoot, artifactRelativePath);
-    if (fs.existsSync(artifactSource)) {
+    if (pluginCacheExistsSync(artifactSource)) {
       return {
-        source: resolveRealpathOrAbsolute(artifactSource),
-        rootDir: resolveRealpathOrAbsolute(artifactRoot),
+        source: pluginCacheRealpathSync(artifactSource) ?? path.resolve(artifactSource),
+        rootDir: pluginCacheRealpathSync(artifactRoot) ?? path.resolve(artifactRoot),
       };
     }
   }
@@ -125,11 +125,23 @@ export function resolvePreferredBundledRootArtifact(params: {
   rootDir: string;
   packageManifest?: OpenClawPackageManifest;
 }): { source: string; rootDir: string } {
-  return resolvePreferredBundledRootArtifactFromCanonicalPaths({
-    source: resolveRealpathOrAbsolute(params.source),
-    rootDir: resolveRealpathOrAbsolute(params.rootDir),
+  const artifacts = getPluginCacheRoot(params.rootDir).runtimeArtifacts;
+  const key = JSON.stringify([
+    "bundled-root",
+    params.source,
+    params.packageManifest?.build?.bundledDist,
+  ]);
+  const cached = artifacts.get(key);
+  if (cached) {
+    return cached;
+  }
+  const resolved = resolvePreferredBundledRootArtifactFromCanonicalPaths({
+    source: pluginCacheRealpathSync(params.source) ?? path.resolve(params.source),
+    rootDir: pluginCacheRealpathSync(params.rootDir) ?? path.resolve(params.rootDir),
     packageManifest: params.packageManifest,
   });
+  artifacts.set(key, resolved);
+  return resolved;
 }
 
 /** Applies source, package-local, and root-build preference without runtime memo state. */

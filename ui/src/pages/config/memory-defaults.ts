@@ -1,15 +1,4 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-
-type ConfigRemover = Pick<RuntimeConfigCapability, "removeFormValue">;
-
-export function resetMemoryEngine(config: ConfigRemover, disabled = false): boolean {
-  if (disabled) {
-    return false;
-  }
-  config.removeFormValue(["plugins", "slots", "memory"]);
-  return true;
-}
 
 export function dreamingConfigPath(pluginId: string, path: readonly string[]) {
   return ["plugins", "entries", pluginId, "config", "dreaming", ...path];

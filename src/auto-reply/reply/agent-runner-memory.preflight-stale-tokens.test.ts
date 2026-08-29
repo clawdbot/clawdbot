@@ -145,6 +145,53 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards the routed account id into preflight compaction", async () => {
+    // Group session keys carry no account identity, so if this launcher drops the
+    // account the compaction path resolves the root history limit after prompt
+    // preparation already used the account limit.
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 200_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    };
+    await writeTestSessionStore(
+      path.join(rootDir, "sessions.json"),
+      "agent:main:main",
+      sessionEntry,
+    );
+
+    await runSessionCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "agent:main:main",
+        agentAccountId: "work",
+        conversationRoutePeerId: "peer",
+        chatType: "direct",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      modelContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      abortSignal: new AbortController().signal,
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(compactEmbeddedAgentSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      agentAccountId: "work",
+      conversationRoutePeerId: "peer",
+      chatType: "direct",
+    });
+  });
+
   it.each([
     {
       name: "the configured roster default for an embedded provider",

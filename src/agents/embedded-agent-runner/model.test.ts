@@ -5,6 +5,7 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadBundledPluginPublicSurface } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
@@ -193,12 +194,13 @@ vi.mock("../prepared-model-runtime.js", async () => {
       Object.assign(modelRegistry, { fork: () => modelRegistry });
     }
     const snapshot = {
+      catalogOwner: undefined,
       agentDir: input.agentDir,
       ...(workspaceDir ? { workspaceDir } : {}),
       activeProjectKeys: [],
       config: input.config ?? {},
       authModes: {},
-      metadataSnapshot: { plugins: [] },
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       allowGatewaySubagentBinding: false,
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: preparedSnapshotState.configuredRuntimeModels,
@@ -1076,12 +1078,13 @@ describe("resolveModel", () => {
       models: [{ id: "deepseek-v4-pro", name: "Configured DeepSeek" }],
     });
     const preparedModelRuntime = {
+      catalogOwner: undefined,
       agentDir: "/tmp/agent",
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,
       config: cfg,
       authModes: {},
-      metadataSnapshot: { plugins: [] } as never,
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [
         {
@@ -1117,12 +1120,13 @@ describe("resolveModel", () => {
     );
 
     const preparedModelRuntime = {
+      catalogOwner: undefined,
       agentDir: "/tmp/agent",
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,
       config: {},
       authModes: {},
-      metadataSnapshot: { plugins: [] } as never,
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [],
       inlineProviderModels: [],
@@ -1152,8 +1156,9 @@ describe("resolveModel", () => {
   });
 
   it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
-    const metadataSnapshot = { plugins: [] } as never;
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
     const preparedModelRuntime = {
+      catalogOwner: undefined,
       agentDir: "/tmp/agent",
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,

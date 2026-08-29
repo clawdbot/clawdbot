@@ -90,6 +90,7 @@ export async function compactEmbeddedRunForRecovery(
       clientCaps: runParams.clientCaps,
       chatType: runParams.chatType,
       agentAccountId: runParams.agentAccountId,
+      conversationRoutePeerId: runParams.conversationRoutePeerId,
       currentChannelId: runParams.currentChannelId,
       currentThreadTs: runParams.currentThreadTs,
       currentMessageId: runParams.currentMessageId,

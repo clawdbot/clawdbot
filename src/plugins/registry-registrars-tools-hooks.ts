@@ -39,6 +39,7 @@ import {
   isConversationHookName,
   isPluginHookAgentTrigger,
   isPluginHookName,
+  isPluginHookReplyDispatchKind,
   isPromptInjectionHookName,
 } from "./types.js";
 import type {
@@ -53,15 +54,15 @@ import type {
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
 
-function normalizeEligibleTriggers(value: unknown) {
+function normalizeHookEligibility<T>(value: unknown, isEligible: (item: unknown) => item is T) {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const triggers = Array.from(value);
-  if (triggers.length === 0 || !triggers.every(isPluginHookAgentTrigger)) {
+  const entries = Array.from(value);
+  if (entries.length === 0 || !entries.every(isEligible)) {
     return undefined;
   }
-  return uniqueValues(triggers);
+  return uniqueValues(entries);
 }
 
 function canRegisterInstalledTrustedHook(record: PluginRecord): boolean {
@@ -433,7 +434,11 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName, opts, policy });
     const eligibleTriggers =
       hookName === "before_agent_reply"
-        ? normalizeEligibleTriggers(opts?.eligibleTriggers)
+        ? normalizeHookEligibility(opts?.eligibleTriggers, isPluginHookAgentTrigger)
+        : undefined;
+    const eligibleDispatchKinds =
+      hookName === "reply_dispatch"
+        ? normalizeHookEligibility(opts?.eligibleDispatchKinds, isPluginHookReplyDispatchKind)
         : undefined;
     const matcher =
       hookName === "before_tool_call" || hookName === "after_tool_call"
@@ -457,6 +462,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(eligibleTriggers ? { eligibleTriggers } : {}),
+      ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
       ...(hookName === "before_prompt_build" && opts?.requiresToolAuthority === true
         ? { requiresToolAuthority: true }
         : {}),

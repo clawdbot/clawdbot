@@ -30,6 +30,7 @@ import {
 } from "./hook-decision-types.js";
 import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
+import { isPluginHookReplyDispatchKind } from "./hook-types.js";
 import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
@@ -265,6 +266,14 @@ function getHooksForName<K extends PluginHookName>(
     .filter((hook) => {
       if (hook.hookName !== hookName) {
         return false;
+      }
+      if (hookName === "reply_dispatch" && hook.eligibleDispatchKinds !== undefined) {
+        const kind =
+          typeof ctx === "object" && ctx !== null && "dispatchKind" in ctx
+            ? ctx.dispatchKind
+            : undefined;
+        // Unknown callers cannot prove exclusion from a hook, including during recovery checks.
+        return !isPluginHookReplyDispatchKind(kind) || hook.eligibleDispatchKinds.includes(kind);
       }
       if (hookName !== "before_agent_reply" || hook.eligibleTriggers === undefined) {
         return true;
@@ -1735,7 +1744,7 @@ export function createHookRunner(
 
   function hasHooks<K extends PluginHookName>(
     hookName: K,
-    ctx?: Parameters<PluginHookHandlerMap[K]>[1],
+    ctx?: Partial<Parameters<PluginHookHandlerMap[K]>[1]>,
   ): boolean {
     if (ctx === undefined) {
       return registry.typedHooks.some((hook) => hook.hookName === hookName);

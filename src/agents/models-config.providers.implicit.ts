@@ -71,6 +71,7 @@ type ImplicitProviderParams = {
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
+  sourceModelInputOmissions?: ReadonlySet<string>;
 };
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -264,6 +265,8 @@ function mergeImplicitProviderConfig(params: {
   existing: ProviderConfig | undefined;
   implicit: ProviderConfig;
   dynamicProviderModels?: boolean;
+  sourceModelInputOmissions?: ReadonlySet<string>;
+  manifestPlugins?: PluginMetadataSnapshot["manifestRegistry"]["plugins"];
 }): ProviderConfig {
   const { providerId, existing, implicit } = params;
   if (!existing) {
@@ -273,19 +276,13 @@ function mergeImplicitProviderConfig(params: {
   if (merge) {
     return merge({ existing, implicit });
   }
-  if (params.dynamicProviderModels) {
-    // Wildcard-visible providers preserve discovered catalog updates while
-    // keeping explicit user config authoritative for non-model fields.
-    return mergeProviderModels(implicit, existing);
-  }
-  return {
-    ...implicit,
-    ...existing,
-    models:
-      Array.isArray(existing.models) && existing.models.length > 0
-        ? existing.models
-        : implicit.models,
-  };
+  return mergeProviderModels(implicit, existing, {
+    providerId,
+    sourceModelInputOmissions: params.sourceModelInputOmissions,
+    manifestPlugins: params.manifestPlugins,
+    preserveConfiguredModelMembership:
+      !params.dynamicProviderModels && Array.isArray(existing.models) && existing.models.length > 0,
+  });
 }
 
 function resolveImplicitProviderAuthMarker(params: {
@@ -483,6 +480,8 @@ async function resolvePluginImplicitProviders(
           config: ctx.config,
           providerId,
         }),
+        sourceModelInputOmissions: ctx.sourceModelInputOmissions,
+        manifestPlugins: ctx.pluginMetadataSnapshot?.manifestRegistry.plugins,
       });
       discovered[providerId] = resolveImplicitProviderAuthMarker({
         ctx,

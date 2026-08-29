@@ -55,7 +55,6 @@ const IrcAccountSchemaBase = z
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groups: z.record(z.string(), ChannelGroupEntrySchema.optional()).optional(),
     channels: z.array(z.string()).optional(),
-    mentionPatterns: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     ...ReplyRuntimeConfigSchemaShape,
   })

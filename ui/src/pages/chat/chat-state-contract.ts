@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionBranch } from "../../api/types.ts";
+import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -40,6 +41,8 @@ export type ChatState = StreamCausalBoundaryState & {
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
+  /** Monotonic count of locally owned runs cleared by terminal reconciliation. */
+  chatRunLifecycleGeneration?: number;
   /** True when the active run was recovered from the embedded-run registry and
    * Stop must use the session-owned abort path (sessions.abort), not chat.abort. */
   chatRunSessionAbortable?: boolean;
@@ -65,6 +68,7 @@ export type ChatState = StreamCausalBoundaryState & {
   sessions?: Partial<SessionCapability>;
   chatSessionMessageSubscriptionRequestedKey?: string | null;
   chatSessionMessageSubscription?: SessionMessageSubscription | null;
+  chatSessionApprovalQueue?: ExecApprovalRequest[];
   chatBranches?: SessionBranch[];
   chatBranchesSessionKey?: string | null;
   chatBranchesConnectionEpoch?: number | null;

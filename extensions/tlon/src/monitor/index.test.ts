@@ -106,6 +106,7 @@ vi.mock("../runtime.js", () => ({
               url: realUrbitFixture.url,
               network: { dangerouslyAllowPrivateNetwork: true },
               ownerShip: "~nec",
+              mediaMaxMb: 1 / 1024,
             },
           },
         },
@@ -165,7 +166,12 @@ beforeEach(() => {
   createChannelInboundEnvelopeBuilderMock.mockReturnValue(buildChannelInboundEnvelopeMock);
   buildChannelInboundEnvelopeMock.mockReturnValue("tlon-envelope");
   formatInboundMediaUnavailableTextMock.mockReturnValue("formatted-inbound-body");
-  inboundRuntimeMock.buildContext.mockReturnValue(builtInboundContextPayload);
+  inboundRuntimeMock.buildContext.mockReset().mockReturnValue(builtInboundContextPayload);
+  inboundRuntimeMock.dispatch.mockReset().mockResolvedValue(undefined);
+  inboundRuntimeMock.resolveEffectiveMessagesConfig
+    .mockReset()
+    .mockReturnValue({ responsePrefix: undefined });
+  ingressMock.receive.mockReset().mockResolvedValue({ kind: "accepted" });
 });
 
 afterEach(async () => {
@@ -455,7 +461,7 @@ it("continues startup after an initial group invite write fails", async () => {
 
 describe("monitorTlonProvider reply prefixes", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  it.each([
+  it.for([
     { name: "global fallback", root: undefined, account: undefined, expected: "[global] reply" },
     { name: "channel override", root: "[root]", account: undefined, expected: "[root] reply" },
     { name: "account override", root: "[root]", account: "[account]", expected: "[account] reply" },
@@ -467,10 +473,13 @@ describe("monitorTlonProvider reply prefixes", () => {
       account: undefined,
       expected: "[gpt-5.6-luna] reply",
     },
-  ])("delivers $name through the shared dispatcher", async ({ name, root, account, expected }) => {
+  ])("delivers $name through the shared dispatcher", async (row, { signal }) => {
+    const { name, root, account, expected } = row;
     const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
       "openclaw/plugin-sdk/channel-inbound",
     );
+    // A timed-out import must not install fixtures into a later test.
+    signal.throwIfAborted();
     const stateDir = tempDirs.make("tlon-prefix-");
     const controller = new AbortController();
     const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
@@ -511,7 +520,10 @@ describe("monitorTlonProvider reply prefixes", () => {
         },
       }),
     );
-    const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+    const monitor = monitorTlonProvider({
+      abortSignal: AbortSignal.any([controller.signal, signal]),
+      runtime,
+    });
     try {
       await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
       const subscription = sseClientMock.subscribe.mock.calls
@@ -626,6 +638,7 @@ describe("monitorTlonProvider inbound media truth", () => {
                 code: "code",
                 network: { dangerouslyAllowPrivateNetwork: true },
                 ownerShip: "~nec",
+                mediaMaxMb: 1 / 1024,
                 ship: "~zod",
                 url: "https://urbit.example.com",
               },
@@ -663,6 +676,9 @@ describe("monitorTlonProvider inbound media truth", () => {
         });
         expect(contextInput.extra.Attachments).toHaveLength(expectedAttachments);
         expect(contextInput.extra.Attachments).toEqual(expectedMedia);
+        expect(saveRemoteMediaMock).toHaveBeenCalledWith(
+          expect.objectContaining({ maxBytes: 1024 }),
+        );
 
         expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
         const dispatchCall = inboundRuntimeMock.dispatch.mock.calls[0];

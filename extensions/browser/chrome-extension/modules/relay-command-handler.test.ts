@@ -19,13 +19,20 @@ function createHarness() {
     send,
     attachDebugger: vi.fn(),
     detachDebugger: vi.fn(async () => undefined),
-    addTabToOpenClawGroup: vi.fn(),
+    createTab: vi.fn(),
     focusWindowForTab,
     scheduleTabsSync: vi.fn(),
     captureAccess: vi.fn(() => epoch),
     requireAccessibleTab,
   });
-  return { chromeMock, epoch, focusWindowForTab, handler, requireAccessibleTab, send };
+  return {
+    chromeMock,
+    epoch,
+    focusWindowForTab,
+    handler: (message: Record<string, unknown>) => handler(message, () => true),
+    requireAccessibleTab,
+    send,
+  };
 }
 
 afterEach(() => vi.unstubAllGlobals());

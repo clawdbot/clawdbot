@@ -458,18 +458,19 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
           props.ownerViewing,
         ),
         props.showOwnerChip
-          ? personActivityLink(props.session?.owner?.actor.id, props.personActivity)
+          ? personActivityLink(
+              props.session?.owner?.actor.identity?.type === "profile"
+                ? props.session.owner.actor.identity.id
+                : undefined,
+              props.personActivity,
+            )
           : null,
       )}
       ${props.showOwnerChip && props.session?.participants?.length
         ? html`<openclaw-viewer-facepile
             class="chat-pane__participants"
-            .staticUsers=${props.session.participants.map((participant) => ({
-              id: participant.id ?? "",
-              name: participant.label,
-              avatarUrl: participant.avatarUrl,
-              watchedSessions: [],
-            }))}
+            .staticParticipants=${props.session.participants}
+            .totalCount=${props.session.participantCount}
             .maxVisible=${4}
             .personActivity=${props.personActivity}
             variant="session"

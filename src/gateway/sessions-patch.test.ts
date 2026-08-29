@@ -2,10 +2,10 @@
 // aliases, model catalog validation, and rejected invalid patch payloads.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
-import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
@@ -313,7 +313,7 @@ describe("gateway sessions patch", () => {
 
   afterEach(() => {
     acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReset();
-    resetProviderAuthAliasMapCacheForTest();
+    clearPluginMetadataLifecycleCaches();
     resetPluginRuntimeStateForTest();
   });
 
@@ -1128,10 +1128,7 @@ describe("gateway sessions patch", () => {
     },
     {
       name: "accepts explicit allowlisted refs absent from bundled catalog",
-      catalog: [
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5" },
-        { provider: "openai", id: "gpt-5.4", name: "GPT-5.2" },
-      ],
+      catalog: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.2" }],
     },
   ])("$name", async ({ catalog }) => {
     const entry = expectPatchOk(
@@ -1144,25 +1141,52 @@ describe("gateway sessions patch", () => {
     expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
   });
 
-  test("supports uncataloged configured primary and session override refs", async () => {
-    const primary = "openai/o3";
-    const override = "openai/o1";
-    const entry = expectPatchOk(
-      await runPatch({
-        cfg: {
-          agents: {
-            defaults: {
-              model: { primary },
-              modelPolicy: { allow: [] },
+  test.each([false, true])(
+    "supports uncataloged refs with agent policy=%s",
+    async (agentPolicy) => {
+      const primary = "synthetic/primary";
+      const override = "synthetic/uncataloged";
+      const entry = expectPatchOk(
+        await runPatch({
+          cfg: {
+            agents: {
+              defaults: {
+                model: { primary },
+                modelPolicy: { allow: agentPolicy ? [primary] : [] },
+              },
+              entries: { main: agentPolicy ? { modelPolicy: { allow: [] } } : {} },
             },
-          },
-        } as OpenClawConfig,
-        patch: { key: MAIN_SESSION_KEY, model: override },
-        loadGatewayModelCatalog: async () => [],
-      }),
-    );
+          } as OpenClawConfig,
+          storeKey: "global",
+          patch: { key: "global", model: override },
+          loadGatewayModelCatalog: async () => [],
+        }),
+      );
 
-    expectModelSelection(entry, "openai", "o1");
+      expectModelSelection(entry, "synthetic", "uncataloged");
+      expect(entry.modelOverrideSource).toBe("user");
+    },
+  );
+
+  test("enforces the default agent policy without an explicit agent or qualified key", async () => {
+    const key = "global";
+    const existing: SessionEntry = { sessionId: "default-policy", updatedAt: 1, label: "Original" };
+    const store = { [key]: existing };
+    const result = await runPatch({
+      cfg: {
+        agents: {
+          defaults: { model: "synthetic/primary", modelPolicy: { allow: [] } },
+          entries: { main: { modelPolicy: { allow: ["synthetic/allowed"] } } },
+        },
+      },
+      store,
+      storeKey: key,
+      patch: { key, model: "synthetic/outside", label: "Changed" },
+      loadGatewayModelCatalog: loadCatalog("synthetic/allowed", "synthetic/outside"),
+    });
+
+    expectPatchError(result, "model not allowed: synthetic/outside");
+    expect(store[key]).toEqual(existing);
   });
 
   test("persists provider-qualified aliases without cross-provider collisions", async () => {

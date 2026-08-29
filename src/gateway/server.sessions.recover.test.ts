@@ -160,10 +160,12 @@ test("sessions.recover settles its active placement before archiving a real sess
     async (
       request: { agentId: string; sessionId: string; sessionKey: string },
       authorize?: () => void,
+      beforeDrain?: () => void,
     ) =>
       await barriers.runReclaimBarrier({
         ...request,
-        ...(authorize ? { authorize } : {}),
+        authorize,
+        beforeDrain,
         begin: () => {
           placement = recoveryWorkerPlacement({
             sessionId: sourceSessionId,
@@ -199,20 +201,24 @@ test("sessions.recover settles its active placement before archiving a real sess
     { agentId: "main", key: sourceKey },
     { context },
   );
-  const committedBeforeReclaim = await Promise.race([
-    reclaimStarted.promise.then(() => false),
-    recovering.then(() => true),
-  ]);
-  expect(committedBeforeReclaim).toBe(false);
-  expect(reclaim).toHaveBeenCalledWith({
-    agentId: "main",
-    sessionId: sourceSessionId,
-    sessionKey: sourceKey,
-  });
-  const unsettledSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
-  expect(unsettledSource?.archivedAt).toBeUndefined();
-  expect(unsettledSource?.mainRestartRecovery?.tombstone?.recoveredSessionKey).toBeUndefined();
-  reclaimGate.resolve();
+  try {
+    const committedBeforeReclaim = await Promise.race([
+      reclaimStarted.promise.then(() => false),
+      recovering.then(() => true),
+    ]);
+    expect(committedBeforeReclaim).toBe(false);
+    expect(reclaim).toHaveBeenCalledWith(
+      { agentId: "main", sessionId: sourceSessionId, sessionKey: sourceKey },
+      undefined,
+      expect.any(Function),
+    );
+    const unsettledSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+    expect(unsettledSource?.archivedAt).toBeUndefined();
+    expect(unsettledSource?.mainRestartRecovery?.tombstone?.recoveredSessionKey).toBeUndefined();
+  } finally {
+    reclaimGate.resolve();
+    await Promise.allSettled([recovering]);
+  }
 
   const recovered = await recovering;
   expect(recovered).toMatchObject({ ok: true, payload: { key: expect.any(String) } });

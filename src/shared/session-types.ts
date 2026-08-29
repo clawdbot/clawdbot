@@ -1,6 +1,7 @@
 import type {
   GatewayAgentRuntime as ProtocolGatewayAgentRuntime,
   SessionCreatedActor,
+  SessionPerson,
   SessionsAssignOwnerParams,
   WorkerExecutionMode,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -55,7 +56,7 @@ export type GatewayAgentKind = "agent" | "system";
 
 /** Assignable identity returned by the complete session-owner facet. */
 export type SessionOwnerFacetIdentity = SessionsAssignOwnerParams["owner"] &
-  Pick<SessionCreatedActor, "label" | "avatarUrl">;
+  Pick<SessionCreatedActor, "label" | "avatarUrl" | "identity">;
 
 /** Per-session Control UI face preference carried by session list rows. */
 export type SessionBoardFace = "chat" | "dashboard";
@@ -87,6 +88,11 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   hasMore?: boolean;
   /** Complete owner facet for the filtered result, independent of pagination. */
   owners?: SessionOwnerFacetIdentity[];
+  people?: SessionPerson[];
+  peopleIncomplete?: boolean;
+  peopleSessionCount?: number;
+  /** Canonical profile selected by the person-association filter. */
+  involvingProfileId?: string;
   defaults: TDefaults;
   sessions: TRow[];
 };
