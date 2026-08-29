@@ -303,8 +303,8 @@ export async function startGatewayService(
  * Rejects if the service manager reports a failed state or a new non-zero exit
  * code, which indicates the binary started but immediately crashed.
  *
- * Kept module-private: production callers share this helper, and exporting it
- * trips the unused-exports deadcode gate even though recovery uses it.
+ * Kept module-private: startGatewayService is the only caller, and exporting
+ * it trips the unused-exports deadcode gate.
  */
 function assertGatewayServiceStarted(
   preState: GatewayServiceState,
@@ -473,18 +473,10 @@ export function resolveGatewayService(): GatewayService {
 /**
  * Restores a managed service after a package swap installs a newer OpenClaw.
  *
- * Only safe when both preconditions hold:
- * - The running config was last written by a newer OpenClaw version (the
- *   future-config guard would refuse a regular restart, but starting an
- *   already-installed unit is exempt because it does not rewrite the unit or
- *   act on the config).
- * - The managed service unit is still installed on disk, so "start" asks the
- *   service manager to run the unit whose ExecStart points at the newly
- *   installed binary. On launchd, start can enable or bootstrap an agent;
- *   requiring an installed unit keeps this to "run what is already on disk."
- *
- * Ownership is still enforced, so a service OpenClaw does not manage is never
- * touched.
+ * Uses the raw platform adapter so the future-config version guard is skipped:
+ * the swap already installed the newer binary the unit runs. Ownership and the
+ * canonical start preflight still apply — a missing or temporary program must
+ * return repair-required, not launch.
  */
 export async function startGatewayServiceAfterFailedUpdate(
   args: GatewayServiceControlArgs,
@@ -501,11 +493,13 @@ export async function startGatewayServiceAfterFailedUpdate(
     ? GATEWAY_SERVICE_REGISTRY[process.platform]
     : createUnsupportedGatewayService();
 
-  const preState = await readGatewayServiceState(service, { env: args.env });
-  await service.start(args);
-  const postState = await readGatewayServiceState(service, { env: args.env });
-  if (postState.loadState.status === "unknown") {
-    throw new Error(`Service status inspection failed after start: ${postState.loadState.detail}`);
+  const result = await startGatewayService(service, args);
+  if (result.outcome === "missing-install") {
+    throw new Error("no managed service is installed.");
   }
-  assertGatewayServiceStarted(preState, postState, "start after update recovery");
+  if (result.outcome === "repair-required") {
+    throw new Error(
+      `service definition requires repair: ${formatGatewayServiceStartRepairIssues(result.issues)}`,
+    );
+  }
 }
