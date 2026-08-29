@@ -30,12 +30,16 @@ function createRawEvent(params?: { messageId?: string; roomToken?: string; text?
   return JSON.stringify(payload);
 }
 
-function startSpool(queue: NextcloudTalkIngressQueue, deliver: NextcloudTalkIngressDeliver) {
+function startSpool(
+  queue: NextcloudTalkIngressQueue,
+  deliver: NextcloudTalkIngressDeliver,
+  log = vi.fn(),
+) {
   return createNextcloudTalkWebhookSpool({
     accountId: "default",
     queue,
     deliver,
-    runtime: { error: vi.fn(), log: vi.fn() },
+    runtime: { error: vi.fn(), log },
     pollIntervalMs: 60_000,
     adoptionStallTimeoutMs: 5_000,
     legacyReplayStore: null,
@@ -368,37 +372,12 @@ describe("Nextcloud Talk durable ingress", () => {
     });
   });
 
-  it("ignores non-message events before they consume the message id", async () => {
-    await withQueue(async (queue) => {
-      const deliver = vi.fn();
-      const spool = startSpool(queue, deliver);
-      try {
-        const ignored = JSON.stringify({ type: "Update", object: { id: "msg-edit" } });
-        await expect(spool.receive(ignored)).resolves.toBe("ignored");
-        expect(await queue.listPending({ limit: "all" })).toEqual([]);
-        expect(deliver).not.toHaveBeenCalled();
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
-  it("records the non-outcome when acknowledging a non-message event", async () => {
+  it("logs non-message events before they consume the message id", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn();
       const log = vi.fn();
-      const spool = createNextcloudTalkWebhookSpool({
-        accountId: "default",
-        queue,
-        deliver,
-        runtime: { error: vi.fn(), log },
-        pollIntervalMs: 60_000,
-        adoptionStallTimeoutMs: 5_000,
-        legacyReplayStore: null,
-      });
+      const spool = startSpool(queue, deliver, log);
       try {
-        // A file share arrives as a non-Note Create activity and is acked
-        // without a durable row; the drop must leave a visible log reason.
         const fileShare = JSON.stringify({
           type: "Create",
           actor: { type: "Person", id: "alice", name: "Alice" },
