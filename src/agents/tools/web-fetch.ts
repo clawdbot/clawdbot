@@ -762,8 +762,8 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     return { ...cached.value, cached: true };
   }
 
-  // Surface the original failure: a fetch that rejected because of the abort already
-  // carries the caller's reason, and replacing it here would discard transport detail.
+  // Preserve the direct fetch's rejection; replacing it with signal.reason would
+  // discard the transport's own error detail.
   const payload = await fetchWebPayload(params);
   // Publish only after guard release: cancellation or cleanup failure must not
   // leave a successful cache entry for a call that never returned its content.
