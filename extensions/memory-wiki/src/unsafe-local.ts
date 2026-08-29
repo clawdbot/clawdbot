@@ -146,6 +146,7 @@ async function writeUnsafeLocalSourcePage(params: {
   sourceUpdatedAtMs: number;
   sourceSize: number;
   state: Awaited<ReturnType<typeof readMemoryWikiSourceSyncState>>;
+  prepareWrite: () => Promise<unknown>;
 }): Promise<{ pagePath: string; changed: boolean; created: boolean }> {
   const { pageId, pagePath } = resolveUnsafeLocalPagePath({
     configuredPath: params.artifact.configuredPath,
@@ -170,6 +171,7 @@ async function writeUnsafeLocalSourcePage(params: {
     pagePath,
     group: "unsafe-local",
     state: params.state,
+    prepareWrite: params.prepareWrite,
     buildRendered: (raw, updatedAt) =>
       renderWikiMarkdown({
         frontmatter: {
@@ -207,7 +209,6 @@ async function writeUnsafeLocalSourcePage(params: {
 export async function syncMemoryWikiUnsafeLocalSources(
   config: ResolvedMemoryWikiConfig,
 ): Promise<BridgeMemoryWikiResult> {
-  await initializeMemoryWikiVault(config);
   if (
     config.vaultMode !== "unsafe-local" ||
     !config.unsafeLocal.allowPrivateMemoryCoreAccess ||
@@ -228,6 +229,8 @@ export async function syncMemoryWikiUnsafeLocalSources(
     config.unsafeLocal.paths,
   );
   const state = await readMemoryWikiSourceSyncState(config.vault.path);
+  let initializePromise: ReturnType<typeof initializeMemoryWikiVault> | undefined;
+  const prepareWrite = () => (initializePromise ??= initializeMemoryWikiVault(config));
   const activeKeys = new Set<string>();
   for (const [syncKey, entry] of Object.entries(state.entries)) {
     if (
@@ -256,6 +259,7 @@ export async function syncMemoryWikiUnsafeLocalSources(
         sourceUpdatedAtMs: stats.mtimeMs,
         sourceSize: stats.size,
         state,
+        prepareWrite,
       });
     }),
     limit: UNSAFE_LOCAL_SYNC_CONCURRENCY,
@@ -268,6 +272,7 @@ export async function syncMemoryWikiUnsafeLocalSources(
     group: "unsafe-local",
     activeKeys,
     state,
+    prepareWrite,
   });
   await writeMemoryWikiSourceSyncState(config.vault.path, state);
   const importedCount = results.filter((result) => result.changed && result.created).length;

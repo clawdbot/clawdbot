@@ -180,6 +180,7 @@ async function writeBridgeSourcePage(params: {
   sourceUpdatedAtMs: number;
   sourceSize: number;
   state: Awaited<ReturnType<typeof readMemoryWikiSourceSyncState>>;
+  prepareWrite: () => Promise<unknown>;
 }): Promise<{ pagePath: string; changed: boolean; created: boolean }> {
   const { pageId, pagePath } = resolveBridgePagePath({
     workspaceDir: params.artifact.workspaceDir,
@@ -206,6 +207,7 @@ async function writeBridgeSourcePage(params: {
     pagePath,
     group: "bridge",
     state: params.state,
+    prepareWrite: params.prepareWrite,
     buildRendered: (raw, updatedAt) => {
       const contentLanguage =
         params.artifact.artifactType === "memory-events" ? "json" : "markdown";
@@ -253,7 +255,6 @@ export async function syncMemoryWikiBridgeSources(params: {
   appConfig?: OpenClawConfig;
 }): Promise<BridgeMemoryWikiResult> {
   resolveMemoryWikiVaultAgentId(params.config);
-  await initializeMemoryWikiVault(params.config);
   if (
     params.config.vaultMode !== "bridge" ||
     !params.config.bridge.enabled ||
@@ -285,6 +286,8 @@ export async function syncMemoryWikiBridgeSources(params: {
     publicArtifacts,
   );
   const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
+  let initializePromise: ReturnType<typeof initializeMemoryWikiVault> | undefined;
+  const prepareWrite = () => (initializePromise ??= initializeMemoryWikiVault(params.config));
   assertMemoryWikiSourceSyncStateCapacity({
     state,
     group: "bridge",
@@ -306,6 +309,7 @@ export async function syncMemoryWikiBridgeSources(params: {
         sourceUpdatedAtMs: stats.mtimeMs,
         sourceSize: stats.size,
         state,
+        prepareWrite,
       }),
     );
   }
@@ -320,6 +324,7 @@ export async function syncMemoryWikiBridgeSources(params: {
         group: "bridge",
         activeKeys,
         state,
+        prepareWrite,
       })
     : 0;
   await writeMemoryWikiSourceSyncState(params.config.vault.path, state);
