@@ -78,7 +78,6 @@ const NON_RUNNABLE_STATES = new Set([
   "terminated",
 ]);
 const LEASE_ID_PATTERN = /^(?:cbx_|tbx_)[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
-const LEGACY_PROVISION_OPERATION_ID_PATTERN = /^provision:[a-f0-9]{64}$/u;
 
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
@@ -117,12 +116,12 @@ async function loadCrabboxConfigShow(params: {
     timeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
   });
   if (result.termination !== "exit" || result.code !== 0) {
-    throw permanentCrabboxCommandError("config show", result);
+    throw crabboxCommandError("config show", result);
   }
   try {
     return JSON.parse(result.stdout) as unknown;
   } catch {
-    throw new WorkerProviderError("Crabbox config show returned invalid JSON");
+    throw new Error("Crabbox config show returned invalid JSON");
   }
 }
 
@@ -152,7 +151,7 @@ async function assertHetznerDesktopHasManagedCoordinator(params: {
   if (nonEmptyString(view?.coordinator) && view?.brokerMode === "managed") {
     return;
   }
-  throw new WorkerProviderError("Crabbox Hetzner desktop profiles require a managed coordinator");
+  throw new Error("Crabbox Hetzner desktop profiles require a managed coordinator");
 }
 
 async function inspectWithContext(params: {
@@ -496,6 +495,11 @@ export function createCrabboxWorkerProvider(
     };
   };
 
+  const resolveAllocation: WorkerProvider["resolveAllocation"] = async (_profile, operationId) => ({
+    leaseId: operationLeaseId(operationId),
+    sharedHost: false,
+  });
+
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
     dispose: () => heartbeats.dispose(),
@@ -503,6 +507,7 @@ export function createCrabboxWorkerProvider(
     supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,
     requiresNodeEnrollment: true,
+    resolveAllocation,
     resolveProvisionTimeoutMs(profile) {
       return resolveCrabboxProvisionCallTimeoutMs(parseCrabboxProfile(profile));
     },
@@ -531,17 +536,10 @@ export function createCrabboxWorkerProvider(
         deadline +
         countCrabboxProvisionSetupPhases(parsed) * CRABBOX_SETUP_TIMEOUT_MS +
         CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS;
-      if (!operationId.trim()) {
-        throw new Error("Crabbox provision requires an operation id");
-      }
-      if (LEGACY_PROVISION_OPERATION_ID_PATTERN.test(operationId)) {
-        throw new WorkerProviderError(
-          "Legacy Crabbox provision state cannot be replayed safely; clean up any prior lease and dispatch again",
-        );
-      }
+      const allocation = await resolveAllocation(profile, operationId);
       const binary = resolveBinary(parsed.binary);
       const context = { binary, provider: parsed.provider };
-      const leaseId = operationLeaseId(operationId);
+      const leaseId = allocation.leaseId;
       const slug = operationSlug(operationId);
       if (parsed.desktop && parsed.provider === "hetzner") {
         await assertHetznerDesktopHasManagedCoordinator({ binary, runCommand });
@@ -688,9 +686,8 @@ export function createCrabboxWorkerProvider(
         provider: parsed.provider,
       });
       return {
-        leaseId,
+        ...allocation,
         node: { deviceId },
-        sharedHost: false,
         ...(parsed.desktop ? { desktop: createCrabboxWorkerDesktopEndpoint() } : {}),
       };
     },

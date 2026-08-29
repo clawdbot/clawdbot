@@ -1735,6 +1735,24 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(requiredPrepublishPluginPackagesForLanes([selfUpgradeLane!])).toEqual([]);
   });
 
+  it.each([
+    {
+      baseline: "2026.4.23",
+      packages: ["@openclaw/acpx", "@openclaw/codex", "@openclaw/discord", "@openclaw/whatsapp"],
+    },
+    { baseline: "2026.4.15", packages: [] },
+  ])(
+    "stages the ACP recipe companion only for supported baseline $baseline",
+    ({ baseline, packages }) => {
+      const plan = planFor({
+        selectedLaneNames: ["published-upgrade-survivor"],
+        upgradeSurvivorBaselines: baseline,
+        upgradeSurvivorScenarios: "acpx-openclaw-tools-bridge",
+      });
+      expect(plan.requiredPrepublishPluginPackages).toEqual(packages);
+    },
+  );
+
   it("does not request a prerelease plugin registry for unrelated lanes", () => {
     const plan = planFor({ selectedLaneNames: ["doctor-switch"] });
     expect(plan.requiredPrepublishPluginPackages).toEqual([]);

@@ -36,6 +36,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
+  measureLaunchTurn,
   openSessionManager,
   placements,
   root,
@@ -137,6 +138,7 @@ describe("worker turn launcher remote handoff", () => {
         }),
       })),
       runWorkspaceCommand: vi.fn(),
+      measureLaunchTurn,
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
         expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({
           owner: "worker",
@@ -432,6 +434,7 @@ describe("worker turn launcher remote handoff", () => {
             signal: command.signal,
           }),
       ),
+      measureLaunchTurn,
       stageAttachments: vi.fn(async () => {}),
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
         request.onDispatchReady?.();

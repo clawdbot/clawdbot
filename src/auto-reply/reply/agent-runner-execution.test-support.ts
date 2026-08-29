@@ -345,12 +345,18 @@ export async function getExecuteAgentTurnForTest() {
         directlySentBlockKeys: outcome.directlySentBlockKeys,
         directlySentBlockPayloads: outcome.directlySentBlockPayloads,
         terminalFailurePayload: outcome.terminalFailurePayload,
+        postCompactionModelFailure: outcome.postCompactionModelFailure,
       };
     }
     if (outcome.kind === "rejected") {
-      return { kind: "final" as const, payload: outcome.payload };
+      return {
+        kind: "final" as const,
+        payload: outcome.payload,
+        postCompactionModelFailure: outcome.postCompactionModelFailure,
+      };
     }
-    return { kind: "final" as const, payload: { text: "NO_REPLY" } };
+    const payload: ReplyPayload = { text: "NO_REPLY" };
+    return { kind: "final" as const, payload };
   };
 }
 
@@ -422,6 +428,7 @@ export type EmbeddedAgentParams = {
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onAutoCompactionSucceeded?: (count: number) => void;
   onReasoningStream?: (payload: {
     text?: string;
     mediaUrls?: string[];

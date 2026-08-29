@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 /** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -6,6 +7,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
+import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
@@ -358,6 +360,27 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(legacyIssueLines.join("\n"), "Legacy config keys detected");
   }
   changesPanelSink.emit(legacyStep.changeLines);
+
+  const { MODEL_METADATA_CORRUPTION_AUDIT_LIMIT, repairGeneratedModelMetadataCorruption } =
+    await import("./doctor/shared/model-metadata-corruption-repair.js");
+  const modelMetadataRepair = runWithCurrentPluginMetadata(state.candidate, () =>
+    repairGeneratedModelMetadataCorruption({
+      config: state.candidate,
+      authoredRoot: snapshot.parsed,
+      configPath: snapshot.path,
+      currentHash: snapshot.hash ?? null,
+      auditRecords: readRecentConfigAuditRecords({
+        env: process.env,
+        homedir,
+        limit: MODEL_METADATA_CORRUPTION_AUDIT_LIMIT,
+      }),
+    }),
+  );
+  applyConfigMutation(modelMetadataRepair, {
+    fixHint: `Run "${doctorFixCommand}" to remove audit-proven generated model metadata.`,
+    emitWarnings: true,
+  });
+
   const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(
     state.cfg,
     snapshot.path,

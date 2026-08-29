@@ -36,8 +36,8 @@ import {
 } from "./testbox-lease-freshness.mts";
 import { resolvePathEnvKey, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
-type RunOption = { index: number; value: string };
-type RunInvocation = ReturnType<typeof parseRunInvocation>;
+type CommandOption = { index: number; value: string };
+type CommandInvocation = ReturnType<typeof parseCommandInvocation>;
 type CommandNormalizeOptions = { canShimIgnoreEnvironment?: boolean };
 type TargetContext = ReturnType<typeof effectiveTargetContext>;
 type ProcessEnv = NodeJS.ProcessEnv;
@@ -74,13 +74,9 @@ const args = process.argv.slice(2);
 if (args[0] === "--") {
   args.shift();
 }
-const workloadOption = isWorkloadRoutedCommand(args)
-  ? extractWrapperValueOption(args, "--workload")
-  : undefined;
-const userArgStart = args[0] === "actions" && args[1] === "hydrate" ? 2 : 1;
-if (args[userArgStart] === "--") {
-  args.splice(userArgStart, 1);
-}
+const workloadCommand = isWorkloadRoutedCommand(args);
+const workloadOption = workloadCommand ? extractWrapperValueOption(args, "--workload") : undefined;
+const userArgStart = commandUserArgStart(args);
 
 function extractWrapperValueOption(commandArgs: string[], name: string) {
   const equalsPrefix = `${name}=`;
@@ -111,6 +107,10 @@ function isWorkloadRoutedCommand(commandArgs: string[]) {
     ["run", "warmup"].includes(commandArgs[0] ?? "") ||
     (commandArgs[0] === "actions" && commandArgs[1] === "hydrate")
   );
+}
+
+function commandUserArgStart(commandArgs: string[]) {
+  return commandArgs[0] === "actions" && commandArgs[1] === "hydrate" ? 2 : 1;
 }
 
 function commandCandidates(command: string, platform: Platform) {
@@ -618,9 +618,9 @@ function effectiveTargetContext(commandArgs: string[]) {
   };
 }
 
-let runValueOptionsFromHelp: Set<string>;
+let commandValueOptionsFromHelp: Set<string>;
 
-function parseRunValueOptionsFromHelp(text: string) {
+function parseCommandValueOptionsFromHelp(text: string) {
   const names = new Set<string>();
   for (const line of text.split(/\r?\n/u)) {
     const match = line.match(
@@ -633,44 +633,47 @@ function parseRunValueOptionsFromHelp(text: string) {
   return names;
 }
 
-function runOptionName(arg: string) {
+function commandOptionName(arg: string) {
   return arg.replace(/^-+/u, "").split("=", 1)[0] ?? "";
 }
 
-function parseRunInvocation(helpText: string, commandArgs: string[]) {
-  runValueOptionsFromHelp ??= parseRunValueOptionsFromHelp(helpText);
+function parseCommandInvocation(helpText: string, commandArgs: string[]) {
+  commandValueOptionsFromHelp ??= parseCommandValueOptionsFromHelp(helpText);
+  const routedCommand = isWorkloadRoutedCommand(commandArgs);
+  const optionStart = routedCommand ? commandUserArgStart(commandArgs) : 0;
   let start = -1;
-  let optionEnd = commandArgs.indexOf("--");
+  // A leaf value may itself be --; only unconsumed tokens end its option prefix.
+  let optionEnd = routedCommand ? commandArgs.length : commandArgs.indexOf("--");
   optionEnd = optionEnd < 0 ? commandArgs.length : optionEnd;
-  if (commandArgs[0] === "run") {
-    for (let index = 1; index < commandArgs.length; index += 1) {
+  if (routedCommand) {
+    for (let index = optionStart; index < commandArgs.length; index += 1) {
       const arg = commandArgs[index] ?? "";
       if (arg === "--") {
         start = index + 1;
         optionEnd = index;
         break;
       }
-      if (!arg.startsWith("-")) {
+      if (arg === "-" || !arg.startsWith("-")) {
         start = index;
         optionEnd = index;
         break;
       }
-      if (!arg.includes("=") && runValueOptionsFromHelp.has(runOptionName(arg))) {
+      if (!arg.includes("=") && commandValueOptionsFromHelp.has(commandOptionName(arg))) {
         index += 1;
       }
     }
   }
 
-  const optionEntries: Array<RunOption & { name: string }> = [];
-  const options = new Map<string, RunOption>();
-  for (let index = commandArgs[0] === "run" ? 1 : 0; index < optionEnd; index += 1) {
+  const optionEntries: Array<CommandOption & { name: string }> = [];
+  const options = new Map<string, CommandOption>();
+  for (let index = optionStart; index < optionEnd; index += 1) {
     const arg = commandArgs[index] ?? "";
     if (!arg.startsWith("-")) {
       continue;
     }
-    const name = runOptionName(arg);
+    const name = commandOptionName(arg);
     const assigned = arg.indexOf("=");
-    const consumesValue = commandArgs[0] !== "run" || runValueOptionsFromHelp.has(name);
+    const consumesValue = !routedCommand || commandValueOptionsFromHelp.has(name);
     const entry = {
       index,
       value:
@@ -684,7 +687,7 @@ function parseRunInvocation(helpText: string, commandArgs: string[]) {
     if (!options.has(name)) {
       options.set(name, entry);
     }
-    if (commandArgs[0] === "run" && assigned < 0 && consumesValue) {
+    if (routedCommand && assigned < 0 && consumesValue) {
       index += 1;
     }
   }
@@ -1050,16 +1053,17 @@ function enforceBrokeredCloud(
 
 function optionValue(commandArgsInput: string[], name: string) {
   return (
-    parseRunInvocation(help.text, commandArgsInput).options.get(runOptionName(name))?.value ?? ""
+    parseCommandInvocation(help.text, commandArgsInput).options.get(commandOptionName(name))
+      ?.value ?? ""
   );
 }
 
 function hasOption(commandArgsInput: string[], name: string) {
-  return parseRunInvocation(help.text, commandArgsInput).options.has(runOptionName(name));
+  return parseCommandInvocation(help.text, commandArgsInput).options.has(commandOptionName(name));
 }
 
 function commandOptionEnd(commandArgs: string[]) {
-  return parseRunInvocation(help.text, commandArgs).optionEnd;
+  return parseCommandInvocation(help.text, commandArgs).optionEnd;
 }
 
 function shouldPreferAzureForWindows(commandArgs: string[], advertisedProviders: string[] = []) {
@@ -1129,27 +1133,24 @@ function ensureNativeWindowsHydrateJob(commandArgs: string[]) {
     return commandArgs;
   }
 
-  const currentJob = optionValue(commandArgs, "--job");
-  if (currentJob && currentJob !== "hydrate") {
+  const invocation = parseCommandInvocation(help.text, commandArgs);
+  const job = invocation.options.get("job");
+  if (job?.value && job.value !== "hydrate") {
     return commandArgs;
   }
 
   const normalizedArgs = [...commandArgs];
   const replacementJob = "hydrate-windows-daemon";
-  const optionEnd = commandOptionEnd(normalizedArgs);
-  for (let index = 0; index < optionEnd; index += 1) {
-    const arg = normalizedArgs[index] ?? "";
-    if (arg === "--job" || arg === "-job") {
-      normalizedArgs[index + 1] = replacementJob;
-      return normalizedArgs;
+  if (job) {
+    const arg = normalizedArgs[job.index] ?? "";
+    if (arg.includes("=")) {
+      normalizedArgs[job.index] = `${arg.slice(0, arg.indexOf("=") + 1)}${replacementJob}`;
+    } else {
+      normalizedArgs[job.index + 1] = replacementJob;
     }
-    if (arg.startsWith("--job=") || arg.startsWith("-job=")) {
-      normalizedArgs[index] = `${arg.slice(0, arg.indexOf("=") + 1)}${replacementJob}`;
-      return normalizedArgs;
-    }
+  } else {
+    normalizedArgs.splice(invocation.optionEnd, 0, "--job", replacementJob);
   }
-
-  normalizedArgs.splice(optionEnd, 0, "--job", replacementJob);
   return normalizedArgs;
 }
 
@@ -1184,7 +1185,7 @@ function absolutizeLocalRunPaths(commandArgs: string[]) {
   }
 
   const normalizedArgs = [...commandArgs];
-  const invocation = parseRunInvocation(help.text, normalizedArgs);
+  const invocation = parseCommandInvocation(help.text, normalizedArgs);
   for (const { index, name: optionName } of invocation.optionEntries) {
     const arg = normalizedArgs[index] ?? "";
     const absolutize = optionName === "download" ? repoRelativeDownload : repoRelativePath;
@@ -1436,24 +1437,24 @@ function isLocalContainerProvider(providerName: string) {
   return ["local-container", "docker", "container", "local-docker"].includes(providerName);
 }
 
-function replaceRunPayload(invocation: RunInvocation, payload: string[]) {
+function replaceRunPayload(invocation: CommandInvocation, payload: string[]) {
   const normalizedArgs = [...invocation.args];
   normalizedArgs.splice(invocation.start, normalizedArgs.length - invocation.start, ...payload);
   return normalizedArgs;
 }
 
-function renderRunShellCommand(invocation: RunInvocation, join = shellJoin) {
+function renderRunShellCommand(invocation: CommandInvocation, join = shellJoin) {
   return invocation.options.has("shell") && invocation.commandArgs.length === 1
     ? invocation.commandArgs[0]
     : join(invocation.commandArgs);
 }
 
-function replaceRunCommandWithShell(initialInvocation: RunInvocation, shellCommand: string) {
+function replaceRunCommandWithShell(initialInvocation: CommandInvocation, shellCommand: string) {
   let invocation = initialInvocation;
   if (!invocation.options.has("shell")) {
     const normalizedArgs = [...invocation.args];
     normalizedArgs.splice(invocation.optionEnd, 0, "--shell");
-    invocation = parseRunInvocation(help.text, normalizedArgs);
+    invocation = parseCommandInvocation(help.text, normalizedArgs);
   }
   return replaceRunPayload(invocation, [shellCommand]);
 }
@@ -2543,7 +2544,7 @@ function remoteGitBootstrapForChangedGate(changedGateBase: string, changedGateAl
   ].join(" ");
 }
 
-function injectRemoteChangedGateEnvironment(invocation: RunInvocation, facts: RunFacts) {
+function injectRemoteChangedGateEnvironment(invocation: CommandInvocation, facts: RunFacts) {
   if (invocation.args[0] !== "run" || isNativeWindowsRemoteTarget(invocation.args)) {
     return invocation.args;
   }
@@ -2659,7 +2660,7 @@ function remotePosixHydratedNodeModulesBootstrap() {
 }
 
 function injectRemoteWindowsHydratedNodeModulesBootstrap(
-  invocation: RunInvocation,
+  invocation: CommandInvocation,
   facts: RunFacts,
   providerName: string,
 ) {
@@ -2683,7 +2684,7 @@ function injectRemoteWindowsHydratedNodeModulesBootstrap(
   );
 }
 
-function injectRemotePosixHydratedNodeModulesBootstrap(invocation: RunInvocation) {
+function injectRemotePosixHydratedNodeModulesBootstrap(invocation: CommandInvocation) {
   if (
     invocation.args[0] !== "run" ||
     isWindowsRemoteTarget(invocation.args) ||
@@ -2709,7 +2710,7 @@ function injectRemoteChangedGateGitBootstrap(
     return commandArgs;
   }
 
-  const invocation = parseRunInvocation(help.text, commandArgs);
+  const invocation = parseCommandInvocation(help.text, commandArgs);
   if (invocation.start < 0) {
     return commandArgs;
   }
@@ -3170,7 +3171,7 @@ function readLeadingShellWord(command: string, start: number) {
   return word ? { word, end: command.length } : null;
 }
 
-function analyzeRemoteCommand(invocation: RunInvocation) {
+function analyzeRemoteCommand(invocation: CommandInvocation) {
   const runArgs = invocation.commandArgs;
   const directScopedEnvCommand = invocation.options.has("shell")
     ? null
@@ -3199,7 +3200,7 @@ function analyzeRemoteCommand(invocation: RunInvocation) {
 }
 
 function prepareRemoteWsl2JsBootstrapScript(
-  run: RunInvocation,
+  run: CommandInvocation,
   facts: RunFacts,
   provider: string,
   changedGateBase: string,
@@ -3241,7 +3242,11 @@ function prepareRemoteWsl2JsBootstrapScript(
   };
 }
 
-function injectRemoteAwsMacosJsBootstrap(run: RunInvocation, facts: RunFacts, provider: string) {
+function injectRemoteAwsMacosJsBootstrap(
+  run: CommandInvocation,
+  facts: RunFacts,
+  provider: string,
+) {
   if (
     !isAwsMacosRemoteTarget(run.args, provider) ||
     (!facts.runtimeEntrypoint && !facts.packageManager && !facts.bun)
@@ -3289,7 +3294,7 @@ function remoteAwsMacosSwiftBootstrap() {
 }
 
 function injectRemoteAwsMacosSwiftBootstrap(
-  invocation: RunInvocation,
+  invocation: CommandInvocation,
   facts: RunFacts,
   providerName: string,
   force = false,
@@ -3309,8 +3314,8 @@ function injectRemoteAwsMacosSwiftBootstrap(
 }
 
 function replaceRunFlagWithScript(commandArgs: string[], flagName: string, scriptPath: string) {
-  const invocation = parseRunInvocation(help.text, commandArgs);
-  const normalizedName = runOptionName(flagName);
+  const invocation = parseCommandInvocation(help.text, commandArgs);
+  const normalizedName = commandOptionName(flagName);
   const normalizedArgs = [...commandArgs];
   for (const { index, name } of invocation.optionEntries) {
     if (name === normalizedName) {
@@ -3324,7 +3329,7 @@ function replaceRunFlagWithScript(commandArgs: string[], flagName: string, scrip
 function prepareAwsMacosScriptStdinBootstrap(commandArgs: string[], providerName: string) {
   if (
     !isAwsMacosRemoteTarget(commandArgs, providerName) ||
-    !parseRunInvocation(help.text, commandArgs).options.has("script-stdin")
+    !parseCommandInvocation(help.text, commandArgs).options.has("script-stdin")
   ) {
     return { args: commandArgs, cleanup: () => {}, prepared: false };
   }
@@ -3424,7 +3429,9 @@ function shouldUseFullCheckoutForRemoteSync(commandArgs: string[], _providerName
     return false;
   }
 
-  const changedGate = isChangedGateCommand(parseRunInvocation(help.text, commandArgs).commandArgs);
+  const changedGate = isChangedGateCommand(
+    parseCommandInvocation(help.text, commandArgs).commandArgs,
+  );
   if (changedGate && !isNativeWindowsRemoteTarget(commandArgs)) {
     return true;
   }
@@ -3754,7 +3761,7 @@ function injectRemoteTestboxBootstrap(commandArgs: string[], providerName: strin
   if (commandArgs[0] !== "run" || canonicalProviderName(providerName) !== "blacksmith-testbox") {
     return commandArgs;
   }
-  const invocation = parseRunInvocation(help.text, commandArgs);
+  const invocation = parseCommandInvocation(help.text, commandArgs);
   if (invocation.start < 0) {
     return commandArgs;
   }
@@ -3768,7 +3775,7 @@ function injectRemoteTestboxBootstrap(commandArgs: string[], providerName: strin
 }
 
 function applyRunTransforms(
-  initialInvocation: RunInvocation,
+  initialInvocation: CommandInvocation,
   initialFacts: RunFacts,
   options: {
     changedGateAlias: string;
@@ -3780,7 +3787,7 @@ function applyRunTransforms(
   const markedArgs = injectRemoteChangedGateEnvironment(initialInvocation, initialFacts);
   const localArgs =
     options.childCwd === repoRoot ? markedArgs : absolutizeLocalRunPaths(markedArgs);
-  let invocation = parseRunInvocation(help.text, localArgs);
+  let invocation = parseCommandInvocation(help.text, localArgs);
   const facts = analyzeRemoteCommand(invocation);
 
   const wsl2ScriptBootstrap = prepareRemoteWsl2JsBootstrapScript(
@@ -3791,16 +3798,16 @@ function applyRunTransforms(
     options.changedGateAlias,
   );
   let transformedArgs = wsl2ScriptBootstrap.args;
-  invocation = parseRunInvocation(help.text, transformedArgs);
+  invocation = parseCommandInvocation(help.text, transformedArgs);
   transformedArgs = injectRemoteAwsMacosJsBootstrap(invocation, facts, options.provider);
-  invocation = parseRunInvocation(help.text, transformedArgs);
+  invocation = parseCommandInvocation(help.text, transformedArgs);
   transformedArgs = injectRemoteAwsMacosSwiftBootstrap(
     invocation,
     facts,
     options.provider,
     facts.swift,
   );
-  invocation = parseRunInvocation(help.text, transformedArgs);
+  invocation = parseCommandInvocation(help.text, transformedArgs);
   transformedArgs = injectRemoteWindowsHydratedNodeModulesBootstrap(
     invocation,
     facts,
@@ -3813,7 +3820,7 @@ function applyRunTransforms(
       options.changedGateAlias,
     );
   }
-  invocation = parseRunInvocation(help.text, transformedArgs);
+  invocation = parseCommandInvocation(help.text, transformedArgs);
   transformedArgs = injectRemotePosixHydratedNodeModulesBootstrap(invocation);
   return {
     args: injectRemoteTestboxBootstrap(transformedArgs, options.provider),
@@ -3822,22 +3829,52 @@ function applyRunTransforms(
 }
 
 const version = probeCrabboxMetadata(binary, ["--version"]);
-const help = probeCrabboxMetadata(binary, ["run", "--help"]);
+const helpCommand = workloadCommand ? args.slice(0, userArgStart) : ["run"];
+const help = probeCrabboxMetadata(binary, [...helpCommand, "--help"]);
 const providers = parseProvidersFromHelp(help.text);
-runValueOptionsFromHelp = parseRunValueOptionsFromHelp(help.text);
+commandValueOptionsFromHelp = parseCommandValueOptionsFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 
 if (
   version.status !== 0 ||
   version.text.length === 0 ||
   help.status !== 0 ||
-  runValueOptionsFromHelp.size === 0
+  commandValueOptionsFromHelp.size === 0
 ) {
   console.error(
     `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} providers=${providers.join(",") || "unknown"}`,
   );
   console.error("[crabbox] selected binary failed basic --version/--help sanity checks");
   process.exit(2);
+}
+
+// Classify help before removing the wrapper separator or preparing execution.
+// Only the leaf's option prefix counts; payloads and flag values stay gated.
+// Upstream's `help <command> ...` alias appends --help, so extra payload is not safe.
+const helpFlags = new Set(["--help", "-h"]);
+const invocationOptions = workloadCommand ? parseCommandInvocation(help.text, args).options : null;
+if (
+  helpFlags.has(args[0] ?? "") ||
+  helpFlags.has(args[userArgStart] ?? "") ||
+  (args[0] === "help" && args.length <= commandUserArgStart(args.slice(1)) + 1) ||
+  (["run", "warmup"].includes(args[0] ?? "") && args[1] === "help") ||
+  invocationOptions?.has("help") ||
+  invocationOptions?.has("h")
+) {
+  const invocation = spawnInvocation(binary, args, process.env, process.platform);
+  const result = spawnSync(invocation.command, invocation.args, {
+    cwd: repoRoot,
+    stdio: "inherit",
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  });
+  if (result.error) {
+    console.error(`[crabbox] ${result.error.message}`);
+  }
+  process.exit(result.status ?? 1);
+}
+
+if (args[userArgStart] === "--") {
+  args.splice(userArgStart, 1);
 }
 
 const providerSelection = selectedProvider(args, providers, version.text);
@@ -3966,7 +4003,7 @@ const scriptStdinPrepared = scriptBootstrap.prepared;
 let wsl2ScriptBootstrap = { args: normalizedArgs, cleanup: () => {}, prepared: false };
 try {
   if (shouldUseFullCheckoutForRemoteSync(normalizedArgs, provider)) {
-    const invocation = parseRunInvocation(help.text, normalizedArgs);
+    const invocation = parseCommandInvocation(help.text, normalizedArgs);
     const facts = analyzeRemoteCommand(invocation);
     const changedGate = facts.changedGate ? changedGateBaseForCommand(facts.commandArgs) : null;
     const changedGateBase = changedGate?.resolvedBase ?? "";
@@ -4010,7 +4047,7 @@ function cleanupOnce() {
   cleanupChildCwd();
 }
 
-const invocation = parseRunInvocation(help.text, normalizedArgs);
+const invocation = parseCommandInvocation(help.text, normalizedArgs);
 const commandFacts = analyzeRemoteCommand(invocation);
 const runtimeEntrypoint = commandFacts.runtimeEntrypoint;
 if (

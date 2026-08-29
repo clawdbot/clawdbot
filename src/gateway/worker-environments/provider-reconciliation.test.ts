@@ -919,37 +919,7 @@ describe("worker environment service", () => {
     expect(support.testState.store.getCredential(environmentId)?.sessionId).toBe("session-new");
   });
 
-  it("adopts an unpersisted provision result before destroying", async () => {
-    const intent = support.testState.store.createIntent({
-      environmentId: "worker-pending-destroy",
-      providerId: "fake",
-      profileId: "development",
-      profileSnapshot: { settings: { region: "test" } },
-      provisionOperationId: "provision:pending-destroy",
-    });
-    support.testState.store.transition({
-      environmentId: intent.environmentId,
-      from: "requested",
-      to: "provisioning",
-    });
-    const destroyed: WorkerLifecycleLease[] = [];
-    const provider = support.createProvider({
-      provision: async () => {
-        expect(
-          support.testState.store.get(intent.environmentId)?.destroyRequestedAtMs,
-        ).not.toBeNull();
-        return { leaseId: "lease-1", ssh: support.SSH_ENDPOINT };
-      },
-      destroy: async (lease) => void destroyed.push(lease),
-    });
-
-    const result = await support.createService(provider).destroy(intent.environmentId);
-
-    expect(result.state).toBe("destroyed");
-    expect(destroyed).toEqual([{ leaseId: "lease-1", profile: { region: "test" } }]);
-  });
-
-  it("retains teardown intent across an indeterminate provision failure", async () => {
+  it("retains teardown intent across an indeterminate allocation resolution", async () => {
     support.testState.prepareInstallation = vi.fn(async () => {
       throw new Error("bundle preparation must not block teardown adoption");
     });
@@ -965,14 +935,14 @@ describe("worker environment service", () => {
       from: "requested",
       to: "provisioning",
     });
-    let provisionFails = true;
+    let resolutionFails = true;
     const destroyed: WorkerLifecycleLease[] = [];
     const provider = support.createProvider({
-      provision: async () => {
-        if (provisionFails) {
-          throw new Error("provision outcome unknown");
+      resolveAllocation: async () => {
+        if (resolutionFails) {
+          throw new Error("allocation identity unavailable");
         }
-        return { leaseId: "lease-retried", ssh: support.SSH_ENDPOINT };
+        return { leaseId: "lease-retried", sharedHost: false };
       },
       destroy: async (lease) => void destroyed.push(lease),
     });
@@ -993,7 +963,7 @@ describe("worker environment service", () => {
       destroyRequestedAtMs: expect.any(Number),
     });
 
-    provisionFails = false;
+    resolutionFails = false;
     await workerService.reconcileOnce();
     expect(support.testState.store.get(intent.environmentId)?.state).toBe("destroyed");
     expect(destroyed).toEqual([{ leaseId: "lease-retried", profile: { region: "test" } }]);

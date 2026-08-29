@@ -5,13 +5,20 @@ import { parentPort, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { EvalFlags, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
-import { boundCodeModeResult, toCodeModeJsonSafe as toJsonSafe } from "./code-mode-json.js";
+import {
+  boundCodeModeError,
+  captureCodeModeOutput,
+  captureCodeModeValue,
+  EMPTY_CODE_MODE_OUTPUT,
+  toCodeModeJsonSafe as toJsonSafe,
+} from "./code-mode-json.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 import type {
   CodeModeConfig,
   CodeModeNamespaceDescriptor,
   CodeModeWorkerPayload,
-  CodeModeWorkerThreadResult as CodeModeWorkerResult,
+  CodeModeVmResult as CodeModeWorkerResult,
+  CodeModeWorkerThreadResult,
   PendingBridgeRequest,
   SettledBridgeRequest,
 } from "./code-mode-worker-types.js";
@@ -260,24 +267,17 @@ function takeOutputSafely(vm: QuickJS): unknown[] {
   }
 }
 
-function boundWorkerResult(
+function captureWorkerResult(
   result: CodeModeWorkerResult,
   config: CodeModeConfig,
-): CodeModeWorkerResult {
-  const bounded = boundCodeModeResult({
-    output: result.output,
-    ...(result.status === "completed" ? { value: result.value } : {}),
-    ...(result.status === "failed" ? { error: result.error } : {}),
-    maxOutputBytes: config.maxOutputBytes,
-  });
+): CodeModeWorkerThreadResult {
+  const output = captureCodeModeOutput(result.output, config.maxOutputBytes);
   if (result.status === "completed") {
-    return { ...result, output: bounded.output, value: bounded.value };
+    return { ...result, output, value: captureCodeModeValue(result.value, config.maxOutputBytes) };
   }
-  return {
-    ...result,
-    output: bounded.output,
-    ...(bounded.error !== undefined ? { error: bounded.error } : {}),
-  };
+  return result.status === "failed"
+    ? { ...result, output, error: boundCodeModeError(result.error, config.maxOutputBytes) }
+    : { ...result, output };
 }
 
 function failedWorkerResult(
@@ -503,15 +503,18 @@ function isQuickJsWasmModule(value: unknown): value is WebAssembly.Module {
   return Object.prototype.toString.call(value) === "[object WebAssembly.Module]";
 }
 
-async function main(): Promise<CodeModeWorkerResult> {
+async function main(): Promise<CodeModeWorkerThreadResult> {
   const input = workerData as unknown;
   if (!isRecord(input) || !isRecord(input.config) || !isQuickJsWasmModule(input.wasmModule)) {
-    return failedWorkerResult("invalid_input", "invalid code mode worker input");
+    return {
+      ...failedWorkerResult("invalid_input", "invalid code mode worker input"),
+      output: EMPTY_CODE_MODE_OUTPUT,
+    };
   }
   const config = input.config as CodeModeConfig;
   try {
     if (input.kind === "exec" && typeof input.source === "string") {
-      return boundWorkerResult(
+      return captureWorkerResult(
         await runExec({
           kind: "exec",
           wasmModule: input.wasmModule,
@@ -530,7 +533,7 @@ async function main(): Promise<CodeModeWorkerResult> {
       );
     }
     if (input.kind === "resume" && input.snapshotBytes instanceof Uint8Array) {
-      return boundWorkerResult(
+      return captureWorkerResult(
         await runResume({
           kind: "resume",
           wasmModule: input.wasmModule,
@@ -546,7 +549,10 @@ async function main(): Promise<CodeModeWorkerResult> {
         config,
       );
     }
-    return failedWorkerResult("invalid_input", "invalid code mode worker input");
+    return {
+      ...failedWorkerResult("invalid_input", "invalid code mode worker input"),
+      output: EMPTY_CODE_MODE_OUTPUT,
+    };
   } catch (error) {
     const timedOut = isQuickJsInterruptedError(error);
     const code = timedOut
@@ -554,7 +560,7 @@ async function main(): Promise<CodeModeWorkerResult> {
       : error instanceof CodeModeWorkerFailure
         ? error.code
         : "internal_error";
-    return boundWorkerResult(
+    return captureWorkerResult(
       failedWorkerResult(code, timedOut ? "code mode timeout exceeded" : errorMessage(error)),
       config,
     );

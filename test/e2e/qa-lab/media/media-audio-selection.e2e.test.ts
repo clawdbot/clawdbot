@@ -136,6 +136,11 @@ describe("QA media audio selection product proof", () => {
     ).toMatchObject({
       outcome: "success",
       attachments: [{ attachmentIndex: 3 }, { attachmentIndex: 2 }],
+      attachmentDispositions: {
+        0: { kind: "not-selected" },
+        2: { kind: "handled" },
+        3: { kind: "handled" },
+      },
     });
     expect(allModeCtx.Transcript).toBe(
       "Audio 1:\ntranscript:third.ogg\n\nAudio 2:\ntranscript:second.ogg",
@@ -144,6 +149,7 @@ describe("QA media audio selection product proof", () => {
       [
         "[Audio 1/2]\nTranscript:\ntranscript:third.ogg",
         "[Audio 2/2]\nTranscript:\ntranscript:second.ogg",
+        "[Audio attachment not processed: attachment limit reached]",
       ].join("\n\n"),
     );
   });

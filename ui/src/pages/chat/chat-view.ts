@@ -110,6 +110,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     fallbackStatus?: FallbackStatus | null;
     progressCard?: ProgressCard | null;
     progressCardHasActiveRun?: boolean;
+    collapseTaskProgress?: boolean;
     onDismissProgressCard?: (card: ProgressCard) => void;
     gatewayQuestionPrompts?: readonly QuestionPrompt[];
     onGatewayQuestionChange?: () => void;

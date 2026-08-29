@@ -231,8 +231,12 @@ export async function executeWorkerTurn(
     }
     // Project the wire handshake; the receipt also carries storage-only provenance.
     const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
+    if (!tunnel.launchTurn) {
+      throw new Error("Worker tunnel does not support worker turns");
+    }
     const launchPlan = await fitLaunchDescriptorWithRuntimeIdentity({
       runtimeIdentity,
+      measure: (plan) => tunnel.measureLaunchTurn(plan, params.turnClaim),
       messages: initialMessagePlan.messages,
       build: (agentRuntimeIdentityToken, windowedMessages) =>
         parseWorkerLaunchPlan({
@@ -314,9 +318,6 @@ export async function executeWorkerTurn(
         handoffAbort.abort(handoffError);
       }
     };
-    if (!tunnel.launchTurn) {
-      throw new Error("Worker tunnel does not support worker turns");
-    }
     const processPromise = tunnel.launchTurn({
       plan,
       turnClaim: params.turnClaim,

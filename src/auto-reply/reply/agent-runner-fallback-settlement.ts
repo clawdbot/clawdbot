@@ -118,6 +118,7 @@ export async function settleAgentFallbackCycle(params: {
           activeSessionEntry: turn.getActiveSessionEntry(),
         }),
       }),
+      postCompactionModelFailure: cycle.state.postCompactionModelAttempted || undefined,
     };
   }
   if (embeddedError?.kind === "role_ordering") {
@@ -131,6 +132,7 @@ export async function settleAgentFallbackCycle(params: {
           ? renderControlUiAgentFailureCopy(embeddedErrorText)
           : PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
       }),
+      postCompactionModelFailure: cycle.state.postCompactionModelAttempted || undefined,
     };
   }
   const sourceReplyPolicy = turn.sessionKey

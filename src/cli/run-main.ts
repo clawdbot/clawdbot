@@ -1256,13 +1256,15 @@ async function runCliWithPreparedOutputMode(
         if (useSourceOnlyBestEffortConfig) {
           return configIo.readSourceConfigBestEffort();
         }
-        const readOptions = {
+        const readOptions: Parameters<typeof configIo.readBestEffortConfig>[0] = {
           ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
           ...(bestEffortConfigStartupPolicy.skipConfigGuard ||
           bestEffortConfigStartupPolicy.validateConfigOnly
             ? { observe: false }
             : {}),
-          skipPluginValidation: true,
+          ...(bestEffortConfigStartupPolicy.validateConfigOnly
+            ? { pluginValidation: "core-only" }
+            : { skipPluginValidation: true }),
         };
         if (!resolveUnownedCliPrimaryCandidate(normalizedArgv)) {
           return configIo.readBestEffortConfig(readOptions);

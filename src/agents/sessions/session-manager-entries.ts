@@ -174,7 +174,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     }
     const entry: SessionMessageEntry = {
       type: "message",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       message,
@@ -189,7 +189,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   appendThinkingLevelChange(thinkingLevel: string): string {
     const entry: ThinkingLevelChangeEntry = {
       type: "thinking_level_change",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       thinkingLevel,
@@ -201,7 +201,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   appendModelChange(provider: string, modelId: string): string {
     const entry: ModelChangeEntry = {
       type: "model_change",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       provider,
@@ -220,7 +220,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   ): string {
     const entry: CompactionEntry = {
       type: "compaction",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       summary,
@@ -241,7 +241,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   appendResetBoundary(reason: ResetReason, firstKeptEntryId?: string): string {
     const entry: ResetEntry = {
       type: "reset",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       reason,
@@ -259,7 +259,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       type: "custom",
       customType,
       data,
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
     };
@@ -270,7 +270,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   appendSessionInfo(name: string): string {
     const entry: SessionInfoEntry = {
       type: "session_info",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       name: name.replace(/[\r\n]+/g, " ").trim(),
@@ -300,7 +300,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       content,
       display,
       details,
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
     };
@@ -374,7 +374,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     }
     const entry: LabelEntry = {
       type: "label",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       targetId,
@@ -506,7 +506,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     }
     const entry: BranchSummaryEntry = {
       type: "branch_summary",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: branchTargetId,
       timestamp: new Date().toISOString(),
       fromId: branchTargetId ?? "root",

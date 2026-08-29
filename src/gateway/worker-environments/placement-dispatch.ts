@@ -153,6 +153,7 @@ function isExactAttachedEnvironment(
     environment &&
     environment.environmentId === placement.environmentId &&
     environment.state === "attached" &&
+    environment.destroyRequestedAtMs === null &&
     environment.ownerEpoch === placement.activeOwnerEpoch &&
     environment.attachedSessionIds.length === 1 &&
     environment.attachedSessionIds[0] === placement.sessionId,
@@ -492,7 +493,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
               }
               reauthorize?.();
               const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
-              let destroyed = false;
               try {
                 reauthorize?.();
                 const reconciliation = await tunnel.reconcileWorkspace({
@@ -558,7 +558,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                   beforeComplete: async () => {
                     reauthorize?.();
                     await environments.destroy(current.environmentId);
-                    destroyed = true;
                   },
                   complete: () => {
                     // Destroy is the final privileged effect. Once it commits, durable placement
@@ -588,10 +587,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                   },
                 });
               } finally {
-                if (
-                  !destroyed &&
-                  isExactAttachedEnvironment(environments.get(current.environmentId), current)
-                ) {
+                if (isExactAttachedEnvironment(environments.get(current.environmentId), current)) {
                   await quiescence.resume();
                 }
               }

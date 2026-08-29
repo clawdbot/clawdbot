@@ -139,6 +139,15 @@
   --brand-claude: #d97757;
   --brand-google: #4285f4;
 
+  --session-color-red: #f07878;
+  --session-color-blue: #72a7ed;
+  --session-color-green: #69bf8a;
+  --session-color-yellow: #dcc365;
+  --session-color-purple: #b595e8;
+  --session-color-orange: #eaa36a;
+  --session-color-pink: #df8cb9;
+  --session-color-cyan: #66bccb;
+
   --control-ui-environment-teal: #14b8a6;
   --control-ui-environment-teal-ink: #5eead4;
   --control-ui-environment-amber: #f59e0b;
@@ -567,6 +576,15 @@
   --accent-2: #0d9488;
   --accent-2-muted: rgba(13, 148, 136, 0.75);
   --accent-2-subtle: rgba(13, 148, 136, 0.08);
+
+  --session-color-red: #c74646;
+  --session-color-blue: #376fbd;
+  --session-color-green: #328452;
+  --session-color-yellow: #9a791b;
+  --session-color-purple: #8652ba;
+  --session-color-orange: #bb681f;
+  --session-color-pink: #b34885;
+  --session-color-cyan: #258394;
 
   --control-ui-environment-teal-ink: #115e59;
   --control-ui-environment-amber-ink: #92400e;
@@ -1089,4 +1107,15 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
 
 :focus:not(:focus-visible) {
   outline: none;
+}
+
+.session-color-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-inline-end: 6px;
+  border-radius: var(--radius-full);
+  background: var(--session-color);
+  vertical-align: middle;
 }

@@ -7,6 +7,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
@@ -483,6 +484,7 @@ function renderCatalogSessionRow(
   }
   const label = session.name || session.threadId;
   const meta = formatSidebarTimestamp(timestamp);
+  const color = normalizeSessionColorValue(session.color ?? "");
   const routeId = "chat";
   const target = sessionNavigationTarget({
     face: routeId,
@@ -531,11 +533,12 @@ function renderCatalogSessionRow(
   return html`
     <div
       ${rowRef ? ref(rowRef) : nothing}
-      class="sidebar-recent-session session-row-host sidebar-recent-session--single-line ${active
-        ? "sidebar-recent-session--active"
-        : ""} ${projectChild ? "sidebar-recent-session--catalog-project-child" : ""} ${running
-        ? "session-row-host--running"
-        : ""}"
+      class="sidebar-recent-session session-row-host sidebar-recent-session--single-line ${color
+        ? "sidebar-recent-session--colored"
+        : ""} ${active ? "sidebar-recent-session--active" : ""} ${projectChild
+        ? "sidebar-recent-session--catalog-project-child"
+        : ""} ${running ? "session-row-host--running" : ""}"
+      style=${color ? `--session-color: var(--session-color-${color})` : nothing}
       data-session-key=${key}
       data-catalog-session-key=${identityKey}
       data-session-row-action-count="1"

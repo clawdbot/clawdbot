@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Extension relay bridge: CDP target synthesis and extension command routing.
 import { describe, expect, it, vi } from "vitest";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
@@ -671,6 +672,36 @@ describe("ExtensionRelayBridge", () => {
     );
     await flush();
 
+    const rootEvent = client.frames().find((frame) => frame.method === "Target.attachedToTarget");
+    const root = asOptionalRecord(rootEvent?.params)?.sessionId;
+    expect(typeof root).toBe("string");
+    cdp.onMessage(
+      JSON.stringify({
+        id: 10,
+        sessionId: root,
+        method: "Target.setAutoAttach",
+        params: { autoAttach: true, waitForDebuggerOnStart: true, flatten: true },
+      }),
+    );
+    await flush();
+    handlers.onMessage(
+      JSON.stringify({
+        type: "cdpEvent",
+        tabId: 1,
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "child-abc",
+          targetInfo: { targetId: "child-target", type: "iframe" },
+          waitingForDebugger: false,
+        },
+      }),
+    );
+    const childEvent = client
+      .frames()
+      .findLast((frame) => frame.method === "Target.attachedToTarget");
+    const child = asOptionalRecord(childEvent?.params)?.sessionId;
+    expect(typeof child).toBe("string");
+    expect(child).not.toBe(root);
     // Extension reports a child (iframe) session for tab 1.
     handlers.onMessage(
       JSON.stringify({
@@ -689,7 +720,7 @@ describe("ExtensionRelayBridge", () => {
 
     // A command addressed to the now-stale child session must not route to a
     // reused tab; it should surface a clean "session not found" error.
-    cdp.onMessage(JSON.stringify({ id: 2, sessionId: "child-abc", method: "Page.reload" }));
+    cdp.onMessage(JSON.stringify({ id: 2, sessionId: child, method: "Page.reload" }));
     await flush();
     const response = client.frames().find((frame) => frame.id === 2);
     expect(response?.error).toBeTruthy();

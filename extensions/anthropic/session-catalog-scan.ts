@@ -1,11 +1,74 @@
 import type { Dirent, Stats } from "node:fs";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 
 const MAX_CATALOG_JSON_CACHE_ENTRIES = 4_000;
+const CLAUDE_METADATA_WINDOW_BYTES = 1024 * 1024;
+const CLAUDE_METADATA_READ_CHUNK_BYTES = 16 * 1024;
 export const CLAUDE_CATALOG_IO_CONCURRENCY = 32;
+
+export async function readClaudeCatalogMetadata(
+  handle: FileHandle,
+  fileSize: number,
+  maxBytes: number,
+  inspectLine: (line: Buffer, metadataOnly: boolean) => boolean,
+): Promise<{ scannedBytes: number; complete: boolean }> {
+  let pending = Buffer.alloc(0);
+  let fileOffset = 0;
+  let scannedBytes = 0;
+  let stopDiscovery = false;
+  let skipPartial = false;
+  const readWindow = async (end: number, metadataOnly: boolean) => {
+    while (fileOffset < end && scannedBytes < maxBytes) {
+      const size = Math.min(
+        CLAUDE_METADATA_READ_CHUNK_BYTES,
+        end - fileOffset,
+        maxBytes - scannedBytes,
+      );
+      const chunk = Buffer.allocUnsafe(size);
+      const { bytesRead } = await handle.read(chunk, 0, size, fileOffset);
+      if (bytesRead === 0) {
+        return;
+      }
+      fileOffset += bytesRead;
+      scannedBytes += bytesRead;
+      pending = pending.length
+        ? Buffer.concat([pending, chunk.subarray(0, bytesRead)])
+        : chunk.subarray(0, bytesRead);
+      let newline: number;
+      while ((newline = pending.indexOf(0x0a)) >= 0) {
+        if (!skipPartial) {
+          stopDiscovery =
+            inspectLine(pending.subarray(0, newline), metadataOnly || stopDiscovery) ||
+            stopDiscovery;
+        }
+        skipPartial = false;
+        pending = pending.subarray(newline + 1);
+      }
+      if (stopDiscovery && !metadataOnly) {
+        return;
+      }
+    }
+  };
+  await readWindow(Math.min(fileSize, CLAUDE_METADATA_WINDOW_BYTES), false);
+  const prefixReadToEnd = fileOffset >= fileSize;
+  // Commands append metadata after conversation rows. Read at most the last MiB too,
+  // charging the same budget; never interpret a clipped JSONL line as a record.
+  const tailOffset = Math.max(fileOffset, fileSize - CLAUDE_METADATA_WINDOW_BYTES);
+  skipPartial = tailOffset > fileOffset;
+  if (skipPartial) {
+    fileOffset = tailOffset - 1;
+    pending = Buffer.alloc(0);
+  }
+  await readWindow(fileSize, true);
+  if (fileOffset >= fileSize && !skipPartial && pending.length > 0) {
+    inspectLine(pending, stopDiscovery || !prefixReadToEnd);
+  }
+  return { scannedBytes, complete: fileOffset >= fileSize };
+}
 
 type CatalogJsonCacheEntry = {
   mtimeMs: number;
@@ -37,24 +100,6 @@ export type ClaudeSessionScanContext = ClaudeProjectsTreeSnapshot & {
 // Parsed index/Desktop JSON stays valid for one path+mtime+size and is LRU-bounded; read failures are
 // never cached, so transient metadata I/O cannot hide a later successful read.
 const catalogJsonCache = new Map<string, CatalogJsonCacheEntry>();
-
-export async function mapConcurrent<T, R>(
-  values: T[],
-  limit: number,
-  mapper: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  results.length = values.length;
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(limit, values.length) }, async () => {
-    while (nextIndex < values.length) {
-      const index = nextIndex++;
-      results[index] = await mapper(values[index]!);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
 
 export function setBoundedCache<K, V>(
   cache: Map<K, V>,
@@ -184,31 +229,35 @@ export async function readProjectsTreeSnapshot(root: string): Promise<ClaudeProj
     return { root, projectDirectories: [], treeStamp: "unavailable" };
   }
   const directoryEntries = entries.filter((entry) => entry.isDirectory());
-  const [resolvedRoot, directories] = await Promise.all([
+  const [resolvedRoot, { results: directories }] = await Promise.all([
     fs.realpath(root).catch(() => undefined),
-    mapConcurrent(directoryEntries, CLAUDE_CATALOG_IO_CONCURRENCY, async (entry) => {
-      const directory = path.join(root, entry.name);
-      const [stat, children] = await Promise.all([
-        fs.stat(directory).catch(() => undefined),
-        fs.readdir(directory, { withFileTypes: true }).catch(() => undefined),
-      ]);
-      return { entry, directory, stat, children };
+    runTasksWithConcurrency({
+      tasks: directoryEntries.map((entry) => async () => {
+        const directory = path.join(root, entry.name);
+        const [stat, children] = await Promise.all([
+          fs.stat(directory).catch(() => undefined),
+          fs.readdir(directory, { withFileTypes: true }).catch(() => undefined),
+        ]);
+        return { entry, directory, stat, children };
+      }),
+      limit: CLAUDE_CATALOG_IO_CONCURRENCY,
+      throwOnError: true,
     }),
   ]);
   const childTargets = directories.flatMap(({ directory, children }, directoryIndex) =>
     (children ?? []).map((child) => ({ directoryIndex, directory, child })),
   );
-  const childSignatures = await mapConcurrent(
-    childTargets,
-    CLAUDE_CATALOG_IO_CONCURRENCY,
-    async ({ directoryIndex, directory, child }) => {
+  const { results: childSignatures } = await runTasksWithConcurrency({
+    tasks: childTargets.map(({ directoryIndex, directory, child }) => async () => {
       const childStat = await fs.stat(path.join(directory, child.name)).catch(() => undefined);
       const signature = childStat?.isFile()
         ? ([child.name, childStat.mtimeMs, childStat.size, childStat.ino] as const)
         : undefined;
       return { directoryIndex, signature };
-    },
-  );
+    }),
+    limit: CLAUDE_CATALOG_IO_CONCURRENCY,
+    throwOnError: true,
+  });
   const signaturesByDirectory = Array.from(
     { length: directories.length },
     (): ClaudeChildFileSignature[] => [],

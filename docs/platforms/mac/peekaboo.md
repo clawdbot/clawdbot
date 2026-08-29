@@ -68,6 +68,27 @@ selects the approved archive and `verify` revalidates the Foundation-signed app,
 architectures, entitlements, and both source revisions. The portable installer is not covered by the app's code
 signature, so this explicit two-digest release-operator handoff remains part of the internal trust boundary.
 
+Elevation artifacts require universal shared app code and both `arm64` and `x86_64` worker payloads under
+`Contents/Resources/node-worker/`. The packager must provide both; `verify` checks both regardless of the target Mac's
+architecture. Each worker must contain a Mach-O Node runtime, the OpenClaw package entrypoint, and build metadata matching
+the app's version, source commit, build timestamp, and worker build ID. All native code in each worker, including addons,
+static archives, and libraries without executable permission bits, must support its directory's architecture. Universal
+Mach-O code is allowed; foreign-platform native code is rejected.
+Signable Mach-O images must also expose native signature metadata for every slice. A generic resource signature,
+even when strict whole-app verification succeeds, is not native-signature evidence. Compatible thin, fat32, and fat64
+static archives remain resources protected by the app seal and architecture checks; they need no standalone Mach-O
+signature. Mixed archive/native containers fail verification. Inspection never thins or rewrites the supplied payload.
+Missing or unexpected architecture trees, escaping or cyclic worker symlinks, and thin shared executables or executable
+libraries fail verification. Dependencies that violate this closure must be repaired in packaging, not excluded from
+validation. The portable installer needs neither a checkout nor a separate inventory helper.
+
+Elevation packaging constructs fresh workers from the complete installed package without changing that input.
+It preserves JavaScript, WASM, other resources, modes, and contained relative symlinks, and omits only native images
+that cannot run on the selected Darwin architecture. Matching universal binaries remain intact. Windows-named source,
+scripts, and README files remain; directory names do not select files for omission. Unclassifiable native images and
+links that would escape, cycle, or become dangling stop packaging. Standard app packaging retains the full package.
+Both paths use the same worker verification and publication flow; build metadata remains unchanged by materialization.
+
 The managed elevation workflow upgrades an already paired Mac. Its selected state and config must define an
 app-readable direct remote Gateway route with string token or password auth, and the selected macOS node identity must
 already be paired. `migration-plan` performs those checks without changing the app, process, LaunchAgent, state, or

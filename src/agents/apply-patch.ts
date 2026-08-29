@@ -187,7 +187,10 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
     deleted: new Set<string>(),
   };
   const noOpPaths = new Set<string>();
-  const fileOps = resolvePatchFileOps(patchOptions);
+  // Acquire only after queue admission, before the first read, so root I/O cannot
+  // reorder source calls or outlive a no-op. Retain the same owner across hunks.
+  let fileOpsPromise: Promise<PatchFileOps> | undefined;
+  const getFileOps = () => (fileOpsPromise ??= resolvePatchFileOps(patchOptions));
 
   for (const hunk of parsed.hunks) {
     if (patchOptions.signal?.aborted) {
@@ -200,6 +203,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
         targetResolution.then((target) => target.queueKey),
         async () => {
           const target = await targetResolution;
+          const fileOps = await getFileOps();
           await assertPatchParentPath(hunk.path, patchOptions);
           await ensureDir(target.resolved, fileOps);
           await createPatchTarget({
@@ -225,6 +229,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
         targetResolution.then((target) => target.queueKey),
         async () => {
           const target = await targetResolution;
+          const fileOps = await getFileOps();
           await fileOps.remove(target.resolved);
         },
       );
@@ -247,9 +252,8 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
       async () => {
         const target = await targetResolution;
         const moveTarget = moveTargetResolution ? await moveTargetResolution : undefined;
-        const applied = await applyUpdateHunk(target.resolved, hunk.chunks, {
-          readFile: (pathLocal) => fileOps.readFile(pathLocal),
-        });
+        const fileOps = await getFileOps();
+        const applied = await applyUpdateHunk(target.resolved, hunk.chunks, fileOps);
 
         if (hunk.movePath && moveTarget) {
           await assertPatchParentPath(hunk.movePath, patchOptions);

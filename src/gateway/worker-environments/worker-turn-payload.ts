@@ -175,10 +175,6 @@ export function windowInitialMessages(messages: AgentMessage[]): WorkerInitialMe
   return { kind: "complete", messages: projected };
 }
 
-// Node hosts append their own bounded websocket endpoint after sizing; reserve
-// its 4 KiB URL, TLS pin, keys, and JSON escaping before admitting replay bytes.
-const WORKER_LAUNCH_ENDPOINT_OVERHEAD_BYTES = 4_608;
-
 type WorkerLaunchFit =
   | { kind: "launch"; plan: WorkerLaunchPlan }
   | {
@@ -193,11 +189,13 @@ export async function fitLaunchDescriptorWithRuntimeIdentity(params: {
   build: (identityToken: string, messages: WorkerTranscriptMessage[]) => WorkerLaunchPlan;
   messages: WorkerTranscriptMessage[];
   runtimeIdentity: AgentRuntimeIdentityTokenParams;
+  measure: (plan: WorkerLaunchPlan) => number;
 }): Promise<WorkerLaunchFit> {
   const tokenBytes = measureAgentRuntimeIdentityTokenBytes(params.runtimeIdentity);
   const plan = fitLaunchDescriptor(
     (messages) => params.build("x".repeat(tokenBytes), messages),
     params.messages,
+    params.measure,
   );
   if (plan.kind !== "launch") {
     return plan;
@@ -218,12 +216,12 @@ export async function fitLaunchDescriptorWithRuntimeIdentity(params: {
 function fitLaunchDescriptor(
   build: (initialMessages: WorkerTranscriptMessage[]) => WorkerLaunchPlan,
   messages: WorkerTranscriptMessage[],
+  measure: (plan: WorkerLaunchPlan) => number,
 ): WorkerLaunchFit {
   let initialMessages = messages;
   while (true) {
     const plan = build(initialMessages);
-    const bytes =
-      Buffer.byteLength(JSON.stringify(plan), "utf8") + WORKER_LAUNCH_ENDPOINT_OVERHEAD_BYTES;
+    const bytes = measure(plan);
     if (bytes <= WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
       return { kind: "launch", plan };
     }

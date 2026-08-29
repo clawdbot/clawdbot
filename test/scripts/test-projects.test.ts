@@ -661,12 +661,26 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it.each([
+    ".github/actions/git-owner/owner.py",
+    ".github/actions/git-owner/action.yml",
+    ".github/actions/ensure-base-commit/policy.py",
+    ".github/actions/ensure-base-commit/action.yml",
+    "scripts/generate-ci-git-owner.mts",
+  ])("selects executable Git boundary proof for %s", (source) => {
+    expect(resolveChangedTestTargetPlan([source])).toEqual({
+      mode: "targets",
+      targets: expect.arrayContaining(["test/scripts/ci-git-owner.test.ts"]),
+    });
+  });
+
   it("keeps CI workflow edits on workflow guard tests", () => {
     expectChangedTargets(
       [".github/workflows/ci.yml"],
       [
         "test/scripts/ci-platform-checkout.test.ts",
         "test/scripts/ci-linux-git.test.ts",
+        "test/scripts/ci-git-owner.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/check-workflows.test.ts",

@@ -31,11 +31,7 @@ import {
   LineDurableSendPlanError,
   loadLineDurableSendPlans,
 } from "./durable-send-plan.js";
-import {
-  buildLineMediaMessage,
-  hasLineSpecificMediaOptions,
-  resolveLineOutboundMedia,
-} from "./outbound-media.js";
+import { buildLineMediaMessage } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import {
   createLineQuickReply,
@@ -225,9 +221,8 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         ? runtime.channel.text.chunkMarkdownText(processed.text, chunkLimit)
         : [];
     const mediaUrls = resolveOutboundMediaUrls(payload);
-    const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
     const mediaOptions = {
-      mediaKind: useLineSpecificMedia ? lineData.mediaKind : ("image" as const),
+      mediaKind: lineData.mediaKind,
       previewImageUrl: lineData.previewImageUrl,
       durationMs: lineData.durationMs,
       trackingId: lineData.trackingId,
@@ -239,26 +234,12 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         if (!trimmed) {
           continue;
         }
-        if (!useLineSpecificMedia) {
-          await recordResult(
-            (lineRuntime?.sendMessageLine ?? outboundRuntime.sendMessageLine)(to, "", {
-              ...sendOptions,
-              ...nextDurableSend(),
-              mediaUrl: trimmed,
-            }),
-          );
-          continue;
-        }
-        const resolved = await resolveLineOutboundMedia(trimmed, mediaOptions);
         await recordResult(
           (lineRuntime?.sendMessageLine ?? outboundRuntime.sendMessageLine)(to, "", {
             ...sendOptions,
+            ...mediaOptions,
             ...nextDurableSend(),
-            mediaUrl: resolved.mediaUrl,
-            mediaKind: resolved.mediaKind,
-            previewImageUrl: resolved.previewImageUrl,
-            durationMs: resolved.durationMs,
-            trackingId: resolved.trackingId,
+            mediaUrl: trimmed,
           }),
         );
       }

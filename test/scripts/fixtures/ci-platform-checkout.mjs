@@ -31,14 +31,25 @@ function saveRef(cwd, ref, revision) {
   publish("refs.json", refs);
 }
 
-function recordCommand(tool, cwd, commandArgs) {
-  fs.appendFileSync(commandsFile, `${JSON.stringify({ tool, cwd, args: commandArgs })}\n`);
+function recordCommand(tool, cwd, commandArgs, configuration) {
+  fs.appendFileSync(
+    commandsFile,
+    `${JSON.stringify({ tool, cwd, args: commandArgs, configuration, envProbe: process.env.CI_OWNER_PROBE })}\n`,
+  );
 }
 
 function publish(name, value) {
   const target = path.join(root, name);
   fs.writeFileSync(`${target}.${process.pid}.tmp`, JSON.stringify(value));
   fs.renameSync(`${target}.${process.pid}.tmp`, target);
+}
+
+function stall(attempt) {
+  // Expire only a ready, deliberately stalled tree. Ordinary cancel-* cases
+  // wait for their signal; cancelDuringCleanup needs a tick to enter real drain.
+  if (!scenario.startsWith("cancel-")) {
+    publish(`fetch-tick-${attempt}.json`, attempt);
+  }
 }
 
 function record(pid, role, attempt = 0) {
@@ -140,6 +151,18 @@ async function until(predicate, label, timeout = 4_000) {
   }
 }
 
+async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lease)) {
+  // Readiness belongs to the owned child's lifetime. The supervisor's existing
+  // watchdog bounds startup; an independent short timer can preempt legal Git work.
+  while (!stopped() && child.exitCode === null && child.signalCode === null) {
+    if (predicate()) {
+      return true;
+    }
+    await delay(10);
+  }
+  return false;
+}
+
 function launch(role, attempt) {
   const child = spawn(process.execPath, [fixture, role, root, policyScenario, String(attempt)], {
     stdio: "ignore",
@@ -148,6 +171,7 @@ function launch(role, attempt) {
     throw error;
   });
   child.unref();
+  return child;
 }
 
 function holdLease() {
@@ -216,11 +240,15 @@ async function command() {
     if (mode === "gh") {
       fs.writeSync(
         1,
-        JSON.stringify({
-          state: "open",
-          head: { sha: "a".repeat(40) },
-          base: { repo: { full_name: "fixture/checkout" } },
-        }),
+        options.lsRemoteResults
+          ? args.includes(".status")
+            ? "ahead\n"
+            : `${"c".repeat(40)}\n`
+          : JSON.stringify({
+              state: "open",
+              head: { sha: "a".repeat(40) },
+              base: { repo: { full_name: "fixture/checkout" } },
+            }),
       );
     }
     process.exit(0);
@@ -229,14 +257,17 @@ async function command() {
     throw new Error(`Unexpected fixture mode: ${mode}`);
   }
   let cwd = insideWorkspace(process.cwd());
+  const configuration = [];
   while (args[0] === "-C" || args[0] === "-c") {
     const flag = args.shift();
     const value = args.shift();
     if (flag === "-C") {
       cwd = insideWorkspace(value);
+    } else {
+      configuration.push(value);
     }
   }
-  recordCommand("git", cwd, args);
+  recordCommand("git", cwd, args, configuration);
   const operation = args.shift();
   if (operation === "init") {
     boundary("init");
@@ -257,19 +288,60 @@ async function command() {
       }
       fs.writeFileSync(path.join(directory, ".previous-checkout"), "owned\n");
     }
-  } else if (operation === "fetch") {
+    const gitDir = path.join(directory, ".git");
+    fs.mkdirSync(gitDir, { recursive: true });
+    fs.writeFileSync(path.join(gitDir, "preexisting.lock"), "not invocation-owned\n", {
+      flag: "wx",
+    });
+    if (scenario === "pre-existing-lock") {
+      fs.writeFileSync(path.join(gitDir, "shallow.lock"), "not invocation-owned\n", { flag: "wx" });
+    }
+    if (scenario === "recovery") {
+      const sharedCache = path.join(root, "shared-git-cache");
+      fs.mkdirSync(sharedCache, { recursive: true });
+      fs.symlinkSync(sharedCache, path.join(gitDir, "shared-cache"), "junction");
+    }
+  } else if (operation === "fetch" || operation === "ls-remote") {
     const counter = path.join(root, "attempt.json");
     const attempt = fs.existsSync(counter) ? JSON.parse(fs.readFileSync(counter, "utf8")) + 1 : 1;
-    boundary(`fetch:${attempt}`);
+    boundary(`${operation}:${attempt}`);
     publish("attempt.json", attempt);
     record(process.pid, "parent", attempt);
+    if (operation === "fetch") {
+      const lock = path.join(cwd, ".git/shallow.lock");
+      fs.mkdirSync(path.dirname(lock), { recursive: true });
+      try {
+        fs.writeFileSync(lock, "fetch-owned\n", { flag: "wx" });
+      } catch (error) {
+        if (error.code !== "EEXIST") {
+          throw error;
+        }
+        fs.writeSync(2, "fixture Git lock exists\n");
+        process.exit(128);
+      }
+      // Normal Git exit rolls back locks; forced termination cannot run that cleanup.
+      process.on("SIGTERM", () => {});
+      process.once("exit", () => fs.unlinkSync(lock));
+      if (scenario === "recovery") {
+        fs.writeFileSync(
+          path.join(cwd, ".git/shared-cache", `${attempt}.lock`),
+          "outside Git ownership\n",
+        );
+      }
+    }
     if (options.cancelDuringCleanup) {
       const pid = process.ppid;
       publish("owner.json", { pid, startTime: getProcessStartTime(pid) });
       record(pid, "owner");
     }
-    launch("child", attempt);
-    await until(() => fs.existsSync(path.join(root, `ready-${attempt}.json`)), "tree readiness");
+    const child = launch("child", attempt);
+    if (
+      !(await waitForReady(() => fs.existsSync(path.join(root, `ready-${attempt}.json`)), child))
+    ) {
+      throw new Error(
+        `Git fixture child exited before readiness (${child.exitCode ?? child.signalCode})`,
+      );
+    }
     if (scenario.startsWith("cancel-")) {
       const owned = liveRecords();
       const alive = owned.filter((entry) => entry.attempt === attempt);
@@ -290,19 +362,22 @@ async function command() {
       fs.writeSync(1, `cancellation: ${JSON.stringify({ signal, owner: owner.pid, alive })}\n`);
       process.kill(owner.pid, signal);
     }
-    if (options.fetchResults) {
-      const result = options.fetchResults[attempt - 1] ?? 0;
+    if (options.fetchResults || options.lsRemoteResults) {
+      const remoteResult =
+        operation === "ls-remote" ? options.lsRemoteResults?.[attempt - 1] : undefined;
+      const result = remoteResult?.code ?? options.fetchResults?.[attempt - 1] ?? 0;
+      if (remoteResult) {
+        fs.writeSync(1, remoteResult.output);
+      }
       if (result === "cleanup-failure") {
         fs.writeFileSync(path.join(root, "bin/ps"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
         process.exit(0);
       }
       if (result === "hang") {
-        if (!options.cancelDuringCleanup) {
-          publish(`fetch-tick-${attempt}.json`, attempt);
-        }
+        stall(attempt);
         return;
       }
-      if (result === 0) {
+      if (result === 0 && operation === "fetch") {
         for (const refspec of args.slice(args.indexOf("origin") + 1)) {
           const [source, target] = refspec.replace(/^\+/u, "").split(":");
           const revision = options.mergeSnapshots?.[attempt - 1]?.sha ?? resolveRef(cwd, source);
@@ -332,12 +407,7 @@ async function command() {
     if (scenario === "git-exit-124") {
       process.exit(124);
     }
-    // Expire the two-second fetch budget only after the full tree is ready.
-    // Immutable ticks avoid replacing a clock file held open by Windows readers.
-    // Cancellation scenarios signal from the ready fetch without advancing this clock.
-    if (!scenario.startsWith("cancel-")) {
-      publish(`fetch-tick-${attempt}.json`, attempt);
-    }
+    stall(attempt);
     return;
   } else if (operation === "checkout") {
     boundary(cwd === path.join(workspace, ".ci-harness") ? "harness-checkout" : "checkout");
@@ -364,7 +434,23 @@ async function command() {
     }
   } else if (operation === "rev-parse") {
     boundary("rev-parse");
+    if (args[0] === "--verify") {
+      fs.writeSync(1, "fixture quiet probe stdout\n");
+      fs.writeSync(2, "fixture quiet probe stderr\n");
+      const counter = path.join(root, "attempt.json");
+      const attempt = fs.existsSync(counter) ? JSON.parse(fs.readFileSync(counter, "utf8")) : 0;
+      process.exit(
+        options.baseAvailableAfter !== undefined && attempt >= options.baseAvailableAfter ? 0 : 1,
+      );
+    }
     fs.writeSync(1, `${args.map((ref) => resolveRef(cwd, ref)).join("\n")}\n`);
+  } else if (operation === "check-ref-format") {
+    boundary("check-ref-format");
+    fs.writeSync(1, "fixture quiet probe stdout\n");
+    fs.writeSync(2, "fixture quiet probe stderr\n");
+    process.exit(options.invalidRef ? 1 : 0);
+  } else if (operation === "remote" && args[0] === "get-url") {
+    fs.writeSync(1, "https://example.invalid/fixture.git\n");
   } else if (operation === "show" && args.join(" ").startsWith("-s --format=%P ")) {
     boundary("show-parents");
     const snapshot = options.mergeSnapshots?.find((entry) => entry.sha === args.at(-1));
@@ -561,12 +647,18 @@ async function supervise() {
     });
     // stop() joins the sentinel's actual close through pendingChildren before reporting.
     void track(sentinel);
-    await until(
-      () => stopping || records().some((entry) => entry.role === "sentinel"),
-      "sentinel readiness",
+    const sentinelReady = await waitForReady(
+      () => records().some((entry) => entry.role === "sentinel"),
+      sentinel,
+      () => Boolean(stopping),
     );
     if (stopping) {
       return;
+    }
+    if (!sentinelReady) {
+      throw new Error(
+        `Sentinel exited before readiness (${sentinel.exitCode ?? sentinel.signalCode})`,
+      );
     }
     const checkoutScript = shellPath(path.join(root, "checkout.sh"));
     // Git for Windows' Bash launcher prepends real Git to PATH. Reassert the
@@ -609,21 +701,27 @@ async function supervise() {
     if (shell.pid) {
       record(shell.pid, "shell");
     }
-    if (options.cancelDuringCleanup) {
-      await until(
-        () => fs.existsSync(path.join(root, "cleanup-started.json")),
-        "cleanup readiness",
+    const ready = (name) =>
+      waitForReady(
+        () => fs.existsSync(path.join(root, name)),
+        shell,
+        () => Boolean(stopping),
       );
+    if (options.cancelDuringCleanup && (await ready("cleanup-started.json"))) {
       const owner = JSON.parse(fs.readFileSync(path.join(root, "owner.json"), "utf8"));
       const ownerStatus = fs.readFileSync(`/proc/${owner.pid}/status`, "utf8");
       const parentPid = Number(ownerStatus.match(/^PPid:\s+(\d+)$/mu)?.[1]);
-      // The raw owner is a child of Bash; bind the signal to the birth identity Git observed.
+      // File policies exec into Bash's PID; raw Git owners are its direct children.
+      // Revalidate the observed birth and exact placement after awaited readiness.
       if (
-        parentPid !== shell.pid ||
+        (owner.pid !== shell.pid && parentPid !== shell.pid) ||
         owner.startTime === null ||
-        getProcessStartTime(owner.pid) !== owner.startTime
+        getProcessStartTime(owner.pid) !== owner.startTime ||
+        stopping ||
+        shell.exitCode !== null ||
+        shell.signalCode !== null
       ) {
-        throw new Error("Raw Git owner changed before cleanup cancellation");
+        throw new Error("Git owner changed before cleanup cancellation");
       }
       process.kill(owner.pid, "SIGTERM");
       report.cancelledDuringCleanup = true;

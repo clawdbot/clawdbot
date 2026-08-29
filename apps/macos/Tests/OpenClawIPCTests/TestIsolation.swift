@@ -82,6 +82,8 @@ enum TestIsolation {
         }
         var previousEnv: [String: String?] = [:]
         for (key, value) in env {
+            // Absence is captured state: subscript assignment lets map infer String??,
+            // dropping absent keys instead of preserving them for restoration.
             previousEnv.updateValue(getenv(key).map { String(cString: $0) }, forKey: key)
             if let value {
                 setenv(key, value, 1)

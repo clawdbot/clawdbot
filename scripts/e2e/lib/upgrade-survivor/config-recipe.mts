@@ -16,6 +16,7 @@ type ConfigStep = {
   id: string;
   intent: string;
   argv: string[];
+  prepublishPluginPackages?: string[];
 };
 
 type BaselineAdaptationSummary = { skippedIntents: string[] };
@@ -178,12 +179,16 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   [
     "acpx-openclaw-tools-bridge",
     [
-      configSetJsonFile(
-        "plugins-acpx-openclaw-tools-bridge",
-        "acpx-openclaw-tools-bridge",
-        "plugins",
-        "plugins-acpx-openclaw-tools-bridge.json",
-      ),
+      {
+        ...configSetJsonFile(
+          "plugins-acpx-openclaw-tools-bridge",
+          "acpx-openclaw-tools-bridge",
+          "plugins",
+          "plugins-acpx-openclaw-tools-bridge.json",
+        ),
+        // The candidate externalizes this runtime even when the baseline bundles it.
+        prepublishPluginPackages: ["@openclaw/acpx"],
+      },
     ],
   ],
   [

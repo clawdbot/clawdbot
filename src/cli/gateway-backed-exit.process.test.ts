@@ -490,6 +490,72 @@ describe("gateway-backed CLI process exit", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "runs gateway status through one OpenClaw entry process",
+    async () => {
+      const root = tempDirs.make("openclaw-gateway-status-entry-process-");
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const pidLogPath = path.join(root, "entry-pids");
+      const preloadPath = path.join(root, "track-entry-pid.mjs");
+      const token = "configured-token";
+      const gateway = await startGatewayStabilityRpcServer(token, "issued-device-token");
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ gateway: { mode: "remote", remote: { url: gateway.url, token } } }),
+      );
+      await fs.writeFile(
+        preloadPath,
+        [
+          'import fs from "node:fs";',
+          'const entry = process.argv[1]?.replaceAll("\\\\", "/");',
+          'if (entry?.endsWith("/src/entry.ts")) {',
+          "  fs.appendFileSync(process.env.OPENCLAW_ENTRY_PID_LOG, `${process.pid}\\n`);",
+          "}",
+          "",
+        ].join("\n"),
+      );
+
+      const result = await runIsolatedGatewayCli({
+        args: [
+          "gateway",
+          "status",
+          "--url",
+          gateway.url,
+          "--token",
+          token,
+          "--require-rpc",
+          "--json",
+          "--timeout",
+          "2000",
+        ],
+        root,
+        stateDir,
+        configPath,
+        env: {
+          NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
+          OPENCLAW_ENTRY_PID_LOG: pidLogPath,
+          OPENCLAW_NODE_EXTRA_CA_CERTS_READY: "1",
+          OPENCLAW_NODE_OPTIONS_READY: undefined,
+          OPENCLAW_NO_RESPAWN: undefined,
+        },
+      });
+
+      expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        rpc: { ok: true, kind: "read" },
+      });
+      const entryPids = new Set(
+        (await fs.readFile(pidLogPath, "utf8"))
+          .trim()
+          .split(/\s+/u)
+          .map((value) => Number.parseInt(value, 10)),
+      );
+      expect(entryPids.size).toBe(1);
+    },
+  );
+
   it.each([
     { label: "list", args: ["devices", "list", "--timeout", "250"] },
     { label: "join-code", args: ["devices", "join-code", "--timeout", "250"] },

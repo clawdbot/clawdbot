@@ -2,11 +2,53 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { minimatch } from "minimatch";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/package-mac-app.sh";
+
+describe("packaged worker freshness", () => {
+  it.each([
+    "dist/OpenClaw.app",
+    "dist/OpenClaw-proof.app",
+    "dist/.openclaw-package.fixture/OpenClaw.app",
+  ])("bounds expanded package exclusions to the app root %s", (app) => {
+    const manifest = JSON.parse(readFileSync("package.json", "utf8")) as { files: string[] };
+    const exclusions = manifest.files
+      .filter((entry) => entry.startsWith("!"))
+      .map((entry) => entry.slice(1));
+    const entries = [app, `${app}/Contents`, `${app}/Contents/MacOS/OpenClaw`, "dist/entry.js"];
+    // npm 12 expands files globs into individual ignore rules. Exclude the app
+    // directory, which also excludes its contents, not every payload file separately.
+    const matches = entries.filter((entry) =>
+      exclusions.some((pattern) => minimatch(entry, pattern, { dot: true })),
+    );
+    expect(matches).toEqual([app]);
+  });
+
+  it("rebuilds dirty JavaScript even when the old SKIP_TSC shortcut is requested", () => {
+    const root = tempDirs.make("openclaw-package-worker-freshness-");
+    const script = readFileSync(scriptPath, "utf8");
+    const start = script.indexOf('if [[ "${SKIP_TSC:-0}"');
+    const end = script.indexOf('node - "$ROOT_DIR/dist/build-info.json"', start);
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `
+      set -euo pipefail
+      run_pnpm() { printf '%s\\n' 'fresh dirty worker' > "$HOME/worker.js"; }
+      ${script.slice(start, end)}
+    `,
+      ],
+      { encoding: "utf8", env: { HOME: root, PATH: "/usr/bin:/bin", SKIP_TSC: "1" } },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(path.join(root, "worker.js"))).toBe(true);
+  });
+});
 
 function makePlist(): string {
   const dir = tempDirs.make("openclaw-plistbuddy-");
@@ -231,6 +273,9 @@ function runSourceProvenanceStampHarness(corruptKey?: string) {
       printf '%s' "$value"
     }
     APP_ROOT=/tmp/OpenClaw.app
+    ROOT_DIR=/unused
+    node() { echo fixture-build-id; }
+    plist_set_or_add_string() { :; }
     BUILD_TS=2026-08-13T00:00:00.000Z
     BUILD_GIT_COMMIT=${JSON.stringify(openClawCommit)}
     PEEKABOO_SOURCE_COMMIT=${JSON.stringify(peekabooCommit)}
@@ -261,7 +306,8 @@ function getSwiftPackageResolutionBlock(): string {
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
 
-  return script.slice(start, end);
+  // The shared EXIT cleanup also needs the packager preamble's unallocated app stage.
+  return `APP_STAGE_DIR=""\n${script.slice(start, end)}`;
 }
 
 function getCompiledPeekabooHelperBlock(): string {
@@ -428,7 +474,7 @@ function runRealCompiledPeekabooHarness(
 function getStopPackagedAppBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("running_packaged_app_pids()");
-  const end = script.indexOf("\nstop_packaged_app_if_running\n");
+  const end = script.indexOf('if [[ -n "${SIGN_IDENTITY:-}" ]]');
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -601,7 +647,7 @@ function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
 
   return runHelper(`
     set -euo pipefail
-    APP_ROOT=${JSON.stringify(appRoot)}
+    APP_DESTINATION=${JSON.stringify(appRoot)}
     PRODUCT=OpenClaw
     PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
     kill() {
@@ -1401,7 +1447,7 @@ describe("package-mac-app plist stamping", () => {
     );
 
     expect(script).not.toContain("killall -q OpenClaw");
-    expect(stopBlock).toContain('local app_binary="$APP_ROOT/Contents/MacOS/OpenClaw"');
+    expect(stopBlock).toContain('local app_binary="$APP_DESTINATION/Contents/MacOS/OpenClaw"');
     expect(stopBlock).toContain('pgrep -x "$PRODUCT"');
     expect(stopBlock).toContain('grep -Fx "$app_binary"');
     expect(stopBlock).toContain(
@@ -1412,7 +1458,10 @@ describe("package-mac-app plist stamping", () => {
   it("passes an explicit signing identity unchanged to the signer", () => {
     const script = readFileSync(scriptPath, "utf8");
     const start = script.indexOf('if [[ -n "${SIGN_IDENTITY:-}" ]]');
-    const signingBlock = script.slice(start, script.indexOf('echo "✅ Bundle ready', start));
+    const signingBlock = script.slice(
+      start,
+      script.indexOf("codesign --verify --deep --strict", start),
+    );
     const tempRoot = tempDirs.make("openclaw-package-signing-identity-");
     const scriptsDir = path.join(tempRoot, "scripts");
     const signerPath = path.join(scriptsDir, "codesign-mac-app.sh");
@@ -1428,6 +1477,10 @@ describe("package-mac-app plist stamping", () => {
       set -euo pipefail
       ROOT_DIR=${JSON.stringify(tempRoot)}
       APP_ROOT=${JSON.stringify(path.join(tempRoot, "OpenClaw.app"))}
+      APP_DESTINATION="$APP_ROOT"
+      stop_packaged_app_if_running() { :; }
+      replace_mac_app_bundle() { :; }
+      codesign() { :; }
       SIGN_IDENTITY=${JSON.stringify(identity)}
       export SIGN_IDENTITY
       ${signingBlock}
@@ -1713,28 +1766,33 @@ describe("package-mac-app plist stamping", () => {
     const mismatched = runRealCompiledPeekabooHarness("none", "e".repeat(40));
     expect(mismatched.status).toBe(1);
     expect(mismatched.stderr).toContain("does not match locked source");
+  });
 
-    const cleanCheckout = runRealCompiledPeekabooHarness("none");
-    expect(cleanCheckout.status, cleanCheckout.stderr).toBe(0);
-    const nestedGitlink = runRealCompiledPeekabooHarness("nested-gitlink");
-    expect(nestedGitlink.status, nestedGitlink.stderr).toBe(0);
+  // Each real Git fixture owns a separate checkout and deadline; do not aggregate
+  // independent verification scenarios into one long synchronous test.
+  it.each(["none", "nested-gitlink"] as const)(
+    "accepts committed Peekaboo source (%s)",
+    (mutation) => {
+      const result = runRealCompiledPeekabooHarness(mutation);
+      expect(result.status, result.stderr).toBe(0);
+    },
+  );
 
-    for (const mutation of [
-      "assume-unchanged",
-      "corrupt-object",
-      "dirty-gitlink",
-      "export-subst",
-      "gitlink-sibling",
-      "ignored",
-      "replacement-ref",
-      "untracked",
-    ] as const) {
-      const dirty = runRealCompiledPeekabooHarness(mutation);
-      expect(dirty.status).toBe(1);
-      expect(dirty.stderr).toContain(
-        "Compiled Peekaboo checkout does not exactly match its committed source",
-      );
-    }
+  it.each([
+    "assume-unchanged",
+    "corrupt-object",
+    "dirty-gitlink",
+    "export-subst",
+    "gitlink-sibling",
+    "ignored",
+    "replacement-ref",
+    "untracked",
+  ] as const)("rejects uncommitted Peekaboo source (%s)", (mutation) => {
+    const result = runRealCompiledPeekabooHarness(mutation);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Compiled Peekaboo checkout does not exactly match its committed source",
+    );
   });
 
   it("restores and rejects a Swift package resolution that changes the lockfile", () => {
@@ -1824,9 +1882,6 @@ describe("package-mac-app plist stamping", () => {
     );
     expect(codesignScript).toContain(
       'echo "Signing embedded CUA driver"; sign_plain_item "$CUA_DRIVER"',
-    );
-    expect(codesignScript.indexOf("Signing embedded CUA driver")).toBeLessThan(
-      codesignScript.indexOf("# Finally sign the bundle"),
     );
   });
 

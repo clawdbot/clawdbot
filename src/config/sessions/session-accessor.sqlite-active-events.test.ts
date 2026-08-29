@@ -281,6 +281,7 @@ describe("SQLite active transcript event projection", () => {
     });
 
     expect(page.scannedMessages).toBe(2);
+    expect(page.newestContiguousEventCount).toBe(0);
     expect(page.serializedBytes).toBeLessThanOrEqual(512);
     expect(page.events.map(({ event }) => (event as { id?: unknown }).id)).toEqual(["small"]);
   });

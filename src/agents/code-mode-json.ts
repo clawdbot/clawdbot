@@ -30,16 +30,54 @@ export function toCodeModeJsonSafe(value: unknown): unknown {
   }
 }
 
+export type CodeModeJsonSource =
+  | { kind: "complete"; json: string }
+  | { kind: "prefix"; json: string; originalBytes: number };
+
+export type CodeModeOutputSource = { count: number; source: CodeModeJsonSource };
+
+export const EMPTY_CODE_MODE_OUTPUT: CodeModeOutputSource = {
+  count: 0,
+  source: { kind: "complete", json: "[]" },
+};
+
+function sourceBytes(source: CodeModeJsonSource): number {
+  return source.kind === "prefix" ? source.originalBytes : Buffer.byteLength(source.json, "utf8");
+}
+
+function retainSource(json: string, originalBytes: number, maxBytes: number): CodeModeJsonSource {
+  return originalBytes <= maxBytes
+    ? { kind: "complete", json }
+    : { kind: "prefix", json: truncateUtf8Prefix(json, maxBytes), originalBytes };
+}
+
+/** Capture after guest conversion, before any public projection discards source facts. */
+export function captureCodeModeValue(value: unknown, maxBytes: number): CodeModeJsonSource {
+  const json = JSON.stringify(toCodeModeJsonSafe(value)) ?? "null";
+  return retainSource(json, Buffer.byteLength(json, "utf8"), maxBytes);
+}
+
+export function captureCodeModeOutput(output: unknown[], maxBytes: number): CodeModeOutputSource {
+  if (output.length === 0) {
+    return EMPTY_CODE_MODE_OUTPUT;
+  }
+  const json = JSON.stringify(output.map(toCodeModeJsonSafe));
+  return {
+    count: output.length,
+    source: retainSource(json, Buffer.byteLength(json, "utf8"), maxBytes),
+  };
+}
+
 const TRUNCATION_GUIDANCE = "Output truncated; rerun with narrower args.";
 
-function truncationMarker(serialized: string, maxBytes: number): unknown {
-  const sourceBytes = Buffer.byteLength(serialized, "utf8");
-  let prefix = truncateUtf8Prefix(serialized, maxBytes);
+function truncationMarker(source: CodeModeJsonSource, maxBytes: number) {
+  const originalBytes = sourceBytes(source);
+  let prefix = truncateUtf8Prefix(source.json, maxBytes);
   while (true) {
     const prefixBytes = Buffer.byteLength(prefix, "utf8");
     const candidate = {
       truncated: true,
-      omittedBytes: sourceBytes - prefixBytes,
+      omittedBytes: originalBytes - prefixBytes,
       guidance: TRUNCATION_GUIDANCE,
       prefix,
     };
@@ -51,23 +89,18 @@ function truncationMarker(serialized: string, maxBytes: number): unknown {
   }
 }
 
-/** Bound one JSON-compatible value, preserving a UTF-8-safe serialized prefix. */
+function projectValue(source: CodeModeJsonSource, maxBytes: number): unknown {
+  return source.kind === "complete" && sourceBytes(source) <= maxBytes
+    ? (JSON.parse(source.json) as unknown)
+    : truncationMarker(source, maxBytes);
+}
+
+/** Nested bridge markers are ordinary guest data when later emitted or returned. */
 export function boundCodeModeValue(value: unknown, maxBytes: number): unknown {
-  const safe = toCodeModeJsonSafe(value);
-  const serialized = JSON.stringify(safe) ?? "null";
-  return Buffer.byteLength(serialized, "utf8") <= maxBytes
-    ? safe
-    : truncationMarker(serialized, maxBytes);
+  return projectValue(captureCodeModeValue(value, maxBytes), maxBytes);
 }
 
-function boundOutputArray(output: unknown[], maxBytes: number): unknown[] {
-  if (jsonUtf8Bytes(output) <= maxBytes) {
-    return output;
-  }
-  return [truncationMarker(JSON.stringify(output), maxBytes - 2)];
-}
-
-function boundErrorString(error: string, maxBytes: number): string {
+export function boundCodeModeError(error: string, maxBytes: number): string {
   if (jsonUtf8Bytes(error) <= maxBytes) {
     return error;
   }
@@ -87,75 +120,86 @@ function boundErrorString(error: string, maxBytes: number): string {
   return `${truncateUtf8Prefix(error, low)} [error truncated]`;
 }
 
-type CodeModeResultInput = {
-  output: unknown[];
-  value?: unknown;
-  error?: string;
-  maxOutputBytes: number;
-};
-type BoundedCodeModeResult = {
-  output: unknown[];
-  value?: unknown;
-  error?: string;
-  truncated: boolean;
-  outputTruncated?: boolean;
-};
+type DeliveryReceipt =
+  | { kind: "entries"; count: number }
+  | { kind: "summary"; originalBytes: number; prefixBytes: number };
+type TerminalChannels = { value?: CodeModeJsonSource; error?: string };
+type DeliveredChannels = { output: unknown[]; value?: unknown; error?: string };
 
-/** Bound guest output, the final value, and failure text under one serialized byte budget. */
-export function boundCodeModeResult(
-  params: CodeModeResultInput & { error: string },
-): BoundedCodeModeResult & { error: string };
-export function boundCodeModeResult(params: CodeModeResultInput): BoundedCodeModeResult;
-export function boundCodeModeResult(params: CodeModeResultInput): BoundedCodeModeResult {
-  const hasValue = Object.hasOwn(params, "value");
-  const safeOutput = params.output.map(toCodeModeJsonSafe);
-  const safeValue = hasValue ? toCodeModeJsonSafe(params.value) : undefined;
-  const outputBytes = safeOutput.length > 0 ? jsonUtf8Bytes(safeOutput) : 0;
-  const valueBytes = hasValue ? jsonUtf8Bytes(safeValue) : 0;
-  const errorBytes = params.error === undefined ? 0 : jsonUtf8Bytes(params.error);
-  const error = params.error === undefined ? {} : { error: params.error };
-  if (outputBytes + valueBytes + errorBytes <= params.maxOutputBytes) {
-    return {
-      output: safeOutput,
-      ...(hasValue ? { value: safeValue } : {}),
-      ...error,
-      truncated: false,
-    };
-  }
-  // Failure text stays a string, so callers and the model retain the original
-  // cause even when output competes for space. Short channels donate their share.
-  if (error.error !== undefined) {
-    const reservedOutputBytes = Math.min(
-      outputBytes + valueBytes,
-      Math.floor(params.maxOutputBytes / 2),
-    );
-    error.error = boundErrorString(error.error, params.maxOutputBytes - reservedOutputBytes);
-  }
-  const maxOutputBytes =
-    params.maxOutputBytes - (error.error === undefined ? 0 : jsonUtf8Bytes(error.error));
-  if (safeOutput.length === 0) {
-    return {
-      output: [],
-      ...(hasValue ? { value: boundCodeModeValue(safeValue, maxOutputBytes) } : {}),
-      ...error,
-      truncated: true,
+/** One bounded cumulative source and delivery receipt, shared across every worker leg. */
+export class CodeModeOutputState {
+  source: CodeModeOutputSource = EMPTY_CODE_MODE_OUTPUT;
+  private delivered: DeliveryReceipt = { kind: "entries", count: 0 };
+
+  constructor(private readonly maxBytes: number) {}
+
+  append(leg: CodeModeOutputSource): void {
+    if (leg.count === 0) {
+      return;
+    }
+    if (this.source.count === 0) {
+      this.source = leg;
+      return;
+    }
+    const previous = this.source.source;
+    const originalBytes = sourceBytes(previous) + sourceBytes(leg.source) - 1;
+    // Nonempty array concatenation removes two brackets and adds one comma.
+    // A missing earlier suffix forbids appending any later prefix after that hole.
+    const json =
+      previous.kind === "prefix"
+        ? previous.json
+        : previous.json.slice(0, -1) + "," + leg.source.json.slice(1);
+    this.source = {
+      count: this.source.count + leg.count,
+      source: retainSource(json, originalBytes, this.maxBytes),
     };
   }
 
-  // Preserve both channels when both overflow: reserve half for the final
-  // value, then let short values donate their unused share to guest output.
-  const reservedValueBytes = hasValue ? Math.min(valueBytes, Math.floor(maxOutputBytes / 2)) : 0;
-  const output = boundOutputArray(safeOutput, maxOutputBytes - reservedValueBytes);
-  const outputTruncated = output !== safeOutput;
-  if (!hasValue) {
-    return { output, ...error, truncated: true, outputTruncated };
+  take(params: TerminalChannels & { error: string }): DeliveredChannels & { error: string };
+  take(params?: TerminalChannels): DeliveredChannels;
+  take(params: TerminalChannels = {}): DeliveredChannels {
+    const { count, source } = this.source;
+    const outputBytes = count === 0 ? 0 : sourceBytes(source);
+    const valueBytes = params.value === undefined ? 0 : sourceBytes(params.value);
+    // Short channels donate their unused share; diagnostics retain their leading cause.
+    const error =
+      params.error === undefined
+        ? undefined
+        : boundCodeModeError(
+            params.error,
+            this.maxBytes - Math.min(outputBytes + valueBytes, Math.floor(this.maxBytes / 2)),
+          );
+    const remaining = this.maxBytes - (error === undefined ? 0 : jsonUtf8Bytes(error));
+    const outputAllowance = remaining - Math.min(valueBytes, Math.floor(remaining / 2));
+    let output: unknown[];
+    let chargedOutputBytes: number;
+    if (outputBytes <= outputAllowance) {
+      // A retained prefix has originalBytes > maxBytes and cannot fit this allowance.
+      // SAFETY: Complete output sources encode normalized arrays, never guest metadata.
+      const entries = JSON.parse(source.json) as unknown[];
+      output = entries.slice(this.delivered.kind === "entries" ? this.delivered.count : count);
+      chargedOutputBytes = outputBytes;
+      this.delivered = { kind: "entries", count };
+    } else {
+      const marker = truncationMarker(source, outputAllowance - 2);
+      const prefixBytes = Buffer.byteLength(marker.prefix, "utf8");
+      const prior = this.delivered;
+      output =
+        prior.kind === "summary" &&
+        prior.originalBytes === outputBytes &&
+        prior.prefixBytes === prefixBytes
+          ? []
+          : [marker];
+      chargedOutputBytes = jsonUtf8Bytes([marker]);
+      this.delivered = { kind: "summary", originalBytes: outputBytes, prefixBytes };
+    }
+    // Allocate from the full cumulative projection before suppressing prior delivery.
+    return {
+      output,
+      ...(params.value === undefined
+        ? {}
+        : { value: projectValue(params.value, remaining - chargedOutputBytes) }),
+      ...(error === undefined ? {} : { error }),
+    };
   }
-  const remainingBytes = maxOutputBytes - jsonUtf8Bytes(output);
-  return {
-    output,
-    value: boundCodeModeValue(safeValue, remainingBytes),
-    ...error,
-    truncated: true,
-    outputTruncated,
-  };
 }

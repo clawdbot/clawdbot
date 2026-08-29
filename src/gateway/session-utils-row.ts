@@ -466,6 +466,7 @@ export function buildGatewaySessionRow(params: {
     kind: gatewayKind,
     label: entry?.label,
     icon: entry?.icon,
+    color: entry?.color,
     channelAvatarUrl,
     category: entry?.category,
     boardFace: entry?.boardFace,

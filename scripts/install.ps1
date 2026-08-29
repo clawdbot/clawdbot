@@ -1853,7 +1853,9 @@ function Install-OpenClawFromGit {
         $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = $prevPnpmSideEffectsCache
         $env:NODE_OPTIONS = $prevNodeOptions
         foreach ($entry in $previousPnpmContext) {
-            [Environment]::SetEnvironmentVariable($entry.Name, $entry.Value, "Process")
+            # The Env provider preserves absence; .NET string binding turns
+            # $null into an empty variable on PowerShell 7.5+.
+            Set-Item -LiteralPath "Env:$($entry.Name)" -Value $entry.Value
         }
         if (Test-Path -LiteralPath $pnpmInstallDirectory) {
             Remove-Item -LiteralPath $pnpmInstallDirectory -Recurse -Force
