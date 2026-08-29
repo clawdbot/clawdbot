@@ -1176,6 +1176,8 @@ export const en: TranslationMap = {
     automationAttached: "Automation attached",
     incognito: "Incognito session",
     cloudWorkerPlacement: "Placement: {state}",
+    placementWorkspaceConflict: "{placement} · 1 workspace conflict",
+    placementWorkspaceConflicts: "{placement} · {count} workspace conflicts",
     cloudWorkerDiskWarning: "Cloud session disk space is low",
     cloudWorkerDiskCritical: "Cloud session disk space is critically low",
     cloudWorkerDescendantConflict: "Cloud worker child: 1 workspace conflict",

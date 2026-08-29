@@ -6,10 +6,7 @@ import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protoc
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
-import { registerSessionPlacementEnglish } from "../i18n/locales/en-session-placement.ts";
 import { icons } from "./icons.ts";
-
-registerSessionPlacementEnglish();
 
 export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 

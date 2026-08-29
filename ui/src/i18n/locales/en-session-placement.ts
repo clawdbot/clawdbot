@@ -1,7 +1,8 @@
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
-// Shared placement copy is registered by the chat controls and session badges.
+// Session-placement recovery copy is registered with the lazy chat placement
+// surfaces so device recovery does not tax every Control UI startup.
 const enSessionPlacement = {
   sessionsView: {
     placementFactService: "Service",
@@ -10,8 +11,6 @@ const enSessionPlacement = {
     placementFactState: "State",
     placementFactDisk: "Disk",
     placementDiskFree: "{free} free",
-    placementWorkspaceConflict: "{placement} · 1 workspace conflict",
-    placementWorkspaceConflicts: "{placement} · {count} workspace conflicts",
     runsOnDevice: "Runs on device",
     deviceOffline: "Device offline",
     waitingForDevice: "Waiting for device to reconnect; retry after it returns.",
