@@ -3696,6 +3696,71 @@ describe("gateway session utils", () => {
     });
   });
 
+  test.each([
+    [undefined, undefined, "full"],
+    [{ mode: "deny" }, undefined, "read-only"],
+    [{ mode: "ask" }, undefined, "guarded"],
+    [{ mode: "auto" }, undefined, "workspace"],
+    [{ mode: "full" }, undefined, "full"],
+    [{ mode: "allowlist" }, undefined, undefined],
+    [{ mode: "full" }, { mode: "ask" }, "guarded"],
+    [{ mode: "ask" }, { mode: "auto" }, "workspace"],
+    [{ mode: "auto" }, { mode: "allowlist" }, undefined],
+    [{ mode: "allowlist" }, { mode: "full" }, "full"],
+    [{ security: "deny", ask: "off" }, undefined, "read-only"],
+    [{ security: "allowlist", ask: "on-miss" }, undefined, "guarded"],
+    [{ security: "full", ask: "off" }, undefined, "full"],
+    [{ security: "allowlist", ask: "off" }, undefined, undefined],
+    [{ security: "full", ask: "on-miss" }, undefined, undefined],
+    [{ security: "deny", ask: "on-miss" }, undefined, undefined],
+    [{ security: "deny", ask: "always" }, undefined, undefined],
+    [{ security: "allowlist", ask: "always" }, undefined, undefined],
+    [{ security: "full", ask: "always" }, undefined, undefined],
+    [{ mode: "auto" }, { ask: "on-miss" }, "guarded"],
+    [{ mode: "full" }, { security: "deny" }, "read-only"],
+    [{ mode: "ask" }, { ask: "always" }, undefined],
+    [{ mode: "ask" }, { host: "sandbox" }, "guarded"],
+  ] as const)(
+    "listAgentsForGateway labels global %j plus agent %j as %s",
+    (globalExec, agentExec, expected) => {
+      const cfg: OpenClawConfig = {
+        tools: { exec: globalExec },
+        agents: { entries: { main: { tools: { exec: agentExec } } } },
+      };
+      const original = structuredClone(cfg);
+      const agent = listAgentsForGateway(cfg).agents.find((entry) => entry.id === "main");
+      if (expected === undefined) {
+        expect(agent).not.toHaveProperty("defaultPermissionMode");
+      } else {
+        expect(agent).toHaveProperty("defaultPermissionMode", expected);
+      }
+      expect(cfg).toEqual(original);
+    },
+  );
+
+  test("listAgentsForGateway keeps configured permission labels scoped to their agent", () => {
+    const cfg: OpenClawConfig = {
+      tools: { exec: { mode: "ask" } },
+      agents: {
+        entries: {
+          guarded: {},
+          restricted: { tools: { exec: { mode: "allowlist" } } },
+          workspace: { tools: { exec: { mode: "auto" } } },
+        },
+      },
+    };
+    expect(
+      listAgentsForGateway(cfg).agents.map(({ id, defaultPermissionMode }) => [
+        id,
+        defaultPermissionMode,
+      ]),
+    ).toEqual([
+      ["guarded", "guarded"],
+      ["restricted", undefined],
+      ["workspace", "workspace"],
+    ]);
+  });
+
   test("listAgentsForGateway includes effective workspace + model for default agent", () => {
     const cfg = {
       session: { mainKey: "main" },

@@ -6009,6 +6009,7 @@ export const en: TranslationMap = {
       nextRun: "New permissions apply to the next run.",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
+      defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Full access requires operator.admin access.",
       updateFailed: "Failed to update permissions: {error}",
       modes: {

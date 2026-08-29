@@ -30,6 +30,8 @@ File tools recognize aliases of the session's trusted root and working directory
 
 New sessions, including managed worktree sessions, inherit the configured global or per-agent tool/exec policy when no mode is specified. Creating a worktree pins the working directory without selecting a permission mode. Explicit modes and modes already saved on existing sessions remain unchanged.
 
+The Control UI permission picker labels Default with the agent's configured exec posture when it matches a session mode, for example **Default (Guarded)** for `tools.exec.mode: "ask"`. Global exec settings apply first, then the agent's overrides; without either, the non-sandbox default is full access. Allowlist-only policy and non-equivalent `security`/`ask` pairs, including `ask: "always"`, keep the plain **Default** label. This is display metadata, not an authorization decision or a filesystem-access guarantee: host approval rules, sandbox restrictions, and tool policy still apply. Selecting Default clears the session override; it does not save the displayed mode into the session.
+
 ## Policy precedence and clamping
 
 Session-wide exec policy belongs to the permission mode. When the mode is unset, normal global or per-agent configuration applies. `/exec security=... ask=...` applies only to its message and can only tighten an explicit session mode; `host` and `node` remain session placement defaults. See [Exec session overrides](/tools/exec#session-overrides-exec).

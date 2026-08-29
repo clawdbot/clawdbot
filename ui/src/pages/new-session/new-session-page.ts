@@ -582,6 +582,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
             ? undefined
             : renderChatPermissionPicker({
                 canSelectFull: this.place.isAdmin(),
+                defaultMode: this.place.selectedAgent()?.defaultPermissionMode,
                 disabled:
                   this.submission.submitting ||
                   Boolean(this.submission.pendingPlacement.sessionKey),
