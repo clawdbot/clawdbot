@@ -65,6 +65,7 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
       workspaceDir: "/tmp/workspace",
       prompt: "continue",
       timeoutMs: 1_000,
+      onAutoCompactionSucceeded: vi.fn(),
     },
     state,
     contextEngine: {
@@ -189,6 +190,7 @@ describe("recoverEmbeddedRunTimeout", () => {
       autoCompactionCount: 1,
       lastCompactionTokensAfter: 80_000,
     });
+    expect(input.runParams.onAutoCompactionSucceeded).toHaveBeenCalledWith(1);
     expect(input.armPostCompactionGuard).toHaveBeenCalledOnce();
     expect(input.prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();
   });
