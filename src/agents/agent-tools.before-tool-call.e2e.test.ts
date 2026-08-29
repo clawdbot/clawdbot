@@ -48,8 +48,10 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { beforeToolCallRuntime } from "./agent-tools.before-tool-call.runtime.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { createWriteTool } from "./sessions/index.js";
+import { createReadTool, createWriteTool } from "./sessions/index.js";
+import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -420,46 +422,49 @@ describe("before_tool_call loop detection behavior", () => {
     }
   });
 
-  it("does not activate reconciled churn when loop detection is unconfigured", async () => {
-    const sessionId = "write-churn-unconfigured-session";
-    const sessionKey = "main";
-    const runId = "write-churn-unconfigured-run";
-    const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
-      const targetPath =
-        typeof params === "object" && params !== null && "path" in params
-          ? String(params.path)
-          : "unknown";
-      progressReasonsDuringExecution.push(
-        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-      );
-      return {
-        content: [{ type: "text", text: `wrote ${targetPath}` }],
-        details: { ok: true, path: targetPath },
-      };
-    });
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    const tool = createWrappedTool("write", execute, {
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      runId,
-    });
-    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
-
-    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
-      await expectUnblockedToolExecution(tool, `write-churn-unconfigured-${index}`, {
-        path: paths[index % paths.length] ?? "/tmp/a.md",
-        content: "same content",
+  it.each([
+    { label: "unconfigured", loopDetection: undefined },
+    { label: "disabled", loopDetection: { enabled: false } },
+  ])(
+    "does not warn or activate changed-write churn when loop detection is $label",
+    async (testCase) => {
+      const sessionId = `write-churn-${testCase.label}-session`;
+      const sessionKey = "main";
+      const runId = `write-churn-${testCase.label}-run`;
+      const execute = vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "write complete" }],
+        details: { changed: true },
       });
-    }
-    await expectUnblockedToolExecution(tool, "write-churn-unconfigured-next", {
-      path: "/tmp/a.md",
-      content: "same content",
-    });
+      markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+      const tool = createWrappedTool("write", execute, {
+        agentId: "main",
+        cwd: "/tmp",
+        sessionId,
+        sessionKey,
+        runId,
+        ...(testCase.loopDetection ? { loopDetection: testCase.loopDetection } : {}),
+      });
+      const markChurn = vi.spyOn(beforeToolCallRuntime, "markDiagnosticArgumentChurnObservation");
 
-    expect(progressReasonsDuringExecution.at(-1)).not.toBe("tool_loop:argument_churn");
-  });
+      try {
+        await withToolLoopEvents(async (emitted) => {
+          for (let index = 0; index <= TOOL_LOOP_WARNING_THRESHOLD; index += 1) {
+            await expectUnblockedToolExecution(tool, `write-churn-${testCase.label}-${index}`, {
+              path: "draft.md",
+              content: `synthetic revision ${index}`,
+            });
+          }
+          expect(emitted).toHaveLength(0);
+        });
+        expect(markChurn).not.toHaveBeenCalled();
+        expect(
+          getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
+        ).not.toBe("tool_loop:argument_churn");
+      } finally {
+        markChurn.mockRestore();
+      }
+    },
+  );
 
   it("does not block known poll loops when output progresses", async () => {
     const execute = vi.fn().mockImplementation(async (toolCallId: string) => {
@@ -536,6 +541,142 @@ describe("before_tool_call loop detection behavior", () => {
         toolName: "exec",
       });
     });
+  });
+
+  it("does not activate changed-write liveness below the warning threshold", async () => {
+    const sessionId = "same-target-write-below-threshold-session";
+    const runId = "same-target-write-below-threshold-run";
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "write complete" }],
+      details: { changed: true },
+    });
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      cwd: "/tmp",
+      sessionId,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey: "main", runId });
+    const writeTool = createWrappedTool("write", execute, loopDetectionContext);
+    const markChurn = vi.spyOn(beforeToolCallRuntime, "markDiagnosticArgumentChurnObservation");
+
+    try {
+      for (let index = 0; index < TOOL_LOOP_WARNING_THRESHOLD; index += 1) {
+        await expectUnblockedToolExecution(writeTool, `same-target-write-below-${index}`, {
+          path: "draft.md",
+          content: `synthetic revision ${index}`,
+        });
+      }
+
+      expect(
+        markChurn.mock.calls
+          .map(([observation]) => observation)
+          .filter((observation) => observation.existingOnly),
+      ).not.toContainEqual(expect.objectContaining({ active: true }));
+    } finally {
+      markChurn.mockRestore();
+    }
+  });
+
+  it("warns on same-target changed-write churn while preserving execution and read escape", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-same-target-churn-"));
+    const sessionId = "same-target-write-churn-session";
+    const runId = "same-target-write-churn-run";
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      cwd: tmpDir,
+      sessionId,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey: "main", runId });
+    const writeTool = wrapToolWithBeforeToolCallHook(
+      createWriteTool(tmpDir) as unknown as AnyAgentTool,
+      loopDetectionContext,
+    );
+    const readTool = wrapToolWithBeforeToolCallHook(
+      createReadTool(tmpDir) as unknown as AnyAgentTool,
+      loopDetectionContext,
+    );
+
+    try {
+      for (let index = 0; index < TOOL_LOOP_WARNING_THRESHOLD; index += 1) {
+        await expectUnblockedToolExecution(writeTool, `same-target-write-${index}`, {
+          path: "draft.md",
+          content: `synthetic revision ${index}`,
+        });
+      }
+
+      await withToolLoopEvents(async (emitted) => {
+        await expectUnblockedToolExecution(writeTool, "same-target-write-warning", {
+          path: "notes/../draft.md",
+          content: "synthetic next revision",
+        });
+        expect(emitted).toHaveLength(1);
+        expect(emitted.at(-1)).toMatchObject({
+          type: "tool.loop",
+          level: "warning",
+          action: "warn",
+          detector: "argument_churn",
+          toolName: "write",
+          count: TOOL_LOOP_WARNING_THRESHOLD,
+        });
+      });
+      expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey: "main" })).toMatchObject(
+        {
+          lastProgressReason: "tool_loop:argument_churn",
+        },
+      );
+      await expect(fs.readFile(path.join(tmpDir, "draft.md"), "utf8")).resolves.toBe(
+        "synthetic next revision",
+      );
+
+      await expectUnblockedToolExecution(readTool, "same-target-write-readback", {
+        path: "draft.md",
+      });
+      await withToolLoopEvents(async (emitted) => {
+        await expectUnblockedToolExecution(writeTool, "same-target-write-after-read", {
+          path: "draft.md",
+          content: "verified revision",
+        });
+        expect(emitted).toHaveLength(0);
+      });
+      await expect(fs.readFile(path.join(tmpDir, "draft.md"), "utf8")).resolves.toBe(
+        "verified revision",
+      );
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("activates stable no-progress churn on the sixth completed outcome", async () => {
+    const sessionId = "stable-churn-completion-session";
+    const runId = "stable-churn-completion-run";
+    const markChurn = vi.spyOn(beforeToolCallRuntime, "markDiagnosticArgumentChurnObservation");
+    const tool = createWrappedTool(
+      "write",
+      vi.fn().mockResolvedValue(createStableNoProgressWriteResult()),
+      { ...enabledLoopDetectionContext, sessionId, runId },
+    );
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey: "main", runId });
+
+    try {
+      for (let index = 0; index < 6; index += 1) {
+        await expectUnblockedToolExecution(tool, `stable-churn-completion-${index}`, {
+          path: index % 2 === 0 ? "/tmp/a.md" : "/tmp/b.md",
+          content: "same content",
+        });
+      }
+      const outcomeObservations = markChurn.mock.calls
+        .map(([observation]) => observation)
+        .filter((observation) => observation.existingOnly === true);
+      expect(outcomeObservations).toHaveLength(6);
+      expect(outcomeObservations.slice(0, 5).every((observation) => !observation.active)).toBe(
+        true,
+      );
+      expect(outcomeObservations.at(-1)?.active).toBe(true);
+    } finally {
+      markChurn.mockRestore();
+    }
   });
 
   it("warns on non-strict same-tool argument churn while preserving tool execution", async () => {

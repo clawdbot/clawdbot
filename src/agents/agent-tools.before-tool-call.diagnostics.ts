@@ -12,6 +12,7 @@ import {
   emitTrustedSkillUsedDiagnosticEvent,
   emitTrustedSecurityEvent,
   type DiagnosticEventPrivateData,
+  type DiagnosticToolLoopEvent,
   type DiagnosticToolParamsSummary,
   type DiagnosticToolSource,
   type DiagnosticToolTerminalReason,
@@ -559,11 +560,7 @@ export function summarizeToolParams(params: unknown): DiagnosticToolParamsSummar
   return { kind: "other" };
 }
 
-export function shouldEmitLoopWarning(
-  state: SessionState,
-  warningKey: string,
-  count: number,
-): boolean {
+function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
   if (!state.toolLoopWarningBuckets) {
     state.toolLoopWarningBuckets = new Map();
   }
@@ -574,6 +571,38 @@ export function shouldEmitLoopWarning(
   }
   state.toolLoopWarningBuckets.set(warningKey, bucket);
   pruneMapToMaxSize(state.toolLoopWarningBuckets, MAX_LOOP_WARNING_KEYS);
+  return true;
+}
+
+type ToolLoopWarning = Pick<
+  DiagnosticToolLoopEvent,
+  "detector" | "count" | "message" | "pairedToolName"
+> & { warningKey?: string };
+
+export function emitLoopWarning(args: {
+  ctx: HookContext;
+  sessionState: SessionState;
+  toolName: string;
+  warning: ToolLoopWarning;
+  logToolLoopAction: typeof import("../logging/diagnostic.js").logToolLoopAction;
+}): boolean {
+  const baseWarningKey = args.warning.warningKey ?? `${args.warning.detector}:${args.toolName}`;
+  const warningKey = args.ctx.runId ? `${args.ctx.runId}:${baseWarningKey}` : baseWarningKey;
+  if (!shouldEmitLoopWarning(args.sessionState, warningKey, args.warning.count)) {
+    return false;
+  }
+  log.warn(`Loop warning for ${args.toolName}: ${args.warning.message}`);
+  args.logToolLoopAction({
+    sessionKey: args.ctx.sessionKey,
+    sessionId: args.ctx.sessionId,
+    toolName: args.toolName,
+    level: "warning",
+    action: "warn",
+    detector: args.warning.detector,
+    count: args.warning.count,
+    message: args.warning.message,
+    ...(args.warning.pairedToolName ? { pairedToolName: args.warning.pairedToolName } : {}),
+  });
   return true;
 }
 
@@ -603,14 +632,19 @@ export async function reconcileLoopCallExecutionParams(args: {
       toolParams: args.toolParams,
       toolCallId: args.toolCallId,
       runId: args.ctx.runId,
+      cwd: args.ctx.cwd ?? args.ctx.workspaceDir,
       warningThreshold: resolveToolLoopWarningThreshold(),
     });
-    markDiagnosticArgumentChurnObservation({
-      sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx.sessionId,
-      runId: args.ctx.runId,
-      active: churn.active,
-    });
+    if (churn.active || churn.executionParamsChanged) {
+      // A trusted novel rewrite can clear before execution; unchanged duplicate
+      // preparation cannot, because its completed outcome owns any later clear.
+      markDiagnosticArgumentChurnObservation({
+        sessionKey: args.ctx.sessionKey,
+        sessionId: args.ctx.sessionId,
+        runId: args.ctx.runId,
+        active: churn.active,
+      });
+    }
   } catch (err) {
     log.warn(
       `tool loop execution-param reconciliation failed: tool=${args.toolName} error=${String(err)}`,
@@ -635,10 +669,13 @@ export async function recordLoopOutcome(args: {
   let recordedOutcome: ToolOutcomeObservation | undefined;
   try {
     const {
-      getArgumentChurnNoProgressStreak,
+      buildArgumentChurnWarning,
+      getToolArgumentChurnStreak,
       getDiagnosticSessionState,
+      logToolLoopAction,
       markDiagnosticArgumentChurnObservation,
       recordToolCallOutcome,
+      resolveToolLoopWarningThreshold,
     } = await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
@@ -652,21 +689,45 @@ export async function recordLoopOutcome(args: {
       error: args.error,
       config: args.ctx.loopDetection,
       ...(args.ctx.runId && { runId: args.ctx.runId }),
+      cwd: args.ctx.cwd ?? args.ctx.workspaceDir,
     });
-    const churnContinues =
-      record !== undefined &&
-      getArgumentChurnNoProgressStreak(
-        (sessionState.toolCallHistory ?? []).filter((call) => call.runId === record.runId),
-        record.toolName,
-        record.argsHash,
-      ).count > 0;
-    markDiagnosticArgumentChurnObservation({
-      sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx.sessionId,
-      runId: args.ctx.runId,
-      active: churnContinues,
-      existingOnly: true,
-    });
+    if (args.ctx.loopDetection?.enabled === true) {
+      const scopedHistory = record
+        ? (sessionState.toolCallHistory ?? []).filter((call) => call.runId === record.runId)
+        : [];
+      const churn = record
+        ? getToolArgumentChurnStreak(
+            record.outcomeKind === "write-mutation"
+              ? scopedHistory.filter((call) => call !== record)
+              : scopedHistory,
+            record,
+          )
+        : { count: 0, variantCount: 0 };
+      const warningThreshold = resolveToolLoopWarningThreshold();
+      const writeMutationAtWarning =
+        churn.kind === "write_mutation" && churn.count >= warningThreshold;
+      const churnContinues =
+        churn.count > 0 && (churn.kind !== "write_mutation" || writeMutationAtWarning);
+      if (record && writeMutationAtWarning) {
+        const warning = buildArgumentChurnWarning(record.toolName, churn);
+        emitLoopWarning({
+          ctx: args.ctx,
+          sessionState,
+          toolName: record.toolName,
+          warning,
+          logToolLoopAction,
+        });
+      }
+      // Parallel batches first gain mutation-threshold evidence from completed
+      // outcomes; stable no-progress reconciliation still requires an existing lease.
+      markDiagnosticArgumentChurnObservation({
+        sessionKey: args.ctx.sessionKey,
+        sessionId: args.ctx.sessionId,
+        runId: args.ctx.runId,
+        active: churnContinues,
+        existingOnly: !writeMutationAtWarning,
+      });
+    }
     if (record?.resultHash && args.ctx.onToolOutcome) {
       recordedOutcome = {
         toolName: record.toolName,

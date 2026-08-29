@@ -1,7 +1,8 @@
 import { normalizeOptionalString as normalizeRunId } from "@openclaw/normalization-core/string-coerce";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
-import { getArgumentChurnNoProgressStreak } from "./tool-loop-argument-churn.js";
+import { getToolArgumentChurnStreak } from "./tool-loop-argument-churn.js";
 import { hashToolCall } from "./tool-loop-detection.js";
+import { hashWriteMutationTarget } from "./tool-loop-write-outcome.js";
 
 /**
  * Rebind the pending admission record to the arguments that will actually
@@ -15,12 +16,23 @@ export function reconcileToolCallExecutionParams(
     toolParams: unknown;
     toolCallId?: string;
     runId?: string;
+    cwd?: string;
     warningThreshold: number;
   },
-): { active: boolean; count: number; variantCount: number } {
+): ReturnType<typeof getToolArgumentChurnStreak> & {
+  active: boolean;
+  matchedPendingCall: boolean;
+  executionParamsChanged: boolean;
+} {
   const history = state.toolCallHistory;
   if (!history) {
-    return { active: false, count: 0, variantCount: 0 };
+    return {
+      active: false,
+      count: 0,
+      variantCount: 0,
+      matchedPendingCall: false,
+      executionParamsChanged: false,
+    };
   }
 
   const runId = normalizeRunId(params.runId);
@@ -41,16 +53,30 @@ export function reconcileToolCallExecutionParams(
       continue;
     }
 
+    const executionParamsChanged = call.argsHash !== argsHash;
     call.argsHash = argsHash;
+    call.mutationTargetHash = hashWriteMutationTarget(
+      params.toolName,
+      params.toolParams,
+      params.cwd,
+    );
     const scopedHistory = history
       .slice(0, index)
       .filter((record) => normalizeRunId(record.runId) === runId);
-    const churn = getArgumentChurnNoProgressStreak(scopedHistory, params.toolName, argsHash);
+    const churn = getToolArgumentChurnStreak(scopedHistory, call);
     return {
       active: churn.count >= params.warningThreshold,
+      matchedPendingCall: true,
+      executionParamsChanged,
       ...churn,
     };
   }
 
-  return { active: false, count: 0, variantCount: 0 };
+  return {
+    active: false,
+    count: 0,
+    variantCount: 0,
+    matchedPendingCall: false,
+    executionParamsChanged: false,
+  };
 }

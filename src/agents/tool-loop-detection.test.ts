@@ -710,6 +710,212 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("warns on repeated changed writes to one target without vetoing the next call", () => {
+      const state = createState();
+      const targetPath = "/tmp/draft.md";
+
+      for (let index = 0; index < WARNING_THRESHOLD; index += 1) {
+        const content = `synthetic revision ${index}`;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content },
+          {
+            content: [{ type: "text", text: "write complete" }],
+            details: {
+              changed: true,
+              created: index === 0,
+              diff: `+${content}`,
+              patch: `--- ${targetPath}\n+++ ${targetPath}\n+${content}`,
+            },
+          },
+          index,
+        );
+      }
+
+      const nextParams = { path: targetPath, content: "synthetic next revision" };
+      expect(
+        detectToolCallLoop(state, "write", nextParams, enabledLoopDetectionConfig),
+      ).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "argument_churn",
+        count: WARNING_THRESHOLD,
+        livenessSignal: "argument_churn",
+      });
+      expect(state.toolCallHistory).toHaveLength(WARNING_THRESHOLD);
+    });
+
+    it("resets changed-write churn after target escape or verification", () => {
+      const state = createState();
+      const targetPath = "/tmp/draft.md";
+      const changedResult = {
+        content: [{ type: "text", text: "write complete" }],
+        details: { changed: true, created: false },
+      };
+      for (let index = 0; index < WARNING_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: `revision ${index}` },
+          changedResult,
+          index,
+        );
+      }
+
+      expect(
+        detectToolCallLoop(
+          state,
+          "write",
+          { path: "/tmp/other.md", content: "other" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toEqual({ stuck: false });
+
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: targetPath },
+        { content: [{ type: "text", text: "verified" }], details: { ok: true } },
+        WARNING_THRESHOLD,
+      );
+      expect(
+        detectToolCallLoop(
+          state,
+          "write",
+          { path: targetPath, content: "verified revision" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toEqual({ stuck: false });
+    });
+
+    it("does not treat a repeated body as changed-write argument churn", () => {
+      const state = createState();
+      const targetPath = "/tmp/draft.md";
+      for (let index = 0; index < WARNING_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: `revision ${index}` },
+          {
+            content: [{ type: "text", text: "write complete" }],
+            details: { changed: true, created: false },
+          },
+          index,
+        );
+      }
+      expect(
+        detectToolCallLoop(
+          state,
+          "write",
+          { path: targetPath, content: "revision 9" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toEqual({ stuck: false });
+    });
+
+    it("normalizes built-in write path aliases against the execution cwd", () => {
+      const state = createState();
+      const scope = { cwd: "/tmp/workspace" };
+      const fileUrl = "file:///tmp/workspace/draft.md";
+      for (let index = 0; index < WARNING_THRESHOLD; index += 1) {
+        const params = {
+          path: index % 2 === 0 ? "@draft.md" : fileUrl,
+          content: `revision ${index}`,
+        };
+        const toolCallId = `write-alias-${index}`;
+        recordToolCall(state, "write", params, toolCallId, enabledLoopDetectionConfig, scope);
+        recordToolCallOutcome(state, {
+          toolName: "write",
+          toolParams: params,
+          toolCallId,
+          result: {
+            content: [{ type: "text", text: "write complete" }],
+            details: { changed: true, created: false },
+          },
+          config: enabledLoopDetectionConfig,
+          cwd: scope.cwd,
+        });
+      }
+      expect(
+        detectToolCallLoop(
+          state,
+          "write",
+          { path: "notes/../draft.md", content: "next revision" },
+          enabledLoopDetectionConfig,
+          scope,
+        ),
+      ).toMatchObject({
+        stuck: true,
+        detector: "argument_churn",
+        count: WARNING_THRESHOLD,
+      });
+    });
+
+    it("scopes changed-write warning buckets to the mutation target", () => {
+      const warningKeys = ["/tmp/first.md", "/tmp/second.md"].map((targetPath) => {
+        const state = createState();
+        for (let index = 0; index < WARNING_THRESHOLD; index += 1) {
+          recordSuccessfulCall(
+            state,
+            "write",
+            { path: targetPath, content: `revision ${index}` },
+            {
+              content: [{ type: "text", text: "write complete" }],
+              details: { changed: true, created: false },
+            },
+            index,
+          );
+        }
+        const result = detectToolCallLoop(
+          state,
+          "write",
+          { path: targetPath, content: "next revision" },
+          enabledLoopDetectionConfig,
+        );
+        if (!result.stuck) {
+          throw new Error("expected same-target write churn warning");
+        }
+        expect(result).toMatchObject({ detector: "argument_churn" });
+        return result.warningKey;
+      });
+
+      expect(warningKeys[0]).toBeTypeOf("string");
+      expect(warningKeys[1]).toBeTypeOf("string");
+      expect(warningKeys[0]).not.toBe(warningKeys[1]);
+    });
+
+    it("keeps whitespace-distinct write targets separate", () => {
+      const state = createState();
+      const scope = { cwd: "/tmp/workspace" };
+      for (let index = 0; index < WARNING_THRESHOLD; index += 1) {
+        const params = { path: "draft.md", content: `revision ${index}` };
+        const toolCallId = `write-whitespace-${index}`;
+        recordToolCall(state, "write", params, toolCallId, enabledLoopDetectionConfig, scope);
+        recordToolCallOutcome(state, {
+          toolName: "write",
+          toolParams: params,
+          toolCallId,
+          result: {
+            content: [{ type: "text", text: "write complete" }],
+            details: { changed: true, created: false },
+          },
+          config: enabledLoopDetectionConfig,
+          cwd: scope.cwd,
+        });
+      }
+
+      expect(
+        detectToolCallLoop(
+          state,
+          "write",
+          { path: " draft.md ", content: "separate target" },
+          enabledLoopDetectionConfig,
+          scope,
+        ),
+      ).toEqual({ stuck: false });
+    });
+
     it("warns on repeated stable argument churn without vetoing the next call", () => {
       const state = createState();
       const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
@@ -845,7 +1051,35 @@ describe("tool-loop-detection", () => {
         warningThreshold: 6,
       });
 
-      expect(reconciled).toEqual({ active: true, count: 6, variantCount: 2 });
+      expect(reconciled).toEqual({
+        active: true,
+        count: 6,
+        variantCount: 2,
+        matchedPendingCall: true,
+        executionParamsChanged: true,
+      });
+    });
+
+    it("reports unchanged prepared params without treating them as an escape", () => {
+      const state = createState();
+      const params = { path: "/tmp/draft.md", content: "same content" };
+      recordToolCall(state, "write", params, "prepared-call", undefined, { runId: "run-1" });
+
+      expect(
+        reconcileToolCallExecutionParams(state, {
+          toolName: "write",
+          toolParams: params,
+          toolCallId: "prepared-call",
+          runId: "run-1",
+          warningThreshold: 6,
+        }),
+      ).toEqual({
+        active: false,
+        count: 0,
+        variantCount: 0,
+        matchedPendingCall: true,
+        executionParamsChanged: false,
+      });
     });
 
     it("does not reconcile a completed loop veto as a pending call", () => {
@@ -870,7 +1104,13 @@ describe("tool-loop-detection", () => {
           toolParams: { path: "/tmp/rewritten.md", content: "same content" },
           warningThreshold: 6,
         }),
-      ).toEqual({ active: false, count: 0, variantCount: 0 });
+      ).toEqual({
+        active: false,
+        count: 0,
+        variantCount: 0,
+        matchedPendingCall: true,
+        executionParamsChanged: true,
+      });
       expect(state.toolCallHistory[0]?.argsHash).not.toBe("pending-args");
       expect(state.toolCallHistory[1]?.argsHash).toBe("vetoed-args");
     });
