@@ -102,6 +102,7 @@ describe("chat pane assistant identity snapshots", () => {
         },
       ];
 
+      pane.state.loadAssistantIdentity = vi.fn(async () => undefined);
       context.agentSelection.set("research");
 
       expect(pane.state.chatSessionApprovalQueue).toEqual([]);

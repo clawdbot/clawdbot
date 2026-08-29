@@ -432,13 +432,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         assistantAgentId: "main",
         defaultAgentId: "main",
-        deferredMethods: [
-          "models.authStatus",
-          "models.authStatus",
-          "models.authStatus",
-          "models.authStatus",
-          "agent.identity.get",
-        ],
+        deferredMethods: ["models.authStatus", "models.authStatus", "agent.identity.get"],
         methodResponses: {
           "agent.identity.get": {
             cases: [
@@ -476,12 +470,25 @@ suite.define(() => {
       await setOwnershipProofCue(page, "Selected agent: Main | Main auth request delayed");
       await pauseForOwnershipProof(page);
 
+      await gateway.deferNext("models.authStatus", { agentId: "work" });
+      await gateway.deferNext("models.authStatus", { agentId: "work" });
       await gateway.deferNext("agent.identity.get", { agentId: "work" });
       await setSelectedAgent(page, "work");
       await expect.poll(async () => (await visibleAuthState(page)).agentId).toBe("work");
       await expect
         .poll(async () => (await gateway.getRequests("models.authStatus")).length)
         .toBeGreaterThanOrEqual(3);
+      await expect
+        .poll(() => visibleAuthState(page))
+        .toEqual({
+          account: null,
+          agentId: "work",
+          displayName: null,
+          error: null,
+          plan: null,
+          ts: null,
+        });
+      await gateway.deferNext("models.authStatus", { agentId: "work" });
       await gateway.emitGatewayEvent("presence", {
         presence: [
           {
@@ -491,8 +498,16 @@ suite.define(() => {
           },
         ],
       });
-      await expect.poll(async () => (await visibleAuthState(page)).agentId).toBe("work");
-      popover = await openVisibleQuotaPopover(page);
+      await expect
+        .poll(() => visibleAuthState(page))
+        .toEqual({
+          account: null,
+          agentId: "work",
+          displayName: null,
+          error: null,
+          plan: null,
+          ts: null,
+        });
       await setOwnershipProofCue(page, "Selected agent: Work | Work auth loading");
       await pauseForOwnershipProof(page);
       if (captureOwnershipProof) {
@@ -511,7 +526,14 @@ suite.define(() => {
       });
       await page.waitForTimeout(100);
       const delayedMainState = await visibleAuthState(page);
-      popover = await openVisibleQuotaPopover(page);
+      expect(delayedMainState).toEqual({
+        account: null,
+        agentId: "work",
+        displayName: null,
+        error: null,
+        plan: null,
+        ts: null,
+      });
       await setOwnershipProofCue(
         page,
         delayedMainState.account === "main@example.test"
@@ -554,8 +576,9 @@ suite.define(() => {
         ),
       ).not.toHaveLength(0);
 
-      await gateway.resolveDeferred("models.authStatus");
-      await gateway.resolveDeferred("models.authStatus");
+      for (let pending = workAuthRequests.length; pending > 0; pending -= 1) {
+        await gateway.resolveDeferred("models.authStatus");
+      }
       await gateway.resolveDeferred("agent.identity.get", {
         agentId: "work",
         name: "Work Agent",
