@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHomeCore } from "../plugin-sdk/test-helpers/temp-home.js";
-import { captureFullEnv, withEnvAsync } from "./env.js";
+import { captureEnv, captureFullEnv, withEnvAsync } from "./env.js";
 import { createTempHomeEnv } from "./temp-home.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -18,6 +18,63 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("createTempHomeEnv", () => {
+  it.each(["directory", "environment"])(
+    "rolls back failed %s acquisition without removing a sibling home",
+    async (stage) => {
+      const parent = await fs.mkdtemp(path.join(os.tmpdir(), "temp-home-acquisition-"));
+      const prefix = path.join(path.basename(parent), "shared-");
+      const sibling = await createTempHomeEnv(prefix);
+      const sharedRoot = path.dirname(sibling.home);
+      const marker = path.join(sibling.home, "keep.txt");
+      await fs.writeFile(marker, "sibling");
+      try {
+        await withEnvAsync({ USERPROFILE: undefined, OPENCLAW_STATE_DIR: "" }, async () => {
+          const keys = ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "OPENCLAW_STATE_DIR"];
+          const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+          const snapshot = captureEnv(keys);
+          const fault = new Error(`failed ${stage} acquisition`);
+          const mkdir = fs.mkdir;
+          const set = Reflect.set;
+          const faultSpy =
+            stage === "directory"
+              ? vi.spyOn(fs, "mkdir").mockImplementationOnce(async (...args) => {
+                  await mkdir(...args);
+                  throw fault;
+                })
+              : vi.spyOn(Reflect, "set").mockImplementation((...args) => {
+                  const result = set(...args);
+                  const [target, key] = args;
+                  if (target === process.env && key === "USERPROFILE") {
+                    faultSpy.mockRestore();
+                    throw fault;
+                  }
+                  return result;
+                });
+          try {
+            await expect(createTempHomeEnv(prefix)).rejects.toBe(fault);
+            expect(Object.fromEntries(keys.map((key) => [key, process.env[key]]))).toEqual(
+              previous,
+            );
+            expect(await fs.readdir(sharedRoot)).toEqual([path.basename(sibling.home)]);
+            expect(await fs.readFile(marker, "utf8")).toBe("sibling");
+            faultSpy.mockRestore();
+            const recovered = await createTempHomeEnv(prefix);
+            expect(path.dirname(recovered.home)).toBe(sharedRoot);
+            expect(recovered.home).not.toBe(sibling.home);
+            await recovered.restore();
+            expect(await fs.readdir(sharedRoot)).toEqual([path.basename(sibling.home)]);
+          } finally {
+            faultSpy.mockRestore();
+            snapshot.restore();
+          }
+        });
+      } finally {
+        await sibling.restore();
+        await fs.rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("sets home env vars and restores them on cleanup", async () => {
     const previousHome = process.env.HOME;
     const previousUserProfile = process.env.USERPROFILE;
