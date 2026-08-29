@@ -139,6 +139,8 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 
 describe("scripts/lib/docker-e2e-plan", () => {
   it.each([
+    ["codex-media-path", ["@openclaw/codex"]],
+    ["live-mcp-code-mode-gateway", ["@openclaw/codex"]],
     ["release-typed-onboarding", ["@openclaw/codex"]],
     ["npm-onboard-channel-agent", ["@openclaw/codex"]],
     ["npm-onboard-discord-channel-agent", ["@openclaw/codex"]],
@@ -1362,6 +1364,25 @@ describe("scripts/lib/docker-e2e-plan", () => {
       package: false,
       prepublishPluginRegistry: false,
     });
+  });
+
+  it("preserves the shared image selection when launching the live gateway lane", () => {
+    const root = tempDirs.make("openclaw-live-gateway-image-");
+    const script = join(root, "scripts/test-live-gateway-models-docker.sh");
+    mkdirSync(dirname(script), { recursive: true });
+    writeFileSync(script, 'printf "%s\\n" "$OPENCLAW_IMAGE"\n');
+    const lane = requireFirstLane(planFor({ selectedLaneNames: ["live-gateway"] }));
+
+    const image = execFileSync("bash", ["-c", lane.command], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR: root,
+        OPENCLAW_IMAGE: "openclaw:shared-candidate",
+      },
+    });
+
+    expect(image.trim()).toBe("openclaw:shared-candidate");
   });
 
   it("derives live Docker credentials from lane resources", () => {
