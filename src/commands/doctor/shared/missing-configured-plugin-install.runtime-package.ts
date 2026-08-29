@@ -1,9 +1,11 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import {
   compareOpenClawReleaseVersions,
   parseRegistryNpmSpec,
+  resolveOpenClawReleaseCohortVersion,
 } from "../../../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../../../infra/update-channels.js";
 import { safeRealpathSync } from "../../../plugins/path-safety.js";
@@ -16,7 +18,6 @@ import {
   VERSION_BOUND_RUNTIME_PLUGIN_IDS,
 } from "./configured-runtime-plugin-installs.js";
 
-const OPENCLAW_BETA_COMPANION_VERSION_RE = /^(\d{4}\.[1-9]\d?\.[1-9]\d?)-beta\.[1-9]\d*$/;
 const OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE =
   /^(\d{4}\.[1-9]\d?\.[1-9]\d?)(?:-beta\.[1-9]\d*)?$/;
 
@@ -84,13 +85,103 @@ function resolveInstalledRuntimePackageVersion(params: {
   );
 }
 
-function betaCompanionMatchesCurrentStableVersion(params: {
-  installedVersion: string;
+function resolveOpenClawCompanionReleaseBase(version: string): string | undefined {
+  const cohortVersion = resolveOpenClawReleaseCohortVersion(version);
+  return OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE.exec(cohortVersion)?.[1];
+}
+
+export function versionBoundRuntimePackageVersionMatchesReleaseCohort(params: {
+  version: string | undefined;
   currentVersion: string;
+  updateChannel: UpdateChannel;
 }): boolean {
-  const installedBase = OPENCLAW_BETA_COMPANION_VERSION_RE.exec(params.installedVersion)?.[1];
-  const currentBase = OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE.exec(params.currentVersion)?.[1];
+  const version = normalizeOptionalLowercaseString(params.version);
+  const currentVersion = normalizeOptionalLowercaseString(params.currentVersion);
+  if (!version || !currentVersion) {
+    return false;
+  }
+  const currentCohortVersion = resolveOpenClawReleaseCohortVersion(currentVersion);
+  if (params.updateChannel !== "beta") {
+    return version === currentCohortVersion;
+  }
+  const installedBase = resolveOpenClawCompanionReleaseBase(version);
+  const currentBase = resolveOpenClawCompanionReleaseBase(currentCohortVersion);
   return Boolean(installedBase && currentBase && installedBase === currentBase);
+}
+
+export function describeVersionBoundRuntimeReleaseCohort(params: {
+  currentVersion: string;
+  updateChannel: UpdateChannel;
+}): string {
+  const currentCohortVersion = resolveOpenClawReleaseCohortVersion(params.currentVersion.trim());
+  if (params.updateChannel !== "beta") {
+    return currentCohortVersion;
+  }
+  const currentBase = resolveOpenClawCompanionReleaseBase(currentCohortVersion);
+  return currentBase ? `${currentBase} beta` : currentCohortVersion;
+}
+
+async function readInstalledRuntimePayloadVersion(params: {
+  record: PluginInstallRecord | undefined;
+  env: NodeJS.ProcessEnv;
+}): Promise<string | undefined> {
+  const installPath =
+    params.record?.source === "npm" ? params.record.installPath?.trim() : undefined;
+  if (!installPath) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(
+      await readFile(path.join(resolveUserPath(installPath, params.env), "package.json"), "utf8"),
+    ) as { version?: unknown };
+    return typeof parsed.version === "string" && parsed.version.trim()
+      ? parsed.version.trim()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function versionBoundRuntimeInstallRecordMatchesReleaseCohort(params: {
+  record: PluginInstallRecord | undefined;
+  env: NodeJS.ProcessEnv;
+  currentVersion: string;
+  updateChannel: UpdateChannel;
+}): Promise<boolean> {
+  const payloadVersion = await readInstalledRuntimePayloadVersion(params);
+  return [params.record?.version, params.record?.resolvedVersion, payloadVersion].every((version) =>
+    versionBoundRuntimePackageVersionMatchesReleaseCohort({
+      version,
+      currentVersion: params.currentVersion,
+      updateChannel: params.updateChannel,
+    }),
+  );
+}
+
+export function preserveExactVersionBoundRuntimeSelector(params: {
+  previousRecord: PluginInstallRecord | undefined;
+  repairedRecord: PluginInstallRecord;
+}): PluginInstallRecord | undefined {
+  const previousSpec = params.previousRecord?.spec
+    ? parseRegistryNpmSpec(params.previousRecord.spec)
+    : null;
+  if (previousSpec?.selectorKind !== "exact-version") {
+    return params.repairedRecord;
+  }
+  const resolvedSpec = params.repairedRecord.resolvedSpec
+    ? parseRegistryNpmSpec(params.repairedRecord.resolvedSpec)
+    : null;
+  if (
+    resolvedSpec?.selectorKind !== "exact-version" ||
+    resolvedSpec.name !== previousSpec.name ||
+    !params.repairedRecord.resolvedSpec
+  ) {
+    return undefined;
+  }
+  return {
+    ...params.repairedRecord,
+    spec: params.repairedRecord.resolvedSpec,
+  };
 }
 
 function installedRuntimePackageVersionIsStale(params: {
@@ -101,17 +192,12 @@ function installedRuntimePackageVersionIsStale(params: {
   if (!params.installedVersion) {
     return false;
   }
-  if (
-    params.updateChannel === "beta" &&
-    betaCompanionMatchesCurrentStableVersion({
-      installedVersion: params.installedVersion,
-      currentVersion: params.currentVersion,
-    })
-  ) {
+  if (versionBoundRuntimePackageVersionMatchesReleaseCohort(params)) {
     return false;
   }
-  const comparison = compareOpenClawReleaseVersions(params.installedVersion, params.currentVersion);
-  return comparison === null ? params.installedVersion !== params.currentVersion : comparison < 0;
+  const currentCohortVersion = resolveOpenClawReleaseCohortVersion(params.currentVersion);
+  const comparison = compareOpenClawReleaseVersions(params.installedVersion, currentCohortVersion);
+  return comparison === null ? params.installedVersion !== currentCohortVersion : comparison < 0;
 }
 
 export function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
