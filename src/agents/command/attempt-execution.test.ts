@@ -330,7 +330,7 @@ describe("sessionTranscriptHasContent", () => {
 
   const assistantMessage = () =>
     buildAssistantMessage({
-      model: { api: "test", provider: "test", id: "test-model" },
+      model: { api: "test", provider: "test", id: "vaporeon-alpha" },
       content: [{ type: "text", text: "persisted answer" }],
       stopReason: "stop",
       usage: buildUsageWithNoCost({}),
