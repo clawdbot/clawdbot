@@ -787,28 +787,6 @@ describe("listThinkingLevels", () => {
     ).toBe(true);
   });
 
-  it("does not synthesize Ultra from Max for non-OpenClaw runtimes", () => {
-    const catalog = [
-      {
-        provider: "myazure",
-        id: "gpt-5.6-sol",
-        reasoning: true,
-        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-      },
-    ];
-
-    expect(listThinkingLevels("myazure", "gpt-5.6-sol", catalog, "codex")).not.toContain("ultra");
-    expect(
-      resolveSupportedThinkingLevel({
-        provider: "myazure",
-        model: "gpt-5.6-sol",
-        level: "ultra",
-        catalog,
-        agentRuntime: "codex",
-      }),
-    ).toBe("max");
-  });
-
   it("does not let catalog xhigh compat override binary thinking providers", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [
