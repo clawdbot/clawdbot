@@ -2,8 +2,8 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildOpenAIProvider } from "../../../../extensions/openai/api.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { loadBundledPluginPublicSurface } from "../../../plugin-sdk/test-helpers/public-surface-loader.js";
 import { setCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata.test-support.js";
 import { loadPluginManifest } from "../../../plugins/manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
@@ -13,6 +13,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
+import type { ProviderPlugin } from "../../../plugins/types.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
@@ -86,9 +87,13 @@ describe("selected route thinking metadata at runtime preparation", () => {
   let root: string;
   let preparedModelRuntime: PreparedModelRuntimeSnapshot;
   let platformModel: NonNullable<ReturnType<typeof resolveBundledStaticCatalogModel>>;
-  const provider = buildOpenAIProvider();
+  let provider: ProviderPlugin;
 
   beforeEach(async () => {
+    const { buildOpenAIProvider } = await loadBundledPluginPublicSurface<{
+      buildOpenAIProvider: () => ProviderPlugin;
+    }>({ pluginId: "openai", artifactBasename: "api.js" });
+    provider = buildOpenAIProvider();
     root = await realpath(await mkdtemp(path.join(tmpdir(), "openclaw-effort-route-")));
     const pluginDir = path.resolve("extensions/openai");
     const loaded = loadPluginManifest(pluginDir);
