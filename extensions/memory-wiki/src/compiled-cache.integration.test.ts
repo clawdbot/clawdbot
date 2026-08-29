@@ -10,7 +10,7 @@ import {
   resetPluginBlobStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { compileMemoryWikiVault } from "./compile.js";
+import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
 import {
   activateMemoryWikiCompiledCacheOwner,
   configureMemoryWikiCompiledCacheStore,
@@ -260,6 +260,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
 
   it("rejects pre-dashboard cache snapshots after the format version bump", async () => {
     const { config } = await createPersistentVault({ initialize: true });
+    await compileMemoryWikiVault(config);
     const legacyStore = createMemoryWikiCompiledCacheStore(<T>(options: OpenBlobStoreOptions) => {
       const store = createPluginBlobStoreForTests<T>("memory-wiki", options, blobStoreEnv);
       return {
@@ -274,6 +275,15 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     await publishSnapshot(config, snapshot("legacy dashboard-free snapshot"));
 
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+
+    configureMemoryWikiCompiledCacheStore(createCacheStore());
+    await expect(
+      refreshMemoryWikiIndexesAfterImport({
+        config,
+        syncResult: { importedCount: 0, updatedCount: 0, removedCount: 0 },
+      }),
+    ).resolves.toMatchObject({ refreshed: true, reason: "compiled-cache-invalid" });
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.not.toBeNull();
   });
 
   it("loads an externally compiled generation after lifecycle refresh without polling", async () => {

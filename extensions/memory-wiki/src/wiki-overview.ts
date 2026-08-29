@@ -66,6 +66,15 @@ function compareOverviewItems(left: MemoryWikiOverviewItem, right: MemoryWikiOve
   return left.title.localeCompare(right.title);
 }
 
+function isOverviewItemEligible(item: MemoryWikiOverviewItem): boolean {
+  return (
+    PRIMARY_OVERVIEW_KINDS.has(item.kind) ||
+    item.claimCount > 0 ||
+    item.questionCount > 0 ||
+    item.contradictionCount > 0
+  );
+}
+
 export async function listMemoryWikiOverview(
   config: ResolvedMemoryWikiConfig,
 ): Promise<MemoryWikiOverviewStatus> {
@@ -75,13 +84,16 @@ export async function listMemoryWikiOverview(
     let totalClaims = 0;
     let totalQuestions = 0;
     let totalContradictions = 0;
-    const items = compiled.digest.pages.flatMap((page) => {
-      pageCounts[page.kind] += 1;
-      totalClaims += page.claimCount;
-      totalQuestions += page.questions.length;
-      totalContradictions += page.contradictions.length;
-      return page.dashboard?.overview ? [page.dashboard.overview] : [];
-    });
+    const items = compiled.digest.pages
+      .flatMap((page) => {
+        pageCounts[page.kind] += 1;
+        totalClaims += page.claimCount;
+        totalQuestions += page.questions.length;
+        totalContradictions += page.contradictions.length;
+        return page.dashboard?.overview ? [page.dashboard.overview] : [];
+      })
+      .filter(isOverviewItemEligible)
+      .toSorted(compareOverviewItems);
     return buildMemoryWikiOverviewStatus({
       items,
       totalPages: compiled.digest.pages.length,
@@ -101,13 +113,7 @@ export async function listMemoryWikiOverview(
   const totalContradictions = pages.reduce((sum, page) => sum + page.contradictions.length, 0);
   const items = pages
     .map((page) => buildMemoryWikiOverviewItem({ page, parsed: parseWikiMarkdown(page.raw) }))
-    .filter(
-      (item) =>
-        PRIMARY_OVERVIEW_KINDS.has(item.kind) ||
-        item.claimCount > 0 ||
-        item.questionCount > 0 ||
-        item.contradictionCount > 0,
-    )
+    .filter(isOverviewItemEligible)
     .toSorted(compareOverviewItems);
 
   return buildMemoryWikiOverviewStatus({

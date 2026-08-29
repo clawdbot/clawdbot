@@ -39,6 +39,76 @@ describe("listMemoryWikiOverview", () => {
     expect(entity?.snippet).toBe("The dashboard reads this summary from the publication.");
   });
 
+  it("keeps cached overview eligibility and ordering aligned with the raw reader", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-overview-cache-parity-",
+      initialize: true,
+    });
+    await fs.mkdir(path.join(rootDir, "entities"), { recursive: true });
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    await fs.mkdir(path.join(rootDir, "reports"), { recursive: true });
+
+    await fs.writeFile(
+      path.join(rootDir, "entities", "a.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          title: "Alpha",
+          claims: [{ text: "Alpha has one claim." }],
+          updatedAt: "2026-04-01T00:00:00.000Z",
+        },
+        body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "b.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          title: "Zulu",
+          claims: [{ text: "Zulu has the first claim." }, { text: "Zulu has the second claim." }],
+          updatedAt: "2026-04-02T00:00:00.000Z",
+        },
+        body: "# Zulu\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "empty.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          title: "Empty source",
+          updatedAt: "2026-04-03T00:00:00.000Z",
+        },
+        body: "# Empty source\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "reports", "empty.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "report",
+          title: "Empty report",
+          updatedAt: "2026-04-04T00:00:00.000Z",
+        },
+        body: "# Empty report\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    const result = await listMemoryWikiOverview(config);
+    const entityItems = result.clusters.find((cluster) => cluster.key === "entity")?.items ?? [];
+
+    expect(entityItems.map((item) => item.title)).toEqual(["Zulu", "Alpha"]);
+    expect(result.clusters.some((cluster) => cluster.key === "source")).toBe(false);
+    expect(result.clusters.some((cluster) => cluster.key === "report")).toBe(false);
+  });
+
   it("groups wiki pages by kind and surfaces claims, questions, and contradictions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-overview-",

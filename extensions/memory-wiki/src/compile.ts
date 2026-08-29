@@ -30,6 +30,7 @@ import {
 } from "./claim-health.js";
 import {
   createMemoryWikiCompiledCachePublicationId,
+  loadMemoryWikiCompiledCache,
   resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
@@ -374,7 +375,12 @@ export type CompileMemoryWikiResult = {
 
 export type RefreshMemoryWikiIndexesResult = {
   refreshed: boolean;
-  reason: "auto-compile-disabled" | "no-import-changes" | "missing-indexes" | "import-changed";
+  reason:
+    | "auto-compile-disabled"
+    | "no-import-changes"
+    | "missing-indexes"
+    | "compiled-cache-invalid"
+    | "import-changed";
   compile?: CompileMemoryWikiResult;
 };
 
@@ -1459,7 +1465,8 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
     params.syncResult.updatedCount > 0 ||
     params.syncResult.removedCount > 0;
   const missingIndexes = await hasMissingWikiIndexes(params.config.vault.path);
-  if (!importChanged && !missingIndexes) {
+  const compiledCacheValid = await loadMemoryWikiCompiledCache(params.config).catch(() => null);
+  if (!importChanged && !missingIndexes && compiledCacheValid) {
     return {
       refreshed: false,
       reason: "no-import-changes",
@@ -1468,7 +1475,12 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
   const compile = await compileMemoryWikiVault(params.config);
   return {
     refreshed: true,
-    reason: missingIndexes && !importChanged ? "missing-indexes" : "import-changed",
+    reason:
+      missingIndexes && !importChanged
+        ? "missing-indexes"
+        : !importChanged && !compiledCacheValid
+          ? "compiled-cache-invalid"
+          : "import-changed",
     compile,
   };
 }
