@@ -742,9 +742,10 @@ describe("Claude session catalog", () => {
     );
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
-        displayName: "Source session",
+        // Adoption shows the user's /rename via displayName; labels stay unseeded
+        // because OpenClaw labels are unique and duplicate CLI titles must adopt.
+        displayName: "Renamed source",
         spawnedCwd: "/work/source",
-        label: "Renamed source",
         initialEntry: expect.objectContaining({
           color: "purple",
           cliBackendId: "claude-cli",
@@ -1149,7 +1150,6 @@ describe("Claude session catalog", () => {
         execNode: "node-a",
         execCwd: "/work/on-node",
         spawnedCwd: "/work/on-node",
-        label: "Node source",
         initialEntry: expect.objectContaining({
           color: "cyan",
           cliSessionBinding: {
