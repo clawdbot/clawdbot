@@ -9,6 +9,12 @@ import { applyNonInteractiveAuthChoice } from "./auth-choice.js";
 const writeWizardConfigFile = vi.hoisted(() => vi.fn(async (config: OpenClawConfig) => config));
 vi.mock("../../../wizard/setup.shared.js", () => ({ writeWizardConfigFile }));
 
+const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
+vi.mock("../../../plugins/manifest-contract-eligibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/manifest-contract-eligibility.js")>()),
+  loadManifestMetadataSnapshot,
+}));
+
 const formatAuthChoiceChoicesForCli = vi.hoisted(() =>
   vi.fn(() => "custom-api-key|skip|demo-provider-api-key"),
 );
@@ -48,6 +54,8 @@ beforeEach(() => {
   resolveManifestProviderAuthChoices.mockReturnValue([]);
   resolveDeprecatedProviderInstallCatalogEntry.mockReset();
   resolveDeprecatedProviderInstallCatalogEntry.mockReturnValue(undefined);
+  loadManifestMetadataSnapshot.mockReset();
+  loadManifestMetadataSnapshot.mockReturnValue({ plugins: [] });
 });
 
 function createRuntime() {
@@ -268,6 +276,11 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(apiKeyParams?.envVarName).toBe("CUSTOM_API_KEY");
     expect(apiKeyParams?.agentDir).toBe(target.agentDir);
     expect(apiKeyParams?.secretInputMode).toBe("ref");
+    expect(loadManifestMetadataSnapshot).toHaveBeenCalledExactlyOnceWith({
+      config: nextConfig,
+      workspaceDir: target.workspaceDir,
+      env: process.env,
+    });
   });
 
   it("keeps a custom provider model on the configured explicit-fleet system agent", async () => {

@@ -9,6 +9,7 @@ import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
 import { normalizeSecretInputModeInput } from "../../../plugins/provider-auth-input.js";
 import { resolveDeprecatedProviderInstallCatalogEntry } from "../../../plugins/provider-install-catalog.js";
@@ -231,6 +232,11 @@ export async function applyNonInteractiveAuthChoice(params: {
 
   if (authChoice === "custom-api-key") {
     try {
+      const manifestPlugins = loadManifestMetadataSnapshot({
+        config: nextConfig,
+        workspaceDir: params.target.workspaceDir,
+        env: process.env,
+      }).plugins;
       // Custom provider setup can be optional-key: some local endpoints do not
       // require auth, but flags and env refs still need validation if present.
       const customAuth = parseNonInteractiveCustomApiFlags({
@@ -280,6 +286,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         compatibility: customAuth.compatibility,
         apiKey: customApiKeyInput,
         providerId: customAuth.providerId,
+        manifestPlugins,
         supportsImageInput: customAuth.supportsImageInput,
         target: params.target,
       });
