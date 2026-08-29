@@ -12,6 +12,58 @@ import {
 setupRunAttemptTestHooks();
 
 describe("Codex channel tool progress", () => {
+  it("keeps raw command detail behind the channel commandText policy", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "channel-command-privacy-session.jsonl"),
+      path.join(tempDir, "channel-command-privacy-workspace"),
+    );
+    const onAgentEvent = vi.fn();
+    const onToolResult = vi.fn();
+    params.config = {
+      channels: {
+        telegram: {
+          streaming: { mode: "progress", progress: { commandText: "status" } },
+        },
+      },
+    };
+    params.messageChannel = "telegram";
+    params.toolProgressDetail = "raw";
+    params.verboseLevel = "full";
+    params.onAgentEvent = onAgentEvent;
+    params.onToolResult = onToolResult;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify(
+      itemNotification("item/started", {
+        type: "commandExecution",
+        id: "private-command-1",
+        command: "printf raw-command-must-stay-private",
+        cwd: params.workspaceDir,
+        status: "inProgress",
+      }),
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith({ text: "🛠️ Bash" });
+    const toolStart = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .find(
+        (event) =>
+          event.stream === "tool" &&
+          event.data?.phase === "start" &&
+          event.data?.toolCallId === "private-command-1",
+      );
+    expect(toolStart?.data?.args).toEqual({
+      command: "printf raw-command-must-stay-private",
+      cwd: params.workspaceDir,
+    });
+    expect(toolStart?.data?.meta).toContain("raw-command-must-stay-private");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("keeps every tool source available to channel policy and verbose callbacks", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
