@@ -334,7 +334,7 @@ export function renderChat(props: ChatProps) {
       sessionKey: props.sessionKey,
       announceTranscript: props.announceTranscript,
       loading: props.loading && !placementStartup,
-      historyLoading: props.historyPagination?.loading,
+      historySentinel: props.historyPagination !== undefined,
       messages: props.messages,
       toolMessages: props.toolMessages,
       guardianNotices: props.guardianNotices,

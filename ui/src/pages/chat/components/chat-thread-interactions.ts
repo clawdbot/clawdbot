@@ -68,7 +68,8 @@ export type ChatThreadProps = {
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;
   loading: boolean;
-  historyLoading?: boolean;
+  /** Older-history pagination is active; render its auto-load sentinel. */
+  historySentinel?: boolean;
   messages: unknown[];
   toolMessages: unknown[];
   guardianNotices?: ChatGuardianNotice[];
