@@ -173,15 +173,21 @@ function approvalRelayPendingDecision(agent: AcpGatewayAgent, approvalId: string
   return relayMap.get(approvalId)?.pendingDecision;
 }
 
-function replayApprovalDecisions(agent: AcpGatewayAgent): Promise<void> {
-  const promptStream = (
-    agent as unknown as {
-      promptStream: {
-        agentEvents: { replayApprovalDecisionsOnReconnect: () => Promise<void> };
-      };
-    }
-  ).promptStream;
-  return promptStream.agentEvents.replayApprovalDecisionsOnReconnect();
+function captureApprovalDecisionRetry(
+  agent: AcpGatewayAgent,
+  approvalId: string,
+): () => Promise<void> {
+  const internal = agent as unknown as {
+    approvalRelays: Map<string, unknown>;
+    promptStream: {
+      agentEvents: { retryApprovalRelayDecision: (relay: unknown) => Promise<void> };
+    };
+  };
+  const relay = expectDefined(
+    internal.approvalRelays.get(approvalId),
+    "approval relay test invariant",
+  );
+  return () => internal.promptStream.agentEvents.retryApprovalRelayDecision(relay);
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
@@ -463,46 +469,31 @@ describe("ACP translator permission relay", () => {
     await cleanupHarness(harness);
   });
 
-  it("does not replay a stored decision after prompt cleanup revokes its relay", async () => {
+  it("does not retry a stored decision after prompt cleanup revokes its relay", async () => {
     const resolveAttempts: Array<{ id: string; decision: string }> = [];
-    const allowAttempts = new Map<string, number>();
-    const firstReplayStarted = createDeferredCore();
-    const firstReplayRelease = createDeferredCore();
     const resolveApproval = vi.fn(async (requestParams?: Record<string, unknown>) => {
       const attempt = requestParams as { id: string; decision: string };
       resolveAttempts.push(attempt);
-      if (attempt.decision !== "allow-once") {
-        return {};
-      }
-      const count = (allowAttempts.get(attempt.id) ?? 0) + 1;
-      allowAttempts.set(attempt.id, count);
-      if (count === 1) {
+      if (resolveAttempts.length === 1) {
         throw new Error("gateway not connected");
-      }
-      if (attempt.id === "approval-first") {
-        firstReplayStarted.resolve();
-        await firstReplayRelease.promise;
       }
       return {};
     });
     const harness = await createHarness({ resolveApproval });
+    const approvalId = "approval-revoked";
     await harness.agent.handleGatewayEvent(
-      createApprovalEvent({ runId: harness.runId, approvalId: "approval-first" }),
+      createApprovalEvent({ runId: harness.runId, approvalId }),
     );
-    await harness.agent.handleGatewayEvent(
-      createApprovalEvent({ runId: harness.runId, approvalId: "approval-second" }),
-    );
-    await vi.waitFor(() => expect(allowAttempts.get("approval-second")).toBe(1));
-
-    const replay = replayApprovalDecisions(harness.agent);
-    await firstReplayStarted.promise;
+    await vi.waitFor(() => {
+      expect(approvalRelayPendingDecision(harness.agent, approvalId)).toBe("allow-once");
+    });
+    const retry = captureApprovalDecisionRetry(harness.agent, approvalId);
     await cleanupHarness(harness);
-    firstReplayRelease.resolve();
-    await replay;
+    await retry();
 
-    expect(resolveAttempts.filter((attempt) => attempt.id === "approval-second")).toEqual([
-      { id: "approval-second", decision: "allow-once" },
-      { id: "approval-second", decision: "deny" },
+    expect(resolveAttempts).toEqual([
+      { id: approvalId, decision: "allow-once" },
+      { id: approvalId, decision: "deny" },
     ]);
   });
 
