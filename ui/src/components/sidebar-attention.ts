@@ -347,6 +347,10 @@ class SidebarAttention extends OpenClawLightDomElement {
     ) {
       return;
     }
+    if (loadedAgentScope && agentScope.selectedId !== loadedAgentScope.selectedId) {
+      this.modelAuthStatus = null;
+      this.modelAuthAgentId = null;
+    }
     if (loadedAgentScope && agentScope.scopeId !== loadedAgentScope.scopeId) {
       this.cronJobs = [];
     }

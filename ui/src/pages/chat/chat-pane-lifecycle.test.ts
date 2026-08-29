@@ -1000,20 +1000,23 @@ describe("chat pane connection lifecycle", () => {
       const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
       const retireModelOverride = vi.fn();
       const sessions = { retireModelOverride } as unknown as SessionCapability;
-      const { state } = createTestChatPane({ client, sessions });
+      const { pane, state } = createTestChatPane({ client, sessions });
       state.sessionKey = sessionKey;
       state.agentsList = { defaultId: "main", mainKey, scope: "global", agents: [] };
       state.assistantAgentId = "work";
+      state.loadAssistantIdentity = vi.fn(async () => undefined);
       state.chatModelSwitchPromises = {
         global: new Promise<boolean>(() => {}),
       };
-
       applySelectedChatAgent(state, "main");
-
       expect(state.chatModelSwitchPromises).toEqual({});
       expect(state.assistantAgentId).toBe("main");
       expect(retireModelOverride).toHaveBeenCalledWith(sessionKey);
       expect(retireModelOverride).toHaveBeenCalledWith("global");
+      pane.context.agentSelection.set("work");
+      applySelectedChatAgent(state, "work");
+      pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, assistantAgentId: "main" });
+      expect(state.assistantAgentId).toBe("work");
     },
   );
 

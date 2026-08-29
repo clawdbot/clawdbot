@@ -20,6 +20,7 @@ import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import {
+  applySelectedChatAgent,
   refreshChatMetadata,
   refreshChatModelCatalogOnDemand,
   refreshChatModelAuthStatus,
@@ -3474,10 +3475,12 @@ describe("resolveChatAvatarUrl", () => {
 describe("loadPageAssistantIdentity", () => {
   it("memoizes identity by agent while fetching a cross-agent switch", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
-      name: params?.agentId === "other" ? "Other Agent" : "Main Agent",
-      agentId: params?.agentId ?? "main",
-    }));
+    const request = vi.fn(
+      async (_method: string, params?: { agentId?: string }): Promise<unknown> => ({
+        name: params?.agentId === "other" ? "Other Agent" : "Main Agent",
+        agentId: params?.agentId ?? "main",
+      }),
+    );
     const client = { request } as unknown as GatewayBrowserClient;
     const context = {
       agents: { state: { agentsList: null }, ensureList: vi.fn(async () => null) },
@@ -3527,6 +3530,43 @@ describe("loadPageAssistantIdentity", () => {
     await state.loadAssistantIdentity();
     expect(request).toHaveBeenCalledTimes(3);
     expect(request).toHaveBeenLastCalledWith("agent.identity.get", { agentId: "main" });
+
+    const staleIdentity = createDeferred<{ name: string; agentId: string }>();
+    assistantIdentity.invalidateAssistantIdentityCache(client);
+    let holdMainIdentity = true;
+    request.mockImplementation((method: string, params?: { agentId?: string }) => {
+      if (method === "chat.metadata") {
+        return Promise.resolve({ commands: [], models: [] });
+      }
+      if (method === "models.authStatus") {
+        return Promise.resolve({ ts: 1, providers: [] });
+      }
+      if (params?.agentId === "main" && holdMainIdentity) {
+        holdMainIdentity = false;
+        return staleIdentity.promise;
+      }
+      return Promise.resolve({
+        name: params?.agentId === "work" ? "Work Agent" : "Main Agent",
+        agentId: params?.agentId ?? "main",
+      });
+    });
+    state.agentsList = {
+      agents: [{ id: "main" }, { id: "work" }],
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+    };
+    state.sessionKey = "global";
+    state.assistantAgentId = "main";
+
+    const pendingMainIdentity = state.loadAssistantIdentity();
+    applySelectedChatAgent(state, "work");
+    staleIdentity.resolve({ name: "Stale Main Agent", agentId: "main" });
+    await pendingMainIdentity;
+
+    await vi.waitFor(() => expect(state.assistantName).toBe("Work Agent"));
+    expect(state.assistantAgentId).toBe("work");
+    expect(request).toHaveBeenCalledWith("agent.identity.get", { agentId: "work" });
   });
 });
 
@@ -3881,22 +3921,89 @@ describe("refreshChatMetadata", () => {
 });
 
 describe("refreshChatModelAuthStatus", () => {
-  it("scopes auth status to the selected session agent", async () => {
-    const request = vi.fn(async () => ({ ts: 1, providers: [] }));
+  it("scopes auth status to the fixed session agent", async () => {
+    const fixedStatus = { ts: 1, providers: [] };
+    const request = vi.fn(async () => fixedStatus);
     const state = {
       client: { request },
       connected: true,
       connectionEpoch: 1,
       sessionKey: "agent:work:dashboard:current",
       assistantAgentId: "main",
+      modelAuthStatusRequestVersion: 0,
       modelAuthStatusResult: null,
       modelAuthStatusError: null,
     } as unknown as ChatPageHost;
 
     await refreshChatModelAuthStatus(state);
+    applySelectedChatAgent(state, "research");
 
     expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "work" });
+    expect(request).toHaveBeenCalledOnce();
+    expect(state.assistantAgentId).toBe("main");
+    expect(state.modelAuthStatusResult).toBe(fixedStatus);
   });
+
+  it.each(["success", "failure"] as const)(
+    "rebinds selected-global auth and rejects the superseded Main %s",
+    async (outcome) => {
+      const mainResponse = createDeferred<{ ts: number; providers: never[] }>();
+      const workResponse = createDeferred<{ ts: number; providers: never[] }>();
+      const request = vi.fn((method: string, params?: { agentId?: string }) => {
+        if (method === "chat.metadata") {
+          return Promise.resolve({ commands: [], models: [] });
+        }
+        return (params?.agentId === "work" ? workResponse : mainResponse).promise;
+      });
+      const staleMainStatus = { ts: 1, providers: [] };
+      const workStatus = { ts: 2, providers: [] };
+      const state = {
+        client: { request },
+        connected: true,
+        connectionEpoch: 1,
+        sessionKey: "global",
+        assistantAgentId: "main",
+        assistantIdentityRequestVersion: 0,
+        modelAuthStatusRequestVersion: 0,
+        modelAuthStatusResult: staleMainStatus,
+        modelAuthStatusError: "stale Main error",
+        loadAssistantIdentity: vi.fn(async () => undefined),
+        requestUpdate: vi.fn(),
+        chatModelSwitchPromises: {},
+        chatModelCatalog: [],
+        chatModelCatalogError: null,
+        chatModelsLoading: false,
+        sessions: {
+          state: { modelOverrides: {} },
+          retireModelOverride: vi.fn(),
+        },
+      } as unknown as ChatPageHost;
+
+      const mainRefresh = refreshChatModelAuthStatus(state);
+      applySelectedChatAgent(state, "work");
+
+      expect(state.assistantAgentId).toBe("work");
+      expect(state.modelAuthStatusResult).toBeNull();
+      expect(state.modelAuthStatusError).toBeNull();
+      expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toEqual([
+        ["models.authStatus", { agentId: "main" }],
+        ["models.authStatus", { agentId: "work" }],
+      ]);
+
+      workResponse.resolve(workStatus);
+      await vi.waitFor(() => expect(state.modelAuthStatusResult).toBe(workStatus));
+
+      if (outcome === "success") {
+        mainResponse.resolve({ ts: 3, providers: [] });
+      } else {
+        mainResponse.reject(new Error("stale Main auth status"));
+      }
+      await mainRefresh;
+
+      expect(state.modelAuthStatusResult).toBe(workStatus);
+      expect(state.modelAuthStatusError).toBeNull();
+    },
+  );
 
   it.each(["success", "failure"] as const)(
     "ignores a stale auth status %s after reconnecting the same client",
@@ -3913,6 +4020,7 @@ describe("refreshChatModelAuthStatus", () => {
         client: { request },
         connected: true,
         connectionEpoch: 1,
+        modelAuthStatusRequestVersion: 0,
         modelAuthStatusResult: currentStatus,
         modelAuthStatusError: null,
       } as unknown as ChatPageHost;

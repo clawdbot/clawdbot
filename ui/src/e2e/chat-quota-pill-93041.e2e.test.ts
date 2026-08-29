@@ -1,9 +1,14 @@
 // Real-browser proof + regression for #93041: provider usage from models.authStatus remains
 // available in the desktop composer's context popover. Screenshots go to the ignored artifacts tree.
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
-import { controlUiE2eWaitTimeoutMs, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiE2eWaitTimeoutMs,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -12,6 +17,13 @@ const suite = createControlUiE2eSuite({
 
 const baseTime = 1_700_000_000_000;
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-quota-pill-93041");
+const captureOwnershipProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const ownershipProofPhase = process.env.OPENCLAW_UI_PROOF_PHASE?.trim() || "candidate";
+const ownershipProofDir = path.resolve(
+  process.cwd(),
+  ".artifacts/ui-visual-proof/agent-quota-ownership",
+  ownershipProofPhase,
+);
 
 const authStatusWithUsage = {
   ts: baseTime,
@@ -55,6 +67,56 @@ const gatewayInjectedSessions = {
 const highPressureSessions = {
   ...gatewayInjectedSessions,
   sessions: [{ ...gatewayInjectedSessions.sessions[0], totalTokens: 190_000 }],
+};
+
+const agentsList = {
+  agents: [
+    { id: "main", name: "Main" },
+    { id: "work", name: "Work" },
+  ],
+  defaultId: "main",
+  mainKey: "main",
+  scope: "global",
+};
+
+function agentAuthStatus(agentId: "main" | "work") {
+  const isMain = agentId === "main";
+  return {
+    ts: baseTime + (isMain ? 1 : 2),
+    providers: [
+      {
+        provider: "openai",
+        displayName: isMain ? "Main OpenAI" : "Work OpenAI",
+        status: "ok",
+        profiles: [{ profileId: `${agentId}-codex`, type: "oauth", status: "ok" }],
+        usage: {
+          providerId: "openai",
+          plan: isMain ? "Main Pro" : "Work Team",
+          accountEmail: `${agentId}@example.test`,
+          windows: [
+            {
+              label: "Week",
+              usedPercent: isMain ? 81 : 24,
+              resetAt: Date.now() + 4 * 86_400_000,
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
+
+const selectedGlobalSessions = {
+  ...gatewayInjectedSessions,
+  sessions: [
+    {
+      ...gatewayInjectedSessions.sessions[0],
+      displayName: "Selected global",
+      key: "global",
+      label: "Selected global",
+      modelProvider: "openai",
+    },
+  ],
 };
 
 const claudeSubscriptionAuthStatus = {
@@ -146,6 +208,85 @@ async function openChat(
 async function closeChat(fixture: { context: BrowserContext; page: Page }): Promise<void> {
   await fixture.page.close().catch(() => {});
   await fixture.context.close().catch(() => {});
+}
+
+async function setSelectedAgent(page: Page, agentId: string): Promise<void> {
+  await page.evaluate((nextAgentId) => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: { context: { agentSelection: { set: (value: string) => void } } };
+    };
+    app.runtime?.context.agentSelection.set(nextAgentId);
+  }, agentId);
+}
+
+async function visibleAuthState(page: Page) {
+  return await page.evaluate(() => {
+    const pane = document.querySelector("openclaw-chat-pane.chat-pane-cache__pane--visible") as
+      | (HTMLElement & {
+          state?: {
+            assistantAgentId?: string | null;
+            modelAuthStatusError?: string | null;
+            modelAuthStatusResult?: {
+              ts?: number;
+              providers?: Array<{
+                displayName?: string;
+                usage?: { accountEmail?: string; plan?: string };
+              }>;
+            } | null;
+          };
+        })
+      | null;
+    const provider = pane?.state?.modelAuthStatusResult?.providers?.[0];
+    return {
+      account: provider?.usage?.accountEmail ?? null,
+      agentId: pane?.state?.assistantAgentId ?? null,
+      displayName: provider?.displayName ?? null,
+      error: pane?.state?.modelAuthStatusError ?? null,
+      plan: provider?.usage?.plan ?? null,
+      ts: pane?.state?.modelAuthStatusResult?.ts ?? null,
+    };
+  });
+}
+
+async function setOwnershipProofCue(page: Page, text: string): Promise<void> {
+  await page.evaluate((label) => {
+    let cue = document.querySelector<HTMLElement>("[data-auth-ownership-proof-cue]");
+    if (!cue) {
+      cue = document.createElement("div");
+      cue.dataset.authOwnershipProofCue = "true";
+      Object.assign(cue.style, {
+        background: "#171717",
+        border: "1px solid #fafafa",
+        borderRadius: "4px",
+        color: "#fafafa",
+        font: "600 13px/1.4 system-ui, sans-serif",
+        maxWidth: "420px",
+        padding: "8px 10px",
+        position: "fixed",
+        right: "16px",
+        top: "16px",
+        zIndex: "2147483647",
+      });
+      document.body.append(cue);
+    }
+    cue.textContent = label;
+  }, text);
+}
+
+async function pauseForOwnershipProof(page: Page): Promise<void> {
+  if (captureOwnershipProof) {
+    await page.waitForTimeout(2_200);
+  }
+}
+
+async function openVisibleQuotaPopover(page: Page) {
+  const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+  const popover = visiblePane.locator(".context-usage__popover");
+  if (!(await popover.isVisible())) {
+    await visiblePane.locator(".context-ring").click();
+  }
+  await popover.waitFor({ state: "visible" });
+  return popover;
 }
 
 suite.define(() => {
@@ -272,30 +413,190 @@ suite.define(() => {
     }
   });
 
-  it("does not expose session routing metadata while plan usage is loading", async () => {
-    // Sidebar attention and the chat pane each request auth status at startup.
-    // Hold both so the popover is observed before any quota snapshot arrives.
-    const fixture = await openChat(
-      authStatusWithUsage,
-      { "sessions.list": gatewayInjectedSessions },
-      ["models.authStatus", "models.authStatus"],
-    );
-    const { page } = fixture;
+  it("binds delayed auth and quota presentation to the selected global agent", async () => {
+    if (captureOwnershipProof) {
+      await mkdir(ownershipProofDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(captureOwnershipProof
+        ? { recordVideo: { dir: ownershipProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const video = page.video();
+    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     try {
-      const contextRing = page.locator(".context-ring");
-      await contextRing.waitFor({ state: "visible" });
-      await contextRing.click();
-      const popover = page.locator(".context-usage__popover");
-      await popover.waitFor({ state: "visible" });
-      await popover.screenshot({ path: path.join(artifactDir, "05-usage-loading.png") });
+      const gateway = await installMockGateway(page, {
+        assistantAgentId: "main",
+        defaultAgentId: "main",
+        deferredMethods: [
+          "models.authStatus",
+          "models.authStatus",
+          "models.authStatus",
+          "models.authStatus",
+          "agent.identity.get",
+        ],
+        methodResponses: {
+          "agent.identity.get": {
+            cases: [
+              { match: { agentId: "main" }, response: { agentId: "main", name: "Main Agent" } },
+              { match: { agentId: "work" }, response: { agentId: "work", name: "Work Agent" } },
+            ],
+          },
+          "agents.list": agentsList,
+          "models.authStatus": {
+            cases: [
+              { match: { agentId: "main" }, response: agentAuthStatus("main") },
+              { match: { agentId: "work" }, response: agentAuthStatus("work") },
+            ],
+          },
+          "sessions.list": selectedGlobalSessions,
+        },
+        sessionKey: "global",
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "global"));
+      const connectRequest = await gateway.waitForRequest("connect");
+      const { client: connectedClient } = connectRequest.params as {
+        client: { instanceId: string };
+      };
+      await expect
+        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
+        .toBe(2);
 
-      expect(await page.locator('[data-chat-provider-usage="true"]').count()).toBe(0);
-      const popoverText = (await popover.textContent()) ?? "";
-      expect(popoverText).not.toContain("openclaw");
-      expect(popoverText).not.toContain("gateway-injected");
-      expect(popoverText).not.toContain("Model:");
+      let popover = await openVisibleQuotaPopover(page);
+      expect(
+        await page
+          .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
+          .locator('[data-chat-provider-usage="true"]')
+          .count(),
+      ).toBe(0);
+      await setOwnershipProofCue(page, "Selected agent: Main | Main auth request delayed");
+      await pauseForOwnershipProof(page);
+
+      await gateway.deferNext("agent.identity.get", { agentId: "work" });
+      await setSelectedAgent(page, "work");
+      await expect.poll(async () => (await visibleAuthState(page)).agentId).toBe("work");
+      await expect
+        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
+        .toBeGreaterThanOrEqual(3);
+      await gateway.emitGatewayEvent("presence", {
+        presence: [
+          {
+            instanceId: connectedClient.instanceId,
+            user: { id: "operator", name: "Operator" },
+            ts: Date.now(),
+          },
+        ],
+      });
+      await expect.poll(async () => (await visibleAuthState(page)).agentId).toBe("work");
+      popover = await openVisibleQuotaPopover(page);
+      await setOwnershipProofCue(page, "Selected agent: Work | Work auth loading");
+      await pauseForOwnershipProof(page);
+      if (captureOwnershipProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(ownershipProofDir, "01-work-loading.png"),
+        });
+      }
+
+      await gateway.resolveDeferred("models.authStatus");
+      await gateway.resolveDeferred("models.authStatus");
+      await gateway.resolveDeferred("agent.identity.get", {
+        agentId: "main",
+        name: "Stale Main Agent",
+      });
+      await page.waitForTimeout(100);
+      const delayedMainState = await visibleAuthState(page);
+      popover = await openVisibleQuotaPopover(page);
+      await setOwnershipProofCue(
+        page,
+        delayedMainState.account === "main@example.test"
+          ? `Visible agent: ${delayedMainState.agentId} | Displayed stale account: ${delayedMainState.account} | Plan: ${delayedMainState.plan}`
+          : delayedMainState.account
+            ? `Visible agent: ${delayedMainState.agentId} | Work result settled | Plan: ${delayedMainState.plan}`
+            : `Visible agent: ${delayedMainState.agentId} | Delayed Main ignored | Work auth loading`,
+      );
+      await pauseForOwnershipProof(page);
+      if (captureOwnershipProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(ownershipProofDir, "02-after-delayed-main.png"),
+        });
+      }
+
+      expect(delayedMainState.agentId).toBe("work");
+      expect(delayedMainState.error).toBeNull();
+      expect(delayedMainState.account).not.toBe("main@example.test");
+      expect(delayedMainState.displayName).not.toBe("Main OpenAI");
+      expect(delayedMainState.plan).not.toBe("Main Pro");
+      const authRequests = await gateway.getRequests("models.authStatus");
+      const workAuthRequests = authRequests.filter(
+        (request) =>
+          typeof request.params === "object" &&
+          request.params !== null &&
+          "agentId" in request.params &&
+          request.params.agentId === "work",
+      );
+      expect(workAuthRequests.length).toBeGreaterThanOrEqual(2);
+      const identityRequests = await gateway.getRequests("agent.identity.get");
+      expect(
+        identityRequests.filter(
+          (request) =>
+            typeof request.params === "object" &&
+            request.params !== null &&
+            "agentId" in request.params &&
+            request.params.agentId === "work",
+        ),
+      ).not.toHaveLength(0);
+
+      await gateway.resolveDeferred("models.authStatus");
+      await gateway.resolveDeferred("models.authStatus");
+      await gateway.resolveDeferred("agent.identity.get", {
+        agentId: "work",
+        name: "Work Agent",
+      });
+      await expect
+        .poll(() => visibleAuthState(page))
+        .toEqual({
+          account: "work@example.test",
+          agentId: "work",
+          displayName: "Work OpenAI",
+          error: null,
+          plan: "Work Team",
+          ts: baseTime + 2,
+        });
+      popover = await openVisibleQuotaPopover(page);
+      await expect.poll(async () => popover.textContent()).toContain("Work Team");
+      const settledText = (await popover.textContent()) ?? "";
+      expect(settledText).toContain("work@example.test");
+      expect(settledText).toContain("24%");
+      expect(settledText).not.toContain("Main Pro");
+      expect(settledText).not.toContain("main@example.test");
+      await setOwnershipProofCue(
+        page,
+        "Selected agent: Work | Account: work@example.test | Plan: Work Team | Quota: 24%",
+      );
+      await pauseForOwnershipProof(page);
+      if (captureOwnershipProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(ownershipProofDir, "03-work-settled.png"),
+        });
+      }
     } finally {
-      await closeChat(fixture);
+      await page.close().catch(() => {});
+      await context.close().catch(() => {});
+      if (captureOwnershipProof && video) {
+        await video
+          .saveAs(path.join(ownershipProofDir, `${ownershipProofPhase}.webm`))
+          .catch(() => {});
+      }
     }
   });
 });
