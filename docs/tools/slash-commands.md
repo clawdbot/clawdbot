@@ -38,6 +38,10 @@ command handling is enabled for the surface.
 <AccordionGroup>
   <Accordion title="Directive behavior details">
     - Directives are stripped from the message before the model sees it.
+      Removal leaves the remaining text's spacing and line endings intact,
+      including code indentation. Only the recognized directive, its arguments,
+      and an adjacent separator (or its own line ending when alone on a line)
+      are removed. Text with no recognized directive is unchanged.
     - In **directive-only** messages (the message is only directives), they
       persist to the session and reply with an acknowledgement.
     - In **normal chat** messages with other text, they act as inline hints and
