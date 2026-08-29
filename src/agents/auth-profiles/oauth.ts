@@ -28,7 +28,11 @@ import {
 } from "../../secrets/runtime-degraded-state.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { authProfilesLog, CLAUDE_CLI_PROFILE_ID } from "./constants.js";
+import {
+  authProfilesLog,
+  CLAUDE_CLI_PROFILE_ID,
+  OPENAI_CODEX_DEFAULT_PROFILE_ID,
+} from "./constants.js";
 import {
   evaluateStoredCredentialEligibility,
   resolveTokenExpiryState,
@@ -41,12 +45,17 @@ import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import {
+  getRuntimeExternalCliProfileIds,
+  setRuntimeExternalCliProfileIds,
+} from "./runtime-external-profile-references.js";
+import {
   getRuntimeAuthProfileStoreSnapshotCore,
   hasRuntimeAuthProfileStoreSnapshot,
   updateRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import {
   loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreWithoutExternalProfiles,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
@@ -214,7 +223,12 @@ async function refreshOAuthCredential(
   return result?.newCredentials ?? null;
 }
 
-/** Refresh one OAuth credential and merge provider-returned token fields. */
+/**
+ * Refresh one caller-scoped OAuth credential without persistence or mirroring.
+ * This shipped direct contract stays process-local; internal persisted Codex
+ * callers use the manager-owned path below. A future SDK major can reconsider
+ * the split after native source-owner writeback has an upstream contract.
+ */
 export async function refreshOAuthCredentialForRuntime(params: {
   credential: OAuthCredential;
   cfg?: OpenClawConfig;
@@ -238,8 +252,88 @@ const oauthManager = createOAuthManager({
       profileId,
       credential,
     }),
+  readAuthoritativeBootstrapCredential: ({ store, profileId, credential }) =>
+    readExternalCliBootstrapCredential({
+      store,
+      profileId,
+      credential,
+      allowInlineOAuthTokenMaterial: true,
+      allowKeychainPrompt: false,
+      fresh: true,
+    }),
   isRefreshTokenReusedError,
 });
+
+/**
+ * Refresh a proven external-CLI runtime profile under the canonical OAuth
+ * manager. The first changed rotation is inserted into SQLite atomically;
+ * unchanged CLI credentials remain runtime-only and the CLI source is read-only.
+ */
+export async function refreshCodexCliOAuthCredentialForRuntime(params: {
+  store: AuthProfileStore;
+  profileId: string;
+  agentDir?: string;
+  cfg?: OpenClawConfig;
+  forceRefresh?: boolean;
+}): Promise<OAuthCredential | null> {
+  if (!isCodexCliOAuthRuntimeProfile({ store: params.store, profileId: params.profileId })) {
+    return null;
+  }
+  const credential = params.store.profiles[params.profileId];
+  if (!credential || credential.type !== "oauth") {
+    return null;
+  }
+  const resolved = await oauthManager.resolveOAuthAccess({
+    store: params.store,
+    profileId: params.profileId,
+    credential,
+    // Native Codex is one machine-wide source. Omitting agentDir selects the
+    // one main SQLite owner, not whichever agent requested rotation first.
+    cfg: params.cfg,
+    forceRefresh: params.forceRefresh,
+    externalCliCredential: credential,
+  });
+  if (!resolved) {
+    return null;
+  }
+  params.store.profiles[params.profileId] = resolved.credential;
+
+  // The store transaction publishes runtime snapshots after commit. Align
+  // this caller's prepared clone with the same canonical SQLite row.
+  const managed = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir).profiles[
+    params.profileId
+  ];
+  if (managed?.type === "oauth" && isDeepStrictEqual(managed, resolved.credential)) {
+    params.store.profiles[params.profileId] = managed;
+    params.store.runtimeExternalProfileIds = params.store.runtimeExternalProfileIds?.filter(
+      (profileId) => profileId !== params.profileId,
+    );
+    if (params.store.runtimeExternalProfileIds?.length === 0) {
+      params.store.runtimeExternalProfileIds = undefined;
+    }
+    setRuntimeExternalCliProfileIds(
+      params.store,
+      getRuntimeExternalCliProfileIds(params.store).filter(
+        (profileId) => profileId !== params.profileId,
+      ),
+    );
+    params.store.runtimePersistedProfileIds = [
+      ...new Set([...(params.store.runtimePersistedProfileIds ?? []), params.profileId]),
+    ].toSorted();
+  }
+  return resolved.credential;
+}
+
+/** Local bundled-runtime guard for the built-in Codex CLI provenance marker. */
+export function isCodexCliOAuthRuntimeProfile(params: {
+  store: AuthProfileStore;
+  profileId: string;
+}): boolean {
+  return (
+    params.profileId === OPENAI_CODEX_DEFAULT_PROFILE_ID &&
+    getRuntimeExternalCliProfileIds(params.store).includes(params.profileId)
+  );
+}
 
 /** Clear in-process OAuth refresh queues between isolated tests. */
 function resetOAuthRefreshQueuesForTest(): void {

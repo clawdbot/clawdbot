@@ -35,14 +35,20 @@ type ExternalCliAuthProfileOptions = {
   profileIds?: Iterable<string>;
 };
 
+type ExternalCliCredentialReadOptions = Pick<
+  ExternalCliAuthProfileOptions,
+  "allowKeychainPrompt"
+> & {
+  /** Bypass the discovery cache when rotating a single-use refresh token. */
+  fresh?: boolean;
+};
+
 type ExternalCliSyncProvider = {
   profileId: string;
   profileAliases?: readonly string[];
   provider: string;
   aliases?: readonly string[];
-  readCredentials: (
-    options?: Pick<ExternalCliAuthProfileOptions, "allowKeychainPrompt">,
-  ) => OAuthCredential | null;
+  readCredentials: (options?: ExternalCliCredentialReadOptions) => OAuthCredential | null;
   // bootstrapOnly providers adopt the external CLI credential only to
   // seed an empty slot; once a local OAuth credential exists for the
   // profile, the local refresh token is treated as canonical and the
@@ -75,7 +81,7 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
     aliases: ["openai", "codex", "codex-cli", "codex-app-server"],
     readCredentials: (options) =>
       readCodexCliCredentialsCached({
-        ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
+        ttlMs: options?.fresh ? 0 : EXTERNAL_CLI_SYNC_TTL_MS,
         allowKeychainPrompt: options?.allowKeychainPrompt,
       }),
     bootstrapOnly: true,
@@ -174,6 +180,7 @@ export function readExternalCliBootstrapCredential(params: {
   credential: OAuthCredential;
   allowInlineOAuthTokenMaterial?: boolean;
   allowKeychainPrompt?: boolean;
+  fresh?: boolean;
 }): OAuthCredential | null {
   const provider = resolveExternalCliSyncProvider(params);
   if (!provider) {
@@ -190,7 +197,10 @@ export function readExternalCliBootstrapCredential(params: {
     return null;
   }
   return normalizeExternalCliCredentialProvider(
-    provider.readCredentials({ allowKeychainPrompt: params.allowKeychainPrompt }),
+    provider.readCredentials({
+      allowKeychainPrompt: params.allowKeychainPrompt,
+      fresh: params.fresh,
+    }),
     params.credential.provider,
   );
 }

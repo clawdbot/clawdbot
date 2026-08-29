@@ -15,6 +15,10 @@ export { resolveEnvApiKey } from "../agents/model-auth-env.js";
 export { removeProviderAuthProfilesWithLock } from "../agents/auth-profiles/profiles.js";
 export { removeAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 export {
+  isCodexCliOAuthRuntimeProfile,
+  refreshCodexCliOAuthCredentialForRuntime,
+} from "../agents/auth-profiles/oauth.js";
+export {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";

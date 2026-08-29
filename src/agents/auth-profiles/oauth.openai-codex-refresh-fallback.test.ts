@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, resetFileLockStateForTest } from "../../infra/file-lock.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -24,8 +25,14 @@ import {
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  OAuthCredential,
+  RuntimeAuthProfileStore,
+} from "./types.js";
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
+let refreshCodexCliOAuthCredentialForRuntime: typeof import("./oauth.js").refreshCodexCliOAuthCredentialForRuntime;
 let resolveApiKeyForProviderCore: typeof import("../model-auth.js").resolveApiKeyForProviderCore;
 let hasAvailableAuthForProvider: typeof import("../model-auth.js").hasAvailableAuthForProvider;
 let markAuthProfileSuccess: typeof import("./profiles.js").markAuthProfileSuccess;
@@ -52,7 +59,10 @@ const {
   buildProviderAuthDoctorHintWithPluginMock,
 } = vi.hoisted(() => ({
   refreshProviderOAuthCredentialWithPluginMock: vi.fn(
-    async (_params?: { context?: unknown }): Promise<OAuthCredential | undefined> => undefined,
+    async (_params?: {
+      config?: OpenClawConfig;
+      context?: unknown;
+    }): Promise<OAuthCredential | undefined> => undefined,
   ),
   formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
   buildProviderAuthDoctorHintWithPluginMock: vi.fn(async () => undefined),
@@ -73,8 +83,12 @@ vi.mock("../../llm/oauth.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
-  resolveProviderOAuthCredentialWithPlugin: async (params: { credential: OAuthCredential }) => {
+  resolveProviderOAuthCredentialWithPlugin: async (params: {
+    config?: OpenClawConfig;
+    credential: OAuthCredential;
+  }) => {
     const credential = await refreshProviderOAuthCredentialWithPluginMock({
+      config: params.config,
       context: params.credential,
     });
     return credential
@@ -101,7 +115,7 @@ afterAll(() => {
   vi.resetModules();
 });
 
-async function readPersistedStore(agentDir: string): Promise<AuthProfileStore> {
+async function readPersistedStore(agentDir?: string): Promise<AuthProfileStore> {
   return readAuthProfileStoreForTest(agentDir);
 }
 
@@ -117,7 +131,7 @@ function mockRotatedOpenAICodexRefresh() {
 }
 
 function expectPersistedOpenAICodexProfile(
-  credential: AuthProfileStore["profiles"][string],
+  credential: AuthProfileCredential | undefined,
   metadata: Record<string, unknown> = {},
 ): void {
   expect(credential?.type).toBe("oauth");
@@ -125,6 +139,18 @@ function expectPersistedOpenAICodexProfile(
   for (const [key, value] of Object.entries(metadata)) {
     expect(credential?.[key as keyof typeof credential]).toBe(value);
   }
+}
+
+function createCodexCliRuntimeStore(
+  profileId: string,
+  credential: OAuthCredential,
+): RuntimeAuthProfileStore {
+  return {
+    version: 1,
+    profiles: { [profileId]: credential },
+    runtimeExternalProfileIds: [profileId],
+    runtimeExternalCliProfileIds: [profileId],
+  };
 }
 
 function resolveOpenAICodexProfile(params: { profileId: string; agentDir: string }) {
@@ -162,7 +188,8 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
 
   beforeAll(async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-refresh-fallback-"));
-    ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+    ({ refreshCodexCliOAuthCredentialForRuntime, resolveApiKeyForProfile } =
+      await import("./oauth.js"));
     ({ hasAvailableAuthForProvider, resolveApiKeyForProviderCore } =
       await import("../model-auth.js"));
     ({ markAuthProfileSuccess } = await import("./profiles.js"));
@@ -201,6 +228,431 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
   afterAll(async () => {
     closeOpenClawAgentDatabasesForTest();
     await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it("promotes only a freshly reread changed Codex CLI rotation into SQLite", async () => {
+    const profileId = "openai:default";
+    const nativeCredential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "native-access",
+      refresh: "native-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-native",
+    };
+    const store = createCodexCliRuntimeStore(profileId, nativeCredential);
+    const freshNativeCredential = {
+      ...nativeCredential,
+      // Metadata-only changes do not prove that Codex replaced the bearer
+      // rejected by app-server, so force-refresh must still call the provider.
+      expires: Date.now() + 10 * 60_000,
+    };
+    readCodexCliCredentialsCachedMock.mockReturnValue(freshNativeCredential);
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async (params) => {
+      expect(requireOAuthContext(params?.context).access).toBe("native-access");
+      return {
+        ...freshNativeCredential,
+        access: "rotated-access-token",
+        refresh: "rotated-refresh-token",
+        expires: Date.now() + 86_400_000,
+      };
+    });
+
+    await expect(
+      refreshCodexCliOAuthCredentialForRuntime({
+        store,
+        profileId,
+        agentDir,
+        forceRefresh: true,
+      }),
+    ).resolves.toMatchObject({
+      access: "rotated-access-token",
+      refresh: "rotated-refresh-token",
+    });
+
+    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledWith({
+      allowKeychainPrompt: false,
+      ttlMs: 0,
+    });
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expectPersistedOpenAICodexProfile((await readPersistedStore()).profiles[profileId], {
+      access: "rotated-access-token",
+      refresh: "rotated-refresh-token",
+    });
+    expect(store.runtimeExternalCliProfileIds).toBeUndefined();
+    expect(store.runtimeExternalProfileIds).toBeUndefined();
+    expect(store.runtimePersistedProfileIds).toEqual([profileId]);
+  });
+
+  it("promotes one native rotation for distinct agent owners and prepared callers", async () => {
+    const profileId = "openai:default";
+    const nativeCredential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "native-access",
+      refresh: "native-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-native",
+    };
+    const createPreparedStore = () =>
+      createCodexCliRuntimeStore(profileId, { ...nativeCredential });
+    const firstStore = createPreparedStore();
+    const secondStore = createPreparedStore();
+    expect(secondStore).not.toBe(firstStore);
+    const stateRoot = path.resolve(agentDir, "../../..");
+    const firstAgentDir = path.join(stateRoot, "agents", "worker-a", "agent");
+    const secondAgentDir = path.join(stateRoot, "agents", "worker-b", "agent");
+    await Promise.all([
+      fs.mkdir(firstAgentDir, { recursive: true }),
+      fs.mkdir(secondAgentDir, { recursive: true }),
+    ]);
+    readCodexCliCredentialsCachedMock.mockReturnValue({ ...nativeCredential });
+    const firstRefresh: { resolve?: (credential: OAuthCredential) => void } = {};
+    const firstRefreshResult = new Promise<OAuthCredential>((resolve) => {
+      firstRefresh.resolve = resolve;
+    });
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async () => await firstRefreshResult,
+    );
+
+    const first = refreshCodexCliOAuthCredentialForRuntime({
+      store: firstStore,
+      profileId,
+      agentDir: firstAgentDir,
+      forceRefresh: true,
+    });
+    await vi.waitFor(() =>
+      expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1),
+    );
+    const second = refreshCodexCliOAuthCredentialForRuntime({
+      store: secondStore,
+      profileId,
+      agentDir: secondAgentDir,
+      forceRefresh: true,
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+
+    expectDefined(
+      firstRefresh.resolve,
+      "first refresh resolver test invariant",
+    )({
+      ...nativeCredential,
+      access: "first-rotated-access",
+      refresh: "first-rotated-refresh",
+      expires: Date.now() + 10 * 60_000,
+    });
+    await expect(first).resolves.toMatchObject({ refresh: "first-rotated-refresh" });
+    await expect(second).resolves.toMatchObject({ refresh: "first-rotated-refresh" });
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
+    expectPersistedOpenAICodexProfile((await readPersistedStore()).profiles[profileId], {
+      refresh: "first-rotated-refresh",
+    });
+    expect((await readPersistedStore(firstAgentDir)).profiles[profileId]).toBeUndefined();
+    expect((await readPersistedStore(secondAgentDir)).profiles[profileId]).toBeUndefined();
+    expect(firstStore.runtimePersistedProfileIds).toEqual([profileId]);
+    expect(secondStore.runtimePersistedProfileIds).toEqual([profileId]);
+  });
+
+  it("rotates again when the current SQLite credential is the rejected attempt", async () => {
+    const profileId = "openai:default";
+    const currentCredential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "current-access",
+      refresh: "current-refresh",
+      expires: Date.now() + 10 * 60_000,
+      accountId: "acct-native",
+    };
+    saveAuthProfileStore({ version: 1, profiles: { [profileId]: currentCredential } }, agentDir);
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async (params) => {
+      expect(requireOAuthContext(params?.context).refresh).toBe("current-refresh");
+      return {
+        ...currentCredential,
+        access: "next-access",
+        refresh: "next-refresh",
+        expires: Date.now() + 20 * 60_000,
+      };
+    });
+    const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+
+    await expect(
+      resolveApiKeyForProfile({
+        store,
+        profileId,
+        agentDir,
+        forceRefresh: true,
+      }),
+    ).resolves.toMatchObject({ apiKey: "next-access" });
+
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expectPersistedOpenAICodexProfile((await readPersistedStore(agentDir)).profiles[profileId], {
+      access: "next-access",
+      refresh: "next-refresh",
+    });
+  });
+
+  it("does not persist an unchanged native Codex CLI refresh result", async () => {
+    const profileId = "openai:default";
+    const nativeCredential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "native-access",
+      refresh: "native-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-native",
+    };
+    const store = createCodexCliRuntimeStore(profileId, nativeCredential);
+    readCodexCliCredentialsCachedMock.mockReturnValue({ ...nativeCredential });
+    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValueOnce({ ...nativeCredential });
+
+    await expect(
+      refreshCodexCliOAuthCredentialForRuntime({
+        store,
+        profileId,
+        agentDir,
+        forceRefresh: true,
+      }),
+    ).resolves.toMatchObject({ refresh: "native-refresh" });
+
+    expect((await readPersistedStore(agentDir)).profiles[profileId]).toBeUndefined();
+    expect(store.runtimeExternalCliProfileIds).toEqual([profileId]);
+  });
+
+  it("adopts a usable fresh native reread without provider rotation or SQLite promotion", async () => {
+    const profileId = "openai:default";
+    const nativeCredential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "prepared-access",
+      refresh: "prepared-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-prepared",
+    };
+    const freshCredential: OAuthCredential = {
+      ...nativeCredential,
+      access: "fresh-access",
+      refresh: "fresh-refresh",
+      expires: Date.now() + 10 * 60_000,
+      accountId: "acct-fresh-login",
+    };
+    const store = createCodexCliRuntimeStore(profileId, nativeCredential);
+    readCodexCliCredentialsCachedMock.mockReturnValue(freshCredential);
+
+    await expect(
+      refreshCodexCliOAuthCredentialForRuntime({
+        store,
+        profileId,
+        agentDir,
+        forceRefresh: true,
+      }),
+    ).resolves.toMatchObject({
+      access: "fresh-access",
+      refresh: "fresh-refresh",
+      accountId: "acct-fresh-login",
+    });
+
+    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
+    expect((await readPersistedStore(agentDir)).profiles[profileId]).toBeUndefined();
+    expect(store.runtimeExternalCliProfileIds).toEqual([profileId]);
+  });
+
+  it("rejects an expired fresh native reread with a different identity before rotation", async () => {
+    const profileId = "openai:default";
+    const nativeCredential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "prepared-access",
+      refresh: "prepared-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-prepared",
+    };
+    readCodexCliCredentialsCachedMock.mockReturnValue({
+      ...nativeCredential,
+      access: "fresh-access",
+      refresh: "fresh-refresh",
+      accountId: "acct-fresh-login",
+    });
+
+    await expect(
+      refreshCodexCliOAuthCredentialForRuntime({
+        store: createCodexCliRuntimeStore(profileId, nativeCredential),
+        profileId,
+        agentDir,
+        forceRefresh: true,
+      }),
+    ).resolves.toBeNull();
+
+    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
+    expect((await readPersistedStore(agentDir)).profiles[profileId]).toBeUndefined();
+  });
+
+  it("does not promote arbitrary supplied OAuth without Codex CLI provenance", async () => {
+    const profileId = "openai:default";
+    const credential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "supplied-access",
+      refresh: "supplied-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-supplied",
+    };
+
+    await expect(
+      refreshCodexCliOAuthCredentialForRuntime({
+        store: { version: 1, profiles: { [profileId]: credential } },
+        profileId,
+        agentDir,
+        forceRefresh: true,
+      }),
+    ).resolves.toBeNull();
+
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
+    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
+    expect((await readPersistedStore(agentDir)).profiles[profileId]).toBeUndefined();
+  });
+
+  it("commits the rotated token when a same-identity SQLite row wins the insert race", async () => {
+    const profileId = "openai:default";
+    const nativeCredential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "native-access",
+      refresh: "native-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-native",
+    };
+    const store = createCodexCliRuntimeStore(profileId, nativeCredential);
+    readCodexCliCredentialsCachedMock.mockReturnValue({ ...nativeCredential });
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              ...nativeCredential,
+              access: "racing-access",
+              refresh: "native-refresh",
+            },
+          },
+        },
+        agentDir,
+      );
+      return {
+        ...nativeCredential,
+        access: "rotated-access",
+        refresh: "rotated-refresh",
+        expires: Date.now() + 60_000,
+      };
+    });
+
+    await expect(
+      refreshCodexCliOAuthCredentialForRuntime({
+        store,
+        profileId,
+        agentDir,
+        forceRefresh: true,
+      }),
+    ).resolves.toMatchObject({ refresh: "rotated-refresh" });
+
+    expectPersistedOpenAICodexProfile((await readPersistedStore(agentDir)).profiles[profileId], {
+      access: "rotated-access",
+      refresh: "rotated-refresh",
+    });
+  });
+
+  it("adopts a usable different-identity SQLite relog that wins the insert race", async () => {
+    const profileId = "openai:default";
+    const nativeCredential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "native-access",
+      refresh: "native-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-native",
+    };
+    const store = createCodexCliRuntimeStore(profileId, nativeCredential);
+    readCodexCliCredentialsCachedMock.mockReturnValue({ ...nativeCredential });
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "oauth",
+              provider: "openai",
+              access: "relogin-access",
+              refresh: "relogin-refresh",
+              expires: Date.now() + 10 * 60_000,
+              accountId: "acct-relogin",
+            },
+          },
+        },
+        agentDir,
+      );
+      return {
+        ...nativeCredential,
+        access: "rotated-native-access",
+        refresh: "rotated-native-refresh",
+        expires: Date.now() + 60_000,
+      };
+    });
+
+    await expect(
+      refreshCodexCliOAuthCredentialForRuntime({
+        store,
+        profileId,
+        agentDir,
+        forceRefresh: true,
+      }),
+    ).resolves.toMatchObject({
+      access: "relogin-access",
+      refresh: "relogin-refresh",
+      accountId: "acct-relogin",
+    });
+    expectPersistedOpenAICodexProfile((await readPersistedStore(agentDir)).profiles[profileId], {
+      refresh: "relogin-refresh",
+      accountId: "acct-relogin",
+    });
+  });
+
+  it("adopts usable authoritative SQLite despite a stale native prepared identity", async () => {
+    const profileId = "openai:default";
+    const nativeCredential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "native-access",
+      refresh: "native-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-native",
+    };
+    const managedCredential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "managed-access",
+      refresh: "managed-refresh",
+      expires: Date.now() + 10 * 60_000,
+      accountId: "acct-relogin",
+    };
+    saveAuthProfileStore({ version: 1, profiles: { [profileId]: managedCredential } }, agentDir);
+    const store = createCodexCliRuntimeStore(profileId, nativeCredential);
+    await expect(
+      refreshCodexCliOAuthCredentialForRuntime({
+        store,
+        profileId,
+        agentDir,
+        forceRefresh: true,
+      }),
+    ).resolves.toMatchObject({ refresh: "managed-refresh" });
+
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
+    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
+    expectPersistedOpenAICodexProfile((await readPersistedStore(agentDir)).profiles[profileId], {
+      refresh: "managed-refresh",
+    });
   });
 
   it("fails closed instead of using matching cached Codex CLI credentials when openai refresh fails", async () => {
@@ -476,6 +928,56 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
         accountId: "acct-rotated",
       },
     );
+  });
+
+  it("keeps configured provider context available during in-lock refresh", async () => {
+    const profileId = "openai:default";
+    const cfg = {
+      auth: {
+        profiles: {
+          [profileId]: { provider: "openai", mode: "oauth" },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://configured-openai.example.test/v1",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider: "openai" }), agentDir);
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async (params) =>
+      params?.config === cfg
+        ? {
+            type: "oauth",
+            provider: "openai",
+            access: "configured-access-token",
+            refresh: "configured-refresh-token",
+            expires: Date.now() + 86_400_000,
+          }
+        : undefined,
+    );
+
+    await expect(
+      resolveApiKeyForProfile({
+        cfg,
+        store: ensureAuthProfileStore(agentDir),
+        profileId,
+        agentDir,
+      }),
+    ).resolves.toMatchObject({
+      apiKey: "configured-access-token",
+      provider: "openai",
+    });
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledWith({
+      config: cfg,
+      context: expect.objectContaining({
+        provider: "openai",
+        type: "oauth",
+      }),
+    });
   });
 
   it("refreshes imported Codex credentials into the canonical auth store without writing back to .codex", async () => {

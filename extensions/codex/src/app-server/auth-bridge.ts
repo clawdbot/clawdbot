@@ -25,6 +25,10 @@ import {
   hasUsableOAuthCredential,
   resolveOpenAICodexAuthIdentity,
 } from "openclaw/plugin-sdk/provider-auth";
+import {
+  isCodexCliOAuthRuntimeProfile,
+  refreshCodexCliOAuthCredentialForRuntime,
+} from "openclaw/plugin-sdk/provider-auth-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import {
   resolveCodexAppServerHomeDir,
@@ -433,14 +437,24 @@ export async function resolveCodexAppServerAuthAccountCacheKey(params: {
     return undefined;
   }
   if (credential.type === "api_key") {
-    const resolved = await resolveApiKeyForProfile({ store, profileId, agentDir });
+    const resolved = await resolveApiKeyForProfile({
+      cfg: params.config,
+      store,
+      profileId,
+      agentDir,
+    });
     const apiKey = resolved?.apiKey?.trim();
     return apiKey
       ? `${resolveChatgptAccountId(profileId, credential)}:${fingerprintApiKeyAuthProfileCacheKey(apiKey)}`
       : resolveChatgptAccountId(profileId, credential);
   }
   if (credential.type === "token") {
-    const resolved = await resolveApiKeyForProfile({ store, profileId, agentDir });
+    const resolved = await resolveApiKeyForProfile({
+      cfg: params.config,
+      store,
+      profileId,
+      agentDir,
+    });
     const accessToken = resolved?.apiKey?.trim();
     return accessToken
       ? `${resolveChatgptAccountId(profileId, credential)}:${fingerprintTokenAuthProfileCacheKey(accessToken)}`
@@ -1103,6 +1117,7 @@ async function resolveLoginParamsForCredential(
   // reject opaque provider credentials.
   if (credential.type === "api_key") {
     const resolved = await resolveApiKeyForProfile({
+      cfg: params.config,
       store: params.preferStoreCredential
         ? params.store
         : ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false }),
@@ -1114,6 +1129,7 @@ async function resolveLoginParamsForCredential(
   }
   if (credential.type === "token") {
     const resolved = await resolveApiKeyForProfile({
+      cfg: params.config,
       store: params.preferStoreCredential
         ? params.store
         : ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false }),
@@ -1187,6 +1203,28 @@ async function resolveOAuthCredentialForCodexAppServer(
     ownerCredential?.type === "oauth" && isCodexAppServerAuthProvider(ownerCredential.provider)
       ? ownerCredential
       : undefined;
+  if (
+    !persistedOAuthCredential &&
+    overlaidOAuthCredential &&
+    isCodexCliOAuthRuntimeProfile({ store, profileId })
+  ) {
+    if (!params.forceRefresh) {
+      // Native Codex remains the read owner until app-server rejects the
+      // bearer and asks for refresh; only that boundary can promote rotation.
+      return overlaidOAuthCredential;
+    }
+    const managedCredential = await refreshCodexCliOAuthCredentialForRuntime({
+      store,
+      profileId,
+      agentDir: ownerAgentDir,
+      cfg: params.config,
+      forceRefresh: params.forceRefresh,
+    });
+    if (!managedCredential?.access?.trim()) {
+      throw new Error(`Codex app-server auth profile "${profileId}" could not refresh.`);
+    }
+    return managedCredential;
+  }
   if (useScopedCredential && overlaidOAuthCredential) {
     return await resolveScopedOAuthCredential({
       store,
@@ -1208,14 +1246,15 @@ async function resolveOAuthCredentialForCodexAppServer(
     return refreshedRuntimeCredential;
   }
   const resolved = await resolveApiKeyForProfile({
-    store,
+    cfg: params.config,
+    // Carry the prepared caller's rejected bearer into the locked manager.
+    // The manager rereads SQLite and deduplicates a concurrent rotation.
+    store: params.forceRefresh && params.preferStoreCredential ? params.store : store,
     profileId,
     agentDir: ownerAgentDir,
-    forceRefresh: params.forceRefresh && Boolean(persistedOAuthCredential),
+    forceRefresh: params.forceRefresh,
   });
-  const refreshed = useScopedCredential
-    ? undefined
-    : loadAuthProfileStoreForSecretsRuntime(ownerAgentDir).profiles[profileId];
+  const refreshed = loadAuthProfileStoreForSecretsRuntime(ownerAgentDir).profiles[profileId];
   const refreshedOAuthCredential =
     refreshed?.type === "oauth" && isCodexAppServerAuthProvider(refreshed.provider)
       ? refreshed
@@ -1241,6 +1280,16 @@ function shouldUseScopedOAuthCredential(params: {
   suppliedCredential: OAuthCredential;
   config?: AuthProfileOrderConfig;
 }): boolean {
+  if (
+    isCodexCliOAuthRuntimeProfile({ store: params.store, profileId: params.profileId }) &&
+    params.persistedCredential?.type === "oauth" &&
+    resolveProviderIdForAuth(params.persistedCredential.provider, { config: params.config }) ===
+      resolveProviderIdForAuth(params.suppliedCredential.provider, { config: params.config })
+  ) {
+    // A first native Codex rotation may have promoted while this prepared
+    // store was detached. SQLite owns the profile from that point forward.
+    return false;
+  }
   if (!params.store.runtimePersistedProfileIds?.includes(params.profileId)) {
     return true;
   }

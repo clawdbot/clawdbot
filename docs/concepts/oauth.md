@@ -55,7 +55,13 @@ To reduce that, OpenClaw treats the auth profile store as a **token sink**:
   re-authentication instead of falling back to external CLI token material.
   Codex CLI bootstrap is narrower still: it can only seed an empty
   `openai:default`-style profile before OpenClaw owns OAuth for that
-  provider; after that, OpenClaw-owned refreshes stay canonical
+  provider. When that credential first needs rotation, OpenClaw re-reads the
+  native Codex credential under the refresh lock. If Codex already replaced
+  the rejected bearer with a different usable bearer, OpenClaw uses that
+  native result without claiming ownership. Metadata-only changes do not
+  suppress a requested refresh. Otherwise, OpenClaw atomically records a
+  successful changed rotation in SQLite. That SQLite profile is canonical
+  afterward; OpenClaw never writes the rotation back to the native Codex store
 - status/startup paths scope external CLI discovery to the provider set
   already configured, so an unrelated CLI login store is not probed for a
   single-provider setup
@@ -180,11 +186,14 @@ Profiles store an `expires` timestamp. At runtime:
 - if a secondary agent reads an inherited main-agent OAuth profile, the
   refresh writes back to the main agent store instead of copying the refresh
   token into the secondary agent store
-- externally managed CLI credentials (Claude CLI, narrow Codex CLI bootstrap;
-  see [The token sink](#the-token-sink-why-it-exists)) are re-read instead of
-  spending a copied refresh token. If a managed refresh fails, OpenClaw
-  reports the affected profile for re-authentication instead of returning
-  external CLI token material.
+- externally managed CLI credentials are re-read from their owner when the
+  provider contract requires it. For narrow Codex CLI bootstrap, that fresh
+  read happens under the global refresh lock immediately before the first
+  rotation. A usable bearer already changed by Codex remains native;
+  otherwise, a successful changed rotation is inserted into SQLite and all
+  later refreshes use that canonical row. If a managed refresh fails,
+  OpenClaw reports the affected profile for re-authentication instead of
+  returning stale external CLI token material.
 
 The refresh flow is automatic; you generally do not need to manage tokens manually.
 

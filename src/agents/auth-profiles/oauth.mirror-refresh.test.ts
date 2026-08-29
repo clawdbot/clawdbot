@@ -8,6 +8,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
+import { getOAuthApiKey } from "../../llm/oauth.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import "./oauth-file-lock-passthrough.test-support.js";
@@ -32,6 +33,7 @@ const {
   refreshProviderOAuthCredentialWithPluginMock,
   formatProviderAuthProfileApiKeyWithPluginMock,
 } = getOAuthProviderRuntimeMocks();
+const getOAuthApiKeyMock = vi.mocked(getOAuthApiKey);
 
 function expectPersistedOpenAICodexProfile(
   credential: AuthProfileStore["profiles"][string],
@@ -486,6 +488,73 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
       }),
     ).rejects.toThrow(/OAuth token refresh failed for openai/);
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not satisfy a reused-token retry from unchanged main-agent credentials", async () => {
+    const profileId = "openai:default";
+    const provider = "openai";
+    const accountId = "acct-shared";
+
+    const subAgentDir = path.join(tempRoot, "agents", "sub-reused-catch", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider, accountId }), subAgentDir);
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider,
+            access: "main-existing-access",
+            refresh: "main-existing-refresh",
+            expires: Date.now() + 60 * 60 * 1000,
+            accountId,
+          },
+        },
+      },
+      mainAgentDir,
+    );
+
+    getOAuthApiKeyMock.mockClear();
+    getOAuthApiKeyMock
+      .mockImplementationOnce(async (_provider, credentials) => {
+        expect(credentials.openai?.access).toBe("main-existing-access");
+        const rotatedLocal = requireOAuthCredential(
+          createExpiredOauthStore({ profileId, provider, accountId }),
+          profileId,
+        );
+        saveAuthProfileStore(
+          {
+            version: 1,
+            profiles: {
+              [profileId]: {
+                ...rotatedLocal,
+                refresh: "rotated-but-still-expired-refresh",
+              },
+            },
+          },
+          subAgentDir,
+        );
+        throw new Error(
+          '401 {"error":{"message":"Your refresh token has already been used to generate a new access token.","code":"refresh_token_reused"}}',
+        );
+      })
+      .mockImplementationOnce(async (_provider, credentials) => {
+        expect(credentials.openai?.access).toBe("main-existing-access");
+        throw new Error("upstream 503 service unavailable");
+      });
+
+    const failure = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+      store: ensureAuthProfileStore(subAgentDir),
+      profileId,
+      agentDir: subAgentDir,
+      forceRefresh: true,
+    }).catch((error: unknown) => error);
+    expect(String(failure)).toContain("refresh_token_reused");
+    expect(
+      requireOAuthCredential(readAuthProfileStoreForTest(subAgentDir), profileId).refresh,
+    ).toBe("rotated-but-still-expired-refresh");
+    expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(2);
   });
 
   it("mirrors refreshed credentials produced by the plugin-refresh path", async () => {

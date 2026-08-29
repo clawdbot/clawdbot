@@ -88,7 +88,7 @@ export async function removeOAuthTestTempRoot(tempRoot: string): Promise<void> {
 }
 
 /** Read a persisted auth profile store, falling back to an empty store. */
-export function readAuthProfileStoreForTest(agentDir: string): AuthProfileStore {
+export function readAuthProfileStoreForTest(agentDir?: string): AuthProfileStore {
   return loadPersistedAuthProfileStore(agentDir) ?? { version: 1, profiles: {} };
 }
 
