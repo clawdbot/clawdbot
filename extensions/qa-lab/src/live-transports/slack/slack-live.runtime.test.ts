@@ -960,9 +960,9 @@ describe("Slack live QA runtime helpers", () => {
         messages: [
           ...Array.from({ length: 40 }, (_, index) => ({
             channelId: "C123456789",
-            text: index === 39 ? `:speech_balloon: ${commentary}` : `${privateText} ${commentary}`,
+            text: `:speech_balloon: ${commentary} ${privateText}\n${privateText}`,
             blockText: [`• *Commentary* — _${commentary}_`, privateText.repeat(1_000)],
-            ts: privateId,
+            ts: `${privateId}-${index}`,
           })),
           { channelId: "C123456789", text: run.matchText, ts: "final" },
         ],
@@ -970,12 +970,68 @@ describe("Slack live QA runtime helpers", () => {
     } catch (error) {
       failure = String(error);
     }
-    expect(failure).toContain("expected commentary in the Slack progress commentary lane");
+    expect(failure).toContain("expected exactly one Slack message identity containing commentary");
     expect(failure).toContain("presentation=");
-    expect(failure).toContain('"colonCommentary":true');
+    expect(failure).toContain('"text":"emoji/other"');
+    expect(JSON.parse(failure.split("presentation=")[1] ?? "[]")).toHaveLength(16);
     expect(failure).not.toContain(privateText);
     expect(failure).not.toContain(privateId);
     expect(failure).not.toContain(commentary);
+    expect(failure.length).toBeLessThan(4_000);
+  });
+
+  it("distinguishes marker envelopes and missing command comments without retaining text", () => {
+    const run = testing.findScenario(["slack-progress-commentary-true"])[0]?.buildRun("U_SUT");
+    if (!run || !("input" in run) || !run.verifyObserved) {
+      throw new Error("expected Slack progress message scenario");
+    }
+    const commentary = run.input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
+    const presentations = [
+      ["", "", "none/none"],
+      ["**", "**", "bold/bold"],
+      ["_", "_", "italic/italic"],
+      ["\\_", "\\_", "escaped-italic/escaped-italic"],
+      ["`", "`", "code/code"],
+      ["> ", "", "quote/none"],
+      ["• ", "", "bullet/none"],
+      [":speech_balloon: ", "", "emoji/none"],
+    ];
+    let failure = "";
+    try {
+      run.verifyObserved({
+        finalMessage: { text: "invalid final", ts: "final" },
+        messages: [
+          ...presentations.map(([prefix, suffix]) => ({
+            channelId: "C123456789",
+            text: `${prefix}${commentary}${suffix}`,
+            blockText: [`• *Commentary* — _${commentary}_\n_${commentary}_`],
+            ts: "same-private-identity",
+          })),
+          ...Array.from({ length: 40 }, () => ({
+            channelId: "C123456789",
+            text: "🛠️ `sleep 5`",
+            ts: "tool-private-identity",
+          })),
+        ],
+      });
+    } catch (error) {
+      failure = String(error);
+    }
+    const facts = JSON.parse(failure.split("presentation=")[1] ?? "[]");
+    expect(facts).toHaveLength(presentations.length + 1);
+    expect(facts.map((fact: { text: string }) => fact.text)).toEqual([
+      ...presentations.map((presentation) => presentation[2]),
+      "missing",
+    ]);
+    expect(facts[0]).toMatchObject({
+      block: "commentary-row/italic",
+      lines: [1, 2],
+      occurrences: [1, 2],
+    });
+    expect(facts.at(-1)).toMatchObject({ tool: "sleep-without-marker" });
+    expect(failure).not.toContain(commentary);
+    expect(failure).not.toContain("private-identity");
+    expect(failure).not.toContain("sleep 5");
     expect(failure.length).toBeLessThan(4_000);
   });
 

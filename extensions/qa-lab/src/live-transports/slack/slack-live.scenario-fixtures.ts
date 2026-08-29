@@ -97,6 +97,46 @@ function isSlackSafeExecSummary(message: { text: string }) {
   return /^(?:🛠️|:hammer_and_wrench:) Exec$/u.test(message.text.trim());
 }
 
+function slackMarkerEnvelope(text: string, marker: string) {
+  const line = text.split(/\r?\n/u).find((value) => value.includes(marker));
+  if (line === undefined) {
+    return "missing";
+  }
+  const index = line.indexOf(marker);
+  const classify = (value: string) => {
+    const edge = value.trim();
+    if (!edge) {
+      return "none";
+    }
+    if (/^(?:•\s+)?\*Commentary\*\s+—\s*_?$/u.test(edge)) {
+      return "commentary-row";
+    }
+    if (/^(?:•\s+)?\*Update\*\s+—\s*$/u.test(edge)) {
+      return "update-row";
+    }
+    if (/^(?:💬|:speech_balloon:)$/u.test(edge)) {
+      return "emoji";
+    }
+    if (edge === "\\_") {
+      return "escaped-italic";
+    }
+    if (edge === "_") {
+      return "italic";
+    }
+    if (/^\*{1,2}$/u.test(edge)) {
+      return "bold";
+    }
+    if (/^`{1,3}$/u.test(edge)) {
+      return "code";
+    }
+    if (/^>+$/u.test(edge)) {
+      return "quote";
+    }
+    return /^[•+-]$/u.test(edge) ? "bullet" : "other";
+  };
+  return `${classify(line.slice(0, index))}/${classify(line.slice(index + marker.length))}`;
+}
+
 export function buildSlackProgressCommentaryRun(
   sutUserId: string,
   expectation: SlackProgressCommentaryExpectation,
@@ -122,26 +162,38 @@ export function buildSlackProgressCommentaryRun(
         const identities = new Map<string, number>();
         // Failure artifacts may be public. Emit only closed presentation facts,
         // never message text, platform ids, command text, or credential fields.
-        const presentation = messages.slice(-16).map((message) => {
+        const presentation = new Set<string>();
+        for (const message of messages) {
           if (message.ts && !identities.has(message.ts)) {
             identities.set(message.ts, identities.size + 1);
           }
-          const text = message.text.trim();
-          return {
+          const texts = [message.text, (message.blockText ?? []).join("\n")];
+          const observedText = observedSlackText(message);
+          const facts = JSON.stringify({
             identity: message.ts ? identities.get(message.ts) : 0,
-            final: observedSlackText(message).includes(finalMarker),
-            commentary: observedSlackText(message).includes(commentaryMarker),
-            commentaryLane: hasSlackCommentaryLaneMarker(message, commentaryMarker),
-            bareCommentary: text === commentaryMarker,
-            colonCommentary: text === `:speech_balloon: ${commentaryMarker}`,
-            typedCommentaryBlock: (message.blockText ?? []).some(
-              (line) => line.trim() === `• *Commentary* — _${commentaryMarker}_`,
-            ),
-            safeExec: isSlackSafeExecSummary(message),
-            commandMarker: observedSlackText(message).includes(toolMarker),
-          };
-        });
-        throw new Error(`${reason}; presentation=${JSON.stringify(presentation)}`);
+            final: observedText.includes(finalMarker),
+            lane: hasSlackCommentaryLaneMarker(message, commentaryMarker),
+            text: slackMarkerEnvelope(texts[0]!, commentaryMarker),
+            block: slackMarkerEnvelope(texts[1]!, commentaryMarker),
+            lines: texts.map((text) => (text ? Math.min(9, text.split(/\r?\n/u).length) : 0)),
+            occurrences: texts.map((text) => Math.min(2, text.split(commentaryMarker).length - 1)),
+            tool: observedText.includes(toolMarker)
+              ? "command-marker"
+              : isSlackSafeExecSummary(message)
+                ? "safe-exec"
+                : /\bsleep\s+5\b/u.test(observedText)
+                  ? "sleep-without-marker"
+                  : "other",
+          });
+          // Repeated history polls must not crowd the distinct captured writes
+          // out of the bounded failure artifact. Assertions still see every write.
+          presentation.delete(facts);
+          presentation.add(facts);
+          if (presentation.size > 16) {
+            presentation.delete(presentation.values().next().value!);
+          }
+        }
+        throw new Error(`${reason}; presentation=[${[...presentation].join(",")}]`);
       }
       if (!finalMessage.ts) {
         fail("Slack progress commentary final message had no ts");
