@@ -158,10 +158,13 @@ merge_verify() {
   MERGE_USE_CRABBOX_ADMIN_BYPASS=false
   enter_worktree "$pr" false || return 1
 
-  require_artifact .local/prep.env
+  require_artifact .local/prep.env || return 1
+  require_artifact .local/gates.env || return 1
   # shellcheck disable=SC1091
-  source .local/prep.env
-  verify_prep_branch_matches_prepared_head "$pr" "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}"
+  source .local/gates.env || return 1
+  # shellcheck disable=SC1091
+  source .local/prep.env || return 1
+  verify_prep_branch_matches_prepared_head "$pr" "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}" || return 1
 
   local json
   json=$(gh_plain pr view "$pr" --json state,isDraft,headRefOid) || return 1
@@ -190,11 +193,18 @@ merge_verify() {
     exit 1
   fi
 
-  mark_pr_operation_side_effects_started
-  # Wait only for the attached CI workflow here. The direct required-check
-  # query below remains the merge authority, so optional contexts cannot stall it.
-  node "$script_parent_dir/watch-pr-ci.mjs" "$pr" "$PREP_HEAD_SHA" \
-    --completion ci-run >.local/merge-checks-watch.log 2>&1 || true
+  mark_pr_operation_side_effects_started || return 1
+  if [ "${GATES_MODE:-}" = "hosted_exact_or_recent_parent" ]; then
+    # The stamp selects the owner, not proof. Revalidate before skipping the
+    # PR-only watcher, which cannot observe accepted hosted release gates.
+    derive_prepare_gate_change_plan "$PREP_HEAD_SHA" || return 1
+    run_hosted_prepare_gates "$pr" "$PREP_HEAD_SHA" "$PREPARE_GATE_CHANGELOG_ONLY" || return 1
+  else
+    # Local/Crabbox preparation retains the attached-CI wait. Required checks
+    # below remain merge authority; optional contexts cannot stall this path.
+    node "$script_parent_dir/watch-pr-ci.mjs" "$pr" "$PREP_HEAD_SHA" \
+      --completion ci-run >.local/merge-checks-watch.log 2>&1 || true
+  fi
   local checks_json
   local checks_err_file
   local checks_exit_status
@@ -223,21 +233,26 @@ merge_verify() {
     esac
   fi
   rm -f "$checks_err_file"
-  if ! printf '%s\n' "$checks_json" | jq -e 'type == "array"' >/dev/null; then
+  # merge_run calls this function in an OR-list, disabling Bash errexit.
+  # Validate every row so malformed evidence cannot fall through as green.
+  if ! printf '%s\n' "$checks_json" | jq -e '
+    type == "array" and all(.[]; type == "object" and
+      (.bucket | IN("pass", "fail", "pending", "skipping", "cancel")))
+  ' >/dev/null; then
     echo "Merge verify failed: GitHub returned invalid required-check evidence." >&2
     return 1
   fi
   local required_count
-  required_count=$(printf '%s\n' "$checks_json" | jq 'length')
+  required_count=$(printf '%s\n' "$checks_json" | jq 'length') || return 1
   if [ "$required_count" -eq 0 ]; then
     echo "No required checks configured for this PR."
   fi
-  printf '%s\n' "$checks_json" | jq -r '.[] | "\(.bucket)\t\(.name)\t\(.state)"'
+  printf '%s\n' "$checks_json" | jq -r '.[] | "\(.bucket)\t\(.name)\t\(.state)"' || return 1
 
   local failed_required
-  failed_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="fail" or .bucket=="skipping")] | length')
+  failed_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket!="pass" and .bucket!="pending")] | length') || return 1
   local pending_required
-  pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="pending")] | length')
+  pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="pending")] | length') || return 1
 
   if [ "$pending_required" -gt 0 ]; then
     echo "Required checks are still pending."
@@ -255,7 +270,7 @@ merge_verify() {
   fi
 
   refresh_main_snapshot || return 1
-  git fetch origin "pull/$pr/head:pr-$pr" --force
+  git fetch origin "pull/$pr/head:pr-$pr" --force || return 1
   if ! git merge-base --is-ancestor "$PR_MAIN_SHA" "refs/heads/pr-$pr"; then
     echo "PR branch is behind main."
     if mainline_drift_requires_sync \
@@ -377,7 +392,7 @@ merge_run() {
 
   validate_review_artifact_data || return 1
   require_ready_review_recommendation || return 1
-  merge_verify "$pr"
+  merge_verify "$pr" || return 1
   # shellcheck disable=SC1091
   source .local/prep.env
 

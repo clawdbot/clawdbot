@@ -63,6 +63,7 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
     join(worktree, ".local/prep.env"),
     `PREP_HEAD_SHA=${head}\nLOCAL_PREP_HEAD_SHA=${head}\nPREP_MAINLINE_BASE_SHA=${base}\n`,
   );
+  writeFileSync(join(worktree, ".local/gates.env"), "GATES_MODE=full\n");
   for (const name of ["review.md", "review.json", "pr-meta.env", "pr-meta.json", "prep.md"]) {
     writeFileSync(join(worktree, ".local", name), "fixture\n");
   }

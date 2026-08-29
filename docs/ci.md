@@ -136,10 +136,25 @@ only to checks that still have the verified name and queued state. Active
 retries, unrelated checks, and ambiguous or incomplete evidence still block
 completion. This is an observation of CI state, not atomic merge authorization.
 
-`--completion ci-run` waits only for the attached CI workflow. Callers must
-separately verify required checks; CI success does not override another
-required check. The native `scripts/pr` merge flow uses this mode and then
-performs its own required-check verification before merging.
+Both watcher modes attach only to `pull_request` CI runs. `--completion ci-run`
+waits only for that attached workflow. Callers must separately verify required
+checks; CI success does not override another required check.
+
+The native `scripts/pr` merge flow reloads the saved prepare gate mode. Hosted
+mode (`OPENCLAW_TESTBOX=1` during prepare) revalidates the prepared head through
+the same hosted verifier used by prepare, including its 24-hour freshness,
+workflow identity, attempt binding, and existing patch-identical reuse rules.
+Accepted hosted proof proceeds directly
+to required-check verification without waiting on older PR CI. Local and Crabbox
+gate modes retain the `--completion ci-run` wait.
+
+Missing prepare artifacts or rejected hosted evidence stop merge verification;
+a saved mode or JSON report is not proof. Inspect `.local/gates-hosted-checks.log`,
+resolve the reported failure, and rerun prepare when its artifacts need refreshing.
+For missing CI, follow the verifier's `scripts/pr ci-dispatch <pr-number>` recovery
+guidance when available. Malformed required-check evidence and cancelled required
+checks also stop verification. Server-enforced publisher binding and the final
+pinned-head merge request remain intact. Hosted mode adds no bypass.
 
 ## PR context and evidence
 
