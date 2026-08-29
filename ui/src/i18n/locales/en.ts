@@ -219,7 +219,6 @@ export const en: TranslationMap = {
     workspaceLabel: "Workspace",
     branchLabel: "Branch",
     runsOn: "Runs on {providerId} · {profileId}",
-    noPrYet: "No PR yet",
     more: "+{count} more",
     changedFile: "{count} file",
     changedFiles: "{count} files",
