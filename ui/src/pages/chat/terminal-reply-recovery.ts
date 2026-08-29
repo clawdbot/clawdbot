@@ -23,9 +23,7 @@ function terminalReplyDisplaySignature(message: unknown): string | null {
   const metadata = asNullableRecord(record?.["__openclaw"]);
   if (
     phase === "commentary" ||
-    (phase !== "final_answer" &&
-      (!stopReason || stopReason === "tooluse") &&
-      metadata?.runTerminal !== true)
+    ((!stopReason || stopReason === "tooluse") && metadata?.runTerminal !== true)
   ) {
     return null;
   }

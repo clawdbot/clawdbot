@@ -66,6 +66,7 @@ suite.define(() => {
       const interimText = "Checking the dashboard state.";
       const updatedInterimText = "Still checking the dashboard state.";
       const partialFinalText = "Drafting the durable dashboard reply.";
+      const stalePartialFinalText = "Drafting more of the durable dashboard reply.";
       const finalText = "The durable dashboard reply is visible after Done.";
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill(prompt);
@@ -125,7 +126,13 @@ suite.define(() => {
         {
           role: "assistant",
           phase: "final_answer",
-          content: [{ text: partialFinalText, type: "text", cache_control: { type: "ephemeral" } }],
+          content: [
+            {
+              text: stalePartialFinalText,
+              type: "text",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
           timestamp: 3,
           __openclaw: { id: "dashboard-partial-final", runId, seq: 3 },
         },
