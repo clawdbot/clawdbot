@@ -373,6 +373,11 @@ openclaw browser doctor --browser-profile chrome
 openclaw doctor
 ```
 
+- **No native host was pre-registered:** check the preceding per-browser refusal
+  diagnostics and resolve the reported path, ownership, or permission issue. This
+  summary does not mean that Chrome's user-data directory is missing. If Chrome
+  has never been launched, launch it first, then rerun `extension install` before
+  adding the extension.
 - **No extension ID detected:** keep Chrome running, rerun `extension install`,
   then add the official Store extension. Use **Load unpacked** only as a
   development fallback after the command says native bootstrap is ready.
