@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -23,6 +24,8 @@ import {
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   releasePlanGateFailures,
+  MAX_RELEASE_ARTIFACT_BYTES,
+  serializeReleaseArtifact,
   selectReleaseStateArtifacts,
   validateReleaseChildRunProvenance,
   validateReleaseExecutionPlanArtifact,
@@ -420,8 +423,9 @@ async function validateReuse(plan, planInputs, signal) {
 }
 
 function writeArtifact(path, payload) {
+  const json = serializeReleaseArtifact(payload);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`);
+  writeFileSync(path, json);
 }
 
 function writeResult(path, payload) {
@@ -483,6 +487,9 @@ async function cancelAffectedChildren(children, blockers, cancelledRunIds, signa
 
 function readArtifact(path, label) {
   try {
+    if (statSync(path).size > MAX_RELEASE_ARTIFACT_BYTES) {
+      throw new Error("release artifact exceeds the size limit");
+    }
     return JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     throw new Error(
@@ -1031,6 +1038,7 @@ async function validateManifestMode() {
   ) {
     throw new Error("release validation manifest differs from the immutable execution plan");
   }
+  writeArtifact(manifestPath, rawManifest);
 }
 
 function selectMode() {

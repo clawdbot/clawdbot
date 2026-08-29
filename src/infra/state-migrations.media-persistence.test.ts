@@ -462,6 +462,49 @@ describe("legacy media persistence doctor migration", () => {
     expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
   });
 
+  it("migrates when valid transcript created_at rows have an unsafe aggregate", async () => {
+    const stateDir = makeTempDir(tempDirs, "media-persistence-large-created-at-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const legacyMediaPaths = ["/media/a.png", "/media/b.png"];
+    const databasePath = createLegacyDatabaseFixture({
+      env,
+      eventsBySession: {
+        unsafe: legacyMediaPaths.map((mediaPath, index) =>
+          createEvent({
+            id: `event-${index + 1}`,
+            parentId: index === 0 ? null : "event-1",
+            timestamp: (index + 1) * 1000,
+            message: { role: "user", content: `message ${index + 1}`, MediaPath: mediaPath },
+          }),
+        ),
+      },
+    });
+    const largeCreatedAt = Math.floor(Number.MAX_SAFE_INTEGER / 2) + 100;
+    expect(largeCreatedAt * 2).toBeGreaterThan(Number.MAX_SAFE_INTEGER);
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    database
+      .prepare("UPDATE transcript_events SET created_at = ? WHERE session_id = ?")
+      .run(largeCreatedAt, "unsafe");
+    database.close();
+
+    expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
+
+    const snapshot = readDatabaseSnapshot(databasePath);
+    expect(snapshot.version.user_version).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(snapshot.rows.map((row) => row.created_at)).toEqual([largeCreatedAt, largeCreatedAt]);
+    const messages = snapshot.rows.map(
+      (row) => (JSON.parse(row.event_json) as FixtureEvent).message,
+    );
+    expect(messages).toEqual(
+      legacyMediaPaths.map((mediaPath) =>
+        expect.objectContaining({
+          __openclaw: { media: [expect.objectContaining({ path: mediaPath })] },
+        }),
+      ),
+    );
+  });
+
   it("upgrades the existing v14 structural schema before the media cutover", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-v14-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

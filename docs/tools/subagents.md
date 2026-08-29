@@ -614,9 +614,9 @@ transcript from within an agent turn:
 
 - Redacts credential/token-like text even when general-purpose log redaction is disabled.
 - Truncates long text blocks (4000 chars per block) and drops thinking signatures, reasoning replay payloads, and inline image data.
-- Enforces an 80 KB response cap; oversized rows are replaced with `[sessions_history omitted: message too large]`.
+- Caps returned messages at 80 KB; older rows can be dropped or an oversized row replaced with `[sessions_history omitted: message too large]`.
 - Use `nextOffset` when present to page backward through older transcript windows.
-- `sessions_history` does **not** strip reasoning tags, `<relevant-memories>` scaffolding, or tool-call XML from message text — it returns structured content blocks close to the raw transcript shape, just redacted and size-bounded. `/subagents log` applies the heavier prose sanitizer (strips reasoning tags, memory scaffolding, and tool-call XML) because it renders plain chat lines instead of structured blocks.
+- Returns structured history rather than `/subagents log`'s plain chat lines. Reasoning tags, `<relevant-memories>` / `<relevant_memories>` scaffolding, and tool-call XML can remain in message text: `sessions_history` does not apply the log command's assistant prose sanitizer. See [Session tools](/concepts/session-tool#listing-and-reading-sessions) for the recall guarantees.
 - Raw on-disk transcript inspection is the fallback when you need the full byte-for-byte transcript.
 
 ## Tool policy
@@ -636,8 +636,8 @@ depth. Leaf sub-agents (default depth-1 behavior, and always at depth 2)
 additionally lose `subagents`, `sessions_list`, `sessions_history`, and
 `sessions_spawn`, so sub-agent communication stays on the announce chain.
 
-`sessions_history` remains a bounded, sanitized recall view here too — it
-is not a raw transcript dump.
+`sessions_history` remains a bounded, redacted recall view here too — it
+is neither a raw transcript dump nor a prose-only rendering.
 
 When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally
 receive `sessions_spawn`, `subagents`, `sessions_list`, and

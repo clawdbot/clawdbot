@@ -1,3 +1,6 @@
+export const MAX_RELEASE_ARTIFACT_BYTES: number;
+export function serializeReleaseArtifact(payload: unknown): string;
+
 export interface ReleaseRecord {
   [key: string]: unknown;
 }

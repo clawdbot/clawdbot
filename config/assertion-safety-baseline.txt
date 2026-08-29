@@ -2089,7 +2089,7 @@ src/agents/tools/image-tool.ts	3
 src/agents/tools/in-process-gateway.ts	1
 src/agents/tools/media-generate-tool-actions-shared.ts	1
 src/agents/tools/message-tool-discovery.ts	3
-src/agents/tools/message-tool-execution.ts	4
+src/agents/tools/message-tool-execution.ts	3
 src/agents/tools/message-tool-visible-content.ts	9
 src/agents/tools/mobile-ui-tool.ts	5
 src/agents/tools/model-config.helpers.ts	1
@@ -3986,7 +3986,6 @@ ui/src/components/wizard-step-controls.ts	4
 ui/src/i18n/lib/registry.ts	2
 ui/src/i18n/lib/translate.ts	3
 ui/src/lib/agents/display.ts	6
-ui/src/lib/board/availability-controller.ts	1
 ui/src/lib/board/gateway-provider.ts	2
 ui/src/lib/board/widget-bridge.ts	3
 ui/src/lib/board/widget-sandbox-host.ts	1

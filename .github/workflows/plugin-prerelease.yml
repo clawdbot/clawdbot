@@ -439,7 +439,8 @@ jobs:
   plugin-prerelease-static-shard:
     permissions:
       contents: read
-    name: ${{ matrix.check_name }}
+    # Job-level skips happen before matrix expansion; retain a unique owner name.
+    name: ${{ matrix.check_name || 'plugin-prerelease-static-shard' }}
     needs: [preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_static == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
@@ -476,7 +477,7 @@ jobs:
   plugin-prerelease-node-shard:
     permissions:
       contents: read
-    name: ${{ matrix.check_name }}
+    name: ${{ matrix.check_name || 'plugin-prerelease-node-shard' }}
     needs: [preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_node == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04') }}
@@ -591,7 +592,7 @@ jobs:
   plugin-prerelease-extension-shard:
     permissions:
       contents: read
-    name: ${{ matrix.check_name }}
+    name: ${{ matrix.check_name || 'plugin-prerelease-extension-shard' }}
     needs: [preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_extensions == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner }}

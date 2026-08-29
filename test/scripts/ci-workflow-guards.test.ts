@@ -3445,7 +3445,7 @@ NODE
     );
     expect(source.match(/check_name: "android-build-play"/gu)).toHaveLength(1);
     expect(source).toContain('task: useCompatibleAndroidCi ? "build-play-compat" : "build-play"');
-    expect(androidJob.name).toBe("${{ matrix.check_name }}");
+    expect(androidJob.name).toBe("${{ matrix.check_name || 'android' }}");
     expect(androidJob["runs-on"]).toBe(
       "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\",\"CONTRIBUTOR\"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
     );
@@ -6634,7 +6634,8 @@ exit 1
       (step: WorkflowStep) => step.id === "swift-build-cache",
     );
     const nativeCachePrefix =
-      "${{ runner.os }}-swift-build-v4-native-tests-${{ steps.swift-toolchain.outputs.key }}-";
+      "${{ runner.os }}-swift-build-v5-graph-${{ steps.swift-toolchain.outputs.key }}-" +
+      "${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-";
 
     expect(buildCache.with).toMatchObject({
       key: expect.stringContaining(nativeCachePrefix),

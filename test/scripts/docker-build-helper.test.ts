@@ -2690,7 +2690,7 @@ docker_e2e_docker_run_cmd run demo
     );
     expect(publishedRunner).toContain('"$clawhub_security_mode"');
     expect(publishedRunner.indexOf("phase assert-prepublish-requests node")).toBeLessThan(
-      publishedRunner.indexOf("phase doctor run_doctor"),
+      publishedRunner.indexOf("phase post-update-repair run_post_update_repair"),
     );
     const discordInstallIndex = runner.indexOf(
       'openclaw_e2e_fixture_plugin_command openclaw -- \\\n    plugins install "npm:@openclaw/discord@$package_version" --pin',
@@ -3267,8 +3267,9 @@ fi
       'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${root_cli_env[@]}" openclaw',
     );
     expect(publishedRunner).toContain(
-      'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive',
+      'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair',
     );
+    expect(publishedRunner).toContain("--accept-capabilities --yes --no-restart --json");
     expect(publishedRunner).toContain(
       'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config validate',
     );
@@ -3375,14 +3376,15 @@ fi
         openclaw: `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s %s\n' "$OPENCLAW_CONFIG_PATH" "$*" >>"$CAPTURE_DIR/openclaw-calls"
-if [ "$FAILURE_STAGE" = doctor ] && [ "\${1:-}" = doctor ]; then
-  exit 41
+if [ "\${1:-}" = doctor ]; then
+  [ "$FAILURE_STAGE" != doctor ] || exit 41
+  exit 0
 fi
 if [ "\${1:-}" = gateway ] && [ "\${2:-}" = install ]; then
   [ "$FAILURE_STAGE" != install ] || exit 44
   exit 0
 fi
-sleep 30
+exec sleep 30
 `,
       });
 
@@ -4799,8 +4801,12 @@ if (starts === 1) {
     expectTextToIncludeInOrder(publishedRunner, [
       "local update_status=0",
       'openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR" || update_status=$?',
-      'if [ "$update_status" -ne 0 ]; then',
-      'echo "openclaw update failed" >&2',
+      'if [ "$update_status" -eq 0 ]; then',
+      "assert-successful-update-json",
+      'if [ "$baseline_version" = "2026.7.1-2" ]; then',
+      'update_repair_required="1"',
+      "assert-recoverable-update-json",
+      'echo "openclaw update failed before the recoverable post-core boundary" >&2',
       'openclaw config validate --json >"$POST_UPDATE_VALIDATE_JSON"',
       'echo "post-update config validation probe status=$validate_status" >&2',
       'openclaw_e2e_print_log "$POST_UPDATE_VALIDATE_ERR" >&2 || true',
@@ -4809,6 +4815,7 @@ if (starts === 1) {
       'openclaw_e2e_print_log "$UPDATE_JSON" >&2 || true',
       'return "$update_status"',
     ]);
+    expect(publishedRunner).not.toContain("update_args+=(--accept-capabilities)");
 
     expectTextToIncludeAll(runner, [
       'openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/update.err"',

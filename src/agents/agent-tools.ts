@@ -62,6 +62,7 @@ import {
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import {
   buildConversationToolPolicyPipelineSteps,
+  projectConversationToolNames,
   resolveConversationToolPolicies,
 } from "./conversation-tool-policy-pipeline.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
@@ -496,6 +497,12 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     additionalProfileAllow: runtimeProfileAlsoAllow,
     additionalPolicyAllow: toolSearchControlAllowlist,
   });
+  const sandboxWorkspaceMediaReadAllowed =
+    projectConversationToolNames({
+      capabilityProfile,
+      toolNames: ["read"],
+      warn: () => undefined,
+    }).length === 1;
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
   const scopeKey = resolveProcessToolScopeKey({
@@ -835,6 +842,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             sandboxRoot,
             sandboxContainerWorkdir: sandbox?.containerWorkdir,
             sandboxFsBridge,
+            sandboxWorkspaceMediaReadAllowed,
             fsPolicy,
             workspaceDir: workspaceRoot,
             spawnWorkspaceDir: capabilityProfile.workspace.spawnWorkspaceRoot,

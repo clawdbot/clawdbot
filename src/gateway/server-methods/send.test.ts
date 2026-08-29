@@ -4564,7 +4564,7 @@ describe("gateway send mirroring", () => {
       expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
       expect(deliveryCall()).toMatchObject({
         to: testCase.expectedTarget,
-        accountId: testCase.accountId,
+        accountId: testCase.accountId ?? "default",
         payloads: [
           expect.objectContaining({ text: testCase.nativeDeclines ? "prepared hello" : "hello" }),
         ],

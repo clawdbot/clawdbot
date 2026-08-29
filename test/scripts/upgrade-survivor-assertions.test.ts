@@ -1,5 +1,5 @@
 // Upgrade Survivor Assertions tests cover upgrade survivor assertions script behavior.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,6 +12,142 @@ const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
+
+const RECOVERABLE_UPDATE = {
+  status: "error",
+  mode: "npm",
+  reason: "post-update-plugins",
+  after: { version: "2026.8.1" },
+  steps: [
+    { name: "global update", exitCode: 0 },
+    { name: "global install swap", exitCode: 0 },
+    { name: "openclaw doctor", exitCode: 0 },
+  ],
+  postUpdate: {
+    plugins: {
+      status: "error",
+      reason: "post-plugin-doctor-invalid-config",
+      warnings: [{ reason: 'Plugin "discord" requires capability consent.' }],
+      sync: { errors: [] },
+      npm: { outcomes: [] },
+      integrityDrifts: [],
+    },
+  },
+};
+
+function runJsonAssertion(command: string, value: unknown, ...args: string[]) {
+  return runJsonTextAssertion(command, `${JSON.stringify(value, null, 2)}\n`, ...args);
+}
+
+function runJsonTextAssertion(command: string, contents: string, ...args: string[]) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-json-"));
+  const file = join(root, "result.json");
+  writeFileSync(file, contents);
+  const result = spawnSync(process.execPath, [ASSERTIONS_PATH, command, file, ...args], {
+    encoding: "utf8",
+  });
+  rmSync(root, { force: true, recursive: true });
+  return result;
+}
+
+function runPrefixedJsonAssertion(command: string, value: unknown, ...args: string[]) {
+  return runJsonTextAssertion(
+    command,
+    `Stopped legacy service before update\n${JSON.stringify(value)}\n`,
+    ...args,
+  );
+}
+
+function withPluginResult(patch: Record<string, unknown>) {
+  return {
+    ...RECOVERABLE_UPDATE,
+    postUpdate: { plugins: { ...RECOVERABLE_UPDATE.postUpdate.plugins, ...patch } },
+  };
+}
+
+describe("upgrade recovery result assertions", () => {
+  it("accepts clean updates for baselines that already have consent", () => {
+    const result = {
+      status: "ok",
+      after: { version: "2026.8.1" },
+      steps: [{ name: "global update", exitCode: 0 }],
+    };
+    expect(runJsonAssertion("assert-successful-update-json", result, "2026.8.1").status).toBe(0);
+    expect(
+      runJsonAssertion(
+        "assert-successful-update-json",
+        {
+          ...result,
+          steps: [{ name: "global update", exitCode: 1 }],
+        },
+        "2026.8.1",
+      ).status,
+    ).not.toBe(0);
+    expect(
+      runPrefixedJsonAssertion("assert-successful-update-json", result, "2026.8.1").status,
+    ).toBe(0);
+  });
+
+  it("accepts only a completed core swap stranded on capability consent", () => {
+    expect(
+      runPrefixedJsonAssertion("assert-recoverable-update-json", RECOVERABLE_UPDATE, "2026.8.1")
+        .status,
+    ).toBe(0);
+    const consentError = 'Plugin "discord" requires capability consent.';
+    const consentOutcome = {
+      pluginId: "discord",
+      status: "error",
+      code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+    };
+    const validResults = [
+      RECOVERABLE_UPDATE,
+      withPluginResult({ warnings: [], sync: { errors: [consentError] } }),
+      withPluginResult({ warnings: [], npm: { outcomes: [consentOutcome] } }),
+    ];
+    for (const value of validResults) {
+      expect(runJsonAssertion("assert-recoverable-update-json", value, "2026.8.1").status).toBe(0);
+    }
+
+    const invalidResults = [
+      { ...RECOVERABLE_UPDATE, reason: "global-update-failed" },
+      { ...RECOVERABLE_UPDATE, after: { version: "2026.7.1-2" } },
+      {
+        ...RECOVERABLE_UPDATE,
+        steps: RECOVERABLE_UPDATE.steps.map((step, index) =>
+          index === 0 ? { ...step, exitCode: 1 } : step,
+        ),
+      },
+      { ...RECOVERABLE_UPDATE, postUpdate: { plugins: { reason: "registry-timeout" } } },
+      withPluginResult({ sync: { errors: [consentError, "registry unavailable"] } }),
+      withPluginResult({ npm: { outcomes: [{ status: "error", code: "EIO" }] } }),
+      withPluginResult({ integrityDrifts: [{ pluginId: "discord" }] }),
+      ...["sync", "npm", "integrityDrifts"].map((field) =>
+        withPluginResult({ [field]: undefined }),
+      ),
+    ];
+    for (const value of invalidResults) {
+      expect(runJsonAssertion("assert-recoverable-update-json", value, "2026.8.1").status).not.toBe(
+        0,
+      );
+    }
+  });
+
+  it("requires repair to finish doctor and plugin convergence without restart", () => {
+    const repaired = {
+      status: "ok",
+      mode: "finalize",
+      restart: false,
+      postUpdate: { doctor: { status: "ok" }, plugins: { status: "ok" } },
+    };
+    expect(runJsonAssertion("assert-repair-json", repaired).status).toBe(0);
+    expect(
+      runJsonAssertion("assert-repair-json", {
+        ...repaired,
+        postUpdate: { ...repaired.postUpdate, plugins: { status: "warning" } },
+      }).status,
+    ).not.toBe(0);
+  });
+});
 
 function writeMigratedSessionState(stateDir: string): void {
   const agentSessionsDir = join(stateDir, "agents", "main", "sessions");

@@ -293,23 +293,14 @@ function scanTrajectoryRows(params: {
   return changedRows;
 }
 
-type MediaSourceVersion = {
-  dataVersion: number;
-  trajectoryBytes: number;
-  trajectoryRows: number;
-  transcriptBytes: number;
-  transcriptCreatedAt: number;
-  transcriptRows: number;
-};
-
-function readMediaSourceVersion(database: DatabaseSync): MediaSourceVersion {
+function readMediaSourceVersion(database: DatabaseSync) {
   const dataVersionRow = database.prepare("PRAGMA data_version").get();
   const counts = database
     .prepare(
       `SELECT
         (SELECT COUNT(*) FROM transcript_events) AS transcript_rows,
         (SELECT COALESCE(SUM(LENGTH(event_json)), 0) FROM transcript_events) AS transcript_bytes,
-        (SELECT COALESCE(SUM(created_at), 0) FROM transcript_events) AS transcript_created_at,
+        (SELECT CAST(COALESCE(SUM(created_at), 0) AS TEXT) FROM transcript_events) AS transcript_created_at,
         (SELECT COUNT(*) FROM trajectory_runtime_events) AS trajectory_rows,
         (SELECT COALESCE(SUM(LENGTH(event_json)), 0) FROM trajectory_runtime_events) AS trajectory_bytes`,
     )
@@ -322,10 +313,14 @@ function readMediaSourceVersion(database: DatabaseSync): MediaSourceVersion {
     trajectoryBytes: count("trajectory_bytes"),
     trajectoryRows: count("trajectory_rows"),
     transcriptBytes: count("transcript_bytes"),
-    transcriptCreatedAt: count("transcript_created_at"),
+    transcriptCreatedAt: String(
+      (isRecord(counts) ? counts.transcript_created_at : undefined) ?? "0",
+    ),
     transcriptRows: count("transcript_rows"),
   };
 }
+
+type MediaSourceVersion = ReturnType<typeof readMediaSourceVersion>;
 
 function mediaSourceDriftMessage(
   pathname: string,

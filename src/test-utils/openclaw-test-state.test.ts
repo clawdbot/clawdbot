@@ -23,8 +23,9 @@ import {
   closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { setTestEnvValue, withEnvAsync } from "./env.js";
+import { captureEnv, setTestEnvValue, withEnvAsync } from "./env.js";
 import { createOpenClawTestState, withOpenClawTestState } from "./openclaw-test-state.js";
+import * as sessionCleanup from "./session-state-cleanup.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
@@ -37,6 +38,133 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("openclaw test state", () => {
+  it.each([
+    { stage: "realpath", layout: "home" },
+    { stage: ".openclaw", layout: "home" },
+    { stage: "workspace", layout: "state-only" },
+    { stage: "home", layout: "split" },
+    { stage: "config", layout: "split" },
+    { stage: "environment", layout: "home" },
+  ] as const)("rolls back $stage acquisition in $layout layout", async ({ stage, layout }) => {
+    const parent = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "test-state-acquisition-")),
+    );
+    const prefix = path.join(path.basename(parent), "fixture-");
+    const unrelated = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: path.join(parent, "unrelated") },
+    });
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_AGENT_DIR: path.join(parent, "previous-agent"),
+          OPENCLAW_ACQUISITION_EMPTY: "",
+          OPENCLAW_ACQUISITION_ABSENT: undefined,
+        },
+        async () => {
+          const keys = [
+            "HOME",
+            "USERPROFILE",
+            "HOMEDRIVE",
+            "HOMEPATH",
+            "OPENCLAW_HOME",
+            "OPENCLAW_STATE_DIR",
+            "OPENCLAW_CONFIG_PATH",
+            "OPENCLAW_AGENT_DIR",
+            "OPENCLAW_ACQUISITION_EMPTY",
+            "OPENCLAW_ACQUISITION_ABSENT",
+          ];
+          const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+          const snapshot = captureEnv(keys);
+          const fault = new Error(`failed ${stage} acquisition`);
+          const mkdir = fs.mkdir;
+          const writeFile = fs.writeFile;
+          const set = Reflect.set;
+          const cleanupSpy = vi.spyOn(sessionCleanup, "cleanupSessionStateForTest");
+          const faultSpy =
+            stage === "realpath"
+              ? vi.spyOn(fs, "realpath").mockRejectedValueOnce(fault)
+              : stage === "config"
+                ? vi.spyOn(fs, "writeFile").mockImplementationOnce(async (...args) => {
+                    await writeFile(...args);
+                    throw fault;
+                  })
+                : stage === "environment"
+                  ? vi.spyOn(Reflect, "set").mockImplementation((...args) => {
+                      const result = set(...args);
+                      const [target, key] = args;
+                      if (target === process.env && key === "HOME") {
+                        faultSpy.mockRestore();
+                        throw fault;
+                      }
+                      return result;
+                    })
+                  : vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
+                      const result = await mkdir(...args);
+                      if (path.basename(String(args[0])) === stage) {
+                        throw fault;
+                      }
+                      return result;
+                    });
+          try {
+            await expect(
+              createOpenClawTestState({
+                prefix,
+                layout,
+                scenario: "minimal",
+                applyEnv: stage !== "config",
+                env: {
+                  OPENCLAW_ACQUISITION_EMPTY: "changed",
+                  OPENCLAW_ACQUISITION_ABSENT: "added",
+                },
+              }),
+            ).rejects.toBe(fault);
+            expect(Object.fromEntries(keys.map((key) => [key, process.env[key]]))).toEqual(
+              previous,
+            );
+            expect(await fs.readdir(parent)).toEqual(["unrelated"]);
+            expect(unrelated.db.isOpen).toBe(true);
+            expect(cleanupSpy).not.toHaveBeenCalled();
+            faultSpy.mockRestore();
+
+            const recovered = await createOpenClawTestState({
+              prefix,
+              layout: "split",
+              scenario: "minimal",
+              applyEnv: false,
+            });
+            try {
+              expect(Object.fromEntries(keys.map((key) => [key, process.env[key]]))).toEqual(
+                previous,
+              );
+              expect(recovered.configPath).toBe(
+                path.join(recovered.root, "config", "openclaw.json"),
+              );
+              expect(JSON.parse(await fs.readFile(recovered.configPath, "utf8"))).toEqual({});
+              recovered.applyEnv();
+              expect(process.env.HOME).toBe(recovered.home);
+              expect(process.env.OPENCLAW_STATE_DIR).toBe(recovered.stateDir);
+            } finally {
+              await recovered.cleanup();
+            }
+            await recovered.cleanup();
+            expect(Object.fromEntries(keys.map((key) => [key, process.env[key]]))).toEqual(
+              previous,
+            );
+            expect(await fs.readdir(parent)).toEqual(["unrelated"]);
+            expect(unrelated.db.isOpen).toBe(true);
+          } finally {
+            faultSpy.mockRestore();
+            cleanupSpy.mockRestore();
+            snapshot.restore();
+          }
+        },
+      );
+    } finally {
+      closeOpenClawStateDatabaseByPath(unrelated.path);
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it("creates an isolated home layout with spawn env and restores process env", async () => {
     const previousHome = process.env.HOME;
     const previousOpenClawHome = process.env.OPENCLAW_HOME;

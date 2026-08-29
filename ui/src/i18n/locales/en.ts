@@ -1098,7 +1098,7 @@ export const en: TranslationMap = {
     actions: "Actions",
     addToWorkboard: "Add to Workboard",
     openWorkboardCard: "Open Workboard card",
-    dashboardAvailable: "Dashboard available",
+    opensAsDashboard: "Opens as dashboard",
     approvalNeeded: "Approval needed",
     messageNeedsAttention: "{count} message needs attention",
     messagesNeedAttention: "{count} messages need attention",

@@ -2116,6 +2116,18 @@ openclaw-settings-save-indicator:empty {
   padding-right: var(--session-row-actions-reserve);
 }
 
+/* Trade unread/PR tracks for action space, keeping active state and second-line
+   metadata visible. Collapse empty containers too so their gaps cannot squeeze the title. */
+.sidebar-recent-session--single-line:not(.sidebar-recent-session--child):is(:hover, :focus-within)
+  :is(
+    .session-unread-dot,
+    .session-row-badge--pull-request,
+    .session-row-aside:has(> .session-row-state > .session-unread-dot:only-child),
+    .session-row-badges:has(> openclaw-tooltip:only-child > .session-row-badge--pull-request)
+  ) {
+  display: none;
+}
+
 .nav-collapse-toggle__icon {
   display: flex;
   align-items: center;

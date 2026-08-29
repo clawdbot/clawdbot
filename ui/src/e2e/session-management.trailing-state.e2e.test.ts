@@ -256,7 +256,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps the trailing unread dot on one axis with and without a pull-request icon", async () => {
+  it("aligns trailing unread dots and trades unread/PR icons for hover actions", async () => {
     const plainKey = "agent:main:unread-plain";
     const pullRequestKey = "agent:main:unread-pr";
     const context = await suite.browser.newContext({
@@ -265,6 +265,9 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
+    });
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
       methodResponses: {
@@ -346,6 +349,23 @@ suite.define(() => {
         await dotInsetFromRowRight(plainRow),
         0,
       );
+      const pullRequestIcon = pullRequestRow.locator("[data-pull-request-state='merged']");
+      const unreadDot = pullRequestRow.locator(".session-unread-dot");
+      const trailingState = pullRequestRow.locator(".session-row-state");
+      await captureUiProof(page, "sidebar-pr-before-hover.png");
+      await pullRequestRow.hover();
+      await captureUiProof(page, "sidebar-pr-hover.png");
+      await pullRequestIcon.waitFor({ state: "hidden" });
+      await unreadDot.waitFor({ state: "hidden" });
+      await trailingState.waitFor({ state: "hidden" });
+      await page.mouse.move(0, 0);
+      await pullRequestIcon.waitFor({ state: "visible" });
+      await unreadDot.waitFor({ state: "visible" });
+      await pullRequestRow.getByRole("button", { name: "Open session menu" }).focus();
+      await trailingState.waitFor({ state: "hidden" });
+      await codingToggle.focus();
+      await pullRequestIcon.waitFor({ state: "visible" });
+      await unreadDot.waitFor({ state: "visible" });
     } finally {
       await context.close();
     }

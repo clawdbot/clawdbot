@@ -166,7 +166,10 @@ until their dependent enforcement changes land.
   adopts any active newer child attempt, reruns failed child jobs in parallel,
   leaves green children untouched, then reruns the parent once to restore the
   immutable plan and seal a trusted all-group manifest. It does not start a
-  second child retry while an attempt is active.
+  second child retry while an attempt is active. Each child or parent rerun
+  mutation is sent exactly once; ambiguous transport failures trigger only
+  bounded read reconciliation. The controller never repeats the mutation, and
+  provenance drift fails closed.
 - Inspect without mutation:
 
   ```bash

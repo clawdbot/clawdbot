@@ -96,6 +96,11 @@ child attempts, and writes the final all-group manifest. The manifest records
 the planned and effective attempt, accepted attempt for every logical job, and
 a digest of the composite job evidence.
 
+Each child or parent rerun mutation is sent exactly once. If GitHub returns an
+ambiguous transient error, the controller performs read-only reconciliation
+until the newer attempt becomes visible or the bounded reconciliation deadline
+expires. It never repeats the mutation, and provenance drift fails closed.
+
 The command stores no continuation ledger or local journal. GitHub run
 attempts, the immutable execution plan, Decision/Drain artifacts, and the final
 manifest are the complete state model. It never tags, publishes, changes a

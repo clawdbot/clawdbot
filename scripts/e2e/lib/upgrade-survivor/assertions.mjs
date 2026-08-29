@@ -62,6 +62,24 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+function readUpdateJson(file) {
+  const raw = fs.readFileSync(file, "utf8");
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    // Published baselines may emit legacy service-control logs before the JSON payload.
+    const jsonStart = raw.indexOf("{");
+    if (jsonStart === -1) {
+      throw error;
+    }
+    return JSON.parse(raw.slice(jsonStart));
+  }
+}
+
+function isCapabilityConsentReason(value) {
+  return typeof value === "string" && value.includes("requires capability consent");
+}
+
 function resolveHomePath(value) {
   if (typeof value !== "string" || value.length === 0) {
     return "";
@@ -1153,6 +1171,90 @@ function assertStatusJson([file]) {
   assert(/running|connected|ok|ready/u.test(text), "gateway status did not report a healthy state");
 }
 
+function assertRecoverableUpdateJson([file, expectedVersion]) {
+  assert(file && expectedVersion, "assert-recoverable-update-json requires a path and version");
+  const result = readUpdateJson(file);
+  const steps = result?.steps;
+  const plugins = result?.postUpdate?.plugins;
+  assert(result?.status === "error", "recoverable update did not report error status");
+  assert(result?.mode === "npm", `recoverable update mode changed: ${String(result?.mode)}`);
+  assert(
+    result?.reason === "post-update-plugins",
+    `update failed before plugin convergence: ${String(result?.reason)}`,
+  );
+  assert(
+    result?.after?.version === expectedVersion,
+    `candidate version was not installed: ${String(result?.after?.version)}`,
+  );
+  assert(Array.isArray(steps) && steps.length > 0, "recoverable update reported no steps");
+  for (const stepName of ["global update", "global install swap"]) {
+    const step = steps.find((entry) => entry?.name === stepName);
+    assert(step?.exitCode === 0, `${stepName} did not complete successfully`);
+  }
+  assert(
+    steps.every((step) => step?.exitCode === 0),
+    "recoverable update contained a failed core step",
+  );
+  assert(plugins?.status === "error", "recoverable update did not fail plugin convergence");
+  assert(
+    plugins?.reason === "post-plugin-doctor-invalid-config",
+    `unexpected plugin convergence failure: ${String(plugins?.reason)}`,
+  );
+  const syncErrors = plugins?.sync?.errors;
+  const npmOutcomes = plugins?.npm?.outcomes;
+  const integrityDrifts = plugins?.integrityDrifts;
+  assert(
+    Array.isArray(syncErrors) && syncErrors.every(isCapabilityConsentReason),
+    "recoverable update contained a non-consent plugin synchronization error",
+  );
+  assert(
+    Array.isArray(npmOutcomes) &&
+      npmOutcomes.every(
+        (outcome) =>
+          outcome?.status !== "error" || outcome?.code === "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+      ),
+    "recoverable update contained a non-consent failed plugin update",
+  );
+  assert(
+    Array.isArray(integrityDrifts) && integrityDrifts.length === 0,
+    "recoverable update contained a plugin integrity drift",
+  );
+  assert(
+    (Array.isArray(plugins?.warnings) &&
+      plugins.warnings.some((warning) => isCapabilityConsentReason(warning?.reason))) ||
+      syncErrors.some(isCapabilityConsentReason) ||
+      npmOutcomes.some(
+        (outcome) =>
+          outcome?.status === "error" && outcome?.code === "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+      ),
+    "plugin convergence failure did not require capability consent",
+  );
+}
+
+function assertSuccessfulUpdateJson([file, expectedVersion]) {
+  assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
+  const result = readUpdateJson(file);
+  assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
+  assert(
+    result?.after?.version === expectedVersion,
+    `successful update version changed: ${String(result?.after?.version)}`,
+  );
+  assert(
+    Array.isArray(result?.steps) && result.steps.every((step) => step?.exitCode === 0),
+    "successful update contained a failed core step",
+  );
+}
+
+function assertRepairJson([file]) {
+  assert(file, "assert-repair-json requires a path");
+  const result = readJson(file);
+  assert(result?.status === "ok", `update repair did not report ok: ${String(result?.status)}`);
+  assert(result?.mode === "finalize", `update repair mode changed: ${String(result?.mode)}`);
+  assert(result?.restart === false, "update repair unexpectedly restarted the Gateway");
+  assert(result?.postUpdate?.doctor?.status === "ok", "update repair doctor did not pass");
+  assert(result?.postUpdate?.plugins?.status === "ok", "update repair plugins did not pass");
+}
+
 function parseStableVersion(version) {
   const match = /^(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$/u.exec(version ?? "");
   assert(match, `invalid stable package version: ${String(version)}`);
@@ -1325,6 +1427,12 @@ if (command === "list-scenarios") {
   assertCompanionPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-status-json") {
   assertStatusJson(process.argv.slice(3));
+} else if (command === "assert-recoverable-update-json") {
+  assertRecoverableUpdateJson(process.argv.slice(3));
+} else if (command === "assert-successful-update-json") {
+  assertSuccessfulUpdateJson(process.argv.slice(3));
+} else if (command === "assert-repair-json") {
+  assertRepairJson(process.argv.slice(3));
 } else if (command === "assert-update-run-self-upgrade") {
   assertUpdateRunSelfUpgrade(process.argv.slice(3));
 } else {

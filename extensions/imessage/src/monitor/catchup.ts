@@ -1,9 +1,14 @@
-// Imessage plugin module implements catchup behavior.
-import { createHash } from "node:crypto";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getIMessageRuntime } from "../runtime.js";
+import {
+  IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
+  IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
+  resolveIMessageCatchupCursorKey,
+  capFailureRetriesMap,
+  type IMessageCatchupCursor,
+} from "../state-contract.js";
 
 // iMessage inbound catchup. When the gateway is offline (crash, restart, mac
 // sleep, machine off), `imsg watch` resumes from current state and ignores
@@ -24,13 +29,6 @@ const MAX_PER_RUN_LIMIT = 500;
 const DEFAULT_FIRST_RUN_LOOKBACK_MINUTES = 30;
 const DEFAULT_MAX_FAILURE_RETRIES = 10;
 const MAX_MAX_FAILURE_RETRIES = 1_000;
-// Defense-in-depth bound on the retry map. The cursor is one plugin-state
-// value, so keep the retry payload well below the 64KB store limit.
-const MAX_FAILURE_RETRY_MAP_SIZE = 512;
-const MAX_FAILURE_RETRY_MAP_JSON_BYTES = 48_000;
-const textEncoder = new TextEncoder();
-export const IMESSAGE_CATCHUP_CURSOR_NAMESPACE = "imessage.catchup-cursors";
-export const IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES = 256;
 const cursorWriteQueue = new KeyedAsyncQueue();
 
 type IMessageCatchupConfig = {
@@ -39,28 +37,6 @@ type IMessageCatchupConfig = {
   perRunLimit?: number;
   firstRunLookbackMinutes?: number;
   maxFailureRetries?: number;
-};
-
-export type IMessageCatchupCursor = {
-  /** Timestamp (ms since epoch) of the highest-watermark message we processed. */
-  lastSeenMs: number;
-  /** ROWID of the highest-watermark processed message. Monotonic in chat.db. */
-  lastSeenRowid: number;
-  /** UTC ms timestamp of the most recent cursor write. */
-  updatedAt: number;
-  /**
-   * Per-GUID failure counter, preserved across runs. Two states:
-   * - `1 <= count < maxFailureRetries`: the GUID is still retrying and
-   *   continues to hold the cursor back.
-   * - `count >= maxFailureRetries`: catchup has given up on the GUID. The
-   *   message is skipped on sight (no dispatch attempt) and the cursor no
-   *   longer waits on it. Entry stays in the map until the cursor naturally
-   *   advances past the message's timestamp.
-   *
-   * A successful dispatch removes the entry. Optional on the persisted shape
-   * so older cursor files without this field load cleanly.
-   */
-  failureRetries?: Record<string, number>;
 };
 
 export type IMessageCatchupRow = {
@@ -96,10 +72,6 @@ export type IMessageCatchupSummary = {
   windowStartMs: number;
   windowEndMs: number;
 };
-
-export function resolveIMessageCatchupCursorKey(accountId: string): string {
-  return createHash("sha256").update(accountId, "utf8").digest("hex").slice(0, 32);
-}
 
 function openCatchupCursorStore(): PluginStateSyncKeyedStore<IMessageCatchupCursor> {
   return getIMessageRuntime().state.openSyncKeyedStore<IMessageCatchupCursor>({
@@ -207,35 +179,6 @@ async function saveIMessageCatchupCursor(
     }
     return cursor;
   });
-}
-
-/**
- * Bound the retry map so a pathological storm of unique failing GUIDs
- * cannot grow the cursor file without limit. Keeps the `maxSize` entries
- * with the highest counts (closest to give-up) when over the bound.
- */
-export function capFailureRetriesMap(
-  map: Record<string, number>,
-  maxSize: number = MAX_FAILURE_RETRY_MAP_SIZE,
-  maxBytes: number = MAX_FAILURE_RETRY_MAP_JSON_BYTES,
-): Record<string, number> {
-  const entries = Object.entries(map);
-  if (entries.length <= maxSize && textEncoder.encode(JSON.stringify(map)).byteLength <= maxBytes) {
-    return map;
-  }
-  // Sort by count desc; stable tiebreak on guid string so the retained set
-  // is deterministic across runs (important for cursor-file diffing during
-  // debugging).
-  entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const capped: Record<string, number> = {};
-  for (const [guid, count] of entries.slice(0, maxSize)) {
-    capped[guid] = count;
-    if (textEncoder.encode(JSON.stringify(capped)).byteLength > maxBytes) {
-      delete capped[guid];
-      break;
-    }
-  }
-  return capped;
 }
 
 export type ResolvedCatchupConfig = {
