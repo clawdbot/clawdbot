@@ -26,6 +26,7 @@ import type { ChatExportResult } from "./export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import type { PendingChatAbort } from "./run-lifecycle.ts";
+import type { ChatScrollToEndOptions } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SidebarLayout } from "./sidebar-layout.ts";
 import type {
@@ -109,16 +110,15 @@ export type ChatPageHost = ChatHost &
     chatScrollCommitCleanup: (() => void) | null;
     chatStreamRenderFrame: number | null;
     chatScrollFrame: number | null;
-    chatScrollGuardFrame: number | null;
     chatScrollGeneration: number;
     chatLastScrollTop: number;
     chatLastScrollHeight: number;
     chatHasAutoScrolled: boolean;
     chatUserNearBottom: boolean;
     chatFollowLocked: boolean;
-    chatIsProgrammaticScroll: boolean;
-    chatProgrammaticScrollTarget: number;
-    chatScrollToEnd?: (options: { behavior?: ScrollBehavior }) => void;
+    chatIsProgrammaticScroll?: () => boolean;
+    chatScrollElement?: () => HTMLElement | null;
+    chatScrollToEnd?: (options: ChatScrollToEndOptions) => boolean;
     sidebarLayout: SidebarLayout;
     sidebarContent: SidebarContent | null;
     attachmentSidebarContent: Extract<SidebarContent, { kind: "attachment" }> | null;
@@ -142,7 +142,7 @@ export type ChatPageHost = ChatHost &
       messageOverride?: string,
       options?: unknown,
       submissionAction?: Event,
-    ) => Promise<void>;
+    ) => Promise<boolean | void>;
     handleAbortChat: (options?: unknown) => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     retryQueuedChatMessage: (id: string) => Promise<void>;

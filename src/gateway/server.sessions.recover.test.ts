@@ -13,7 +13,10 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  runExclusiveSessionLifecycleMutation,
+} from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
@@ -157,10 +160,12 @@ test("sessions.recover settles its active placement before archiving a real sess
     async (
       request: { agentId: string; sessionId: string; sessionKey: string },
       authorize?: () => void,
+      beforeDrain?: () => void,
     ) =>
       await barriers.runReclaimBarrier({
         ...request,
-        ...(authorize ? { authorize } : {}),
+        authorize,
+        beforeDrain,
         begin: () => {
           placement = recoveryWorkerPlacement({
             sessionId: sourceSessionId,
@@ -196,20 +201,24 @@ test("sessions.recover settles its active placement before archiving a real sess
     { agentId: "main", key: sourceKey },
     { context },
   );
-  const committedBeforeReclaim = await Promise.race([
-    reclaimStarted.promise.then(() => false),
-    recovering.then(() => true),
-  ]);
-  expect(committedBeforeReclaim).toBe(false);
-  expect(reclaim).toHaveBeenCalledWith({
-    agentId: "main",
-    sessionId: sourceSessionId,
-    sessionKey: sourceKey,
-  });
-  const unsettledSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
-  expect(unsettledSource?.archivedAt).toBeUndefined();
-  expect(unsettledSource?.mainRestartRecovery?.tombstone?.recoveredSessionKey).toBeUndefined();
-  reclaimGate.resolve();
+  try {
+    const committedBeforeReclaim = await Promise.race([
+      reclaimStarted.promise.then(() => false),
+      recovering.then(() => true),
+    ]);
+    expect(committedBeforeReclaim).toBe(false);
+    expect(reclaim).toHaveBeenCalledWith(
+      { agentId: "main", sessionId: sourceSessionId, sessionKey: sourceKey },
+      undefined,
+      expect.any(Function),
+    );
+    const unsettledSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+    expect(unsettledSource?.archivedAt).toBeUndefined();
+    expect(unsettledSource?.mainRestartRecovery?.tombstone?.recoveredSessionKey).toBeUndefined();
+  } finally {
+    reclaimGate.resolve();
+    await Promise.allSettled([recovering]);
+  }
 
   const recovered = await recovering;
   expect(recovered).toMatchObject({ ok: true, payload: { key: expect.any(String) } });
@@ -239,6 +248,120 @@ test("sessions.recover settles its active placement before archiving a real sess
   ).resolves.toMatchObject({ ok: true, payload: { key: recovered.payload?.key } });
   expect(reclaim).toHaveBeenCalledOnce();
 });
+
+test.each(["before-interrupt", "before-drain"] as const)(
+  "automatic reclaim rechecks eligibility after waiting %s",
+  async (phase) => {
+    const { dir, storePath } = await createSessionStoreDir();
+    const sessionKey = `agent:main:dashboard:idle-reclaim-${phase}`;
+    const sessionId = `idle-reclaim-${phase}`;
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("gateway test state directory is unavailable");
+    }
+    const repoRoot = await initializeManagedWorktreeTestRepository(dir);
+    const worktree = await materializeManagedWorktreeFixture({
+      env: process.env,
+      name: sessionId,
+      now: Date.now(),
+      ownerKind: "session",
+      ownerId: sessionKey,
+      repoRoot,
+      stateDir,
+    });
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: sessionStoreEntry(sessionId, {
+          spawnedCwd: worktree.path,
+          worktree: {
+            id: worktree.id,
+            branch: worktree.branch,
+            repoRoot,
+            canonicalWorkspaceDir: repoRoot,
+          },
+        }),
+      },
+    });
+    const placement = recoveryWorkerPlacement({ sessionId, sessionKey, state: "active" });
+    if (placement.state !== "active") {
+      throw new Error("expected active worker placement");
+    }
+    const enteredWait = createDeferredCore();
+    const releaseWait = createDeferredCore();
+    const wait = async () => {
+      enteredWait.resolve();
+      await releaseWait.promise;
+    };
+    const onInterrupt = vi.fn();
+    let releaseAdmission = () => {};
+    const admission =
+      phase === "before-interrupt"
+        ? await beginSessionWorkAdmission({
+            scope: storePath,
+            identities: [sessionId, sessionKey],
+            assertAllowed: () => {},
+            onInterrupt: () => {
+              onInterrupt();
+              releaseAdmission();
+            },
+          })
+        : undefined;
+    releaseAdmission = () => admission?.release();
+    const begin = vi.fn(() => ({ ...placement, state: "draining" as const }));
+    const reclaim = vi.fn(async () => {
+      throw new Error("ineligible worker must not be reclaimed");
+    });
+    const barriers = createGatewayWorkerPlacementReclaimBarriers({
+      placements: {
+        get: () => placement,
+        waitForTurnClaimRelease: async () => {
+          if (phase === "before-drain") {
+            await wait();
+          }
+        },
+      },
+      loadSessionRuntime: async () => {
+        if (phase === "before-interrupt") {
+          await wait();
+        }
+        return {
+          managedWorktrees,
+          resolveCanonicalSessionEntryFromStoreKeys,
+          resolveGatewaySessionStoreTargetWithStore,
+        };
+      },
+      revokeSessionAuthority: vi.fn(),
+    });
+    let eligible = true;
+    const eligibilityError = new Error("worker is no longer idle");
+    const reclaiming = barriers.runReclaimBarrier({
+      sessionId,
+      sessionKey,
+      agentId: "main",
+      beforeDrain: () => {
+        if (!eligible) {
+          throw eligibilityError;
+        }
+      },
+      begin,
+      reclaim,
+    });
+    const rejected = expect(reclaiming).rejects.toBe(eligibilityError);
+    try {
+      await enteredWait.promise;
+      eligible = false;
+      releaseWait.resolve();
+      await rejected;
+      expect(onInterrupt).not.toHaveBeenCalled();
+      expect(begin).not.toHaveBeenCalled();
+      expect(reclaim).not.toHaveBeenCalled();
+    } finally {
+      releaseWait.resolve();
+      admission?.release();
+      await Promise.allSettled([reclaiming]);
+    }
+  },
+);
 
 test.each(["rejected", "unavailable", "stale-result"] as const)(
   "sessions.recover leaves its source and successor untouched when cloud reclaim is %s",
@@ -526,6 +649,97 @@ test("sessions.recover rejects a healthy session", async () => {
     error: { code: "INVALID_REQUEST", message: expect.stringContaining("tombstoned") },
   });
 });
+
+test.each([false, true])(
+  "sessions.recover uses the recovering creator's sandbox requirement (%s), not its source's",
+  async (required) => {
+    const { storePath } = await createSessionStoreDir();
+    const owner = ensureProfileForEmail("recovery-source-owner@example.test");
+    const recovering = ensureProfileForEmail("recovery-requester@example.test");
+    setUserProfileRole(recovering.id, "requester");
+    const sourceKey = "agent:main:dashboard:creator-policy-recovery";
+    const sourceStamp = {
+      createdVia: "operator" as const,
+      createdActor: { type: "human" as const, id: owner.id },
+      createdAt: 123,
+      ...(!required ? { sandbox: "required" as const } : {}),
+    };
+    await seedRecoverableSession({
+      sourceKey,
+      sourceSessionId: "creator-policy-recovery-source",
+      storePath,
+      overrides: { ...sourceStamp, visibility: "shared" },
+    });
+    const cfg = {
+      ...getRuntimeConfig(),
+      gateway: {
+        ...getRuntimeConfig().gateway,
+        roles: {
+          default: "requester",
+          definitions: {
+            requester: {
+              sessions: { others: "write" as const },
+              agents: "*" as const,
+              scopes: ["operator.read" as const, "operator.write" as const],
+              ...(required ? { sandbox: "required" as const } : {}),
+            },
+          },
+        },
+      },
+    };
+    const request = {
+      client: {
+        connect: {
+          minProtocol: 3,
+          maxProtocol: 3,
+          client: { id: "test" as const, mode: "test" as const, platform: "test", version: "test" },
+          role: "operator",
+          scopes: ["operator.write"],
+        },
+        authenticatedUserProfile: {
+          profileId: recovering.id,
+          displayName: recovering.displayName,
+          hasAvatar: false,
+          updatedAt: recovering.updatedAt,
+        },
+      },
+      context: { getRuntimeConfig: () => cfg },
+    };
+    type RecoveryPayload = { key: string; continuation: { status: string } };
+    const recovered = await directSessionReq<RecoveryPayload>(
+      "sessions.recover",
+      { agentId: "main", key: sourceKey },
+      request,
+    );
+    expect(recovered).toMatchObject({
+      ok: true,
+      payload: { key: expect.any(String), continuation: { status: "started" } },
+    });
+    const scope = { agentId: "main", sessionKey: recovered.payload?.key ?? "", storePath };
+    const successor = loadSessionEntry(scope);
+    expect(successor).toMatchObject({
+      createdVia: "operator",
+      createdActor: { type: "human", id: recovering.id },
+      createdAt: expect.any(Number),
+    });
+    expect(successor?.sandbox).toBe(required ? "required" : undefined);
+    expect(successor?.createdAt).not.toBe(sourceStamp.createdAt);
+    const repeated = await directSessionReq<RecoveryPayload>(
+      "sessions.recover",
+      { agentId: "main", key: sourceKey },
+      request,
+    );
+    expect(repeated.payload?.key).toBe(scope.sessionKey);
+    expect(loadSessionEntry(scope)).toMatchObject({
+      createdActor: successor?.createdActor,
+      createdAt: successor?.createdAt,
+    });
+    expect(loadSessionEntry(scope)?.sandbox).toBe(successor?.sandbox);
+    const source = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+    expect(source).toMatchObject(sourceStamp);
+    expect(source?.sandbox).toBe(required ? undefined : "required");
+  },
+);
 
 test("sessions.recover cannot create a successor on an agent excluded by the caller's role", async () => {
   const { storePath } = await createSessionStoreDir();

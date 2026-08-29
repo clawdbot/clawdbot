@@ -33,6 +33,7 @@ export const GatewayErrorDetailCodes = {
   PROJECT_CLONE_FAILED: "PROJECT_CLONE_FAILED",
   UNKNOWN_AGENT_ID: "UNKNOWN_AGENT_ID",
   WIZARD_NOT_FOUND: "WIZARD_NOT_FOUND",
+  SETUP_ADMISSION_BUSY: "SETUP_ADMISSION_BUSY",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
@@ -67,6 +68,11 @@ export type UserPrefsLimitExceededErrorDetails = {
 export type UnknownAgentIdErrorDetails = {
   code: typeof GatewayErrorDetailCodes.UNKNOWN_AGENT_ID;
   agentId: string;
+};
+
+/** Setup rejected before its task or wizard session was admitted. */
+export type SetupAdmissionBusyErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY;
 };
 
 /** Missing or expired process-local setup wizard session. */
@@ -104,7 +110,8 @@ export type GatewayErrorDetails =
   | SkillProposalRevisionChangedErrorDetails
   | ProjectCloneErrorDetails
   | UnknownAgentIdErrorDetails
-  | WizardNotFoundErrorDetails;
+  | WizardNotFoundErrorDetails
+  | SetupAdmissionBusyErrorDetails;
 
 type GatewayErrorLike = {
   code?: unknown;

@@ -292,33 +292,6 @@ function resolvePersistedLmstudioApiKey(params: {
     : undefined;
 }
 
-/** Keeps explicit model entries first and appends unique discovered entries. */
-function mergeDiscoveredModels(params: {
-  explicitModels?: ModelDefinitionConfig[];
-  discoveredModels?: ModelDefinitionConfig[];
-}): ModelDefinitionConfig[] {
-  const explicitModels = Array.isArray(params.explicitModels) ? params.explicitModels : [];
-  const discoveredModels = Array.isArray(params.discoveredModels) ? params.discoveredModels : [];
-  if (explicitModels.length === 0) {
-    return discoveredModels;
-  }
-  if (discoveredModels.length === 0) {
-    return explicitModels;
-  }
-
-  const merged = [...explicitModels];
-  const seen = new Set(normalizeStringEntries(explicitModels.map((model) => model.id)));
-  for (const model of discoveredModels) {
-    const id = model.id.trim();
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    merged.push(model);
-  }
-  return merged;
-}
-
 async function discoverLmstudioProviderCatalog(params: {
   baseUrl?: string;
   apiKey?: string;
@@ -1025,12 +998,7 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
       headers: resolvedHeaders,
       quiet: !apiKey && !explicit && !resolvedDiscoveryApiKey,
     }));
-  const models = explicitProvider
-    ? explicitProvider.models
-    : mergeDiscoveredModels({
-        explicitModels: explicit?.models,
-        discoveredModels: provider.models,
-      });
+  const models = provider.models;
   if (models.length === 0 && !apiKey && !explicit?.apiKey) {
     return null;
   }

@@ -397,7 +397,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
       deviceId: this.place.deviceId,
       autoDevice: this.place.autoDevice,
       devicePlacement: this.place.devicePlacementRequirement(),
-      deviceDisabledReason: this.place.modelControl.devicePlacementUnsupportedReason(),
+      deviceDisabledReason:
+        this.place.modelControl.devicePlacementUnsupportedReason() ??
+        this.gateway.deviceCatalogDisabledReason,
     });
     const projectState = resolveProjectChip({
       folder: this.place.folder,
@@ -425,6 +427,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       machineClass: this.place.machineClass,
       deviceId: this.place.deviceId,
       autoDevice: this.place.autoDevice,
+      autoPlacementMode: this.place.modelControl.autoPlacementSelectionMode(),
       worktreeAvailable: this.place.worktreeAvailable(),
       cloudDisabledReason: this.submission.cloudDisabledReason(),
       cloudProfileDisabledReason: (profile) =>
@@ -479,7 +482,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       submitting,
       pendingPlacement,
       ...this.browser.popoverCallbacks("project"),
-      browserTarget: this.browser.browserTarget,
+      browserOpen: this.browser.browserOpen,
       browserListing: this.browser.browserListing,
       browserLoading: this.browser.browserLoading,
       browserError: this.browser.browserError,
@@ -494,11 +497,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
         this.place.applyFolder(folder, this.browser.browserListing?.path === folder),
       onBaseRefInput: (baseRef) => this.place.setBaseRef(baseRef),
       onWorktreeNameInput: (worktreeName) => this.place.setWorktreeName(worktreeName),
-      onBrowse: (target) =>
-        this.browser.selectGatewayBrowser(
-          target.label,
-          this.place.folder.trim() || this.place.workspacePath(),
-        ),
+      onBrowse: () =>
+        this.browser.selectGatewayBrowser(this.place.folder.trim() || this.place.workspacePath()),
       onBrowserPathDraftChange: (value) => {
         this.browser.browserPathDraft = value;
       },
@@ -677,7 +677,10 @@ export class NewSessionPage extends OpenClawLightDomElement {
           ? "new-session-page--incognito"
           : ""}"
       >
-        ${renderNewSessionIncognitoControl(this.submission)}
+        ${renderNewSessionIncognitoControl(
+          this.submission,
+          this.submission.capabilities.canStartAsDraft(this.context),
+        )}
         <div
           class="new-session-page__scroll"
           ?inert=${this.submission.submitting}

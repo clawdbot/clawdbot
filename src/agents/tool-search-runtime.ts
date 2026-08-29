@@ -12,12 +12,11 @@ import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import {
   getBeforeToolCallFailureDisposition,
   isPreExecutionBlockedToolResult,
-  isToolWrappedWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { transferToolEffectReceipt } from "./tool-effect-receipt.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
   isTrustedToolExecutionPreflightError,
@@ -25,6 +24,8 @@ import {
 } from "./tool-result-error.js";
 import {
   compactToolSearchCatalogEntry,
+  prepareToolSearchCatalogExecutionTool,
+  readToolSearchCatalogTelemetry,
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
@@ -38,7 +39,6 @@ import {
 import { readToolSearchLimit } from "./tool-search-request.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
-  CatalogSource,
   CatalogVisibilityOptions,
   ToolSearchCallOptions,
   ToolSearchCatalogEntry,
@@ -266,21 +266,6 @@ export function prepareToolSearchDispatcherArguments(args: unknown): unknown {
   }
   const { args: _wrappedArgs, input: _wrappedInput, ...outerRest } = args;
   return { ...outerRest, ...nestedInput, id: selectorValue };
-}
-
-function getTelemetry(catalog: ToolSearchCatalogSession) {
-  const sources: Record<CatalogSource, number> = { openclaw: 0, mcp: 0, client: 0 };
-  for (const entry of catalog.entries) {
-    sources[entry.source] += 1;
-  }
-  return {
-    catalogSize: catalog.entries.length,
-    sources,
-    counterScope: catalog.counterScope,
-    searchCount: catalog.searchCount,
-    describeCount: catalog.describeCount,
-    callCount: catalog.callCount,
-  };
 }
 
 type CatalogSchemaName = "inputSchema" | "outputSchema";
@@ -597,7 +582,9 @@ export class ToolSearchRuntime {
     }
     const pluginMeta = getPluginToolMeta(entry.tool as Parameters<typeof getPluginToolMeta>[0]);
     if (pluginMeta) {
-      return pluginMeta.mcp ? false : pluginMeta.replaySafe === true;
+      return pluginMeta.mcp
+        ? false
+        : pluginMeta.replaySafe === true && pluginMeta.sideEffecting !== true;
     }
     if (getChannelAgentToolMeta(entry.tool as never)) {
       return false;
@@ -640,19 +627,13 @@ export class ToolSearchRuntime {
         await assertCatalogOutputMatchesSchema(entry, candidate);
       }
       const snapshot = snapshotToolSearchTargetTranscriptResult(candidate);
+      // Projection changes object identity; move the private terminal receipt with it.
+      transferToolEffectReceipt(candidate, snapshot);
       await assertCatalogOutputMatchesSchema(entry, snapshot);
       return snapshot;
     };
     const validateInput = this.options.validateInput && entry.source === "openclaw";
-    const prepareInput =
-      this.options.prepareInput &&
-      entry.source === "openclaw" &&
-      "prepareBeforeToolCallParams" in entry.tool &&
-      typeof entry.tool.prepareBeforeToolCallParams === "function";
-    const executionTool =
-      (prepareInput || validateInput) && !isToolWrappedWithBeforeToolCallHook(entry.tool as never)
-        ? wrapToolWithBeforeToolCallHook(entry.tool as never)
-        : entry.tool;
+    const executionTool = prepareToolSearchCatalogExecutionTool(entry, this.options);
     const runExecution = async () => {
       const parentToolCallId = options?.parentToolCallId ?? toolCallId;
       const signal = options?.signal ?? this.ctx.abortSignal;
@@ -672,6 +653,7 @@ export class ToolSearchRuntime {
           sourceName: entry.sourceName,
           toolCallId,
           parentToolCallId: options?.parentToolCallId,
+          replaySafe: this.isReplaySafeExactId(entry.id),
           input: normalizedInput,
           signal,
           onUpdate: options?.onUpdate,
@@ -707,11 +689,10 @@ export class ToolSearchRuntime {
         )
       : await runExecution();
     const acceptedResult = await acceptResultBeforeProjection(result);
-    const parentToolCallId = options?.parentToolCallId;
-    if (parentToolCallId) {
+    if (options?.parentToolCallId) {
       this.terminalTargetBatchByParent.set(
-        parentToolCallId,
-        this.terminalTargetBatchByParent.get(parentToolCallId) !== false &&
+        options.parentToolCallId,
+        this.terminalTargetBatchByParent.get(options.parentToolCallId) !== false &&
           acceptedResult.terminate === true,
       );
     }
@@ -719,7 +700,7 @@ export class ToolSearchRuntime {
   };
 
   telemetry() {
-    return getTelemetry(resolveCatalog(this.ctx));
+    return readToolSearchCatalogTelemetry(this.ctx);
   }
 }
 

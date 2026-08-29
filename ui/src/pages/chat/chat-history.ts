@@ -8,7 +8,9 @@ import type {
   SessionBranch,
   SessionsListResult,
 } from "../../api/types.ts";
+import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-store.ts";
+import { accumulatedStreamText, advanceAccumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
@@ -52,14 +54,20 @@ import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
+  setChatSessionProjection,
 } from "./history-merge.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "./performance.ts";
-import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import {
+  reconcileChatRunFromSessionRow,
+  reconcileChatRunLifecycle,
+  setChatRunError,
+} from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
+import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
   cacheChatSessionSnapshot,
@@ -69,11 +77,10 @@ import {
 } from "./session-message-cache.ts";
 import {
   latestPersistedSteerBoundary,
-  markChatStreamAfterBoundary,
+  rolloverChatStream,
   resolveCumulativeAssistantTail,
 } from "./stream-causal-boundary.ts";
 import {
-  clearToolStreamSegments,
   currentLiveToolCallIds,
   hasVisibleStreamParts,
   historyReplacedVisibleStream,
@@ -352,6 +359,7 @@ export type ChatHistoryResult = {
     runId: string;
     text?: string;
     startedAt?: number;
+    sessionAbortable?: boolean;
     events?: Array<{
       runId: string;
       seq: number;
@@ -361,6 +369,7 @@ export type ChatHistoryResult = {
       agentId?: string;
       data: Record<string, unknown>;
     }>;
+    plan?: { steps: Array<{ step: string; status: string }>; explanation?: string };
   };
 };
 
@@ -397,20 +406,12 @@ function replayInFlightRunEvents(
   }
 }
 
-function resolveInFlightAssistantTail(
-  messages: unknown[],
-  bufferedText: unknown,
-  runId: string,
-): string | null {
-  if (
-    typeof bufferedText !== "string" ||
-    !bufferedText ||
-    isHiddenAssistantStreamText(bufferedText)
-  ) {
-    return null;
-  }
-  const tail = resolveCumulativeAssistantTail(messages, bufferedText, runId);
-  return tail && !isHiddenAssistantStreamText(tail) ? tail : null;
+function resolveInFlightAssistantText(bufferedText: unknown): string | null {
+  return typeof bufferedText === "string" &&
+    bufferedText &&
+    !isHiddenAssistantStreamText(bufferedText)
+    ? bufferedText
+    : null;
 }
 
 function onlyInFlightRunProjectionChanged(
@@ -453,22 +454,19 @@ function readChatRunProjections(state: ChatState, sessionKey: string, agentId?: 
   ).runs;
 }
 
-function mergeInFlightAssistantTails(
-  snapshotTail: string | null,
-  cumulativeLiveTail: string | null,
-): string | null {
-  if (!snapshotTail) {
-    return cumulativeLiveTail;
+function mergeInFlightAssistantText(snapshot: string | null, live: string | null): string | null {
+  if (!snapshot || live?.startsWith(snapshot)) {
+    return live ?? snapshot;
   }
-  if (!cumulativeLiveTail || snapshotTail.startsWith(cumulativeLiveTail)) {
-    return snapshotTail;
+  if (!live || snapshot.startsWith(live)) {
+    return snapshot;
   }
-  // Every Gateway delta carries its full assistant message. Comparing complete
-  // projections preserves repeated tokens without guessing delta overlap.
-  return cumulativeLiveTail;
+  // Divergence: live deltas are newer than the bounded snapshot, so the local
+  // cumulative buffer wins — a lagging snapshot must not rewind streamed text.
+  return live;
 }
 
-function applyInFlightRunSnapshot(params: {
+function applyHistoryRunSnapshot(params: {
   state: ChatState;
   run: ChatHistoryResult["inFlightRun"];
   sessionInfo: GatewaySessionRow | undefined;
@@ -490,6 +488,30 @@ function applyInFlightRunSnapshot(params: {
   } = params;
   const inFlightRunId = run?.runId?.trim();
   if (!inFlightRunId || !run) {
+    const terminalRunId = sessionInfo?.lastRunId;
+    if (
+      terminalRunId &&
+      sessionInfo.lastRunError &&
+      (sessionInfo.status === "failed" || sessionInfo.status === "timeout") &&
+      !isSessionRunActive(sessionInfo) &&
+      (!state.chatRunId || state.chatRunId === terminalRunId) &&
+      runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)
+    ) {
+      // A create-time failure can precede the pane subscription. Recover its
+      // durable terminal through the same reducer; newer live runs win the race
+      // and an existing full diagnostic wins over the bounded session summary.
+      const projection = reduceChatSessionProjection(state, {
+        type: "runTerminal",
+        runId: terminalRunId,
+        status: sessionInfo.status === "timeout" ? "timeout" : "error",
+        errorMessage: sessionInfo.lastRunError,
+      });
+      setChatRunError(
+        state,
+        projection.runs[terminalRunId]?.errorMessage ?? sessionInfo.lastRunError,
+      );
+      reconcileChatRunFromSessionRow(state, sessionInfo, { publishRunStatus: false });
+    }
     return;
   }
   const projectedInFlightRun = currentRunProjections[inFlightRunId];
@@ -497,6 +519,13 @@ function applyInFlightRunSnapshot(params: {
     state.chatRunId === inFlightRunId &&
     projectedInFlightRun?.status === "streaming" &&
     onlyInFlightRunProjectionChanged(previousRunProjections, currentRunProjections, inFlightRunId);
+  const retainsLiveStream =
+    sameRunContinued ||
+    (state.chatRunId === inFlightRunId &&
+      (activeStreamBeforeReset !== null ||
+        state.chatStreamSegments?.some(
+          (segment) => !segment.runId || segment.runId === inFlightRunId,
+        )));
   const activeRunIds = sessionInfo?.activeRunIds;
   const inFlightRunIsActive =
     isSessionRunActive(sessionInfo ?? {}) &&
@@ -513,34 +542,56 @@ function applyInFlightRunSnapshot(params: {
     // Their identity fences ABA races where a run starts and finishes while
     // history is pending; deltas from this same live run must still merge.
     state.chatRunId = inFlightRunId;
+    state.chatRunError = null;
+    state.chatRunSessionAbortable = run?.sessionAbortable === true;
   }
   if (!inFlightRunIsActive || state.chatRunId !== inFlightRunId) {
     return;
   }
   const snapshotStartedAt =
     typeof run.startedAt === "number" && Number.isFinite(run.startedAt) ? run.startedAt : null;
-  const snapshotTail = resolveInFlightAssistantTail(state.chatMessages, run.text, inFlightRunId);
-  const liveTail = sameRunContinued
-    ? resolveInFlightAssistantTail(
-        state.chatMessages,
-        extractText(projectedInFlightRun?.message),
-        inFlightRunId,
+  const liveText = sameRunContinued
+    ? mergeInFlightAssistantText(
+        resolveInFlightAssistantText(extractText(projectedInFlightRun?.message)),
+        activeStreamBeforeReset,
       )
     : activeStreamBeforeReset;
-  const tail = mergeInFlightAssistantTails(snapshotTail, liveTail);
-  state.chatStream = tail;
+  state.chatStream = mergeInFlightAssistantText(resolveInFlightAssistantText(run.text), liveText);
   state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
-  const persistedBoundary = latestPersistedSteerBoundary(state.chatMessages, inFlightRunId);
-  if (tail && persistedBoundary) {
-    markChatStreamAfterBoundary(state, {
-      runId: inFlightRunId,
-      boundaryRunId: persistedBoundary.runId,
-      timestamp: state.chatStreamStartedAt,
-    });
+  // A retained pane gets its boundary from session.message. Only fresh adoption
+  // reconstructs it from history, with the persisted prefix as cumulative evidence.
+  const boundary = retainsLiveStream
+    ? null
+    : latestPersistedSteerBoundary(state.chatMessages, inFlightRunId);
+  const tail =
+    state.chatStream === null
+      ? null
+      : resolveCumulativeAssistantTail(
+          state.chatMessages,
+          state.chatStream,
+          inFlightRunId,
+          boundary?.index,
+        );
+  const prefix = state.chatStream?.slice(0, state.chatStream.length - (tail?.length ?? 0)) ?? "";
+  const accumulated = accumulatedStreamText(state.chatStreamSegments ?? []);
+  if (boundary || advanceAccumulatedStreamText(accumulated, prefix) !== accumulated) {
+    state.chatStreamSegments = [
+      ...(state.chatStreamSegments ?? []),
+      {
+        text: prefix,
+        ts: state.chatStreamStartedAt,
+        runId: inFlightRunId,
+        ...(boundary ? { boundaryRunId: boundary.runId } : {}),
+        ...(prefix ? { persisted: true } : { boundaryMarker: true }),
+      },
+    ];
   }
   const startupPhase = run.events?.findLast((event) => event.stream === "run_status")?.data.phase;
   const hasStartupStatus =
     startupPhase === "preparing_workspace" ||
+    startupPhase === "naming_worktree" ||
+    startupPhase === "creating_worktree" ||
+    startupPhase === "running_setup" ||
     startupPhase === "provisioning_environment" ||
     startupPhase === "preparing_context" ||
     startupPhase === "starting_model";
@@ -787,6 +838,7 @@ export function disposeSelectedSessionMessageSubscription(state: ChatState): voi
   }
   state.chatSessionMessageSubscriptionRequestedKey = null;
   state.chatSessionMessageSubscription = null;
+  state.chatSessionApprovalQueue = [];
   const sessions = state.sessions;
   if (!sessions?.unsubscribeMessages) {
     return;
@@ -828,9 +880,6 @@ export async function syncSelectedSessionMessageSubscription(
   if (!nextKey) {
     return;
   }
-  await retryPendingSessionMessageSubscriptionReleases(state);
-  const paneRequests = getChatHistoryPaneRequests(state);
-  const generation = ++paneRequests.subscriptionGeneration;
   const previousRequestedKey = normalizeSubscriptionKey(
     state.chatSessionMessageSubscriptionRequestedKey,
   );
@@ -842,6 +891,13 @@ export async function syncSelectedSessionMessageSubscription(
     nextSubscriptionAgentId !== null &&
     previousSelectedKey === nextKey &&
     (previousSubscription?.agentId ?? null) !== nextSubscriptionAgentId;
+  if (selectedAgentChanged) {
+    state.chatSessionApprovalQueue = [];
+    state.requestUpdate?.();
+  }
+  const paneRequests = getChatHistoryPaneRequests(state);
+  const generation = ++paneRequests.subscriptionGeneration;
+  await retryPendingSessionMessageSubscriptionReleases(state);
   const selectedKeyChanged = previousSelectedKey !== null && previousSelectedKey !== nextKey;
   const shouldUnsubscribePrevious =
     previousSubscription !== null &&
@@ -900,6 +956,9 @@ export async function syncSelectedSessionMessageSubscription(
       shouldSubscribe && isCurrent()
         ? state.sessions.subscribeMessages(nextKey, {
             agentId: nextSubscriptionAgentId ?? undefined,
+            ...(hasOperatorApprovalsAccess(state.hello?.auth ?? null)
+              ? { includeApprovals: true }
+              : {}),
           })
         : Promise.resolve(null);
     // Gateway subscriptions are independent canonical-key entries. Overlap the old
@@ -963,6 +1022,15 @@ export async function syncSelectedSessionMessageSubscription(
     }
     state.chatSessionMessageSubscriptionRequestedKey = nextKey;
     state.chatSessionMessageSubscription = subscribed;
+    if (subscribed.includeApprovals) {
+      state.chatSessionApprovalQueue = projectSessionApprovalReplay(
+        subscribed.approvalReplay,
+        subscribed.key,
+        subscribed.agentId ?? undefined,
+      );
+    } else {
+      state.chatSessionApprovalQueue = [];
+    }
     clearRecoveredError();
   } catch (err) {
     if (isCurrent()) {
@@ -973,6 +1041,7 @@ export async function syncSelectedSessionMessageSubscription(
 
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
+  supersedeInFlight?: boolean;
   startup?: boolean;
 };
 
@@ -1590,6 +1659,7 @@ export async function loadChatHistory(
   // Live events replace the rendered array while their snapshot is pending;
   // only stable session and connection ownership may start another request.
   if (
+    opts.supersedeInFlight !== true &&
     inFlight.phase === "in-flight" &&
     inFlight.key === requestKey &&
     inFlight.client === client &&
@@ -1822,21 +1892,27 @@ async function loadChatHistoryUncached(
       for (const payload of response.messages) {
         applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
       }
+      const historyProjection = getChatSessionProjection(state, state.chatMessages);
       if (Object.hasOwn(response.sessionInfo, "activeLeafEntryId")) {
         state.chatDisplayedLeafEntryId = response.sessionInfo.activeLeafEntryId?.trim() || null;
       }
       state.currentSessionId = response.sessionInfo.sessionId?.trim() || previousSessionId;
+      // An accepted delta advances the same transcript generation, not a branch replacement.
+      // Carry ownership across its leaf advance; reseeding loses attributed pending sends and runs.
+      setChatSessionProjection(state, {
+        ...historyProjection,
+        scope: { ...historyProjection.scope, ...readChatSessionProjectionScope(state) },
+      });
       state.chatThinkingLevel = response.sessionInfo.thinkingLevel ?? null;
       state.chatQueueModeOverride = response.sessionInfo.queueMode;
       state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
-      const currentRunProjections = readChatRunProjections(state, sessionKey, requestAgentId);
-      applyInFlightRunSnapshot({
+      applyHistoryRunSnapshot({
         state,
         run: response.inFlightRun,
         sessionInfo: response.sessionInfo,
         previousRunProjections,
         runProjectionsBeforeApply,
-        currentRunProjections,
+        currentRunProjections: historyProjection.runs,
         resetStream: !state.chatRunId || state.chatRunId === previousRunId,
         activeStreamBeforeReset: activeStreamBeforeApply,
       });
@@ -1936,7 +2012,7 @@ async function loadChatHistoryUncached(
     state.chatVerboseLevel = res.verboseLevel ?? null;
     state.chatQueueModeOverride = res.sessionInfo?.queueMode;
     state.chatEffectiveQueueMode = res.sessionInfo?.effectiveQueueMode;
-    let activeStreamBeforeReset = state.chatRunId ? state.chatStream : null;
+    const activeStreamBeforeReset = state.chatRunId ? state.chatStream : null;
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
@@ -1950,9 +2026,7 @@ async function loadChatHistoryUncached(
         state,
         streamReconciliation,
       );
-      if (pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation)) {
-        activeStreamBeforeReset = state.chatStream;
-      }
+      pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
       const liveToolIds = currentLiveToolCallIds(state);
       if (state.chatRunId && (hasVisibleStream || liveToolIds.length > 0)) {
         state.chatRunStartup = { state: "activity", runId: state.chatRunId };
@@ -1963,16 +2037,18 @@ async function loadChatHistoryUncached(
       const historyReplacedSomeToolStream = persistedToolStreamIds.size > 0;
       const liveToolStreamReplaced = liveToolIds.length === 0 || historyReplacedToolStream;
       if (!hasVisibleStream || historyReplacedStream) {
+        if (state.chatRunId && historyReplacedStream) {
+          rolloverChatStream(state, { runId: state.chatRunId, persisted: true });
+        }
         if (liveToolStreamReplaced) {
-          // Clear all streaming state — history includes tool results and text
-          // inline, so keeping streaming artifacts would cause duplicates.
-          maybeResetToolStream(state);
+          maybeResetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
         } else {
           prunePersistedToolStreamMessages(state, persistedToolStreamIds);
-          clearToolStreamSegments(state);
         }
-        state.chatStream = null;
-        state.chatStreamStartedAt = null;
+        if (!state.chatRunId) {
+          state.chatStream = null;
+          state.chatStreamStartedAt = null;
+        }
         recordChatHistoryTiming(state, "stream-reset", startedAtMs, {
           requestSessionKey: sessionKey,
           requestAgentId,
@@ -1985,38 +2061,25 @@ async function loadChatHistoryUncached(
         maybeResetToolStream(state);
         state.chatStream = null;
         state.chatStreamStartedAt = null;
-      } else if (historyReplacedToolStream) {
-        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
-          includeCurrent: false,
-          persistCommentary: true,
-        });
-        state.chatStream = visibleCurrentAssistantStreamTail(
-          state,
-          streamReconciliation.isHiddenStreamText,
-        );
-        if (state.chatStream === null) {
-          state.chatStreamStartedAt = null;
-        }
-        maybeResetToolStream(state);
       } else if (historyReplacedSomeToolStream) {
-        const visibleCurrentTail = visibleCurrentAssistantStreamTail(
-          state,
-          streamReconciliation.isHiddenStreamText,
-        );
         state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
           includeCurrent: false,
-          requirePersistedTool: true,
+          requirePersistedTool: !historyReplacedToolStream,
           persistCommentary: true,
         });
-        state.chatStream = visibleCurrentTail;
-        if (state.chatStream === null) {
+        if (!visibleCurrentAssistantStreamTail(state, streamReconciliation.isHiddenStreamText)) {
           state.chatStreamStartedAt = null;
         }
-        prunePersistedToolStreamMessages(state, persistedToolStreamIds);
+        pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
+        if (historyReplacedToolStream) {
+          maybeResetToolStream(state, { preserveStreamSegments: true });
+        } else {
+          prunePersistedToolStreamMessages(state, persistedToolStreamIds);
+        }
       }
     }
 
-    applyInFlightRunSnapshot({
+    applyHistoryRunSnapshot({
       state,
       run: res.inFlightRun,
       sessionInfo: res.sessionInfo,

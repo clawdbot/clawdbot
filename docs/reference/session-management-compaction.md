@@ -18,12 +18,12 @@ Overview docs first: [Session management](/concepts/session), [Compaction](/conc
 
 Older installs may still have `sessions.json` files under the agent `sessions/`
 directory. Treat those files as legacy session-row migration inputs or explicit
-offline-maintenance targets. Gateway startup and `openclaw doctor --fix` import
-hot legacy rows and transcript history into the per-agent SQLite store
-automatically. Run `openclaw doctor --session-sqlite inspect
---session-sqlite-all-agents`, then follow the [Doctor migration
-sequence](/cli/doctor#session-sqlite-migration), when you need explicit
-inspection or validation evidence. If a migration fails after legacy transcript
+offline-maintenance targets. Gateway startup does not import them. Stop the
+Gateway, back up its state, and use `openclaw doctor --fix` to import legacy rows
+and transcript history into the per-agent SQLite store. Run
+`openclaw doctor --session-sqlite inspect --session-sqlite-all-agents`, then
+follow the [Doctor migration sequence](/cli/doctor#session-sqlite-migration)
+for inspection and validation. If a migration fails after legacy transcript
 artifacts were archived, use the Doctor recovery mode from that sequence.
 Recovery uses migration manifests, restores only the affected archived support
 artifacts, prepares a sanitized GitHub issue report when requested, and does not
@@ -136,8 +136,9 @@ Each `sessionKey` points at a current `sessionId` (the SQLite transcript identit
 - **Idle expiry** (`session.reset.mode: "idle"` with `session.reset.idleMinutes`, or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. If daily and idle are both configured, whichever expires first wins.
 - **Control UI reconnect resume** preserves the currently visible session for one reconnect send when the Gateway receives the matching `sessionId` from an operator UI client. This is a one-shot signal; ordinary stale sends still create a new `sessionId`.
 - **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but never extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
-- **Parent fork policy** uses OpenClaw's active branch when creating a thread or subagent fork. If that branch is too large (over a fixed internal cap, currently 100K tokens), OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. Sizing is automatic and not configurable; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
-- **Operator forks**: `sessions.create { parentSessionKey, fork: true }` creates a new session whose transcript branches from the parent's current state (same fork machinery as subagent spawns, including the size cap above). The fork is refused while the parent has an active run, inherits the parent's model selection unless one is passed explicitly, and marks the child `forkedFromParent` with fresh token counters.
+- **Automatic parent fork policy** uses OpenClaw's active branch when creating a thread or subagent fork. If that branch is too large (over a fixed internal cap, currently 100K tokens), OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. Sizing is automatic and not configurable; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
+- **Operator forks**: `sessions.create { parentSessionKey, fork: true }` branches from the parent's current state. Admission uses the selected child model's effective usable input capacity, falling back to the 100K safety cap when model capacity is unavailable. A normal fork is refused while the parent has an active run; adding `forkFrom: "last-completed"` copies only through the last completed assistant message, excluding the in-progress tail. Unlike automatic parent forks, an operator fork over its capacity limit is rejected rather than accepted with isolated context. The child inherits the parent's model selection unless one is passed explicitly. The response marks it `forkedFromParent`, and token counters start fresh.
+- **Message forks**: `sessions.fork { sessionKey, entryId }` creates a child from the active-path prefix before the selected user message and returns that message to the composer for editing. The parent remains unchanged. Incognito forks retain the parent's in-memory storage class; restarting the Gateway removes both sessions. See [Control UI](/web/control-ui) for fork and rewind actions.
 
 ## Session store schema
 
@@ -211,12 +212,18 @@ When splitting a long transcript into compaction chunks, OpenClaw keeps assistan
 
 ## When auto-compaction happens
 
-Two triggers in the embedded OpenClaw agent:
+The built-in OpenClaw runtime has three scheduling paths:
 
 1. **Overflow recovery**: the model returns a context-overflow error (`request_too_large`, `context length exceeded`, `input exceeds the maximum number of tokens`, `input token count exceeds the maximum number of input tokens`, `input is too long for the model`, `ollama error: context length exceeded`, and other provider-shaped variants) - compact, then retry. When the provider reports the attempted token count, OpenClaw forwards that observed count into overflow-recovery compaction; if the provider confirms overflow but exposes no parseable count, OpenClaw passes a minimally over-budget synthetic count to compaction engines and diagnostics. If overflow recovery still fails, OpenClaw surfaces explicit guidance and preserves the current session mapping instead of silently rotating to a fresh session id - retry the message, run `/compact`, or run `/new`.
-2. **Threshold maintenance**: after a successful turn, when the current context exceeds the model window minus OpenClaw's built-in headroom for prompts and the next model output.
 
-Two additional guards run outside these two triggers:
+   One provider shape is terminal rather than compaction-recoverable. When the refusal states a single request larger than the provider's entire token limit - Groq answers an oversized request with an HTTP 413 naming TPM and stating `Limit <n>, Requested <m>` - no bucket state can admit it. Compaction budgets against the model's context window rather than that per-request ceiling, and its own summarization request is refused by the same ceiling, so it can only spend further calls that cannot succeed. OpenClaw surfaces the reset guidance immediately instead of compacting, adopting a successor transcript, or retrying. Ordinary TPM throttling, which states a requested size within the limit, stays a rate limit and keeps its normal backoff.
+
+2. **Usage-based maintenance**: normal replies check projected usage before their turn; successful direct commands, including `agent --local` and Gateway agent RPC runs, check after the completed turn is persisted and any pending final reply is protected. Both block on projected usage at or above the active model window minus the selected compaction reserve, subject to an applicable server compaction threshold floor. The memory-flush soft margin does not lower this blocking threshold. Disabling memory flush does not disable this compaction. Direct-command maintenance respects `compaction.enabled: false` and skips a second compaction when the completed run already compacted.
+3. **Session-internal threshold maintenance**: default-mode sessions can also compact when actual context usage exceeds the model window minus the session reserve. Safeguard mode disables this competing session-internal path and leaves proactive scheduling to the maintenance owner above.
+
+The persisted `contextBudgetStatus` is a pre-prompt pressure estimate, not an execution command. Completed direct commands, normal replies, and queued follow-up replies record it when the runtime supplies one. `/status` can show this estimate, marked with `~` and `est`, when fresh token usage is unavailable. Compaction and session resets invalidate old estimates; a completed run without a diagnostic clears the previous one unless that run preserves the session's model state (for example, a heartbeat). Its `route` and `shouldCompact` fields can report pressure while the provider attempt is still admitted. Use completed compaction counts and transcript entries to verify that compaction actually happened.
+
+Two additional guards run outside these paths:
 
 - **Preflight local compaction**: set `agents.defaults.compaction.maxActiveTranscriptBytes` to a positive byte threshold (bytes or a string like `"20mb"`) to trigger local compaction before opening the next run once the active transcript reaches that size. Normal semantic compaction still runs. For Codex app-server sessions, the same threshold caps native rollout transcripts and oversized native threads restart fresh. Unset or `0` disables the guard.
 - **Mid-turn precheck**: set `agents.defaults.compaction.midTurnPrecheck.enabled: true` (default `false`) to add a tool-loop guard. After a tool result is appended and before the next model call, OpenClaw estimates prompt pressure using the same preflight budget logic used at turn start. If context no longer fits, the guard does not compact inline - it raises a structured mid-turn precheck signal, stops the current prompt submission, and lets the outer run loop use the existing recovery path (truncate oversized tool results when that is enough, or trigger the configured compaction mode and retry). Works with both `default` and `safeguard` compaction modes, including provider-backed safeguard compaction. Independent of `maxActiveTranscriptBytes`: the byte-size guard runs before a turn opens, mid-turn precheck runs later, after new tool results are appended.
@@ -238,7 +245,7 @@ Two additional guards run outside these two triggers:
 
 OpenClaw enforces a built-in reserve for embedded runs and caps it against the active model context window so it cannot consume the whole prompt budget. This keeps small-context local models from entering compaction from the first token while leaving enough headroom for multi-turn housekeeping such as the memory flush.
 
-Set `enabled: false` to disable threshold-driven auto-compaction inside the embedded agent runtime. OpenClaw's preflight and overflow-recovery compaction paths remain available, and manual `/compact` continues to work.
+Set `enabled: false` to disable threshold-driven auto-compaction inside the embedded agent runtime and direct-command post-turn maintenance. OpenClaw's reply preflight and overflow-recovery compaction paths remain available, and manual `/compact` continues to work.
 
 Manual `/compact` uses `agents.defaults.compaction.keepRecentTokens` (default: `20000`) and keeps that recent-tail cut point.
 
@@ -285,6 +292,14 @@ Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/c
 | `model`                     | unset            | exact provider/model override for the flush turn only, for example `ollama/qwen3:8b`                                                                   |
 | `softThresholdTokens`       | `4000`           | gap below the compaction threshold that triggers a flush                                                                                               |
 | `forceFlushTranscriptBytes` | unset (disabled) | force a flush once active transcript history reaches this estimated byte size (or string like `"2mb"`), even if token counters are stale; `0` disables |
+
+For a 32,768-token window, a 20,000-token reserve and a 4,000-token soft margin,
+early flushing starts at 8,768 projected tokens. Blocking token compaction starts
+at 12,768, or later if an applicable server threshold is higher. Between those
+thresholds, flushing can run without blocking the next user turn on compaction.
+The selected memory provider owns the reserve and flush margin; without a flush
+plan, maintenance still uses the effective compaction reserve. Nonpositive
+thresholds suppress token triggers. Transcript byte guards remain independent.
 
 Notes:
 

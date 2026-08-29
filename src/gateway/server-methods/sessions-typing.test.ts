@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -7,15 +8,16 @@ import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  presence: [] as Array<{
-    user?: { id: string; name?: string };
-    watchedSessions?: string[];
-  }>,
+  presence: [] as Array<Pick<PresenceEntry, "user" | "watchedSessions">>,
 }));
 
 vi.mock("../../infra/system-presence.js", () => ({
   listSystemPresence: () => mocks.presence,
 }));
+
+function profileUser(id: string): NonNullable<PresenceEntry["user"]> {
+  return { id, identity: { type: "profile", id } };
+}
 
 function client(profileId: string, connId: string): GatewayClient {
   return {
@@ -92,6 +94,59 @@ afterEach(() => {
 });
 
 describe("session typing handler", () => {
+  it.each([
+    {
+      name: "counts a same-id raw viewer separately from the profile actor",
+      presence: [{ user: profileUser("shared") }, { user: { id: "shared" } }],
+      expected: true,
+    },
+    {
+      name: "does not let a raw viewer establish profile actor membership",
+      presence: [{ user: { id: "shared" } }, { user: profileUser("other") }],
+      expected: false,
+    },
+    {
+      name: "counts multiple tabs of the profile actor once",
+      presence: [{ user: profileUser("shared") }, { user: profileUser("shared") }],
+      expected: false,
+    },
+  ])("$name", async ({ name, presence, expected }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = `agent:main:typing-namespace-${name.replaceAll(" ", "-")}`;
+      const sessionId = "typing-namespace";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId,
+          updatedAt: 1,
+          createdActor: { type: "human", id: "shared" },
+          visibility: "shared",
+        },
+      );
+      mocks.presence = presence.map((entry) => ({ ...entry, watchedSessions: [sessionKey] }));
+      const broadcast = vi.fn();
+      expect(
+        await callTyping({
+          sessionKey,
+          sessionId,
+          typing: true,
+          preview: "draft preview",
+          client: client("shared", "typing-namespace-actor"),
+          context: context(broadcast),
+        }),
+      ).toEqual({ ok: true, broadcast: expected });
+      if (expected) {
+        expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+          "session.typing",
+          expect.objectContaining({ actor: { type: "human", id: "shared", label: "shared" } }),
+          expect.objectContaining({ sessionKeys: [sessionKey] }),
+        );
+      } else {
+        expect(broadcast).not.toHaveBeenCalled();
+      }
+    });
+  });
+
   it("broadcasts bounded draft previews and never includes previews after typing stops", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       vi.useFakeTimers();
@@ -107,8 +162,8 @@ describe("session typing handler", () => {
         },
       );
       mocks.presence = [
-        { user: { id: "alice" }, watchedSessions: [sessionKey] },
-        { user: { id: "owner" }, watchedSessions: [sessionKey] },
+        { user: profileUser("alice"), watchedSessions: [sessionKey] },
+        { user: profileUser("owner"), watchedSessions: [sessionKey] },
       ];
       const broadcast = vi.fn();
       const params = {
@@ -157,8 +212,8 @@ describe("session typing handler", () => {
         },
       );
       mocks.presence = [
-        { user: { id: "alice" }, watchedSessions: [sessionKey] },
-        { user: { id: "owner" }, watchedSessions: [sessionKey] },
+        { user: profileUser("alice"), watchedSessions: [sessionKey] },
+        { user: profileUser("owner"), watchedSessions: [sessionKey] },
       ];
       const broadcast = vi.fn();
       const params = {
@@ -209,8 +264,8 @@ describe("session typing handler", () => {
         },
       );
       mocks.presence = [
-        { user: { id: "alice" }, watchedSessions: ["global"] },
-        { user: { id: "owner" }, watchedSessions: ["global"] },
+        { user: profileUser("alice"), watchedSessions: ["global"] },
+        { user: profileUser("owner"), watchedSessions: ["global"] },
       ];
       const broadcast = vi.fn();
 
@@ -247,11 +302,13 @@ describe("session typing handler", () => {
         },
       );
       mocks.presence = [
-        { user: { id: "multi" }, watchedSessions: [sessionKey] },
-        { user: { id: "owner" }, watchedSessions: [sessionKey] },
+        { user: profileUser("multi"), watchedSessions: [sessionKey] },
+        { user: profileUser("owner"), watchedSessions: [sessionKey] },
       ];
       const broadcast = vi.fn();
       const requestContext = context(broadcast);
+      const recordClientActivity = vi.fn();
+      requestContext.recordClientActivity = recordClientActivity;
       const params = { sessionKey, sessionId: "session-main", context: requestContext };
       const tabOne = client("multi", "multi-tab-1");
       const tabTwo = client("multi", "multi-tab-2");
@@ -277,6 +334,9 @@ describe("session typing handler", () => {
       });
       await vi.advanceTimersByTimeAsync(500);
       expect(broadcast.mock.calls.map((call) => call[1].typing)).toEqual([true, false]);
+      expect(recordClientActivity.mock.calls).toEqual([[tabOne], [tabTwo]]);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(recordClientActivity).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -297,8 +357,8 @@ describe("session typing handler", () => {
         );
       await writeSession("session-before-reset", 1);
       mocks.presence = [
-        { user: { id: "alice" }, watchedSessions: [sessionKey] },
-        { user: { id: "owner" }, watchedSessions: [sessionKey] },
+        { user: profileUser("alice"), watchedSessions: [sessionKey] },
+        { user: profileUser("owner"), watchedSessions: [sessionKey] },
       ];
       const broadcast = vi.fn();
       const requestContext = context(broadcast);
@@ -366,8 +426,8 @@ describe("session typing handler", () => {
         visibility: "shared",
       });
       mocks.presence = [
-        { user: { id: "alice" }, watchedSessions: [sessionKey] },
-        { user: { id: "owner" }, watchedSessions: [sessionKey] },
+        { user: profileUser("alice"), watchedSessions: [sessionKey] },
+        { user: profileUser("owner"), watchedSessions: [sessionKey] },
       ];
       const broadcast = vi.fn();
       const params = {
@@ -376,6 +436,8 @@ describe("session typing handler", () => {
         client: client("alice", "alice-tab"),
         context: context(broadcast),
       };
+      const recordClientActivity = vi.fn();
+      params.context.recordClientActivity = recordClientActivity;
 
       expect(await callTyping({ ...params, typing: true })).toEqual({
         ok: true,
@@ -394,6 +456,41 @@ describe("session typing handler", () => {
       });
       await vi.advanceTimersByTimeAsync(900);
       expect(broadcast).toHaveBeenCalledTimes(1);
+      expect(recordClientActivity).toHaveBeenCalledTimes(2);
+      await callTyping({ ...params, typing: true });
+      expect(recordClientActivity).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("does not record malformed, hidden, or unauthorized typing", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:typing-activity-authorization";
+      const scope = { agentId: "main", sessionKey };
+      const entry = {
+        sessionId: "typing-activity",
+        updatedAt: 1,
+        createdActor: { type: "human" as const, id: "owner" },
+      };
+      await upsertSessionEntryCore(scope, { ...entry, visibility: "draft" });
+      const requestContext = context();
+      const recordClientActivity = vi.fn();
+      requestContext.recordClientActivity = recordClientActivity;
+      const params = {
+        sessionKey,
+        sessionId: entry.sessionId,
+        typing: true,
+        client: client("viewer", "typing-viewer"),
+        context: requestContext,
+      };
+      await callTyping({ ...params, sessionKey: "" });
+      await callTyping(params);
+      expect(recordClientActivity).not.toHaveBeenCalled();
+      await upsertSessionEntryCore(scope, { ...entry, visibility: "shared" });
+      await callTyping(params);
+      expect(recordClientActivity).toHaveBeenCalledExactlyOnceWith(params.client);
+      await upsertSessionEntryCore(scope, { ...entry, visibility: "shared", incognito: true });
+      await callTyping(params);
+      expect(recordClientActivity).toHaveBeenCalledExactlyOnceWith(params.client);
     });
   });
 });

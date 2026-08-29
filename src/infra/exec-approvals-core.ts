@@ -1,5 +1,6 @@
 // Shared exec approval types and mode normalization.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { ApprovalScope } from "./approval-scope.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
@@ -195,6 +196,8 @@ export type ExecApprovalRequestPayload = {
   security?: string | null;
   ask?: string | null;
   warningText?: string | null;
+  /** Owner-declared blast-radius facts; display-only, never authorization. */
+  scope?: ApprovalScope | null;
   commandAnalysis?: CommandExplanationSummary | null;
   commandSpans?: ExecApprovalCommandSpan[];
   unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];

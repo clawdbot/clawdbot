@@ -968,7 +968,9 @@ async function buildResponsesPayload(
             `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
             'const target = (await catalog.search("qa_restart_wait")).find((tool) => tool.toolName === "qa_restart_wait");',
             'if (!target) throw new Error("qa_restart_wait unavailable");',
-            "await target({});",
+            // Bridge calls drain inside exec; explicitly yield while this hold is pending.
+            // The restart scenario must interrupt a real wait call, not a timing guess.
+            'await Promise.all([target({}), yield_control("restart checkpoint")]);',
             `return "CHECKPOINT-${nextCheckpoint}";`,
           ].join("\n"),
         });
@@ -1101,7 +1103,11 @@ async function buildResponsesPayload(
   ) {
     const targetTool = extractToolSearchTarget(allInputText);
     const plannedArgs = targetTool
-      ? buildQaToolSearchArgs(targetTool, QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
+      ? buildQaToolSearchArgs(
+          targetTool,
+          QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText),
+          allInputText,
+        )
       : {};
     if (
       targetTool &&

@@ -1,4 +1,5 @@
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
+import { createServer as createHttpsServer } from "node:https";
 import net from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { describe, expect, it, vi } from "vitest";
@@ -17,8 +18,8 @@ import type {
   WorkerInferenceEventFrame,
   WorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import {
-  formatWorkerConnectionFailure,
   toWorkerConnectionError,
   WorkerAdmissionDeadlineExceededError,
   WorkerConnectionStoppedError,
@@ -143,6 +144,184 @@ function installThrowingThenHealthyListeners(connection: ReturnType<typeof creat
 }
 
 describe("worker connection endpoint failures", () => {
+  it("rejects a TLS pin mismatch before upgrade without retrying admission", async () => {
+    const server = createHttpsServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
+    const websocketServer = new WebSocketServer({ server });
+    const peers = new Set<net.Socket>();
+    let connections = 0;
+    let httpBytes = 0;
+    let connectFrames = 0;
+    let resolvePeerClosed!: () => void;
+    const peerClosed = new Promise<void>((resolve) => {
+      resolvePeerClosed = resolve;
+    });
+    server.on("connection", (peer) => {
+      connections += 1;
+      peers.add(peer);
+      peer.once("close", () => {
+        peers.delete(peer);
+        resolvePeerClosed();
+      });
+    });
+    server.on("secureConnection", (peer) => {
+      peer.on("data", (data: Buffer) => {
+        httpBytes += data.length;
+      });
+    });
+    websocketServer.on("connection", (socket) => {
+      socket.on("message", () => {
+        connectFrames += 1;
+      });
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("test gateway did not allocate a TCP port");
+    }
+    const connection = createWorkerConnection({
+      endpoint: {
+        kind: "websocket",
+        url: `wss://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
+        tlsFingerprint: "ab".repeat(32),
+        cloudflareAccess: { clientId: "fixture-client-id", clientSecret: "fixture-client-secret" },
+      },
+      connectParams: FRAME_CONNECT_PARAMS,
+      admissionTimeoutMs: 1_000,
+      admissionDeadlineMs: 3_000,
+      reconnectBackoff: { initialMs: 10, maxMs: 10, factor: 1, jitter: 0 },
+    });
+    const states: WorkerConnectionState["kind"][] = [];
+    connection.onStateChange((state) => states.push(state.kind));
+
+    try {
+      const error = await connection.start().catch((cause: unknown) => cause);
+      await peerClosed;
+      expect(error).toBeInstanceOf(WorkerConnectionEndpointError);
+      expect(error).toMatchObject({ message: "gateway tls fingerprint mismatch" });
+      expect(states).toEqual(["connecting", "failed"]);
+      await expect(connection.waitForExit()).resolves.toEqual({ kind: "failed", error });
+      expect(connections).toBe(1);
+      expect(httpBytes).toBe(0);
+      expect(connectFrames).toBe(0);
+    } finally {
+      await connection.stop();
+      for (const socket of websocketServer.clients) {
+        socket.terminate();
+      }
+      for (const peer of peers) {
+        peer.destroy();
+      }
+      await new Promise<void>((resolve) => {
+        websocketServer.close(() => resolve());
+      });
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it.each([
+    "connect failure",
+    "no hello",
+    "retryable rejection",
+    "redacted connect failure",
+  ] as const)("retains the last %s diagnosis at the admission deadline", async (scenario) => {
+    vi.useFakeTimers();
+    const sockets: EventEmitter[] = [];
+    const diagnostics: Array<Error | undefined> = [];
+    const endpointUrl =
+      "wss://fixture-user:fixture-password@gateway.example:8443/private/__openclaw__/worker?token=fixture-token";
+    const connection = createWorkerConnection({
+      endpoint: {
+        kind: "websocket",
+        url: endpointUrl,
+        cloudflareAccess: { clientId: "fixture-client-id", clientSecret: "fixture-client-secret" },
+      },
+      connectParams: FRAME_CONNECT_PARAMS,
+      admissionTimeoutMs: 300,
+      admissionDeadlineMs: 1_000,
+      reconnectBackoff: { initialMs: 100, maxMs: 100, factor: 1, jitter: 0 },
+      onConnectionFailure: (error) => diagnostics.push(error),
+      createSocket: () => {
+        const socket = Object.assign(new EventEmitter(), {
+          readyState: 0,
+          send: (raw: string) => {
+            if (scenario === "retryable rejection") {
+              socket.emit(
+                "message",
+                Buffer.from(
+                  JSON.stringify({
+                    type: "res",
+                    id: JSON.parse(raw).id,
+                    ok: false,
+                    error: {
+                      code: "INVALID_REQUEST",
+                      message: "unavailable",
+                      details: { reason: "gateway-unavailable" },
+                      retryable: true,
+                    },
+                  }),
+                ),
+              );
+            }
+          },
+          close: () => socket.emit("close", 1006, Buffer.alloc(0)),
+          terminate: () => socket.emit("close", 1006, Buffer.alloc(0)),
+        });
+        sockets.push(socket);
+        setTimeout(() => {
+          if (scenario === "connect failure" || scenario === "redacted connect failure") {
+            const detail =
+              scenario === "redacted connect failure"
+                ? `Opening handshake has timed out ${FRAME_CONNECT_PARAMS.admission.credential} fixture-client-secret ${endpointUrl} ${"x".repeat(4_096)}`
+                : "Opening handshake has timed out";
+            socket.emit("error", new Error(sockets.length === 1 ? "ECONNREFUSED" : detail));
+            socket.emit("close", 1006, Buffer.alloc(0));
+          } else {
+            socket.readyState = 1;
+            socket.emit("open");
+          }
+        }, 0);
+        return socket as unknown as WebSocket;
+      },
+    });
+    const expected =
+      scenario === "connect failure" || scenario === "redacted connect failure"
+        ? "connect failed: Opening handshake has timed out"
+        : scenario === "no hello"
+          ? "no hello within deadline"
+          : "worker admission rejected: gateway-unavailable";
+    try {
+      const starting = connection.start().catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const error = await starting;
+      expect(error).toBeInstanceOf(WorkerAdmissionDeadlineExceededError);
+      expect(error).toMatchObject({ message: expect.stringContaining(expected) });
+      expect(error).toMatchObject({ message: expect.stringContaining("gateway.example:8443") });
+      expect(error).toMatchObject({
+        message: expect.stringContaining(`after ${sockets.length} attempts`),
+      });
+      expect(sockets.length).toBeGreaterThan(1);
+      expect(diagnostics.at(-1)).toBe(error);
+      const message = (error as Error).message;
+      expect(message.length).toBeLessThan(400);
+      for (const secret of [
+        "fixture-user",
+        "fixture-password",
+        "fixture-token",
+        "fixture-client-secret",
+        FRAME_CONNECT_PARAMS.admission.credential,
+      ]) {
+        expect(message).not.toContain(secret);
+      }
+      await expect(connection.waitForExit()).resolves.toEqual({ kind: "failed", error });
+    } finally {
+      await connection.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("fails insecure public endpoints without entering reconnect backoff", async () => {
     const createSocket = vi.fn();
     const connection = createWorkerConnection({
@@ -190,14 +369,14 @@ describe("worker connection endpoint failures", () => {
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
       onConnectionFailure: (error) => {
         if (error) {
-          failures.push(formatWorkerConnectionFailure(endpoint, error));
+          failures.push(error.message);
         }
       },
     });
 
     try {
       await expect(connection.start()).rejects.toBeInstanceOf(WorkerAdmissionDeadlineExceededError);
-      expect(failures.at(-1)).toMatch(
+      expect(failures.at(-2)).toMatch(
         new RegExp(
           `^worker could not reach gateway 127\\.0\\.0\\.1:${port}: .*ECONNREFUSED.*; check TLS pin/publicUrl configuration$`,
           "u",

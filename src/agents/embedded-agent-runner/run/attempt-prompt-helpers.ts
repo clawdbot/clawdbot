@@ -476,6 +476,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "currentMessageId"
   | "config"
   | "skillsSnapshot"
+  | "toolsAllow"
   | "senderId"
   | "provider"
   | "modelId"
@@ -552,6 +553,7 @@ export function buildAfterTurnRuntimeContext(params: {
       cwd: params.cwd,
       agentDir: params.agentDir,
       config: params.attempt.config,
+      toolsAllow: params.attempt.toolsAllow,
       skillsSnapshot: params.attempt.skillsSnapshot,
       senderId: params.attempt.senderId,
       provider: params.attempt.provider,

@@ -9,6 +9,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
+  fitsTelegramCallbackData,
   hasTelegramApprovalCallbackPrefix,
   parseTelegramApprovalCallbackData,
 } from "./approval-callback-data.js";
@@ -98,7 +99,7 @@ function isNonemptyTelegramCallbackValue(value: unknown): value is string {
 }
 
 function isBoundedTelegramCallbackData(value: unknown): value is string {
-  return isNonemptyTelegramCallbackValue(value) && Buffer.byteLength(value, "utf8") <= 64;
+  return isNonemptyTelegramCallbackValue(value) && fitsTelegramCallbackData(value);
 }
 
 function canReconcileTelegramLegacyLane(params: {

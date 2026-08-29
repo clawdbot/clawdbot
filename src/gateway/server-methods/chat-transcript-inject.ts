@@ -5,6 +5,11 @@ import { persistSessionTranscriptTurn } from "../../config/sessions/session-acce
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  readSessionTranscriptRunId,
+  resolveTerminalAssistantTranscriptRunId,
+} from "../../sessions/transcript-events.js";
+import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 type AssistantMessageContent = Extract<AppendMessageArg, { role: "assistant" }>["content"];
@@ -21,6 +26,8 @@ type GatewayInjectedTranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
+  /** Set when the commit predicate declined the append; not an error. */
+  skipped?: boolean;
   error?: string;
 };
 
@@ -108,6 +115,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     content: [{ type: "text", text: params.message }],
   };
   const rawDeliveryFacts = applyAssistantDeliveryDirectives(rawDeliveryMessage).openclawDelivery;
+  const abortRunId = params.abortMeta?.runId;
   const messageBody: AppendMessageArg & Record<string, unknown> = applyAssistantDeliveryDirectives({
     role: "assistant",
     // Gateway-injected assistant messages can include non-model content blocks (e.g. embedded TTS audio).
@@ -141,6 +149,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     if (!params.transcriptPath && (!params.storePath || !params.sessionId || !params.sessionKey)) {
       return { ok: false, error: "transcript identity not resolved" };
     }
+    let predicateDeclined = false;
     const turn = await persistSessionTranscriptTurn(
       {
         sessionKey: params.sessionKey ?? "",
@@ -158,6 +167,22 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
           {
             message: messageBody,
             idempotencyLookup: "scan-assistant",
+            ...(params.abortMeta
+              ? {
+                  shouldAppendInTransaction: (latestAssistantMessage: unknown) => {
+                    const committedRunId = resolveTerminalAssistantTranscriptRunId(
+                      latestAssistantMessage,
+                      readSessionTranscriptRunId(latestAssistantMessage),
+                    );
+                    const committedText = extractAssistantPhaseText(latestAssistantMessage)?.trim();
+                    // The same run can commit before its live buffer clears. Recheck after
+                    // BEGIN IMMEDIATE so a direct writer cannot land between this fact and insert.
+                    predicateDeclined =
+                      committedRunId === abortRunId && committedText === params.message.trim();
+                    return !predicateDeclined;
+                  },
+                }
+              : {}),
             now,
             useRawWhenLinear: true,
           },
@@ -166,6 +191,10 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     );
     const appended = turn.messages[0];
     if (!appended) {
+      // A declined predicate is a decision, not a failure: no row was wanted.
+      if (predicateDeclined) {
+        return { ok: true, skipped: true };
+      }
       return { ok: false, error: "gateway-injected assistant message was not appended" };
     }
     return {

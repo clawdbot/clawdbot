@@ -488,7 +488,11 @@ suite.define(() => {
     await toast.waitFor();
     expect(await toast.textContent()).toContain("Could not pin to dashboard. Try again.");
     expect(await pin.isEnabled()).toBe(true);
-    expect(await pin.getAttribute("title")).toBe("Could not pin to dashboard. Try again.");
+    await page.mouse.move(0, 0);
+    await pin.hover();
+    const hint = page.locator("wa-tooltip[open]");
+    await hint.locator('[part="body"]').waitFor({ state: "visible" });
+    expect(await hint.textContent()).toContain("Could not pin to dashboard. Try again.");
     expect(await page.getByText("internal path detail", { exact: false }).count()).toBe(0);
     if (recordProof) {
       await page.screenshot({ path: path.join(workboardPinFailureProofDir, "pin-failed.png") });

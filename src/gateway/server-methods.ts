@@ -179,6 +179,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   "sessions-groups": () =>
     import("./server-methods/sessions-groups.js").then((module) => module.sessionGroupHandlers),
+  "sessions-goal": () =>
+    import("./server-methods/sessions-goal.js").then((module) => module.sessionGoalHandlers),
   "sessions-messaging": () =>
     import("./server-methods/sessions-messaging.js").then(
       (module) => module.sessionMessagingHandlers,
@@ -269,6 +271,11 @@ function authorizeGatewayMethod(
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
   if (role === "node") {
+    return null;
+  }
+  if (method === "device.scopes.requestUpgrade" || method === "device.scopes.waitUpgrade") {
+    // Scope recovery must remain reachable from a paired operator whose grant is empty;
+    // the handlers bind both calls to the connection's exact device identity.
     return null;
   }
   if (scopes.includes(ADMIN_SCOPE)) {
@@ -633,8 +640,17 @@ export async function runWithGatewayRequestEnvelope<T>(
       return await withPluginRuntimeGatewayRequestScope(
         {
           context: options.context,
+          // Detached turn admission needs the live instance resolver, not a captured request context.
+          resolveGatewayContext: options.context.resolveGatewayContext,
           client,
           isWebchatConnect: options.isWebchatConnect,
+          // Only an owner-bound in-process stream may retain admitted Full authority.
+          ...(client?.internal?.nodeInvokeStream
+            ? {
+                invokeWithSessionNodeAuthority:
+                  getPluginRuntimeGatewayRequestScope()?.invokeWithSessionNodeAuthority,
+              }
+            : {}),
           ...(pluginRegistry ? { pluginRegistry } : {}),
         },
         fn,
@@ -702,6 +718,9 @@ export async function handleGatewayRequest(
       respond,
       context,
       ...(signal ? { signal } : {}),
+      ...(opts.sessionMutationCommitGuard
+        ? { sessionMutationCommitGuard: opts.sessionMutationCommitGuard }
+        : {}),
       ...(authorization.sessionMutationAuthorization
         ? { sessionMutationAuthorization: authorization.sessionMutationAuthorization }
         : {}),

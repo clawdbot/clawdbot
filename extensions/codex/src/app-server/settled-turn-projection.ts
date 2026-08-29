@@ -7,7 +7,12 @@ import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
 const MAX_RESPONSE_ITEMS = 200;
 const MAX_PROJECTION_BYTES = 512 * 1024;
 const MAX_TEXT_BYTES = 64 * 1024;
-const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/u;
+// Projected names replay as function_call history items, which Codex
+// thread/inject_items deserializes as free-form strings (ResponseItem::FunctionCall).
+// Codex records MCP and connector calls under dotted namespaced ids
+// ("codex_apps.slack.slack_send"), so "." must stay projectable or any turn
+// that used such a tool can never finalize.
+const TOOL_NAME_PATTERN = /^[a-zA-Z0-9._-]{1,128}$/u;
 const TOOL_ERROR_STATUS_PREFIX = "[Tool result status: error]\n";
 
 type ProjectedToolReference = { id: string; name: string };
@@ -55,7 +60,9 @@ function requireCallId(value: unknown): string {
 function requireToolName(value: unknown): string {
   const name = normalizeOptionalString(value);
   if (!name || !TOOL_NAME_PATTERN.test(name)) {
-    throw new Error("Codex settled-turn projection found an invalid tool name");
+    throw new Error(
+      `Codex settled-turn projection found an invalid tool name${name ? `: ${name.slice(0, 64)}` : ""}`,
+    );
   }
   return name;
 }

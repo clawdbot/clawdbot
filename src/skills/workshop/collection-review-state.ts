@@ -3,11 +3,11 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
+  readConfigMachineState,
+  updateConfigMachineState,
+} from "../../state/config-machine-state.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -22,15 +22,17 @@ import {
   type SkillWorkshopStoreOptions,
 } from "./store-sqlite-schema.js";
 
-const CURATOR_STATE_ID = 1;
 const REVIEW_CLAIM_MS = 11 * 60_000;
 // Bound per-workspace history so unattended weekly maintenance cannot grow state forever.
 const SKILL_COLLECTION_REVIEW_RETENTION_COUNT = 90;
 const SKILL_COLLECTION_REVIEW_HISTORY_LIMIT = 20;
-type CollectionReviewDatabase = Pick<
-  OpenClawStateDatabase,
-  "skill_curator_state" | "skill_workshop_collection_reviews"
->;
+type CollectionReviewDatabase = Pick<OpenClawStateDatabase, "skill_workshop_collection_reviews">;
+type SkillCuratorState = {
+  lastAttemptAtMs: number;
+  lastSuccessAtMs: number | null;
+  lastError: string | null;
+  lastResult: Record<string, unknown>;
+};
 
 type SkillCollectionReviewOutcome = {
   createTime: number;
@@ -77,30 +79,17 @@ export async function withSkillCollectionReviewClaim<T>(
   );
 }
 
-function parseReviewState(value: string | null | undefined): Record<string, unknown> {
-  if (!value) {
-    return {};
-  }
-  try {
-    return asNullableRecord(JSON.parse(value)) ?? {};
-  } catch {
-    return {};
-  }
-}
-
 function reviewMap<T>(state: Record<string, unknown>, field: string): Record<string, T> {
-  // SAFETY: cache-class state written only by recordWorkspaceReview below; invalid outer JSON resets it.
+  // SAFETY: cache-class state is written only by recordWorkspaceReview below.
   return (asNullableRecord(state[field]) ?? {}) as Record<string, T>;
 }
 
 function readReviewState(options: OpenClawStateDatabaseOptions): Record<string, unknown> {
-  const database = openOpenClawStateDatabase(options);
-  const kysely = getNodeSqliteKysely<CollectionReviewDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    kysely.selectFrom("skill_curator_state").select("last_result_json").where("id", "=", 1),
+  return (
+    asNullableRecord(
+      readConfigMachineState<SkillCuratorState>("skills.curatorState", options)?.lastResult,
+    ) ?? {}
   );
-  return parseReviewState(row?.last_result_json);
 }
 
 export function readSkillReviewOutcomes(options: OpenClawStateDatabaseOptions = {}) {
@@ -131,9 +120,9 @@ export function recordSkillCollectionReviewStatus(
     workspaceDir,
     status,
     {
-      last_attempt_at_ms: status.attemptedAtMs,
-      ...(status.succeededAtMs !== undefined ? { last_success_at_ms: status.succeededAtMs } : {}),
-      last_error: status.error ?? null,
+      lastAttemptAtMs: status.attemptedAtMs,
+      ...(status.succeededAtMs !== undefined ? { lastSuccessAtMs: status.succeededAtMs } : {}),
+      lastError: status.error ?? null,
     },
     options,
   );
@@ -151,47 +140,30 @@ function recordWorkspaceReview(
   field: "collectionReviews" | "experienceReviews",
   workspaceDir: string,
   review: SkillCollectionReviewStatus | SkillExperienceReviewStatus,
-  columns: {
-    last_attempt_at_ms?: number;
-    last_success_at_ms?: number;
-    last_error?: string | null;
-  },
+  columns: Partial<Omit<SkillCuratorState, "lastResult">>,
   options: OpenClawStateDatabaseOptions,
 ): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const kysely = getNodeSqliteKysely<CollectionReviewDatabase>(db);
-    const current = executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .selectFrom("skill_curator_state")
-        .select("last_result_json")
-        .where("id", "=", CURATOR_STATE_ID),
-    );
-    const state = parseReviewState(current?.last_result_json);
-    const updatedState = {
-      ...columns,
-      last_result_json: JSON.stringify({
-        ...state,
-        [field]: {
-          ...asNullableRecord(state[field]),
-          [workspaceKey(workspaceDir)]: review,
+  updateConfigMachineState<SkillCuratorState>(
+    "skills.curatorState",
+    (current) => {
+      const state = asNullableRecord(current?.lastResult) ?? {};
+      return {
+        lastAttemptAtMs: 0,
+        lastSuccessAtMs: null,
+        lastError: null,
+        ...current,
+        ...columns,
+        lastResult: {
+          ...state,
+          [field]: {
+            ...asNullableRecord(state[field]),
+            [workspaceKey(workspaceDir)]: review,
+          },
         },
-      }),
-    };
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .insertInto("skill_curator_state")
-        .values({
-          id: CURATOR_STATE_ID,
-          last_attempt_at_ms: 0,
-          last_success_at_ms: null,
-          last_error: null,
-          ...updatedState,
-        })
-        .onConflict((conflict) => conflict.column("id").doUpdateSet(updatedState)),
-    );
-  }, options);
+      };
+    },
+    options,
+  );
 }
 
 function parseStoredNames(value: string, field: string): string[] {

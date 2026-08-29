@@ -149,7 +149,7 @@ describe("prepared model catalog builder", () => {
     );
   });
 
-  it("carries manifest context-window choices into the prepared catalog", async () => {
+  it("carries manifest capability metadata into the prepared catalog", async () => {
     const plugin = {
       id: "anthropic",
       origin: "bundled",
@@ -167,6 +167,8 @@ describe("prepared model catalog builder", () => {
                 ],
                 contextWindowDefault: "1m",
                 thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+                input: ["text", "image"],
+                mediaInput: { image: { maxBytes: 4096, tokenMode: "tile" } },
               },
             ],
           },
@@ -190,6 +192,8 @@ describe("prepared model catalog builder", () => {
       ],
       contextWindowDefault: "1m",
       thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+      input: ["text", "image"],
+      mediaInput: { image: { maxBytes: 4096, tokenMode: "tile" } },
     });
   });
 

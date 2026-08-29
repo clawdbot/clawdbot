@@ -40,20 +40,22 @@ const pluginManifestRegistry = vi.hoisted(
     diagnostics: [],
   }),
 );
-const pluginMetadataSnapshot = vi.hoisted(
-  (): PluginMetadataSnapshot => ({
+const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
     policyHash: "policy",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "policy",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
+  return {
+    policyHash: "policy",
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: pluginManifestRegistry,
     plugins: [],
@@ -78,8 +80,8 @@ const pluginMetadataSnapshot = vi.hoisted(
       indexPluginCount: 0,
       manifestPluginCount: 0,
     },
-  }),
-);
+  };
+});
 const pluginLookUpTableMetrics = vi.hoisted(() => ({
   registrySnapshotMs: 0,
   manifestRegistryMs: 0,

@@ -386,6 +386,21 @@ export type PluginRuntimeCore = {
       ) => Promise<RuntimeSessionEntry | null>;
     };
   };
+  hooks: {
+    /** Dispatch untrusted external content through an isolated, contained hook agent turn. */
+    dispatchHookAgentTurn: (params: {
+      name: string;
+      agentId: string;
+      sessionKey: string;
+      message: string;
+      externalContentSource: "email";
+      deliver: boolean;
+      model?: string;
+      thinking?: import("../../auto-reply/thinking.js").ThinkLevel;
+      timeoutSeconds?: number;
+      idempotencyKey?: string;
+    }) => Promise<{ ok: true; runId: string } | { ok: false; reason: string }>;
+  };
   system: {
     enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEvent;
     requestHeartbeat: typeof import("../../infra/heartbeat-wake.js").requestHeartbeat;

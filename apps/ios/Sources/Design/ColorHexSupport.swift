@@ -18,6 +18,12 @@ enum ColorHexSupport {
         return "#\(hex)"
     }
 
+    /// Per-profile accent from a users.prefs.get entries payload. nil for
+    /// missing or malformed values so callers fall back to the gateway accent.
+    static func profileAccentHex(entries: [String: Any]?) -> String? {
+        self.normalizedHex(entries?["ui.accent"] as? String)
+    }
+
     /// Gateway user-accent contract shared with the Control UI and talk config:
     /// ui.prefs.accent wins over ui.seamColor; invalid values fall through.
     static func gatewayUserAccentHex(configUI ui: [String: Any]?) -> String? {

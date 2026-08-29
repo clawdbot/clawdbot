@@ -4,6 +4,7 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requ
 import {
   actionOpacity,
   captureUiProof,
+  controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
@@ -22,13 +23,19 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     await installMockGateway(page, {
+      mainSessionKey: "agent:main:main",
       methodResponses: {
         "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", Date.now()),
+          sessionRow("agent:main:main", "Main", baseTime),
           Object.assign(
-            sessionRow("agent:main:two-line", "Two-line session", Date.now() - 1, {
+            sessionRow("agent:main:two-line", "Two-line session", baseTime - 1, {
               pinned: true,
+              pinnedAt: baseTime,
             }),
             { lastMessagePreview: "Finishing repository setup review" },
           ),
@@ -38,7 +45,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:two-line"));
       const row = page.locator('[data-session-key="agent:main:two-line"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       const pin = row.getByRole("button", { name: "Unpin session" });
@@ -249,7 +256,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps the trailing unread dot on one axis with and without a pull-request icon", async () => {
+  it("aligns trailing unread dots and trades unread/PR icons for hover actions", async () => {
     const plainKey = "agent:main:unread-plain";
     const pullRequestKey = "agent:main:unread-pr";
     const context = await suite.browser.newContext({
@@ -258,6 +265,9 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
+    });
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
       methodResponses: {
@@ -319,7 +329,7 @@ suite.define(() => {
       const pullRequestRow = page.locator(`[data-session-key="${pullRequestKey}"]`);
       await plainRow.waitFor({ state: "visible", timeout: 10_000 });
       await expect
-        .poll(() => pullRequestRow.locator("[data-session-pr-state='merged']").isVisible())
+        .poll(() => pullRequestRow.locator("[data-pull-request-state='merged']").isVisible())
         .toBe(true);
 
       const dotInsetFromRowRight = async (row: typeof plainRow) => {
@@ -339,6 +349,23 @@ suite.define(() => {
         await dotInsetFromRowRight(plainRow),
         0,
       );
+      const pullRequestIcon = pullRequestRow.locator("[data-pull-request-state='merged']");
+      const unreadDot = pullRequestRow.locator(".session-unread-dot");
+      const trailingState = pullRequestRow.locator(".session-row-state");
+      await captureUiProof(page, "sidebar-pr-before-hover.png");
+      await pullRequestRow.hover();
+      await captureUiProof(page, "sidebar-pr-hover.png");
+      await pullRequestIcon.waitFor({ state: "hidden" });
+      await unreadDot.waitFor({ state: "hidden" });
+      await trailingState.waitFor({ state: "hidden" });
+      await page.mouse.move(0, 0);
+      await pullRequestIcon.waitFor({ state: "visible" });
+      await unreadDot.waitFor({ state: "visible" });
+      await pullRequestRow.getByRole("button", { name: "Open session menu" }).focus();
+      await trailingState.waitFor({ state: "hidden" });
+      await codingToggle.focus();
+      await pullRequestIcon.waitFor({ state: "visible" });
+      await unreadDot.waitFor({ state: "visible" });
     } finally {
       await context.close();
     }
@@ -394,6 +421,9 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const gateway = await installMockGateway(page, {
       featureMethods: [
         "chat.metadata",
@@ -472,17 +502,24 @@ suite.define(() => {
         .toBe(true);
       await expect.poll(() => state.locator('[aria-label="Forked session"]').count()).toBe(0);
       await expect
-        .poll(() => state.locator("[data-session-pr-state='open']").isVisible())
+        .poll(() => row.locator("[data-pull-request-state='open']").isVisible())
         .toBe(true);
       await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
       await expect.poll(() => state.locator(".session-unread-dot").count()).toBe(0);
+      const prIcon = row.locator("[data-pull-request-state='open'] svg");
+      expect(
+        await prIcon.evaluate((icon) => {
+          const { width, height } = icon.getBoundingClientRect();
+          return { width, height };
+        }),
+      ).toEqual({ width: 12, height: 12 });
       const stateLayout = await row.evaluate((element) => {
         const endcap = element.querySelector<HTMLElement>(
           ".sidebar-recent-session__details-endcap",
         );
         const atoms = Array.from(
           element.querySelectorAll<HTMLElement>(
-            ".session-row-state :is([data-session-pr-state='open'], .session-run-spinner)",
+            ".sidebar-recent-session__details-endcap :is([data-pull-request-state='open'], .session-run-spinner)",
           ),
         );
         if (!endcap || atoms.length !== 2) {

@@ -28,17 +28,13 @@ import {
   registerWebPushSubscription,
   resolveVapidKeys,
 } from "../../infra/push-web.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 export const pushHandlers: GatewayRequestHandlers = {
   "push.test": async ({ params, respond, context }) => {
-    if (!validatePushTestParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "push.test",
-        validator: validatePushTestParams,
-      });
+    if (!assertValidParams(params, validatePushTestParams, "push.test", respond)) {
       return;
     }
 
@@ -129,12 +125,14 @@ export const pushHandlers: GatewayRequestHandlers = {
   },
 
   "push.web.vapidPublicKey": async ({ params, respond }) => {
-    if (!validateWebPushVapidPublicKeyParams(params)) {
-      respondInvalidParams({
+    if (
+      !assertValidParams(
+        params,
+        validateWebPushVapidPublicKeyParams,
+        "push.web.vapidPublicKey",
         respond,
-        method: "push.web.vapidPublicKey",
-        validator: validateWebPushVapidPublicKeyParams,
-      });
+      )
+    ) {
       return;
     }
 
@@ -145,12 +143,7 @@ export const pushHandlers: GatewayRequestHandlers = {
   },
 
   "push.web.subscribe": async ({ params, respond }) => {
-    if (!validateWebPushSubscribeParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "push.web.subscribe",
-        validator: validateWebPushSubscribeParams,
-      });
+    if (!assertValidParams(params, validateWebPushSubscribeParams, "push.web.subscribe", respond)) {
       return;
     }
 
@@ -164,12 +157,9 @@ export const pushHandlers: GatewayRequestHandlers = {
   },
 
   "push.web.unsubscribe": async ({ params, respond }) => {
-    if (!validateWebPushUnsubscribeParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "push.web.unsubscribe",
-        validator: validateWebPushUnsubscribeParams,
-      });
+    if (
+      !assertValidParams(params, validateWebPushUnsubscribeParams, "push.web.unsubscribe", respond)
+    ) {
       return;
     }
 
@@ -180,12 +170,7 @@ export const pushHandlers: GatewayRequestHandlers = {
   },
 
   "push.web.test": async ({ params, respond }) => {
-    if (!validateWebPushTestParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "push.web.test",
-        validator: validateWebPushTestParams,
-      });
+    if (!assertValidParams(params, validateWebPushTestParams, "push.web.test", respond)) {
       return;
     }
 

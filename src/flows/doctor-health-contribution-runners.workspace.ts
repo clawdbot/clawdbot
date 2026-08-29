@@ -191,6 +191,7 @@ export async function runMemorySearchHealthContribution(
     await maybeRepairMemoryRecallHealth({ cfg: ctx.cfg, prompter: ctx.prompter });
   }
   await noteMemorySearchHealth(ctx.cfg, {
+    env: ctx.env,
     gatewayMemoryProbe: ctx.gatewayMemoryProbe ?? { checked: false, ready: false, skipped: false },
   });
   if (ctx.options.deep === true) {
@@ -232,6 +233,7 @@ export async function collectMemorySearchHealthFindings(
   const { noteMemorySearchHealth } = await import("../commands/doctor-memory-search.js");
   const notes: string[] = [];
   await noteMemorySearchHealth(ctx.cfg, {
+    env: ctx.env,
     includeWorkspaceMemoryHealth: false,
     skipAuthProfileResolution: true,
     gatewayMemoryProbe: { checked: false, ready: false, skipped: true },

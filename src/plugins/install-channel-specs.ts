@@ -120,3 +120,26 @@ export function resolveClawHubInstallSpecsForUpdateChannel(params: {
     fallbackLabel: betaSpec,
   };
 }
+
+/**
+ * Installs the channel-resolved spec, widening to the operator's own selector
+ * when that release has no published artifact. The degrade is announced rather
+ * than silent, because it changes which build the operator ends up running.
+ */
+export async function installWithChannelFallback<T>(params: {
+  installSpec: string;
+  fallbackSpec?: string;
+  install: (spec: string) => Promise<T>;
+  isRetryable: (result: T) => boolean;
+  onFallback: (message: string) => void | Promise<void>;
+}): Promise<T> {
+  const result = await params.install(params.installSpec);
+  const { fallbackSpec } = params;
+  if (!fallbackSpec || fallbackSpec === params.installSpec || !params.isRetryable(result)) {
+    return result;
+  }
+  await params.onFallback(
+    `No ${params.installSpec} release is published; installing ${fallbackSpec} instead.`,
+  );
+  return await params.install(fallbackSpec);
+}

@@ -620,7 +620,8 @@ describe("skill collection review", () => {
     runEmbeddedAgent.mockImplementation(async () => {
       database.exec(`
         CREATE TRIGGER reject_collection_review_state
-        BEFORE UPDATE ON skill_curator_state
+        BEFORE UPDATE ON config_machine_state
+        WHEN NEW.state_key = 'skills.curatorState'
         BEGIN
           SELECT RAISE(FAIL, 'collection review state unavailable');
         END

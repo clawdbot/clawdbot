@@ -9,12 +9,12 @@ import { compareValidSemver } from "../../infra/semver.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
-import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   fingerprintCliRuntimeArtifact,
   resolveCliRuntimeOwnerFingerprint,
 } from "../cli-auth-epoch.js";
 import { resolveCliExecutableIdentity } from "../cli-executable-identity.js";
+import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
 import type { CliOutput } from "../cli-output-contracts.js";
 import {
   detectImageReferences,
@@ -49,6 +49,7 @@ import { createCliToolTracking } from "./execute-tool-tracking.js";
 import {
   buildCliArgs,
   enqueueCliRun,
+  isClaudeCliBackendId,
   prepareCliPromptImagePayload,
   resolveCliNoOutputTimeoutMs,
   resolveCliRunQueueKey,
@@ -166,12 +167,7 @@ export async function executePreparedCliRun(
   let prompt =
     params.controlOperation !== undefined
       ? basePrompt
-      : applyPluginTextReplacements(
-          appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
-            preserveExactPrompt: params.trigger === "heartbeat" ? params.prompt : undefined,
-          }),
-          context.backendResolved.textTransforms?.input,
-        );
+      : applyPluginTextReplacements(basePrompt, context.backendResolved.textTransforms?.input);
   if (
     nodePlacement &&
     ((params.images?.length ?? 0) > 0 ||
@@ -182,6 +178,9 @@ export async function executePreparedCliRun(
   ) {
     throw new Error("paired-node Claude CLI sessions do not support attachments or images");
   }
+  const imageTurnEntryId = isClaudeCliBackendId(context.backendResolved.id)
+    ? params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId
+    : undefined;
   const imagePayload = nodePlacement
     ? { prompt, imagePaths: [] as string[], cleanupImages: async () => {} }
     : await prepareCliPromptImagePayload({
@@ -194,6 +193,7 @@ export async function executePreparedCliRun(
         imageOrder: params.imageOrder,
         mediaImageLayout: params.mediaImageLayout,
         media: params.media,
+        ...(imageTurnEntryId ? { imageTurnKey: hashCliImageTurnEntryId(imageTurnEntryId) } : {}),
       });
   prompt = imagePayload.prompt;
   const promptInputBackend =

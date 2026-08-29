@@ -29,7 +29,7 @@ export type DeviceWorkerAvailability = {
   available: boolean;
   node?: NodeWorkerSupervisorNodeProof;
   issue?: NodeRunnerInventoryIssue;
-  unavailableReason?: "unpaired" | "disconnected" | "at-capacity";
+  unavailableReason?: "unpaired" | "disconnected" | "hosting-unavailable" | "at-capacity";
 };
 type DeviceWorkerAvailabilityResolver = (deviceId: string) => Promise<DeviceWorkerAvailability>;
 type DeviceWorkerReconciliation = (deviceId: string) => Promise<readonly string[]>;
@@ -60,8 +60,10 @@ export function deviceUnavailableText(deviceId: string, availability: DeviceWork
       return `device worker is not a paired node host: ${deviceId}`;
     case "disconnected":
       return `device worker node is not connected: ${deviceId}; reconnect it before retrying`;
+    case "hosting-unavailable":
+      return `device node ${deviceId} is connected but cannot host sessions; enable session hosting (nodeHost.workerRuns.enabled), update the node if needed, then reconnect it`;
     case "at-capacity":
-      return `device worker is at capacity (all worker slots in use): ${deviceId}; retry after a running turn completes`;
+      return `device worker is at capacity (all worker slots in use): ${deviceId}; stop an existing worker environment or retry when a slot is free`;
     default:
       return `device worker availability is unknown: ${deviceId}; verify the node host is paired and connected, then retry`;
   }
@@ -124,7 +126,9 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
     const unavailableReason = !hasPairedNodeRole(paired)
       ? "unpaired"
       : !current
-        ? "disconnected"
+        ? nodeTransport?.isConnected?.(deviceId)
+          ? "hosting-unavailable"
+          : "disconnected"
         : undefined;
     const issue = nodeTransport?.getIssue?.(deviceId);
     return {

@@ -111,8 +111,16 @@ vi.mock("./app-server/shared-client.js", () => ({
   }),
   withLeasedCodexAppServerClientStartSelectionRetry: async (params: {
     lease: { client?: unknown };
-    run: (client: unknown) => Promise<unknown>;
-  }) => await params.run(params.lease.client),
+    options?: { timeoutMs?: number };
+    run: (
+      client: unknown,
+      requestOptions: () => { timeoutMs: number; assertCurrent: () => void },
+    ) => Promise<unknown>;
+  }) =>
+    await params.run(params.lease.client, () => ({
+      timeoutMs: params.options?.timeoutMs ?? 60_000,
+      assertCurrent: () => undefined,
+    })),
 }));
 vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
   const actual =
@@ -134,7 +142,7 @@ import {
   isCodexAppServerLiveThreadClaimed,
   retainCodexAppServerLiveThread,
 } from "./app-server/client-runtime.js";
-import type { CodexAppServerClient } from "./app-server/client.js";
+import { CodexAppServerRpcError, type CodexAppServerClient } from "./app-server/client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { codexNativeSubagentMonitorRuntime } from "./app-server/native-subagent-monitor.js";
 import type { JsonValue } from "./app-server/protocol.js";
@@ -250,6 +258,9 @@ async function createSameThreadClientMigrationFixture(
   const replacementClient = {
     getInstanceId: () => "client-after-migration",
     request: vi.fn(async (method: string) => {
+      if (method === "thread/read") {
+        return { thread: conversationThreadStartResult("thread-migrated").thread };
+      }
       operations.push(`replacement:${method}`);
       if (method === "thread/resume") {
         return conversationThreadStartResult("thread-migrated");
@@ -348,7 +359,7 @@ const NETWORK_PROXY_CONFIG_PATCH = NETWORK_PROXY_RUNTIME.networkProxy?.configPat
 const NETWORK_PROXY_CONFIG_FINGERPRINT =
   NETWORK_PROXY_RUNTIME.networkProxy?.configFingerprint ?? "missing";
 
-function conversationThreadStartResult(threadId: string) {
+function conversationThreadStartResult(threadId: string, canAcceptDirectInput?: boolean | null) {
   return {
     approvalPolicy: "never",
     approvalsReviewer: "user",
@@ -372,6 +383,7 @@ function conversationThreadStartResult(threadId: string) {
       projectId: null,
       cliVersion: "0.149.0",
       source: "unknown",
+      ...(canAcceptDirectInput !== undefined ? { canAcceptDirectInput } : {}),
       agentNickname: null,
       agentRole: null,
       gitInfo: null,
@@ -1049,51 +1061,274 @@ describe("codex conversation binding", () => {
     expect(bindingAfterStart?.networkProxyConfigFingerprint).toBe(NETWORK_PROXY_CONFIG_FINGERPRINT);
   });
 
-  it("drops a retained native child before applying bound-only apps and sandbox policy", async () => {
-    const sessionFile = path.join(tempDir, "retained-child-session.jsonl");
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  it("releases a structured initial-attach resume failure before reusing the client", async () => {
+    const sessionFile = path.join(tempDir, "structured-resume-failure.jsonl");
+    const rejection = new CodexAppServerRpcError(
+      { code: -32_603, message: "resume response assembly failed" },
+      "thread/resume",
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/read") {
+        return { thread: conversationThreadStartResult("thread-structured-resume-failure").thread };
+      }
+      if (method === "thread/resume") {
+        throw rejection;
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
     const client = {
-      getInstanceId: () => "client-native-child",
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        requests.push({ method, params: requestParams });
-        if (method === "thread/unsubscribe") {
-          return {};
-        }
-        if (method === "thread/resume") {
-          return conversationThreadStartResult("thread-native-child");
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
+      getInstanceId: () => "client-structured-resume-failure",
+      request,
       addNotificationHandler: vi.fn(() => () => undefined),
       addRequestHandler: vi.fn(() => () => undefined),
       addCloseHandler: vi.fn(() => () => undefined),
     } as unknown as CodexAppServerClient;
-    ensureCodexAppServerClientRuntime(client, { agentDir: tempDir });
-    await retainCodexAppServerLiveThread(client, "thread-native-child");
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
 
-    await startCodexConversationThread({
-      pluginConfig: { appServer: { sandbox: "read-only" } },
-      sessionFile,
-      threadId: "thread-native-child",
-      workspaceDir: tempDir,
-    });
+    await expect(
+      startCodexConversationThread({
+        sessionFile,
+        threadId: "thread-structured-resume-failure",
+        workspaceDir: tempDir,
+      }),
+    ).rejects.toBe(rejection);
 
-    expect(requests.map(({ method }) => method)).toEqual(["thread/unsubscribe", "thread/resume"]);
-    expect(requests[0]?.params).toEqual({ threadId: "thread-native-child" });
-    expect(requests[1]?.params).toMatchObject({
-      threadId: "thread-native-child",
-      sandbox: "read-only",
-      config: {
-        project_doc_max_bytes: 131_072,
-        apps: { _default: { enabled: false } },
-        "features.apps": false,
-      },
-    });
-    await expect(consumeCodexAppServerLiveThread(client, "thread-native-child")).resolves.toEqual(
-      expect.objectContaining({ release: expect.any(Function) }),
-    );
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/resume",
+      "thread/unsubscribe",
+    ]);
+    expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
+
+  it.each([undefined, null, true])(
+    "reconfigures a retained interactive or unknown-capability thread (%s)",
+    async (canAcceptDirectInput) => {
+      const sessionFile = path.join(tempDir, "retained-child-session.jsonl");
+      const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+      const client = {
+        getInstanceId: () => "client-native-child",
+        request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+          if (method === "thread/read") {
+            return {
+              thread: conversationThreadStartResult("thread-native-child", canAcceptDirectInput)
+                .thread,
+            };
+          }
+          requests.push({ method, params: requestParams });
+          if (method === "thread/unsubscribe") {
+            return {};
+          }
+          if (method === "thread/resume") {
+            return conversationThreadStartResult("thread-native-child", canAcceptDirectInput);
+          }
+          throw new Error(`unexpected method: ${method}`);
+        }),
+        addNotificationHandler: vi.fn(() => () => undefined),
+        addRequestHandler: vi.fn(() => () => undefined),
+        addCloseHandler: vi.fn(() => () => undefined),
+      } as unknown as CodexAppServerClient;
+      ensureCodexAppServerClientRuntime(client, { agentDir: tempDir });
+      await retainCodexAppServerLiveThread(client, "thread-native-child");
+      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+
+      await startCodexConversationThread({
+        pluginConfig: { appServer: { sandbox: "read-only" } },
+        sessionFile,
+        threadId: "thread-native-child",
+        workspaceDir: tempDir,
+      });
+
+      expect(requests.map(({ method }) => method)).toEqual(["thread/unsubscribe", "thread/resume"]);
+      expect(requests[0]?.params).toEqual({ threadId: "thread-native-child" });
+      expect(requests[1]?.params).toMatchObject({
+        threadId: "thread-native-child",
+        sandbox: "read-only",
+        config: {
+          project_doc_max_bytes: 131_072,
+          apps: { _default: { enabled: false } },
+          "features.apps": false,
+        },
+      });
+      await expect(consumeCodexAppServerLiveThread(client, "thread-native-child")).resolves.toEqual(
+        expect.objectContaining({ release: expect.any(Function) }),
+      );
+    },
+  );
+
+  it.each(["preflight", "commit", "retention", "binding-read"] as const)(
+    "preserves the current owner when attachment fails during %s",
+    async (expiresDuring) => {
+      const sharedClientRuntime = await import("./app-server/shared-client.js");
+      const actualSharedClientRuntime = await vi.importActual<
+        typeof import("./app-server/shared-client.js")
+      >("./app-server/shared-client.js");
+      const retry = vi
+        .spyOn(sharedClientRuntime, "withLeasedCodexAppServerClientStartSelectionRetry")
+        .mockImplementation(
+          actualSharedClientRuntime.withLeasedCodexAppServerClientStartSelectionRetry,
+        );
+      const sessionFile = path.join(tempDir, "expired-attachment.jsonl");
+      const threadId = "thread-expired-attachment";
+      const existingThreadId = expiresDuring === "commit" ? "thread-previous-attachment" : threadId;
+      const harness = createClientHarness();
+      ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+      const release = vi.fn(async () => undefined);
+      await retainCodexAppServerLiveThread(harness.client, existingThreadId, release);
+      const releaseSibling = vi.fn(async () => undefined);
+      await retainCodexAppServerLiveThread(harness.client, "thread-sibling", releaseSibling);
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: existingThreadId,
+        clientId: harness.client.getInstanceId(),
+        cwd: tempDir,
+      });
+      const before = await readCodexAppServerBinding(sessionFile);
+      const response = conversationThreadStartResult(threadId, true);
+      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(harness.client);
+      sharedClientMocks.retainSharedCodexAppServerClientByInstanceId.mockReturnValue({
+        client: harness.client,
+        release: vi.fn(),
+      });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const startedAt = Date.now();
+      let resumeAccepted = false;
+      const request = vi.spyOn(harness.client, "request").mockImplementation(async (method) => {
+        if (method === "thread/read") {
+          if (expiresDuring === "preflight") {
+            vi.setSystemTime(startedAt + 1_001);
+          }
+          return { thread: response.thread } as never;
+        }
+        if (method === "thread/resume") {
+          resumeAccepted = true;
+          return response as never;
+        }
+        if (method === "thread/unsubscribe") {
+          return {} as never;
+        }
+        throw new Error(`unexpected Codex method ${method}`);
+      });
+
+      try {
+        await expect(
+          startCodexConversationThreadImpl({
+            pluginConfig: { appServer: { requestTimeoutMs: 1_000 } },
+            sessionFile,
+            threadId,
+            workspaceDir: tempDir,
+            bindingStore: {
+              ...testCodexAppServerBindingStore,
+              read: async (identity) => {
+                if (resumeAccepted) {
+                  if (expiresDuring === "binding-read") {
+                    throw new Error("Invalid Codex app-server binding row");
+                  }
+                  if (expiresDuring === "retention") {
+                    vi.setSystemTime(startedAt + 1_001);
+                  }
+                }
+                return await testCodexAppServerBindingStore.read(identity);
+              },
+              mutate: async (...args) => {
+                if (expiresDuring === "commit") {
+                  vi.setSystemTime(startedAt + 1_001);
+                }
+                return await testCodexAppServerBindingStore.mutate(...args);
+              },
+            },
+          }),
+        ).rejects.toThrow(
+          expiresDuring === "binding-read" ? "Invalid Codex app-server binding row" : "timed out",
+        );
+
+        expect(request.mock.calls.map(([method]) => method)).toEqual(
+          expiresDuring === "preflight"
+            ? ["thread/read"]
+            : ["thread/read", "thread/resume", "thread/unsubscribe"],
+        );
+        expect(release).toHaveBeenCalledTimes(expiresDuring === "preflight" ? 0 : 1);
+        expect(releaseSibling).not.toHaveBeenCalled();
+        expect(harness.stdinDestroyed).toBe(false);
+        await expect(
+          consumeCodexAppServerLiveThread(harness.client, "thread-sibling"),
+        ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
+        await expect(consumeCodexAppServerLiveThread(harness.client, threadId)).resolves.toEqual(
+          expiresDuring === "preflight"
+            ? expect.objectContaining({ release: expect.any(Function) })
+            : undefined,
+        );
+      } finally {
+        retry.mockRestore();
+        harness.client.close();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    { knownBeforeResume: true, sameOwner: false },
+    { knownBeforeResume: true, sameOwner: true },
+    { knownBeforeResume: false, sameOwner: false },
+  ])(
+    "rejects binding a parent-owned child without displacing the current owner (preflight: $knownBeforeResume, same owner: $sameOwner)",
+    async ({ knownBeforeResume, sameOwner }) => {
+      const sessionFile = path.join(tempDir, "parent-owned-session.jsonl");
+      const harness = createClientHarness();
+      ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+      const threadId = "thread-parent-owned";
+      const existingThreadId = sameOwner ? threadId : "thread-existing";
+      const release = vi.fn(async () => undefined);
+      await retainCodexAppServerLiveThread(harness.client, existingThreadId, release);
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: existingThreadId,
+        clientId: harness.client.getInstanceId(),
+        cwd: tempDir,
+      });
+      const before = await readCodexAppServerBinding(sessionFile);
+      const response = conversationThreadStartResult(threadId, false);
+      const request = vi.spyOn(harness.client, "request").mockImplementation(async (method) => {
+        if (method === "thread/read") {
+          return {
+            thread: { ...response.thread, canAcceptDirectInput: knownBeforeResume ? false : null },
+          } as never;
+        }
+        if (method === "thread/resume") {
+          return response as never;
+        }
+        if (method === "thread/unsubscribe") {
+          return {} as never;
+        }
+        throw new Error(`unexpected Codex method ${method}`);
+      });
+      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(harness.client);
+      sharedClientMocks.retainSharedCodexAppServerClientByInstanceId.mockReturnValue({
+        client: harness.client,
+        release: vi.fn(),
+      });
+
+      try {
+        await expect(
+          startCodexConversationThread({ sessionFile, threadId, workspaceDir: tempDir }),
+        ).rejects.toThrow("controlled by its parent");
+
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
+        expect(release).not.toHaveBeenCalled();
+        expect(
+          request.mock.calls.map(([method]) => method).filter((method) => method !== "thread/read"),
+        ).toEqual(knownBeforeResume ? [] : ["thread/resume", "thread/unsubscribe"]);
+        await expect(
+          consumeCodexAppServerLiveThread(harness.client, existingThreadId),
+        ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+      } finally {
+        harness.client.close();
+      }
+    },
+  );
 
   it("never resumes or unsubscribes an actively claimed native child for a conversation", async () => {
     const sessionFile = path.join(tempDir, "active-child-session.jsonl");
@@ -1147,9 +1382,72 @@ describe("codex conversation binding", () => {
     }
   });
 
+  it.each([
+    { sessionKey: undefined, knownBeforeResume: true },
+    { sessionKey: "agent:main:dashboard:incognito-child", knownBeforeResume: true },
+    { sessionKey: undefined, knownBeforeResume: false },
+    { sessionKey: "agent:main:dashboard:incognito-child", knownBeforeResume: false },
+  ])(
+    "preserves a stored child binding when direct input is refused (session: $sessionKey, preflight: $knownBeforeResume)",
+    async ({ sessionKey, knownBeforeResume }) => {
+      const sessionFile = path.join(tempDir, "stored-child.jsonl");
+      const harness = createClientHarness();
+      ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+      const threadId = "thread-parent-owned";
+      const release = vi.fn(async () => undefined);
+      if (knownBeforeResume) {
+        await retainCodexAppServerLiveThread(harness.client, threadId, release);
+      }
+      await writeTestConversationBinding(sessionFile, { threadId, cwd: tempDir });
+      const before = await readTestConversationBinding(sessionFile);
+      const request = vi.spyOn(harness.client, "request").mockImplementation(async (method) => {
+        if (method === "thread/read") {
+          return {
+            thread: conversationThreadStartResult(threadId, knownBeforeResume ? false : null)
+              .thread,
+          } as never;
+        }
+        if (method === "thread/resume") {
+          return conversationThreadStartResult(threadId, false) as never;
+        }
+        if (method === "thread/unsubscribe") {
+          return {} as never;
+        }
+        throw new Error(`unexpected Codex method ${method}`);
+      });
+      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(harness.client);
+      const { event, ctx } = boundConversationClaim(sessionFile, sessionKey);
+
+      try {
+        await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toMatchObject({
+          handled: true,
+          reply: { text: expect.stringContaining("controlled by its parent") },
+        });
+        await expect(readTestConversationBinding(sessionFile)).resolves.toEqual(before);
+        expect(request.mock.calls.map(([method]) => method)).toEqual(
+          knownBeforeResume
+            ? ["thread/read"]
+            : ["thread/read", "thread/resume", "thread/unsubscribe"],
+        );
+        expect(release).not.toHaveBeenCalled();
+        const ownership = await consumeCodexAppServerLiveThread(harness.client, threadId);
+        if (knownBeforeResume) {
+          expect(ownership).toEqual(expect.objectContaining({ release: expect.any(Function) }));
+        } else {
+          expect(ownership).toBeUndefined();
+        }
+      } finally {
+        harness.client.close();
+      }
+    },
+  );
+
   it("keeps a retained native child owned when its pre-resume unsubscribe fails", async () => {
     const sessionFile = path.join(tempDir, "failed-child-session.jsonl");
     const request = vi.fn(async (method: string) => {
+      if (method === "thread/read") {
+        return { thread: conversationThreadStartResult("thread-failed-child").thread };
+      }
       if (method === "thread/unsubscribe") {
         throw new Error("native child unsubscribe failed");
       }
@@ -1174,7 +1472,10 @@ describe("codex conversation binding", () => {
       }),
     ).rejects.toThrow("native child unsubscribe failed");
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/unsubscribe"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/unsubscribe",
+    ]);
     await expect(consumeCodexAppServerLiveThread(client, "thread-failed-child")).resolves.toEqual(
       expect.objectContaining({ release: expect.any(Function) }),
     );
@@ -2515,10 +2816,14 @@ describe("codex conversation binding", () => {
     let notificationHandler: ((notification: unknown) => void) | undefined;
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        requests.push({ method, params: requestParams });
         if (method === "thread/resume") {
+          requests.push({ method, params: requestParams });
           return conversationThreadStartResult("thread-target");
         }
+        if (method === "thread/read") {
+          return { thread: conversationThreadStartResult("thread-target").thread };
+        }
+        requests.push({ method, params: requestParams });
         if (method === "turn/start") {
           setImmediate(() =>
             notificationHandler?.({
@@ -3406,6 +3711,63 @@ describe("codex conversation binding", () => {
   });
 
   it.each([
+    { label: "structured failure", code: -32_603, cleaned: true },
+    { label: "overload rejection", code: -32_001, cleaned: false },
+  ])(
+    "preserves incognito reconnect $label without redundant cleanup",
+    async ({ code, cleaned }) => {
+      const sessionFile = path.join(tempDir, "incognito-reconnect.jsonl");
+      await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
+      const binding = await readTestConversationBinding(sessionFile);
+      const rejection = new CodexAppServerRpcError(
+        {
+          code,
+          message: cleaned ? "resume response assembly failed" : "thread not found: thread-1",
+        },
+        "thread/resume",
+      );
+      let unsubscribed = false;
+      const request = vi.fn(async (method: string) => {
+        if (method === "thread/read") {
+          return { thread: conversationThreadStartResult("thread-1").thread };
+        }
+        if (method === "thread/resume") {
+          throw rejection;
+        }
+        if (method === "thread/unsubscribe" && cleaned && !unsubscribed) {
+          unsubscribed = true;
+          return { status: "unsubscribed" };
+        }
+        throw new Error(`unexpected cleanup or fallback: ${method}`);
+      });
+      const closeAndWait = vi.fn(async () => true);
+      const client = { request, closeAndWait, getInstanceId: () => "reconnected-client" };
+      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+      const { event, ctx } = boundConversationClaim(
+        sessionFile,
+        "agent:main:dashboard:incognito-reconnect",
+      );
+
+      await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toEqual({
+        handled: true,
+        reply: {
+          text: `Codex app-server turn failed: ${rejection.message}`,
+        },
+      });
+      expect(request.mock.calls.map(([method]) => method)).toEqual(
+        cleaned
+          ? ["thread/read", "thread/resume", "thread/unsubscribe"]
+          : ["thread/read", "thread/resume"],
+      );
+      expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+      expect(closeAndWait).not.toHaveBeenCalled();
+      await expect(readTestConversationBinding(sessionFile)).resolves.toEqual(
+        cleaned ? undefined : binding,
+      );
+    },
+  );
+
+  it.each([
     { label: "ordinary", sessionKey: undefined },
     { label: "incognito", sessionKey: "agent:main:dashboard:incognito-resume-failure" },
   ])(
@@ -3417,8 +3779,11 @@ describe("codex conversation binding", () => {
         cwd: tempDir,
       });
       const request = vi.fn(async (method: string) => {
+        if (method === "thread/read") {
+          return { thread: conversationThreadStartResult("thread-1").thread };
+        }
         if (method === "thread/resume") {
-          throw new Error("conversation resume response timed out");
+          throw new Error("thread not found: thread-1");
         }
         if (method === "thread/unsubscribe") {
           throw new Error("detached client must not receive another cleanup request");
@@ -3442,10 +3807,13 @@ describe("codex conversation binding", () => {
 
       await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toEqual({
         handled: true,
-        reply: { text: "Codex app-server turn failed: conversation resume response timed out" },
+        reply: { text: "Codex app-server turn failed: thread not found: thread-1" },
       });
 
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "thread/read",
+        "thread/resume",
+      ]);
       expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledOnce();
       expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledWith(
         client,

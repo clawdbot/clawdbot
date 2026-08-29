@@ -26,7 +26,7 @@ struct MacGatewayProfilesTests {
             MacGatewayProfileStore.profileID(url: rootPath))
     }
 
-    @Test func `profiles sharing an authority keep independent TLS pin owners`() throws {
+    @Test(.gatewayTLSStoreIsolated) func `profiles sharing an authority keep independent TLS pin owners`() throws {
         let url = try #require(URL(string: "wss://studio.example"))
         let first = MacGatewayProfile(id: "first", name: "First", url: url)
         let second = MacGatewayProfile(id: "second", name: "Second", url: url)

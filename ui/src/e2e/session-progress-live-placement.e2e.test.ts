@@ -89,6 +89,9 @@ suite.define(() => {
                 key: sessionKey,
                 kind: "direct",
                 label: "Progress placement",
+                hasActiveRun: true,
+                activeRunIds: ["stale-run"],
+                status: "completed",
                 updatedAt,
               },
             ]),
@@ -106,13 +109,13 @@ suite.define(() => {
           await expect
             .poll(() => timestamp.getAttribute("datetime"))
             .toBe(new Date(updatedAt).toISOString());
-          await expect.poll(() => timestamp.getAttribute("aria-label")).toMatch(/^Last activity: /);
-          await expect.poll(() => timestamp.textContent()).toMatch(/\d{1,2}:\d{2}:\d{2}/);
+          await expect.poll(() => timestamp.getAttribute("aria-label")).toMatch(/^Updated /);
+          await expect.poll(() => timestamp.textContent()).toMatch(/^Updated /);
           await expect.poll(() => timestamp.isVisible()).toBe(true);
           const accessibleCard = placement === "composer" ? card.locator("summary") : card;
           await expect
             .poll(() => accessibleCard.getAttribute("aria-label"))
-            .toContain("Last activity:");
+            .not.toContain("Updated");
           const timestampBounds = await timestamp.boundingBox();
           const cardBounds = await card.boundingBox();
           if (!timestampBounds || !cardBounds) {
@@ -126,6 +129,11 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
           .toBe(1);
+        const pausedStep = visiblePane.locator(".session-progress-card__step--paused");
+        await expect.poll(() => pausedStep.getAttribute("aria-label")).toBe("Implement, paused");
+        await expect
+          .poll(() => visiblePane.locator(".session-progress-card .session-run-spinner").count())
+          .toBe(0);
         await expectVisibleLastActivity("composer");
         await captureProof(page, "composer-attached-wide.png");
 

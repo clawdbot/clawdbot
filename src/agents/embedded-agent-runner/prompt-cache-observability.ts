@@ -12,6 +12,7 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { NormalizedUsage } from "../usage.js";
 
 type PromptCacheChangeCode =
+  | "aggregateToolResultTruncation"
   | "cacheRetention"
   | "model"
   | "streamStrategy"
@@ -308,6 +309,25 @@ export function beginPromptCacheObservation(params: {
     changes,
     previousCacheRead: previous?.lastCacheRead ?? null,
   };
+}
+
+export function recordAggregateTruncation(params: {
+  sessionId: string;
+  promptCacheKey?: string;
+  sessionKey?: string;
+}): void {
+  const tracker = trackers.get(buildTrackerKey(params));
+  const changes = tracker?.pendingChanges ?? [];
+  if (!tracker || changes.some((change) => change.code === "aggregateToolResultTruncation")) {
+    return;
+  }
+  tracker.pendingChanges = [
+    ...changes,
+    {
+      code: "aggregateToolResultTruncation",
+      detail: "aggregate tool-result truncation changed provider prompt",
+    },
+  ];
 }
 
 export function completePromptCacheObservation(params: {

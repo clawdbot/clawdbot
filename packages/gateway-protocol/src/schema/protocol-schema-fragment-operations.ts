@@ -5,6 +5,7 @@ import * as config from "./config.js";
 import * as openclaw from "./openclaw.js";
 import * as taskSuggestions from "./task-suggestions.js";
 import * as tasks from "./tasks.js";
+import * as users from "./users.js";
 import * as wizard from "./wizard.js";
 
 export const OperationsProtocolSchemas = {
@@ -28,6 +29,7 @@ export const OperationsProtocolSchemas = {
   AuditEvent: audit.AuditEventSchema,
   AuditListParams: audit.AuditListParamsSchema,
   AuditListResult: audit.AuditListResultSchema,
+  UsersPrefsChangedEvent: users.UsersPrefsChangedEventSchema,
   TaskSuggestion: taskSuggestions.TaskSuggestionSchema,
   TaskSuggestionEvent: taskSuggestions.TaskSuggestionEventSchema,
   TaskSuggestionResolution: taskSuggestions.TaskSuggestionResolutionSchema,

@@ -14,7 +14,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
-  isPerAgentSessionStoreConfig,
   listSessionMembershipKeys,
   resolveExistingAgentSessionStoreTargetsSync,
   resolveSessionStorePathCore,
@@ -140,29 +139,18 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             return sessionAgentId === agentId;
           })
     )?.filter(canSearchSessionKey);
-    const existingTargets = configured
-      ? []
+    const searchTargets = configured
+      ? [{ agentId, storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }) }]
       : resolveExistingAgentSessionStoreTargetsSync(cfg, agentId);
-    if (!configured && (existingTargets.length === 0 || scopedSessionKeys?.length === 0)) {
+    if (!configured && (searchTargets.length === 0 || scopedSessionKeys?.length === 0)) {
       respond(true, { results: [] }, undefined);
       return;
     }
     try {
-      const configuredVisibleSessionKeys =
-        restrictVisibility && configured && scopedSessionKeys === undefined
-          ? listSessionEntriesReadOnly({
-              agentId,
-              storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-            })
-              .map((entry) => entry.sessionKey)
-              .filter(canSearchSessionKey)
-          : undefined;
-      const searchTargets = configured ? [undefined] : existingTargets;
       const targetResults = searchTargets.flatMap((target) => {
         const targetSessionKeys =
           scopedSessionKeys ??
-          configuredVisibleSessionKeys ??
-          (target && (restrictVisibility || !isPerAgentSessionStoreConfig(cfg.session?.store))
+          (restrictVisibility
             ? listSessionEntriesReadOnly({ agentId: target.agentId, storePath: target.storePath })
                 .map((entry) => entry.sessionKey)
                 .filter((sessionKey) => {
@@ -178,13 +166,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         }
         return [
           searchSessionTranscripts({
-            agentId: target?.agentId ?? agentId,
+            ...target,
             query,
             // Over-fetch retired multi-store searches so deduplication can still fill the caller's
             // requested page when the same transcript was copied during a store migration.
             limit: configured ? params.limit : 25,
             ...(targetSessionKeys ? { sessionKeys: targetSessionKeys } : {}),
-            ...(target ? { storePath: target.storePath } : {}),
           }),
         ];
       });
@@ -307,6 +294,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 modelCatalog: modelCatalogByAgent,
                 opts: p,
                 ...(p.involvingMe === true && identityId ? { involvingActorId: identityId } : {}),
+                ...(p.ownerFirst === true && identityId ? { ownerFirstActorId: identityId } : {}),
               }),
             {
               config: cfg,
@@ -720,3 +708,5 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     respond(true, { messages }, undefined);
   },
 };
+
+export const sessionsListHandler = sessionReadHandlers["sessions.list"]!;

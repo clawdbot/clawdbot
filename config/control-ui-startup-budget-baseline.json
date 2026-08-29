@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 341333,
-  "reason": "Tide, Beacon, and Phosphor themes: theme-name wiring, three appearance options, locale strings, and two font stylesheet mappings",
-  "updatedAt": "2026-08-26"
+  "startupJsGzipBytes": 345606,
+  "reason": "Generation-safe optimistic session deletion (#132233, fixing #132057); measured 345606 B after current-main integration, below the maintainer-approved 347323 B baseline; hard cap and allowances unchanged",
+  "updatedAt": "2026-08-29"
 }

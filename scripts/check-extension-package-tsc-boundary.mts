@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Verifies extension packages compile through their package-local TypeScript boundary.
-import { spawn, spawnSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import type { EventEmitter } from "node:events";
 import {
   existsSync,
@@ -20,14 +20,18 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
+import {
+  distArtifactEntryArgs,
+  withDistArtifactOwnership,
+} from "./lib/dist-artifact-ownership.mts";
 import { toErrorObject } from "./lib/error-format.mts";
+import {
+  runManagedCommand,
+  signalExitCode,
+  terminateManagedChild,
+} from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import {
-  forwardSignalToVitestProcessGroup,
-  installVitestProcessGroupCleanup,
-  shouldUseDetachedVitestProcessGroup,
-} from "./vitest-process-group.mts";
 
 type BoundaryMode = "all" | "compile" | "canary";
 type StepOutputCapture = { text: string; truncatedChars: number };
@@ -57,28 +61,9 @@ type StepFailureParams = {
   note?: string;
 };
 type StepResult = { stdout: string; stderr: string; elapsedMs: number };
-type StepChildPipe = {
-  setEncoding(encoding: BufferEncoding): unknown;
-  on(event: "data", listener: (chunk: unknown) => void): unknown;
-};
-type StepChild = {
-  pid?: number;
-  stdout: StepChildPipe | null;
-  stderr: StepChildPipe | null;
-  kill(signal?: NodeJS.Signals | number): boolean;
-  on(event: "error", listener: (error: Error) => void): unknown;
-  on(event: "close", listener: (code: number | null) => void): unknown;
-};
-type StepSpawnOptions = NonNullable<Parameters<typeof spawn>[2]> & {
-  stdio: ["ignore", "pipe", "pipe"];
-};
-type StepSpawn = (command: string, args: string[], options: StepSpawnOptions) => StepChild;
 type RunNodeStepParams = {
   abortController?: AbortController;
-  killProcess?: (pid: number, signal?: NodeJS.Signals | number) => boolean;
   onFailure?: (error: ReturnType<typeof attachStepFailureMetadata>) => void;
-  platform?: NodeJS.Platform;
-  spawnImpl?: StepSpawn;
 };
 type BoundaryStep = {
   label: string;
@@ -88,10 +73,6 @@ type BoundaryStep = {
   onSuccess?: (result: StepResult) => void;
 };
 type BoundaryCheckParams = { rootDir?: string; processObject?: Pick<EventEmitter, "on" | "off"> };
-type VitestProcessSignal = Exclude<
-  Parameters<typeof forwardSignalToVitestProcessGroup>[0]["signal"],
-  0
->;
 
 const require = createRequire(import.meta.url);
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -103,16 +84,12 @@ if (typeof nativePreviewBin !== "string") {
   throw new Error("@typescript/native-preview does not declare the tsgo binary");
 }
 const tsgoBin = resolve(dirname(nativePreviewPackageJsonPath), nativePreviewBin);
-const prepareBoundaryArtifactsArgs = [
-  "--import",
-  "tsx",
+const prepareBoundaryArtifactsArgs = distArtifactEntryArgs(
   resolve(repoRoot, "scripts/prepare-extension-package-boundary-artifacts.mts"),
-];
+);
 const extensionPackageBoundaryBaseConfig = "../tsconfig.package-boundary.base.json";
 const FAILURE_OUTPUT_TAIL_LINES = 40;
 const STEP_OUTPUT_MAX_CHARS = 256 * 1024;
-const STEP_PROCESS_GROUP_EXIT_POLL_MS = 25;
-const STEP_POST_FORCE_KILL_WAIT_MS = 1_000;
 const SLOW_COMPILE_SUMMARY_LIMIT = 10;
 const COMPILE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".json"]);
 const ROOTDIR_BOUNDARY_CANARY_IMPORT_PATH =
@@ -431,50 +408,6 @@ function writeStampFile(filePath: string) {
   writeFileSync(filePath, `${new Date().toISOString()}\n`, "utf8");
 }
 
-function runNodeStep(label: string, args: string[], timeoutMs: number) {
-  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, MAX_TIMER_TIMEOUT_MS);
-  const startedAt = Date.now();
-  const result = spawnSync(process.execPath, args, {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-    timeout: resolvedTimeoutMs,
-  });
-
-  if (result.status === 0 && !result.error) {
-    return result;
-  }
-
-  const timeoutSuffix =
-    result.error?.name === "Error" && result.error.message.includes("ETIMEDOUT")
-      ? `${label} timed out after ${resolvedTimeoutMs}ms`
-      : "";
-  const errorSuffix = result.error ? result.error.message : "";
-  const note = [timeoutSuffix, errorSuffix].filter(Boolean).join("\n");
-  const elapsedMs = Date.now() - startedAt;
-  const kind = timeoutSuffix ? "timeout" : result.error ? "spawn-error" : "nonzero-exit";
-  const failure = attachStepFailureMetadata(
-    new Error(
-      formatStepFailure(label, {
-        stdout: result.stdout,
-        stderr: result.stderr,
-        kind,
-        elapsedMs,
-        note,
-      }),
-    ),
-    label,
-    {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      kind,
-      elapsedMs,
-      note,
-    },
-  );
-  throw Object.assign(failure, { status: result.status ?? 1 });
-}
-
 function abortSiblingSteps(abortController?: AbortController) {
   if (abortController && !abortController.signal.aborted) {
     abortController.abort();
@@ -484,237 +417,94 @@ function abortSiblingSteps(abortController?: AbortController) {
 /**
  * Runs one node-based boundary check step with timeout and output capture.
  */
-export function runNodeStepAsync(
+export async function runNodeStepAsync(
   label: string,
   args: string[],
   timeoutMs: number,
   params: RunNodeStepParams = {},
 ) {
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, MAX_TIMER_TIMEOUT_MS);
-  const abortController = params.abortController;
-  const killProcess = params.killProcess ?? process.kill.bind(process);
-  const onFailure = params.onFailure;
-  const platform = params.platform ?? process.platform;
-  const spawnImpl: StepSpawn = params.spawnImpl ?? spawn;
   const startedAt = Date.now();
-  return new Promise<StepResult>((resolvePromise, rejectPromise) => {
-    const child = spawnImpl(process.execPath, args, {
+  let stdout = createStepOutputCapture();
+  let stderr = createStepOutputCapture();
+  let receivedSignal: NodeJS.Signals | undefined;
+  let activeChild: ChildProcess | undefined;
+  try {
+    const code = await runManagedCommand({
+      bin: process.execPath,
+      args,
       cwd: repoRoot,
-      detached: shouldUseDetachedVitestProcessGroup(platform),
       env: process.env,
-      signal: abortController?.signal,
       stdio: ["ignore", "pipe", "pipe"],
-    });
-    if (!child.stdout || !child.stderr) {
-      throw new Error(`${label} child process did not expose piped output`);
-    }
-
-    let stdout = createStepOutputCapture();
-    let stderr = createStepOutputCapture();
-    let settled = false;
-    let forwardedSignal: VitestProcessSignal | null = null;
-    const signalChild = (signal: VitestProcessSignal) => {
-      if (
-        !forwardSignalToVitestProcessGroup({
-          child,
-          kill: killProcess,
-          platform,
-          signal,
-        })
-      ) {
-        child.kill(signal);
-      }
-    };
-    const processGroupAlive = () => {
-      if (platform === "win32" || typeof child.pid !== "number") {
-        return false;
-      }
-      try {
-        killProcess(-child.pid, 0);
-        return true;
-      } catch (error) {
-        return Boolean(
-          error && typeof error === "object" && "code" in error && error.code === "EPERM",
-        );
-      }
-    };
-    const waitForProcessGroupExit = async (ms: number) => {
-      const deadlineAt = Date.now() + ms;
-      while (Date.now() < deadlineAt) {
-        if (!processGroupAlive()) {
-          return true;
+      shell: false,
+      timeoutMs: resolvedTimeoutMs,
+      signal: params.abortController?.signal,
+      abortKillGraceMs: 0,
+      requireProcessTreeExit: process.platform !== "win32",
+      onSignal(signal) {
+        receivedSignal = signal;
+        // Boundary cancellation historically stops compiler groups immediately.
+        if (activeChild) {
+          terminateManagedChild(activeChild, "SIGKILL");
         }
-        await new Promise((resolvePoll) => {
-          setTimeout(resolvePoll, STEP_PROCESS_GROUP_EXIT_POLL_MS);
+      },
+      onReady(child) {
+        activeChild = child;
+        child.stdout!.setEncoding("utf8");
+        child.stderr!.setEncoding("utf8");
+        child.stdout!.on("data", (chunk) => {
+          stdout = appendBoundedStepOutput(stdout, chunk);
         });
-      }
-      return !processGroupAlive();
-    };
-    const waitAfterForceKill = async () => {
-      if (processGroupAlive()) {
-        await waitForProcessGroupExit(STEP_POST_FORCE_KILL_WAIT_MS);
-      }
-    };
-    const rejectCanceledStep = async () => {
-      signalChild("SIGKILL");
-      await waitAfterForceKill();
-      rejectPromise(
-        toErrorObject(
-          attachStepFailureMetadata(new Error(`${label} canceled after sibling failure`), label, {
-            kind: "canceled",
-            elapsedMs: Date.now() - startedAt,
-            note: "canceled after sibling failure",
-          }),
-          "Step canceled after sibling failure",
-        ),
-      );
-    };
-    const abortSignal = abortController?.signal;
-    const abortListener = () => {
-      signalChild("SIGTERM");
-    };
-    abortSignal?.addEventListener("abort", abortListener, { once: true });
-    const teardownProcessCleanup = installVitestProcessGroupCleanup({
-      child,
-      forceSignal: "SIGKILL",
-      onSignal: (signal) => {
-        forwardedSignal ??= signal;
+        child.stderr!.on("data", (chunk) => {
+          stderr = appendBoundedStepOutput(stderr, chunk);
+        });
       },
     });
-    const cleanup = () => {
-      clearTimeout(timer);
-      abortSignal?.removeEventListener("abort", abortListener);
-      teardownProcessCleanup();
+    if (receivedSignal) {
+      process.exitCode = signalExitCode(receivedSignal);
+      throw new Error(`${label} interrupted by ${receivedSignal}`);
+    }
+    if (code !== 0) {
+      throw Object.assign(new Error(`${label} failed with exit code ${code}`), {
+        code: "NONZERO_EXIT",
+      });
+    }
+    return {
+      stdout: formatCapturedStepOutput(stdout),
+      stderr: formatCapturedStepOutput(stderr),
+      elapsedMs: Date.now() - startedAt,
     };
-    const timer = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      signalChild("SIGKILL");
-      void (async () => {
-        await waitAfterForceKill();
-        const stdoutText = formatCapturedStepOutput(stdout);
-        const stderrText = formatCapturedStepOutput(stderr);
-        const error = attachStepFailureMetadata(
-          new Error(
-            formatStepFailure(label, {
-              stdout: stdoutText,
-              stderr: stderrText,
-              kind: "timeout",
-              elapsedMs: Date.now() - startedAt,
-              note: `${label} timed out after ${resolvedTimeoutMs}ms`,
-            }),
-          ),
-          label,
-          {
-            stdout: stdoutText,
-            stderr: stderrText,
-            kind: "timeout",
-            elapsedMs: Date.now() - startedAt,
-            note: `${label} timed out after ${resolvedTimeoutMs}ms`,
-          },
-        );
-        onFailure?.(error);
-        abortSiblingSteps(abortController);
-        rejectPromise(toErrorObject(error, "Step timed out"));
-      })();
-    }, resolvedTimeoutMs);
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout = appendBoundedStepOutput(stdout, chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr = appendBoundedStepOutput(stderr, chunk);
-    });
-    child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      cleanup();
-      settled = true;
-      if (error.name === "AbortError" && abortController?.signal.aborted) {
-        void rejectCanceledStep();
-        return;
-      }
-      const stdoutText = formatCapturedStepOutput(stdout);
-      const stderrText = formatCapturedStepOutput(stderr);
-      const failure = attachStepFailureMetadata(
-        new Error(
-          formatStepFailure(label, {
-            stdout: stdoutText,
-            stderr: stderrText,
-            kind: "spawn-error",
-            elapsedMs: Date.now() - startedAt,
-            note: error.message,
-          }),
-        ),
-        label,
-        {
-          stdout: stdoutText,
-          stderr: stderrText,
-          kind: "spawn-error",
-          elapsedMs: Date.now() - startedAt,
-          note: error.message,
-        },
-      );
-      onFailure?.(failure);
-      abortSiblingSteps(abortController);
-      rejectPromise(toErrorObject(failure, "Step spawn failed"));
-    });
-    child.on("close", (code) => {
-      if (settled) {
-        return;
-      }
-      cleanup();
-      settled = true;
-      const signal = forwardedSignal;
-      if (signal) {
-        signalChild("SIGKILL");
-        void waitAfterForceKill().finally(() => {
-          process.kill(process.pid, signal);
-        });
-        return;
-      }
-      if (abortController?.signal.aborted) {
-        void rejectCanceledStep();
-        return;
-      }
-      if (code === 0) {
-        resolvePromise({
-          stdout: formatCapturedStepOutput(stdout),
-          stderr: formatCapturedStepOutput(stderr),
-          elapsedMs: Date.now() - startedAt,
-        });
-        return;
-      }
-      const stdoutText = formatCapturedStepOutput(stdout);
-      const stderrText = formatCapturedStepOutput(stderr);
-      const error = attachStepFailureMetadata(
-        new Error(
-          formatStepFailure(label, {
-            stdout: stdoutText,
-            stderr: stderrText,
-            kind: "nonzero-exit",
-            elapsedMs: Date.now() - startedAt,
-          }),
-        ),
-        label,
-        {
-          stdout: stdoutText,
-          stderr: stderrText,
-          kind: "nonzero-exit",
-          elapsedMs: Date.now() - startedAt,
-        },
-      );
-      onFailure?.(error);
-      abortSiblingSteps(abortController);
-      rejectPromise(toErrorObject(error, "Step failed"));
-    });
-  });
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    const kind =
+      code === "ETIMEDOUT"
+        ? "timeout"
+        : code === "ABORT_ERR"
+          ? "canceled"
+          : code === "NONZERO_EXIT"
+            ? "nonzero-exit"
+            : "spawn-error";
+    const detail = {
+      stdout: formatCapturedStepOutput(stdout),
+      stderr: formatCapturedStepOutput(stderr),
+      kind,
+      elapsedMs: Date.now() - startedAt,
+      note:
+        code === "ETIMEDOUT"
+          ? `${label} timed out after ${resolvedTimeoutMs}ms`
+          : error instanceof Error
+            ? error.message
+            : String(error),
+    };
+    const failure = attachStepFailureMetadata(
+      new Error(formatStepFailure(label, detail), { cause: error }),
+      label,
+      detail,
+    );
+    params.onFailure?.(failure);
+    abortSiblingSteps(params.abortController);
+    throw failure;
+  }
 }
 
 /**
@@ -723,6 +513,7 @@ export function runNodeStepAsync(
 export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurrency: number) {
   const abortController = new AbortController();
   let firstFailure: unknown = null;
+  const failures: unknown[] = [];
   await pMap(
     steps,
     async (step) => {
@@ -741,13 +532,19 @@ export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurr
       } catch (error) {
         // Keep the mapper fulfilled so pMap waits for active process-group cleanup.
         firstFailure ??= error;
+        failures.push(error);
         abortSiblingSteps(abortController);
       }
     },
     { concurrency, stopOnError: false },
   );
   if (firstFailure) {
-    throw toErrorObject(firstFailure, "Non-Error thrown");
+    const primary = toErrorObject(firstFailure, "Non-Error thrown");
+    // Retain every cleanup failure so the owner cannot release on only the
+    // first compiler error while a later sibling still has unjoined work.
+    throw failures.length > 1
+      ? new AggregateError(failures, primary.message, { cause: primary })
+      : primary;
   }
 }
 
@@ -807,106 +604,12 @@ function resolveBoundaryTsStampPath(extensionId: string, rootDir = repoRoot) {
   return resolve(rootDir, "extensions", extensionId, "dist", ".boundary-tsc.stamp");
 }
 
-/**
- * Resolves the local lock path for extension boundary checks.
- */
-export function resolveBoundaryCheckLockPath(rootDir = repoRoot) {
-  return resolve(rootDir, "dist", ".extension-package-boundary.lock");
-}
-
-function resolveBoundaryCheckLockOwnerPath(lockPath: string) {
-  return join(lockPath, "owner.json");
-}
-
-function isProcessAlive(pid: unknown) {
-  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return Boolean(error && typeof error === "object" && "code" in error && error.code === "EPERM");
-  }
-}
-
-function removeStaleBoundaryCheckLock(lockPath: string) {
-  const ownerPath = resolveBoundaryCheckLockOwnerPath(lockPath);
-  let owner: unknown;
-  try {
-    owner = JSON.parse(readFileSync(ownerPath, "utf8"));
-  } catch {
-    rmSync(lockPath, { force: true, recursive: true });
-    return true;
-  }
-
-  const ownerPid = owner && typeof owner === "object" && "pid" in owner ? owner.pid : undefined;
-  if (isProcessAlive(ownerPid)) {
-    return false;
-  }
-  rmSync(lockPath, { force: true, recursive: true });
-  return true;
-}
-
-/**
- * Acquires the single-process lock for extension boundary checks.
- */
-export function acquireBoundaryCheckLock(params: BoundaryCheckParams = {}) {
-  const rootDir = params.rootDir ?? repoRoot;
-  const processObject = params.processObject ?? process;
-  const lockPath = resolveBoundaryCheckLockPath(rootDir);
-  mkdirSync(dirname(lockPath), { recursive: true });
-  try {
-    mkdirSync(lockPath);
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
-      if (removeStaleBoundaryCheckLock(lockPath)) {
-        mkdirSync(lockPath);
-      } else {
-        throw attachStepFailureMetadata(
-          new Error(
-            [
-              "extension package boundary check",
-              "kind: lock-contention",
-              `lock: ${lockPath}`,
-              "another extension package boundary check is already running in this checkout",
-            ].join("\n\n"),
-            { cause: error },
-          ),
-          "extension package boundary check",
-          {
-            kind: "lock-contention",
-            note: `lock: ${lockPath}\nanother extension package boundary check is already running in this checkout`,
-          },
-        );
-      }
-    } else {
-      throw error;
-    }
-  }
-
-  writeFileSync(
-    resolveBoundaryCheckLockOwnerPath(lockPath),
-    `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }, null, 2)}\n`,
-    "utf8",
-  );
-
-  const release = () => {
-    rmSync(lockPath, { force: true, recursive: true });
-  };
-  processObject.on("exit", release);
-  return () => {
-    processObject.off("exit", release);
-    release();
-  };
-}
-
 async function runCompileCheck(extensionIds: string[]) {
   const prepStartedAt = Date.now();
   process.stdout.write(
     `preparing plugin-sdk boundary artifacts for ${extensionIds.length} plugins\n`,
   );
-  runNodeStep("plugin-sdk boundary prep", prepareBoundaryArtifactsArgs, 420_000);
+  await runNodeStepAsync("plugin-sdk boundary prep", prepareBoundaryArtifactsArgs, 420_000);
   const prepElapsedMs = Date.now() - prepStartedAt;
   const concurrency = resolveCompileConcurrency();
   const verboseFreshLogs = process.env.OPENCLAW_EXTENSION_BOUNDARY_VERBOSE_FRESH === "1";
@@ -993,7 +696,7 @@ async function runCompileCheck(extensionIds: string[]) {
 
 async function runCanaryCheck(extensionIds: string[]) {
   const startedAt = Date.now();
-  await Promise.all(
+  const results = await Promise.allSettled(
     extensionIds.map(async (extensionId, index) => {
       const { canaryPath, tsconfigPath } = resolveCanaryArtifactPaths(extensionId);
 
@@ -1037,7 +740,16 @@ async function runCanaryCheck(extensionIds: string[]) {
           error instanceof Error && "fullOutput" in error && typeof error.fullOutput === "string"
             ? error.fullOutput
             : String(error);
-        if (!output.includes("TS6059") || !output.includes(ROOTDIR_BOUNDARY_CANARY_OUTPUT_HINT)) {
+        if (
+          !(
+            error &&
+            typeof error === "object" &&
+            "kind" in error &&
+            error.kind === "nonzero-exit"
+          ) ||
+          !output.includes("TS6059") ||
+          !output.includes(ROOTDIR_BOUNDARY_CANARY_OUTPUT_HINT)
+        ) {
           throw error;
         }
       } finally {
@@ -1045,6 +757,12 @@ async function runCanaryCheck(extensionIds: string[]) {
       }
     }),
   );
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "extension boundary canary failed");
+  }
   return {
     canaryElapsedMs: Date.now() - startedAt,
   };
@@ -1053,14 +771,13 @@ async function runCanaryCheck(extensionIds: string[]) {
 /**
  * Runs the extension package TypeScript boundary check.
  */
-export async function main(argv: string[] = process.argv.slice(2)) {
+async function runBoundaryCheck(argv: string[]) {
   const startedAt = Date.now();
   const mode = parseMode(argv);
   const optInExtensionIds = collectOptInExtensionIds();
   const canaryExtensionIds = collectCanaryExtensionIds(optInExtensionIds);
   const cleanupExtensionIds = optInExtensionIds;
   const shouldRunCanary = mode === "all" || mode === "canary";
-  const releaseBoundaryLock = acquireBoundaryCheckLock();
   const teardownCanaryCleanup = installCanaryArtifactCleanup(cleanupExtensionIds);
   let prepElapsedMs: number | undefined;
   let compileCount = 0;
@@ -1096,10 +813,13 @@ export async function main(argv: string[] = process.argv.slice(2)) {
       }),
     );
   } finally {
-    releaseBoundaryLock?.();
     teardownCanaryCleanup?.();
     cleanupCanaryArtifactsForExtensions(cleanupExtensionIds);
   }
+}
+
+export async function main(argv: string[] = process.argv.slice(2)) {
+  return withDistArtifactOwnership(repoRoot, () => runBoundaryCheck(argv));
 }
 
 if (import.meta.main) {

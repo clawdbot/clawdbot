@@ -10,7 +10,6 @@ import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import { t } from "../i18n/index.ts";
-import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
 import {
   restartHoverMarqueeIfHovered,
@@ -18,7 +17,7 @@ import {
   stopHoverMarqueeFromEvent,
 } from "../lib/hover-marquee.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
-import { projectPresencePayload } from "../lib/presence-users.ts";
+import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
@@ -27,6 +26,7 @@ import type {
   CatalogBackingSessionDisplay,
   CatalogSessionMenuRequest,
 } from "./app-sidebar-session-catalogs.ts";
+import type { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
 import type { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import {
   rowDemandsVisibility,
@@ -41,7 +41,6 @@ import {
   describeSessionTrailingState,
   renderSessionLeadingState,
 } from "./session-leading-indicator.ts";
-import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { renderSidebarSessionSubtitle } from "./session-row-subtitle.ts";
@@ -52,6 +51,7 @@ import "./tooltip.ts";
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
 export interface SessionListHost {
+  readonly basePath: string;
   readonly sessionDataContext: Pick<ApplicationContext, "gateway"> | undefined;
   readonly sidebarLiveActivity: boolean;
   readonly sessionsShowPreview: boolean;
@@ -104,10 +104,7 @@ export interface SessionListHost {
     options?: ApplicationNavigationOptions,
   ) => void;
 
-  sessionPullRequestIndicatorState(
-    sessionKey: string,
-    worktreeId: string,
-  ): SessionPullRequestIndicatorState;
+  readonly sessionPullRequests: Pick<SessionPullRequestIndicatorsController, "summary">;
   mainSessionRow(): { key: string } | null;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
   isSessionChildrenFullyShown(sessionKey: string): boolean;
@@ -124,7 +121,7 @@ export interface SessionListHost {
   startSidebarSectionDrag(sectionId: string): void;
   finishSidebarSectionDrag(): void;
   toggleSection(sectionId: string): void;
-  openNewSession(target?: NewSessionTarget): void;
+  expandedAgentId(): string;
   readNewSessionAccess(): import("../lib/session-method-access.ts").SessionMethodAccess;
   readSessionMutationAccess(request: {
     method: string;
@@ -181,9 +178,10 @@ export function renderRecentSession(params: {
     narrationLine: host.sidebarNarrationLines.get(session.key),
     observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
   });
-  const pullRequestState = session.worktreeId
-    ? host.sessionPullRequestIndicatorState(session.key, session.worktreeId)
-    : "none";
+  const initialPullRequest = session.pullRequest ?? display?.pullRequest;
+  const pullRequest = session.worktreeId
+    ? host.sessionPullRequests.summary(session.key, session.worktreeId, initialPullRequest)
+    : initialPullRequest;
   const ownerAttribution =
     host.sessionsStatusFilter === "archived"
       ? "archived"
@@ -195,14 +193,19 @@ export function renderRecentSession(params: {
       ? session.archivedBy
       : session.owner?.actor
     : undefined;
-  const ownerId = ownerActor?.id?.trim();
-  const ownerViewing = ownerId
-    ? projectPresencePayload(
-        host.sessionData.presencePayload,
-        host.sessionDataContext?.gateway.snapshot.selfUser?.id,
-        host.sessionData.presenceInstanceId,
-      ).users.some((user) => user.id === ownerId && user.watchedSessions.includes(session.key))
-    : undefined;
+  const ownerViewing =
+    ownerActor?.identity?.type === "profile"
+      ? projectPresencePayload(host.sessionData.presencePayload).users.some(
+          (user) =>
+            presenceMatchesProfile(user, ownerActor.identity) &&
+            user.watchedSessions.includes(session.key),
+        )
+      : undefined;
+  // Person sections already own durable attribution. Restore the row avatar
+  // only for live presence; pinned and archive-attribution rows have no matching header.
+  const ownerRepeatedBySection =
+    host.sessionsGrouping === "person" && !session.pinned && ownerAttribution !== "archived";
+  const leadingOwner = ownerRepeatedBySection && ownerViewing !== true ? undefined : ownerActor;
   const gateway = host.sessionDataContext?.gateway;
   const channelAvatarAuth = {
     authTokens: gateway
@@ -219,11 +222,10 @@ export function renderRecentSession(params: {
         gateway.connection.password.trim()),
     ),
   };
-  const { running, leadingIndicator, trailingIndicator, renderedOwnerId } =
+  const { running, leadingIndicator, trailingIndicator, renderedOwnerIdentity } =
     renderSessionLeadingState(
       session,
-      pullRequestState,
-      ownerActor,
+      leadingOwner,
       ownerAttribution,
       ownerViewing,
       session.participants,
@@ -234,7 +236,7 @@ export function renderRecentSession(params: {
     ? running && session.unread
       ? t("sessionsView.unread")
       : ""
-    : describeSessionTrailingState(session, pullRequestState);
+    : describeSessionTrailingState(session);
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
   const stateId = trailingDescription ? sidebarSessionStateId(session.key) : undefined;
@@ -307,7 +309,7 @@ export function renderRecentSession(params: {
           label,
           session.archived === true,
           session.forkSource !== undefined,
-          session.pullRequest ?? display.pullRequest,
+          pullRequest,
         ]),
         marqueeLabelTemplate,
       )
@@ -360,28 +362,24 @@ export function renderRecentSession(params: {
           <span class="sidebar-recent-session__details">
             ${renderSidebarSessionSubtitle({ subtitle, narration })}
             <span class="sidebar-recent-session__details-endcap">
-              ${!session.isChild && sessionHasBoard(session.key)
-                ? html`<span
-                    class="sidebar-board-glyph"
-                    role="img"
-                    aria-label=${t("sessionsView.dashboardAvailable")}
-                    title=${t("sessionsView.dashboardAvailable")}
-                    >${icons.layoutDashboard}</span
-                  >`
-                : nothing}
               <openclaw-viewer-facepile
                 .presencePayload=${host.sessionData.presencePayload}
-                .selfUserId=${host.sessionDataContext?.gateway.snapshot.selfUser?.id}
+                .selfUser=${host.sessionDataContext?.gateway.snapshot.selfUser}
                 .selfInstanceId=${host.sessionData.presenceInstanceId}
                 .sessionKey=${session.key}
-                .excludeUserId=${renderedOwnerId}
+                .excludeIdentity=${renderedOwnerIdentity}
                 .maxVisible=${3}
                 variant="session"
               ></openclaw-viewer-facepile>
               ${renderSessionRowBadges({
-                ...session,
+                isChild: session.isChild,
+                incognito: session.incognito,
+                placementState: session.placementState,
+                diskSpaceStatus: session.diskSpaceStatus,
+                workspaceConflictCount: session.workspaceConflictCount,
+                outboxAttentionCount: session.outboxAttentionCount,
                 hasComposerDraft: session.hasComposerDraft === true,
-                pullRequest: session.pullRequest ?? display?.pullRequest,
+                pullRequest,
                 hasApproval: sessionHasPendingApproval(
                   host.sessionData.approvalBadgeSnapshot(),
                   session.key,

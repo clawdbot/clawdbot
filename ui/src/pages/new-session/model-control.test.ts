@@ -181,6 +181,75 @@ describe("new-session model runtime", () => {
     ).toBeNull();
   });
 
+  it.each([
+    { inherited: true, checked: "true", toggleValue: "off", next: false },
+    { inherited: false, checked: "false", toggleValue: "on", next: true },
+    { inherited: "auto", checked: "true", toggleValue: "off", next: false },
+  ] as const)(
+    "renders the current composer toggle for inherited Fast Mode $inherited",
+    async ({ inherited, checked, toggleValue, next }) => {
+      const { context } = contextWith([
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          reasoning: true,
+          effectiveFastMode: inherited,
+        },
+      ]);
+      const control = new NewSessionModelControl(() => undefined);
+      control.load(context, "main", true);
+
+      await vi.waitFor(() => {
+        const container = renderControl(control, context);
+        const toggle = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]");
+        expect(
+          container.querySelector(".chat-controls__fast-mode-title")?.textContent?.trim(),
+        ).toBe("Fast mode");
+        expect(toggle?.classList.contains("chat-controls__speed-toggle")).toBe(true);
+        expect(toggle?.dataset.chatSpeedToggle).toBe(toggleValue);
+        expect(toggle?.getAttribute("aria-checked")).toBe(checked);
+      });
+
+      renderControl(control, context)
+        .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")
+        ?.click();
+      expect(control.fastMode).toBe(next);
+    },
+  );
+
+  it("clears Fast Mode when switching to a provider without a wire mapping", async () => {
+    const { context } = contextWith([
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true },
+      { id: "llama-4", name: "Llama 4", provider: "ollama" },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+    control.load(context, "main", true);
+
+    await vi.waitFor(() =>
+      expect(
+        renderControl(control, context).querySelector('[data-chat-model-option="ollama/llama-4"]'),
+      ).not.toBeNull(),
+    );
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")
+      ?.click();
+    expect(control.fastMode).toBe(true);
+
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="ollama/llama-4"]')
+      ?.click();
+
+    expect(control.selected).toBe("ollama/llama-4");
+    expect(control.fastMode).toBeUndefined();
+    const unsupportedToggle = renderControl(control, context).querySelector<HTMLButtonElement>(
+      "[data-chat-speed-toggle]",
+    );
+    expect(unsupportedToggle?.disabled).toBe(true);
+    expect(unsupportedToggle?.getAttribute("aria-checked")).toBe("false");
+    expect(unsupportedToggle?.dataset.chatSpeedToggle).toBe("");
+  });
+
   it("does not mark ordinary catalog loading as preference restoration", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
@@ -214,9 +283,7 @@ describe("new-session model runtime", () => {
     expect(loadingModelTrigger?.classList.contains("chat-controls__model-trigger--loading")).toBe(
       true,
     );
-    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe(
-      "Chat model: Loading models…; Effort: Medium",
-    );
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe("Chat model: Loading models…");
     expect(loadingModelTrigger?.getAttribute("aria-disabled")).toBe("false");
     expect(loadingSkeleton).not.toBeNull();
     expect(loadingSkeleton?.getAttribute("aria-hidden")).toBe("true");
@@ -248,9 +315,7 @@ describe("new-session model runtime", () => {
     );
     expect(loadingModelTrigger).not.toBeNull();
     expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
-    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe(
-      "Chat model: Loading models…; Effort: Medium",
-    );
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe("Chat model: Loading models…");
     expect(loadingSkeleton).not.toBeNull();
     expect(loadingSkeleton?.getAttribute("aria-hidden")).toBe("true");
     expect(loadingModelTrigger?.textContent).not.toContain("Loading models");
@@ -401,12 +466,14 @@ describe("new-session model runtime", () => {
         name: "GPT-5.6 Luna",
         provider: "openai",
         available: false,
+        unavailableReason: "missing-auth",
       },
       {
         id: "gpt-5.6-sol",
         name: "GPT-5.6 Sol",
         provider: "openai",
         available: false,
+        unavailableReason: "missing-auth",
       },
     ]);
     const control = new NewSessionModelControl(() => undefined);
@@ -428,18 +495,16 @@ describe("new-session model runtime", () => {
     const container = renderControl(control, context);
     const options = container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]");
     expect(
-      control.isModelUnavailable({
+      control.modelUnavailableReason({
         id: "main",
         model: { primary: "openai/gpt-5.6-luna" },
       }),
-    ).toBe(true);
+    ).toBe("missing-auth");
     expect(options).toHaveLength(2);
     expect(options[0]?.textContent).toContain("Sign-in needed");
     expect([...options].every((option) => !option.disabled)).toBe(true);
     expect([...options].every((option) => option.dataset.chatModelSetup === "true")).toBe(true);
-    expect(container.textContent).toContain(
-      "Authentication failed. Review the provider credential or sign-in, then retry.",
-    );
+    expect(container.textContent).toContain("No models available");
     container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
     expect(navigate).toHaveBeenCalledWith("model-setup");
   });
@@ -513,13 +578,14 @@ describe("new-session model runtime", () => {
         name: "GPT-5.6 Luna",
         provider: "openai",
         available: false,
+        unavailableReason: "missing-auth",
       },
     ];
     const { context, request } = contextWith(coldModels);
     const control = new NewSessionModelControl(() => undefined);
     const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
     control.load(context, "main", true, { agent });
-    await vi.waitFor(() => expect(control.isModelUnavailable(agent)).toBe(true));
+    await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
 
     const offlineContext = {
       ...context,
@@ -536,7 +602,7 @@ describe("new-session model runtime", () => {
     expect(container.querySelector('[data-chat-model-catalog-state="offline"]')).not.toBeNull();
     expect(container.textContent).toContain("Offline");
     expect(container.textContent).not.toContain("Authentication failed");
-    expect(control.isModelUnavailable(agent)).toBe(false);
+    expect(control.modelUnavailableReason(agent)).toBeUndefined();
     expect(request).toHaveBeenCalledOnce();
   });
 
@@ -547,6 +613,7 @@ describe("new-session model runtime", () => {
         name: "GPT-5.6 Luna",
         provider: "openai",
         available: false,
+        unavailableReason: "missing-auth",
       },
     ];
     const availableModels: ModelCatalogEntry[] = [
@@ -556,7 +623,7 @@ describe("new-session model runtime", () => {
     const control = new NewSessionModelControl(() => undefined);
     const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
     control.load(context, "main", true, { agent });
-    await vi.waitFor(() => expect(control.isModelUnavailable(agent)).toBe(true));
+    await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
 
     request.mockRejectedValueOnce(new Error("refresh failed"));
     control.invalidate(false);
@@ -573,7 +640,7 @@ describe("new-session model runtime", () => {
       "GPT-5.6 Luna",
     );
     expect(container.textContent).not.toContain("Authentication failed");
-    expect(control.isModelUnavailable(agent)).toBe(false);
+    expect(control.modelUnavailableReason(agent)).toBeUndefined();
 
     request.mockResolvedValueOnce({ models: availableModels });
     control.load(context, "main", true, { agent });
@@ -585,7 +652,7 @@ describe("new-session model runtime", () => {
         ),
       ).toBeNull(),
     );
-    expect(control.isModelUnavailable(agent)).toBe(false);
+    expect(control.modelUnavailableReason(agent)).toBeUndefined();
     container = renderControl(control, context, "main", agent);
     expect(
       container.querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-luna"]')

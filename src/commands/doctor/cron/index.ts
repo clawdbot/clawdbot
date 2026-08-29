@@ -25,6 +25,7 @@ import {
 import {
   formatLegacyIssuePreview,
   formatIncompleteInheritedAuthorityAdvisory,
+  formatLegacyGatewayExecAdvisory,
   formatScheduledToolPolicyAdvisory,
   formatUnresolvedCommandPromptAdvisory,
   formatUnresolvedShellPromptAdvisory,
@@ -185,7 +186,6 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     legacyRunLogDetected,
     legacyQuarantine,
     legacyImportCount,
-    sqliteProjectionBackfillCount,
     rawJobs,
   } = state;
   const sqliteStorePath = resolveOpenClawStateSqlitePath();
@@ -305,12 +305,14 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     }
   }
 
-  if (sqliteProjectionBackfillCount > 0) {
+  if (normalized.legacyGatewayExecJobs.length > 0) {
     findings.push(
       legacyCronStoreFinding({
-        message: `${pluralize(sqliteProjectionBackfillCount, "SQLite cron row")} will be backfilled from stored config JSON into split columns.`,
+        message: `${pluralize(normalized.legacyGatewayExecJobs.length, "automation")} require recreation because they grant the retired \`gateway_exec\` alias.`,
         path: sqliteStorePath,
-        requirement: "sqlite-projection-backfill",
+        requirement: "legacy-gateway-exec-recreation",
+        fixHint:
+          "Review the affected jobs with `openclaw automations list --all`, then recreate each one from a fresh authenticated creator turn or explicitly reauthorize its complete tool cap from a trusted operator shell.",
       }),
     );
   }
@@ -381,7 +383,6 @@ export async function maybeRepairLegacyCronStore(params: {
     legacyRunLogDetected,
     legacyQuarantine,
     legacyImportCount,
-    sqliteProjectionBackfillCount,
     invalidConfigRows,
     rawJobs,
   } = state;
@@ -527,6 +528,12 @@ export async function maybeRepairLegacyCronStore(params: {
   if (scheduledToolPolicyAdvisory) {
     note(scheduledToolPolicyAdvisory, "Cron");
   }
+  const legacyGatewayExecAdvisory = formatLegacyGatewayExecAdvisory(
+    normalized.legacyGatewayExecJobs,
+  );
+  if (legacyGatewayExecAdvisory) {
+    note(legacyGatewayExecAdvisory, "Cron");
+  }
   const staticMcpByAgentWorkspace = new Map<string, boolean>();
   const incompleteInheritedAuthorityAdvisory = formatIncompleteInheritedAuthorityAdvisory(
     rawJobs
@@ -598,11 +605,6 @@ export async function maybeRepairLegacyCronStore(params: {
   if (invalidConfigRows.length > 0) {
     previewLines.push(
       `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
-    );
-  }
-  if (sqliteProjectionBackfillCount > 0) {
-    previewLines.push(
-      `- ${pluralize(sqliteProjectionBackfillCount, "SQLite cron row")} will be backfilled from stored config JSON into split columns`,
     );
   }
   if (notifyCount > 0) {

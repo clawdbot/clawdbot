@@ -44,7 +44,7 @@ describe("anthropic-vertex provider plugin", () => {
     ).toBe("gcp-vertex-credentials");
   });
 
-  it("merges the implicit Vertex catalog into explicit provider overrides", async () => {
+  it("returns raw discovery for the host to merge with explicit provider overrides", async () => {
     const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
 
     const result = await provider.catalog?.run({
@@ -76,8 +76,8 @@ describe("anthropic-vertex provider plugin", () => {
     }
     expect(result.provider.api).toBe("anthropic-messages");
     expect(result.provider.apiKey).toBe("gcp-vertex-credentials");
-    expect(result.provider.baseUrl).toBe("https://europe-west4-aiplatform.googleapis.com");
-    expect(result.provider.headers).toEqual({ "x-test-header": "1" });
+    expect(result.provider.baseUrl).toBe("https://us-east5-aiplatform.googleapis.com");
+    expect(result.provider.headers).toBeUndefined();
     expect(result.provider.models.map((model) => model.id)).toEqual([
       "claude-fable-5",
       "claude-mythos-5",

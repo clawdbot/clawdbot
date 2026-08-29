@@ -88,7 +88,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   readonly sessionProjection = new SidebarSessionProjection();
   readonly sessionData = new SessionDataController(this);
-  private readonly sessionPullRequestIndicators = new SessionPullRequestIndicatorsController(this, {
+  readonly sessionPullRequests = new SessionPullRequestIndicatorsController(this, {
     getConnected: () => this.connected,
     getRows: () =>
       mergeAdoptedSessionPullRequestRows({
@@ -116,7 +116,8 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     });
 
   private sessionPeopleSortCapability(): boolean | undefined {
-    return this.context?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities;
+    const owners = this.selectedAgentSessionResult()?.owners;
+    return owners ? owners.length >= 2 : undefined;
   }
 
   sessionPeopleSortAvailable(): boolean {
@@ -124,14 +125,14 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   effectiveSessionSortMode(): SidebarSessionSortMode {
-    // A reconnect can temporarily hide the capability. Render Created without
-    // discarding People until an authoritative single-identity hello arrives.
+    // A refresh can temporarily invalidate the owner facet. Render Created
+    // without discarding People until an authoritative single-owner list arrives.
     return resolveSidebarSessionSortMode(this.sessionSortMode, this.sessionPeopleSortAvailable());
   }
 
   effectiveSessionsGrouping(): SidebarSessionsGrouping {
-    // Reconnects temporarily hide the capability; retain the stored Person
-    // preference so it returns when the authoritative identity policy does.
+    // Refreshes can temporarily invalidate the owner facet; retain the Person
+    // preference so it returns with the authoritative multi-owner list.
     const grouping = this.sessionsGrouping;
     return grouping === "person" && !this.sessionPeopleSortAvailable() ? "category" : grouping;
   }
@@ -141,6 +142,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   private readonly sessionOwnerFilter = new SessionOwnerFilterController(this, () => this.context);
+
+  sidebarSessionOwnerFilter() {
+    return this.sessionOwnerFilter;
+  }
 
   get sessionOwnerFilterId(): string | null {
     return this.sessionOwnerFilter.ownerId;
@@ -206,10 +211,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     if (this.sessionProjection.promoteCreatedSession(sessionKey)) {
       this.requestUpdate();
     }
-  }
-
-  sessionPullRequestIndicatorState(sessionKey: string, worktreeId: string) {
-    return this.sessionPullRequestIndicators.state(sessionKey, worktreeId);
   }
 
   override updated(changedProperties: PropertyValues<this>) {
@@ -465,24 +466,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     }
   }
 
-  readonly replaceCurrentSession = (sessionKey: string) => {
-    const row = this.findSidebarSessionByKey(sessionKey);
-    const face = resolveSessionPreferredFace(row);
-    const target = sessionNavigationTarget({
-      face,
-      sessionKey,
-      fallbackAgentId: this.selectedAgentIdForSessions(),
-      basePath: this.basePath,
-      row,
-      mainKey: this.sessionMainKey(),
-      preferenceDerivedFace: true,
-    });
-    this.setApplicationSession(sessionKey, this.selectedAgentIdForSessions());
-    if (isSessionRouteId(this.activeRouteId)) {
-      this.onNavigate?.(face, target.options);
-    }
-  };
-
   /** Chip switching selects the agent and refreshes its session list. */
   protected readonly expandAgent = (agentId: string) => {
     const context = this.context;
@@ -621,6 +604,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       sessionData: this.sessionData,
       selectedAgentId: selected,
       statusFilter: this.sessionsStatusFilter,
+      deletionState: (key, agentId) => this.context?.sessions.deletionState(key, agentId),
       archiveVisibility: (key) => this.context?.sessions.archiveVisibility(key),
     });
     const rowsByKey = new Map(rows.map((row) => [row.key, row]));
@@ -717,11 +701,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     ) {
       projected.unshift(navigationState.toSidebarSession(selectedFallback));
     }
-    const ownerFacet =
-      selected === loadedAgentId
-        ? this.sessionData.sessionsResult?.owners
-        : this.sessionData.sessionResultsByAgent[selected]?.owners;
-    return this.applySessionOwnerFilter(projected, ownerFacet);
+    return this.applySessionOwnerFilter(projected, this.selectedAgentSessionResult()?.owners);
   }
 
   private selectedAgentSessionResult(): SessionsListResult | null {

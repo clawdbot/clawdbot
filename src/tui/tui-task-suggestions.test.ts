@@ -2,6 +2,7 @@ import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tu
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { createTuiTaskSuggestionController } from "./tui-task-suggestions.js";
 
 type TestSelector = Component & {
@@ -24,14 +25,6 @@ function suggestionPayload(overrides: Record<string, unknown> = {}) {
     createdAt: 1_000,
     ...overrides,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function createHarness() {
@@ -163,7 +156,7 @@ describe("TUI task suggestions", () => {
     harness.selectors[0]?.onSelect?.(accept);
 
     await vi.waitFor(() => {
-      expect(harness.acceptTaskSuggestion).toHaveBeenCalledWith("task_1");
+      expect(harness.acceptTaskSuggestion).toHaveBeenCalledWith("task_1", "worktree", undefined);
       expect(harness.onAccepted).toHaveBeenCalledWith("agent:main:task");
     });
     expect(harness.addSystem).toHaveBeenCalledWith("follow-up task started in agent:main:task");
@@ -188,7 +181,7 @@ describe("TUI task suggestions", () => {
     harness.selectors[0]?.onSelect?.(action);
 
     await vi.waitFor(() => {
-      expect(harness.acceptTaskSuggestion).toHaveBeenCalledWith("task_1", mode);
+      expect(harness.acceptTaskSuggestion).toHaveBeenCalledWith("task_1", mode, undefined);
     });
     if (mode === "session") {
       expect(harness.onAccepted).not.toHaveBeenCalled();
@@ -440,6 +433,107 @@ describe("TUI task suggestions", () => {
       expect(harness.addSystem).toHaveBeenCalledWith("follow-up task started in agent:main:task");
     });
     expect(harness.onAccepted).not.toHaveBeenCalled();
+  });
+
+  it.each(["accept", "dismiss"])(
+    "keeps an in-flight %s hidden across navigation and refresh",
+    async (value) => {
+      const harness = createHarness();
+      const pending = deferred<{ taskId: string; key: string; dismissed: boolean }>();
+      const action =
+        value === "accept" ? harness.acceptTaskSuggestion : harness.dismissTaskSuggestion;
+      action.mockReturnValueOnce(pending.promise);
+      harness.listTaskSuggestions.mockResolvedValue([suggestionPayload()]);
+      await harness.controller.refresh();
+      const item = expectDefined(
+        harness.selectors[0]?.items.find((entry) => entry.value === value),
+        "pending task action",
+      );
+      harness.selectors[0]?.onSelect?.(item);
+      if (value === "accept") {
+        harness.selectors[0]?.onSelect?.(item);
+      }
+      expect(action).toHaveBeenCalledTimes(1);
+
+      harness.setSessionKey("agent:main:other");
+      harness.controller.sessionChanged();
+      harness.setSessionKey("agent:main:main");
+      harness.controller.sessionChanged();
+      await harness.controller.refresh();
+      harness.controller.handleEvent("task.suggestion", {
+        action: "created",
+        suggestion: suggestionPayload(),
+      });
+      expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+
+      pending.resolve({ taskId: "task_1", key: "agent:main:task", dismissed: true });
+      await new Promise(setImmediate);
+      expect(action).toHaveBeenCalledTimes(1);
+      expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+      expect(harness.addSystem).toHaveBeenCalledWith(
+        value === "accept"
+          ? "follow-up task started in agent:main:task"
+          : "follow-up task dismissed",
+      );
+    },
+  );
+
+  it.each([
+    { value: "accept", fails: false },
+    { value: "accept", fails: true },
+    { value: "dismiss", fails: false },
+    { value: "dismiss", fails: true },
+  ])("ignores $value completion after disposal (fails=$fails)", async ({ value, fails }) => {
+    const harness = createHarness();
+    const pending = deferred<{ taskId: string; key: string; dismissed: boolean }>();
+    const action =
+      value === "accept" ? harness.acceptTaskSuggestion : harness.dismissTaskSuggestion;
+    action.mockReturnValueOnce(pending.promise);
+    harness.controller.handleEvent("task.suggestion", {
+      action: "created",
+      suggestion: suggestionPayload(),
+    });
+    const item = expectDefined(
+      harness.selectors[0]?.items.find((entry) => entry.value === value),
+      "pending task action",
+    );
+    harness.selectors[0]?.onSelect?.(item);
+    if (value === "accept") {
+      harness.selectors[0]?.onSelect?.(item);
+    }
+    expect(action).toHaveBeenCalledTimes(1);
+    harness.controller.dispose();
+    harness.requestRender.mockClear();
+    if (fails) {
+      pending.reject(new Error("gateway unavailable"));
+    } else {
+      pending.resolve({ taskId: "task_1", key: "agent:main:task", dismissed: true });
+    }
+    await new Promise(setImmediate);
+
+    expect(harness.onAccepted).not.toHaveBeenCalled();
+    expect(harness.addSystem).not.toHaveBeenCalled();
+    expect(harness.listTaskSuggestions).not.toHaveBeenCalled();
+    expect(harness.requestRender).not.toHaveBeenCalled();
+  });
+
+  it("ignores a failed recovery refresh after disposal", async () => {
+    const harness = createHarness();
+    const pending = deferred<unknown[]>();
+    harness.dismissTaskSuggestion.mockRejectedValueOnce(new Error("gateway unavailable"));
+    harness.listTaskSuggestions.mockReturnValueOnce(pending.promise);
+    harness.controller.handleEvent("task.suggestion", {
+      action: "created",
+      suggestion: suggestionPayload(),
+    });
+    harness.selectors[0]?.onSelect?.({ value: "dismiss", label: "Dismiss" });
+    await vi.waitFor(() => expect(harness.listTaskSuggestions).toHaveBeenCalledTimes(1));
+    harness.controller.dispose();
+    harness.addSystem.mockClear();
+    pending.reject(new Error("refresh unavailable"));
+    await new Promise(setImmediate);
+
+    expect(harness.addSystem).not.toHaveBeenCalled();
   });
 
   it("shows only suggestions for the active session", () => {

@@ -833,6 +833,8 @@ describe("collectPluginNpmGitRangeSelection", () => {
     "packages/plugin-package-contract/src/schema.ts",
     "scripts/lib/plugin-publication-candidates.ts",
     "scripts/lib/plugin-publication-collector.ts",
+    "scripts/lib/tsx-cli-shim.mjs",
+    "scripts/tsx.mjs",
     "scripts/plugin-npm-release-plan.ts",
   ])("selects all publishable plugins for an authority-only %s change", (changedPath) => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-range-");

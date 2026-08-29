@@ -5,7 +5,6 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 // NodeSession is plugin-SDK-reachable; importing these types from the
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
 // the public plugin-sdk dts (check-plugin-sdk-exports guards this).
@@ -46,6 +45,7 @@ import {
   type PendingInvoke,
   type PendingSystemRunEvent,
 } from "./node-registry.invoke-stream.js";
+import { isNodeWorkerHostClientId } from "./node-runner-inventory-runtime.js";
 import { normalizeNodeSkillDescriptors } from "./node-skill-descriptors.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -232,7 +232,8 @@ export class NodeRegistry {
       if (
         !node ||
         node.connId !== pending.connId ||
-        (!pending.onProgress && node.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST)
+        (!pending.onProgress &&
+          (!isNodeWorkerHostClientId(node.clientId) || node.clientMode !== "node"))
       ) {
         return;
       }
@@ -1113,8 +1114,8 @@ export class NodeRegistry {
     signal?: AbortSignal;
     idempotencyKey?: string;
     sessionKey?: string;
-    /** Receives the id after pairing validation and a successful dispatch. */
-    onDispatchReady?: (invokeId: string) => void;
+    /** Receives the id and armed hard deadline after a successful dispatch. */
+    onDispatchReady?: (invokeId: string, deadlineAtMs?: number) => void;
     /** Revalidates caller authority at the registry-owned transport handoff. */
     isDispatchAuthorized?: () => boolean;
   }): Promise<NodeInvokeResult> {

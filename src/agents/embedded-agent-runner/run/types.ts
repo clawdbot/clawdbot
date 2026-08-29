@@ -25,14 +25,16 @@ import type { McpConnectAction } from "../../mcp-connect-action.js";
 import type { McpAppChannelView } from "../../mcp-ui-resource.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
-import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
+import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
+import type { ToolEffectReceipt } from "../../tool-effect-receipt.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
+import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
@@ -67,6 +69,8 @@ type EmbeddedRunAttemptToolTerminalObservation = {
   arguments?: unknown;
   meta?: string;
   executionStarted?: boolean;
+  /** Exact-instance replay classification resolved by the host tool catalog. */
+  replaySafe?: boolean;
   outcome: "success" | "failure";
   failure?: Omit<ToolErrorSummary, "toolName" | "meta" | "mutatingAction">;
   /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
@@ -85,6 +89,7 @@ type EmbeddedRunAttemptToolTerminalResolution = {
   executionStarted: boolean;
   executedArguments?: Record<string, unknown>;
   sideEffectEvidence: boolean;
+  effectReceipt: ToolEffectReceipt;
 };
 
 type EmbeddedRunAttemptToolTerminalObserver = (
@@ -99,6 +104,12 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /**
+   * Run-owned start timestamp captured by the embedded-run orchestrator before
+   * admission. Flows onto the queue handle so recovery can project the active
+   * run's authoritative start time instead of the session's subagent first-run.
+   */
+  startedAtMs?: number;
   /** Explicit session owner captured before fallback agent resolution. */
   contextEngineAgentId?: string;
   /** Host-resolved sandbox snapshot for plugin harness tool construction. */
@@ -165,6 +176,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onAttemptTimeout?: (reason: Error) => void;
   /** Signals an explicit cancellation through the active native run handle. */
   onAttemptAbort?: () => void;
+  onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
+  onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   model: Model;
@@ -215,6 +228,8 @@ export type EmbeddedRunAttemptResult = {
   sessionFileUsed?: string;
   diagnosticTrace?: DiagnosticTraceContext;
   agentHarnessId?: string;
+  /** Current physical model attempt; replaced from the prepared runtime plan at the boundary. */
+  modelAttempt?: AgentRuntimeModelAttempt;
   /** Exact credential material fingerprint reported by a harness-owned auth boundary. */
   authBindingFingerprint?: string;
   /** Exact local implementation used by a plugin-owned harness attempt. */

@@ -95,6 +95,7 @@ function shouldSkipNonVisibleTurnRetry(params: {
   return Boolean(
     params.aborted ||
     params.timedOut ||
+    params.attempt.terminal.kind === "failed" ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
@@ -337,6 +338,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   );
   if (
     params.payloadCount !== 0 ||
+    (!params.allowEmptyStopContinuation && hasOnlySilentAssistantReply(attempt.assistantTexts)) ||
     params.hasTerminalToolPresentation ||
     params.aborted ||
     ((params.timedOut || terminal.kind === "timeout") && !idlePromptTimeout) ||

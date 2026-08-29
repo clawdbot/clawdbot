@@ -409,11 +409,15 @@ jobs:
               echo "Artifact-backed Telegram E2E requires the complete prerelease plugin registry tuple." >&2
               exit 1
             fi
-            expected_registry_name="docker-e2e-prepublish-plugin-registry-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID}-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT}"
-            if [[ "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME" != "$expected_registry_name" ]]; then
-              echo "Prerelease plugin registry artifact name does not match its producer run." >&2
-              exit 1
-            fi
+            expected_registry_suffix="-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID}-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT}"
+            case "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME" in
+              "docker-e2e-prepublish-plugin-registry${expected_registry_suffix}" | \
+                "package-acceptance-telegram-plugin-registry${expected_registry_suffix}") ;;
+              *)
+                echo "Prerelease plugin registry artifact name does not match its producer run." >&2
+                exit 1
+                ;;
+            esac
           fi
           case "${PROVIDER_MODE}" in
             mock-openai | live-frontier) ;;

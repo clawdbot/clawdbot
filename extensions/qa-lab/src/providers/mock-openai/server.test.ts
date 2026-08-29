@@ -1,5 +1,7 @@
 import { once } from "node:events";
+import { runInNewContext } from "node:vm";
 // Qa Lab tests cover server plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
@@ -5582,6 +5584,35 @@ Update and merge these partial structured summaries.`,
     );
   });
 
+  it.each([
+    {
+      fixture: "single",
+      expectedQuestionId: "deploy_target",
+      expectedMultiSelect: undefined,
+    },
+    { fixture: "multi", expectedQuestionId: "checks", expectedMultiSelect: true },
+  ])("plans the $fixture ask_user Telegram fixture", async (entry) => {
+    const server = await startMockServer();
+    const response = await expectNonStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          `tool search qa check target=ask_user ask_user_fixture=${entry.fixture}. Ask the question.`,
+        ),
+      ],
+    });
+
+    const call = outputItem(await response.json());
+    const args = JSON.parse(String(call.arguments)) as {
+      questions?: Array<{ id?: string; multiSelect?: boolean }>;
+    };
+    expect(call.name).toBe("ask_user");
+    expect(args.questions).toHaveLength(1);
+    expect(args.questions?.[0]).toMatchObject({
+      id: entry.expectedQuestionId,
+      ...(entry.expectedMultiSelect ? { multiSelect: true } : {}),
+    });
+  });
+
   it("plans QA tool-search failure calls with denied-input args", async () => {
     const server = await startMockServer();
 
@@ -6892,8 +6923,31 @@ Update and merge these partial structured summaries.`,
       expect(execArgs).toMatchObject({ language: "javascript", restartSafe: true });
       expect(execArgs.code).toContain("qa_restart_wait");
       expect(execArgs.code).toContain('catalog.search("qa_restart_wait")');
-      expect(execArgs.code).toContain("await target({})");
       expect(execArgs.code).toContain(`CHECKPOINT-${checkpoint}`);
+
+      const started = createDeferred<void>();
+      const released = createDeferred<void>();
+      let yielded = false;
+      const target = Object.assign(
+        () => {
+          started.resolve();
+          return released.promise;
+        },
+        { toolName: "qa_restart_wait" },
+      );
+      const execution = runInNewContext(`(async () => { ${String(execArgs.code)} })()`, {
+        catalog: { search: async () => [target] },
+        yield_control: () => {
+          yielded = true;
+        },
+      }) as Promise<unknown>;
+      try {
+        await started.promise;
+        expect(yielded).toBe(true);
+      } finally {
+        released.resolve();
+        await expect(execution).resolves.toBe(`CHECKPOINT-${checkpoint}`);
+      }
 
       const runId = `restart-checkpoint-${checkpoint}`;
       input.push(

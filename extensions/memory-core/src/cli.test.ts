@@ -6,7 +6,10 @@ import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveSessionTranscriptsDirForAgent as resolveTestSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  normalizeSessionDeliveryState,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -22,6 +25,7 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatMemoryIndexOutcome } from "./cli-runtime-common.js";
 import { openMemoryCoreStateStore } from "./dreaming-state.js";
+import type { MemoryForgetReport } from "./memory-forget-report.js";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   configureMemoryCoreDreamingStateForTests,
@@ -51,12 +55,16 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
-async function seedCliBackfillTranscript(sessionId: string, days: string[]): Promise<void> {
+async function seedCliBackfillTranscript(
+  sessionId: string,
+  days: string[],
+  metadata: Partial<Parameters<typeof upsertSessionEntry>[0]["entry"]> = {},
+): Promise<void> {
   const agentId = "main";
   const sessionsDir = resolveTestSessionTranscriptsDirForAgent(agentId);
   const storePath = path.join(sessionsDir, "sessions.json");
   const sessionKey = `agent:${agentId}:cli-session-backfill:${sessionId}`;
-  const entry = { sessionId, updatedAt: Date.parse(`${days.at(-1)}T12:00:00.000Z`) };
+  const entry = { ...metadata, sessionId, updatedAt: Date.now() };
   await fs.mkdir(sessionsDir, { recursive: true });
   await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
   for (const day of days) {
@@ -327,7 +335,16 @@ describe("memory cli", () => {
 
   it("forwards repeated forget selectors and reports quoted lines and curated writes in both output formats", async () => {
     getRuntimeConfig.mockReturnValue(configuredAgents);
-    const report = {
+    const report: MemoryForgetReport = {
+      participantMatches: [
+        {
+          actorId: "person-one",
+          identities: [
+            { type: "profile", id: "person-one" },
+            { type: "agent", id: "person-one" },
+          ],
+        },
+      ],
       agentId: "ops",
       dryRun: true,
       sessionIds: ["session-one", "session-two"],
@@ -400,6 +417,10 @@ describe("memory cli", () => {
     await runMemoryCli(["forget", "--session", "session-one", "--agent", "ops", "--dry-run"]);
     const output = firstMockCallArg(logs, "memory forget output");
     expect(output).toContain("Source transcripts retained: 2");
+    expect(output).toContain(
+      'Raw participant selector: person-one: {"type":"profile","id":"person-one"}, {"type":"agent","id":"person-one"}',
+    );
+    expect(output).toContain("Matches select whole sessions across identity namespaces.");
     expect(output).toContain("Session resolution: session-one (live)");
     expect(output).toContain("Session resolution: session-two (unresolved)");
     expect(output).toContain("Memory artifacts: 1 files, 1 entries, 2 quoted lines");
@@ -465,12 +486,27 @@ describe("memory cli", () => {
     );
   });
 
-  it("drains session backfill in one apply command before preview", async () => {
+  it("drains admitted session backfill in one apply command before preview", async () => {
     const workspaceDir = path.join(workspaceFixtureRoot, `session-backfill-${workspaceCaseId++}`);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(workspaceDir, "openclaw.json"));
     await fs.mkdir(workspaceDir, { recursive: true });
     await seedCliBackfillTranscript("drain", ["2026-01-01", "2026-01-02", "2026-01-03"]);
+    await seedCliBackfillTranscript("excluded", ["2026-01-04"], {
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "discord", to: "channel:admission-fixture" },
+        origin: { provider: "discord", to: "channel:admission-fixture" },
+      }),
+    });
+    getRuntimeConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: { memoryPolicy: { excludeSessions: { channels: ["discord"] } } },
+          },
+        },
+      },
+    });
 
     mockManager({ status: () => makeMemoryStatus({ workspaceDir }), close: vi.fn() });
     const applyJson = spyRuntimeJson(defaultRuntime);

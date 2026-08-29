@@ -49,6 +49,7 @@ describe("Git backup command agent selection", () => {
     mocks.restoreGitBackupRef.mockReset().mockResolvedValue({
       commit: "backup-commit",
       excludedTables: [],
+      excludedConfigStateKeyPrefixes: [],
       targetPath: "/tmp/restored.sqlite",
     });
     mocks.verifyGitBackupRef.mockReset().mockResolvedValue({

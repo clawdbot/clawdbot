@@ -19,10 +19,8 @@ export const CRABBOX_LIFECYCLE_TIMEOUT_MS = 60_000;
 // AWS coordinator heartbeat latency reached 107.6 seconds in production measurements.
 export const CRABBOX_HEARTBEAT_TIMEOUT_MS = 150_000;
 
-// `providers --json` is a static compiled report: no network, no credentials,
-// measured well under a second. The picker awaits it, so cap it far below the
-// lifecycle budget — a hung binary must fall back to label-only choices
-// promptly instead of stalling the whole cloud picker.
+// `providers --json` is a static compiled report; bound picker latency for a hung binary.
+// Failed reads leave machine overrides unavailable until a later discovery request succeeds.
 export const CRABBOX_MACHINE_CATALOG_TIMEOUT_MS = 5_000;
 // Fixed-lease inspection can follow warmup's final read; allow four one-minute retries.
 const CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS = 5 * 60_000;

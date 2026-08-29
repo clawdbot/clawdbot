@@ -3,19 +3,28 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import {
+  checkClientVoiceToolConfirmationPolicy,
+  noteClientVoiceConfirmationUtterance,
+} from "../../talk/client-voice-confirmation.js";
+import { resetClientVoiceConfirmationStateForTest } from "../../talk/client-voice-confirmation.test-support.js";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../talk/describe-view-tool.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildTalkRealtimeConfig } from "./talk-shared.js";
 import { talkHandlers } from "./talk.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
+  getUserPreferences: vi.fn<() => Record<string, unknown>>(() => ({})),
   readConfigFileSnapshot: vi.fn(),
+  resolveUserProfileId: vi.fn((profileId: string) => profileId),
   canonicalizeSpeechProviderId: vi.fn((providerId: string | undefined) => providerId),
   getSpeechProvider: vi.fn(),
   listSpeechProviders: vi.fn(() => []),
@@ -93,6 +102,16 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+}));
+
+vi.mock("../../state/user-preferences.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-preferences.js")>()),
+  getUserPreferences: mocks.getUserPreferences,
+}));
+
+vi.mock("../../state/user-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profiles.js")>()),
+  resolveUserProfileId: mocks.resolveUserProfileId,
 }));
 
 vi.mock("../../tts/provider-registry.js", () => ({
@@ -320,6 +339,8 @@ beforeEach(() => {
     );
   });
 });
+
+afterEach(() => resetClientVoiceConfirmationStateForTest());
 
 function markTalkOwnerCold(ownerId: string): void {
   setActiveDegradedSecretOwners([
@@ -1118,10 +1139,30 @@ describe("talk.config handler", () => {
     },
   );
 
-  it("prefers the user accent over the operator seam color", async () => {
+  it.each([
+    {
+      name: "prefers the authenticated profile accent over gateway appearance defaults",
+      profileId: "profile-1",
+      profileAccent: "#A1B2C3",
+      expectedAccent: "#a1b2c3",
+    },
+    {
+      name: "ignores malformed authenticated profile accents",
+      profileId: "profile-1",
+      profileAccent: "not-a-color",
+      expectedAccent: "#52c99a",
+    },
+    {
+      name: "keeps profile-less callers on their existing gateway accent path",
+      expectedAccent: "#52c99a",
+    },
+  ])("$name", async ({ profileId, profileAccent, expectedAccent }) => {
     markTalkOwnerCold("tts");
     const runtimeConfig = createTalkConfig("healthy-talk-key");
     mocks.getSpeechProvider.mockReturnValue({ id: "acme" });
+    mocks.getUserPreferences.mockReturnValue(
+      profileAccent === undefined ? {} : { "ui.accent": profileAccent },
+    );
     mocks.readConfigFileSnapshot.mockResolvedValue({
       config: { ...runtimeConfig, ui: { seamColor: "#123456", prefs: { accent: "#52c99a" } } },
     });
@@ -1129,13 +1170,21 @@ describe("talk.config handler", () => {
 
     await callTalkHandler("talk.config", {
       params: {},
-      client: { connect: { scopes: ["operator.read"] } },
+      client: {
+        connect: { scopes: ["operator.read"] },
+        ...(profileId ? { authenticatedUserProfile: { profileId } } : {}),
+      },
       respond,
       context: { getRuntimeConfig: () => runtimeConfig },
     });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(respond.mock.calls[0]?.[1]?.config?.ui).toEqual({ seamColor: "#52c99a" });
+    expect(respond.mock.calls[0]?.[1]?.config?.ui).toEqual({ seamColor: expectedAccent });
+    if (profileId) {
+      expect(mocks.getUserPreferences).toHaveBeenCalledWith(profileId, ["ui.accent"]);
+    } else {
+      expect(mocks.getUserPreferences).not.toHaveBeenCalled();
+    }
   });
 
   it("projects the runtime realtime transport when source config is invalid", async () => {
@@ -2689,6 +2738,67 @@ describe("talk.client.toolCall handler", () => {
     finishRun?.();
   });
 
+  it("keeps the started run registered when refusal invalidates a detached confirmation", async () => {
+    const now = Date.now();
+    const challenge = checkClientVoiceToolConfirmationPolicy({
+      agentId: "main",
+      voiceSessionId: "voice-test",
+      runId: "run-original",
+      toolName: "message",
+      toolParams: { action: "send", message: "cancelled action" },
+      now,
+    });
+    if (challenge.allowed) {
+      throw new Error("expected voice confirmation challenge");
+    }
+    const confirmationId = challenge.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)?.[1];
+    if (!confirmationId) {
+      throw new Error("missing voice confirmation id");
+    }
+    noteClientVoiceConfirmationUtterance({
+      agentId: "main",
+      voiceSessionId: "voice-test",
+      text: "yes",
+      timestamp: now + 1,
+    });
+    mocks.chatSend.mockImplementationOnce(
+      async ({
+        respond,
+      }: {
+        respond: (ok: boolean, result?: unknown, error?: unknown) => void;
+      }) => {
+        noteClientVoiceConfirmationUtterance({
+          agentId: "main",
+          voiceSessionId: "voice-test",
+          text: "no",
+          timestamp: now + 3,
+        });
+        respond(true, { runId: "run-stale-confirmation" }, undefined);
+      },
+    );
+    const respond = vi.fn();
+
+    await callTalkHandler("talk.client.toolCall", {
+      params: {
+        sessionKey: "main",
+        voiceSessionId: "voice-test",
+        callId: "call-stale-confirmation",
+        name: "openclaw_agent_consult",
+        args: { question: "Do it", confirmationId },
+      },
+      respond,
+      context: { getRuntimeConfig: () => ({}) as OpenClawConfig },
+    });
+
+    expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        voiceSessionId: "voice-test",
+        runId: "run-stale-confirmation",
+      }),
+    );
+    expectRespondOk(respond, { runId: "run-stale-confirmation" });
+  });
+
   it("passes configured consult thinking and fast-mode overrides to chat.send", async () => {
     const respond = vi.fn();
 
@@ -4095,6 +4205,88 @@ describe("talk.client.create handler", () => {
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
     expectRespondError(respond, {
       message: 'talk.client.create only supports brain="agent-consult"',
+    });
+  });
+});
+describe("role-required Talk session creation", () => {
+  it.each([
+    { method: "talk.client.create" as const, params: { sessionKey: "agent:main:talk-required" } },
+    {
+      method: "talk.session.create" as const,
+      params: {
+        sessionKey: "agent:main:talk-required",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+    },
+  ])("passes authenticated creator isolation through $method", async ({ method, params }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      vi.clearAllMocks();
+      const profile = ensureProfileForEmail("talk-required@example.test");
+      mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+        provider: {
+          id: "openai",
+          label: "OpenAI Realtime",
+          isConfigured: () => true,
+          createBrowserSession: vi.fn(async () => ({
+            provider: "openai",
+            transport: "webrtc" as const,
+            clientSecret: "test-session-secret",
+          })),
+          createBridge: vi.fn(),
+        },
+        providerConfig: {},
+      });
+      mocks.resolveRealtimeVoiceProviderCapabilities.mockImplementation(
+        ({ provider }: { provider: { capabilities?: unknown } }) => provider.capabilities,
+      );
+      mocks.createOrResumeClientVoiceSession.mockReturnValue("voice-required");
+      mocks.createTalkRealtimeRelaySession.mockReturnValue({
+        provider: "openai",
+        transport: "gateway-relay",
+        relaySessionId: "relay-required",
+      });
+      const config: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "none" },
+                agents: ["main"],
+                scopes: ["operator.talk"],
+                sandbox: "required",
+              },
+            },
+          },
+        },
+        talk: { realtime: { provider: "openai", providers: { openai: {} } } },
+      };
+      const respond = vi.fn();
+
+      await callTalkHandler(method, {
+        params,
+        respond,
+        client: {
+          connId: "conn-required",
+          connect: { scopes: ["operator.talk"] },
+          authenticatedUserProfile: { profileId: profile.id },
+        },
+        context: { getRuntimeConfig: () => config, logGateway: { warn: vi.fn() } },
+      });
+
+      expectRespondOk(respond);
+      expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "main",
+          sessionKey: "agent:main:talk-required",
+          creation: expect.objectContaining({
+            actor: { type: "human", id: profile.id },
+            sandbox: "required",
+          }),
+        }),
+      );
     });
   });
 });

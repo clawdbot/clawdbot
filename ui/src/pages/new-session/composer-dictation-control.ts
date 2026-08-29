@@ -50,7 +50,7 @@ export class NewSessionDictationControl {
   previewDraft(): string | undefined {
     const dictation = this.dictation;
     return dictation?.active
-      ? this.options.textarea.previewTranscript(dictation.partial)
+      ? this.options.textarea.previewTranscript(dictation.transcript)
       : undefined;
   }
 

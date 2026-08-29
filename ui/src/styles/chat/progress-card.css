@@ -230,10 +230,9 @@
   place-items: center;
 }
 
-.session-hovercard__pr-row,
 .session-hovercard__branch-row {
   display: grid;
-  grid-template-columns: var(--session-hovercard-context-icon-size) auto minmax(0, 1fr);
+  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr) auto;
   align-items: center;
   column-gap: var(--space-2);
   min-width: 0;
@@ -244,14 +243,20 @@
 }
 
 .session-hovercard__pr-row {
+  display: grid;
+  /* The author cell is always present (empty when unknown) so every row shares
+     one geometry and the diff stats stay in the trailing 1fr column. */
+  grid-template-columns: var(--session-hovercard-context-icon-size) auto auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-2);
+  min-width: 0;
+  /* The row is an anchor: without these it falls back to default link styling. */
+  color: var(--muted);
+  text-decoration: none;
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
   line-height: 1.35;
-}
-
-.session-hovercard__branch-row {
-  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr) auto;
 }
 
 .session-hovercard__pr-state-icon,
@@ -310,6 +315,15 @@
 
 .session-hovercard__pr-state-icon {
   color: var(--session-pr-state-color, var(--muted));
+}
+
+.session-hovercard__pr-author {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 12ch;
+  color: var(--muted);
 }
 
 .session-hovercard__pr-row .session-hovercard__diff {
@@ -611,7 +625,8 @@
   color: var(--session-progress-neutral);
 }
 
-.session-progress-card__step--pending .session-progress-card__step-marker {
+.session-progress-card__step--pending .session-progress-card__step-marker,
+.session-progress-card__step--paused .session-progress-card__step-marker {
   color: var(--session-progress-neutral);
 }
 

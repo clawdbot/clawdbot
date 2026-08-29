@@ -38,6 +38,7 @@ import {
 import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import {
   describeSessionsSpawnTool,
+  describeSubagentSpawnContext,
   SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
   SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
@@ -105,7 +106,7 @@ function recordAcceptedSessionSpawn(
   const targetAgentId = childSessionKey
     ? parseAgentSessionKey(childSessionKey)?.agentId
     : undefined;
-  if (result.status !== "accepted" || !childSessionKey || !targetAgentId) {
+  if (result.status !== "accepted" || !childSessionKey || !targetAgentId || !context) {
     return;
   }
   recordSessionToolActionFact({
@@ -153,6 +154,7 @@ function resolveSessionsSpawnThreadAvailability(opts?: {
 function createSessionsSpawnToolSchema(params: {
   acpAvailable: boolean;
   threadAvailable: boolean;
+  subagentThreadAvailable: boolean;
   swarmEnabled: boolean;
 }) {
   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
@@ -213,8 +215,7 @@ function createSessionsSpawnToolSchema(params: {
       description: '"inherit" parent sandbox policy; "require" fails unless child is sandboxed.',
     }),
     context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
-      description:
-        "Native: omit/isolated clean; fork only needing requester transcript; visible fork requires same agent.",
+      description: describeSubagentSpawnContext(params.subagentThreadAvailable),
     }),
     lightContext: Type.Optional(
       Type.Boolean({
@@ -346,6 +347,7 @@ export function createSessionsSpawnTool(
     description: describeSessionsSpawnTool({
       acpAvailable,
       threadAvailable,
+      subagentThreadAvailable: threadAvailability.subagent,
       swarmEnabled: swarmConfig.enabled,
       sessionToolsVisibility,
       spawnRestricted: restrictToSpawned,
@@ -353,6 +355,7 @@ export function createSessionsSpawnTool(
     parameters: createSessionsSpawnToolSchema({
       acpAvailable,
       threadAvailable,
+      subagentThreadAvailable: threadAvailability.subagent,
       swarmEnabled: swarmConfig.enabled,
     }),
     execute: async (_toolCallId, args) => {
@@ -464,7 +467,7 @@ export function createSessionsSpawnTool(
           })
         : await spawnVisible();
       if (visibleResult) {
-        recordAcceptedSessionSpawn(visibleResult, context);
+        recordAcceptedSessionSpawn(visibleResult, context ?? "isolated");
         return jsonResult(
           addRoleToFailureResult(visibleResult as { status: string }, requestedAgentId),
         );
@@ -570,7 +573,7 @@ export function createSessionsSpawnTool(
             parentExecutionIdentityToken,
           ),
         );
-        recordAcceptedSessionSpawn(result, context);
+        recordAcceptedSessionSpawn(result, "isolated");
         return jsonResult(addRoleToFailureResult(result, requestedAgentId));
       }
 
@@ -642,7 +645,7 @@ export function createSessionsSpawnTool(
         ),
       );
 
-      recordAcceptedSessionSpawn(result, context);
+      recordAcceptedSessionSpawn(result, result.context);
       return jsonResult(addRoleToFailureResult(result, requestedAgentId));
     },
   };

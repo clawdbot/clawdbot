@@ -78,17 +78,18 @@ function resolveSlackThreadTsCandidate(value?: string | number | null): string |
 
 const mattermostThreading: ChannelThreadingAdapter = {
   resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
-    const ambientThreadId = threadId != null && threadId !== "" ? String(threadId) : undefined;
-    const resolvedThreadId =
-      replyDelivery?.chatType === "direct"
-        ? undefined
-        : replyToIsExplicit
+    const ambientThreadId = threadId != null ? String(threadId) : undefined;
+    const isFlatDirect =
+      replyDelivery?.chatType === "direct" && replyDelivery.replyToMode === "off";
+    const resolvedThreadId = isFlatDirect
+      ? undefined
+      : replyDelivery
+        ? replyToIsExplicit
           ? (replyToId ?? ambientThreadId)
-          : replyDelivery
-            ? (ambientThreadId ?? replyToId ?? undefined)
-            : (replyToId ?? ambientThreadId);
+          : (ambientThreadId ?? replyToId ?? undefined)
+        : (ambientThreadId ?? replyToId);
     return {
-      replyToId: replyDelivery?.chatType === "direct" ? null : resolvedThreadId,
+      replyToId: isFlatDirect ? null : resolvedThreadId,
       threadId: resolvedThreadId ?? null,
     };
   },
@@ -480,25 +481,31 @@ describe("routeReply", () => {
     expect(lastDeliveryPayload().replyToId).toBeUndefined();
   });
 
-  it("honors Mattermost policy that clears direct-message reply targets", async () => {
-    const res = await routeTestReply({
-      payload: { text: "hello", replyToId: "post-1" },
-      channel: "mattermost",
-      to: "user:U123",
-      replyDelivery: {
-        chatType: "direct",
-        replyToMode: "all",
-      },
-      replyKind: "block",
-    });
+  it.each([
+    { replyToMode: "off" as const, expectedTarget: null },
+    { replyToMode: "all" as const, expectedTarget: "post-1" },
+  ])(
+    "honors Mattermost $replyToMode direct-message reply placement",
+    async ({ replyToMode, expectedTarget }) => {
+      const res = await routeTestReply({
+        payload: { text: "hello", replyToId: "post-1" },
+        channel: "mattermost",
+        to: "user:U123",
+        replyDelivery: {
+          chatType: "direct",
+          replyToMode,
+        },
+        replyKind: "block",
+      });
 
-    expect(res.ok).toBe(true);
-    expectLastDeliveryFields({
-      replyToId: null,
-      threadId: null,
-    });
-    expect(lastDeliveryPayload().replyToId).toBeUndefined();
-  });
+      expect(res.ok).toBe(true);
+      expectLastDeliveryFields({
+        replyToId: expectedTarget,
+        threadId: expectedTarget,
+      });
+      expect(lastDeliveryPayload().replyToId).toBe(expectedTarget ?? undefined);
+    },
+  );
 
   it("preserves explicit Mattermost reply targets over the ambient thread", async () => {
     const res = await routeTestReply({

@@ -106,13 +106,14 @@ describe("createLazyGatewayCronState", () => {
       updateHandlers: vi.fn(),
     };
     const stopOwner = vi.fn(async () => {});
+    const prepareExitWatcherHandoff = vi.fn(async () => ({
+      current: () => watchers,
+      adopt: vi.fn(),
+      stopOwner,
+    }));
     hoisted.setState({
       ...createCronState(cron),
-      prepareExitWatcherHandoff: vi.fn(async () => ({
-        current: () => watchers,
-        adopt: vi.fn(),
-        stopOwner,
-      })),
+      prepareExitWatcherHandoff,
     });
     const lazy = createLazyGatewayCronState(createParams());
 
@@ -124,7 +125,9 @@ describe("createLazyGatewayCronState", () => {
     await handoff?.stopOwner();
     finishStart.resolve();
     await start;
+    await handoff?.stopOwner();
 
+    expect(prepareExitWatcherHandoff).toHaveBeenCalledOnce();
     expect(stopOwner).toHaveBeenCalledOnce();
     expect(watchers.cancelAll).not.toHaveBeenCalled();
     expect(cron["stop"]).not.toHaveBeenCalled();
@@ -401,7 +404,6 @@ describe("createLazyGatewayCronState", () => {
     const lazy = createLazyGatewayCronState(createParams());
 
     // Teardown before load must not force the heavy import.
-    lazy.stopExitWatchers();
     await lazy.stopStreamWatchers();
     expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
 
@@ -410,9 +412,7 @@ describe("createLazyGatewayCronState", () => {
     expect(state.reconcileExitWatchers).toHaveBeenCalledTimes(1);
     expect(state.reconcileStreamWatchers).toHaveBeenCalledTimes(1);
 
-    lazy.stopExitWatchers();
     await lazy.stopStreamWatchers();
-    expect(state.stopExitWatchers).toHaveBeenCalledTimes(1);
     expect(state.stopStreamWatchers).toHaveBeenCalledTimes(1);
   });
 
@@ -449,10 +449,9 @@ function createCronState(cron: GatewayCronServiceContract): GatewayCronState {
     storePath: "/tmp/openclaw-cron.json",
     cronEnabled: true,
     reconcileExitWatchers: vi.fn(async () => {}),
-    stopExitWatchers: vi.fn(),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileHeartbeatJobs: vi.fn(async () => {}),
+    reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
   } satisfies GatewayCronState;
 }
 

@@ -527,9 +527,9 @@ export function listAgentRunsForSession(params: {
   const state = getAgentRunRegistryState();
   const runs: Array<{ runId: string; lifecycleGeneration: string }> = [];
   for (const [runId, context] of state.contexts) {
-    const matches = context.sessionId
-      ? context.sessionId === params.sessionId
-      : context.sessionKey === params.sessionKey;
+    const matches =
+      context.sessionKey === params.sessionKey &&
+      (!context.sessionId || context.sessionId === params.sessionId);
     if (matches && context.lifecycleGeneration === state.lifecycleGeneration) {
       runs.push({ runId, lifecycleGeneration: context.lifecycleGeneration });
     }

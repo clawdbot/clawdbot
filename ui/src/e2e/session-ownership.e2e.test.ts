@@ -1,9 +1,9 @@
 import { mkdir } from "node:fs/promises";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
 import {
   avatarLabelCenterDelta,
@@ -22,28 +22,39 @@ const suite = createControlUiE2eSuite({
 });
 
 let page: Page | undefined;
+
+async function selectMenuValue(menu: Locator, value: string) {
+  await menu.evaluate((element, selectedValue) => {
+    element.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: selectedValue } },
+      }),
+    );
+  }, value);
+}
+
 function sessionsList(owners: [string, string], withAvatars = false) {
-  const ownerFacet = [
-    {
-      type: "human" as const,
-      id: owners[0],
-      label: "Ada",
-      ...(withAvatars ? { avatarUrl: `/api/users/${owners[0]}/avatar?v=1` } : {}),
-    },
-    ...(owners[1] === owners[0]
-      ? []
-      : [
-          {
-            type: "human" as const,
-            id: owners[1],
-            label: "Bob",
-            ...(withAvatars ? { avatarUrl: `/api/users/${owners[1]}/avatar?v=1` } : {}),
-          },
-        ]),
-  ];
+  const ada = {
+    type: "human" as const,
+    id: owners[0],
+    identity: { type: "profile" as const, id: owners[0] },
+    label: "Ada",
+  };
+  const bob = {
+    type: "human" as const,
+    id: owners[1],
+    identity: { type: "profile" as const, id: owners[1] },
+    label: owners[1] === owners[0] ? "Ada" : "Bob",
+  };
+  const ownerFacet = owners[1] === owners[0] ? [ada] : [ada, bob];
   return {
     count: 2,
-    owners: ownerFacet,
+    owners: ownerFacet.map((actor) =>
+      withAvatars
+        ? Object.assign({}, actor, { avatarUrl: `/api/users/${actor.id}/avatar?v=1` })
+        : actor,
+    ),
     defaults: { contextTokens: null, model: null, modelProvider: null },
     path: "",
     sessions: [
@@ -52,8 +63,8 @@ function sessionsList(owners: [string, string], withAvatars = false) {
         kind: "direct",
         label: "Ada research",
         category: "Research",
-        createdActor: { type: "human", id: owners[0], label: "Ada" },
-        owner: { actor: { type: "human", id: owners[0], label: "Ada" } },
+        createdActor: ada,
+        owner: { actor: ada },
         updatedAt: 2,
       },
       {
@@ -61,18 +72,8 @@ function sessionsList(owners: [string, string], withAvatars = false) {
         kind: "direct",
         label: "Bob operations",
         category: "Operations",
-        createdActor: {
-          type: "human",
-          id: owners[1],
-          label: owners[1] === owners[0] ? "Ada" : "Bob",
-        },
-        owner: {
-          actor: {
-            type: "human",
-            id: owners[1],
-            label: owners[1] === owners[0] ? "Ada" : "Bob",
-          },
-        },
+        createdActor: bob,
+        owner: { actor: bob },
         updatedAt: 1,
       },
     ],
@@ -92,12 +93,14 @@ function collaborativeSessionsList() {
   const ada = {
     type: "human" as const,
     id: "profile-ada",
+    identity: { type: "profile" as const, id: "profile-ada" },
     label: "Ada",
     avatarUrl: "/api/users/profile-ada/avatar?v=1",
   };
   const bob = {
     type: "human" as const,
     id: "profile-bob",
+    identity: { type: "profile" as const, id: "profile-bob" },
     label: "Bob",
     avatarUrl: "/api/users/profile-bob/avatar?v=1",
   };
@@ -114,7 +117,7 @@ function collaborativeSessionsList() {
         label: "Fix issue #127689",
         createdActor: ada,
         owner: { actor: ada },
-        participants: [bob],
+        participants: [{ identity: bob.identity, label: bob.label, avatarUrl: bob.avatarUrl }],
         participantCount: 1,
         updatedAt: 3,
       },
@@ -124,7 +127,10 @@ function collaborativeSessionsList() {
         label: "Release planning",
         createdActor: bob,
         owner: { actor: bob },
-        participants: [ada, { type: "agent" as const, id: "research", label: "Research" }],
+        participants: [
+          { identity: ada.identity, label: ada.label, avatarUrl: ada.avatarUrl },
+          { identity: { type: "agent" as const, id: "research" }, label: "Research" },
+        ],
         participantCount: 2,
         updatedAt: 2,
       },
@@ -261,7 +267,7 @@ suite.define(() => {
     }
   });
 
-  it("shows permanent owner chips and filters existing custom groups", async () => {
+  it("derives People controls and owner filtering from current session owners", async () => {
     if (captureUiProofEnabled) {
       await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
     }
@@ -284,7 +290,7 @@ suite.define(() => {
       { id: "profile-bob", background: "#985b42", label: "B" },
     ]);
     const gateway = await installMockGateway(currentPage, {
-      hasMultipleSessionSharingIdentities: true,
+      hasMultipleSessionSharingIdentities: false,
       sessionKey: "agent:main:ada",
       presenceUsers: [
         {
@@ -306,7 +312,9 @@ suite.define(() => {
     await expect.poll(() => currentPage.locator("openclaw-session-owner-chip").count()).toBe(3);
 
     const ownerMenu = await openSidebarSortMenu(currentPage);
-    await ownerMenu.locator('[value="sort:people"]').waitFor();
+    await captureUiProof(currentPage, "00-people-controls-from-session-owners.png");
+    await expectBrowser(ownerMenu.locator('[value="grouping:person"]')).toBeVisible();
+    await expectBrowser(ownerMenu.locator('[value="sort:people"]')).toBeVisible();
     const ownerRows = ownerMenu.locator('wa-dropdown-item[value^="owner:"]:not([value="owner:"])');
     await expectBrowser(ownerRows).toHaveCount(3);
     await expectBrowser(ownerRows.first()).toHaveAttribute("value", "owner:profile-patrick");
@@ -315,58 +323,65 @@ suite.define(() => {
     const firstOwnerCenterDelta = await avatarLabelCenterDelta(ownerRows.first());
     await captureUiProof(currentPage, "00-people-sort-available.png");
     expect(firstOwnerCenterDelta).toBeLessThanOrEqual(0.5);
-    await ownerMenu.evaluate((element) =>
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: "sort:people" } },
-        }),
-      ),
+    await selectMenuValue(ownerMenu, "grouping:person");
+    await expectBrowser(
+      currentPage.locator('[data-session-section="person:profile:profile-ada"]'),
+    ).toContainText("Ada research");
+    await expectBrowser(
+      currentPage.locator('[data-session-section="person:profile:profile-bob"]'),
+    ).toContainText("Bob operations");
+
+    const groupedMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(groupedMenu.locator('[value="grouping:person"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
     );
+    await selectMenuValue(groupedMenu, "grouping:category");
+
+    const sortableMenu = await openSidebarSortMenu(currentPage);
+    await selectMenuValue(sortableMenu, "sort:people");
     const peopleMenu = await openSidebarSortMenu(currentPage);
     await expectBrowser(peopleMenu.locator('[value="sort:people"]')).toHaveAttribute(
       "aria-checked",
       "true",
     );
     await captureUiProof(currentPage, "01-people-sort-selected.png");
+    const expectOwnerFilter = async (after: number) => {
+      // The chat title survives a sidebar refresh; wait for the filtered row itself.
+      await expectBrowser(
+        currentPage.locator('[data-session-section="category:Research"]'),
+      ).toContainText("Ada research");
+      await expectBrowser(currentPage.locator('[data-session-key="agent:main:ada"]')).toBeVisible();
+      await expectBrowser(currentPage.locator('[data-session-key="agent:main:bob"]')).toHaveCount(
+        0,
+      );
+      await expectBrowser(
+        currentPage.locator('[data-session-section="category:Operations"]'),
+      ).toHaveCount(0);
+      // The shared roster may also refresh, so the filtered request need not be last.
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).slice(after))
+        .toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              params: expect.objectContaining({ ownerId: "profile-ada" }),
+            }),
+          ]),
+        );
+    };
+    const beforeSelection = (await gateway.getRequests("sessions.list")).length;
     await peopleMenu.locator('[value="owner:profile-ada"]').waitFor();
-    await peopleMenu.evaluate((element) =>
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: "owner:profile-ada" } },
-        }),
-      ),
-    );
-    await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
-    await expect
-      .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
-      .toBe(0);
+    await selectMenuValue(peopleMenu, "owner:profile-ada");
+    await expectOwnerFilter(beforeSelection);
     await captureSessionOwnerProof(currentPage, "04-owner-filter-selected.png");
-    expect(await currentPage.locator('[data-session-section="category:Research"]').count()).toBe(1);
-    expect(await currentPage.locator('[data-session-section="category:Operations"]').count()).toBe(
-      0,
-    );
-    await expect
-      .poll(async () =>
-        (await gateway.getRequests("sessions.list")).some(
-          (request) =>
-            (request.params as { ownerId?: unknown } | undefined)?.ownerId === "profile-ada",
-        ),
-      )
-      .toBe(true);
 
     const initialConnections = (await gateway.getRequests("connect")).length;
+    const beforeReconnect = (await gateway.getRequests("sessions.list")).length;
     await gateway.closeLatest(1012, "owner filter reconnect proof");
     await expect
       .poll(async () => (await gateway.getRequests("connect")).length)
       .toBeGreaterThan(initialConnections);
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.list")).at(-1)?.params)
-      .toMatchObject({ ownerId: "profile-ada" });
-    await expect
-      .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
-      .toBe(0);
+    await expectOwnerFilter(beforeReconnect);
     const reconnectedMenu = await openSidebarSortMenu(currentPage);
     await expectBrowser(reconnectedMenu.locator('[value="owner:profile-ada"]')).toHaveAttribute(
       "aria-checked",
@@ -374,17 +389,8 @@ suite.define(() => {
     );
 
     await currentPage.reload();
-    // installMockGateway creates a new in-page request log for the reloaded
-    // document, so this wait and last-request assertion cannot reuse traffic
-    // from the pre-reload owner selection.
-    await gateway.waitForRequest("sessions.list");
-    await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.list")).at(-1)?.params)
-      .toMatchObject({ ownerId: "profile-ada" });
-    await expect
-      .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
-      .toBe(0);
+    // Reload starts a new in-page request log, so no earlier traffic can satisfy this.
+    await expectOwnerFilter(0);
     const reloadedMenu = await openSidebarSortMenu(currentPage);
     await expectBrowser(reloadedMenu.locator('[value="owner:profile-ada"]')).toHaveAttribute(
       "aria-checked",
@@ -427,14 +433,7 @@ suite.define(() => {
       sessions: allSessions.sessions.filter((session) => session.key === "agent:main:ada"),
     });
     const menu = await openSidebarSortMenu(currentPage);
-    await menu.evaluate((element) =>
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: "involving-me" } },
-        }),
-      ),
-    );
+    await selectMenuValue(menu, "involving-me");
     await expect
       .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
       .toBe(0);
@@ -529,7 +528,7 @@ suite.define(() => {
 
     const newThread = currentPage
       .locator(".sidebar-session-toolbar")
-      .getByRole("button", { name: "New session" });
+      .getByRole("link", { name: "New session" });
     await newThread.focus();
     await currentPage.keyboard.press("Enter");
     await expect.poll(() => new URL(currentPage.url()).pathname).toBe("/new");
@@ -791,7 +790,14 @@ suite.define(() => {
     }
     Object.assign(activeSession, { visibility: "shared", sharingRole: "owner" });
     sessions.count = 1;
-    sessions.owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
+    sessions.owners = [
+      {
+        type: "human",
+        id: "profile-ada",
+        identity: { type: "profile", id: "profile-ada" },
+        label: "Ada",
+      },
+    ];
     sessions.sessions = [activeSession];
     const longMemberLabel =
       "Alexandria Montgomery-Santiago from the International Collaboration Working Group";
@@ -992,12 +998,12 @@ suite.define(() => {
     // Agent and system identities render the non-human icon from identity.type,
     // not from an ID-string heuristic; owner-chip presentation is human-only.
     await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
-    expect(
-      await longNameItem.locator(".chat-pane__sharing-member-label").getAttribute("title"),
-    ).toBe(longMemberLabel);
-    expect(await longIdItem.locator(".chat-pane__sharing-member-label").getAttribute("title")).toBe(
-      longMemberId,
-    );
+    await expect
+      .poll(() => tooltipTitleText(longNameItem.locator(".chat-pane__sharing-member-label")))
+      .toBe(longMemberLabel);
+    await expect
+      .poll(() => tooltipTitleText(longIdItem.locator(".chat-pane__sharing-member-label")))
+      .toBe(longMemberId);
     await expectBrowser(selectedIndicator).toHaveCount(1);
     expect(await selectedIndicator.getAttribute("aria-label")).not.toBeNull();
   });

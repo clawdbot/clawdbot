@@ -254,7 +254,7 @@ function renderChatQueueItem(
   const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
   const reconnecting = !failed && (props.offline || item.sendState === "waiting-reconnect");
   const stateLabel = sendStateLabel(item, props.offline === true);
-  const steered = item.queueMode === "steer" && !failed;
+  const steered = item.queueMode === "steer" && stateLabel === null;
   const busy = item.sendState === "executing-command";
   const editing = props.editingId === item.id;
   const canSteer =
@@ -263,6 +263,7 @@ function renderChatQueueItem(
     Boolean(props.canAbort && props.onQueueSteer) &&
     !editing &&
     !item.localCommandName &&
+    !item.intent &&
     (isSteerableQueuedMessage(item) || item.sendState === "waiting-model");
   const segment = reorder.segments.find((ids) => ids.includes(item.id)) ?? [];
   const moveIndex = segment.indexOf(item.id);

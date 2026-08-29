@@ -444,12 +444,8 @@ export function buildCodexRuntimeThreadConfigForRun(
     ...(options.restrictedToolSurfaceInheritedMcpServerNames ?? []),
     ...(isJsonObject(configMcpServers) ? Object.keys(configMcpServers) : []),
   ];
-  // Per-thread configs deep-merge; drop server launch details before the
-  // final disabled-server patch so a delivery turn cannot retain MCP access.
-  const restrictedRunConfig =
-    restrictedToolSurface && isJsonObject(configMcpServers)
-      ? { ...config, mcp_servers: {} }
-      : config;
+  // Codex validates each transport before it applies `enabled`. Preserve the
+  // transport here; the deny patch below disables it and attestation proves it stayed inactive.
   const webSearchConfig = resolveCodexWebSearchPlan({
     config: params.config,
     disableTools: params.disableTools,
@@ -458,7 +454,7 @@ export function buildCodexRuntimeThreadConfigForRun(
     webSearchAllowed: options.webSearchAllowed,
   }).threadConfig;
   const baseConfig = buildCodexRuntimeThreadConfig(
-    mergeCodexThreadConfigs(restrictedRunConfig, webSearchConfig),
+    mergeCodexThreadConfigs(config, webSearchConfig),
     options,
   );
   const runtimeConfig =

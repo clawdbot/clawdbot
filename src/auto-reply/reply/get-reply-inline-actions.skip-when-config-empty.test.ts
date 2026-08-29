@@ -1044,6 +1044,126 @@ describe("handleInlineActions", () => {
     expect(commandArgs.skillCommands).toEqual(skillCommands);
   });
 
+  it.each([
+    {
+      channelBody: "/skill wait-what explain the previous reply",
+      normalizedBody: "/skill wait-what explain the previous reply",
+      expectedRequest: "/skill wait-what explain the previous reply",
+    },
+    {
+      channelBody: "/wait_what explain the previous reply",
+      normalizedBody: "/wait_what explain the previous reply",
+      expectedRequest: "/wait_what explain the previous reply",
+    },
+    {
+      channelBody: "/skill@openclaw: wait-what explain the previous reply",
+      normalizedBody: "/skill wait-what explain the previous reply",
+      expectedRequest: "/skill wait-what explain the previous reply",
+      botUsername: "openclaw",
+    },
+    {
+      channelBody: "/wait_what@openclaw explain the previous reply",
+      normalizedBody: "/wait_what explain the previous reply",
+      expectedRequest: "/wait_what explain the previous reply",
+      botUsername: "openclaw",
+    },
+    {
+      channelBody: "/skill wait-what explain /help",
+      normalizedBody: "/skill wait-what explain /help",
+      expectedRequest: "/skill wait-what explain /help",
+    },
+    {
+      channelBody: "/skill wait-what explain /status",
+      normalizedBody: "/skill wait-what explain /status",
+      cleanedBody: "/skill wait-what explain",
+      expectedRequest: "/skill wait-what explain /status",
+      inlineStatusRequested: true,
+    },
+    {
+      channelBody: "/skill@OpenClaw: wait-what first line\nsecond line\n\n  indented third",
+      normalizedBody: "/skill wait-what first line\nsecond line\n\n  indented third",
+      expectedRequest: "/skill wait-what first line\nsecond line\n\n  indented third",
+      botUsername: "openclaw",
+    },
+    {
+      channelBody: "/wait_what@openclaw first line\nsecond line",
+      normalizedBody: "/wait_what first line\nsecond line",
+      expectedRequest: "/wait_what first line\nsecond line",
+      botUsername: "openclaw",
+    },
+    {
+      channelBody: "/skill@otherbot: wait-what explain",
+      normalizedBody: "/skill@otherbot wait-what explain",
+      botUsername: "openclaw",
+      foreignBot: true,
+    },
+    {
+      channelBody: "/wait_what@otherbot explain",
+      normalizedBody: "/wait_what@otherbot explain",
+      botUsername: "openclaw",
+      foreignBot: true,
+    },
+  ])("resolves channel skill request $channelBody", async (testCase) => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({
+      Body: testCase.channelBody,
+      CommandBody: testCase.normalizedBody,
+      BotUsername: testCase.botUsername,
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "wait_what",
+        skillName: "wait-what",
+        description: "Explain the previous reply clearly",
+        modelVisible: false,
+        skillFile: "/tmp/skills/wait-what/SKILL.md",
+      },
+    ];
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: testCase.cleanedBody ?? testCase.channelBody,
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: testCase.normalizedBody,
+        commandBodyNormalized: testCase.normalizedBody,
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+        skillCommands,
+        inlineStatusRequested: testCase.inlineStatusRequested === true,
+      },
+    });
+
+    expect(result.kind).toBe("continue");
+    if (result.kind !== "continue") {
+      throw new Error("expected hidden skill invocation to continue to the model");
+    }
+    if (testCase.foreignBot) {
+      expect(result.cleanedBody).toBe(testCase.channelBody);
+      expect(ctx.Body).toBe(testCase.channelBody);
+      expect(result.explicitSkillSelections).toBeUndefined();
+      return;
+    }
+    expect(result.cleanedBody).toBe(
+      [
+        "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
+        "- wait-what (SKILL.md: /tmp/skills/wait-what/SKILL.md)",
+        "",
+        "User request:",
+        testCase.expectedRequest,
+      ].join("\n"),
+    );
+    expect(ctx.Body).toBe(result.cleanedBody);
+    expect(result.explicitSkillSelections).toEqual([
+      { name: "wait_what", path: "/tmp/skills/wait-what/SKILL.md" },
+    ]);
+    expect(handleCommandsMock).not.toHaveBeenCalled();
+    expect(buildStatusReplyMock).not.toHaveBeenCalled();
+  });
+
   it("preserves exact channel prompt bytes while expanding $ skill references", async () => {
     const typing = createTypingController();
     const original = "Review this plan with $office_hours and $release_notes.";
@@ -1231,10 +1351,22 @@ describe("handleInlineActions", () => {
     expect(typing.cleanup).toHaveBeenCalledOnce();
   });
 
-  it("returns a visible error for an allowlist-hidden leading skill slash command", async () => {
+  it.each([
+    {
+      channelBody: "/office_hours@openclaw review this",
+      normalizedBody: "/office_hours review this",
+    },
+    {
+      channelBody: "/skill@openclaw: office-hours review this",
+      normalizedBody: "/skill office-hours review this",
+    },
+  ])("returns a visible error for allowlist-hidden $channelBody", async (testCase) => {
     const typing = createTypingController();
-    const original = "/office_hours review this";
-    const ctx = buildTestCtx({ Body: original, CommandBody: original });
+    const ctx = buildTestCtx({
+      Body: testCase.channelBody,
+      CommandBody: testCase.normalizedBody,
+      BotUsername: "openclaw",
+    });
     listSkillCommandsForWorkspaceMock.mockImplementation(
       (params: { includeAllowlistHidden?: boolean }) =>
         params.includeAllowlistHidden
@@ -1252,11 +1384,11 @@ describe("handleInlineActions", () => {
     const result = await runTestInlineActions({
       ctx,
       typing,
-      cleanedBody: original,
+      cleanedBody: testCase.channelBody,
       command: {
         isAuthorizedSender: true,
-        rawBodyNormalized: original,
-        commandBodyNormalized: original,
+        rawBodyNormalized: testCase.normalizedBody,
+        commandBodyNormalized: testCase.normalizedBody,
       },
       overrides: {
         allowTextCommands: true,

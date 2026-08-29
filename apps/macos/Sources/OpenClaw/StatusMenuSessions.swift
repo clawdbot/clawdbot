@@ -48,12 +48,9 @@ final class StatusMenuSessions: NSObject {
     }
 
     func configureSessionItem(_ item: NSMenuItem, row: SessionRow) {
-        item.title = row.label
+        item.title = StatusMenuMetrics.fittedTitle(row.label)
         item.isEnabled = true
-        self.configureHostedView(
-            item,
-            rootView: AnyView(StatusSessionCard(row: row)),
-            width: StatusMenuRenderer.cardWidth)
+        StatusMenuRenderer.configureHostedView(item, rootView: StatusSessionCard(row: row), highlights: true)
 
         if let submenu = item.submenu {
             self.updateSessionSubmenu(submenu, row: row)
@@ -66,28 +63,12 @@ final class StatusMenuSessions: NSObject {
         item.title = String(localized: "Approval requested")
         item.isEnabled = true
         item.submenu = nil
-        self.configureHostedView(
-            item,
-            rootView: AnyView(StatusApprovalCard(request: request)),
-            width: StatusMenuRenderer.cardWidth)
+        StatusMenuRenderer.configureHostedView(item, rootView: StatusApprovalCard(request: request))
     }
 
     func cancelPreviewTasks() {
         self.previewTasks.forEach { $0.cancel() }
         self.previewTasks.removeAll()
-    }
-
-    private func configureHostedView(_ item: NSMenuItem, rootView: AnyView, width: CGFloat) {
-        if let hosting = item.view as? NSHostingView<AnyView> {
-            hosting.rootView = rootView
-            hosting.invalidateIntrinsicContentSize()
-            hosting.frame = NSRect(origin: .zero, size: NSSize(width: width, height: hosting.fittingSize.height))
-            return
-        }
-
-        let hosting = NSHostingView(rootView: rootView)
-        hosting.frame = NSRect(origin: .zero, size: NSSize(width: width, height: hosting.fittingSize.height))
-        item.view = hosting
     }
 
     private func prewarmPreviews(for rows: [SessionRow]) {
@@ -119,6 +100,7 @@ extension StatusMenuSessions {
     private func buildSessionSubmenu(for row: SessionRow) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
+        menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
 
         menu.addItem(self.makePreviewItem(
@@ -251,6 +233,7 @@ extension StatusMenuSessions {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.showsStateColumn = true
+        menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
         let selected = levels.contains(current ?? "") ? current ?? "off" : "off"
 
@@ -292,6 +275,7 @@ extension StatusMenuSessions {
 
     private func buildPreviewSubmenu(sessionKey: String) -> NSMenu {
         let menu = NSMenu()
+        menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
         menu.addItem(self.makePreviewItem(
             sessionKey: sessionKey,
@@ -303,29 +287,26 @@ extension StatusMenuSessions {
     private func makePreviewItem(sessionKey: String, title: String, maxLines: Int) -> NSMenuItem {
         let item = NSMenuItem()
         item.isEnabled = false
-        let width = StatusMenuRenderer.cardWidth
-        let initialView = AnyView(SessionMenuPreviewView(
-            width: width,
-            maxLines: maxLines,
-            title: title,
-            items: [],
-            status: .loading)
-            .environment(\.isEnabled, true))
-        self.configureHostedView(item, rootView: initialView, width: width)
+        StatusMenuRenderer.configureHostedView(
+            item,
+            rootView: SessionMenuPreviewView(
+                maxLines: maxLines,
+                title: title,
+                items: [],
+                status: .loading)
+                .environment(\.isEnabled, true))
 
-        self.previewTasks.append(Task { [weak self, weak item] in
+        self.previewTasks.append(Task { [weak item] in
             let snapshot = await SessionMenuPreviewLoader.load(sessionKey: sessionKey, maxItems: 10)
-            guard !Task.isCancelled, let self, let item else { return }
-            self.configureHostedView(
+            guard !Task.isCancelled, let item else { return }
+            StatusMenuRenderer.configureHostedView(
                 item,
-                rootView: AnyView(SessionMenuPreviewView(
-                    width: width,
+                rootView: SessionMenuPreviewView(
                     maxLines: maxLines,
                     title: title,
                     items: snapshot.items,
                     status: snapshot.status)
-                    .environment(\.isEnabled, true)),
-                width: width)
+                    .environment(\.isEnabled, true))
         })
 
         return item

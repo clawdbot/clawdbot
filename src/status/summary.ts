@@ -9,7 +9,7 @@ import { resolveProjectedSessionContextTokens } from "../config/sessions/context
 import { resolveSystemMainSessionKey } from "../config/sessions/main-session.js";
 import {
   hasSessionActiveAutoModelFallback,
-  hasSessionAutoModelFallbackProvenance,
+  hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -146,19 +146,6 @@ function discountRetainedLostTaskFailures(
     ...tasks,
     failures: Math.max(0, tasks.failures - retainedLostCount),
   };
-}
-
-function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
-  if (!entry?.modelOverride) {
-    return false;
-  }
-  if (entry.modelOverrideSource === "user") {
-    return true;
-  }
-  if (entry.modelOverrideSource === "auto") {
-    return false;
-  }
-  return !hasSessionAutoModelFallbackProvenance(entry);
 }
 
 type SessionCandidate = {

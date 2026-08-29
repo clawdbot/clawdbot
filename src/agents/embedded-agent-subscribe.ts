@@ -38,10 +38,8 @@ import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js"
 import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
-import {
-  consumeTrustedToolNoStartError,
-  registerTrustedToolNoStartError,
-} from "./tool-result-error.js";
+import { registerToolEffectReceipt } from "./tool-effect-receipt.js";
+import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const embeddedLog = createSubsystemLogger("agent/embedded");
@@ -70,7 +68,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   let lastAssistantUsage: ReturnType<typeof normalizeUsage>;
   let compactionCount = 0;
   let currentAttemptAssistant: AssistantMessage | undefined;
-
   const assistantTexts = state.assistantTexts;
   const toolMetas = state.toolMetas;
   const toolMetaById = state.toolMetaById;
@@ -283,7 +280,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       total: usageTotals.total || derivedTotal || undefined,
     };
   };
-  const getLastAssistantUsage = () => (lastAssistantUsage ? { ...lastAssistantUsage } : undefined);
+  const getLastAssistantUsage = () => normalizeUsage(lastAssistantUsage);
   const incrementCompactionCount = () => {
     compactionCount += 1;
   };
@@ -451,9 +448,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.deterministicApprovalPromptSent = false;
     state.lastDeliveredBlockReplyText = undefined;
     state.toolExecutionSinceLastBlockReply = false;
-    // A retry is a new model attempt. A silent retry must not inherit the
-    // completed assistant or pre-compaction context snapshot.
+    // Keep prior usage until the retry records its own call or terminal error.
     currentAttemptAssistant = undefined;
+    state.retryUsage = lastAssistantUsage ?? state.retryUsage;
     lastAssistantUsage = undefined;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
@@ -470,6 +467,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       // Context-engine projection may later replace or mutate transcript
       // objects. Final delivery needs the model event owned by this run.
       currentAttemptAssistant = structuredClone(msg) as AssistantMessage;
+      lastAssistantUsage ??= msg.stopReason === "error" ? state.retryUsage : undefined;
+      state.retryUsage = undefined;
     }
   };
 
@@ -628,7 +627,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       };
       try {
         const result = await toolParams.execute(onImplementationStart);
-        await handleToolExecutionEnd(ctx, {
+        const terminal = await handleToolExecutionEnd(ctx, {
           type: "tool_execution_end",
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
@@ -637,7 +636,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           result,
           hideFromChannelProgress: toolParams.hideFromChannelProgress,
         } as never);
-        return result;
+        return registerToolEffectReceipt(result, terminal.effectReceipt);
       } catch (error) {
         const trustedNoStart = consumeTrustedToolNoStartError(error);
         const terminal = await handleToolExecutionEnd(ctx, {
@@ -649,10 +648,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           result: buildToolLifecycleErrorResult(error),
           hideFromChannelProgress: toolParams.hideFromChannelProgress,
         } as never);
-        if (trustedNoStart && !terminal.executionStarted) {
-          registerTrustedToolNoStartError(error);
-        }
-        throw error;
+        const receipt = trustedNoStart
+          ? ({ state: "not_started" } as const)
+          : terminal.effectReceipt;
+        throw registerToolEffectReceipt(error, receipt);
       }
     },
     unsubscribe,

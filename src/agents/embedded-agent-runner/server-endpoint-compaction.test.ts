@@ -12,6 +12,7 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
   requestPreparedOpenAIResponsesCompaction: requestPreparedCompactionMock,
 }));
 
+import { testing } from "../openai-transport-stream.test-support.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 
 const model = {
@@ -75,17 +76,16 @@ beforeEach(() => {
   requestPreparedCompactionMock.mockReset();
   requestPreparedCompactionMock.mockResolvedValue({
     item: { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
+    output: [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "remember copper" }] },
+      { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
+    ],
     historyMode: "retained-users",
     usage: { input_tokens: 1_000, output_tokens: 200, dropped_message_count: 1 },
     model,
-    replayMetadata: {
-      v: 1,
-      source: "openai-responses",
-      provider: "xai",
-      api: "openai-responses",
-      model: "grok-4.5",
-      baseUrlHash: "test-base-url",
-    },
+    replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+      sessionId: "session-1",
+    }),
   });
 });
 
@@ -108,6 +108,17 @@ describe("attemptServerEndpointCompaction", () => {
       type: "openai-responses-retained-compaction",
       id: "cmp_test",
       data: "opaque",
+      compactedWindow: {
+        state: "ready",
+        output: JSON.stringify([
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "remember copper" }],
+          },
+          { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
+        ]),
+      },
     });
     expect(owner.message.providerReplay).not.toHaveProperty("replayIndex");
   });
@@ -115,17 +126,13 @@ describe("attemptServerEndpointCompaction", () => {
   it("marks a checkpoint-only response at the assistant content boundary", async () => {
     requestPreparedCompactionMock.mockResolvedValueOnce({
       item: { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
+      output: [{ type: "compaction", id: "cmp_test", encrypted_content: "opaque" }],
       historyMode: "compacted-prefix",
       usage: { input_tokens: 1_000, output_tokens: 200 },
       model,
-      replayMetadata: {
-        v: 1,
-        source: "openai-responses",
-        provider: "xai",
-        api: "openai-responses",
-        model: "grok-4.5",
-        baseUrlHash: "test-base-url",
-      },
+      replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+        sessionId: "session-1",
+      }),
     });
     const { session, result } = attempt();
 
@@ -168,6 +175,19 @@ describe("attemptServerEndpointCompaction", () => {
 
     await expect(result).resolves.toBeUndefined();
     expect(requestAborted).toBe(true);
+  });
+
+  it("leaves the durable transcript intact when policy would redact the canonical window", async () => {
+    const session = createSession();
+    const before = structuredClone(session.sessionManager.getBranch());
+    const { result } = attempt({
+      sessionManager: session.sessionManager,
+      context: { systemPrompt: "system", messages: session.messages },
+      config: { logging: { redactPatterns: ["remember copper"] } },
+    });
+
+    await expect(result).resolves.toBeUndefined();
+    expect(session.sessionManager.getBranch()).toEqual(before);
   });
 
   it("does not call the endpoint during overflow recovery", async () => {

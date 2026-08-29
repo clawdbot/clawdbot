@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(configDir, "../..");
 // Measured module set the default boot flow (app shell + sidebar + chat route)
-// loads through dynamic imports. Regenerate with `pnpm ui:boot-manifest:gen`
-// after a build; stale entries degrade gracefully back to automatic chunking.
+// loads through dynamic imports. `pnpm ui:boot-manifest:gen` measures a fresh
+// build without this group so stale entries cannot feed back into the capture.
 const controlUiBootModules: ReadonlySet<string> = new Set(
   JSON.parse(
     fs.readFileSync(path.join(configDir, "control-ui-boot-modules.json"), "utf8"),

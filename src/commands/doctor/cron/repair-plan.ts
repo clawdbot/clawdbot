@@ -1,9 +1,5 @@
 // Cron doctor repair planning helpers for previewing and merging legacy rows.
-import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalStringifiedId } from "../../../../packages/normalization-core/src/string-coerce.js";
-import { normalizeCronJobInput } from "../../../cron/normalize.js";
-import type { CronJob } from "../../../cron/types.js";
 import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
@@ -82,6 +78,18 @@ export function formatScheduledToolPolicyAdvisory(params: {
     "- Reauthorize with an exact explicit cap: `openclaw cron edit <id> --tools <tool,...>`.",
   );
   return lines.join("\n");
+}
+
+/** Advisory for alias-only jobs whose original exec authority cannot be proven from storage. */
+export function formatLegacyGatewayExecAdvisory(names: string[]): string | null {
+  if (names.length === 0) {
+    return null;
+  }
+  return [
+    `${pluralize(names.length, "automation")} ${names.length === 1 ? "grants" : "grant"} the retired \`gateway_exec\` alias${formatJobNameList(names)}.`,
+    "- Doctor will not convert this alias to `exec` because the stored name does not prove its original producer or approval restrictions.",
+    "- Recreate the automation from a fresh authenticated creator turn, or explicitly reauthorize its complete tool cap from a trusted operator shell.",
+  ].join("\n");
 }
 
 /** Advisory for legacy default caps that were captured before configured MCP was final. */
@@ -223,42 +231,4 @@ export function mergeRuntimeEntryIntoConfigJob(params: {
       : {}),
     ...(params.runtimeEntry?.state ? { state: structuredClone(params.runtimeEntry.state) } : {}),
   };
-}
-
-/** Return true when a SQLite cron projection row no longer matches config JSON. */
-export function needsSqliteProjectionBackfill(params: {
-  configJob: Record<string, unknown>;
-  projectedJob?: CronJob;
-}): boolean {
-  if (!params.projectedJob) {
-    return true;
-  }
-  const normalizedConfig = normalizeCronJobInput(params.configJob, { applyDefaults: true });
-  if (!normalizedConfig) {
-    return true;
-  }
-  if (!isRecord(params.projectedJob)) {
-    return true;
-  }
-  const projected = params.projectedJob;
-  for (const field of [
-    "agentId",
-    "deleteAfterRun",
-    "delivery",
-    "description",
-    "enabled",
-    "failureAlert",
-    "name",
-    "payload",
-    "schedule",
-    "scheduledToolPolicy",
-    "sessionKey",
-    "sessionTarget",
-    "wakeMode",
-  ] as const) {
-    if (!isDeepStrictEqual(normalizedConfig[field], projected[field])) {
-      return true;
-    }
-  }
-  return false;
 }

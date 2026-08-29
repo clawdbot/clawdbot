@@ -5,7 +5,10 @@ import {
   formatErrorMessage,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { retireCodexAppServerClientAfterTimedOutTurn } from "./attempt-client-cleanup.js";
+import {
+  retireCodexAppServerClientAfterTimedOutTurn,
+  terminateCodexBackgroundTerminals,
+} from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
 import {
   CodexSteeringAcceptedUnconfirmedError,
@@ -334,6 +337,7 @@ export async function activateCodexAttemptTurn(
   const handle = {
     kind: "embedded" as const,
     runId: params.runId,
+    startedAtMs: params.startedAtMs,
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
@@ -389,7 +393,29 @@ export async function activateCodexAttemptTurn(
       })().finally(completeTurn);
       return;
     }
-    void interruptTurn(activeTurnId).finally(completeTurn);
+    const interrupted = interruptTurn(activeTurnId);
+    if (terminalState.explicitCancellationObserved) {
+      // turn/completed ends the turn, not its native background terminals.
+      // Keep this attempt's route and lease until thread-scoped cleanup settles.
+      state.abortCleanup = interrupted.then(async (confirmed) => {
+        if (!confirmed) {
+          throw new Error(
+            "Codex cancellation could not confirm the turn stopped; background terminals may still be running.",
+          );
+        }
+        await terminateCodexBackgroundTerminals(
+          resourceState.client,
+          resourceState.thread.threadId,
+        );
+      });
+    }
+    const cancellation = terminalState.explicitCancellationObserved
+      ? state.abortCleanup
+      : interrupted;
+    void cancellation.then(completeTurn, (error: unknown) => {
+      embeddedAgentLog.warn("codex app-server cancellation cleanup failed", { error });
+      completeTurn();
+    });
   };
   runAbortController.signal.addEventListener("abort", abortListener, { once: true });
   if (runAbortController.signal.aborted) {

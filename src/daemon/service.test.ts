@@ -1,5 +1,6 @@
 // Daemon service tests cover service install, start, stop, and status flows.
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -138,28 +139,117 @@ describe("resolveGatewayService", () => {
 });
 
 describe("readGatewayServiceState", () => {
-  it("tracks installed, loaded, and running separately", async () => {
-    const hasInstalledDefinition = vi.fn(async () => false);
-    const service = createService({
-      hasInstalledDefinition,
-      isLoaded: vi.fn(async () => true),
-      readCommand: vi.fn(async () => ({
-        programArguments: ["openclaw", "gateway", "run"],
-        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
-      })),
-      readRuntime: vi.fn(async () => ({ status: "running" })),
-    });
+  it.each([
+    { updateInstallKind: "git" as const, shouldRestart: false },
+    { updateInstallKind: "git" as const, shouldRestart: true },
+    { updateInstallKind: "package" as const, shouldRestart: false },
+    { updateInstallKind: "package" as const, shouldRestart: true },
+  ])(
+    "allows managerless Linux preflight for $updateInstallKind restart=$shouldRestart",
+    async ({ updateInstallKind, shouldRestart }) => {
+      const { maybeStopManagedServiceBeforeMutableUpdate } =
+        await import("../cli/update-cli/update-command-service.js");
+      const home = await makeTempWorkspace("openclaw-managerless-preflight-");
+      const keys = [
+        "HOME",
+        "PATH",
+        "OPENCLAW_HOME",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_CONFIG_PATH",
+        "OPENCLAW_PROFILE",
+        "OPENCLAW_SUPERVISOR_MODE",
+        "OPENCLAW_SERVICE_MARKER",
+        "OPENCLAW_SERVICE_KIND",
+        "OPENCLAW_SYSTEMD_UNIT",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "DBUS_SYSTEM_BUS_ADDRESS",
+        "XDG_RUNTIME_DIR",
+        "SUDO_USER",
+      ];
+      const snapshot = captureEnv(keys);
+      try {
+        setPlatform("linux");
+        for (const key of keys) {
+          delete process.env[key];
+        }
+        process.env.HOME = home;
+        process.env.PATH = home;
+        const result = await maybeStopManagedServiceBeforeMutableUpdate({
+          root: home,
+          updateInstallKind,
+          shouldRestart,
+          jsonMode: true,
+          phase: "inspect",
+          timeoutMs: 2_000,
+        });
+        expect(result.blockMessage).toBeUndefined();
+        expect(result.serviceMutationAllowed).toBe(false);
+        expect(result.serviceMutationSkipMessage).toContain("inspection is unavailable");
+        expect(result.serviceMutationSkipMessage).toContain("gateway status --deep");
+        expect(result.serviceUpdateVerdict?.kind).not.toBe("absent");
+        expect(result.stopped).toBe(false);
+      } finally {
+        snapshot.restore();
+        await fs.rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
-    const state = await readGatewayServiceState(service, {
-      env: { OPENCLAW_GATEWAY_PORT: "1" },
-    });
+  it.each([
+    { read: "ordinary", requireEffective: undefined, capabilityFails: false },
+    { read: "strict", requireEffective: true, capabilityFails: false },
+    { read: "strict with unavailable capability", requireEffective: true, capabilityFails: true },
+  ])(
+    "tracks service state and reads only needed capability for $read reads",
+    async ({ requireEffective, capabilityFails }) => {
+      const hasInstalledDefinition = vi.fn(async () => false);
+      const readDefinitionMutationCapability = vi.fn<
+        NonNullable<GatewayService["readDefinitionMutationCapability"]>
+      >(async () => {
+        if (capabilityFails) {
+          throw new Error("capability unavailable");
+        }
+        return { kind: "sealed", reason: "foreign-owner" };
+      });
+      const service = createService({
+        hasInstalledDefinition,
+        readDefinitionMutationCapability,
+        isLoaded: vi.fn(async () => true),
+        readCommand: vi.fn(async () => ({
+          programArguments: ["openclaw", "gateway", "run"],
+          environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+        })),
+        readRuntime: vi.fn(async () => ({ status: "running" })),
+      });
 
-    expect(state.installed).toBe(true);
-    expect(state.loadState).toEqual({ status: "loaded" });
-    expect(state.running).toBe(true);
-    expect(state.env.OPENCLAW_GATEWAY_PORT).toBe("18789");
-    expect(hasInstalledDefinition).not.toHaveBeenCalled();
-  });
+      const state = await readGatewayServiceState(service, {
+        env: { OPENCLAW_GATEWAY_PORT: "1" },
+        requireEffective,
+        timeoutMs: 100,
+      });
+
+      expect(state.installed).toBe(true);
+      expect(state.loadState).toEqual({ status: "loaded" });
+      expect(state.running).toBe(true);
+      expect(state.env.OPENCLAW_GATEWAY_PORT).toBe("18789");
+      expect(hasInstalledDefinition).not.toHaveBeenCalled();
+      if (requireEffective) {
+        expect(readDefinitionMutationCapability).toHaveBeenCalledWith({
+          env: { OPENCLAW_GATEWAY_PORT: "1" },
+          environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+          timeoutMs: 100,
+        });
+        expect(state.definitionMutationCapability).toEqual(
+          capabilityFails
+            ? { kind: "unknown", reason: "inspection-failed" }
+            : { kind: "sealed", reason: "foreign-owner" },
+        );
+      } else {
+        expect(readDefinitionMutationCapability).not.toHaveBeenCalled();
+        expect(state.definitionMutationCapability).toBeUndefined();
+      }
+    },
+  );
 
   it.each([
     { name: "system-scoped OpenClaw service", definition: true, installed: true },
@@ -210,13 +300,28 @@ describe("readGatewayServiceState", () => {
     );
   });
 
-  it("preserves runtime probe failures as an explicit unknown state", async () => {
+  it("propagates required effective command inspection failures", async () => {
+    const readCommand = vi.fn(async () => {
+      throw new Error("manager unavailable");
+    });
+    const service = createService({ readCommand });
+
+    await expect(readGatewayServiceState(service, { requireEffective: true })).rejects.toThrow(
+      "manager unavailable",
+    );
+    expect(readCommand).toHaveBeenCalledWith(process.env, {
+      timeoutMs: undefined,
+      requireEffective: true,
+    });
+  });
+
+  it("normalizes localized runtime probe failures at the service boundary", async () => {
     const readCommand = vi.fn(async () => null);
     const service = createService({
       isLoaded: vi.fn(async () => true),
       readCommand,
       readRuntime: vi.fn(async () => {
-        throw new Error("systemctl show timed out");
+        throw new Error("錯誤: 系統找不到指定的檔案。");
       }),
     });
 
@@ -226,8 +331,27 @@ describe("readGatewayServiceState", () => {
     expect(state.running).toBe(false);
     expect(state.runtime).toEqual({
       status: "unknown",
-      detail: "Error: systemctl show timed out",
+      detail: "service runtime inspection failed",
+      inspectionFailure: {
+        code: "service-runtime-inspection-failed",
+        detail: "錯誤: 系統找不到指定的檔案。",
+      },
     });
+  });
+
+  it("bounds structured runtime inspection diagnostics", async () => {
+    const service = createService({
+      readRuntime: vi.fn(async () => {
+        throw new Error("錯".repeat(600));
+      }),
+    });
+
+    const state = await readGatewayServiceState(service);
+
+    expect(state.runtime?.inspectionFailure).toMatchObject({
+      code: "service-runtime-inspection-failed",
+    });
+    expect(state.runtime?.inspectionFailure?.detail).toHaveLength(500);
   });
 
   it("preserves loaded-state probe failures as an explicit unknown state", async () => {
@@ -248,8 +372,11 @@ describe("readGatewayServiceState", () => {
   it("validates merged service env before native status probes", async () => {
     const isLoaded = vi.fn(async () => true);
     const readRuntime = vi.fn(async () => ({ status: "running" as const }));
+    const readDefinitionMutationCapability =
+      vi.fn<NonNullable<GatewayService["readDefinitionMutationCapability"]>>();
     const service = createService({
       isLoaded,
+      readDefinitionMutationCapability,
       readCommand: vi.fn(async () => ({
         programArguments: ["openclaw", "gateway", "run"],
         environment: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
@@ -260,6 +387,7 @@ describe("readGatewayServiceState", () => {
     await expect(
       readGatewayServiceState(service, {
         env: {},
+        requireEffective: true,
         validateEnvBeforeStatusRead: (env) => {
           throw new Error(`refused ${env.OPENCLAW_SYSTEMD_UNIT}`);
         },
@@ -268,6 +396,7 @@ describe("readGatewayServiceState", () => {
 
     expect(isLoaded).not.toHaveBeenCalled();
     expect(readRuntime).not.toHaveBeenCalled();
+    expect(readDefinitionMutationCapability).not.toHaveBeenCalled();
   });
 });
 
@@ -514,29 +643,128 @@ describe("startGatewayService", () => {
     expect(service.start).toHaveBeenCalledTimes(1);
   });
 
-  it("requests repair before start when the loaded service points at temporary install paths", async () => {
-    const service = createService({
-      readCommand: vi.fn(async () => ({
-        programArguments: [
-          "/private/tmp/openclaw-ai-install-cli-pr118/tools/node/bin/node",
-          "/tmp/openclaw-ai-install-cli-pr118/lib/node_modules/openclaw/dist/index.js",
-          "gateway",
+  describe("service program paths", () => {
+    const entrypoint = path.resolve("openclaw.mjs");
+    const missing = path.resolve("missing-gateway-entrypoint.cjs");
+    const temporary = path.join(os.tmpdir(), "openclaw-service-layout", "index.js");
+    const heapFlag = "--max-old-space-size=16384";
+
+    describe.each([
+      { kind: "missing", program: missing },
+      { kind: "temporary", program: temporary },
+    ])("$kind program", ({ kind, program }) => {
+      it.each([
+        { layout: "runtime executable", args: [program, heapFlag, entrypoint] },
+        { layout: "ordinary entrypoint", args: [process.execPath, program] },
+        { layout: "entrypoint after heap flag", args: [process.execPath, heapFlag, program] },
+        {
+          layout: "entrypoint after a preload named gateway",
+          args: [process.execPath, "--require", "gateway", heapFlag, program],
+        },
+        {
+          layout: "entrypoint after separate heap flag values",
+          args: [
+            process.execPath,
+            "--max-old-space-size",
+            "16384",
+            "--max-semi-space-size",
+            "64",
+            program,
+          ],
+        },
+        {
+          layout: "relative entrypoint after heap flag",
+          args: [process.execPath, heapFlag, path.basename(program)],
+          workingDirectory: path.dirname(program),
+        },
+        { layout: "direct wrapper", args: [program] },
+        {
+          layout: "node-host entrypoint",
+          args: [process.execPath, program],
+          subcommand: ["node", "run"],
+        },
+        {
+          layout: "node-host entrypoint after dev loader",
+          args: [process.execPath, "--import", "tsx", program],
+          subcommand: ["node", "run"],
+        },
+      ])(
+        "requests repair before start for $layout",
+        async ({ args, workingDirectory, subcommand = ["gateway"] }) => {
+          const service = createService({
+            readCommand: vi.fn(async () => ({
+              programArguments: [...args, ...subcommand],
+              workingDirectory,
+            })),
+            isLoaded: vi.fn(async () => true),
+          });
+
+          const result = await startGatewayService(service, { env: {}, stdout: process.stdout });
+
+          expect.soft(result).toMatchObject({
+            outcome: "repair-required",
+            issues: [
+              {
+                code: `${kind}-program`,
+                message: `service command points at a ${kind} path: ${program}`,
+              },
+            ],
+          });
+          expect(service.start).not.toHaveBeenCalled();
+        },
+      );
+    });
+
+    it.each([
+      { layout: "ordinary entrypoint", args: [process.execPath, entrypoint] },
+      {
+        layout: "heap flags and unrelated preload path",
+        args: [
+          process.execPath,
+          "--max-old-space-size",
+          "16384",
+          "--require",
+          temporary,
+          entrypoint,
         ],
-        environment: {},
-      })),
-      isLoaded: vi.fn(async () => true),
-    });
+        workingDirectory: os.tmpdir(),
+      },
+      {
+        layout: "relative entrypoint",
+        args: [process.execPath, heapFlag, path.basename(entrypoint)],
+        workingDirectory: path.dirname(entrypoint),
+      },
+      { layout: "direct wrapper", args: [entrypoint] },
+      {
+        layout: "bare Node runtime for node host",
+        args: ["node", entrypoint],
+        subcommand: ["node", "run"],
+      },
+    ])(
+      "starts $layout without inspecting application paths",
+      async ({ args, workingDirectory, subcommand = ["gateway"] }) => {
+        const service = createService({
+          readCommand: vi.fn(async () => ({
+            programArguments: [
+              ...args,
+              ...subcommand,
+              "--config",
+              missing,
+              "--log-file",
+              temporary,
+              "gateway",
+            ],
+            workingDirectory,
+          })),
+          isLoaded: vi.fn(async () => true),
+        });
 
-    const result = await startGatewayService(service, {
-      env: {},
-      stdout: process.stdout,
-    });
+        const result = await startGatewayService(service, { env: {}, stdout: process.stdout });
 
-    expect(result.outcome).toBe("repair-required");
-    if (result.outcome === "repair-required") {
-      expect(result.issues.map((issue) => issue.code)).toContain("temporary-program");
-    }
-    expect(service.start).not.toHaveBeenCalled();
+        expect(result.outcome).toBe("started");
+        expect(service.start).toHaveBeenCalledOnce();
+      },
+    );
   });
 
   it("falls back to missing-install when start fails and install artifacts are gone", async () => {

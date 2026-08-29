@@ -99,6 +99,10 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
     ]);
 
     const settings = menu.locator('wa-dropdown-item[value="command:settings"]');
+    const settingsShortcut = settings.locator(".session-menu__shortcut");
+    expect(
+      await settingsShortcut.evaluate((element) => getComputedStyle(element).fontFamily),
+    ).toMatch(/^system-ui,/u);
     const settingsRestBackground = await settings.evaluate(
       (element) => getComputedStyle(element).backgroundColor,
     );
@@ -174,6 +178,7 @@ suite.define(() => {
       await offline.waitFor({ state: "visible", timeout: 10_000 });
       expect(await offline.textContent()).toContain("Offline");
       expect(await offline.textContent()).toContain("Reconnecting…");
+      await expect.poll(() => page.title()).toContain("(Disconnected)");
       await captureUnionProof(page, "sidebar-account-footer", "feature-dark-offline.png", [footer]);
 
       const socketCount = await gateway.getSocketCount();
@@ -186,6 +191,7 @@ suite.define(() => {
       await expect
         .poll(() => footer.locator(".sidebar-footer-bar__status").count(), { timeout: 10_000 })
         .toBe(0);
+      await expect.poll(() => page.title()).not.toContain("Disconnected");
       await gateway.emitGatewayEvent("shutdown", {
         reason: "gateway restart",
         restartExpectedMs: 5_000,

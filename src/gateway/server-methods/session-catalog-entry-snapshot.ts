@@ -11,9 +11,13 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionCatalogEntrySnapshot } from "../../plugins/session-catalog.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  hasSessionCreatorProfileProvenance,
+  projectSessionActor,
+} from "../session-identity-projection.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
-import { projectSessionActor } from "../session-utils-row.js";
+import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
 
 type SessionCatalogRequestEntrySnapshot = {
   sessionEntries: SessionCatalogEntrySnapshot;
@@ -27,6 +31,8 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   const entriesByAgentId = new Map<string, readonly SessionEntrySummary[]>();
   const entryIndexByAgentId = new Map<string, ReadonlyMap<string, SessionEntry>>();
   const actorBySessionKey = new Map<string, SessionCatalogSession["createdActor"]>();
+  // Hosts share human identities within this request; a new snapshot must see profile edits.
+  const userProfileIdentityById = new Map<string, SessionActorProfileIdentity | undefined>();
   let catalogEntries:
     | ReturnType<NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]>>
     | undefined;
@@ -92,7 +98,12 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
         freshest = entry;
       }
     }
-    const actor = projectSessionActor(freshest?.createdActor, undefined, params.cfg);
+    const actor = projectSessionActor(
+      freshest?.createdActor,
+      userProfileIdentityById,
+      params.cfg,
+      hasSessionCreatorProfileProvenance(freshest),
+    );
     actorBySessionKey.set(actorCacheKey, actor);
     return actor;
   };

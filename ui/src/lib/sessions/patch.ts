@@ -28,12 +28,10 @@ export type SessionPatch = {
 
 export type SessionPatchOptions = {
   agentId?: string;
-  /** Durable identity observed with the row before an archive or restore action. */
+  /** Durable identity observed with the row before the action or edit began. */
   expectedSessionId?: string;
   /** Explicit unread marker observed by an automatic read acknowledgement. */
   expectedMarkedUnreadAt?: number | null;
-  /** Let a caller with stricter lifecycle ownership publish the resolved model value. */
-  deferModelOverride?: boolean;
   /** Keep optimistic model state bound to the UI owner that initiated the patch. */
   ownsModelOverride?: () => boolean;
   /** Capture the current connection now, but dispatch only after this tail settles. */

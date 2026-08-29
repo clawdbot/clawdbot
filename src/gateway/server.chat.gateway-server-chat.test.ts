@@ -190,6 +190,8 @@ describe("gateway server chat", () => {
       });
       return await run(dir);
     } finally {
+      // Dispatch can outlive its RPC; keep its store selected until retained work settles.
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
@@ -2426,6 +2428,9 @@ describe("gateway server chat", () => {
           },
         },
       });
+      agentDiscoveryMock.enabled = true;
+      agentDiscoveryMock.models = [{ id: "gpt-5", provider: "openai", reasoning: true }];
+      await prepareGatewayReplyRuntimeForTest({ force: true });
 
       const historyRes = await rpcReq<{
         thinkingLevel?: string;
@@ -2436,6 +2441,7 @@ describe("gateway server chat", () => {
       expect(historyRes.payload?.thinkingLevel).toBe("minimal");
       expect(historyRes.payload?.sessionInfo?.thinkingLevel).toBeUndefined();
     } finally {
+      Object.assign(agentDiscoveryMock, { enabled: false, models: [] });
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
@@ -2620,6 +2626,60 @@ describe("gateway server chat", () => {
     }
   });
 
+  test.each(["return", "throw"] as const)(
+    "retains the session fixture while admitted dispatch settles after callback %s",
+    async (outcome) => {
+      const runId = `idem-fixture-dispatch-${outcome}`;
+      const dispatchStarted = createDeferred();
+      const releaseDispatch = createDeferred();
+      const callbackFinished = createDeferred();
+      const callbackError = new Error("fixture callback failed");
+      let fixtureDir = "";
+      let storePath = "";
+      dispatchInboundMessageMock.mockImplementationOnce(async () => {
+        dispatchStarted.resolve();
+        await releaseDispatch.promise;
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      });
+      const fixture = withMainSessionStore(async (dir) => {
+        fixtureDir = dir;
+        storePath = path.join(dir, "sessions.json");
+        try {
+          await sendChatAndExpectStarted(runId, "hold fixture dispatch open");
+          await dispatchStarted.promise;
+          if (outcome === "throw") {
+            throw callbackError;
+          }
+          return "fixture result";
+        } finally {
+          callbackFinished.resolve();
+        }
+      });
+      const completion = Promise.allSettled([fixture]);
+      try {
+        await callbackFinished.promise;
+        // Let the fixture's finally run while the admitted dispatch is still held.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+        expect(testState.sessionStorePath).toBe(storePath);
+        expect((await fs.stat(fixtureDir)).isDirectory()).toBe(true);
+      } finally {
+        releaseDispatch.resolve();
+        await completion;
+        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      }
+      expect(await completion).toEqual([
+        outcome === "throw"
+          ? { status: "rejected", reason: callbackError }
+          : { status: "fulfilled", value: "fixture result" },
+      ]);
+      expect(testState.sessionStorePath).toBeUndefined();
+      await expect(fs.stat(fixtureDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   test("agent.wait ignores stale agent snapshots while same-runId chat.send is active", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-vs-stale-agent";
@@ -2660,6 +2720,7 @@ describe("gateway server chat", () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-with-agent-lifecycle";
       const blockedReply = createDeferred();
+      const runtimeStarted = createDeferred();
       mockGetReplyFromConfigOnce(async (_ctx, opts) => {
         opts?.onAgentRunStart?.(runId);
         const runtimeOwner = claimAgentRunContext(
@@ -2673,6 +2734,7 @@ describe("gateway server chat", () => {
           { ownsContext: true, trackOwner: true },
         );
         expect(runtimeOwner).toBeDefined();
+        runtimeStarted.resolve();
         try {
           await blockedReply.promise;
         } finally {
@@ -2684,6 +2746,8 @@ describe("gateway server chat", () => {
         const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
         expect(subscribeRes.ok).toBe(true);
         await sendChatAndExpectStarted(runId, "hold chat run open");
+        // The ACK precedes dispatch; emit lifecycle only after the runtime owns this run.
+        await runtimeStarted.promise;
 
         const terminalSessionChange = onceMessage(
           ws,
@@ -2729,8 +2793,10 @@ describe("gateway server chat", () => {
           8_000,
         );
         blockedReply.resolve();
-        const settledEvent = await settledSessionChange.catch(() => {
-          throw new Error("Gateway did not publish settled run ownership after chat.send cleanup");
+        const settledEvent = await settledSessionChange.catch((cause: unknown) => {
+          throw new Error("Gateway did not publish settled run ownership after chat.send cleanup", {
+            cause,
+          });
         });
         await waitForAgentRunOk(runId);
         expectRecordFields(settledEvent.payload, {

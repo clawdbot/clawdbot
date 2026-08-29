@@ -104,25 +104,21 @@ function buildStoredAriaRefs(
 ): Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }> {
   const refs: Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }> =
     {};
-  const counts = new Map<string, number>();
   const refsByKey = new Map<string, string[]>();
 
   for (const node of nodes) {
     const role = normalizeLowercaseStringOrEmpty(node.role) || "unknown";
-    const name = node.name.trim() || undefined;
-    const key = `${role}:${name ?? ""}`;
-    const nth = counts.get(key) ?? 0;
-    counts.set(key, nth + 1);
-    const refsForKey = refsByKey.get(key);
-    if (refsForKey) {
-      refsForKey.push(node.ref);
-    } else {
-      refsByKey.set(key, [node.ref]);
-    }
+    const name = node.name.trim();
+    const key = `${role}:${name}`;
+    const refsForKey = refsByKey.get(key) ?? [];
+    const nth = refsForKey.length;
+    refsForKey.push(node.ref);
+    refsByKey.set(key, refsForKey);
     refs[node.ref] = {
       role,
-      ...(name ? { name } : {}),
-      ...(nth > 0 ? { nth } : {}),
+      name,
+      // Keep index zero for duplicates; only singleton groups can omit nth.
+      nth,
       ...(markedRefs.has(node.ref) ? { domMarker: true } : {}),
     };
   }

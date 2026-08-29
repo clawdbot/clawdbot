@@ -36,7 +36,8 @@ function preserveMixedModelDirective(
     rawModelProfile: directives.rawModelProfile,
     rawModelRuntime: directives.rawModelRuntime,
     modelDirectiveSource: directives.modelDirectiveSource,
-    modelSessionOnly: directives.modelSessionOnly,
+    modelScope: directives.modelScope,
+    modelScopeConflict: directives.modelScopeConflict,
   };
 }
 

@@ -115,7 +115,6 @@ export function patchChatSessionSettings(
   patch: SessionPatch,
   options: {
     agentId?: string;
-    deferModelOverride?: boolean;
     ownsModelOverride?: () => boolean;
     reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
   } = {},
@@ -127,7 +126,6 @@ export function patchChatSessionSettings(
     // redirect queued intent to a replacement Gateway.
     const result = await host.sessions.patch(sessionKey, patch, {
       agentId: options.agentId,
-      deferModelOverride: options.deferModelOverride,
       ownsModelOverride: options.ownsModelOverride,
       waitFor: previous,
     });
@@ -169,7 +167,6 @@ export async function patchChatCommandSessionSettings(
   sessionKey: string,
   patch: SessionPatch,
   options: {
-    deferModelOverride?: boolean;
     ownsModelOverride?: () => boolean;
     reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
   } = {},

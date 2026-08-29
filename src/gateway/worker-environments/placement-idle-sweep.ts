@@ -84,28 +84,21 @@ export function createWorkerPlacementIdleSweep(options: {
             agentId: placement.agentId,
           };
           const hasSessionWork = await getSessionWorkAdmissionCheck?.(request);
-          const current = options.placements.get(placement.sessionId);
-          if (
-            hasSessionWork?.() ||
-            current?.state !== "active" ||
-            current.generation !== placement.generation ||
-            current.updatedAtMs !== placement.updatedAtMs ||
-            current.turnClaim
-          ) {
-            continue;
-          }
-          const authorize = hasSessionWork
-            ? () => {
-                // Once drain starts, its lifecycle fence owns teardown; never abort it midway.
-                if (
-                  options.placements.get(placement.sessionId)?.state === "active" &&
-                  hasSessionWork()
-                ) {
-                  throw new WorkerPlacementAutoSuspendBusyError();
-                }
-              }
-            : undefined;
-          await options.dispatch.reclaim(request, authorize);
+          const beforeDrain = () => {
+            const current = options.placements.get(placement.sessionId);
+            if (
+              hasSessionWork?.() ||
+              current?.state !== "active" ||
+              current.generation !== placement.generation ||
+              current.environmentId !== placement.environmentId ||
+              current.activeOwnerEpoch !== placement.activeOwnerEpoch ||
+              current.updatedAtMs !== placement.updatedAtMs ||
+              current.turnClaim
+            ) {
+              throw new WorkerPlacementAutoSuspendBusyError();
+            }
+          };
+          await options.dispatch.reclaim(request, undefined, beforeDrain);
           options.info(
             `auto-suspended ${placement.sessionKey} after ${suspendAfter} idle; wakes on next message`,
           );

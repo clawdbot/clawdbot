@@ -73,12 +73,14 @@ async function deliverPrimaryWebhook(
     return result;
   }
   if (result.status !== "error" && !(typeof result.summary === "string" && result.summary.trim())) {
-    return withPrimaryWebhookTrace({
-      job,
-      result,
-      delivered: false,
-      error: "cron webhook delivery skipped: run produced no payload",
-    });
+    return settle(
+      withPrimaryWebhookTrace({
+        job,
+        result,
+        delivered: false,
+        deliverySuppressionReason: "empty",
+      }),
+    );
   }
   if (!state.deps.sendCronWebhook) {
     return withPrimaryWebhookTrace({
@@ -441,21 +443,36 @@ async function executeJobCoreWithTimeoutUnfinalized(
 export function authorCronRunCompletion<
   T extends Pick<
     CronJobRunResult,
-    "status" | "error" | "deliveryError" | "delivery" | "delivered" | "deliveryAttempted"
+    | "status"
+    | "error"
+    | "deliveryError"
+    | "deliverySuppressionReason"
+    | "deliveryState"
+    | "delivery"
+    | "delivered"
+    | "deliveryAttempted"
   >,
 >(_state: CronServiceState, job: CronJob, result: T) {
-  const deliveryState = resolveDeliveryState({
-    job,
-    runStatus: result.status,
-    delivery: result.delivery,
-    delivered: result.delivered,
-    deliveryAttempted: result.deliveryAttempted,
-    error: result.deliveryError ?? result.error,
-  });
+  const deliveryState =
+    result.deliveryState ??
+    resolveDeliveryState({
+      job,
+      runStatus: result.status,
+      delivery: result.delivery,
+      delivered: result.delivered,
+      deliveryAttempted: result.deliveryAttempted,
+      error: result.deliveryError ?? result.error,
+      deliverySuppressionReason: result.deliverySuppressionReason,
+    });
   return {
     ...result,
     deliveryState,
-    completionStatus: resolveAdmittedCronCompletionStatus(job, result.status, deliveryState.status),
+    completionStatus: resolveAdmittedCronCompletionStatus(
+      job,
+      result.status,
+      deliveryState.status,
+      deliveryState.deliverySuppressionReason,
+    ),
   };
 }
 

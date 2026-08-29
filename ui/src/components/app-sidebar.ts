@@ -9,8 +9,6 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
-import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
@@ -23,7 +21,6 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
-import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   renderAppSidebarBrand,
@@ -67,14 +64,10 @@ import {
 import { renderPanelRefreshStatus } from "./panel-refresh-status.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
+import { SidebarPeopleController } from "./sidebar-people-controller.ts";
 // The shared loader retries transient chunk failures online; a deploy-pruned
 // chunk still stays off until reload when that retry fails, by design.
-const sidebarChromeImport = createIdleImport(() =>
-  Promise.all([
-    customElements.get("openclaw-lobster-pet") ? undefined : import("./lobster-pet.ts"),
-    customElements.get("openclaw-viewer-facepile") ? undefined : import("./viewer-facepile.ts"),
-  ]),
-);
+const lobsterPetImport = createIdleImport(() => import("./lobster-pet.runtime.ts"));
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
   @state() override sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
@@ -82,6 +75,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
+  private readonly people = new SidebarPeopleController(this);
 
   sessionGroupDefaults(name: string) {
     if (this.context?.sessions.groupsStatus() !== "ready") {
@@ -176,37 +170,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   constructor() {
     super();
     void this.subscriptions;
-    void new BoardAvailabilityController(
-      this,
-      () => {
-        const mainKey = this.selectedAgentMainSessionKey(this.activeChipAgent().activeId);
-        return [
-          mainKey,
-          ...this.visibleSessionRowsInOrder()
-            .filter((session) => !session.isChild)
-            .map((session) => session.key),
-        ];
-      },
-      undefined,
-      () => {
-        const snapshot = this.context?.gateway.snapshot;
-        const client = snapshot?.client;
-        const availabilityClient =
-          client &&
-          typeof client.request === "function" &&
-          typeof client.addEventListener === "function"
-            ? client
-            : null;
-        return {
-          client: availabilityClient,
-          connected: snapshot?.phase === "connected",
-          available: snapshot ? isGatewayMethodAdvertised(snapshot, "board.get") !== false : false,
-          key: `${this.context?.gateway.connection?.gatewayUrl ?? ""}\u0000${
-            snapshot?.hello?.server?.version ?? ""
-          }`,
-        };
-      },
-    );
+  }
+
+  override dismissTransientMenus(): boolean {
+    const hadPersonCard = this.people.dismiss();
+    return super.dismissTransientMenus() || hadPersonCard;
   }
 
   override disconnectedCallback() {
@@ -333,7 +301,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     );
     // The decorative pet's large module stays out of startup and upgrades in place.
     // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
-    sidebarChromeImport.schedule();
+    lobsterPetImport.schedule();
     this.catalogRendererImport.schedule();
   }
 
@@ -399,10 +367,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   handleSessionListDrop(event: DragEvent): void {
     this.sessionOrganizer.handleSessionListDrop(event);
-  }
-
-  openNewSession(target?: NewSessionTarget): void {
-    this.requestOpenNewSession(this.expandedAgentId(), target);
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {

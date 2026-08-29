@@ -71,6 +71,11 @@ artifact through `artifacts.download`, which returns inline base64 bytes when
 the artifact is byte-backed or a short-lived, ticketed URL when it is
 Gateway-managed.
 
+Native clients resolve ticketed media against the connected Gateway URL,
+preserving its reverse-proxy path prefix. A Gateway reached at
+`wss://gateway.example/openclaw` loads managed media beneath
+`https://gateway.example/openclaw/api/chat/media/outgoing/`, not the server root.
+
 The ticketed byte routes support:
 
 - `Range` requests with HTTP `206 Partial Content` for seeking

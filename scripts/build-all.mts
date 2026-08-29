@@ -11,6 +11,11 @@ import prettyMilliseconds from "pretty-ms";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
+  distArtifactEntryArgs,
+  withDistArtifactOwnership,
+} from "./lib/dist-artifact-ownership.mts";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
+import {
   listPluginSdkDistArtifacts,
   listPluginSdkDeclarationOutputs,
   pluginSdkEntrypoints,
@@ -131,6 +136,8 @@ const PLUGIN_SDK_ENTRY_DTS_CACHE_ENV = [
 ];
 const PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS = [
   "scripts/write-plugin-sdk-entry-dts.ts",
+  "scripts/lib/declaration-source-index.mts",
+  "scripts/lib/direct-run.mjs",
   "scripts/lib/plugin-sdk-entries.mts",
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
@@ -142,21 +149,18 @@ const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
   { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
 ];
 const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS = [
-  ...PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS,
+  "scripts/write-plugin-sdk-entry-dts.ts",
   "package.json",
   "pnpm-lock.yaml",
   "tsconfig.json",
   "tsconfig.plugin-sdk.dts.json",
-  {
-    path: "src",
-    extensions: [".ts", ".tsx", ".mts", ".cts", ".json"],
+  "node-version.d.mts",
+  // SDK source types also depend on build metadata and private QA helpers.
+  ...["src", "packages", "scripts/lib", "test/helpers"].map((sourceRoot) => ({
+    path: sourceRoot,
+    extensions: TSDOWN_SOURCE_EXTENSIONS,
     excludeDirectories: ["dist", "node_modules"],
-  },
-  {
-    path: "packages",
-    extensions: [".ts", ".tsx", ".mts", ".cts", ".json"],
-    excludeDirectories: ["dist", "node_modules"],
-  },
+  })),
 ];
 const PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS = [
   "dist/plugin-sdk/.boundary-entry-shims.stamp",
@@ -551,25 +555,35 @@ export function resolveBuildAllEnvironment(
   now: () => Date = () => new Date(),
   readGitCommit: () => string | null = readCurrentGitCommit,
 ) {
-  return resolveBuildIdentityEnvironment({
+  const buildEnv = resolveBuildIdentityEnvironment({
     commitLabel: "build commit",
     env,
     now,
     readGitCommit,
   });
+  // Older installed updaters already send this marker to candidate builds.
+  // Updates need runtime artifacts; explicit declaration/package builds still win.
+  if (buildEnv.OPENCLAW_UPDATE_IN_PROGRESS === "1") {
+    buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] ??= "1";
+  }
+  return buildEnv;
 }
 
 export function resolveBuildAllTsdownPlan(
   profile: string,
   env: NodeJS.ProcessEnv,
   params: Omit<MemoryLimitParams, "env"> = {},
-) {
-  if (profile !== "full" && profile !== "package") {
+): {
+  env: NodeJS.ProcessEnv;
+  heapShortfall: ReturnType<typeof resolveTsdownBuildPlan>["heapShortfall"];
+} {
+  if (profile !== "full" && profile !== "package" && profile !== "ciArtifacts") {
     return { env, heapShortfall: null };
   }
   const plan = resolveTsdownBuildPlan({ ...params, env });
   return {
-    env: { ...env, [TSDOWN_MAX_OLD_SPACE_MB_ENV]: String(plan.maxOldSpaceMb) },
+    // Direct Node steps need NODE_OPTIONS; tsdown descendants also need the frozen budget.
+    env: { ...plan.env, [TSDOWN_MAX_OLD_SPACE_MB_ENV]: String(plan.maxOldSpaceMb) },
     heapShortfall: plan.heapShortfall,
   };
 }
@@ -994,7 +1008,7 @@ export function formatBuildAllTimingSummary(timings: BuildAllTiming[]) {
   return `[build-all] phase timings: total ${formatBuildAllDuration(totalMs)}; slowest ${phases}`;
 }
 
-export function runBuildAllSteps(
+export async function runBuildAllSteps(
   profile: string,
   params: {
     cacheEnabled?: boolean;
@@ -1005,11 +1019,17 @@ export function runBuildAllSteps(
     now?: () => number;
     resolveCacheState?: typeof resolveBuildAllStepCacheState;
     restoreCache?: typeof restoreBuildAllStepCacheOutputs;
-    runStep?: (invocation: ReturnType<typeof resolveBuildAllStep>) => { status: number | null };
+    runStep?: (
+      invocation: ReturnType<typeof resolveBuildAllStep>,
+    ) => { status: number | null } | Promise<{ status: number | null }>;
     steps?: BuildAllStep[];
   } = {},
 ) {
-  let buildEnv = params.env ?? resolveBuildAllEnvironment();
+  const { env: buildEnv, heapShortfall } = resolveBuildAllTsdownPlan(
+    profile,
+    resolveBuildAllEnvironment(params.env),
+    params.memoryLimit,
+  );
   const steps = params.steps ?? resolveBuildAllSteps(profile, buildEnv);
   const cacheEnabled = params.cacheEnabled ?? buildEnv.OPENCLAW_BUILD_CACHE !== "0";
   const logger = params.logger ?? console;
@@ -1019,21 +1039,29 @@ export function runBuildAllSteps(
   const finalizeCache = params.finalizeCache ?? finalizeBuildAllStepCache;
   const runStep =
     params.runStep ??
-    ((invocation: ReturnType<typeof resolveBuildAllStep>) =>
-      spawnSync(invocation.command, invocation.args, invocation.options));
+    (async (invocation: ReturnType<typeof resolveBuildAllStep>) => {
+      const script = invocation.args[2];
+      return {
+        status: await runManagedCommand({
+          bin: invocation.command,
+          args:
+            script === "scripts/tsdown-build.mts" ||
+            script === "scripts/write-plugin-sdk-entry-dts.ts"
+              ? distArtifactEntryArgs(script, invocation.args.slice(3))
+              : invocation.args,
+          ...invocation.options,
+          requireProcessTreeExit: process.platform !== "win32",
+        }),
+      };
+    });
   const timings: BuildAllTiming[] = [];
   let exitCode = 0;
-  if (profile === "full" || profile === "package") {
-    const buildPlan = resolveBuildAllTsdownPlan(profile, buildEnv, params.memoryLimit);
-    const heapShortfall = buildPlan.heapShortfall;
-    if (heapShortfall) {
-      if (heapShortfall.fatal) {
-        logger.error(heapShortfall.message);
-        return { exitCode: 1, timings };
-      }
-      logger.warn(heapShortfall.message);
+  if (heapShortfall) {
+    if (heapShortfall.fatal) {
+      logger.error(heapShortfall.message);
+      return { exitCode: 1, timings };
     }
-    buildEnv = buildPlan.env;
+    logger.warn(heapShortfall.message);
   }
   for (const step of steps) {
     const cacheStartedAt = now();
@@ -1056,7 +1084,7 @@ export function runBuildAllSteps(
     }
     logger.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
     const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
-    const result = runStep(invocation);
+    const result = await runStep(invocation);
     const durationMs = cacheDurationMs + now() - startedAt;
     if (typeof result.status === "number") {
       if (result.status !== 0) {
@@ -1094,7 +1122,9 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   if (args?.help) {
     console.log(buildAllUsage());
   } else {
-    const result = runBuildAllSteps(args.profile);
+    const result = await withDistArtifactOwnership(process.cwd(), () =>
+      runBuildAllSteps(args.profile),
+    );
     if (result.exitCode !== 0) {
       process.exit(result.exitCode);
     }

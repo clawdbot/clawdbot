@@ -68,8 +68,12 @@ else
   FOLLOWTHROUGH_PROGRESS_FINAL_MODE="legacy"
 fi
 run_log=""
+# Signal traps inherit the harness function's log redirection. Reserve the original stdout
+# so EXIT cleanup cannot print the failure tail back into the log it is reading.
+exec 3>&1
 
 cleanup() {
+  local cleanup_status="$?"
   if [ -n "${CODEX_PLUGIN_PACK_DIR:-}" ]; then
     rm -rf "$CODEX_PLUGIN_PACK_DIR"
   fi
@@ -77,8 +81,12 @@ cleanup() {
     docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
   fi
   if [ -n "${run_log:-}" ]; then
+    if [ "$cleanup_status" -ne 0 ]; then
+      docker_e2e_print_log "$run_log" >&3 || true
+    fi
     rm -f "$run_log"
   fi
+  return "$cleanup_status"
 }
 trap cleanup EXIT
 
@@ -343,7 +351,7 @@ if [ -n "$CODEX_PLUGIN_REGISTRY_TARBALL" ]; then
 fi
 
 echo "Installing Codex plugin: $CODEX_PLUGIN_SPEC"
-openclaw plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
+openclaw_e2e_fixture_plugin_command openclaw -- plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
 
 node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs configure "$MODEL_REF"
 
@@ -542,7 +550,6 @@ node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs assert-agent-error "$p
 
 echo "Codex npm plugin live Docker E2E passed"
 EOF
-  docker_e2e_print_log "$run_log"
   exit 1
 fi
 

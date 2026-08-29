@@ -1,47 +1,37 @@
-/**
- * Applies provider plugin policy to configured model provider settings.
- */
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
-  applyProviderNativeStreamingUsagePolicy,
-  normalizeProviderConfigPolicy,
-  resolveProviderConfigApiKeyPolicy,
-  type ProviderPolicyManifestRegistry,
-} from "./models-config.providers.policy.runtime.js";
+  normalizeProviderConfigWithPlugin,
+  resolveProviderConfigApiKeyWithPlugin,
+} from "../plugins/provider-runtime.js";
+import { resolveProviderPluginLookupKey } from "./models-config.providers.policy.lookup.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
+
+export type ProviderPolicyManifestRegistry = Pick<PluginManifestRegistry, "plugins">;
 
 /**
  * Provider-specific config policy adapters.
  *
- * Runtime policy rules live in the sibling runtime module; this file exposes the
- * small stable API used by models-config loading and tests.
+ * These helpers call plugin hooks without triggering runtime plugin loading
+ * from config assembly.
  */
-/** Applies native-streaming usage compatibility policy to the provider map. */
-export function applyNativeStreamingUsageCompat(
-  providers: Record<string, ProviderConfig>,
-): Record<string, ProviderConfig> {
-  let changed = false;
-  const nextProviders: Record<string, ProviderConfig> = {};
-
-  for (const [providerKey, provider] of Object.entries(providers)) {
-    const nextProvider = applyProviderNativeStreamingUsagePolicy(providerKey, provider);
-    nextProviders[providerKey] = nextProvider;
-    changed ||= nextProvider !== provider;
-  }
-
-  return changed ? nextProviders : providers;
-}
-
 /** Normalizes a provider config according to provider-specific runtime policy. */
 export function normalizeProviderSpecificConfig(
   providerKey: string,
   provider: ProviderConfig,
   manifestRegistry?: ProviderPolicyManifestRegistry,
 ): ProviderConfig {
-  const normalized = normalizeProviderConfigPolicy(providerKey, provider, manifestRegistry);
-  if (normalized && normalized !== provider) {
-    return normalized;
-  }
-  return provider;
+  const runtimeProviderKey = resolveProviderPluginLookupKey(providerKey, provider);
+  return (
+    normalizeProviderConfigWithPlugin({
+      provider: runtimeProviderKey,
+      allowRuntimePluginLoad: false,
+      ...(manifestRegistry ? { manifestRegistry } : {}),
+      context: {
+        provider: providerKey,
+        providerConfig: provider,
+      },
+    }) ?? provider
+  );
 }
 
 /** Resolves a provider-specific API key env lookup policy when one exists. */
@@ -50,5 +40,15 @@ export function resolveProviderConfigApiKeyResolver(
   provider?: ProviderConfig,
   manifestRegistry?: ProviderPolicyManifestRegistry,
 ): ((env: NodeJS.ProcessEnv) => string | undefined) | undefined {
-  return resolveProviderConfigApiKeyPolicy(providerKey, provider, manifestRegistry);
+  const runtimeProviderKey = resolveProviderPluginLookupKey(providerKey, provider).trim();
+  return (env) =>
+    resolveProviderConfigApiKeyWithPlugin({
+      provider: runtimeProviderKey,
+      allowRuntimePluginLoad: false,
+      ...(manifestRegistry ? { manifestRegistry } : {}),
+      context: {
+        provider: providerKey,
+        env,
+      },
+    });
 }

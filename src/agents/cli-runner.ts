@@ -277,11 +277,7 @@ export async function runPreparedCliAgent(
   }
   const historyMessages = needsHookHistory
     ? await loadCliSessionHistoryMessages({
-        sessionId: params.sessionId,
-        sessionFile: params.sessionFile,
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        config: params.config,
+        sessionTarget: params.sessionTarget,
       })
     : [];
   const llmInputEvent = {
@@ -402,7 +398,9 @@ export async function runPreparedCliAgent(
     if (
       !assistantText &&
       !output.didSendViaMessagingTool &&
-      params.allowEmptyAssistantReplyAsSilent !== true
+      params.allowEmptyAssistantReplyAsSilent !== true &&
+      // Strict isolated completion owns valid-empty output after reasoning is removed.
+      !(isolatedCompletion && params.outputTextPolicy === "strict-visible")
     ) {
       const process = output.diagnostics?.process;
       if (process) {
@@ -514,6 +512,7 @@ export async function runPreparedCliAgent(
       contextEngine: context.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
       config: context.contextEngineConfig,
       contextEngineHostSupport: buildGenericCliContextEngineHostSupport({
@@ -525,11 +524,7 @@ export async function runPreparedCliAgent(
     });
     const contextEngineHistoryMessages = context.contextEngine
       ? await loadCliSessionContextEngineMessages({
-          sessionId: params.sessionId,
-          sessionFile: params.sessionFile,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          config: params.config,
+          sessionTarget: params.sessionTarget,
         })
       : [];
     const finishCliAttempt = async (

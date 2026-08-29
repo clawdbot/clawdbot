@@ -1933,6 +1933,119 @@ describe("subagent registry lifecycle hardening", () => {
     await waitForLifecycleState(() => expect(runs.has(entry.runId)).toBe(false));
   });
 
+  it.each([
+    { name: "pending", beforeDelete: undefined, persisted: { status: "pending" as const } },
+    {
+      name: "queued",
+      beforeDelete: {
+        status: "in_progress" as const,
+        disposition: "session_queued" as const,
+        queueId: "queue-1",
+      },
+      persisted: {
+        status: "in_progress" as const,
+        disposition: "session_queued" as const,
+        queueId: "queue-1",
+      },
+    },
+  ])(
+    "persists a required completion before delete cleanup for $name delivery",
+    async ({ beforeDelete, persisted }) => {
+      const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: true });
+      const runs = new Map([[entry.runId, entry]]);
+      const persistedSnapshots: SubagentRunRecord[] = [];
+      let releaseAnnounce: ((outcome: AnnounceFlowOutcome) => void) | undefined;
+      const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+        (announceParams) =>
+          new Promise<AnnounceFlowOutcome>((resolve) => {
+            if (beforeDelete) {
+              entry.delivery = { ...entry.delivery, ...beforeDelete };
+            }
+            expect(announceParams.onBeforeDeleteChildSession?.()).toBe(true);
+            releaseAnnounce = resolve;
+          }),
+      );
+      const controller = createLifecycleController({
+        entry,
+        runs,
+        persistOrThrow: vi.fn(() => {
+          persistedSnapshots.push(structuredClone(entry));
+        }),
+        runSubagentAnnounceFlow,
+      });
+
+      await completeRun(controller, entry, {
+        triggerCleanup: true,
+        terminalReply: { disposition: "visible", text: "final completion reply" },
+      });
+      await waitForLifecycleState(() =>
+        expect(entry.deleteCleanupDispatchedAt).toBeTypeOf("number"),
+      );
+
+      const deleteSnapshot = persistedSnapshots.find(
+        (snapshot) => snapshot.deleteCleanupDispatchedAt !== undefined,
+      );
+      expect(deleteSnapshot).toMatchObject({
+        completion: {
+          required: true,
+          resultText: "final completion reply",
+        },
+        delivery: {
+          ...persisted,
+          payload: {
+            requesterSessionKey: "agent:main:main",
+            childSessionKey: "agent:main:subagent:child",
+            task: "finish the task",
+            outcome: { status: "ok" },
+            terminalReply: { disposition: "visible", text: "final completion reply" },
+          },
+        },
+      });
+      expect(deleteSnapshot?.delivery?.attemptCount).toBeUndefined();
+      expect(deleteSnapshot?.delivery?.lastAttemptAt).toBeUndefined();
+
+      releaseAnnounce?.("delivered");
+      await waitForLifecycleState(() => expect(runs.has(entry.runId)).toBe(false));
+    },
+  );
+
+  it("does not hand off delete cleanup when the replay payload cannot be persisted", async () => {
+    const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: true });
+    const runs = new Map([[entry.runId, entry]]);
+    const persistOrThrow = vi.fn();
+    let beforeDelete: (() => boolean) | undefined;
+    let releaseAnnounce: ((outcome: AnnounceFlowOutcome) => void) | undefined;
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      (announceParams) =>
+        new Promise<AnnounceFlowOutcome>((resolve) => {
+          beforeDelete = announceParams.onBeforeDeleteChildSession;
+          releaseAnnounce = resolve;
+        }),
+    );
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      persistOrThrow,
+      runSubagentAnnounceFlow,
+    });
+
+    await completeRun(controller, entry, {
+      triggerCleanup: true,
+      terminalReply: { disposition: "visible", text: "final completion reply" },
+    });
+    await waitForLifecycleState(() => expect(beforeDelete).toBeTypeOf("function"));
+    persistOrThrow.mockImplementationOnce(() => {
+      throw new Error("registry store boom");
+    });
+
+    expect(() => beforeDelete?.()).toThrow("registry store boom");
+    expect(entry.deleteCleanupDispatchedAt).toBeUndefined();
+    expect(entry.delivery?.payload).toBeUndefined();
+
+    releaseAnnounce?.("delivered");
+    await waitForLifecycleState(() => expect(runs.has(entry.runId)).toBe(false));
+  });
+
   it("discards completion capture when an authoritative yield arrives during the await", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: false });
     let finishCapture: ((result: string) => void) | undefined;
@@ -4768,10 +4881,12 @@ describe("requester settle wake trigger", () => {
         return "intentional_non_delivery" as const;
       },
     );
+    let pendingDescendantRuns = 0;
     const controller = createLifecycleController({
       entry,
       maybeWakeRequesterAfterAllChildrenSettled,
       runSubagentAnnounceFlow,
+      countPendingDescendantRuns: () => pendingDescendantRuns,
     });
 
     await completeRun(controller, entry, {
@@ -4801,6 +4916,30 @@ describe("requester settle wake trigger", () => {
     expect(taskExecutorMocks.completeTaskRunByRunId).toHaveBeenCalledWith(
       expect.objectContaining({ terminalOutcome: "blocked" }),
     );
+    expect(entry.suppressCompletionDelivery).toBe(true);
+
+    entry.cleanupCompletedAt = undefined;
+    entry.cleanupHandled = false;
+    entry.wakeOnDescendantSettle = true;
+    vi.mocked(runSubagentAnnounceFlow).mockClear();
+    taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockClear();
+
+    pendingDescendantRuns = 1;
+    expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(entry.suppressCompletionDelivery).toBe(true);
+    expect(entry.wakeOnDescendantSettle).toBe(true);
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+
+    pendingDescendantRuns = 0;
+    expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toEqual(expect.any(Number)));
+
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(entry.suppressCompletionDelivery).toBeUndefined();
+    expect(entry.wakeOnDescendantSettle).toBeUndefined();
+    expect(entry.requesterSettleWake).toBeUndefined();
+    expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
   });
 
   it("retains a delete-mode child after no-wake until its requester turn settles", async () => {

@@ -32,7 +32,10 @@ import type { GetReplyOptions, ReplyPayload } from "../../auto-reply/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { registerAgentHarness } from "../harness/registry.js";
-import { withPreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
+import {
+  getPreparedModelRuntimeBorrowedSnapshot,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -534,7 +537,7 @@ describe("prepared harness source delivery", () => {
     );
   });
 
-  it("completes an admitted turn on its generation after a plugin-runtime replacement", async () => {
+  it("completes an admitted turn on A after plugin-runtime generation B publishes", async () => {
     const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
     const config = {};
     const workspaceDir = "/tmp/workspace";
@@ -560,28 +563,37 @@ describe("prepared harness source delivery", () => {
       policyHash: "replacement",
       workspaceDir,
     };
+    const admittedSnapshot = {
+      ...baseLease.snapshot,
+      config,
+      workspaceDir,
+      pluginRegistry,
+      metadataSnapshot: admittedMetadataSnapshot,
+    } as NonNullable<ReturnType<typeof getPreparedModelRuntimeBorrowedSnapshot>>;
+    let publishedMetadataSnapshot = admittedMetadataSnapshot;
     const release = vi.fn();
     let servedMetadataSnapshot: unknown;
+    let publishedMetadataAtAcquire: unknown;
     mockedAcquireAgentRunPreparedModelRuntime.mockClear();
     mockedAcquireAgentRunPreparedModelRuntime.mockImplementationOnce(
       async (
         _input,
         options?: {
-          pluginGeneration?: { pluginMetadataSnapshot: typeof admittedMetadataSnapshot };
+          pluginGeneration?: PreparedModelRuntimePluginGeneration;
         },
       ) => {
-        const metadataSnapshot =
-          options?.pluginGeneration?.pluginMetadataSnapshot ?? replacementMetadataSnapshot;
-        servedMetadataSnapshot = metadataSnapshot;
+        const generation = options?.pluginGeneration;
+        const borrowed = generation
+          ? getPreparedModelRuntimeBorrowedSnapshot(generation)
+          : undefined;
+        if (!borrowed) {
+          throw new Error("prepared model runtime plugin generation was superseded");
+        }
+        publishedMetadataAtAcquire = publishedMetadataSnapshot;
+        servedMetadataSnapshot = borrowed.metadataSnapshot;
         return {
           ...baseLease,
-          snapshot: {
-            ...baseLease.snapshot,
-            config,
-            workspaceDir,
-            pluginRegistry,
-            metadataSnapshot,
-          },
+          snapshot: borrowed as typeof baseLease.snapshot,
           release,
         };
       },
@@ -589,6 +601,7 @@ describe("prepared harness source delivery", () => {
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["ok"] }));
     useOpenAIPlatformAuthFixture();
+    publishedMetadataSnapshot = replacementMetadataSnapshot;
 
     const result = await withPreparedModelRuntimePluginGenerationScope(
       admittedGeneration,
@@ -601,12 +614,14 @@ describe("prepared harness source delivery", () => {
           runId: "admitted-generation-replacement",
           sessionKey: undefined,
         }),
+      () => admittedSnapshot,
     );
 
     expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
       expect.objectContaining({ config, workspaceDir }),
       expect.objectContaining({ pluginGeneration: admittedGeneration }),
     );
+    expect(publishedMetadataAtAcquire).toBe(replacementMetadataSnapshot);
     expect(servedMetadataSnapshot).toBe(admittedGeneration.pluginMetadataSnapshot);
     expect(result.payloads).toEqual([{ text: "ok" }]);
     expect(release).toHaveBeenCalledOnce();
@@ -651,6 +666,7 @@ describe("prepared harness source delivery", () => {
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["ok"] }));
     useOpenAIPlatformAuthFixture();
+    const abortSignal = new AbortController().signal;
 
     const isolatedProbeParams: RunEmbeddedAgentInternalParams = {
       ...overflowBaseRunParams,
@@ -662,6 +678,7 @@ describe("prepared harness source delivery", () => {
       preparedModelRuntimeMode: "isolated-read-only",
       runId: "isolated-probe-generation",
       sessionKey: undefined,
+      abortSignal,
       workspaceDir,
     };
     const result = await withPreparedModelRuntimePluginGenerationScope(
@@ -671,6 +688,7 @@ describe("prepared harness source delivery", () => {
 
     expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
       expect.objectContaining({ config, loadRuntimePlugins: true, workspaceDir }),
+      abortSignal,
     );
     expect(result.payloads).toEqual([{ text: "ok" }]);
     expect(release).toHaveBeenCalledOnce();

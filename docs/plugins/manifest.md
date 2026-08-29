@@ -516,6 +516,8 @@ The manifest row is the canonical help text. Register the same command at runtim
 
 Use `commandAliases` when a plugin owns a runtime command name that users may mistakenly put in `plugins.allow` or try to run as a root CLI command. OpenClaw uses this metadata for diagnostics without importing plugin runtime code.
 
+If a plugin fails to load, invoking its declared `runtime-slash` command in chat returns the plugin name, a short failure reason, and recovery guidance (`openclaw doctor` and gateway logs). Unknown commands and commands belonging to intentionally disabled plugins keep their normal handling; manifest ownership alone does not make a command executable.
+
 ```json
 {
   "commandAliases": [
@@ -853,6 +855,8 @@ Each `dangerousFlags` entry supports:
 | `bundledDefaultEnabled` | No       | `boolean`  | Override bundled-plugin default enablement when deciding whether this SecretRef surface is active. Use this when the plugin is bundled but the surface should stay inactive until explicitly enabled in config.                                                                                                                                            |
 | `paths`                 | Yes      | `object[]` | Secret-shaped config paths, each with `path` (dot-separated, relative to `plugins.entries.<id>.config`, supports `*` wildcards), optional `expected` (currently only `"string"`), and optional `ownerKind` (currently only `"route"`). A declared owner isolates only that exact matched path when resolution fails; its owner id is the full config path. |
 
+For plugins declaring `secretInputs`, `configSchema` validates the pre-resolution source config paired with the runtime config. A valid SecretRef is not rejected because its resolved credential is a string with a different shape. Invalid plaintext source values still fail validation. Runtime loading, CLI registration, and root command discovery use the same rule; plugins receive resolved values with defaults selected from the source config, without changing either input.
+
 Concrete paths preserve literal record keys and array indices: `headers["X.Trace"]` remains distinct from `headers.X.Trace`, and record key `["0"]` remains distinct from array index `[0]`. Plugin IDs containing dots are quoted the same way, such as `plugins.entries["example.plugin"].config.headers["X.Trace"]`.
 
 ## mediaUnderstandingProviderMetadata reference
@@ -1122,6 +1126,8 @@ Suppression fields:
 `upstreamModel` marks a row that serves the same upstream model as a row in another bundled catalog under a different name, for example a subscription endpoint next to the vendor's API endpoint. It is authoring metadata: normalization drops it, and a contract test uses it to keep capability flags such as `compat.codeMode` from drifting between catalogs that ship the same model. Most rows need no marker, because matching ignores a leading vendor namespace and casing: `moonshotai/kimi-k3` and `zai-org/GLM-5.2` already match the first-party `kimi-k3` and `glm-5.2` rows. Reach for `upstreamModel` only when the vendor's own names genuinely differ. See [Code mode](/tools/code-mode#models-shipped-by-more-than-one-provider).
 
 Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `refreshable` when manifest rows are useful listable seeds or supplements but a refresh/cache can add more rows later; refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw must load provider runtime to know the list.
+
+Capabilities belong to the declared API and base URL, not only the provider/model id. When model listing enriches a cached row, it uses manifest capabilities only for a matching route; a custom endpoint must supply its own limits and capabilities.
 
 ## modelIdNormalization reference
 
@@ -1403,22 +1409,22 @@ Use `env.allOf` when every listed variable is required and `env.anyOf` when any 
 
 ## Discovery precedence (duplicate plugin ids)
 
-OpenClaw discovers plugins from three roots, checked in this order: bundled plugins shipped with OpenClaw, the global install root (`~/.openclaw/extensions`), and the current workspace root (`<workspace>/.openclaw/extensions`), plus any explicit `plugins.load.paths` entries.
+OpenClaw discovers plugins from explicit `plugins.load.paths` entries, the current workspace root (`<workspace>/.openclaw/extensions`), bundled plugins shipped with OpenClaw, and global install locations (`~/.openclaw/extensions` plus tracked install paths). Discovery order alone does not determine which copy loads.
 
-If two discoveries share the same `id`, only the **highest-precedence** manifest is kept; lower-precedence duplicates are dropped instead of loading beside it. Precedence, highest to lowest:
+If two distinct plugin roots share the same `id`, only the **highest-precedence** manifest is kept; lower-precedence duplicates are dropped instead of loading beside it. Precedence, highest to lowest:
 
-1. **Config-selected** — a path explicitly pinned in `plugins.entries.<id>`
-2. **Global install matching a tracked install record** — a plugin installed via `openclaw plugin install`/`openclaw plugin update` that OpenClaw's install tracking recognizes for that same id, even when the id also belongs to a bundled plugin
-3. **Bundled** — plugins shipped with OpenClaw
-4. **Workspace** — plugins discovered relative to the current workspace
-5. Any other discovered candidate
+1. **Config-selected** — a path explicitly selected in `plugins.load.paths`
+2. **Development-source bundled** — a bundled plugin inside the checkout selected by `OPENCLAW_DEV_SOURCE_ROOT`
+3. **Global install matching a tracked install record** — an installed global candidate whose path matches its install record, managed by `openclaw plugins install`/`openclaw plugins update`
+4. **Bundled** — other plugins shipped with OpenClaw
+5. **Workspace** — plugins discovered relative to the current workspace
+6. **Untracked global** — other plugins discovered in the global root
 
 Implications:
 
-- A forked or stale copy of a bundled plugin sitting untracked in the workspace or global root will not shadow the bundled build.
-- To override a bundled plugin, either run `openclaw plugin install` for that id so the tracked global install outranks the bundled copy, or pin a specific path via `plugins.entries.<id>` so it wins by config-selected precedence.
-- Duplicate drops are logged so Doctor and startup diagnostics can point at the discarded copy.
-- Config-selected duplicate overrides are worded as explicit overrides in diagnostics, but still warn so stale forks and accidental shadows stay visible.
+- An auto-discovered workspace or untracked global copy will not shadow a bundled plugin, even when its id is enabled or allowlisted. `plugins.allow` and `plugins.entries.<id>.enabled` control load permission, not source selection.
+- To override a bundled plugin intentionally, select its path via `plugins.load.paths`. A tracked global install can also override an ordinary bundled copy, but not a development-source bundled copy.
+- Duplicate warnings identify the discarded copy and selected source, with config-selected winners labeled as explicit overrides. Intentional tracked-install overrides of ordinary bundled copies do not emit duplicate warnings.
 
 ## JSON Schema requirements
 

@@ -141,6 +141,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           ...sessionPromptState.sessionWriterFence,
         }
       : undefined;
+  await sessionPromptState.settleOwnedTranscriptProjection(
+    resolvedSessionTarget,
+    params.abortSignal,
+  );
   const trajectorySessionFile = resolvedSessionTarget?.sessionKey ?? sessionPromptState.sessionFile;
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
@@ -222,6 +226,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   });
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
     params,
+    runStartedAtMs: runInput.startedAtMs,
     transcriptOwnership: params.sessionManager
       ? { kind: "caller-owned", sessionManager: params.sessionManager }
       : { kind: "runtime-target", sessionTarget: resolvedSessionTarget },

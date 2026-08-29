@@ -118,6 +118,62 @@ async function resolveTerminalText(overrides: TerminalInputOverrides): Promise<s
 }
 
 describe("terminal resolution", () => {
+  it.each(["empty", "reasoning"])(
+    "preserves a failed harness turn instead of retrying its %s output",
+    async (output) => {
+      const error = new Error("Authentication failed with provider (HTTP 401)");
+      const assistant =
+        output === "reasoning"
+          ? buildEmbeddedRunnerAssistant({ content: [{ type: "thinking", thinking: "checking" }] })
+          : undefined;
+      const attempt = makeEmbeddedRunnerAttempt({
+        terminal: { kind: "failed", source: "prompt", error },
+        assistantTexts: [],
+        currentAttemptAssistant: assistant,
+        lastAssistant: assistant,
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: false },
+      });
+      const input = makeTerminalInput({ attempt });
+
+      const resolved = await resolveEmbeddedRunTerminal(input);
+
+      expect(resolved).toMatchObject({
+        action: "complete",
+        result: { meta: { error: { message: error.message, fallbackSafe: false } } },
+      });
+      expect(input.activateInternalPrompt).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["openai:selected", undefined])(
+    "reports the successful profile %s privately for command maintenance",
+    async (authProfileId) => {
+      const text = "The turn completed.";
+      const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: [text],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+      });
+      const onSuccessfulAuthProfile = vi.fn();
+      const resolved = await resolveEmbeddedRunTerminal(
+        makeTerminalInput({
+          attempt,
+          attemptAssistant: assistant,
+          payloadsWithToolMedia: [{ text }],
+          authProfileId,
+          runParams: { authProfileStateMode: "read-only", onSuccessfulAuthProfile },
+        }),
+      );
+
+      expect(resolved.action).toBe("complete");
+      expect(onSuccessfulAuthProfile).toHaveBeenCalledExactlyOnceWith(authProfileId);
+      if (resolved.action === "complete") {
+        expect(resolved.result.meta.agentMeta).not.toHaveProperty("authProfileId");
+      }
+    },
+  );
+
   it.each([
     {
       reason: "auth" as const,
@@ -660,6 +716,60 @@ describe("terminal resolution", () => {
         settledTurnFinalizationAvailable: true,
       }),
     ).toBeNull();
+  });
+
+  it("keeps explicit silence terminal only for reply-optional settled turns", () => {
+    const toolUseAssistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool-1", name: "write", arguments: {} }],
+    });
+    const silentAssistant = buildEmbeddedRunnerAssistant({
+      stopReason: "stop",
+      content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [SILENT_REPLY_TOKEN],
+      toolMetas: [{ toolName: "write", toolCallId: "tool-1", replaySafe: false }],
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      messagesSnapshot: [
+        { role: "user", content: [{ type: "text", text: "[OpenClaw heartbeat poll]" }] },
+        toolUseAssistant,
+        { role: "toolResult", toolCallId: "tool-1", toolName: "write", isError: false },
+        silentAssistant,
+      ] as never,
+      lastAssistant: silentAssistant,
+      currentAttemptAssistant: silentAssistant,
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+
+    const request = (runParams: {
+      trigger: "heartbeat" | "user";
+      terminalReplyExpectation?: "required";
+    }) =>
+      resolveSettledTurnFinalizationRequest({
+        runParams: {
+          sessionId: "session:settled-silent",
+          runId: "run:settled-silent",
+          ...runParams,
+        } as never,
+        attempt,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        modelApi: "openai-responses",
+        executionContract: undefined,
+        payloadsWithToolMedia: [],
+        hasTerminalToolPresentation: false,
+        terminalState: resolveEmbeddedRunAttemptTerminalState({
+          attempt,
+          assistant: silentAssistant,
+        }),
+        settledTurnFinalizationAvailable: true,
+      });
+
+    expect(request({ trigger: "heartbeat" })).toBeNull();
+    expect(request({ trigger: "user", terminalReplyExpectation: "required" })).toBe(
+      SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+    );
   });
 
   it("requires an available finalizer and no visible structured error", () => {

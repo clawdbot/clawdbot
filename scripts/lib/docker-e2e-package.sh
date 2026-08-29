@@ -177,8 +177,10 @@ docker_e2e_prepare_package_tgz() {
   local pack_dir
   pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-docker-e2e-pack.XXXXXX")"
   local pack_status=0
+  # ROOT_DIR can be a frozen candidate; resolve tooling beside this helper.
   package_tgz="$(
-    node "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" \
+    node "$DOCKER_E2E_PACKAGE_LIB_DIR/../package-openclaw-for-docker.mjs" \
+      --source-dir "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" \
       --allow-unreleased-changelog \
       --output-dir "$pack_dir" \
       --output-name openclaw-current.tgz
@@ -274,6 +276,7 @@ docker_e2e_harness_mount_args() {
     -v "$harness_root/tsconfig.json:/app/tsconfig.json:ro"
     -v "$harness_root/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"
     -v "$harness_root/test/helpers:/app/test/helpers:ro"
+    -v "$harness_root/scripts/prepublish-plugin-registry-artifact.mjs:/app/scripts/prepublish-plugin-registry-artifact.mjs:ro"
     -v "$harness_root/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"
   )
 }

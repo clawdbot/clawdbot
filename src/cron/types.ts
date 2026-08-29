@@ -1,6 +1,7 @@
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
+import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
@@ -8,10 +9,16 @@ import type { CronRuntimeAuthority } from "./runtime-authority.js";
 import type {
   CronScheduledToolCallerOrigin,
   CronScheduledToolPolicy,
+  CronToolsAllowExecTarget,
+  CronToolsAllowExecTargetRequirement,
 } from "./scheduled-tool-policy.js";
 import type { CronJobBase, CronPacing } from "./types-shared.js";
 
 export type { CronPacing } from "./types-shared.js";
+export type {
+  CronToolsAllowExecTarget,
+  CronToolsAllowExecTargetRequirement,
+} from "./scheduled-tool-policy.js";
 export type { CronCompletionStatus } from "./completion-status.js";
 
 /** Supported schedule forms persisted in cron job specs. */
@@ -156,6 +163,7 @@ export type CronResolvedDeliveryState = {
   delivered?: boolean;
   status: CronDeliveryStatus;
   error?: string;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
   failureNotification: CronFailureNotificationDelivery;
 };
 
@@ -464,6 +472,8 @@ export type CronJobState = {
   lastDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error text when available. */
   lastDeliveryError?: string;
+  /** Intentional non-delivery reason for the last run, when recorded by the dispatcher. */
+  deliverySuppressionReason?: NormalizeReplySkipReason;
   /** Whether the last run's output was delivered to the target channel. */
   lastDelivered?: boolean;
   /** Whether the last failed run's failure notification was delivered to the target channel. */
@@ -474,7 +484,7 @@ export type CronJobState = {
   lastFailureNotificationDeliveryError?: string;
 };
 
-export type CronTrigger = {
+type CronTrigger = {
   script: string;
   once?: boolean;
 };
@@ -537,6 +547,9 @@ export type CronStoredJob = CronJob & {
   /** Immutable creator provenance stamped by the trusted cron creation seam. */
   createdActor?: SessionCreatedActor;
   toolsAllowProvenance?: CronToolsAllowProvenance;
+  toolsAllowExecTarget?: CronToolsAllowExecTarget;
+  /** Exact expected pin for jobs created from a verified host-owned exec projection. */
+  toolsAllowExecTargetRequirement?: CronToolsAllowExecTargetRequirement;
   /** Runtime-private authority omitted from public Gateway and wire contracts. */
   runtimeAuthority?: CronRuntimeAuthority;
   /** Authority was explicitly cleared and must be reauthorized before app reuse. */

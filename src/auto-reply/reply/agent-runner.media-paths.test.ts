@@ -137,6 +137,7 @@ vi.mock("../../agents/embedded-agent.js", () => ({
 }));
 
 vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
+  clearActiveEmbeddedRun: vi.fn(),
   formatEmbeddedAgentQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
     outcome.reason && outcome.sessionId
       ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`
@@ -261,7 +262,7 @@ vi.mock("./agent-runner-memory.js", () => ({
     sessionEntry,
     outcome: "skipped",
   }),
-  runPreflightCompactionIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) =>
+  runSessionCompactionIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) =>
     sessionEntry,
 }));
 
@@ -742,6 +743,8 @@ describe("runReplyAgent media path normalization", () => {
       text: "here is the chart",
       mediaUrl: "/tmp/outbound-media/1-chart.png",
       mediaUrls: ["/tmp/outbound-media/1-chart.png"],
+      attachments: [{ name: "chart.png", mimeType: "image/png", trustedLocalMedia: true }],
+      trustedLocalMedia: true,
     });
     expect(finalPayload).toEqual(blockPayload);
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);

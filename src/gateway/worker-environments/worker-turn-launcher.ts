@@ -2,11 +2,10 @@ import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { mapThinkingLevelForProvider } from "../../agents/embedded-agent-runner/utils.js";
 import type { SandboxContext } from "../../agents/sandbox/types.js";
-import {
-  withSessionPlacementForcedTerminalSettlement,
-  type LocalTurnPlacementClaim,
-  type SessionPlacementAdmissionProvider,
-  type SessionPlacementTurnParams,
+import type {
+  LocalTurnPlacementClaim,
+  SessionPlacementAdmissionProvider,
+  SessionPlacementTurnParams,
 } from "../../agents/session-placement-admission.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -32,6 +31,7 @@ import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunne
 import { resolveWorkerBrowserLaunchPlan } from "./worker-browser-launch-plan.js";
 import {
   claimWorkerTurn,
+  executeLocalTurn,
   rejectPendingWorkerResult,
   releaseClaimIfOwned,
   requireActivePlacement,
@@ -64,6 +64,12 @@ import {
 } from "./workspace-result-finalize.js";
 
 type ReclaimedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
+type ActiveWorkerTurn = {
+  claim: WorkerSessionTurnClaim;
+  sessionKey: string;
+  signal?: AbortSignal;
+  recoverTerminal?: () => string | undefined;
+};
 
 type WorkerTurnLauncherOptions = {
   environments: WorkerTurnEnvironmentService;
@@ -76,31 +82,10 @@ type WorkerTurnLauncherOptions = {
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 };
 
-async function executeLocalTurn<T>(params: {
-  claim: LocalTurnPlacementClaim;
-  placements: WorkerSessionPlacementStore;
-  runLocal: () => Promise<T>;
-}): Promise<T> {
-  const current = params.placements.get(params.claim.sessionId);
-  const turnClaim = params.placements.claimTurn({
-    ...resolvePlacementIdentity(params.claim, current),
-    claimId: randomUUID(),
-    runId: params.claim.runId,
-    owner: { kind: "local" },
-  });
-  // Forced terminalization and ordinary completion share this exact-claim closure.
-  // Replacement fencing makes a late finally harmless after recovery settles it.
-  const settle = () => releaseClaimIfOwned(params.placements, turnClaim);
-  try {
-    return await withSessionPlacementForcedTerminalSettlement(settle, params.runLocal);
-  } finally {
-    await settle();
-  }
-}
-
 async function executeWorkerTurn(params: {
   environments: WorkerTurnEnvironmentService;
   onHandoff: () => void;
+  onTerminal: () => void;
   placement: ActiveWorkerPlacement;
   placements: WorkerSessionPlacementStore;
   reconcileActivePlacement: (environmentId: string) => Promise<void>;
@@ -207,12 +192,20 @@ async function executeWorkerTurn(params: {
     ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
     timeoutMs: turn.timeoutMs,
   });
+  const portalAvailable =
+    Boolean(environment.nodeDeviceId) &&
+    environment.sshEndpoint === null &&
+    (await params.environments.supportsNodePortal?.(
+      placement.environmentId,
+      placement.activeOwnerEpoch,
+    )) === true;
   const reasoning = mapThinkingLevelForProvider(turn.thinkLevel);
   const { browser, toolAuthority } = resolveWorkerBrowserLaunchPlan({
     desktop: environment.desktop,
     modelRef,
     turn,
     githubPublicationAvailable,
+    portalAvailable,
   });
   params.placements.authorizeWorkerTurnTools(params.turnClaim, toolAuthority.allowedToolNames);
   const { operationalRunInstance, runtimeIdentity } = await prepareWorkerAgentRuntimeIdentity({
@@ -310,12 +303,18 @@ async function executeWorkerTurn(params: {
     plan,
     turnClaim: params.turnClaim,
     timeoutMs: turn.timeoutMs,
+    credentialExpiresAtMs: credential.expiresAtMs,
     signal: turn.abortSignal
       ? AbortSignal.any([turn.abortSignal, handoffAbort.signal])
       : handoffAbort.signal,
     onDispatchReady,
   });
   const processResult = await processPromise;
+  // Node launches return only after the exact launch journal receipt is terminal,
+  // including any admission re-arms. Transport failures never reach this fact.
+  if (environment.nodeDeviceId && environment.sshEndpoint === null) {
+    params.onTerminal();
+  }
   if (handoffError) {
     throw handoffError;
   }
@@ -418,10 +417,7 @@ async function executeWorkerTurn(params: {
 }
 
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
-  const activeWorkerTurns = new Map<
-    string,
-    { claim: WorkerSessionTurnClaim; signal: AbortSignal }
-  >();
+  const activeWorkerTurns = new Map<string, ActiveWorkerTurn>();
   const provider: SessionPlacementAdmissionProvider & {
     resolveSandbox(params: {
       agentId: string;
@@ -431,6 +427,12 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       workspaceDir: string;
     }): Promise<SandboxContext | null>;
   } = {
+    recoverTerminalTurn(session) {
+      const active = activeWorkerTurns.get(session.sessionId);
+      return active && (!session.sessionKey || active.sessionKey === session.sessionKey)
+        ? active.recoverTerminal?.()
+        : undefined;
+    },
     async resolveSandbox(params) {
       const placement = options.placements.get(params.sessionId);
       if (
@@ -568,7 +570,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           isCancellationRequested: (activeClaim) => {
             const active = activeWorkerTurns.get(activeClaim.sessionId);
             return Boolean(
-              active?.signal.aborted && sameWorkerSessionTurnClaim(active.claim, activeClaim),
+              active?.signal?.aborted && sameWorkerSessionTurnClaim(active.claim, activeClaim),
             );
           },
           ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
@@ -576,14 +578,14 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         placement = admitted.placement;
         turnClaim = admitted.turnClaim;
       }
-      const activeWorkerTurn =
-        !remoteExec && turn.abortSignal
-          ? { claim: turnClaim, signal: turn.abortSignal }
-          : undefined;
+      const activeWorkerTurn: ActiveWorkerTurn | undefined = !remoteExec
+        ? { claim: turnClaim, sessionKey: placement.sessionKey, signal: turn.abortSignal }
+        : undefined;
       if (activeWorkerTurn) {
         activeWorkerTurns.set(turnClaim.sessionId, activeWorkerTurn);
       }
       let handedOff = false;
+      let terminalAtMs: number | undefined;
       try {
         // Release queue protection only after the placement claim is durable.
         onAdmitted?.();
@@ -591,6 +593,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           environments: options.environments,
           onHandoff: () => {
             handedOff = true;
+          },
+          onTerminal: () => {
+            terminalAtMs = Date.now();
           },
           placement,
           placements: options.placements,
@@ -690,6 +695,16 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             placement,
             turnClaim,
             error,
+            ...(activeWorkerTurn && terminalAtMs !== undefined
+              ? {
+                  terminal: {
+                    observedAtMs: terminalAtMs,
+                    registerRecovery: (recover: () => string | undefined) => {
+                      activeWorkerTurn.recoverTerminal = recover;
+                    },
+                  },
+                }
+              : {}),
           });
         } else {
           await releaseClaimIfOwned(options.placements, turnClaim);

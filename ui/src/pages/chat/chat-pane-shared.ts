@@ -1,13 +1,12 @@
 import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/index.js";
-import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
 import { clampText } from "../../lib/format.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
@@ -16,6 +15,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };
 export type PaneSessionHandoff = {
+  goalMode?: ChatGoalDraftMode;
   attachments: ChatAttachment[];
   composerFallbacks?: ChatPageHost["chatComposerFallbackByScope"];
   draft: string;
@@ -29,7 +29,7 @@ type PendingPaneSessionHandoff = PaneSessionHandoff & { expiresAt: number; sessi
 const PANE_SESSION_HANDOFF_TTL_MS = 30_000;
 const PANE_SESSION_HANDOFF_LIMIT = 4;
 const paneSessionHandoffs = new WeakMap<
-  ApplicationContext,
+  ApplicationContext<RouteId>,
   Map<string, PendingPaneSessionHandoff[]>
 >();
 
@@ -41,6 +41,17 @@ function discardPaneSessionHandoff(handoff: PendingPaneSessionHandoff): void {
     ...handoff.attachments,
     ...Object.values(handoff.composerFallbacks ?? {}).flatMap((fallback) => fallback.attachments),
   ]);
+}
+
+function removePaneSessionHandoffs(
+  pending: PendingPaneSessionHandoff[] | undefined,
+  matches: (handoff: PendingPaneSessionHandoff) => boolean,
+): void {
+  for (let index = (pending?.length ?? 0) - 1; index >= 0; index -= 1) {
+    if (matches(pending![index]!)) {
+      discardPaneSessionHandoff(pending!.splice(index, 1)[0]!);
+    }
+  }
 }
 
 function paneHandoffs(
@@ -60,12 +71,7 @@ function paneHandoffs(
   }
   if (pending) {
     const now = Date.now();
-    for (let index = pending.length - 1; index >= 0; index -= 1) {
-      if (pending[index]!.expiresAt <= now) {
-        discardPaneSessionHandoff(pending[index]!);
-        pending.splice(index, 1);
-      }
-    }
+    removePaneSessionHandoffs(pending, (handoff) => handoff.expiresAt <= now);
   }
   return pending;
 }
@@ -77,13 +83,9 @@ export function preparePaneSessionHandoff(
   handoff: PaneSessionHandoff,
 ): void {
   const pending = paneHandoffs(context, paneId, true)!;
-  const existing = pending.findIndex((candidate) =>
+  removePaneSessionHandoffs(pending, (candidate) =>
     areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
   );
-  if (existing >= 0) {
-    discardPaneSessionHandoff(pending[existing]!);
-    pending.splice(existing, 1);
-  }
   const stored = {
     sessionKey,
     ...handoff,
@@ -120,12 +122,23 @@ export function clearPaneSessionHandoff(
   paneId: string,
   sessionKey: string,
 ): void {
-  const pending = paneHandoffs(context, paneId, false);
-  for (let index = (pending?.length ?? 0) - 1; index >= 0; index -= 1) {
-    if (areUiSessionKeysEquivalent(pending![index]!.sessionKey, sessionKey)) {
-      discardPaneSessionHandoff(pending![index]!);
-      pending?.splice(index, 1);
-    }
+  removePaneSessionHandoffs(paneHandoffs(context, paneId, false), (handoff) =>
+    areUiSessionKeysEquivalent(handoff.sessionKey, sessionKey),
+  );
+}
+
+export function retireSessionPaneHandoffs(
+  context: ApplicationContext<RouteId>,
+  targets: readonly { key: string; retireBeforeRevision: number }[],
+): void {
+  for (const pending of paneSessionHandoffs.get(context)?.values() ?? []) {
+    removePaneSessionHandoffs(pending, (handoff) =>
+      targets.some(
+        ({ key, retireBeforeRevision }) =>
+          areUiSessionKeysEquivalent(handoff.sessionKey, key) &&
+          handoff.expiresAt - PANE_SESSION_HANDOFF_TTL_MS < retireBeforeRevision,
+      ),
+    );
   }
 }
 
@@ -233,7 +246,7 @@ export type ChatPaneConnectionScope = {
   sessions: ChatPageContext["sessions"];
 };
 export const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open], details.msg-meta[open]:not([data-preview])";
+  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 export const CHAT_AUTOTYPE_EXEMPT_SELECTOR =
   "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox'], [data-chat-autotype-exempt]";
@@ -246,22 +259,6 @@ export const NEW_SESSION_LIST_LOADING_MESSAGE =
   "Session list is still refreshing. Try New Chat again in a moment.";
 export const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
-
-export function summarizeSessionPullRequests(
-  pullRequests: readonly ControlUiSessionPullRequest[],
-  previous?: SessionCatalogPullRequestSummary,
-): SessionCatalogPullRequestSummary | undefined {
-  const current = pullRequests[0];
-  if (!current) {
-    return undefined;
-  }
-  const numbers = [...new Set(pullRequests.map((pullRequest) => pullRequest.number))]
-    .slice(0, 20)
-    .toSorted((left, right) => left - right);
-  return previous?.state === current.state && previous.numbers.join(",") === numbers.join(",")
-    ? previous
-    : { numbers, state: current.state };
-}
 
 export function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boolean {
   return event

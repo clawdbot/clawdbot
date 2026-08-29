@@ -1,5 +1,6 @@
 // Upgrade Survivor Assertions tests cover upgrade survivor assertions script behavior.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +12,142 @@ const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
+
+const RECOVERABLE_UPDATE = {
+  status: "error",
+  mode: "npm",
+  reason: "post-update-plugins",
+  after: { version: "2026.8.1" },
+  steps: [
+    { name: "global update", exitCode: 0 },
+    { name: "global install swap", exitCode: 0 },
+    { name: "openclaw doctor", exitCode: 0 },
+  ],
+  postUpdate: {
+    plugins: {
+      status: "error",
+      reason: "post-plugin-doctor-invalid-config",
+      warnings: [{ reason: 'Plugin "discord" requires capability consent.' }],
+      sync: { errors: [] },
+      npm: { outcomes: [] },
+      integrityDrifts: [],
+    },
+  },
+};
+
+function runJsonAssertion(command: string, value: unknown, ...args: string[]) {
+  return runJsonTextAssertion(command, `${JSON.stringify(value, null, 2)}\n`, ...args);
+}
+
+function runJsonTextAssertion(command: string, contents: string, ...args: string[]) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-json-"));
+  const file = join(root, "result.json");
+  writeFileSync(file, contents);
+  const result = spawnSync(process.execPath, [ASSERTIONS_PATH, command, file, ...args], {
+    encoding: "utf8",
+  });
+  rmSync(root, { force: true, recursive: true });
+  return result;
+}
+
+function runPrefixedJsonAssertion(command: string, value: unknown, ...args: string[]) {
+  return runJsonTextAssertion(
+    command,
+    `Stopped legacy service before update\n${JSON.stringify(value)}\n`,
+    ...args,
+  );
+}
+
+function withPluginResult(patch: Record<string, unknown>) {
+  return {
+    ...RECOVERABLE_UPDATE,
+    postUpdate: { plugins: { ...RECOVERABLE_UPDATE.postUpdate.plugins, ...patch } },
+  };
+}
+
+describe("upgrade recovery result assertions", () => {
+  it("accepts clean updates for baselines that already have consent", () => {
+    const result = {
+      status: "ok",
+      after: { version: "2026.8.1" },
+      steps: [{ name: "global update", exitCode: 0 }],
+    };
+    expect(runJsonAssertion("assert-successful-update-json", result, "2026.8.1").status).toBe(0);
+    expect(
+      runJsonAssertion(
+        "assert-successful-update-json",
+        {
+          ...result,
+          steps: [{ name: "global update", exitCode: 1 }],
+        },
+        "2026.8.1",
+      ).status,
+    ).not.toBe(0);
+    expect(
+      runPrefixedJsonAssertion("assert-successful-update-json", result, "2026.8.1").status,
+    ).toBe(0);
+  });
+
+  it("accepts only a completed core swap stranded on capability consent", () => {
+    expect(
+      runPrefixedJsonAssertion("assert-recoverable-update-json", RECOVERABLE_UPDATE, "2026.8.1")
+        .status,
+    ).toBe(0);
+    const consentError = 'Plugin "discord" requires capability consent.';
+    const consentOutcome = {
+      pluginId: "discord",
+      status: "error",
+      code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+    };
+    const validResults = [
+      RECOVERABLE_UPDATE,
+      withPluginResult({ warnings: [], sync: { errors: [consentError] } }),
+      withPluginResult({ warnings: [], npm: { outcomes: [consentOutcome] } }),
+    ];
+    for (const value of validResults) {
+      expect(runJsonAssertion("assert-recoverable-update-json", value, "2026.8.1").status).toBe(0);
+    }
+
+    const invalidResults = [
+      { ...RECOVERABLE_UPDATE, reason: "global-update-failed" },
+      { ...RECOVERABLE_UPDATE, after: { version: "2026.7.1-2" } },
+      {
+        ...RECOVERABLE_UPDATE,
+        steps: RECOVERABLE_UPDATE.steps.map((step, index) =>
+          index === 0 ? { ...step, exitCode: 1 } : step,
+        ),
+      },
+      { ...RECOVERABLE_UPDATE, postUpdate: { plugins: { reason: "registry-timeout" } } },
+      withPluginResult({ sync: { errors: [consentError, "registry unavailable"] } }),
+      withPluginResult({ npm: { outcomes: [{ status: "error", code: "EIO" }] } }),
+      withPluginResult({ integrityDrifts: [{ pluginId: "discord" }] }),
+      ...["sync", "npm", "integrityDrifts"].map((field) =>
+        withPluginResult({ [field]: undefined }),
+      ),
+    ];
+    for (const value of invalidResults) {
+      expect(runJsonAssertion("assert-recoverable-update-json", value, "2026.8.1").status).not.toBe(
+        0,
+      );
+    }
+  });
+
+  it("requires repair to finish doctor and plugin convergence without restart", () => {
+    const repaired = {
+      status: "ok",
+      mode: "finalize",
+      restart: false,
+      postUpdate: { doctor: { status: "ok" }, plugins: { status: "ok" } },
+    };
+    expect(runJsonAssertion("assert-repair-json", repaired).status).toBe(0);
+    expect(
+      runJsonAssertion("assert-repair-json", {
+        ...repaired,
+        postUpdate: { ...repaired.postUpdate, plugins: { status: "warning" } },
+      }).status,
+    ).not.toBe(0);
+  });
+});
 
 function writeMigratedSessionState(stateDir: string): void {
   const agentSessionsDir = join(stateDir, "agents", "main", "sessions");
@@ -268,6 +405,7 @@ function assertConfig(params: {
   acceptedIntents: string[];
   config: unknown;
   scenario: string;
+  stage?: "baseline" | "survival";
 }): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-config-"));
   try {
@@ -285,9 +423,133 @@ function assertConfig(params: {
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: params.scenario,
+        OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: params.stage ?? "survival",
       },
       stdio: "pipe",
     });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
+const ACCEPTED_SURFACE = {
+  channels: [],
+  providers: [],
+  tools: [],
+  contracts: [],
+  hooks: [],
+  mcpServers: [],
+  cliCommands: [],
+  cliBackends: [],
+  skills: [],
+  dangerousConfigFlags: [],
+};
+
+function acceptedSurfaceHash(): string {
+  return createHash("sha256").update(JSON.stringify(ACCEPTED_SURFACE)).digest("hex");
+}
+
+function assertCompanionPluginRecords(
+  mutate?: (
+    records: Record<string, Record<string, unknown>>,
+    installPaths: Record<"codex" | "discord" | "whatsapp", string>,
+  ) => void,
+  capabilityConsentSupported = true,
+): void {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-companions-"));
+  try {
+    const stateDir = join(root, "state");
+    const version = "2026.8.1";
+    const discordInstallPath = join(
+      stateDir,
+      "npm",
+      "projects",
+      "discord",
+      "node_modules",
+      "@openclaw",
+      "discord",
+    );
+    const codexInstallPath = join(
+      stateDir,
+      "npm",
+      "projects",
+      "codex",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    const whatsappInstallPath = join(stateDir, "extensions", "whatsapp");
+    for (const [installPath, packageName] of [
+      [discordInstallPath, "@openclaw/discord"],
+      [whatsappInstallPath, "@openclaw/whatsapp"],
+      [codexInstallPath, "@openclaw/codex"],
+    ] as const) {
+      mkdirSync(installPath, { recursive: true });
+      writeJson(join(installPath, "package.json"), { name: packageName, version });
+    }
+    const npmIntegrity = "sha512-upgrade-survivor";
+    const clawpackSha256 = "a".repeat(64);
+    const consent = (integrity: string) => ({
+      acceptedSurface: ACCEPTED_SURFACE,
+      acceptedSurfaceHash: acceptedSurfaceHash(),
+      acceptedSurfaceAt: "2026-08-27T00:00:00.000Z",
+      acceptedSurfaceIntegrity: integrity,
+    });
+    const records: Record<string, Record<string, unknown>> = {
+      discord: {
+        source: "npm",
+        spec: `@openclaw/discord@${version}`,
+        resolvedName: "@openclaw/discord",
+        resolvedVersion: version,
+        integrity: npmIntegrity,
+        installPath: discordInstallPath,
+        ...(capabilityConsentSupported ? consent(npmIntegrity) : {}),
+      },
+      whatsapp: {
+        source: "clawhub",
+        spec: `clawhub:@openclaw/whatsapp@${version}`,
+        version,
+        clawhubPackage: "@openclaw/whatsapp",
+        clawhubChannel: "official",
+        artifactKind: "npm-pack",
+        clawpackSha256,
+        installPath: whatsappInstallPath,
+        ...(capabilityConsentSupported ? consent(clawpackSha256) : {}),
+      },
+      codex: {
+        source: "npm",
+        spec: `@openclaw/codex@${version}`,
+        resolvedName: "@openclaw/codex",
+        resolvedVersion: version,
+        integrity: npmIntegrity,
+        installPath: codexInstallPath,
+        ...(capabilityConsentSupported ? consent(npmIntegrity) : {}),
+      },
+    };
+    mutate?.(records, {
+      codex: codexInstallPath,
+      discord: discordInstallPath,
+      whatsapp: whatsappInstallPath,
+    });
+    mkdirSync(join(stateDir, "plugins"), { recursive: true });
+    writeJson(join(stateDir, "plugins", "installs.json"), { installRecords: records });
+
+    execFileSync(
+      process.execPath,
+      [
+        ASSERTIONS_PATH,
+        "assert-companion-installs",
+        version,
+        capabilityConsentSupported ? "1" : "0",
+      ],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+        },
+        stdio: "pipe",
+      },
+    );
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -526,6 +788,128 @@ describe("upgrade survivor assertions", () => {
       }),
     ).not.toThrow();
   });
+
+  it("allows legacy Discord DM config only at the baseline stage", () => {
+    const legacyConfig = {
+      channels: {
+        discord: {
+          enabled: true,
+          dm: { policy: "allowlist", allowFrom: ["111111111111111111"] },
+          guilds: {
+            "222222222222222222": {
+              channels: { "333333333333333333": { requireMention: true } },
+            },
+          },
+          threadBindings: { idleHours: 72 },
+        },
+      },
+    };
+    expect(() =>
+      assertConfig({
+        acceptedIntents: ["discord-channel"],
+        config: legacyConfig,
+        scenario: "base",
+        stage: "baseline",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertConfig({
+        acceptedIntents: ["discord-channel"],
+        config: legacyConfig,
+        scenario: "base",
+      }),
+    ).toThrow(/legacy Discord DM config survived/);
+  });
+
+  it("requires canonical Discord DM config after update", () => {
+    expect(() =>
+      assertConfig({
+        acceptedIntents: ["discord-channel"],
+        config: {
+          channels: {
+            discord: {
+              enabled: true,
+              dmPolicy: "allowlist",
+              allowFrom: ["111111111111111111"],
+              guilds: {
+                "222222222222222222": {
+                  channels: { "333333333333333333": { requireMention: true } },
+                },
+              },
+              threadBindings: { idleHours: 72 },
+            },
+          },
+        },
+        scenario: "base",
+      }),
+    ).not.toThrow();
+  });
+
+  it("requires exact artifact-bound consent for direct companion installs", () => {
+    expect(() => assertCompanionPluginRecords()).not.toThrow();
+    expect(() =>
+      assertCompanionPluginRecords((records) => {
+        const discord = records.discord;
+        if (!discord) {
+          throw new Error("discord fixture missing");
+        }
+        Reflect.deleteProperty(discord, "acceptedSurfaceIntegrity");
+      }),
+    ).toThrow(/discord plugin consent integrity/);
+  });
+
+  it("accepts frozen companion installs when the candidate lacks capability consent", () => {
+    expect(() => assertCompanionPluginRecords(undefined, false)).not.toThrow();
+  });
+
+  it("requires artifact integrity when the candidate lacks capability consent", () => {
+    expect(() =>
+      assertCompanionPluginRecords((records) => {
+        const discord = records.discord;
+        if (!discord) {
+          throw new Error("discord fixture missing");
+        }
+        Reflect.deleteProperty(discord, "integrity");
+      }, false),
+    ).toThrow(/discord plugin integrity missing/);
+  });
+
+  it.each([
+    ["npm", "discord", "resolvedVersion", "version"],
+    ["ClawHub", "whatsapp", "version", "resolvedVersion"],
+  ] as const)(
+    "requires the source-native version field for %s companion installs",
+    (_sourceLabel, pluginId, requiredField, alternateField) => {
+      expect(() =>
+        assertCompanionPluginRecords((records) => {
+          const record = records[pluginId];
+          if (!record) {
+            throw new Error(`${pluginId} fixture missing`);
+          }
+          record[alternateField] = record[requiredField];
+          Reflect.deleteProperty(record, requiredField);
+        }),
+      ).toThrow(new RegExp(`${pluginId} plugin version changed`));
+    },
+  );
+
+  it.each([
+    ["npm", "discord"],
+    ["ClawHub", "whatsapp"],
+  ] as const)(
+    "requires the installed package version to match for %s companion installs",
+    (_sourceLabel, pluginId) => {
+      expect(() =>
+        assertCompanionPluginRecords((_records, installPaths) => {
+          const packageName = pluginId === "discord" ? "@openclaw/discord" : "@openclaw/whatsapp";
+          writeJson(join(installPaths[pluginId], "package.json"), {
+            name: packageName,
+            version: "2026.8.0",
+          });
+        }),
+      ).toThrow(new RegExp(`${pluginId} installed package version changed`));
+    },
+  );
 
   it("accepts official ClawHub npm-pack installs for configured external plugins", () => {
     expect(() => assertConfiguredPluginState()).not.toThrow();

@@ -11,6 +11,7 @@ import {
   buildOpenAICompatibleLiveModels,
   isUpstreamProviderCatalogModel,
   readLiveModelCatalogBooleanField,
+  readLiveModelCatalogId,
   readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogRecord,
   readLiveModelCatalogStringField,
@@ -48,7 +49,12 @@ export {
   readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogStringField,
 };
-export { projectUpstreamProviderCatalogModel } from "./provider-catalog-live-normalize.internal.js";
+export {
+  listProviderCatalogSnapshotEntries,
+  projectProviderCatalogSnapshotRows,
+  projectUpstreamProviderCatalogSnapshot,
+  type ProviderCatalogSnapshot,
+} from "./provider-catalog-snapshot.internal.js";
 export type {
   ProjectedUpstreamProviderCatalogModel,
   UpstreamProviderCatalog,
@@ -183,21 +189,6 @@ function readDefaultLiveModelCatalogRows(body: unknown): readonly unknown[] {
     return (body as { data: unknown[] }).data;
   }
   throw new Error("Live model catalog response must be an array or { data: [] }");
-}
-
-function readDefaultLiveModelId(row: unknown): string | undefined {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return undefined;
-  }
-  const candidate = row as { id?: unknown; object?: unknown };
-  if (candidate.object !== undefined && candidate.object !== "model") {
-    return undefined;
-  }
-  if (typeof candidate.id !== "string") {
-    return undefined;
-  }
-  const modelId = candidate.id.trim();
-  return modelId || undefined;
 }
 
 function normalizeLiveModelCatalogRequestApiKey(value: string | undefined): string | undefined {
@@ -544,7 +535,7 @@ export async function fetchLiveProviderModelIds(
   params: FetchLiveProviderModelIdsParams,
 ): Promise<string[]> {
   const rows = await fetchLiveProviderModelRows(params);
-  const readModelId = params.readModelId ?? readDefaultLiveModelId;
+  const readModelId = params.readModelId ?? readLiveModelCatalogId;
   const seen = new Set<string>();
   const modelIds: string[] = [];
   for (const row of rows) {

@@ -109,13 +109,70 @@ function agentKysely() {
 }
 
 describe("searchSessionTranscripts", () => {
-  it("searches a populated closed database without reopening a writer", async () => {
-    await appendUserMessage("session-1", "agent:main:main", "readonly search needle");
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: env() });
-    closeOpenClawAgentDatabasesForTest();
+  it.each([false, true])(
+    "searches a populated closed database without reopening a writer (shared: %s)",
+    async (shared) => {
+      const agentId = shared ? "beta" : "main";
+      const sessionKey = `agent:${agentId}:main`;
+      const storePath = shared ? path.join(paths.tempDir, "shared.sqlite") : undefined;
+      if (shared) {
+        openOpenClawAgentDatabase({ agentId: "alpha", env: env(), path: storePath });
+      }
+      await appendTranscriptMessage(
+        { agentId, env: env(), sessionId: "session-1", sessionKey, storePath },
+        { message: { role: "user", content: [{ type: "text", text: "readonly search needle" }] } },
+      );
+      const databasePath = storePath ?? resolveOpenClawAgentSqlitePath({ agentId, env: env() });
+      closeOpenClawAgentDatabasesForTest();
 
-    expect(search("needle").hits).toHaveLength(1);
-    expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
+      expect(
+        searchSessionTranscripts({ agentId, env: env(), query: "needle", storePath }).hits,
+      ).toEqual([expect.objectContaining({ sessionKey, sessionId: "session-1" })]);
+      expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
+    },
+  );
+
+  it("scopes omitted filters to a logical namespace in a shared database", async () => {
+    const storePath = path.join(paths.tempDir, "shared.sqlite");
+    openOpenClawAgentDatabase({ agentId: "owner", env: env(), path: storePath });
+    const sessions = [
+      ["work_team", "agent:work_team:main"],
+      ["workxteam", "agent:workxteam:main"],
+      ["owner", "agent:owner:main"],
+      ["owner", "global"],
+      ["owner", "unknown"],
+    ] as const;
+    for (const [index, [agentId, sessionKey]] of sessions.entries()) {
+      const text =
+        agentId === "work_team"
+          ? `needle bounded ${"context ".repeat(30)}`
+          : agentId === "workxteam"
+            ? "needle bounded"
+            : "needle";
+      await appendTranscriptMessage(
+        { agentId, env: env(), sessionId: `session-${index}`, sessionKey, storePath },
+        { message: { role: "user", content: [{ type: "text", text }] } },
+      );
+    }
+    const params = { agentId: "work_team", env: env(), query: "needle", storePath };
+    expect(
+      searchSessionTranscripts(params)
+        .hits.map((hit) => hit.sessionKey)
+        .toSorted(),
+    ).toEqual(["agent:work_team:main", "global", "unknown"]);
+    expect(searchSessionTranscripts({ ...params, query: "bounded", limit: 1 })).toEqual({
+      hits: [expect.objectContaining({ sessionKey: "agent:work_team:main" })],
+      indexing: false,
+      truncated: false,
+    });
+    expect(
+      searchSessionTranscripts({ ...params, sessionKeys: ["agent:workxteam:main"] }).hits,
+    ).toEqual([expect.objectContaining({ sessionKey: "agent:workxteam:main" })]);
+    expect(
+      searchSessionTranscripts({ ...params, sessionKeys: [] })
+        .hits.map((hit) => hit.sessionKey)
+        .toSorted(),
+    ).toEqual(sessions.map(([, sessionKey]) => sessionKey).toSorted());
   });
 
   it("returns empty results without creating a missing database", () => {

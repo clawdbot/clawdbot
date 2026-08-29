@@ -12,11 +12,12 @@ import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js"
 import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
+  ensureSessionEntrySync,
   loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
+  type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
-import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   markMcpLoopbackRequestClassified,
@@ -42,6 +43,8 @@ import {
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
@@ -69,6 +72,7 @@ import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { FailoverError } from "./failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
+import { SessionManager } from "./sessions/session-manager.js";
 
 const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
 
@@ -124,55 +128,26 @@ function setHookRunnerForTest(hookRunner: unknown): void {
   globalStore[hookRunnerGlobalStateKey] = state;
 }
 
-function createSessionFile(params?: { history?: Array<{ role: "user"; content: string }> }) {
-  // Session files use the real JSONL shape so transcript/history readers stay
-  // covered without spinning up a full CLI process.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hooks-"));
+function createSessionFixture(params?: {
+  history?: Array<{ role: "user"; content: string }>;
+  sessionKey?: string;
+}) {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hooks-")));
   sessionFileEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
   setTestEnvValue("OPENCLAW_STATE_DIR", dir);
-  const sessionFile = path.join(dir, "agents", "main", "sessions", "s1.jsonl");
-  const storePath = path.join(path.dirname(sessionFile), "sessions.json");
-  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-  fs.writeFileSync(
+  const storePath = path.join(dir, "agents", "main", "sessions", "sessions.json");
+  const sessionTarget: SessionTranscriptRuntimeTarget = {
+    agentId: "main",
+    sessionId: "s1",
+    sessionKey: params?.sessionKey ?? "agent:main:main",
     storePath,
-    JSON.stringify({
-      "agent:main:main": {
-        sessionId: "s1",
-        sessionFile,
-        updatedAt: Date.now(),
-      },
-    }),
-    "utf-8",
-  );
-  fs.writeFileSync(
-    sessionFile,
-    `${JSON.stringify({
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: "session-test",
-      timestamp: new Date(0).toISOString(),
-      cwd: dir,
-    })}\n`,
-    "utf-8",
-  );
+  };
+  ensureSessionEntrySync(sessionTarget, { sessionId: "s1", updatedAt: Date.now() });
+  const manager = SessionManager.open(sessionTarget, dir);
   for (const [index, entry] of (params?.history ?? []).entries()) {
-    fs.appendFileSync(
-      sessionFile,
-      `${JSON.stringify({
-        type: "message",
-        id: `msg-${index}`,
-        parentId: index > 0 ? `msg-${index - 1}` : null,
-        timestamp: new Date(index + 1).toISOString(),
-        message: {
-          role: entry.role,
-          content: entry.content,
-          timestamp: index + 1,
-        },
-      })}\n`,
-      "utf-8",
-    );
+    manager.appendMessage({ ...entry, timestamp: index + 1 });
   }
-  return { dir, sessionFile, storePath };
+  return { dir, sessionFile: sessionTarget.sessionKey, sessionTarget, storePath };
 }
 
 type PreparedContextOverrides = Partial<{
@@ -244,7 +219,6 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
     },
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    bootstrapPromptWarningLines: [],
     claudeSkillsPluginArgs: [],
     ...(params?.openClawHistoryPrompt
       ? { openClawHistoryPrompt: params.openClawHistoryPrompt }
@@ -330,50 +304,27 @@ function expectTextMessage(value: unknown, fields: { role: string; content: stri
   expect(message.timestamp).toBeTypeOf("number");
 }
 
-async function readTranscriptMessages(sessionFile: string): Promise<unknown[]> {
-  const sessionId = path.basename(sessionFile, ".jsonl");
-  const events = await loadTranscriptEvents({
-    agentId: "main",
-    sessionId,
-    sessionKey: "agent:main:main",
-    storePath: path.join(path.dirname(sessionFile), "sessions.json"),
-  });
+async function readTranscriptMessages(
+  sessionTarget: SessionTranscriptRuntimeTarget,
+): Promise<unknown[]> {
+  const events = await loadTranscriptEvents(sessionTarget);
   return events.flatMap((entry) =>
     typeof entry === "object" && entry !== null && "message" in entry ? [entry.message] : [],
   );
 }
 
-async function seedSqliteSessionEntry(params: {
-  sessionFile: string;
-  storePath: string;
-}): Promise<void> {
-  await upsertSessionEntryCore(
-    {
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      storePath: params.storePath,
-    },
-    {
-      sessionId: "s1",
-      sessionFile: params.sessionFile,
-      updatedAt: Date.now(),
-    },
-  );
-}
-
 function createCliUserTurnRecorder(params: {
   text: string;
-  sessionFile: string;
+  sessionTarget: SessionTranscriptRuntimeTarget;
   sessionKey?: string;
   workspaceDir: string;
 }) {
   return createUserTurnTranscriptRecorder({
     input: { text: params.text },
     target: createTestUserTurnTranscriptTarget({
-      sessionId: "s1",
-      sessionKey: params.sessionKey ?? "agent:main:main",
+      ...params.sessionTarget,
+      sessionKey: params.sessionKey ?? params.sessionTarget.sessionKey,
       cwd: params.workspaceDir,
-      storePath: path.join(path.dirname(params.sessionFile), "sessions.json"),
     }),
   });
 }
@@ -397,6 +348,8 @@ describe("runCliAgent reliability", () => {
     mockGetGlobalHookRunner.mockReset();
     setHookRunnerForTest(null);
     vi.unstubAllEnvs();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     sessionFileEnvSnapshot?.restore();
     sessionFileEnvSnapshot = undefined;
     resetDiagnosticEventsForTest();
@@ -1438,7 +1391,7 @@ describe("runCliAgent reliability", () => {
   });
 
   it("hooks the visible source reply without pre-persisting its dispatch mirror", async () => {
-    const { dir, sessionFile, storePath } = createSessionFile();
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => ["llm_output", "agent_end"].includes(hookName)),
       runLlmInput: vi.fn(async () => undefined),
@@ -1491,13 +1444,14 @@ describe("runCliAgent reliability", () => {
     context.mcpDeliveryCapture = true;
     context.params.sourceReplyDeliveryMode = "message_tool_only";
     context.params.sessionFile = sessionFile;
+    context.params.sessionTarget = sessionTarget;
     context.params.storePath = storePath;
     context.params.persistAssistantTranscript = true;
 
     try {
       await runPreparedCliAgent(context);
 
-      const transcriptMessages = await readTranscriptMessages(sessionFile);
+      const transcriptMessages = await readTranscriptMessages(sessionTarget);
       expect(transcriptMessages).toHaveLength(0);
       const llmOutputEvent = requireRecord(
         callArg(hookRunner.runLlmOutput, 0, 0, "llm_output event"),
@@ -2111,7 +2065,8 @@ describe("runCliAgent reliability", () => {
       }),
     );
     const clearBeforeRetry = vi.fn(async () => false);
-    const { dir, sessionFile } = createSessionFile({
+    const { dir, sessionFile, sessionTarget } = createSessionFixture({
+      sessionKey: "agent:main:subagent:retained-format",
       history: [{ role: "user", content: "earlier context" }],
     });
 
@@ -2138,6 +2093,7 @@ describe("runCliAgent reliability", () => {
             ...context.params,
             agentId: "main",
             sessionFile,
+            sessionTarget,
             workspaceDir: dir,
             onBeforeFreshCliSessionRetry: clearBeforeRetry,
           },
@@ -2297,7 +2253,8 @@ describe("runCliAgent reliability", () => {
         }
         return makeManagedRun({ stdout: "hello from fresh cli" });
       });
-      const { dir, sessionFile } = createSessionFile({
+      const { dir, sessionFile, sessionTarget } = createSessionFixture({
+        sessionKey: "agent:main:subagent:retry",
         history: [{ role: "user", content: "earlier context" }],
       });
       const clearBeforeRetry = vi.fn(async () => {
@@ -2327,6 +2284,7 @@ describe("runCliAgent reliability", () => {
             ...context.params,
             agentId: "main",
             sessionFile,
+            sessionTarget,
             workspaceDir: dir,
             onBeforeFreshCliSessionRetry: clearBeforeRetry,
           },
@@ -2397,7 +2355,8 @@ describe("runCliAgent reliability", () => {
         stderr: "rate limit exceeded",
       }),
     );
-    const { dir, sessionFile } = createSessionFile({
+    const { dir, sessionFile, sessionTarget } = createSessionFixture({
+      sessionKey: "agent:main:subagent:retry",
       history: [{ role: "user", content: "earlier context" }],
     });
     const context = buildPreparedContext({
@@ -2416,6 +2375,7 @@ describe("runCliAgent reliability", () => {
             ...context.params,
             agentId: "main",
             sessionFile,
+            sessionTarget,
             workspaceDir: dir,
             onBeforeFreshCliSessionRetry: clearBeforeRetry,
           },
@@ -2446,12 +2406,8 @@ describe("runCliAgent reliability", () => {
   it("returns the assembled CLI prompt in meta for raw trace consumers", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from cli" }));
 
-    const result = await runPreparedCliAgent({
-      ...buildPreparedContext(),
-      bootstrapPromptWarningLines: ["Warning: prompt budget low."],
-    });
+    const result = await runPreparedCliAgent(buildPreparedContext());
 
-    expect(result.meta.finalPromptText).toContain("Warning: prompt budget low.");
     expect(result.meta.finalPromptText).toContain("hi");
     expect(result.meta.finalAssistantRawText).toBe("hello from cli");
     const executionTrace = requireRecord(result.meta.executionTrace, "execution trace");
@@ -2597,7 +2553,7 @@ describe("runCliAgent reliability", () => {
       runAgentEnd: vi.fn(async () => undefined),
     };
     setHookRunnerForTest(hookRunner);
-    const { dir, sessionFile } = createSessionFile();
+    const { dir, sessionFile, sessionTarget } = createSessionFixture();
 
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from cli" }));
 
@@ -2607,6 +2563,7 @@ describe("runCliAgent reliability", () => {
         params: {
           ...buildPreparedContext().params,
           sessionFile,
+          sessionTarget,
           workspaceDir: dir,
           sessionKey: "agent:main:main",
           agentId: "main",
@@ -2794,11 +2751,10 @@ describe("runCliAgent reliability", () => {
 
   it("persists approved CLI user turns and successful assistant output", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from cli" }));
-    const { dir, sessionFile, storePath } = createSessionFile();
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
     const onUserMessagePersisted = vi.fn();
 
     try {
-      await seedSqliteSessionEntry({ sessionFile, storePath });
       const context = buildPreparedContext({
         sessionKey: "agent:main:main",
         runId: "run-persist-cli",
@@ -2829,6 +2785,7 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          sessionTarget,
           storePath,
           workspaceDir: dir,
           prompt: "runtime prompt",
@@ -2851,7 +2808,7 @@ describe("runCliAgent reliability", () => {
         }),
       );
 
-      const messages = await readTranscriptMessages(sessionFile);
+      const messages = await readTranscriptMessages(sessionTarget);
       expect(messages).toContainEqual(
         expect.objectContaining({
           role: "user",
@@ -2888,7 +2845,7 @@ describe("runCliAgent reliability", () => {
 
   it("honors CLI retry suppression before approved user-turn persistence", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from retry" }));
-    const { dir, sessionFile, storePath } = createSessionFile();
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
     const recorder = createUserTurnTranscriptRecorder({
       input: {
         text: "suppressed display prompt",
@@ -2911,7 +2868,6 @@ describe("runCliAgent reliability", () => {
     const onUserMessagePersisted = vi.fn();
 
     try {
-      await seedSqliteSessionEntry({ sessionFile, storePath });
       const context = buildPreparedContext({
         sessionKey: "agent:main:main",
         runId: "run-suppressed-cli",
@@ -2922,6 +2878,7 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          sessionTarget,
           workspaceDir: dir,
           prompt: "runtime prompt",
           storePath,
@@ -2934,7 +2891,7 @@ describe("runCliAgent reliability", () => {
       expect(result.payloads).toEqual([{ text: "hello from retry" }]);
       expect(persistApprovedSpy).not.toHaveBeenCalled();
       expect(onUserMessagePersisted).not.toHaveBeenCalled();
-      await expect(readTranscriptMessages(sessionFile)).resolves.toEqual([]);
+      await expect(readTranscriptMessages(sessionTarget)).resolves.toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2942,7 +2899,7 @@ describe("runCliAgent reliability", () => {
 
   it("honors a CLI user-turn recorder target that skips after session rebound", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello after rebound" }));
-    const { dir, sessionFile, storePath } = createSessionFile();
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
     const recorder = createUserTurnTranscriptRecorder({
       input: {
         text: "stale rebound prompt",
@@ -2955,7 +2912,6 @@ describe("runCliAgent reliability", () => {
     const onUserMessagePersisted = vi.fn();
 
     try {
-      await seedSqliteSessionEntry({ sessionFile, storePath });
       const context = buildPreparedContext({
         sessionKey: "agent:main:main",
         runId: "run-rebound-recorder",
@@ -2966,6 +2922,7 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          sessionTarget,
           workspaceDir: dir,
           prompt: "runtime prompt",
           storePath,
@@ -2977,7 +2934,7 @@ describe("runCliAgent reliability", () => {
       expect(result.payloads).toEqual([{ text: "hello after rebound" }]);
       expect(persistApprovedSpy).toHaveBeenCalledOnce();
       expect(onUserMessagePersisted).not.toHaveBeenCalled();
-      await expect(readTranscriptMessages(sessionFile)).resolves.toEqual([]);
+      await expect(readTranscriptMessages(sessionTarget)).resolves.toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2985,7 +2942,7 @@ describe("runCliAgent reliability", () => {
 
   it("records transformed fresh Claude reseed prompts with durable local proof", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from claude" }));
-    const { dir, sessionFile } = createSessionFile();
+    const { dir, sessionFile, sessionTarget } = createSessionFixture();
     const historyPrompt = [
       "Continue this conversation using the OpenClaw transcript below as prior session history.",
       "Treat it as authoritative context for this fresh CLI session.",
@@ -3015,10 +2972,11 @@ describe("runCliAgent reliability", () => {
         ...context.params,
         agentId: "main",
         sessionFile,
+        sessionTarget,
         workspaceDir: dir,
         userTurnTranscriptRecorder: createCliUserTurnRecorder({
           text: "current ask",
-          sessionFile,
+          sessionTarget,
           workspaceDir: dir,
         }),
       };
@@ -3040,7 +2998,7 @@ describe("runCliAgent reliability", () => {
 
   it("does not mint a reseed receipt without caller-owned durable proof", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from claude" }));
-    const { dir, sessionFile } = createSessionFile();
+    const { dir, sessionFile, sessionTarget } = createSessionFixture();
 
     try {
       setCliRunnerTestDeps({
@@ -3055,6 +3013,7 @@ describe("runCliAgent reliability", () => {
         ...context.params,
         agentId: "main",
         sessionFile,
+        sessionTarget,
         workspaceDir: dir,
         transcriptPrompt: "canonical current ask",
       };
@@ -3062,7 +3021,7 @@ describe("runCliAgent reliability", () => {
       const result = await runPreparedCliAgent(context);
 
       expect(result.meta.agentMeta?.cliSessionBinding?.reseedReceipt).toBeUndefined();
-      await expect(readTranscriptMessages(sessionFile)).resolves.not.toContainEqual(
+      await expect(readTranscriptMessages(sessionTarget)).resolves.not.toContainEqual(
         expect.objectContaining({ role: "user" }),
       );
     } finally {
@@ -3073,14 +3032,14 @@ describe("runCliAgent reliability", () => {
 
   it("mints an omission receipt for a trusted suppressed reseed turn", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from claude" }));
-    const { dir, sessionFile } = createSessionFile();
+    const { dir, sessionFile, sessionTarget } = createSessionFixture();
     const recorder = createUserTurnTranscriptRecorder({
       target: createTestUserTurnTranscriptTarget({
         sessionId: "s1",
         sessionKey: "agent:main:main",
         agentId: "main",
         cwd: dir,
-        storePath: path.join(path.dirname(sessionFile), "sessions.json"),
+        storePath: sessionTarget.storePath,
       }),
     });
     recorder.markBlocked();
@@ -3098,6 +3057,7 @@ describe("runCliAgent reliability", () => {
         ...context.params,
         agentId: "main",
         sessionFile,
+        sessionTarget,
         workspaceDir: dir,
         suppressNextUserMessagePersistence: true,
         userTurnTranscriptRecorder: recorder,
@@ -3111,7 +3071,7 @@ describe("runCliAgent reliability", () => {
         localSessionId: "s1",
         userTurnDisposition: "omitted",
       });
-      await expect(readTranscriptMessages(sessionFile)).resolves.toEqual([]);
+      await expect(readTranscriptMessages(sessionTarget)).resolves.toEqual([]);
     } finally {
       restoreCliRunnerTestDeps();
       fs.rmSync(dir, { recursive: true, force: true });
@@ -3120,10 +3080,10 @@ describe("runCliAgent reliability", () => {
 
   it("reuses durable local proof when a fallback suppresses duplicate persistence", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from claude" }));
-    const { dir, sessionFile } = createSessionFile();
+    const { dir, sessionFile, sessionTarget } = createSessionFixture();
     const recorder = createCliUserTurnRecorder({
       text: "current ask",
-      sessionFile,
+      sessionTarget,
       workspaceDir: dir,
     });
 
@@ -3143,6 +3103,7 @@ describe("runCliAgent reliability", () => {
         ...context.params,
         agentId: "main",
         sessionFile,
+        sessionTarget,
         workspaceDir: dir,
         suppressNextUserMessagePersistence: true,
         userTurnTranscriptRecorder: recorder,
@@ -3166,10 +3127,10 @@ describe("runCliAgent reliability", () => {
 
   it("uses runtime-owned persistence proof", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from claude" }));
-    const { dir, sessionFile } = createSessionFile();
+    const { dir, sessionFile, sessionTarget } = createSessionFixture();
     const recorder = createCliUserTurnRecorder({
       text: "current ask",
-      sessionFile,
+      sessionTarget,
       workspaceDir: dir,
     });
     recorder.markRuntimePersisted({
@@ -3191,6 +3152,7 @@ describe("runCliAgent reliability", () => {
         ...context.params,
         agentId: "main",
         sessionFile,
+        sessionTarget,
         workspaceDir: dir,
         suppressNextUserMessagePersistence: true,
         userTurnTranscriptRecorder: recorder,
@@ -3244,10 +3206,9 @@ describe("runCliAgent reliability", () => {
     };
     setHookRunnerForTest(hookRunner);
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "secret CLI output" }));
-    const { dir, sessionFile, storePath } = createSessionFile();
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
 
     try {
-      await seedSqliteSessionEntry({ sessionFile, storePath });
       const context = buildPreparedContext({
         sessionKey: "agent:main:main",
         runId: "run-blocked-cli",
@@ -3260,6 +3221,7 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          sessionTarget,
           workspaceDir: dir,
           persistAssistantTranscript: true,
           storePath,
@@ -3270,7 +3232,7 @@ describe("runCliAgent reliability", () => {
       expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
         assistantTranscriptOwned: true,
       });
-      await expect(readTranscriptMessages(sessionFile)).resolves.toEqual([]);
+      await expect(readTranscriptMessages(sessionTarget)).resolves.toEqual([]);
       expect(hookRunner.runBeforeMessageWrite).toHaveBeenCalledOnce();
       expect(
         callArg(hookRunner.runBeforeMessageWrite, 0, 1, "before_message_write context"),
@@ -3285,30 +3247,9 @@ describe("runCliAgent reliability", () => {
 
   it("does not append late CLI output after the session key is rebound", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "late CLI output" }));
-    const { dir, sessionFile, storePath } = createSessionFile();
-    const replacementFile = path.join(path.dirname(sessionFile), "s2.jsonl");
-    fs.writeFileSync(
-      replacementFile,
-      `${JSON.stringify({
-        type: "session",
-        version: CURRENT_SESSION_VERSION,
-        id: "s2",
-        timestamp: new Date(0).toISOString(),
-        cwd: dir,
-      })}\n`,
-      "utf-8",
-    );
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        "agent:main:main": {
-          sessionId: "s2",
-          sessionFile: replacementFile,
-          updatedAt: Date.now(),
-        },
-      }),
-      "utf-8",
-    );
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
+    const replacementTarget = { ...sessionTarget, sessionId: "s2" };
+    await upsertSessionEntryCore(sessionTarget, { sessionId: "s2", updatedAt: Date.now() });
 
     try {
       const context = buildPreparedContext({
@@ -3321,6 +3262,7 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          sessionTarget,
           workspaceDir: dir,
           persistAssistantTranscript: true,
           storePath,
@@ -3331,8 +3273,8 @@ describe("runCliAgent reliability", () => {
       expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
         assistantTranscriptOwned: true,
       });
-      await expect(readTranscriptMessages(sessionFile)).resolves.toEqual([]);
-      await expect(readTranscriptMessages(replacementFile)).resolves.toEqual([]);
+      await expect(readTranscriptMessages(sessionTarget)).resolves.toEqual([]);
+      await expect(readTranscriptMessages(replacementTarget)).resolves.toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -3340,7 +3282,7 @@ describe("runCliAgent reliability", () => {
 
   it("does not persist private room-event assistant output", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "private ambient output" }));
-    const { dir, sessionFile, storePath } = createSessionFile();
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
 
     try {
       const context = buildPreparedContext({
@@ -3353,6 +3295,7 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          sessionTarget,
           workspaceDir: dir,
           persistAssistantTranscript: true,
           storePath,
@@ -3364,7 +3307,7 @@ describe("runCliAgent reliability", () => {
       expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
         assistantTranscriptOwned: true,
       });
-      await expect(readTranscriptMessages(sessionFile)).resolves.toEqual([]);
+      await expect(readTranscriptMessages(sessionTarget)).resolves.toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -3372,7 +3315,7 @@ describe("runCliAgent reliability", () => {
 
   it("passes cwd to approved CLI user-turn persistence", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from cli" }));
-    const { dir, sessionFile } = createSessionFile();
+    const { dir, sessionFile, sessionTarget } = createSessionFixture();
     const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-persist-cwd-"));
     let capturedCwd: unknown;
     const recorder = {
@@ -3411,6 +3354,7 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          sessionTarget,
           workspaceDir: dir,
           cwd: taskDir,
           prompt: "runtime prompt",
@@ -3429,7 +3373,7 @@ describe("runCliAgent reliability", () => {
 
   it("uses an existing user-turn recorder for approved CLI persistence", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from cli" }));
-    const { dir, sessionFile } = createSessionFile();
+    const { dir, sessionFile, sessionTarget } = createSessionFixture();
     const recorder = createUserTurnTranscriptRecorder({
       input: {
         text: "recorder display prompt",
@@ -3441,7 +3385,7 @@ describe("runCliAgent reliability", () => {
         sessionId: "s1",
         sessionKey: "agent:main:main",
         cwd: dir,
-        storePath: path.join(path.dirname(sessionFile), "sessions.json"),
+        storePath: sessionTarget.storePath,
       }),
       updateMode: "none",
     });
@@ -3457,6 +3401,7 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          sessionTarget,
           workspaceDir: dir,
           prompt: "runtime prompt",
           userTurnTranscriptRecorder: recorder,
@@ -3466,7 +3411,7 @@ describe("runCliAgent reliability", () => {
       expect(result.payloads).toEqual([{ text: "hello from cli" }]);
       expect(recorder.hasPersisted()).toBe(true);
 
-      const messages = await readTranscriptMessages(sessionFile);
+      const messages = await readTranscriptMessages(sessionTarget);
       expect(messages).toEqual([
         expect.objectContaining({
           role: "user",
@@ -3491,14 +3436,14 @@ describe("runCliAgent reliability", () => {
     };
     setHookRunnerForTest(hookRunner);
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from cli" }));
-    const { dir, sessionFile } = createSessionFile();
+    const { dir, sessionFile, sessionTarget } = createSessionFixture();
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: "blocked user turn" },
       target: createTestUserTurnTranscriptTarget({
         sessionId: "s1",
         sessionKey: "agent:main:main",
         cwd: dir,
-        storePath: path.join(path.dirname(sessionFile), "sessions.json"),
+        storePath: sessionTarget.storePath,
       }),
       beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
     });
@@ -3514,6 +3459,7 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          sessionTarget,
           workspaceDir: dir,
           prompt: "runtime prompt",
           userTurnTranscriptRecorder: recorder,
@@ -3523,7 +3469,7 @@ describe("runCliAgent reliability", () => {
       expect(result.payloads).toEqual([{ text: "hello from cli" }]);
       expect(recorder.hasPersisted()).toBe(false);
       expect(recorder.isBlocked()).toBe(true);
-      await expect(readTranscriptMessages(sessionFile)).resolves.toEqual([]);
+      await expect(readTranscriptMessages(sessionTarget)).resolves.toEqual([]);
       expect(hookRunner.runBeforeMessageWrite).toHaveBeenCalledOnce();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -3535,7 +3481,7 @@ describe("runCliAgent reliability", () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({ stdout: "hello despite notification failure" }),
     );
-    const { dir, sessionFile } = createSessionFile();
+    const { dir, sessionFile, sessionTarget } = createSessionFixture();
 
     try {
       const context = buildPreparedContext({
@@ -3548,11 +3494,12 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          sessionTarget,
           workspaceDir: dir,
           prompt: "runtime prompt",
           userTurnTranscriptRecorder: createCliUserTurnRecorder({
             text: "display prompt",
-            sessionFile,
+            sessionTarget,
             sessionKey: "agent:main:main",
             workspaceDir: dir,
           }),
@@ -3641,10 +3588,9 @@ describe("runCliAgent reliability", () => {
       runAgentEnd: vi.fn(() => agentEndSettled),
     };
     setHookRunnerForTest(hookRunner);
-    const { dir, sessionFile } = createSessionFile({
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture({
       history: [{ role: "user", content: "earlier context" }],
     });
-    const storePath = path.join(dir, "sessions.json");
 
     try {
       let resolved = false;
@@ -3659,6 +3605,7 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          sessionTarget,
           storePath,
           workspaceDir: dir,
           prompt: "secret prompt",
@@ -3753,9 +3700,14 @@ describe("runCliAgent reliability", () => {
 
       const blockedLine = requireRecord(
         expectDefined(
-          transcriptEvents.find(
-            (entry) => requireRecord(entry, "transcript entry").type === "message",
-          ),
+          transcriptEvents.find((entry) => {
+            const event = requireRecord(entry, "transcript entry");
+            return (
+              event.type === "message" &&
+              requireRecord(event.message, "transcript message").idempotencyKey ===
+                "hook-block:before_agent_run:user:run-blocked-cli"
+            );
+          }),
           "blocked transcript message",
         ),
         "blocked transcript message",
@@ -3779,7 +3731,7 @@ describe("runCliAgent reliability", () => {
 
   it("does not rebind a reset session when a stale before_agent_run hook blocks", async () => {
     supervisorSpawnMock.mockClear();
-    const { dir, sessionFile, storePath } = createSessionFile();
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
     const sessionKey = "agent:main:main";
     const context = makeClaudePreparedContext({
       sessionKey,
@@ -3812,6 +3764,7 @@ describe("runCliAgent reliability", () => {
             ...context.params,
             agentId: "main",
             sessionFile,
+            sessionTarget,
             storePath,
             workspaceDir: dir,
             prompt: "secret prompt",
@@ -3840,7 +3793,7 @@ describe("runCliAgent reliability", () => {
       })),
     };
     setHookRunnerForTest(hookRunner);
-    const { dir, sessionFile } = createSessionFile();
+    const dir = autoCleanupTempDirs.make("openclaw-cli-fixed-owner-");
     const storePath = path.join(dir, "shared-sessions.json");
     const sessionKey = "global";
     const context = makeClaudePreparedContext({
@@ -3863,7 +3816,7 @@ describe("runCliAgent reliability", () => {
                 entries: { ops: {}, research: {} },
               },
             },
-            sessionFile,
+            sessionFile: sessionKey,
             storePath,
             workspaceDir: dir,
             prompt: "secret prompt",
@@ -3905,11 +3858,10 @@ describe("runCliAgent reliability", () => {
       })),
     };
     setHookRunnerForTest(hookRunner);
-    const { dir, sessionFile, storePath } = createSessionFile();
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
     const onUserMessagePersisted = vi.fn();
 
     try {
-      await seedSqliteSessionEntry({ sessionFile, storePath });
       const recorder = createUserTurnTranscriptRecorder({
         input: {
           text: "secret prompt",
@@ -3941,6 +3893,7 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          sessionTarget,
           workspaceDir: dir,
           prompt: "secret prompt",
           storePath,
@@ -4005,7 +3958,9 @@ describe("runCliAgent reliability", () => {
       })),
     };
     setHookRunnerForTest(hookRunner);
-    const { dir, sessionFile } = createSessionFile();
+    const { dir, sessionFile, sessionTarget } = createSessionFixture({
+      sessionKey: "agent:main:telegram:chat-1",
+    });
 
     try {
       const context = buildPreparedContext({
@@ -4018,6 +3973,7 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          sessionTarget,
           workspaceDir: dir,
           prompt: "sender scoped prompt",
           messageChannel: "telegram",
@@ -4154,7 +4110,7 @@ describe("runCliAgent reliability", () => {
       runAgentEnd: vi.fn(async () => undefined),
     };
     setHookRunnerForTest(hookRunner);
-    const { dir, sessionFile } = createSessionFile({
+    const { dir, sessionFile, sessionTarget } = createSessionFixture({
       history: Array.from({ length: MAX_CLI_SESSION_HISTORY_MESSAGES + 5 }, (_, index) => ({
         role: "user" as const,
         content: `history-${index}`,
@@ -4187,6 +4143,7 @@ describe("runCliAgent reliability", () => {
           agentId: "main",
           onBeforeFreshCliSessionRetry: clearBeforeRetry,
           sessionFile,
+          sessionTarget,
           workspaceDir: dir,
         },
       });
@@ -4243,21 +4200,14 @@ describe("runCliAgent reliability", () => {
   });
 
   it("builds fresh-session history reseed prompts from hook-mutated prompts", async () => {
-    const { dir, sessionFile } = createSessionFile({
+    const { dir, sessionFile, sessionTarget } = createSessionFixture({
       history: [{ role: "user", content: "earlier ask" }],
     });
-    fs.appendFileSync(
-      sessionFile,
-      `${JSON.stringify({
-        type: "compaction",
-        id: "compaction-1",
-        parentId: "msg-0",
-        timestamp: new Date(2).toISOString(),
-        summary: "compacted earlier ask",
-        firstKeptEntryId: "msg-0",
-        tokensBefore: 10_000,
-      })}\n`,
-      "utf-8",
+    const manager = SessionManager.open(sessionTarget, dir);
+    manager.appendCompaction(
+      "compacted earlier ask",
+      expectDefined(manager.getLeafId(), "retained history entry"),
+      10_000,
     );
     const config: OpenClawConfig = { agents: { defaults: { workspace: dir } } };
     cliBackendsTesting.setDepsForTest({
@@ -4287,6 +4237,7 @@ describe("runCliAgent reliability", () => {
         admittedRunContext: createTestAdmittedRunContext("run-history-hook"),
         sessionId: "s1",
         sessionFile,
+        sessionTarget,
         workspaceDir: dir,
         config,
         prompt: "current ask",
@@ -4306,7 +4257,7 @@ describe("runCliAgent reliability", () => {
   });
 
   it("keeps native control operations out of restrictive prompt preparation", async () => {
-    const { dir, sessionFile } = createSessionFile({
+    const { dir, sessionFile, sessionTarget } = createSessionFixture({
       history: [{ role: "user", content: "earlier ask" }],
     });
     const config: OpenClawConfig = { agents: { defaults: { workspace: dir } } };
@@ -4341,6 +4292,7 @@ describe("runCliAgent reliability", () => {
         admittedRunContext: createTestAdmittedRunContext("run-native-compact"),
         sessionId: "s1",
         sessionFile,
+        sessionTarget,
         workspaceDir: dir,
         config,
         prompt: "/compact",
@@ -4366,7 +4318,6 @@ describe("runCliAgent reliability", () => {
       expect(context.systemPrompt).toBe("");
       expect(context.contextEngine).toBeUndefined();
       expect(context.claudeSkillsPluginArgs).toEqual([]);
-      expect(context.bootstrapPromptWarningLines).toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

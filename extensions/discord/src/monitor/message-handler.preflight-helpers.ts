@@ -7,8 +7,8 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import type { Message } from "../internal/discord.js";
+import type { DiscordChannelInfo } from "./message-channel-info.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
-import type { DiscordChannelInfo } from "./message-utils.js";
 
 const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
 

@@ -3,11 +3,7 @@ import type { WorktreesRemoveResult } from "../../../packages/gateway-protocol/s
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import {
-  buildAgentMainSessionKey,
-  parseAgentSessionKey,
-  resolveUiConfiguredMainKey,
-} from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import {
   formatPreservedWorktreeConfirmation,
   formatPreservedWorktreesNotice,
@@ -162,9 +158,9 @@ export async function archiveSessionWithUndo(
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ) {
-  scope.sessions.setArchiveVisibility(session.key, "pending");
+  scope.sessions.setArchivePending(session.key, true);
   const result = await patchSession(host, session, { archived: true }, scope);
-  scope.sessions.setArchiveVisibility(session.key, result === "completed" ? "archived" : undefined);
+  scope.sessions.setArchivePending(session.key, false);
   if (result !== "completed" || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
@@ -311,6 +307,9 @@ export async function deleteSessionsBatch(
   try {
     const result = await scope.sessions.deleteMany(requests);
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (result.preservedWorktrees.length > 0) {
+        showToast({ message: formatPreservedWorktreesNotice(result.preservedWorktrees) });
+      }
       return;
     }
     if (host.sidebarSessionStatusFilter() !== "active") {
@@ -324,18 +323,6 @@ export async function deleteSessionsBatch(
       if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
       }
-    }
-    const deletedActive = rows.find((row) => row.active && result.deleted.includes(row.key));
-    if (deletedActive) {
-      host.replaceCurrentSession(
-        buildAgentMainSessionKey({
-          agentId: parseAgentSessionKey(deletedActive.key)?.agentId ?? scope.selectedAgentId,
-          mainKey: resolveUiConfiguredMainKey({
-            agentsList: scope.context.agents.state.agentsList,
-            hello: scope.gateway.snapshot.hello,
-          }),
-        }),
-      );
     }
     if (result.errors.length > 0) {
       host.sessionData.publishSessionMutationError(scope, result.errors.join("; "));
@@ -427,43 +414,25 @@ export async function createSessionGroup(
   sessions: readonly SidebarRecentSession[],
   scope: SidebarSessionMutationScope,
 ): Promise<SidebarSessionMutationResult> {
+  if (sessions.some((session) => !session.sessionId)) {
+    host.sessionData.publishSessionMutationError(scope, t("common.refresh"));
+    return "failed";
+  }
   const remembered = await rememberSessionGroup(host, name, scope);
   if (remembered !== "completed") {
     return remembered;
   }
-  // The dialog no longer blocks, so a captured row can be deleted while the
-  // catalog write is in flight, and sessions.patch would recreate it. Re-resolve
-  // every target against the current list, as the Sessions-page path does.
-  const targets = sessions.flatMap((session) => {
-    const current = host.findSidebarSessionByKey(session.key);
-    return current ? [current] : [];
-  });
-  if (targets.length > 0) {
-    const moved =
-      targets.length === 1
-        ? await patchSession(host, targets[0]!, { category: name }, scope)
-        : await patchSessions(host, targets, { category: name }, scope);
-    // Rows that left the list are absent from `targets`, so patching the
-    // remainder reports success for a selection that was only partly applied.
-    // Closing on that would leave the skipped rows unaccounted for, so the
-    // partial outcome is named here; it is terminal, as the group already exists.
-    if (moved === "completed" && targets.length < sessions.length) {
-      showToast({ message: t("sessionsView.newGroupMovePartial") });
-    }
-    return moved;
+  // The Gateway checks the identities captured with the action. A bounded
+  // roster can page them out or replace a key, so it cannot authorize the move.
+  if (sessions.length > 0) {
+    return sessions.length === 1
+      ? patchSession(host, sessions[0]!, { category: name }, scope)
+      : patchSessions(host, sessions, { category: name }, scope);
   }
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
-  // A header-created group starts empty and needs no notice. Rows that were
-  // requested but resolved to nothing are a partial outcome: the group landed
-  // and the moves did not. The sidebar list is a bounded projection, so this is
-  // not proof the sessions are gone — say so rather than closing on a silent
-  // non-outcome the operator cannot account for.
-  if (sessions.length > 0) {
-    showToast({ message: t("sessionsView.newGroupMoveSkipped") });
-  }
-  // Re-render so the new section shows up.
+  // A header-created group starts empty and needs no assignment.
   host.requestUpdate();
   return "completed";
 }
@@ -625,6 +594,9 @@ export async function deleteSession(
   try {
     const outcome = await scope.sessions.delete(session.key, deleteParams);
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (outcome.worktreePreserved) {
+        showToast({ message: formatPreservedWorktreesNotice([outcome.worktreePreserved]) });
+      }
       return;
     }
     if (host.sidebarSessionStatusFilter() !== "active") {
@@ -641,9 +613,6 @@ export async function deleteSession(
       });
       if (!removeAccess.allowed) {
         window.alert(formatPreservedWorktreesNotice([preserved]));
-        if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-          return;
-        }
       } else {
         const removeWorktree = await showConfirmDialog({
           message: formatPreservedWorktreeConfirmation(preserved),
@@ -651,10 +620,8 @@ export async function deleteSession(
           danger: true,
           signal: scope.signal,
         });
-        // Cancel needs this guard too: the delete already landed, so a scope
-        // retired while the modal was open must not drive the navigation below.
-        // A retired scope leaves the worktree exactly like the no-access branch
-        // above, so it earns the same visible outcome instead of vanishing quietly.
+        // Reconnect cancels the worktree prompt, not the confirmed deletion.
+        // Report the preserved worktree without using the retired client.
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
           showToast({
             message: formatPreservedWorktreesNotice([preserved]),
@@ -673,24 +640,9 @@ export async function deleteSession(
           } catch (error) {
             host.sessionData.publishSessionMutationError(scope, error);
           }
-          if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-            return;
-          }
         }
       }
     }
-    if (!outcome.deleted || !session.active) {
-      return;
-    }
-    host.replaceCurrentSession(
-      buildAgentMainSessionKey({
-        agentId,
-        mainKey: resolveUiConfiguredMainKey({
-          agentsList: scope.context.agents.state.agentsList,
-          hello: scope.gateway.snapshot.hello,
-        }),
-      }),
-    );
   } catch (error) {
     host.sessionData.publishSessionMutationError(scope, error);
   }

@@ -25,6 +25,7 @@ export type OllamaTagModel = {
   size?: number;
   digest?: string;
   remote_host?: string;
+  remote_model?: string;
   capabilities?: string[];
   details?: {
     context_length?: number;
@@ -45,7 +46,8 @@ type OllamaRunningModel = {
 
 type OllamaModelRow = OllamaTagModel | OllamaRunningModel;
 
-export type OllamaModelWithContext = OllamaTagModel & OllamaModelShowInfo;
+export type OllamaModelWithContext = OllamaTagModel &
+  OllamaModelShowInfo & { capabilitiesFromList?: boolean };
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
@@ -96,12 +98,28 @@ export type OllamaModelShowInfo = {
 export const mergeOllamaModelShowInfo = (
   model: OllamaModelWithContext,
   info: OllamaModelShowInfo,
-): OllamaModelWithContext => ({
-  ...model,
-  ...info,
-  contextWindow: info.contextWindow ?? model.contextWindow ?? model.details?.context_length,
-  capabilities: info.capabilities ?? model.capabilities,
-});
+): OllamaModelWithContext => {
+  const incomplete =
+    info.capabilities === undefined &&
+    model.capabilities !== undefined &&
+    isOllamaRemoteModel(model) &&
+    !isOllamaEmbeddingOnlyModel(model);
+  return {
+    ...model,
+    ...info,
+    contextWindow: info.contextWindow ?? model.contextWindow ?? model.details?.context_length,
+    capabilities: incomplete
+      ? [
+          ...new Set([
+            ...(model.capabilities ?? []),
+            ...(info.showInspectionFailed ? [] : ["tools"]),
+            ...(isReasoningModelHeuristic(model.name) ? ["thinking"] : []),
+          ]),
+        ]
+      : (info.capabilities ?? model.capabilities),
+    ...(incomplete ? { capabilitiesFromList: true } : {}),
+  };
+};
 
 const OLLAMA_FAILED_SHOW_INFO: OllamaModelShowInfo = Object.freeze({
   showInspectionFailed: true,
@@ -333,7 +351,12 @@ export async function enrichOllamaCompletionModels(
     );
     for (const model of batch) {
       const canComplete = model.capabilities?.includes("completion");
-      if (!canComplete && (opts?.requireCompletionCapability || model.capabilities)) {
+      if (
+        isOllamaEmbeddingOnlyModel(model) ||
+        (!canComplete &&
+          (opts?.requireCompletionCapability ||
+            (model.capabilities && !model.capabilitiesFromList)))
+      ) {
         continue;
       }
       completionModels.push(model);
@@ -347,6 +370,21 @@ export async function enrichOllamaCompletionModels(
 
 export function isOllamaCloudModel(modelName: string | undefined): boolean {
   return isCloudModelRef(modelName);
+}
+
+export function isOllamaEmbeddingOnlyModel(model: OllamaTagModel): boolean {
+  // Advertised tools do not turn an embedding-only row into a chat model.
+  return (
+    model.capabilities?.includes("embedding") === true && !model.capabilities.includes("completion")
+  );
+}
+
+export function isOllamaRemoteModel(model: OllamaTagModel): boolean {
+  // Remote stubs can identify only the upstream model, without a host or cloud suffix.
+  return (
+    Boolean(model.remote_host?.trim() || model.remote_model?.trim()) ||
+    isOllamaCloudModel(model.name)
+  );
 }
 
 /**
@@ -371,30 +409,26 @@ export function buildOllamaModelDefinition(
   capabilities?: string[],
   opts?: { showInspectionFailed?: boolean },
 ): ModelDefinitionConfig {
-  const hasVision = capabilities?.includes("vision") ?? false;
-  const input: ("text" | "image")[] = hasVision ? ["text", "image"] : ["text"];
-  const reasoning =
-    supportsOllamaCloudFullThinkingEffort(modelId) ||
-    (capabilities === undefined
-      ? isReasoningModelHeuristic(modelId)
-      : capabilities.includes("thinking"));
-  const compat = {
-    supportsTools: capabilities?.includes("tools") ?? opts?.showInspectionFailed !== true,
-    supportsUsageInStreaming: true,
-    supportsJsonSchemaResponseFormat: !isOllamaCloudModel(modelId),
-  };
   return {
     id: modelId,
     name: modelId,
-    reasoning,
-    input,
+    reasoning:
+      supportsOllamaCloudFullThinkingEffort(modelId) ||
+      (capabilities === undefined
+        ? isReasoningModelHeuristic(modelId)
+        : capabilities.includes("thinking")),
+    input: capabilities?.includes("vision") ? ["text", "image"] : ["text"],
     cost: OLLAMA_DEFAULT_COST,
     contextWindow:
       contextWindow ??
       resolveOllamaCloudDefaultModel(modelId)?.contextWindow ??
       OLLAMA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
-    compat,
+    compat: {
+      supportsTools: capabilities?.includes("tools") ?? opts?.showInspectionFailed !== true,
+      supportsUsageInStreaming: true,
+      supportsJsonSchemaResponseFormat: !isOllamaCloudModel(modelId),
+    },
   };
 }
 

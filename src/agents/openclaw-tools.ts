@@ -8,6 +8,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import { bindAssembledAgentToolActionDescriptor } from "./agent-tool-metadata.js";
 import {
   type HookContext,
   isToolWrappedWithBeforeToolCallHook,
@@ -256,6 +257,8 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
         sameChannelThreadRequired: options?.sameChannelThreadRequired,
         sandboxRoot: options?.sandboxRoot,
         sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
+        sandboxFsBridge: options?.sandboxFsBridge,
+        sandboxWorkspaceMediaReadAllowed: options?.sandboxWorkspaceMediaReadAllowed,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
         sourceReplyOnly: options?.sourceReplyOnly,
@@ -615,6 +618,9 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
 
   allTools = filterToolsByClientCaps(allTools, options?.clientCaps);
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
+  for (const tool of allTools) {
+    bindAssembledAgentToolActionDescriptor(tool);
+  }
 
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
   const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(

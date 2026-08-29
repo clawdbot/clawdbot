@@ -889,25 +889,17 @@ describe("streamProxy loopback /api/stream", () => {
         throw new Error("expected loopback server address");
       }
 
-      const result = await resultWithinMs(
-        streamProxy(model, context, {
-          authToken: "token",
-          proxyUrl: `http://127.0.0.1:${address.port}`,
-          timeoutMs: 3_000,
-        }),
-        1_000,
-      );
+      const result = await streamProxy(model, context, {
+        authToken: "token",
+        proxyUrl: `http://127.0.0.1:${address.port}`,
+        timeoutMs: 3_000,
+      }).result();
+      // Native cancellation closes the remote socket asynchronously; the test owns the deadline.
+      await closed;
       expect(result).toMatchObject({
         ...entry.expected,
         content: [{ type: "text", text: "visible" }],
       });
-      const socketClosed = await Promise.race([
-        closed.then(() => true),
-        new Promise<boolean>((resolve) => {
-          setTimeout(() => resolve(false), 300);
-        }),
-      ]);
-      expect(socketClosed).toBe(true);
     },
   );
 

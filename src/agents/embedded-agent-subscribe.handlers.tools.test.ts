@@ -431,6 +431,14 @@ describe("handleToolExecutionStart read path checks", () => {
                   optionValue: "Production",
                 },
               },
+              {
+                label: "Other…",
+                action: {
+                  type: "question",
+                  questionId,
+                  intent: "custom-input",
+                },
+              },
             ],
           },
         ],
@@ -486,41 +494,25 @@ describe("handleToolExecutionStart read path checks", () => {
     await pending;
   });
 
-  it.each([
-    {
-      name: "multi-question",
-      questions: [
-        {
-          id: "target",
-          header: "Target",
-          question: "Where next?",
-          options: [{ label: "Staging" }, { label: "Production" }],
-        },
-        {
-          id: "region",
-          header: "Region",
-          question: "Which region?",
-          options: [{ label: "EU" }, { label: "US" }],
-        },
-      ],
-    },
-    {
-      name: "multi-select",
-      questions: [
-        {
-          id: "targets",
-          header: "Targets",
-          question: "Where next?",
-          options: [{ label: "Staging" }, { label: "Production" }],
-          multiSelect: true,
-        },
-      ],
-    },
-  ])("keeps $name ask_user prompts text-only", async ({ questions }) => {
+  it("keeps multi-question ask_user prompts text-only", async () => {
+    const questions = [
+      {
+        id: "target",
+        header: "Target",
+        question: "Where next?",
+        options: [{ label: "Staging" }, { label: "Production" }],
+      },
+      {
+        id: "region",
+        header: "Region",
+        question: "Which region?",
+        options: [{ label: "EU" }, { label: "US" }],
+      },
+    ];
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();
     ctx.params.onToolResult = onToolResult;
-    const toolCallId = `ask-${questions[0]?.id ?? "unknown"}`;
+    const toolCallId = "ask-multi-question";
 
     await startTool(ctx, {
       toolName: "ask_user",
@@ -532,12 +524,37 @@ describe("handleToolExecutionStart read path checks", () => {
 
     const payload = onToolResult.mock.calls[0]?.[0];
     expect(payload?.text).toContain(
-      questions.length > 1
-        ? "Reply by number or question id. Use a declared option where choices are fixed."
-        : "Reply with the number, the option text, or your own answer.",
+      "Reply by number or question id. Use a declared option where choices are fixed.",
     );
     expect(payload).not.toHaveProperty("presentation");
     expect(payload).not.toHaveProperty("presentationTextMode");
+    await activation.finish();
+  });
+
+  it("keeps a multi-select ask_user prompt readable without partial native state", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const questions = [
+      {
+        id: "checks",
+        header: "Checks",
+        question: "Which checks should run?",
+        options: [{ label: "Unit" }, { label: "Lint" }],
+        multiSelect: true,
+      },
+    ];
+
+    await startTool(ctx, { toolName: "ask_user", toolCallId: "ask-checks", args: { questions } });
+    const activation = await activateAskUserPrompt("ask-checks", { questions });
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+
+    const payload = onToolResult.mock.calls[0]?.[0];
+    expect(payload?.text).toContain(
+      "Reply with comma-separated option numbers or text, or your own answer.",
+    );
+    expect(payload).not.toHaveProperty("presentation");
+    expect(payload?.channelData).toEqual({ askUser: { questionId: activation.questionId } });
     await activation.finish();
   });
 
@@ -2881,7 +2898,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       normalizeAgentRunTerminalReceipt(Reflect.get(prepared.agentMeta, "terminalReceipt"))
         ?.successfulToolNames,
     ).toEqual([]);
-    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
   });
 
   it("emits the shared approver-DM notice when another approval client received the request", async () => {
@@ -2906,7 +2923,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     expect(requireMockCallArg(onToolResult, 0, "tool result").text).toBe(
       "Approval required. I sent approval DMs to the approvers for this account.",
     );
-    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
   });
 
   it("records an actionable failure when deterministic approval delivery rejects", async () => {

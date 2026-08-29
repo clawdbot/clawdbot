@@ -573,7 +573,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { content: [{ type: "text", text: "file data" }] },
     });
 
-    await Promise.resolve();
+    await toolHarness.subscription.waitForPendingEvents();
 
     expect(onToolResult).toHaveBeenCalledTimes(3);
     const readOutput = toolResultPayloadAt(onToolResult, 2);

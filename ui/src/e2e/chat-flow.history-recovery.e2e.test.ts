@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -17,8 +18,119 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+type ChatFlowTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
 suite.define(() => {
+  it("keeps an unrelated retained transcript after another tab deletes a session", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionA = "agent:main:session-a";
+    const sessionB = "agent:main:session-b";
+    const deletedSession = "agent:main:session-c";
+    const sessionAText = "Session A survives the peer deletion.";
+    const sessionBText = "Session B keeps the first pane retained.";
+    const historyCases = {
+      cases: [
+        {
+          match: { sessionKey: sessionA },
+          response: {
+            messages: [{ role: "assistant", content: [{ type: "text", text: sessionAText }] }],
+            sessionId: "session-a",
+          },
+        },
+        {
+          match: { sessionKey: sessionB },
+          response: {
+            messages: [{ role: "assistant", content: [{ type: "text", text: sessionBText }] }],
+            sessionId: "session-b",
+          },
+        },
+      ],
+    };
+    const sessionListResponse = chatSessionListResponse([
+      { key: sessionA, kind: "direct", label: "Session A", updatedAt: 3 },
+      { key: sessionB, kind: "direct", label: "Session B", updatedAt: 2 },
+      { key: deletedSession, kind: "direct", label: "Session C", updatedAt: 1 },
+    ]);
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "chat.history": historyCases,
+        "chat.startup": historyCases,
+        "sessions.list": sessionListResponse,
+      },
+      sessionKey: sessionA,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
+      await page.getByText(sessionAText, { exact: true }).waitFor({ timeout: 10_000 });
+
+      const sessionLink = (sessionKey: string) =>
+        page.locator(
+          `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
+        );
+      await sessionLink(sessionB).click();
+      await page.getByText(sessionBText, { exact: true }).waitFor({ timeout: 10_000 });
+      const retainedHistoryRequests = async () =>
+        (await gateway.getRequests("chat.history")).filter(({ params }) => {
+          const { sessionKey } = requireRecord(params);
+          return sessionKey === sessionA || sessionKey === sessionB;
+        });
+      const historyRequestsBeforePeerDelete = (await retainedHistoryRequests()).length;
+      const startupRequestsBeforePeerDelete = (await gateway.getRequests("chat.startup")).length;
+      await page.evaluate(() => {
+        window.addEventListener("storage", (event) => {
+          if (event.key === "openclaw.control.chatSnapshots.invalidate.v1") {
+            document.documentElement.dataset.snapshotInvalidationReceived = "true";
+          }
+        });
+      });
+
+      const peer = await context.newPage();
+      try {
+        await installMockGateway(peer, {
+          methodResponses: {
+            "sessions.delete": { deleted: true, ok: true },
+            "sessions.list": sessionListResponse,
+          },
+          sessionKey: deletedSession,
+        });
+        await peer.goto(`${suite.server.baseUrl}sessions`);
+        await peer.waitForFunction(() =>
+          Boolean((document.querySelector("openclaw-app") as ChatFlowTestApp).runtime),
+        );
+        await expect(
+          peer.evaluate(async (sessionKey) => {
+            const sessions = (document.querySelector("openclaw-app") as ChatFlowTestApp).runtime
+              ?.context.sessions;
+            if (!sessions) {
+              throw new Error("session capability unavailable");
+            }
+            return sessions.delete(sessionKey, { agentId: "main" });
+          }, deletedSession),
+        ).resolves.toMatchObject({ deleted: true });
+        await page.waitForFunction(
+          () => document.documentElement.dataset.snapshotInvalidationReceived === "true",
+        );
+      } finally {
+        await peer.close();
+      }
+
+      await sessionLink(sessionA).click();
+      await page.getByText(sessionAText, { exact: true }).waitFor({ timeout: 10_000 });
+      // Prefetch may warm C without reloading either retained pane. Request capture is
+      // append-only, so checking history after the startup window covers the same interval.
+      await expectRequestCountStable(gateway, "chat.startup", startupRequestsBeforePeerDelete);
+      expect(await retainedHistoryRequests()).toHaveLength(historyRequestsBeforePeerDelete);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("restores reasoning and tool activity after navigating away from a session", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     if (artifactDir) {
@@ -501,7 +613,7 @@ suite.define(() => {
           const rows = Array.from(pane?.querySelectorAll<HTMLElement>("[data-chat-row-key]") ?? []);
           samples.push({
             hiddenNotice: pane?.textContent?.includes("Showing last") ?? false,
-            loading: pane?.querySelector(".chat-history-loading") !== null,
+            loading: pane?.querySelector('.chat-history-available[aria-busy="true"]') !== null,
             messageCount: pane?.state?.chatMessages?.length ?? 0,
             minOpacity: rows.reduce(
               (minimum, row) => Math.min(minimum, Number.parseFloat(getComputedStyle(row).opacity)),
@@ -592,22 +704,24 @@ suite.define(() => {
 
       await gateway.closeLatest(1006, "lost ack");
 
-      const queue = page.locator(".chat-queue");
-      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      const deliveryStatus = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
+      await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-queue").count()).toBe(0);
+      await page.locator(".chat-group.user").getByText(prompt, { exact: true }).waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      await queue.locator(".chat-queue__retry").click();
+      await deliveryStatus.getByRole("button", { name: "Retry queued message" }).click();
 
       const sends = await waitForRequests(gateway, "chat.send", 2);
       const secondParams = requireRecord(sends[1]?.params);
       expect(secondParams.idempotencyKey).toBe(runId);
       expect(secondParams.message).toBe(prompt);
-      await queue.waitFor({ state: "detached", timeout: 10_000 });
+      await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
-  it("dismisses an ACK-lost banner after exact authoritative history proof", async () => {
+  it("clears inline delivery uncertainty after exact authoritative history proof", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -644,8 +758,11 @@ suite.define(() => {
       );
       await gateway.closeLatest(1006, "lost ack");
 
-      const queue = page.locator(".chat-queue");
-      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      const deliveryStatus = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
+      await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-queue").count()).toBe(0);
+      const userBubble = page.locator(".chat-group.user").getByText(prompt, { exact: true });
+      await userBubble.waitFor();
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/01-delivery-uncertain.png`, fullPage: true });
       }
@@ -665,7 +782,7 @@ suite.define(() => {
         sessionKey: "main",
         status: "done",
       });
-      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       if (artifactDir) {
         await page.screenshot({
@@ -691,8 +808,9 @@ suite.define(() => {
         status: "running",
       });
 
-      await queue.waitFor({ state: "detached", timeout: 10_000 });
-      await page.locator(".chat-group.user").getByText(prompt).waitFor({ timeout: 10_000 });
+      await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
+      await userBubble.waitFor({ timeout: 10_000 });
+      expect(await userBubble.count()).toBe(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/03-delivery-proven.png`, fullPage: true });

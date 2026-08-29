@@ -78,7 +78,6 @@ type MatrixHandlerTestHarnessOptions = {
   blockStreamingEnabled?: boolean;
   dmEnabled?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
-  textLimit?: number;
   mediaMaxBytes?: number;
   startupMs?: number;
   startupGraceMs?: number;
@@ -372,7 +371,6 @@ export function createMatrixHandlerTestHarness(
     blockStreamingEnabled: options.blockStreamingEnabled ?? false,
     dmEnabled: options.dmEnabled ?? true,
     dmPolicy,
-    textLimit: options.textLimit ?? 8_000,
     mediaMaxBytes: options.mediaMaxBytes ?? 10_000_000,
     startupMs: options.startupMs ?? 0,
     startupGraceMs: options.startupGraceMs ?? 0,

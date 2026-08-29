@@ -5,8 +5,8 @@ import {
   resolveBoardWidgetContentKindByPluginKind,
   resolveBoardWidgetContentKindResourceUrls,
 } from "../plugins/board-widget-content-kinds.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { verifyBoardViewTicket } from "./board-view-ticket.js";
+import { requireBoardViewTicketAuthority, verifyBoardViewTicket } from "./board-view-ticket.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
 type AuthorizedBoardWidgetView = {
   sessionKey: string;
@@ -17,12 +17,13 @@ type AuthorizedBoardWidgetView = {
 export function resolveAuthorizedBoardWidgetView(
   store: BoardStore,
   ticket: string,
-  options: { nowMs?: number } = {},
+  options: { gatewayContext?: GatewayRequestContext; nowMs?: number } = {},
 ): AuthorizedBoardWidgetView {
   const claims = verifyBoardViewTicket(ticket, options);
   if (!claims) {
     throw new BoardValidationError("invalid_operation", "board widget view ticket is invalid");
   }
+  const authority = requireBoardViewTicketAuthority(claims, options.gatewayContext);
   const document = claims.pluginFrame
     ? store.readWidgetRegistered(claims.sessionKey, claims.name)
     : store.readWidgetHtml(claims.sessionKey, claims.name);
@@ -39,7 +40,7 @@ export function resolveAuthorizedBoardWidgetView(
       throw new BoardValidationError("invalid_operation", "board widget view ticket is stale");
     }
     const registration = resolveBoardWidgetContentKindByPluginKind(
-      getActivePluginRegistry(),
+      authority.pluginRegistry,
       document.pluginKind,
     );
     const resourceUrls = registration

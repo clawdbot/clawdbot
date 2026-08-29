@@ -246,21 +246,31 @@ describe("createPtyAdapter", () => {
     });
   });
 
-  it("resolves wait when exit fires before wait is called", async () => {
-    const stub = createStubPty();
-    spawnMock.mockReturnValue(stub);
+  it.each([true, false])(
+    "preserves the first PTY exit across waits (waitBefore=%s)",
+    async (waitBefore) => {
+      const stub = createStubPty();
+      spawnMock.mockReturnValue(stub);
 
-    const adapter = await createPtyAdapter({
-      shell: "bash",
-      args: ["-lc", "exit 3"],
-    });
+      const adapter = await createPtyAdapter({
+        shell: "bash",
+        args: ["-lc", "exit 3"],
+      });
 
-    expect(stub.onExit).toHaveBeenCalledTimes(1);
-    stub.emitExit({ exitCode: 3, signal: 0 });
-    await expect(adapter.wait()).resolves.toEqual({ code: 3, signal: null });
-    expect(adapter.stdin?.destroyed).toBe(true);
-    expect(adapter.stdin?.writable).toBe(false);
-  });
+      expect(stub.onExit).toHaveBeenCalledTimes(1);
+      const pending = waitBefore ? [adapter.wait(), adapter.wait()] : [];
+      stub.emitExit({ exitCode: 3, signal: 0 });
+      const result = await adapter.wait();
+      expect(result).toStrictEqual({ code: 3, signal: null });
+      expect(adapter.stdin?.destroyed).toBe(true);
+      expect(adapter.stdin?.writable).toBe(false);
+      stub.emitExit({ exitCode: 9, signal: 15 });
+      adapter.dispose();
+      for (const wait of [...pending, adapter.wait()]) {
+        await expect(wait).resolves.toBe(result);
+      }
+    },
+  );
 
   it("reports stdin as non-writable after EOF or dispose", async () => {
     const stub = createStubPty();
@@ -292,9 +302,13 @@ describe("createPtyAdapter", () => {
       args: ["-lc", "echo ok"],
     });
     adapter.onStdout(() => undefined);
+    const pending = adapter.wait();
 
     adapter.dispose();
 
+    const result = await pending;
+    expect(result).toStrictEqual({ code: null, signal: null });
+    await expect(adapter.wait()).resolves.toBe(result);
     expect(stub.disposeData).toHaveBeenCalledTimes(1);
     expect(stub.disposeExit).toHaveBeenCalledTimes(1);
   });

@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -49,7 +50,7 @@ async function captureSidebar(page: Page, fileName: string) {
 }
 
 suite.define(() => {
-  it("keeps foreign-owned rows visible while a warm refresh's shared phase is in flight", async () => {
+  it("keeps foreign-owned rows visible while one warm owner-first refresh is in flight", async () => {
     const context = await suite.browser.newContext({
       viewport: { height: 800, width: 1200 },
       ...(captureProof
@@ -60,17 +61,12 @@ suite.define(() => {
     const adaRow = sessionRow("profile-ada", "agent:main:ada", "Ada research", 2);
     const bobRow = sessionRow("profile-bob", "agent:main:bob", "Bob operations", 1);
     const sharedRoster = rosterOf([adaRow, bobRow]);
-    const ownerRoster = rosterOf([adaRow]);
     const gateway = await installMockGateway(page, {
       presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
       sessionKey: "agent:main:ada",
       methodResponses: {
-        "sessions.list": {
-          cases: [
-            { match: { ownerId: "profile-ada" }, response: ownerRoster },
-            { response: sharedRoster },
-          ],
-        },
+        "sessions.subscribe": { subscribed: true, list: sharedRoster },
+        "sessions.list": sharedRoster,
       },
     });
 
@@ -82,10 +78,8 @@ suite.define(() => {
       await bob.waitFor();
       await captureSidebar(page, "warm-before-event.png");
 
-      // Hold the warm refresh open at its vulnerable point: release the
-      // owner-scoped response while the shared response remains deferred.
+      // Hold the single warm roster projection open and observe the existing DOM.
       const before = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list", { ownerId: "profile-ada" });
       await gateway.deferNext("sessions.list");
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey: adaRow.key,
@@ -94,8 +88,8 @@ suite.define(() => {
         reason: "create",
         updatedAt: 3,
       });
-      await gateway.waitForRequest("sessions.list", { after: before + 1 });
-      const ownerProbe = await page.evaluateHandle(() => {
+      await gateway.waitForRequest("sessions.list", { after: before });
+      const refreshProbe = await page.evaluateHandle(() => {
         const app = document.querySelector<
           HTMLElement & { runtime?: { context: ApplicationContext } }
         >("openclaw-app");
@@ -125,9 +119,7 @@ suite.define(() => {
           wasRemoved: () => removed,
         };
       });
-      await gateway.resolveDeferred("sessions.list", ownerRoster);
-
-      const ownerPhase = await ownerProbe.evaluate(async (probe) => {
+      const inFlight = await refreshProbe.evaluate(async (probe) => {
         await new Promise<void>((resolve) => {
           requestAnimationFrame(() => resolve());
         });
@@ -140,7 +132,7 @@ suite.define(() => {
           rowRemoved: probe.wasRemoved(),
         };
       });
-      expect(ownerPhase).toEqual({
+      expect(inFlight).toEqual({
         connected: true,
         loading: true,
         revisionAdvanced: false,
@@ -148,19 +140,19 @@ suite.define(() => {
         rowRemoved: false,
       });
       expect(
-        (await gateway.getRequests("sessions.list"))
-          .slice(before)
-          .map((request) => (request.params as { ownerId?: string }).ownerId ?? null),
-      ).toEqual(["profile-ada", null]);
+        (await gateway.getRequests("sessions.list")).slice(before).map((request) => request.params),
+      ).toEqual([
+        expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
+      ]);
 
       for (let sample = 0; sample < 6; sample += 1) {
         expect(await bob.count()).toBe(1);
         expect(await ada.count()).toBe(1);
       }
-      await captureSidebar(page, "warm-shared-deferred.png");
+      await captureSidebar(page, "warm-refresh-deferred.png");
 
       await gateway.resolveDeferred("sessions.list", sharedRoster);
-      const sharedPhase = await ownerProbe.evaluate(async (probe) => {
+      const completed = await refreshProbe.evaluate(async (probe) => {
         if (probe.sessions.canonicalListRevision === probe.revision) {
           await new Promise<void>((resolve) => {
             const unsubscribe = probe.sessions.subscribe(() => {
@@ -185,7 +177,7 @@ suite.define(() => {
           rowRemoved: probe.wasRemoved(),
         };
       });
-      expect(sharedPhase).toEqual({
+      expect(completed).toEqual({
         connected: true,
         loading: false,
         revisionAdvanced: true,
@@ -194,8 +186,8 @@ suite.define(() => {
       });
       await expect.poll(() => bob.count()).toBe(1);
       expect(await ada.count()).toBe(1);
-      await captureSidebar(page, "warm-after-merge.png");
-      await ownerProbe.dispose();
+      await captureSidebar(page, "warm-after-refresh.png");
+      await refreshProbe.dispose();
     } finally {
       await context.close();
     }

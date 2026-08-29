@@ -666,6 +666,9 @@ describe("Slack live QA runtime helpers", () => {
       if (!commentaryMarker || !toolMarker || !finalMarker || !verifyObserved) {
         throw new Error(`missing Slack progress verifier: ${testCase.id}`);
       }
+      // Progress cards compact command details from the middle, so the QA marker
+      // stays at the command suffix where the real Slack presentation preserves it.
+      expect(input).toContain(`run: sleep 5 # ${toolMarker}.`);
       const messages = [
         {
           channelId: "C123456789",
@@ -678,7 +681,7 @@ describe("Slack live QA runtime helpers", () => {
                 channelId: "C123456789",
                 text: testCase.commentaryStyle === "lane" ? "Working…" : commentaryMarker,
                 ...(testCase.commentaryStyle === "lane"
-                  ? { blockText: ["Update", commentaryMarker] }
+                  ? { blockText: [`• *Update* — ${commentaryMarker}`] }
                   : {}),
                 ts: testCase.commentaryTs,
               },
@@ -734,7 +737,7 @@ describe("Slack live QA runtime helpers", () => {
       { text: `_${commentaryMarker}_` },
       { text: ` \n_${commentaryMarker}_\t` },
       { text: `💬 ${commentaryMarker}` },
-      { blockText: ["Update", commentaryMarker], text: "Working…" },
+      { blockText: [`• *Update* — ${commentaryMarker}`], text: "Working…" },
     ]) {
       expect(() => verifyCommentaryMessage(message)).not.toThrow();
     }

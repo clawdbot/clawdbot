@@ -68,7 +68,8 @@ struct ChatGatewayRequestTests {
         let request = OpenClawChatGatewayRequests.sessionsList(
             limit: 12,
             search: "  incident  ",
-            archived: true)
+            archived: true,
+            agentID: " Reviewer ")
 
         #expect(request.method == "sessions.list")
         #expect(request.timeoutMs == 15000)
@@ -77,6 +78,14 @@ struct ChatGatewayRequestTests {
         #expect(request.params["limit"]?.value as? Int == 12)
         #expect(request.params["search"]?.value as? String == "incident")
         #expect(request.params["archived"]?.value as? Bool == true)
+        #expect(request.params["agentId"]?.value as? String == "Reviewer")
+
+        let unscoped = OpenClawChatGatewayRequests.sessionsList(
+            limit: nil,
+            search: nil,
+            archived: false,
+            agentID: "   ")
+        #expect(unscoped.params["agentId"] == nil)
     }
 
     @Test func `child session request encodes focused pagination filters`() {
@@ -296,7 +305,7 @@ struct ChatGatewayRequestTests {
         #expect(delete.params["name"]?.value as? String == "Personal")
     }
 
-    @Test func `rename clear archive and fork use session mutation contracts`() {
+    @Test func `rename clear archive delete and fork use session mutation contracts`() {
         let rename = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "agent:main:child",
             agentID: nil,
@@ -326,11 +335,16 @@ struct ChatGatewayRequestTests {
         let fork = OpenClawChatGatewayRequests.forkSession(
             parentSessionKey: "agent:main:child",
             agentID: nil)
+        let delete = OpenClawChatGatewayRequests.deleteSession(
+            sessionKey: "agent:main:child",
+            agentID: nil)
 
         #expect(rename.params["label"]?.value is NSNull)
         #expect(archive.params["archived"]?.value as? Bool == true)
         #expect(archive.params["expectedSessionId"]?.value as? String == "session-child")
         #expect(archive.timeoutMs == 600_000)
+        #expect(delete.method == "sessions.delete")
+        #expect(delete.timeoutMs == 600_000)
         #expect(restore.params["expectedSessionId"]?.value as? String == "session-child")
         #expect(restore.timeoutMs == 15000)
         #expect(fork.method == "sessions.create")
@@ -382,7 +396,8 @@ struct ChatGatewayRequestTests {
         #expect(request.params["thinking"]?.value as? String == "low")
         #expect(request.params["timeoutMs"] == nil)
         let encoded = try JSONEncoder().encode(request.params["attachments"])
-        #expect(String(decoding: encoded, as: UTF8.self).contains("a.png"))
+        let json = try #require(String(bytes: encoded, encoding: .utf8))
+        #expect(json.contains("a.png"))
     }
 
     @Test func `send request omits inherited thinking override`() {

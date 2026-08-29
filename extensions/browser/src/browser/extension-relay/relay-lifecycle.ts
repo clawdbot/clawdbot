@@ -76,8 +76,8 @@ export async function ensureExtensionRelayForProfile(
     }
     // The host-local HMAC key can rotate while Browser control stays up.
     // Resolve one canonical desired profile after adopting the live key.
-    const { ensureExtensionRelayToken, readExtensionRelayToken } = await import("./relay-auth.js");
-    const token = readExtensionRelayToken() ?? (await ensureExtensionRelayToken());
+    const { ensureExtensionRelayToken } = await import("./relay-auth.js");
+    const token = await ensureExtensionRelayToken();
     if (state.resolved.extensionRelayToken !== token) {
       state.resolved = { ...state.resolved, extensionRelayToken: token };
     }

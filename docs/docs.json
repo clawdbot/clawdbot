@@ -1054,6 +1054,7 @@
                 "pages": [
                   "index",
                   "start/showcase",
+                  "start/why-openclaw",
                   "concepts/features"
                 ]
               },
@@ -1070,6 +1071,7 @@
                 "group": "Guides",
                 "pages": [
                   "start/openclaw",
+                  "start/teams",
                   "start/wizard-cli-reference",
                   "start/wizard-cli-automation"
                 ]
@@ -1336,7 +1338,7 @@
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
-              "plugins/geolocation",
+                  "plugins/geolocation",
                   "plugins/beam",
                   "plugins/voice-call",
                   "plugins/vault",
@@ -1379,6 +1381,7 @@
                 "pages": [
                   "automation/index",
                   "automation/cron-jobs",
+                  "automation/imap",
                   "automation/tasks",
                   "automation/taskflow",
                   "automation/standing-orders",
@@ -1696,6 +1699,7 @@
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/restart-recovery",
+                      "gateway/cloud-sessions",
                       "gateway/cloud-workers",
                       "gateway/multiple-gateways",
                       "gateway/multi-tenant-hosting"

@@ -13,6 +13,44 @@ afterEach(async () => {
 });
 
 describe("chat composer steering queue", () => {
+  it("keeps attempted unconfirmed messages inline while local commands retain retry and discard", () => {
+    const onQueueRetry = vi.fn();
+    const onQueueRemove = vi.fn();
+    const container = renderQueue({
+      queue: [
+        {
+          id: "message",
+          text: "Already attempted",
+          createdAt: 1,
+          sendState: "unconfirmed",
+          sendAttempts: 1,
+        },
+        {
+          id: "reset",
+          text: "/reset",
+          localCommandName: "reset",
+          createdAt: 2,
+          sendState: "unconfirmed",
+          sendError: "Check the conversation before retrying the command.",
+          sendAttempts: 1,
+        },
+      ],
+      onQueueRetry,
+      onQueueRemove,
+    });
+
+    const rows = container.querySelectorAll(".chat-queue__item");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.getAttribute("data-chat-queue-item")).toBe("reset");
+    expect(rows[0]?.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(
+      t("chat.queue.states.needsReview"),
+    );
+    rows[0]?.querySelector<HTMLButtonElement>(".chat-queue__retry")?.click();
+    rows[0]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
+    expect(onQueueRetry).toHaveBeenCalledWith("reset");
+    expect(onQueueRemove).toHaveBeenCalledWith("reset");
+  });
+
   it("renders the durable steer mode without a run-bound state", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -403,15 +441,16 @@ describe("chat composer queue reordering", () => {
     expect(onQueueEditCancel).not.toHaveBeenCalled();
   });
 
-  it("projects an offline transition on each row without a queue header", () => {
+  it("projects one offline state on each row without a queue header", () => {
     const container = renderQueue({
       offline: true,
-      queue: [{ id: "a", text: "a", createdAt: 1, sendState: "waiting-idle" }],
+      queue: [{ id: "a", text: "a", createdAt: 1, queueMode: "steer", sendState: "waiting-idle" }],
       onQueueRemove: vi.fn(),
     });
 
     const row = container.querySelector(".chat-queue__item");
     expect(row?.classList.contains("chat-queue__item--reconnect")).toBe(true);
+    expect(row?.querySelectorAll(".chat-queue__badge")).toHaveLength(1);
     expect(row?.querySelector(".chat-queue__badge--reconnect")?.textContent?.trim()).toBe(
       t("chat.queue.states.waitingForReconnect"),
     );

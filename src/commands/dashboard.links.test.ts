@@ -71,14 +71,20 @@ function expectNoLogWith(text: string): void {
   expect(logMessages().join("\n")).not.toContain(text);
 }
 
-function mockSnapshot(token: unknown = "abc") {
+function mockSnapshot(
+  token: unknown = "abc",
+  gatewayOptions?: {
+    controlUi?: { basePath: string };
+    tls?: { enabled: boolean };
+  },
+) {
   readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/openclaw.json",
     exists: true,
     raw: "{}",
     parsed: {},
     valid: true,
-    config: { gateway: { auth: { token } } },
+    config: { gateway: { auth: { token }, ...gatewayOptions } },
     issues: [],
     legacyIssues: [],
   });
@@ -216,6 +222,30 @@ describe("dashboardCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith("ssh hint");
   });
 
+  it("preserves Gateway TLS after remote browser delivery fails", async () => {
+    vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
+    mockSnapshot("shhhh", {
+      controlUi: { basePath: "/control" },
+      tls: { enabled: true },
+    });
+    resolveControlUiLinksMock.mockReturnValue({
+      httpUrl: "https://127.0.0.1:18789/control/",
+      wsUrl: "wss://127.0.0.1:18789/control",
+    });
+    copyToClipboardMock.mockResolvedValue(false);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(false);
+    formatControlUiSshHintMock.mockReturnValue("ssh hint");
+
+    await dashboardCommand(runtime);
+
+    expect(formatControlUiSshHintMock).toHaveBeenCalledWith({
+      port: 18789,
+      basePath: "/control",
+      tlsEnabled: true,
+    });
+  });
+
   it("reports opener failure without claiming the host has no GUI", async () => {
     mockSnapshot("shhhh");
     copyToClipboardMock.mockResolvedValue(true);
@@ -243,6 +273,7 @@ describe("dashboardCommand", () => {
     expect(formatControlUiSshHintMock).toHaveBeenCalledWith({
       port: 18789,
       basePath: undefined,
+      tlsEnabled: false,
     });
     expect(runtime.log).toHaveBeenCalledWith("ssh hint");
   });
@@ -259,7 +290,11 @@ describe("dashboardCommand", () => {
     // formatControlUiSshHint must NOT receive the token — the returned
     // hint string is written to runtime.log, which flows into the same
     // console-captured log file readable by operator.read-scoped devices.
-    expect(formatControlUiSshHintMock).toHaveBeenCalledWith({ port: 18789, basePath: undefined });
+    expect(formatControlUiSshHintMock).toHaveBeenCalledWith({
+      port: 18789,
+      basePath: undefined,
+      tlsEnabled: false,
+    });
     const [sshHintOptions] = formatControlUiSshHintMock.mock.calls[0] ?? [];
     expect(sshHintOptions).not.toHaveProperty("token");
 

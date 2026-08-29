@@ -278,6 +278,15 @@ final class AppState {
     /// Gateway-provided UI accent color (hex). Optional; clients provide a default.
     var seamColorHex: String?
 
+    /// Caller's per-profile accent (users.prefs.get). Kept separate from
+    /// seamColorHex so settings-pane config refreshes cannot clobber it.
+    var profileAccentHex: String?
+
+    /// Accent the UI renders: the profile accent wins over the gateway seam color.
+    var effectiveAccentHex: String? {
+        self.profileAccentHex ?? self.seamColorHex
+    }
+
     var iconOverride: IconOverrideSelection {
         didSet { self.ifNotPreview { AppDefaults.standard.set(self.iconOverride.rawValue, forKey: iconOverrideKey) } }
     }
@@ -528,6 +537,7 @@ final class AppState {
             AppDefaults.standard.set(true, forKey: talkShiftToStopEnabledKey)
         }
         self.seamColorHex = nil
+        self.profileAccentHex = nil
         if let storedHeartbeats = AppDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {
             self.heartbeatsEnabled = storedHeartbeats
         } else {
@@ -1095,16 +1105,10 @@ extension AppState {
     }
 
     func setTalkEnabled(_ enabled: Bool) async {
-        guard voiceWakeSupported else {
-            self.talkEnabled = false
-            await GatewayConnection.shared.talkMode(enabled: false, phase: "disabled")
-            return
-        }
-
-        self.talkEnabled = enabled
+        self.talkEnabled = enabled && voiceWakeSupported
         guard !self.isPreview else { return }
 
-        if !enabled {
+        if !self.talkEnabled {
             await GatewayConnection.shared.talkMode(enabled: false, phase: "disabled")
             return
         }
@@ -1549,7 +1553,7 @@ extension AppState {
 
 @MainActor
 enum AppStateStore {
-    static let shared = AppState()
+    static let shared = AppState(preview: ProcessInfo.processInfo.isPreview)
 
     static func updateLaunchAtLogin(enabled: Bool) {
         Task.detached(priority: .utility) {

@@ -2138,14 +2138,20 @@ describe("sendMessageTelegram", () => {
     expect(botApi.sendMessage).toHaveBeenCalledTimes(3);
   });
 
-  it("does not continue after accepted-send bookkeeping fails", async () => {
+  it.each([
+    new Error("delivery observer failed"),
+    createHtmlParseError(),
+    new Error("Bad Request: message text is empty"),
+    createChunkRejection("delivery observer failed"),
+  ])("does not continue after accepted-send bookkeeping fails: %s", async (observerError) => {
     botApi.sendMessage
       .mockResolvedValueOnce({ message_id: 54, chat: { id: "123" } })
-      .mockResolvedValueOnce({ message_id: 55, chat: { id: "123" } });
+      .mockResolvedValueOnce({ message_id: 55, chat: { id: "123" } })
+      .mockResolvedValue({ message_id: 56, chat: { id: "123" } });
     const onDeliveryResult = vi
       .fn()
       .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("delivery observer failed"));
+      .mockRejectedValueOnce(observerError);
 
     let observed: unknown;
     try {
@@ -3487,6 +3493,34 @@ describe("sendMessageTelegram", () => {
     expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(observed).toHaveProperty("cause", terminal);
     expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("maps a supergroup migration rejection without rewriting the durable target", async () => {
+    const chatId = "-123456789";
+    const migratedChatId = -1_001_234_567_890;
+    const terminal = Object.assign(
+      new Error("400: Bad Request: group chat was upgraded to a supergroup chat"),
+      {
+        name: "GrammyError",
+        error_code: 400,
+        description: "Bad Request: group chat was upgraded to a supergroup chat",
+        parameters: { migrate_to_chat_id: migratedChatId },
+      },
+    );
+    const sendMessage = vi.fn().mockRejectedValue(terminal);
+    const api = makeTelegramApiTestMock({ sendMessage });
+
+    const observed = await sendMessageTelegram(chatId, "hi", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    }).catch((error: unknown) => error);
+
+    expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(observed).toMatchObject({ cause: terminal, retryable: false });
+    expect(observed).toMatchObject({ message: expect.stringContaining(String(migratedChatId)) });
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(firstMockCall(sendMessage, "sendMessage call")[0]).toBe(chatId);
   });
 
   it("keeps broad 421-shaped durable send errors ambiguous", async () => {

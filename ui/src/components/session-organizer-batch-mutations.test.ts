@@ -6,12 +6,16 @@ import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import type { SessionDeleteBatchResult } from "../lib/sessions/session-capability.ts";
+import type {
+  SessionDeleteBatchResult,
+  SessionDeleteOutcome,
+} from "../lib/sessions/session-capability.ts";
 import { showToast } from "../lib/toast.ts";
 import { SESSION_MUTATION_TEST_METHODS } from "../test-helpers/gateway-methods.ts";
 import {
@@ -248,9 +252,28 @@ describe("patchSessionRows", () => {
     expect(harness.refreshReplacement).toHaveBeenCalledOnce();
   });
 
-  it("uses the legacy-compatible batch Mark as read payload", async () => {
+  it.each([{ unread: false }, { unread: true }, { category: "Projects" }, { pinned: true }])(
+    "preserves captured identities for metadata patch %j",
+    async (patch) => {
+      const rows = [sessionRow(0), sessionRow(1)];
+      const harness = createHarness();
+
+      await patchSessionRows(harness.host, rows, patch, harness.scope);
+
+      expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
+        targets: rows.map((row) => ({
+          key: row.key,
+          agentId: "main",
+          expectedSessionId: row.sessionId,
+        })),
+        patch,
+      });
+    },
+  );
+
+  it("keeps batch read identity independent of the unread acknowledgement capability", async () => {
     const rows = [sessionRow(0), sessionRow(1)];
-    const harness = createHarness();
+    const harness = createHarness({ capabilities: [] });
 
     await patchSessionRows(harness.host, rows, { unread: false }, harness.scope);
 
@@ -258,19 +281,8 @@ describe("patchSessionRows", () => {
       targets: rows.map((row) => ({
         key: row.key,
         agentId: "main",
+        expectedSessionId: row.sessionId,
       })),
-      patch: { unread: false },
-    });
-  });
-
-  it("uses the legacy batch read payload when the Gateway lacks the unread contract", async () => {
-    const rows = [sessionRow(0), sessionRow(1)];
-    const harness = createHarness({ capabilities: [] });
-
-    await patchSessionRows(harness.host, rows, { unread: false }, harness.scope);
-
-    expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
-      targets: rows.map((row) => ({ key: row.key, agentId: "main" })),
       patch: { unread: false },
     });
   });
@@ -526,6 +538,29 @@ describe("session organizer destructive confirmations", () => {
     patchSettings({ sessionDeleteConfirm: true });
     document.body.replaceChildren();
     restoreDialogPolyfill();
+  });
+
+  it("keeps a preservation notice when optimistic navigation unmounts the initiating header", async () => {
+    const harness = createHarness(destructiveHarness);
+    const response = createDeferred<SessionDeleteOutcome>();
+    harness.deleteOne.mockImplementationOnce(() => response.promise);
+    const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
+    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    await vi.waitFor(() => expect(harness.deleteOne).toHaveBeenCalledOnce());
+    harness.retireScope();
+    response.resolve({
+      deleted: true,
+      worktreePreserved: {
+        id: "wt-busy",
+        branch: "feature",
+        path: "/tmp/worktree",
+        reason: "busy",
+      },
+    });
+    await pending;
+    expect(showToast).toHaveBeenCalledWith({
+      message: "Managed Worktrees:\nfeature — live run or cleanup active",
+    });
   });
 
   it("renders the localized batch-delete copy in-app and deletes once accepted", async () => {

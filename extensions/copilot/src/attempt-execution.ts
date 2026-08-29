@@ -98,7 +98,6 @@ export async function runCopilotExecution(context: {
   let timedOut = false;
   let promptError: Error | undefined;
   let sdkSessionId: string | undefined;
-  let sessionIdUsed = input.sessionId;
   // Resumed sessions may predate the atomic journal or survive a crash. Only a
   // session created under this journal can be deleted after incomplete cleanup.
   let nativeSessionCreatedFresh = false;
@@ -169,7 +168,6 @@ export async function runCopilotExecution(context: {
             now,
             promptError: undefined,
             sdkSessionId: undefined,
-            sessionIdUsed: input.sessionId,
           }),
         );
       }
@@ -183,7 +181,6 @@ export async function runCopilotExecution(context: {
             error,
           ),
           sdkSessionId: undefined,
-          sessionIdUsed: input.sessionId,
         }),
       );
     }
@@ -202,7 +199,6 @@ export async function runCopilotExecution(context: {
           "[copilot-attempt] cwd override is not supported for sandboxed Copilot runs; omit cwd or use the agent workspace as cwd",
         ),
         sdkSessionId: undefined,
-        sessionIdUsed: input.sessionId,
       }),
     );
   }
@@ -239,7 +235,6 @@ export async function runCopilotExecution(context: {
         now,
         promptError: createPromptError("model_not_supported", toCopilotError(error).message, error),
         sdkSessionId: undefined,
-        sessionIdUsed: input.sessionId,
       }),
     );
   }
@@ -316,7 +311,6 @@ export async function runCopilotExecution(context: {
             error,
           ),
           sdkSessionId: undefined,
-          sessionIdUsed: input.sessionId,
         });
         return finishAttempt(result);
       }
@@ -400,7 +394,6 @@ export async function runCopilotExecution(context: {
         "[copilot-attempt] canonical transcript persistence requires the Copilot SDK session id",
       );
     }
-    sessionIdUsed = sdkSessionId ?? input.sessionId;
     if (sdkSessionId && deps.onSessionEstablished && !settledToolFinalization) {
       try {
         deps.onSessionEstablished({
@@ -474,6 +467,7 @@ export async function runCopilotExecution(context: {
         abortActiveSession,
         bridge,
         canAcceptSteering: () => initialSdkUserValidated,
+        startedAtMs: input.startedAtMs,
         input,
         isAborted: () => aborted,
         isSettled: () => settled,
@@ -661,7 +655,6 @@ export async function runCopilotExecution(context: {
     resumeFailureRecovered,
     sdkSessionId,
     sentTurnStarted,
-    sessionIdUsed,
     settledFinalizationAssistantCompleted,
     settledToolFinalization,
     timedOut,

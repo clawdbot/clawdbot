@@ -53,7 +53,7 @@ export const execSchema = Type.Object({
     }),
   ),
   host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
-    description: "Exec host/target (auto|sandbox|gateway|node).",
+    description: "Omit or use auto to inherit the configured host.",
   }),
   security: Type.Optional(
     Type.String({

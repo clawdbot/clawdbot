@@ -1956,7 +1956,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       );
 
       assertPrepared(prepared);
-      expect(prepared.ctxPayload.RawBody).toBe("caption\n\n[slack forwarded image unavailable]");
+      expect(prepared.ctxPayload.RawBody).toBe("caption\n\n[slack attachment unavailable]");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -2100,17 +2100,18 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
   it("keeps a failed file recoverable when a sibling download reaches the agent", async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn(
-      async (input: RequestInfo | URL) =>
-        new Response(Buffer.from("image contents"), {
-          status: 200,
-          headers: {
-            "content-type": "image/png",
-            ...(typeof input === "string" && input.includes("original-name.png")
-              ? { "content-disposition": 'attachment; filename="server-renamed.png"' }
-              : {}),
-          },
-        }),
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) =>
+      typeof input === "string" && input.includes("missing-contract.pdf")
+        ? new Response("Not Found", { status: 404 })
+        : new Response(Buffer.from("image contents"), {
+            status: 200,
+            headers: {
+              "content-type": "image/png",
+              ...(typeof input === "string" && input.includes("original-name.png")
+                ? { "content-disposition": 'attachment; filename="server-renamed.png"' }
+                : {}),
+            },
+          }),
     ) as typeof fetch;
     let downloadedPaths: string[] = [];
 
@@ -2131,7 +2132,12 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
               url_private_download: "https://files.slack.com/original-name.png",
             },
             { name: "original-name.png", mimetype: "image/png" },
-            { id: "F1", name: "missing-contract.pdf", mimetype: "application/pdf" },
+            {
+              id: "F1",
+              name: "missing-contract.pdf",
+              mimetype: "application/pdf",
+              url_private_download: "https://files.slack.com/missing-contract.pdf",
+            },
           ],
         }),
       );
@@ -2144,13 +2150,52 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       expect(prepared.ctxPayload.RawBody).toContain("server-renamed.png (image/png)");
       expect(prepared.ctxPayload.RawBody?.match(/original-name\.png/g)).toHaveLength(1);
       expect(prepared.ctxPayload.BodyForAgent).toContain(
-        "missing-contract.pdf (application/pdf, fileId: F1)",
+        "missing-contract.pdf (application/pdf, fileId: F1) unavailable (",
       );
+      expect(prepared.ctxPayload.BodyForAgent).toContain("HTTP 404");
+      expect(prepared.ctxPayload.BodyForAgent).toContain("[slack 2 attachments unavailable]");
     } finally {
       globalThis.fetch = originalFetch;
       await Promise.all(
         downloadedPaths.map((downloadedPath) => fs.rm(downloadedPath, { force: true })),
       );
+    }
+  });
+
+  it("keeps the ninth file visible to the agent without downloading past the cap", async () => {
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn(
+      async () =>
+        new Response(Buffer.from("image contents"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    globalThis.fetch = mockFetch as typeof fetch;
+    let downloadedPaths: string[] = [];
+    try {
+      const prepared = await prepareWithDefaultCtx(
+        createSlackMessage({
+          text: "Inspect these files",
+          files: Array.from({ length: 9 }, (_, index) => ({
+            id: `FCAP${index}`,
+            name: `image-${index}.png`,
+            mimetype: "image/png",
+            url_private_download: `https://files.slack.com/image-${index}.png`,
+          })),
+        }),
+      );
+      assertPrepared(prepared);
+      downloadedPaths =
+        prepared.ctxPayload.media?.flatMap((media) => (media.path ? [media.path] : [])) ?? [];
+      expect(mockFetch).toHaveBeenCalledTimes(8);
+      expect(prepared.ctxPayload.media).toHaveLength(8);
+      expect(prepared.ctxPayload.BodyForAgent).toContain(
+        "image-8.png (image/png, fileId: FCAP8) unavailable (omitted: 8-file limit)",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      await Promise.all(downloadedPaths.map((filePath) => fs.rm(filePath, { force: true })));
     }
   });
 
@@ -2170,7 +2215,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
     assertPrepared(prepared);
     expect(prepared.ctxPayload.RawBody).toContain(
-      "[Slack file: forwarded-report.pdf (fileId: FFORWARD)]",
+      "[Slack file: forwarded-report.pdf (fileId: FFORWARD) unavailable (no private download URL)]",
     );
   });
 
@@ -2196,7 +2241,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
     assertPrepared(prepared);
     expect(prepared.ctxPayload.RawBody).toContain(
-      "[Slack file: direct-report.pdf (fileId: FDIRECT), shared-report.pdf (fileId: FSHARED), forwarded-report.pdf (fileId: FFORWARD)]",
+      "[Slack file: direct-report.pdf (fileId: FDIRECT) unavailable (no private download URL), shared-report.pdf (fileId: FSHARED) unavailable (no private download URL), forwarded-report.pdf (fileId: FFORWARD) unavailable (no private download URL)]",
     );
   });
 
@@ -2209,7 +2254,9 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
 
     assertPrepared(prepared);
-    expect(prepared.ctxPayload.RawBody).toContain("[Slack file: file]");
+    expect(prepared.ctxPayload.RawBody).toContain(
+      "[Slack file: file unavailable (no private download URL)]",
+    );
   });
 
   it("extracts attachment text for bot messages with empty text when allowBots is true (#27616)", async () => {
@@ -3379,6 +3426,94 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         expectAssistantHistory: true,
       },
     );
+  });
+
+  it("keeps unavailable thread-root files visible beside hydrated media", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) =>
+      (typeof input === "string" ? input : input instanceof URL ? input.href : input.url).includes(
+        "missing.pdf",
+      )
+        ? new Response("Not Found", { status: 404 })
+        : new Response(Buffer.from("image contents"), {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          }),
+    ) as typeof fetch;
+    let downloadedPaths: string[] = [];
+    const rootMessage = {
+      text: `${"Root context. ".repeat(200)}Inspect both attachments`,
+      user: "U1",
+      ts: "760.000",
+      files: [
+        {
+          id: "FAVAILABLE",
+          name: "available.png",
+          mimetype: "image/png",
+          url_private_download: "https://files.slack.com/available.png",
+        },
+        {
+          id: "FMISSING",
+          name: "missing.pdf",
+          mimetype: "application/pdf",
+          url_private_download: "https://files.slack.com/missing.pdf",
+        },
+      ],
+    };
+    const replies = vi.fn(async (params: { limit?: number }) => ({
+      messages:
+        params.limit === 1
+          ? [rootMessage]
+          : Array.from({ length: 21 }, (_, index) => ({
+              text: `Prior reply ${index}`,
+              user: "U1",
+              ts: `760.${String(index + 100).padStart(3, "0")}`,
+            })),
+      response_metadata: { next_cursor: "" },
+    }));
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const slackCtx = createThreadSlackCtx({ cfg, replies });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    try {
+      const prepared = await prepareThreadMessage(slackCtx, {
+        channel: "CROOTPARTIAL",
+        text: "Please use the files from the root",
+        ts: "761.000",
+        thread_ts: "760.000",
+      });
+
+      assertPrepared(prepared);
+      downloadedPaths =
+        prepared.ctxPayload.media?.flatMap((media) => (media.path ? [media.path] : [])) ?? [];
+      expect(prepared.ctxPayload.media).toHaveLength(1);
+      expect(prepared.ctxPayload.media?.[0]).toMatchObject({
+        contentType: "image/png",
+        fileName: "available.png",
+      });
+      expect(prepared.ctxPayload.ThreadStarterBody).toMatch(/^\[slack attachment unavailable\]/);
+      expect(prepared.ctxPayload.ThreadStarterBody).toContain(
+        "missing.pdf (application/pdf, fileId: FMISSING) unavailable (",
+      );
+      expect(prepared.ctxPayload.ThreadStarterBody).toContain("HTTP 404");
+      expect(prepared.ctxPayload.ThreadStarterBody).toContain("Inspect both attachments");
+      expect(prepared.ctxPayload.ThreadStarterBody?.slice(0, 2_000)).toContain("missing.pdf");
+      expect(prepared.ctxPayload.ThreadHistoryBody).toContain(
+        "missing.pdf (application/pdf, fileId: FMISSING) unavailable (",
+      );
+      expect(prepared.ctxPayload.ThreadHistoryBody).toContain("HTTP 404");
+      expect(prepared.ctxPayload.ThreadHistoryBody?.match(/\[slack message id:/g)).toHaveLength(20);
+      expect(prepared.ctxPayload.RawBody).not.toContain("missing.pdf");
+      expect(prepared.ctxPayload.CommandBody).toBe("Please use the files from the root");
+    } finally {
+      globalThis.fetch = originalFetch;
+      await Promise.all(downloadedPaths.map((filePath) => fs.rm(filePath, { force: true })));
+    }
   });
 
   it("skips loading thread history when thread session already exists in store (bloat fix)", async () => {

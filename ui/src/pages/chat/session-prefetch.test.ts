@@ -3,6 +3,7 @@
 import { IDBFactory } from "fake-indexeddb";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -130,6 +131,7 @@ describe("recent session prefetch", () => {
         },
       },
       sessions: {
+        subscribe: () => () => undefined,
         get canonicalListRevision() {
           return current.listRevision;
         },
@@ -188,6 +190,28 @@ describe("recent session prefetch", () => {
     );
     controller.hostUpdated?.();
   }
+
+  it("does not repopulate a removed session from an in-flight prefetch before the next list revision", async () => {
+    const key = "agent:main:deleted";
+    const response = createDeferred<ReturnType<typeof historyResult>>();
+    const request = vi.fn(() => response.promise);
+    const snapshot = {
+      client: { request } as unknown as GatewayBrowserClient,
+      listRevision: 1,
+      openSessionKeys: [],
+      rows: [row(key, NOW - 1)],
+    };
+    updatePrefetch(snapshot);
+    await vi.advanceTimersByTimeAsync(300);
+    await settlePromises();
+    expect(request).toHaveBeenCalledOnce();
+    updatePrefetch({ ...snapshot, rows: [] });
+    response.resolve(historyResult(key));
+    await settlePromises();
+    expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })).toBeNull();
+    await store.flush();
+    expect(await store.read(key)).toBeNull();
+  });
 
   it("quickly warms five eligible sessions together without reopening fresh or active history", async () => {
     store.write("agent:main:fresh", historySnapshot("fresh"));

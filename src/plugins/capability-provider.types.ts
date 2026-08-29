@@ -219,7 +219,11 @@ export type WorkerProvider = {
   ) => Promise<WorkerLease>;
   /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
   resolveProvisionTimeoutMs?: (profile: WorkerProfile) => number;
-  /** Throws on transient/indeterminate failures; `unknown` means authoritative absence. */
+  /**
+   * Throws on transient/indeterminate observation failures. `unknown` means the provider no
+   * longer recognizes a usable lease; core fences it and requests destroy. Only `destroyed`
+   * proves teardown complete and lets core skip destroy.
+   */
   inspect: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<WorkerLeaseStatus>;
   /**
    * Resolves provider-owned dynamic identities. When absent, the gateway uses its generic

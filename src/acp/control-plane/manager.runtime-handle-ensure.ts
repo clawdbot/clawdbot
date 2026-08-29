@@ -35,7 +35,6 @@ export async function ensureManagerRuntimeHandle(params: {
   selectedBackend?: string;
   deps: Pick<AcpSessionManagerDeps, "requireRuntimeBackend">;
   runtimeHandles: ManagerRuntimeHandleCache;
-  enforceConcurrentSessionLimit: (params: { cfg: OpenClawConfig; sessionKey: string }) => void;
   writeSessionMeta: WriteManagerSessionMeta;
 }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
   const agent =
@@ -87,11 +86,6 @@ export async function ensureManagerRuntimeHandle(params: {
       reason: "runtime-handle-replaced",
     });
   }
-
-  params.enforceConcurrentSessionLimit({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-  });
 
   const backend = params.deps.requireRuntimeBackend(configuredBackend || undefined);
   const runtime = backend.runtime;

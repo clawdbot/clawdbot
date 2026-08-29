@@ -43,7 +43,11 @@ export async function runPreparedReply(
       allowGatewaySubagentBinding: true,
       workspaceDir: context.workspaceDir,
     },
-    { catalogMode: "static", pluginGeneration: dispatchRuntime.pluginGeneration },
+    {
+      catalogMode: "static",
+      pluginGeneration: dispatchRuntime.pluginGeneration,
+      abortSignal: params.opts?.abortSignal,
+    },
   );
   let leaseActive = true;
   try {

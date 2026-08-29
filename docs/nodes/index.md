@@ -185,7 +185,7 @@ If the node retries with changed auth details, re-run `openclaw devices list` an
 
 Naming options:
 
-- `--display-name` on `openclaw node run` / `openclaw node install` (persists in the shared `node_host_config` SQLite row alongside the client instance ID and Gateway connection metadata).
+- `--display-name` on `openclaw node run` / `openclaw node install` (persists in the shared `nodeHost.config` SQLite machine-state value alongside the client instance ID and Gateway connection metadata).
 - `openclaw nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
 
 ### Node-hosted MCP servers
@@ -280,7 +280,7 @@ operators can ignore skills from every paired node with
 
 The headless node keeps three separate state records in shared SQLite:
 
-- `~/.openclaw/state/openclaw.sqlite` (`node_host_config`): the client instance ID, display name, and Gateway connection metadata.
+- `~/.openclaw/state/openclaw.sqlite` (`config_machine_state`, key `nodeHost.config`): the client instance ID, display name, and Gateway connection metadata.
 - `~/.openclaw/state/openclaw.sqlite` (`device_identities`, key `primary`): the signed device keypair and derived cryptographic device ID.
 - `~/.openclaw/state/openclaw.sqlite` (`device_auth_tokens`): paired device auth tokens keyed by cryptographic device ID and role.
 
@@ -452,7 +452,8 @@ node does not advertise this command yet, so its rows remain view-only.
 
 ### Host OpenClaw sessions
 
-A headless node host can separately opt into full OpenClaw session hosting:
+The macOS menu bar app and the headless node host can opt into full OpenClaw
+session hosting with the same node-local setting:
 
 ```json5
 {
@@ -462,7 +463,13 @@ A headless node host can separately opt into full OpenClaw session hosting:
 }
 ```
 
-Restart the node host after enabling this setting. On the first session dispatch
+Restart the app or node host after enabling this setting. The macOS app owns
+one paired node identity and uses the shared node runtime for session hosting;
+do not start a second CLI node for the same Mac. Its native camera, screen, and
+desktop capabilities remain on that identity. If the shared runtime cannot
+start, native capabilities remain available, but session hosting is unavailable.
+
+On the first session dispatch
 for a Gateway build, the node downloads one sealed worker artifact from that
 paired Gateway, verifies its exact content hash, and publishes it atomically
 under the Gateway-namespaced node-host bundle root. The artifact already
@@ -473,7 +480,7 @@ while its receipt still matches the Gateway's current build.
 You can also enroll and enable a service host in one step with
 `openclaw connect --service --session-host`. In Control UI New Session, a
 write-scoped operator selects a Gateway project or folder and then either a
-specific paired device or **Any available node**. OpenClaw creates a
+specific paired device or **Auto**. OpenClaw creates a
 session-owned managed worktree on the Gateway, dispatches it with the exact
 `deviceId` or `autoDevice: true`, and sends the first turn only after the chosen
 device placement becomes active. New Session does not bind `execNode` or browse
@@ -513,7 +520,12 @@ visible but disabled with an actionable reason. Enable hosting with
 setting, then restart the node host. Update-required hosts must be upgraded and
 restarted before selection.
 
-Choose **Any available node** to let the Gateway select an eligible paired,
+While node inventory refreshes, or if that refresh fails, the picker keeps known
+devices visible but disables remote selection and Start until fresh inventory
+arrives. Local remains selectable; cached worker slots never authorize a new
+remote session.
+
+Choose **Auto** to let the Gateway select an eligible paired,
 connected session host. For OpenClaw worker turns, it selects the host with the
 most available worker slots and breaks ties by device ID. Runtimes that do not
 consume worker slots choose the eligible host with the lowest device ID instead.
@@ -940,7 +952,7 @@ Notes:
 - `system.run` returns stdout/stderr/exit code in the payload.
 - Shell execution now goes through the `exec` tool with `host=node`; `nodes` remains the direct-RPC surface for explicit node commands.
 - `nodes invoke` does not expose `system.run` or `system.run.prepare`; those stay on the exec path only.
-- The exec path prepares a canonical `systemRunPlan` before approval. Once an approval is granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields.
+- The exec path reads the node policy and prepares a canonical `systemRunPlan`. Full/off execution resolves working-directory aliases without adding approval-only script checks. When caller or node policy requires approval binding, stricter path and script checks remain in place. Once an approval is granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields.
 - `system.notify` respects notification permission state on the macOS app; supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
 - Unrecognized node `platform` / `deviceFamily` metadata uses a conservative default allowlist that excludes `system.run` and `system.which`. If you intentionally need those commands for an unknown platform, add them explicitly via `gateway.nodes.commands.allow`.
 - A `system.run` request supports `cwd`, an `env` map, `timeoutMs`, and `needsScreenRecording` — these are fields of the request payload carried on the exec path (see above), not `nodes invoke` CLI flags.
@@ -995,7 +1007,7 @@ Notes:
 - Client instance metadata, signed device identity, and pairing auth use separate state records; see [Headless identity state](#headless-identity-state).
 - Exec approvals are enforced locally via
   `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` (see [Exec approvals](/tools/exec-approvals)).
-- On macOS, the headless node host executes `system.run` locally by default. Set `OPENCLAW_NODE_EXEC_HOST=app` to route `system.run` through the companion app exec host; add `OPENCLAW_NODE_EXEC_FALLBACK=0` to require the app host and fail closed if it is unavailable.
+- On macOS, the headless node host executes `system.run` locally by default. Set `OPENCLAW_NODE_EXEC_HOST=app` to require the companion app exec host, with no local fallback. `OPENCLAW_NODE_EXEC_FALLBACK` does not change current routing.
 - Add `--tls` / `--tls-fingerprint` when the Gateway WS uses TLS.
 
 ## Mac node mode

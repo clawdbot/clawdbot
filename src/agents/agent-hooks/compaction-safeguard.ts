@@ -69,7 +69,7 @@ import {
 } from "./compaction-safeguard-quality.js";
 import {
   getCompactionSafeguardRuntime,
-  setCompactionSafeguardCancelReason,
+  setCompactionSafeguardCancellation,
 } from "./compaction-safeguard-runtime.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
@@ -219,6 +219,7 @@ type SummaryQualityRetention = {
   auditSummary: string;
   identifiers: string[];
   latestAsk: string | null;
+  latestAskCompleted: boolean;
   requiredAskContext: string;
   identifierPolicy: "strict" | "off" | "custom";
 };
@@ -836,14 +837,25 @@ function formatRequiredAskContext(summary: string): string {
   return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -tailBudget)}`;
 }
 
-function extractLatestUserAsk(messages: AgentMessage[]): string | null {
+function extractLatestUserTurn(
+  messages: AgentMessage[],
+): { ask: string; completed: boolean } | null {
+  let sawTurnTail = false;
+  let completed = false;
   for (const message of messages.toReversed()) {
-    if (message.role !== "user") {
+    if (message.role === "user") {
+      const ask = extractMessageText(message);
+      if (ask) {
+        return { ask, completed };
+      }
       continue;
     }
-    const text = extractMessageText(message);
-    if (text) {
-      return text;
+    if (!sawTurnTail && (message.role === "assistant" || message.role === "toolResult")) {
+      sawTurnTail = true;
+      completed =
+        message.role === "assistant" &&
+        message.stopReason === "stop" &&
+        Boolean(extractMessageText(message));
     }
   }
   return null;
@@ -955,7 +967,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       containsRealConversation(
         stripRuntimeContextCustomMessages(collectSessionContextMessages(ctx.sessionManager)),
       );
-    setCompactionSafeguardCancelReason(ctx.sessionManager, undefined);
+    setCompactionSafeguardCancellation(ctx.sessionManager, undefined);
     if (!hasRealConversation) {
       // When there are no summarizable messages AND no real turn-prefix content,
       // cancelling compaction leaves context unchanged but the SDK re-triggers
@@ -1126,7 +1138,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "was not called and model was not passed through runtime registry.",
         );
       }
-      setCompactionSafeguardCancelReason(
+      setCompactionSafeguardCancellation(
         ctx.sessionManager,
         "Compaction safeguard could not resolve a summarization model.",
       );
@@ -1135,7 +1147,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
     const authResult = await resolveModelAuth(ctx, model);
     if (!authResult.ok) {
-      setCompactionSafeguardCancelReason(ctx.sessionManager, authResult.reason);
+      setCompactionSafeguardCancellation(ctx.sessionManager, authResult.reason);
       return { cancel: true };
     }
     try {
@@ -1225,7 +1237,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       }
 
       const oracleMessages = [...messagesToSummarize, ...turnPrefixMessages];
-      const latestUserAsk = extractLatestUserAsk(oracleMessages);
+      const splitUserTurn = preparation.isSplitTurn
+        ? extractLatestUserTurn(turnPrefixMessages)
+        : null;
+      const latestUserTurn = splitUserTurn ?? extractLatestUserTurn(messagesToSummarize);
+      const latestUserAsk = latestUserTurn?.ask ?? null;
+      // Preparation sees the retained suffix. Bind that fact only to its user-bearing cut turn,
+      // not an older history ask when the split starts at a custom or bash message.
+      const latestUserAskCompleted =
+        (splitUserTurn ? preparation.splitTurnCompleted : undefined) ??
+        latestUserTurn?.completed ??
+        false;
+      const splitCompletionInstruction = splitUserTurn
+        ? `The split turn is ${latestUserAskCompleted ? "completed; its terminal response is retained outside this prefix" : "not completed"}. Preserve this status; do not infer it from the prefix alone.\n\n`
+        : "";
       const identifiers = extractOpaqueIdentifiers(
         oracleMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
       );
@@ -1236,8 +1261,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         messages: messagesToSummarize,
         recentTurnsPreserve,
       });
-      messagesToSummarize = summaryTargetMessages;
       const preservedTurnsSectionLocal = buildPreservedTurnsSection(preservedRecentMessages);
+      const latestPreparedAsk = extractLatestUserTurn(messagesToSummarize)?.ask ?? null;
+      const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
+      // The producer needs the preserved completion context whenever it runs; handing over the
+      // ask alone can resurrect completed work. All-preserved windows stay model-free unless
+      // verbatim capping would hide the audited ask.
+      const includePreservedContext =
+        qualityGuardEnabled &&
+        latestPreparedAsk === latestUserAsk &&
+        Boolean(latestPreparedAsk) &&
+        (summaryTargetMessages.length > 0 ||
+          !preservedTurnsSectionLocal.text.includes(requiredAskContext));
+      messagesToSummarize = includePreservedContext ? messagesToSummarize : summaryTargetMessages;
       const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
 
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
@@ -1281,7 +1317,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ...llmSummaryParams,
               messages: turnPrefixMessages,
               maxChunkTokens,
-              customInstructions: `${TURN_PREFIX_INSTRUCTIONS}\n\nAdditional requirements:\n\n${currentInstructions}`,
+              customInstructions: `${TURN_PREFIX_INSTRUCTIONS}\n\n${splitCompletionInstruction}Additional requirements:\n\n${currentInstructions}`,
               previousSummary: undefined,
             });
             splitTurnSectionLocal = formatGeneratedSplitTurnSection(prefixSummary, () => {
@@ -1298,7 +1334,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               "Compaction safeguard: corrective generation failed; " +
                 `reasonCode=corrective_generation_failed attempt=${attempt + 1}`,
             );
-            setCompactionSafeguardCancelReason(
+            setCompactionSafeguardCancellation(
               ctx.sessionManager,
               "Compaction safeguard finalized summary failed quality checks and corrective generation failed.",
             );
@@ -1326,6 +1362,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 auditSummary: unbudgetedSummary,
                 identifiers,
                 latestAsk: latestUserAsk,
+                latestAskCompleted: latestUserAskCompleted,
                 requiredAskContext:
                   splitTurnAskContextLocal || formatRequiredAskContext(latestUserAsk ?? ""),
                 identifierPolicy,
@@ -1344,7 +1381,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "Compaction safeguard: required quality facts exceed finalized artifact budget; " +
               `requiredChars>${MAX_COMPACTION_SUMMARY_CHARS} identifierCount=${identifiers.length}`,
           );
-          setCompactionSafeguardCancelReason(
+          setCompactionSafeguardCancellation(
             ctx.sessionManager,
             "Compaction safeguard required facts exceed the finalized summary budget.",
           );
@@ -1353,8 +1390,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         const quality = auditSummaryQuality({
           summary: finalized.summary,
           structuralSummary: finalized.structuralSummary,
+          completionSummary: unbudgetedSummary,
           identifiers,
           latestAsk: latestUserAsk,
+          latestAskCompleted: latestUserAskCompleted,
           identifierPolicy,
         });
         if (quality.ok) {
@@ -1368,7 +1407,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "Compaction safeguard: finalized summary failed quality checks; " +
               `reasonCodes=${reasonCodes.join(",")} reasonCount=${quality.reasons.length}`,
           );
-          setCompactionSafeguardCancelReason(
+          setCompactionSafeguardCancellation(
             ctx.sessionManager,
             "Compaction safeguard finalized summary failed quality checks.",
           );
@@ -1400,9 +1439,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       log.warn(
         `Compaction summarization failed; cancelling compaction to preserve history: ${message}`,
       );
-      setCompactionSafeguardCancelReason(
+      setCompactionSafeguardCancellation(
         ctx.sessionManager,
         `Compaction safeguard could not summarize the session: ${message}`,
+        error,
       );
       return { cancel: true };
     }

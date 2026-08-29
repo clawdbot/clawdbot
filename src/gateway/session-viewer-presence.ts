@@ -1,9 +1,13 @@
 // Per-connection viewer presence declarations. Message subscriptions are transport state,
 // while this replace-set records only the sessions a client is actually rendering.
+import { upsertPresence } from "../infra/system-presence.js";
+import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
+import { recordClientPresenceActivity } from "./server/client-presence.js";
+import type { GatewayClientRegistry } from "./server/client-registry.js";
+import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 
-type SessionViewerPresenceDeclarationsDeps = {
-  onReplace: (connId: string, sessionKeys: readonly string[]) => void;
-  isConnectionActive?: (connId: string) => boolean;
+type SessionViewerPresenceDeclarationsDeps = Parameters<typeof broadcastPresenceSnapshot>[0] & {
+  clients: GatewayClientRegistry;
 };
 
 type SessionViewerPresenceDeclarations = {
@@ -36,7 +40,8 @@ export function createSessionViewerPresenceDeclarations(
       return [];
     }
     const normalizedConnId = connId.trim();
-    if (!normalizedConnId || deps.isConnectionActive?.(normalizedConnId) === false) {
+    const client = deps.clients.getByConnectionId(normalizedConnId);
+    if (!client || client.invalidated || client.socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
       return [];
     }
     const next = normalizedSessionKeys(sessionKeys);
@@ -49,7 +54,15 @@ export function createSessionViewerPresenceDeclarations(
     } else {
       declarations.set(normalizedConnId, next);
     }
-    deps.onReplace(normalizedConnId, next);
+    if (client.presenceKey) {
+      upsertPresence(client.presenceKey, {
+        watchedSessions: next.length > 0 ? [...next] : undefined,
+      });
+      if (next.length > 0) {
+        recordClientPresenceActivity(deps.clients, client);
+      }
+      broadcastPresenceSnapshot(deps);
+    }
     return next;
   };
 

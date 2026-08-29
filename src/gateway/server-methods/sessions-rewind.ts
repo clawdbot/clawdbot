@@ -19,6 +19,8 @@ import {
   type SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
 import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
@@ -34,6 +36,7 @@ import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -201,6 +204,11 @@ async function mutateSessionAtMessage(
   action: MessageCutAction,
 ): Promise<void> {
   const { params, respond, context, client } = options;
+  const { sessionMutationCommitGuard, sessionMutationAuthorization } = options;
+  const commitGuard = () => {
+    sessionMutationCommitGuard?.();
+    sessionMutationAuthorization?.assertCurrent();
+  };
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey.trim() : "";
   const entryId =
     action === "switch"
@@ -306,6 +314,9 @@ async function mutateSessionAtMessage(
         }).active;
     },
     run: async () => {
+      // A queued sharing mutation can revoke participation without rotating the source identity.
+      // Revalidate under the shared lifecycle fence before delegating or writing history.
+      commitGuard();
       if (!targetStillCurrent) {
         respond(
           false,
@@ -344,12 +355,12 @@ async function mutateSessionAtMessage(
         return;
       }
       const upstreamLink = readSessionUpstreamLink(current.canonicalKey, current.target.agentId);
-      if (upstreamLink && action !== "fork") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, EXTERNAL_CONVERSATION_ERROR),
-        );
+      const archived = current.entry.archivedAt !== undefined;
+      if ((archived || upstreamLink) && action !== "fork") {
+        const message = archived
+          ? `${action === "switch" ? "Branch switch" : "Rewind"} is unavailable for archived sessions.`
+          : EXTERNAL_CONVERSATION_ERROR;
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
         return;
       }
       const placementError = resolveSessionWorkerPlacementMutationError({
@@ -363,7 +374,12 @@ async function mutateSessionAtMessage(
         return;
       }
       const targetKey =
-        action === "fork" ? buildDashboardSessionKey(current.target.agentId) : current.canonicalKey;
+        action === "fork"
+          ? buildDashboardSessionKey(current.target.agentId, {
+              incognito:
+                current.entry.incognito === true || isIncognitoSessionKey(current.canonicalKey),
+            })
+          : current.canonicalKey;
       const expectedState = {
         sessionId: current.entry.sessionId,
         lifecycleRevision: current.entry.lifecycleRevision,
@@ -379,10 +395,13 @@ async function mutateSessionAtMessage(
         );
         return;
       }
+      const creation = resolveOperatorSessionCreation(client);
+      const sandbox = action === "fork" ? resolveCreatorSandbox(cfg, creation) : undefined;
       const upstreamFork =
         upstreamLink && upstreamForkHarness
           ? await upstreamForkHarness.fork({
               targetKey,
+              sandbox,
               source: {
                 agentId: current.target.agentId,
                 sessionId: current.entry.sessionId,
@@ -434,48 +453,35 @@ async function mutateSessionAtMessage(
         return;
       }
       let result: MessageCutMutationResult;
+      const mutationParams = {
+        agentId: current.target.agentId,
+        commitGuard,
+        sessionKey: current.canonicalKey,
+        sessionStoreKey: current.sessionStoreKey,
+        storePath: current.storePath,
+      };
       try {
-        const creation = resolveOperatorSessionCreation(client);
         result = await (action === "fork"
           ? forkSessionAtMessage(
               {
-                agentId: current.target.agentId,
+                ...mutationParams,
                 entryId,
-                sessionKey: current.canonicalKey,
-                sessionStoreKey: current.sessionStoreKey,
-                storePath: current.storePath,
                 targetKey,
-                creation: {
-                  ...creation,
-                  ...(resolveCreatorSandbox(cfg, creation) === "required"
-                    ? { sandbox: "required" }
-                    : {}),
-                },
+                creation: { ...creation, sandbox },
               },
               expectedState,
             )
           : action === "rewind"
-            ? rewindSessionToMessage(
-                {
-                  agentId: current.target.agentId,
-                  entryId,
-                  sessionKey: current.canonicalKey,
-                  sessionStoreKey: current.sessionStoreKey,
-                  storePath: current.storePath,
-                },
-                expectedState,
-              )
-            : switchSessionBranch(
-                {
-                  agentId: current.target.agentId,
-                  leafEntryId: entryId,
-                  sessionKey: current.canonicalKey,
-                  sessionStoreKey: current.sessionStoreKey,
-                  storePath: current.storePath,
-                },
-                expectedState,
-              ));
-      } catch {
+            ? rewindSessionToMessage({ ...mutationParams, entryId }, expectedState)
+            : switchSessionBranch({ ...mutationParams, leafEntryId: entryId }, expectedState));
+      } catch (error) {
+        if (error instanceof SessionMutationAuthorizationChangedError) {
+          throw error;
+        }
+        if (error instanceof ModelSelectionLockedError) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+          return;
+        }
         respond(
           false,
           undefined,

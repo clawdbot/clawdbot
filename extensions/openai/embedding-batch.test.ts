@@ -114,7 +114,7 @@ describe("OpenAI embedding batch output", () => {
         },
       });
 
-      await expect(provider.embedQuery("hello")).resolves.toEqual([3, 5]);
+      await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([3, 5]);
       expect(received).toEqual([
         {
           url: "/tenant/v1/embeddings?api-version=2024-10-21&tenant=alpha",

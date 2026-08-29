@@ -25,6 +25,13 @@
   color: var(--chat-text);
   overflow-wrap: anywhere;
   word-break: break-word;
+  /* Serif chat faces need macOS stem darkening to stay crisp at chat size:
+     the app-wide `antialiased` (base.css body) thins their hairlines into
+     gray smear. applyChatFontSmoothing (app/typography.ts) sets `auto` when
+     the resolved chat typeface is a serif; unset falls back to the inherited
+     app-wide smoothing. */
+  -webkit-font-smoothing: var(--chat-font-smoothing, inherit);
+  -moz-osx-font-smoothing: var(--chat-font-smoothing, inherit);
 }
 
 .chat-message-disclosure {

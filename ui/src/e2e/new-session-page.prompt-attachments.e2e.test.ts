@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
@@ -639,114 +640,6 @@ suite.define(() => {
     });
   });
 
-  it("releases pasted image previews after remove, reset, restored removal, and success", async () => {
-    await withNewSessionPage(async (page) => {
-      await page.addInitScript(() => {
-        const createObjectURL = URL.createObjectURL.bind(URL);
-        const revokeObjectURL = URL.revokeObjectURL.bind(URL);
-        const proof = { created: 0, revoked: 0 };
-        (globalThis as unknown as { attachmentUrlProof: typeof proof }).attachmentUrlProof = proof;
-        URL.createObjectURL = (blob: Blob) => {
-          proof.created += 1;
-          return createObjectURL(blob);
-        };
-        URL.revokeObjectURL = (url: string) => {
-          proof.revoked += 1;
-          revokeObjectURL(url);
-        };
-      });
-      await installMockGateway(page, {
-        methodResponses: {
-          "agents.list": {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "writer", name: "Writer" },
-            ],
-          },
-          "sessions.create": { key: "agent:main:preview-cleanup", runStarted: true },
-        },
-      });
-      const proof = () =>
-        page.evaluate(
-          () =>
-            (globalThis as unknown as { attachmentUrlProof: { created: number; revoked: number } })
-              .attachmentUrlProof,
-        );
-      const navigate = (routeId: string, search = "") =>
-        page.evaluate(
-          ({ targetRouteId, targetSearch }) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: {
-                context: {
-                  navigate: (routeId: string, options?: { search?: string }) => void;
-                };
-              };
-            };
-            if (!app.runtime) {
-              throw new Error("OpenClaw application runtime is unavailable");
-            }
-            app.runtime.context.navigate(targetRouteId, { search: targetSearch });
-          },
-          { targetRouteId: routeId, targetSearch: search },
-        );
-      await page.goto(`${suite.server.baseUrl}new`);
-      const composer = page.locator(".new-session-page__message");
-
-      await pastePng(composer);
-      await page.getByRole("img", { name: "pixel.png" }).waitFor();
-      await page.getByRole("button", { name: "Remove attachment" }).click();
-      await expect.poll(async () => (await proof()).revoked).toBe(1);
-
-      await pastePng(composer);
-      await page.getByRole("img", { name: "pixel.png" }).waitFor();
-      const agentDropdown = page.locator(".new-session-page__select--agent wa-dropdown");
-      await page.locator(".new-session-page__select--agent .agent-select__trigger").click();
-      await expect
-        .poll(() =>
-          agentDropdown.evaluate((dropdown) => (dropdown as HTMLElement & { open: boolean }).open),
-        )
-        .toBe(true);
-      await navigate("new-session", "?agent=main&catalog=missing");
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              (
-                document.querySelector(".new-session-page__select--agent wa-dropdown") as
-                  | (HTMLElement & { open: boolean })
-                  | null
-              )?.open ?? false,
-          ),
-        )
-        .toBe(false);
-      await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
-      await expect.poll(async () => (await proof()).revoked).toBe(2);
-
-      await navigate("new-session");
-      await composer.waitFor();
-      await page.getByRole("img", { name: "pixel.png" }).waitFor();
-      await navigate("chat");
-      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
-      await expect.poll(async () => (await proof()).revoked).toBe(2);
-
-      await navigate("new-session");
-      await composer.waitFor();
-      await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
-      await page.getByRole("button", { name: "Remove attachment" }).click();
-      await expect.poll(async () => (await proof()).revoked).toBe(3);
-      await pastePng(composer);
-      await page.getByRole("img", { name: "pixel.png" }).waitFor();
-      await page.getByRole("button", { name: "Start session" }).click();
-      await page.waitForURL(
-        (url) => url.pathname === controlUiSessionPath("agent:main:preview-cleanup"),
-      );
-      await expect.poll(async () => await proof()).toEqual({ created: 4, revoked: 4 });
-    });
-  });
-
   it("locks the submitted draft until creation settles and restores it after failure", async () => {
     await withNewSessionPage(async (page) => {
       const sessionKey = "agent:main:locked-new-session-draft";
@@ -905,12 +798,12 @@ suite.define(() => {
       const failedStatus = failedGroup.locator(".chat-send-status");
       await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
       expect(await failedStatus.textContent()).toContain("Not sent");
-      expect(await failedStatus.getAttribute("title")).toBe(runError);
+      await expect.poll(() => tooltipTitleText(failedStatus)).toBe(runError);
 
       await page.reload();
       await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
       expect(await failedStatus.textContent()).toContain("Not sent");
-      expect(await failedStatus.getAttribute("title")).toBe(runError);
+      await expect.poll(() => tooltipTitleText(failedStatus)).toBe(runError);
 
       await page.getByRole("button", { name: "Retry queued message" }).click();
       const retry = await gateway.waitForRequest("chat.send");
@@ -967,7 +860,7 @@ suite.define(() => {
       const failedStatus = failedGroup.locator(".chat-send-status");
       await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
       expect(await failedStatus.textContent()).toContain("Not sent");
-      expect(await failedStatus.getAttribute("title")).toBe(runError);
+      await expect.poll(() => tooltipTitleText(failedStatus)).toBe(runError);
       await page.getByRole("button", { name: "Retry queued message" }).click();
       const retry = await gateway.waitForRequest("chat.send");
       expect(retry.params).toMatchObject({

@@ -62,7 +62,7 @@ host-neutral suspension handshake:
 2. Call `gateway.suspend.prepare` with a stable, unique `requestId`.
 3. If the response is `busy`, keep the process running and retry later. To hold
    admission closed while already-admitted work finishes, request the optional
-   preserve-only drain mode and poll `gateway.suspend.status` instead.
+   drain mode and poll `gateway.suspend.status` instead.
 4. If the response is `ready`, save the returned `suspensionId`, then freeze or
    snapshot the process before `expiresAtMs`.
 5. After thaw, or if suspension is abandoned, call `gateway.suspend.resume`
@@ -94,14 +94,17 @@ The RPC contract is:
 
 `terminalPolicy` and `drain` are optional. `terminalPolicy` accepts only
 `"preserve"` or `"terminate"` and defaults to `"preserve"`; `drain` defaults
-to `false`. With `drain: false` or no `drain` field, request handling and
-response shapes are unchanged: open terminal sessions block normal host
-suspension. A caller preparing an update that will terminate the Gateway may
-explicitly use `"terminate"`; this ignores open process-local terminal sessions
-only. Terminal persistence activity and all other tracked work still block
-preparation. Drain mode always preserves terminals: combining `drain: true`
-with `terminalPolicy: "terminate"` returns `INVALID_REQUEST` without acquiring
-a lease.
+to `false`. The terminal policy applies to both immediate preparation and drain
+mode:
+
+- `"preserve"`: open terminal sessions block suspension. Use this for host
+  freeze/snapshot operations that must preserve the running process.
+- `"terminate"`: open process-local terminal sessions do not block suspension.
+  Use this for release updates that will restart the Gateway. Preparation does
+  not close terminals; the actual Gateway restart ends their PTYs and commands.
+
+Pending final chat-state writes (`terminal-persistence`) and all other tracked
+work still block preparation under either policy.
 
 IDs are trimmed, must contain a non-whitespace character, and are limited to
 128 characters. A busy prepare result has `status: "busy"`, `reason`,
@@ -136,11 +139,12 @@ and returns:
 ```
 
 Already-admitted work and its owned completions continue naturally; unrelated
-new runs, sessions, scheduled jobs, and independent work stay rejected. Open
-terminal sessions and terminal-persistence work remain blockers until they
-settle naturally. Drain mode never terminates or detaches a terminal. A terminal
-that remains open indefinitely can therefore keep the lease draining until the
-controller resumes it or the lease expires.
+new runs, sessions, scheduled jobs, and independent work stay rejected. With
+`terminalPolicy: "preserve"`, an open terminal can keep the lease draining until
+it closes, the controller resumes the Gateway, or the lease expires. With
+`terminalPolicy: "terminate"`, that same terminal remains open but does not
+block readiness. Neither policy terminates or detaches terminals during
+preparation, polling, renewal, resume, or lease expiry.
 
 Poll `gateway.suspend.status` with the returned `suspensionId`, honoring
 `retryAfterMs`. While blockers remain, status returns `status: "draining"`
@@ -165,6 +169,19 @@ openclaw gateway call gateway.suspend.status \
   --json
 openclaw gateway resume '<suspension-id>'
 ```
+
+For a release update, use the same handshake with `terminalPolicy: "terminate"`
+so an open terminal cannot hold the drain indefinitely:
+
+```bash
+openclaw gateway call gateway.suspend.prepare \
+  --params '{"requestId":"release-update-1","terminalPolicy":"terminate","drain":true}' \
+  --json
+```
+
+Wait for the lease to become `ready` before performing the checked restart.
+Terminal commands and scrollback are not recovered after restart; see
+[Restart recovery](/gateway/restart-recovery#what-is-not-resumed).
 
 A competing request ID or transient scheduler-resume failure returns retryable
 `UNAVAILABLE` with `retryAfterMs`. During scheduler recovery, prepare, status,

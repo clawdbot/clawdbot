@@ -79,6 +79,7 @@ type BranchCheckpointSessionParams = {
   sourceStoreKey?: string;
   nextKey: string;
   checkpointId: string;
+  creation?: Parameters<typeof branchCompactionCheckpointSession>[0]["creation"];
 };
 
 type RestoreCheckpointSessionParams = {
@@ -547,6 +548,7 @@ async function branchCheckpointSessionFromStoredBoundary(
     nextKey: params.nextKey,
     checkpointId: params.checkpointId,
     expectedState: params.expectedState,
+    creation: params.creation,
     ...(params.sourceStoreKey ? { sourceStoreKey: params.sourceStoreKey } : {}),
     ...(legacySource ? { legacySource } : {}),
   });

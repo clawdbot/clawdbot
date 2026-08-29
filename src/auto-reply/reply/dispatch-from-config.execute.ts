@@ -41,6 +41,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     dispatcher,
     failDispatchReplyOperation,
     flushPendingCommentaryProgress,
+    getAgentRunTerminalOutcome,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
     hookRunner,
@@ -597,14 +598,18 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
         `dispatch-from-config: deferred final text fallback failed: ${formatErrorMessage(fallbackError)}`,
       );
     }
+    const failedAgentRun = getAgentRunTerminalOutcome() === "failed";
     if (
       params.replyOptions?.isHeartbeat === true ||
-      !didDeliverVisiblePartialReply ||
+      (!failedAgentRun && !didDeliverVisiblePartialReply) ||
       isDispatchOperationAborted()
     ) {
       throw error;
     }
     failDispatchReplyOperation(error, "failed");
+    if (!didDeliverVisiblePartialReply) {
+      return undefined;
+    }
     return buildTerminalAgentRunFailureReplyPayload({
       visibleReplyDelivered: true,
       sessionCtx: ctx,
@@ -642,7 +647,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     // Command handling prepared a trailing prompt after ACP in-place reset.
     // Route that tail through ACP now (same turn) instead of embedded dispatch.
     ctx.AcpDispatchTailAfterReset = false;
-    if (hookRunner?.hasHooks("reply_dispatch")) {
+    if (hookRunner?.hasHooks("reply_dispatch", { dispatchKind: state.dispatchKind })) {
       const tailDispatchResult = await runWithDispatchLifecycleAdmission(
         async () =>
           await runWithDispatchAbortSignal(
@@ -674,10 +679,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 }),
                 {
                   cfg,
+                  dispatchKind: state.dispatchKind,
                   dispatcher: state.dispatchHookDispatcher,
                   abortSignal:
                     state.getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
                   onReplyStart: params.replyOptions?.onReplyStart,
+                  onAgentRunStart: params.replyOptions?.onAgentRunStart,
+                  userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
                   recordProcessed: state.recordProcessed,
                   markIdle: state.markIdle,
                 },

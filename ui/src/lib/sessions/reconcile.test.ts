@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, test } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
+import { resolveChatThinkingSelectState } from "../chat/thinking.ts";
 import {
   preserveRosterPresentationMetadata,
   reconcileSessionChanged,
@@ -142,6 +143,7 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
         controlOwnerSessionKey: "agent:main:owner",
         restartRecoveryStatus: "pending",
         goal: "ship it",
+        modelOverrideSource: "user",
       } as never,
     ],
   };
@@ -159,6 +161,7 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
       controlOwnerSessionKey: null,
       restartRecoveryStatus: null,
       goal: null,
+      modelOverrideSource: null,
     },
   } as never);
 
@@ -176,6 +179,10 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
   }
   // updatedAt stays legitimately nullable and must not be deleted by the loop.
   expect(row?.updatedAt).toBe(2);
+  // Clearing a pin means the gateway confirmed inheritance. Deleting that null would
+  // make the row indistinguishable from a gateway too old to report provenance, and
+  // the picker would keep showing the cleared pin.
+  expect(row?.modelOverrideSource).toBeNull();
 });
 
 test("sessions.changed clears exact run ids only for an explicit tombstone", () => {
@@ -390,6 +397,60 @@ test("ownerless raw-global events invalidate without contaminating the selected 
 });
 
 describe("reconcileSessionChanged", () => {
+  it.each([
+    { name: "inherited Medium", thinkingDefault: "medium", thinkingLevel: undefined },
+    { name: "configured Off", thinkingDefault: "off", thinkingLevel: undefined },
+    { name: "explicit Off", thinkingDefault: "medium", thinkingLevel: "off" },
+  ])(
+    "preserves $name when history omits prepared thinking metadata",
+    ({ thinkingDefault, thinkingLevel }) => {
+      const identity = {
+        modelProvider: "test-provider",
+        model: "reasoning-model",
+        agentRuntime: { id: "openclaw", source: "model" as const },
+      };
+      const row = {
+        ...identity,
+        key: "agent:main:main",
+        kind: "direct" as const,
+        sessionId: "s1",
+        updatedAt: 1,
+        thinkingLevel,
+      };
+      const metadata = {
+        thinkingDefault,
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "medium", label: "medium" },
+        ],
+        thinkingOptions: ["off", "medium"],
+      };
+      const current = {
+        ...buildResult([{ ...row, ...metadata }]),
+        defaults: { ...identity, ...metadata, contextTokens: null },
+      };
+      const next = reconcileSessionHistory(
+        current,
+        { ...row, updatedAt: 2 },
+        { ...identity, contextTokens: null },
+      );
+
+      expect(next?.sessions[0]).toMatchObject(metadata);
+      expect(next?.defaults).toMatchObject(metadata);
+      expect(next?.sessions[0]?.thinkingLevel).toBe(thinkingLevel);
+      expect(
+        resolveChatThinkingSelectState({
+          catalog: [],
+          sessionKey: row.key,
+          sessionsResult: next,
+        }).selection,
+      ).toMatchObject({
+        source: thinkingLevel === undefined ? "default" : "override",
+        value: thinkingLevel ?? thinkingDefault,
+      });
+    },
+  );
+
   it("drops a cleared category from the merged row", () => {
     const key = "agent:main:discord:channel:1";
     const result = buildResult([
@@ -732,3 +793,30 @@ describe("reconcileSessionHistory", () => {
     expect(reconciled?.sessions[0]?.derivedTitle).toBeUndefined();
   });
 });
+
+test.each([undefined, "generation-a", "generation-b"])(
+  "delete reconciliation removes only the event generation (%s)",
+  (sessionId) => {
+    const row = {
+      key: "agent:main:recreated",
+      sessionId: "generation-b",
+      kind: "direct" as const,
+      updatedAt: 2,
+    };
+    const result = {
+      ts: 2,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [row],
+    };
+    const reconciled = reconcileSessionChanged(result, {
+      sessionKey: row.key,
+      agentId: "main",
+      reason: "delete",
+      sessionId,
+    });
+    expect(reconciled.result?.sessions).toEqual(sessionId === row.sessionId ? [] : [row]);
+    expect(reconciled.deletedKey).toBe(sessionId === row.sessionId ? row.key : undefined);
+  },
+);

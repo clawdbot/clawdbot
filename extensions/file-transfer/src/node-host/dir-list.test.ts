@@ -3,7 +3,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { handleDirFetch } from "./dir-fetch.js";
 import { createCanonicalDirListCommand } from "./dir-list-worker-command.js";
 import { handleDirList } from "./dir-list.js";
 
@@ -15,6 +16,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
@@ -56,6 +58,79 @@ describe("handleDirList — fs errors", () => {
   });
 });
 
+describe.each([
+  ["dir.list", handleDirList, "path not found", "PERMISSION_DENIED"],
+  ["dir.fetch", handleDirFetch, "directory not found", "READ_ERROR"],
+] as const)("%s — directory binding", (_command, handle, notFoundMessage, permissionCode) => {
+  it.each(["malformed", "write", "device", "inode"] as const)(
+    "rejects a %s binding before reading the directory",
+    async (kind) => {
+      const stats = await fs.stat(tmpRoot, { bigint: true });
+      const binding = { kind: "existing", device: String(stats.dev), inode: String(stats.ino) };
+      const expectedBinding = {
+        malformed: null,
+        write: {
+          kind: "write",
+          anchorPath: tmpRoot,
+          anchorDevice: binding.device,
+          anchorInode: binding.inode,
+        },
+        device: { ...binding, device: "different" },
+        inode: { ...binding, inode: "different" },
+      }[kind];
+      const readdir = vi.spyOn(fs, "readdir");
+
+      await expect(
+        handle({ path: tmpRoot, preflightOnly: true, expectedBinding }),
+      ).resolves.toEqual({
+        ok: false,
+        code: "CANONICAL_PATH_CHANGED",
+        message: "filesystem identity differs from the authorized target",
+        canonicalPath: tmpRoot,
+      });
+      expect(readdir).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves path and directory errors before validating the binding", async () => {
+    const missing = path.join(tmpRoot, "missing");
+    await expect(handle({ path: missing, expectedBinding: null })).resolves.toEqual({
+      ok: false,
+      code: "NOT_FOUND",
+      message: notFoundMessage,
+    });
+    const file = path.join(tmpRoot, "file.txt");
+    await fs.writeFile(file, "keep");
+    await expect(handle({ path: file, expectedBinding: null })).resolves.toEqual({
+      ok: false,
+      code: "IS_FILE",
+      message: "path is not a directory",
+      canonicalPath: file,
+    });
+    await expect(
+      handle({ path: file, expectedCanonicalPath: tmpRoot, expectedBinding: null }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "CANONICAL_PATH_CHANGED",
+      message: "canonical path differs from the authorized target",
+      canonicalPath: file,
+    });
+  });
+
+  it("retains the command's permission-error classification", async () => {
+    vi.spyOn(fs, "stat").mockRejectedValueOnce(
+      Object.assign(new Error("denied"), { code: "EACCES" }),
+    );
+
+    await expect(handle({ path: tmpRoot, expectedBinding: null })).resolves.toEqual({
+      ok: false,
+      code: permissionCode,
+      message: "stat failed: Error: denied",
+      canonicalPath: tmpRoot,
+    });
+  });
+});
+
 describe("handleDirList — happy path", () => {
   it.runIf(process.platform === "linux")(
     "keeps enumeration bound after the checked path is retargeted",
@@ -67,11 +142,6 @@ describe("handleDirList — happy path", () => {
       await fs.mkdir(replacement);
       await fs.writeFile(path.join(approved, "approved.txt"), "approved");
       await fs.writeFile(path.join(replacement, "secret.txt"), "secret");
-      await Promise.all(
-        Array.from({ length: 5000 }, (_, index) =>
-          fs.writeFile(path.join(approved, `f-${String(index).padStart(4, "0")}`), ""),
-        ),
-      );
       await fs.symlink(approved, current);
       const approvedStats = await fs.stat(approved, { bigint: true });
 
@@ -80,40 +150,50 @@ describe("handleDirList — happy path", () => {
         expectedCanonicalPath: approved,
         expectedDevice: String(approvedStats.dev),
         expectedInode: String(approvedStats.ino),
-        maxEntries: 5001,
+        maxEntries: 10,
         offset: 0,
       });
-      const child = spawn(command[0]!, command.slice(1), {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      // Retarget after the real chdir, before the unchanged worker checks and
+      // enumerates its bound directory. Polling /proc can miss the entire child.
+      const retargetAfterBinding = `(() => {
+        const fs = require("node:fs");
+        const chdir = process.chdir;
+        process.chdir = (directory) => {
+          chdir(directory);
+          process.chdir = chdir;
+          fs.unlinkSync(${JSON.stringify(current)});
+          fs.symlinkSync(${JSON.stringify(replacement)}, ${JSON.stringify(current)});
+        };
+      })();`;
+      const child = spawn(
+        command[0]!,
+        [command[1]!, retargetAfterBinding + command[2]!, ...command.slice(3)],
+        {
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
       const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
       child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
       const exit = new Promise<number | null>((resolve, reject) => {
         child.once("error", reject);
-        child.once("exit", resolve);
+        child.once("close", resolve);
       });
-
-      let observedBoundCwd = false;
-      for (let attempt = 0; attempt < 200 && child.exitCode === null; attempt += 1) {
-        const cwd = await fs.readlink(`/proc/${child.pid}/cwd`).catch(() => "");
-        if (cwd === approved) {
-          observedBoundCwd = true;
-          break;
+      try {
+        expect(await exit, Buffer.concat(stderr).toString("utf8")).toBe(0);
+        expect(await fs.readlink(current)).toBe(replacement);
+        const result = JSON.parse(Buffer.concat(stdout).toString("utf8")) as {
+          entries: Array<{ name: string }>;
+        };
+        expect(result.entries.some((entry) => entry.name === "approved.txt")).toBe(true);
+        expect(result.entries.some((entry) => entry.name === "secret.txt")).toBe(false);
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
         }
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 1);
-        });
+        await exit.catch(() => undefined);
       }
-      expect(observedBoundCwd).toBe(true);
-      await fs.unlink(current);
-      await fs.symlink(replacement, current);
-
-      expect(await exit).toBe(0);
-      const result = JSON.parse(Buffer.concat(stdout).toString("utf8")) as {
-        entries: Array<{ name: string }>;
-      };
-      expect(result.entries.some((entry) => entry.name === "approved.txt")).toBe(true);
-      expect(result.entries.some((entry) => entry.name === "secret.txt")).toBe(false);
     },
   );
 
@@ -154,14 +234,21 @@ describe("handleDirList — happy path", () => {
 
   it("binds the canonical target before listing entries", async () => {
     await fs.writeFile(path.join(tmpRoot, "private.txt"), "secret");
+    const stats = await fs.stat(tmpRoot, { bigint: true });
+    const binding = { kind: "existing", device: String(stats.dev), inode: String(stats.ino) };
 
-    const preflight = await handleDirList({ path: tmpRoot, preflightOnly: true });
-    expect(preflight).toMatchObject({
+    const preflight = await handleDirList({
+      path: tmpRoot,
+      preflightOnly: true,
+      expectedBinding: { ...binding, extra: "not part of the binding" },
+    });
+    expect(preflight).toEqual({
       ok: true,
       path: tmpRoot,
       entries: [],
       truncated: false,
       preflight: true,
+      binding,
     });
 
     const changed = await handleDirList({

@@ -24,6 +24,7 @@ type UiSessionDefaults = {
   defaultAgentId?: string | null;
   mainKey?: string | null;
   mainSessionKey?: string | null;
+  modelConfigured?: boolean;
 };
 
 export { normalizeAgentId };
@@ -107,7 +108,7 @@ export function normalizeSessionKeyForUiComparison(sessionKey: string | undefine
   return parts.join(":");
 }
 
-function readSessionDefaults(
+export function readSessionDefaults(
   host: Pick<UiSessionDefaultsHost, "hello">,
 ): UiSessionDefaults | undefined {
   const snapshot = host.hello?.snapshot;

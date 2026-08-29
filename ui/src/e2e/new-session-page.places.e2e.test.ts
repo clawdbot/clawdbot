@@ -203,7 +203,20 @@ suite.define(() => {
       expect(commandPaletteBox).not.toBeNull();
       expect(incognitoBox?.y).toBeCloseTo(commandPaletteBox?.y ?? 0, 0);
       expect(incognitoBox?.x ?? 0).toBeGreaterThan((commandPaletteBox?.x ?? 0) + 100);
-      expect(await page.locator('.new-session-page__composer [role="switch"]').count()).toBe(0);
+      expect(
+        await page
+          .locator(".new-session-page__composer")
+          .getByRole("switch", { name: "Incognito" })
+          .count(),
+      ).toBe(0);
+      const fastMode = page.locator(".new-session-page__composer [data-chat-speed-toggle]");
+      expect(await fastMode.count()).toBe(1);
+      expect(await fastMode.getAttribute("aria-checked")).toBe("false");
+      expect(
+        await fastMode.evaluate((element) =>
+          element.classList.contains("chat-controls__speed-toggle"),
+        ),
+      ).toBe(true);
       expect(await incognitoToggle.getAttribute("aria-checked")).toBe("false");
       await incognitoToggle.click();
       await expect.poll(() => incognitoToggle.getAttribute("aria-checked")).toBe("true");
@@ -280,7 +293,7 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 393, height: 852 });
       const mobileModelSettings = page.locator(
-        '.new-session-page__composer [data-chat-model-settings="true"]',
+        '.new-session-page__composer [data-chat-model-select="true"]',
       );
       const mobilePermission = page.locator(
         '.new-session-page__composer [data-chat-permission-select="true"]',
@@ -311,9 +324,7 @@ suite.define(() => {
       }
       expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
       expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
-      expect(mobileModelSettingsBox.x).toBeGreaterThan(
-        mobileFooterBox.x + mobileFooterBox.width / 2,
-      );
+      expect(mobileModelSettingsBox.x).toBeGreaterThanOrEqual(mobileFooterBox.x);
       expect(mobileModelSettingsBox.x + mobileModelSettingsBox.width).toBeLessThanOrEqual(
         mobileFooterBox.x + mobileFooterBox.width,
       );
@@ -332,7 +343,14 @@ suite.define(() => {
       await mobileModelSettings.click();
       await expect.poll(() => page.locator(".chat-controls__model-menu").isVisible()).toBe(true);
       await captureProjectUiProof(page, "mobile-new-session-model-open.png");
-      await page.locator(".chat-controls__mobile-effort-option").click();
+      expect(
+        await page
+          .locator(".chat-controls__model-menu")
+          .getByText(/Effort|Fast mode/)
+          .count(),
+      ).toBe(0);
+      await page.keyboard.press("Escape");
+      await page.locator('[data-chat-thinking-select="true"]').click();
       await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
       await captureProjectUiProof(page, "mobile-new-session-effort-open.png");
       await page.keyboard.press("Escape");

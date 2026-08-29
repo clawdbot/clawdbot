@@ -44,8 +44,9 @@ export async function runMemorySessionBackfill(
         process.exitCode = 1;
         return;
       }
+      const pluginConfig = resolveMemoryPluginConfig(cfg);
       const remConfig = resolveMemoryRemDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
+        pluginConfig,
         cfg,
       });
       let result;
@@ -53,6 +54,7 @@ export async function runMemorySessionBackfill(
         result = await runSessionBackfill({
           agentId,
           workspaceDir,
+          pluginConfig,
           ...(opts.from !== undefined ? { from: opts.from } : {}),
           ...(opts.to !== undefined ? { to: opts.to } : {}),
           ...(opts.limitDays !== undefined ? { limitDays: opts.limitDays } : {}),

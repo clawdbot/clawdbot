@@ -3,11 +3,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT,
+  type ModelCompatConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
+import {
+  ensureCodexAppServerClientRuntime,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
@@ -538,7 +546,12 @@ describe("Codex delegation capability", () => {
       "tools.experimental_request_user_input.enabled": true,
       "tools.update_plan.enabled": true,
       mcp_servers: {
-        "local-example": { command: "example-mcp" },
+        "local-example": {
+          command: "example-mcp",
+          args: ["--stdio"],
+          cwd: "/repo/mcp",
+          env: { MCP_MODE: "restricted" },
+        },
       },
       web_search: "live",
     };
@@ -580,7 +593,15 @@ describe("Codex delegation capability", () => {
         expect(request.config?.[disabledFeature]).toBe(false);
       }
       expect(request.config?.web_search).toBe("disabled");
-      expect(request.config?.mcp_servers).toEqual({ "local-example": { enabled: false } });
+      expect(request.config?.mcp_servers).toEqual({
+        "local-example": {
+          command: "example-mcp",
+          args: ["--stdio"],
+          cwd: "/repo/mcp",
+          env: { MCP_MODE: "restricted" },
+          enabled: false,
+        },
+      });
       expect(request.developerInstructions).toContain("`message(action=send)`");
       expect(request.developerInstructions).not.toContain("`spawn_agent`");
       expect(request.developerInstructions).not.toContain("`tool_search`");
@@ -608,7 +629,14 @@ describe("Codex delegation capability", () => {
       expect(normal.config?.["features.multi_agent_v2"]).toBe(true);
       expect(normal.config?.["features.plugins"]).toBe(true);
       expect(normal.config?.["tools.update_plan.enabled"]).toBe(false);
-      expect(normal.config?.mcp_servers).toEqual({ "local-example": { command: "example-mcp" } });
+      expect(normal.config?.mcp_servers).toEqual({
+        "local-example": {
+          command: "example-mcp",
+          args: ["--stdio"],
+          cwd: "/repo/mcp",
+          env: { MCP_MODE: "restricted" },
+        },
+      });
       expect(normal.developerInstructions).toContain("`spawn_agent`");
     }
   });
@@ -1691,7 +1719,12 @@ describe("Codex app-server native code mode config", () => {
 
   it("does not overwrite native supervised turn settings", () => {
     const params = createAttemptParams({ provider: "anthropic" });
-    params.thinkLevel = "high";
+    params.thinkLevel = "off";
+    const compat: ModelCompatConfig = { supportedReasoningEfforts: ["none", "high"] };
+    params.model = {
+      ...createCodexTestModel("anthropic"),
+      compat,
+    };
     const request = buildTurnStartParams(params, {
       threadId: "thread-supervised",
       cwd: "/repo",
@@ -1990,32 +2023,114 @@ describe("Codex app-server native code mode config", () => {
 });
 
 describe("Codex app-server turn input image sanitizing", () => {
-  it("carries native workspace temporary-root overrides into turn policy", () => {
-    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
-      threadId: "thread-1",
-      cwd: "/tmp/qa/workspace",
-      appServer: {
-        ...createAppServerOptions(),
-        start: {
-          args: [
-            "app-server",
-            "-c",
-            "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-            "-c",
-            "sandbox_workspace_write.exclude_slash_tmp=true",
-          ],
-        },
-      } as never,
-    });
+  const excludedTmpStart = {
+    args: [
+      "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
+      "-csandbox_workspace_write.exclude_slash_tmp=true",
+      "app-server",
+    ],
+  };
 
-    expect(request.sandboxPolicy).toEqual({
-      type: "workspaceWrite",
-      writableRoots: ["/tmp/qa/workspace"],
-      networkAccess: false,
-      excludeTmpdirEnvVar: true,
-      excludeSlashTmp: true,
-    });
-  });
+  it.each([
+    {
+      name: "separate",
+      args: [
+        "-c",
+        "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "--config",
+        "sandbox_workspace_write.exclude_slash_tmp=true",
+      ],
+      excluded: true,
+    },
+    {
+      name: "attached short",
+      args: [
+        "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "-c=sandbox_workspace_write.exclude_slash_tmp=true",
+      ],
+      excluded: true,
+    },
+    {
+      name: "mixed last true",
+      args: [
+        "--config=sandbox_workspace_write.exclude_tmpdir_env_var=false",
+        "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "--config=sandbox_workspace_write.exclude_slash_tmp=true",
+      ],
+      excluded: true,
+    },
+    {
+      name: "mixed last false",
+      args: [
+        "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "--config",
+        "sandbox_workspace_write.exclude_tmpdir_env_var=false",
+        "--config=sandbox_workspace_write.exclude_slash_tmp=true",
+        "-c=sandbox_workspace_write.exclude_slash_tmp=false",
+      ],
+      excluded: false,
+    },
+    {
+      name: "commented true across separate and attached forms",
+      args: [
+        "-c",
+        "sandbox_workspace_write.exclude_tmpdir_env_var = false # earlier",
+        "--config=sandbox_workspace_write.exclude_tmpdir_env_var = true # exclusion retained",
+        "--config",
+        "sandbox_workspace_write.exclude_slash_tmp = false # earlier",
+        "-c=sandbox_workspace_write.exclude_slash_tmp = true # exclusion retained",
+      ],
+      excluded: true,
+    },
+    {
+      name: "commented false wins last",
+      args: [
+        "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "--config",
+        "sandbox_workspace_write.exclude_tmpdir_env_var=false # explicit last value",
+        "--config=sandbox_workspace_write.exclude_slash_tmp=true",
+        "-csandbox_workspace_write.exclude_slash_tmp=false # explicit last value",
+      ],
+      excluded: false,
+    },
+    {
+      name: "quoted booleans remain strings",
+      args: [
+        '-csandbox_workspace_write.exclude_tmpdir_env_var="true" # not a boolean',
+        "--config=sandbox_workspace_write.exclude_slash_tmp='true' # not a boolean",
+      ],
+      excluded: false,
+    },
+    {
+      name: "option value and terminator",
+      args: [
+        "--ws-issuer",
+        "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "--",
+        "--config=sandbox_workspace_write.exclude_slash_tmp=true",
+      ],
+      excluded: false,
+    },
+  ])(
+    "carries native workspace temporary-root overrides into turn policy: $name",
+    ({ args, excluded }) => {
+      const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+        threadId: "thread-1",
+        cwd: "/tmp/qa/workspace",
+        appServer: {
+          ...createAppServerOptions(),
+          start: { args: ["app-server", ...args] },
+        } as never,
+      });
+      expect(request.sandboxPolicy).toEqual({
+        type: "workspaceWrite",
+        writableRoots: ["/tmp/qa/workspace"],
+        networkAccess: false,
+        excludeTmpdirEnvVar: excluded,
+        excludeSlashTmp: excluded,
+      });
+    },
+  );
 
   it("preserves implicit temporary writable roots for ordinary Codex turns", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
@@ -2037,7 +2152,10 @@ describe("Codex app-server turn input image sanitizing", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",
-      appServer: createAppServerOptions() as never,
+      appServer: {
+        ...createAppServerOptions(),
+        start: excludedTmpStart,
+      } as never,
       sandboxPolicy: {
         type: "workspaceWrite",
         writableRoots: ["/repo"],
@@ -2060,7 +2178,10 @@ describe("Codex app-server turn input image sanitizing", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",
-      appServer: createNetworkProxyAppServerOptions() as never,
+      appServer: {
+        ...createNetworkProxyAppServerOptions(),
+        start: excludedTmpStart,
+      } as never,
     });
 
     expect(request).not.toHaveProperty("permissions");
@@ -2071,7 +2192,10 @@ describe("Codex app-server turn input image sanitizing", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",
-      appServer: createNetworkProxyAppServerOptions() as never,
+      appServer: {
+        ...createNetworkProxyAppServerOptions(),
+        start: excludedTmpStart,
+      } as never,
       sandboxPolicy: {
         type: "externalSandbox",
         networkAccess: "enabled",
@@ -2268,26 +2392,23 @@ describe("Codex app-server turn params", () => {
 });
 
 describe("Codex app-server model provider selection", () => {
-  it.each(["openai", "openai"])(
-    "omits public %s modelProvider when forwarding native Codex auth on thread/start",
-    (provider) => {
-      const request = buildThreadStartParams(
-        createAttemptParams({
-          provider,
-          authProfileId: "work",
-          runtimeExternalProfileIds: ["work"],
-        }),
-        {
-          cwd: "/repo",
-          dynamicTools: [],
-          appServer: createAppServerOptions() as never,
-          developerInstructions: "test instructions",
-        },
-      );
+  it("omits public openai modelProvider when forwarding native Codex auth on thread/start", () => {
+    const request = buildThreadStartParams(
+      createAttemptParams({
+        provider: "openai",
+        authProfileId: "work",
+        runtimeExternalProfileIds: ["work"],
+      }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+      },
+    );
 
-      expect(request).not.toHaveProperty("modelProvider");
-    },
-  );
+    expect(request).not.toHaveProperty("modelProvider");
+  });
 
   it("uses the bound native Codex auth profile when deciding thread/resume modelProvider", () => {
     const request = buildThreadResumeParams(
@@ -3344,38 +3465,62 @@ describe("Codex app-server adopted thread lifecycle", () => {
     });
   });
 
-  it("rejects an adopted thread that is active in another runner before reserving it", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
-    const { threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "thread/read") {
-        return {
-          thread: {
-            ...threadStartResult(threadId).thread,
-            status: { type: "active" },
-          },
-        };
+  it.each([
+    { status: "active", canAcceptDirectInput: true, error: "active in another runner" },
+    { status: "idle", canAcceptDirectInput: false, error: "controlled by its parent" },
+  ])(
+    "preserves retained adopted ownership when native preflight rejects: $status",
+    async ({ status, canAcceptDirectInput, error }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+      const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
+      const harness = createFakeCodexAppServerClient(async (method: string) => {
+        if (method === "thread/read") {
+          return {
+            thread: {
+              ...threadStartResult(threadId).thread,
+              status: { type: status },
+              canAcceptDirectInput,
+            },
+          };
+        }
+        if (method === "thread/unsubscribe") {
+          return { status: "unsubscribed" };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      ensureCodexAppServerClientRuntime(harness.client, { agentDir: workspaceDir });
+      await testCodexAppServerBindingStore.mutate(identity, {
+        kind: "patch",
+        threadId,
+        patch: { clientId: harness.client.getInstanceId() },
+      });
+      const release = vi.fn();
+      await retainCodexAppServerLiveThread(harness.client, threadId, release);
+      const reserveResumeThread = vi.fn(() => ({ release: vi.fn() }));
+      const before = await testCodexAppServerBindingStore.read(identity);
+      try {
+        await expect(
+          startOrResumeThread({
+            client: harness.client,
+            reserveResumeThread,
+            params,
+            cwd: workspaceDir,
+            dynamicTools: [],
+            appServer: createThreadLifecycleAppServerOptions(),
+          }),
+        ).rejects.toThrow(error);
+
+        expect(harness.request.mock.calls.map(([method]) => method)).toEqual(["thread/read"]);
+        expect(release).not.toHaveBeenCalled();
+        expect(await testCodexAppServerBindingStore.read(identity)).toEqual(before);
+        expect(reserveResumeThread).not.toHaveBeenCalled();
+      } finally {
+        harness.close();
       }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const reserveResumeThread = vi.fn(() => ({ release: vi.fn() }));
-
-    await expect(
-      startOrResumeThread({
-        client: { request } as never,
-        reserveResumeThread,
-        params,
-        cwd: workspaceDir,
-        dynamicTools: [],
-        appServer: createThreadLifecycleAppServerOptions(),
-      }),
-    ).rejects.toThrow("active in another runner");
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read"]);
-    expect(reserveResumeThread).not.toHaveBeenCalled();
-  });
+    },
+  );
 });
 
 describe("Codex app-server supervised branch lifecycle", () => {
@@ -3667,7 +3812,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         project_doc_max_bytes: 0,
         mcp_servers: {
           inherited: { enabled: false },
-          "request-only": { enabled: false },
+          "request-only": { command: "request-mcp", enabled: false },
         },
       });
     }
@@ -4538,6 +4683,253 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
   });
 
+  it.each(
+    ["probe", "canonical", "ready"].flatMap((stage) =>
+      ["before write", "after write"].flatMap((failure) =>
+        ["confirmed", "rejected", "acknowledgement lost"].map((archive) => ({
+          stage,
+          failure,
+          archive,
+        })),
+      ),
+    ),
+  )(
+    "cleans $stage tracking failure $failure (archive: $archive) before retry",
+    async ({ stage, failure, archive }) => {
+      const archiveFails = archive !== "confirmed";
+      const sourceThreadId = "thread-source";
+      const probeThreadId = "thread-probe";
+      const finalThreadId = "thread-final";
+      const workspaceDir = path.join(tempDir, "workspace");
+      const attempt = createThreadLifecycleParams(
+        path.join(tempDir, "session.jsonl"),
+        workspaceDir,
+      );
+      const identity = await seedPendingSupervisionBinding({
+        attempt,
+        cwd: workspaceDir,
+        pending: { sourceThreadId },
+      });
+      const initial = await testCodexAppServerBindingStore.read(identity);
+      const storageError = new Error("tracking storage failure");
+      let failed = false;
+      let retry = false;
+      const unarchivedId = stage === "probe" ? probeThreadId : finalThreadId;
+      const nativeThreads = new Set([sourceThreadId]);
+      const request = vi.fn(async (method: string, requestParams?: unknown) => {
+        if (method === "thread/read") {
+          return { thread: sourceThread({ threadId: sourceThreadId }) };
+        }
+        if (method === "thread/fork" || method === "thread/start") {
+          const threadId = `${method === "thread/fork" ? probeThreadId : finalThreadId}${retry ? "-retry" : ""}`;
+          nativeThreads.add(threadId);
+          return nativeThreadResult(threadId, "native-effective", "native-provider");
+        }
+        if (method === "thread/archive") {
+          const threadId = (requestParams as { threadId: string }).threadId;
+          if (!retry && threadId === unarchivedId && archive === "rejected") {
+            throw new Error("archive rejected");
+          }
+          nativeThreads.delete(threadId);
+          if (!retry && threadId === unarchivedId && archive === "acknowledgement lost") {
+            throw new Error("archive acknowledgement lost");
+          }
+          return {};
+        }
+        if (method === "thread/unsubscribe") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const targetIds =
+        stage === "probe"
+          ? [probeThreadId]
+          : stage === "canonical"
+            ? [probeThreadId, finalThreadId]
+            : [finalThreadId];
+      const bindingStore: CodexAppServerBindingStore = {
+        ...testCodexAppServerBindingStore,
+        mutate: async (storeIdentity, mutation) => {
+          if (
+            !failed &&
+            mutation.kind === "patch-pending-supervision-branch" &&
+            mutation.pending.cleanupThreadIds?.join(",") === targetIds.join(",")
+          ) {
+            failed = true;
+            if (failure === "after write") {
+              await testCodexAppServerBindingStore.mutate(storeIdentity, mutation);
+            }
+            throw storageError;
+          }
+          return await testCodexAppServerBindingStore.mutate(storeIdentity, mutation);
+        },
+      };
+      const abandonClient = vi.fn(async () => undefined);
+      const common = {
+        client: { request } as never,
+        abandonClient,
+        bindingStore,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+      };
+      const error = await startOrResumeThreadImpl(common).catch(
+        (caughtError: unknown) => caughtError,
+      );
+      expect(failed).toBe(true);
+      expect(
+        request.mock.calls
+          .filter(([method]) => method === "thread/archive")
+          .map(([, params]) => params),
+      ).toEqual(
+        (stage === "probe" ? [probeThreadId] : [probeThreadId, finalThreadId]).map((threadId) => ({
+          threadId,
+        })),
+      );
+      if (archiveFails) {
+        expect(error).toMatchObject({
+          name: "CodexAppServerUnsafeSubscriptionError",
+          cause: storageError,
+        });
+        expect(abandonClient).toHaveBeenCalledOnce();
+      } else {
+        expect(error).toBe(storageError);
+        expect(abandonClient).not.toHaveBeenCalled();
+      }
+      expect([...nativeThreads]).toEqual(
+        archive === "rejected" ? [sourceThreadId, unarchivedId] : [sourceThreadId],
+      );
+      expect(await testCodexAppServerBindingStore.read(identity)).toEqual({
+        ...initial,
+        pendingSupervisionBranch: {
+          ...initial!.pendingSupervisionBranch,
+          ...(archiveFails ? { cleanupThreadIds: [unarchivedId] } : {}),
+        },
+      });
+
+      retry = true;
+      request.mockClear();
+      await expect(startOrResumeThreadImpl(common)).resolves.toMatchObject({
+        threadId: `${finalThreadId}-retry`,
+        lifecycle: { action: "forked" },
+      });
+      expect([...nativeThreads]).toEqual([sourceThreadId, `${finalThreadId}-retry`]);
+      const persisted = await testCodexAppServerBindingStore.read(identity);
+      expect(persisted?.threadId).toBe(`${finalThreadId}-retry`);
+      expect(persisted?.pendingSupervisionBranch).toBeUndefined();
+      if (archiveFails) {
+        expect(request.mock.calls[0]).toEqual([
+          "thread/archive",
+          { threadId: unarchivedId },
+          expect.any(Object),
+        ]);
+      }
+    },
+  );
+
+  it.each(["unreadable", "pending successor", "materialized successor", "other generation"])(
+    "abandons the exact client when failed tracking finds an %s binding",
+    async (owner) => {
+      const sourceThreadId = "thread-source";
+      const probeThreadId = "thread-probe";
+      const finalThreadId = "thread-final";
+      const workspaceDir = path.join(tempDir, "workspace");
+      const attempt = createThreadLifecycleParams(
+        path.join(tempDir, "session.jsonl"),
+        workspaceDir,
+      );
+      const identity = await seedPendingSupervisionBinding({
+        attempt,
+        cwd: workspaceDir,
+        pending: { sourceThreadId },
+      });
+      const storageError = new Error("tracking storage failure");
+      const readError = new Error("tracking verification unavailable");
+      let failed = false;
+      let preserved: Awaited<ReturnType<CodexAppServerBindingStore["read"]>>;
+      const request = vi.fn(async (method: string) => {
+        if (method === "thread/read") {
+          return { thread: sourceThread({ threadId: sourceThreadId }) };
+        }
+        if (method === "thread/fork" || method === "thread/start") {
+          return nativeThreadResult(
+            method === "thread/fork" ? probeThreadId : finalThreadId,
+            "native-effective",
+            "native-provider",
+          );
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const bindingStore: CodexAppServerBindingStore = {
+        ...testCodexAppServerBindingStore,
+        read: async (storeIdentity) => {
+          if (failed && owner === "unreadable") {
+            throw readError;
+          }
+          return await testCodexAppServerBindingStore.read(storeIdentity);
+        },
+        mutate: async (storeIdentity, mutation) => {
+          if (
+            !failed &&
+            mutation.kind === "patch-pending-supervision-branch" &&
+            mutation.pending.cleanupThreadIds?.includes(finalThreadId)
+          ) {
+            failed = true;
+            if (owner === "pending successor") {
+              await testCodexAppServerBindingStore.mutate(storeIdentity, {
+                ...mutation,
+                pending: { ...mutation.expected, lastTurnId: "turn-successor" },
+              });
+            } else if (owner === "materialized successor") {
+              await testCodexAppServerBindingStore.mutate(storeIdentity, {
+                kind: "commit-pending-supervision-branch",
+                expected: mutation.expected,
+                threadId: finalThreadId,
+                patch: { model: "native-effective", modelProvider: "native-provider" },
+              });
+            } else if (owner === "other generation") {
+              await testCodexAppServerBindingStore.adoptSessionGeneration(
+                { ...identity, sessionId: "successor" },
+                identity.sessionId,
+              );
+            }
+            preserved = await testCodexAppServerBindingStore.read(
+              owner === "other generation" ? { ...identity, sessionId: "successor" } : identity,
+            );
+            throw storageError;
+          }
+          return await testCodexAppServerBindingStore.mutate(storeIdentity, mutation);
+        },
+      };
+      const abandonClient = vi.fn(async () => undefined);
+      const error = await startOrResumeThreadImpl({
+        client: { request } as never,
+        abandonClient,
+        bindingStore,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+      }).catch((caughtError: unknown) => caughtError);
+      expect(error).toMatchObject({
+        name: "CodexAppServerUnsafeSubscriptionError",
+        cause: { cause: storageError, errors: expect.arrayContaining([storageError]) },
+      });
+      expect(abandonClient).toHaveBeenCalledOnce();
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "thread/read",
+        "thread/fork",
+        "thread/start",
+      ]);
+      expect(
+        await testCodexAppServerBindingStore.read(
+          owner === "other generation" ? { ...identity, sessionId: "successor" } : identity,
+        ),
+      ).toEqual(preserved);
+    },
+  );
+
   it("does not clean the committed canonical thread when post-commit diagnostics fail", async () => {
     const sourceThreadId = "thread-source";
     const probeThreadId = "thread-probe";
@@ -5169,6 +5561,8 @@ describe("resolveReasoningEffort (#71946)", () => {
     { requested: "max", supported: maxEfforts, expected: "max" },
     { requested: "ultra", supported: maxEfforts, expected: "max" },
     { requested: "ultra", supported: ultraEfforts, expected: "ultra" },
+    { requested: "high", supported: ["none", "max"], expected: "max" },
+    { requested: "high", supported: ["none"], expected: null },
   ] as const)(
     "maps $requested to $expected using provider-supported efforts",
     ({ requested, supported, expected }) => {
@@ -5188,6 +5582,9 @@ describe("resolveReasoningEffort (#71946)", () => {
   it("omits non-effort think levels", () => {
     expect(resolveReasoningEffort("off", "catalog-model", ultraEfforts)).toBeNull();
     expect(resolveReasoningEffort("adaptive", "catalog-model", ultraEfforts)).toBeNull();
+    expect(
+      resolveReasoningEffort("adaptive", "catalog-model", ["none", ...ultraEfforts]),
+    ).toBeNull();
   });
 });
 

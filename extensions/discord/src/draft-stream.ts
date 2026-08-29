@@ -1,5 +1,5 @@
 // Discord plugin module implements draft stream behavior.
-import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
+import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createChannelMessage,
@@ -25,8 +25,8 @@ type DiscordDraftStream = {
   stop: () => Promise<void>;
   /** Move the active draft to another Discord channel, preserving its current text. */
   retarget: (channelId: string) => Promise<void>;
-  /** Retry cleanup for drafts left behind by a failed retarget delete. */
-  cleanupRetargeted: () => Promise<void>;
+  /** Retry failed preview deletes at the owning turn's cleanup boundary. */
+  cleanupPendingMessages: () => Promise<void>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: (mode?: "preserve" | "discard") => void;
 };
@@ -125,13 +125,11 @@ export function createDiscordDraftStream(params: {
       discardActiveCreate = false;
       if (generation !== streamGeneration) {
         if (shouldDiscardStaleCreate && typeof sentMessageId === "string" && sentMessageId) {
-          try {
-            await deleteChannelMessage(rest, channelId, sentMessageId);
-          } catch (err) {
-            params.warn?.(
-              `discord stale stream preview cleanup failed: ${formatErrorMessage(err)}`,
-            );
-          }
+          await deleteCleanupMessage({
+            channelId,
+            messageId: sentMessageId,
+            warnPrefix: "discord stale stream preview cleanup failed",
+          });
         }
         return true;
       }
@@ -156,22 +154,13 @@ export function createDiscordDraftStream(params: {
     }
   };
 
-  const readMessageId = () => streamMessageId;
-  const clearMessageId = () => {
-    streamMessageId = undefined;
-  };
-  const isValidStreamMessageId = (value: unknown): value is string => typeof value === "string";
-  const { loop, update, stop, clear, discardPending, seal } = createFinalizableDraftLifecycle({
-    throttleMs,
-    state: streamState,
-    sendOrEditStreamMessage,
-    readMessageId,
-    clearMessageId,
-    isValidMessageId: isValidStreamMessageId,
-    deleteMessage: async (messageId) => await deleteChannelMessage(rest, channelId, messageId),
-    warn: params.warn,
-    warnPrefix: "discord stream preview cleanup failed",
-  });
+  const { loop, update, stop, discardPending, seal } = createFinalizableDraftStreamControlsForState(
+    {
+      throttleMs,
+      state: streamState,
+      sendOrEditStreamMessage,
+    },
+  );
 
   const forceNewMessage = (mode: "preserve" | "discard" = "preserve") => {
     // In-flight REST calls may finish after a turn boundary. Advance identity
@@ -196,7 +185,7 @@ export function createDiscordDraftStream(params: {
       params.warn?.(`${message.warnPrefix}: ${formatErrorMessage(err)}`);
     }
   };
-  const cleanupRetargeted = async () => {
+  const cleanupPendingMessages = async () => {
     const pending = pendingCleanupMessages;
     pendingCleanupMessages = [];
     for (const message of pending) {
@@ -255,6 +244,11 @@ export function createDiscordDraftStream(params: {
     }
     await deleteCleanupMessage(currentMessage);
   };
+  const clear = async () => {
+    await discardPending();
+    // Current and detached previews share one failed-delete owner for the final drain.
+    await deleteCurrentMessage();
+  };
 
   params.log?.(`discord stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
@@ -268,7 +262,7 @@ export function createDiscordDraftStream(params: {
     seal,
     stop,
     retarget,
-    cleanupRetargeted,
+    cleanupPendingMessages,
     forceNewMessage,
   };
 }

@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { shellQuote } from "./shell-quote.js";
 import {
+  formatQaScenarioCommandOutput,
   runQaScenarioCommandLifecycle,
   type QaScenarioCommandExecution,
 } from "./test-file-scenario-command-lifecycle.js";
@@ -201,7 +202,7 @@ export async function runDockerE2eBatch(params: {
   }
   await fs.writeFile(
     logPath,
-    `$ ${shellQuote(process.execPath)} scripts/test-docker-all.mjs\n${commandResult.stdout}${commandResult.stderr}`,
+    `$ ${shellQuote(process.execPath)} scripts/test-docker-all.mjs\n${formatQaScenarioCommandOutput(commandResult)}`,
     "utf8",
   );
 

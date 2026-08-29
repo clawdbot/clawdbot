@@ -11,6 +11,15 @@ import {
   type MemoryToolOptions,
 } from "./memory-tool-contract.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
+
+// Core owns this session-store error; Memory Core must preserve its exact code
+// without importing a core-internal module across the plugin boundary.
+const SESSION_CANONICAL_KEY_MIGRATION_REQUIRED = "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED";
+const SESSION_CANONICAL_KEY_MIGRATION_WARNING =
+  "Memory search is unavailable because the session catalog requires canonical-key migration.";
+const SESSION_CANONICAL_KEY_MIGRATION_ACTION =
+  "Stop the Gateway and run openclaw doctor --fix, then restart the Gateway and retry memory_search.";
+
 type MemorySearchManagerResult = Awaited<
   ReturnType<(typeof import("./memory/index.js"))["getMemorySearchManager"]>
 >;
@@ -83,6 +92,7 @@ export function buildMemorySearchUnavailableResult(
   overrides?: {
     warning?: string;
     action?: string;
+    code?: string;
   },
 ) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
@@ -93,18 +103,22 @@ export function buildMemorySearchUnavailableResult(
   );
   const warning =
     overrides?.warning ??
-    (isQuotaError
-      ? "Memory search is unavailable because the embedding provider quota is exhausted."
-      : isMissingNodeSqlite
-        ? "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support."
-        : "Memory search is unavailable due to an embedding/provider error.");
+    (overrides?.code === SESSION_CANONICAL_KEY_MIGRATION_REQUIRED
+      ? SESSION_CANONICAL_KEY_MIGRATION_WARNING
+      : isQuotaError
+        ? "Memory search is unavailable because the embedding provider quota is exhausted."
+        : isMissingNodeSqlite
+          ? "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support."
+          : "Memory search is unavailable due to an embedding/provider error.");
   const action =
     overrides?.action ??
-    (isQuotaError
-      ? "Top up or switch embedding provider, then retry memory_search."
-      : isMissingNodeSqlite
-        ? "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search."
-        : "Check embedding provider configuration and retry memory_search.");
+    (overrides?.code === SESSION_CANONICAL_KEY_MIGRATION_REQUIRED
+      ? SESSION_CANONICAL_KEY_MIGRATION_ACTION
+      : isQuotaError
+        ? "Top up or switch embedding provider, then retry memory_search."
+        : isMissingNodeSqlite
+          ? "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search."
+          : "Check embedding provider configuration and retry memory_search.");
   return {
     results: [],
     disabled: true,

@@ -1,6 +1,12 @@
 // Codex tests cover conversation turn input plugin behavior.
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
+
+const localFileCases = ["file", "FILE", "FiLe"].flatMap((scheme) =>
+  ["mediaPath", "mediaUrl"].map((field) => ({ scheme, field })),
+);
 
 describe("codex conversation turn input", () => {
   it("forwards inbound image attachments to Codex app-server", () => {
@@ -87,27 +93,31 @@ describe("codex conversation turn input", () => {
     ]);
   });
 
-  it("decodes local file URLs for Codex local image input", () => {
-    expect(
-      buildCodexConversationTurnInput({
-        prompt: "look",
-        event: {
-          content: "look",
-          channel: "webchat",
-          isGroup: false,
-          metadata: {
-            mediaPath: "file:///tmp/OpenClaw%20QA/photo.png",
-            mediaType: "image/png",
+  it.each(localFileCases)(
+    "decodes $scheme URLs from $field for local images",
+    ({ scheme, field }) => {
+      const imagePath = path.resolve("OpenClaw QA", "photo #1?.png");
+      expect(
+        buildCodexConversationTurnInput({
+          prompt: "look",
+          event: {
+            content: "look",
+            channel: "webchat",
+            isGroup: false,
+            metadata: {
+              [field]: pathToFileURL(imagePath).href.replace(/^file:/, `${scheme}:`),
+              mediaType: "image/png",
+            },
           },
-        },
-      }),
-    ).toEqual([
-      { type: "text", text: "look", text_elements: [] },
-      { type: "localImage", path: "/tmp/OpenClaw QA/photo.png" },
-    ]);
-  });
+        }),
+      ).toEqual([
+        { type: "text", text: "look", text_elements: [] },
+        { type: "localImage", path: imagePath },
+      ]);
+    },
+  );
 
-  it("drops malformed local file URLs instead of throwing", () => {
+  it.each(localFileCases)("drops malformed $scheme URLs from $field", ({ scheme, field }) => {
     expect(
       buildCodexConversationTurnInput({
         prompt: "look",
@@ -116,7 +126,7 @@ describe("codex conversation turn input", () => {
           channel: "webchat",
           isGroup: false,
           metadata: {
-            mediaPath: "file:///tmp/%zz/photo.png",
+            [field]: `${scheme}:///tmp/%zz/photo.png`,
             mediaType: "image/png",
           },
         },
@@ -124,7 +134,45 @@ describe("codex conversation turn input", () => {
     ).toEqual([{ type: "text", text: "look", text_elements: [] }]);
   });
 
+  it.each(localFileCases)(
+    "rejects encoded separators in $scheme URLs from $field",
+    ({ scheme, field }) => {
+      expect(
+        buildCodexConversationTurnInput({
+          prompt: "look",
+          event: {
+            content: "look",
+            channel: "webchat",
+            isGroup: false,
+            metadata: { [field]: `${scheme}:///tmp/hidden%2Fphoto.png`, mediaType: "image/png" },
+          },
+        }),
+      ).toEqual([{ type: "text", text: "look", text_elements: [] }]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(localFileCases)(
+    "preserves POSIX backslash filenames in $scheme URLs from $field",
+    ({ scheme, field }) => {
+      expect(
+        buildCodexConversationTurnInput({
+          prompt: "look",
+          event: {
+            content: "look",
+            channel: "webchat",
+            isGroup: false,
+            metadata: { [field]: `${scheme}:///tmp/photo%5Cname.png`, mediaType: "image/png" },
+          },
+        }),
+      ).toEqual([
+        { type: "text", text: "look", text_elements: [] },
+        { type: "localImage", path: "/tmp/photo\\name.png" },
+      ]);
+    },
+  );
+
   it("treats local media URLs as Codex local image input", () => {
+    const secondImagePath = path.resolve("OpenClaw QA", "second.jpg");
     expect(
       buildCodexConversationTurnInput({
         prompt: "look",
@@ -133,7 +181,7 @@ describe("codex conversation turn input", () => {
           channel: "webchat",
           isGroup: false,
           metadata: {
-            mediaUrls: ["/tmp/staged-photo.png", "file:///tmp/OpenClaw%20QA/second.jpg"],
+            mediaUrls: ["/tmp/staged-photo.png", pathToFileURL(secondImagePath).href],
             mediaTypes: ["image/png", "image/jpeg"],
           },
         },
@@ -141,7 +189,7 @@ describe("codex conversation turn input", () => {
     ).toEqual([
       { type: "text", text: "look", text_elements: [] },
       { type: "localImage", path: "/tmp/staged-photo.png" },
-      { type: "localImage", path: "/tmp/OpenClaw QA/second.jpg" },
+      { type: "localImage", path: secondImagePath },
     ]);
   });
 

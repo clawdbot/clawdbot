@@ -7,7 +7,7 @@ read_when:
   - "npm install -g fails with permissions or PATH issues"
 ---
 
-OpenClaw requires **Node 22.22.3+, Node 24.15+, or Node 25.9+** (which includes Node 26). **Node 26 is the default and recommended runtime** — it starts the Gateway noticeably faster and uses less memory than Node 24, and the installer script provisions it when Node is missing. CI and release workflows still pin Node 24; Node 22 remains supported via its LTS line. Node 23 is unsupported. The [installer script](/install#alternative-install-methods) detects and installs Node automatically — use this page when you want to set up Node yourself (versions, PATH, global installs).
+OpenClaw requires **Node 22.22.3+, Node 24.15+, or Node 25.9+** (which includes Node 26). **Node 26 is the recommended runtime** — it starts the Gateway noticeably faster and uses less memory than Node 24. The installer provisions Node 26 on macOS and the supported Node 24 LTS line on Linux when Node is missing; CI and release workflows also pin Node 24. Node 22 remains supported via its LTS line. Node 23 is unsupported. The [installer script](/install#alternative-install-methods) detects and installs Node automatically — use this page when you want to set up Node yourself (versions, PATH, global installs).
 
 ## Check your version
 
@@ -34,7 +34,7 @@ node -v
     **Ubuntu / Debian:**
 
     ```bash
-    curl -fsSL https://deb.nodesource.com/setup_26.x | sudo -E bash -
+    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
     sudo apt-get install -y nodejs
     ```
 

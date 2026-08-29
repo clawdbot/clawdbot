@@ -3,6 +3,7 @@ import type {
   WorkerGitHubPublishParams,
   WorkerConnectParams,
   WorkerLiveEventParams,
+  WorkerPortalParams,
   WorkerProtocolCloseReason,
   WorkerSessionsSendParams,
   WorkerSessionsSpawnParams,
@@ -34,6 +35,10 @@ import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./place
 import type { WorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentStore } from "./store.js";
+import {
+  serializeWorkerSessionToolResult,
+  workerSessionToolErrorResult,
+} from "./worker-session-tool-result.js";
 
 type WorkerProcessTurnBinding = {
   turnClaim: WorkerSessionTurnClaim;
@@ -117,6 +122,12 @@ type WorkerTurnRpcOptions = {
           identity: WorkerConnectionIdentity;
           toolName: "github_publish";
           request: WorkerGitHubPublishParams;
+          signal?: AbortSignal;
+        }
+      | {
+          identity: WorkerConnectionIdentity;
+          toolName: "portal";
+          request: WorkerPortalParams;
           signal?: AbortSignal;
         },
   ) => Promise<WorkerSessionToolResult>;
@@ -386,7 +397,11 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
   const executeSessionTool = async (
     identity: WorkerConnectionIdentity,
     toolName: WorkerSessionToolName,
-    request: WorkerSessionsSpawnParams | WorkerSessionsSendParams | WorkerGitHubPublishParams,
+    request:
+      | WorkerSessionsSpawnParams
+      | WorkerSessionsSendParams
+      | WorkerGitHubPublishParams
+      | WorkerPortalParams,
     signal?: AbortSignal,
   ): Promise<WorkerSessionToolServiceResult> => {
     const validate = () => {
@@ -411,35 +426,33 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     if (!options.executeSessionTool) {
       return { ok: false, reason: "gateway-unavailable" };
     }
+    const operation =
+      toolName === "sessions_spawn" && "task" in request
+        ? { toolName, request }
+        : toolName === "sessions_send" && "sessionKey" in request
+          ? { toolName, request }
+          : toolName === "portal" && "action" in request
+            ? { toolName, request }
+            : toolName === "github_publish"
+              ? { toolName, request }
+              : undefined;
+    if (!operation) {
+      return { ok: false, closeReason: "invalid-frame" };
+    }
     let result: WorkerSessionToolResult;
     try {
-      result = await options.executeSessionTool(
-        toolName === "sessions_spawn"
-          ? {
-              identity,
-              toolName,
-              request: request as WorkerSessionsSpawnParams,
-              ...(signal ? { signal } : {}),
-            }
-          : toolName === "sessions_send"
-            ? {
-                identity,
-                toolName,
-                request: request as WorkerSessionsSendParams,
-                ...(signal ? { signal } : {}),
-              }
-            : {
-                identity,
-                toolName,
-                request,
-                ...(signal ? { signal } : {}),
-              },
-      );
-    } catch {
-      return { ok: false, reason: "gateway-unavailable" };
+      result = await options.executeSessionTool({
+        identity,
+        ...operation,
+        ...(signal ? { signal } : {}),
+      });
+    } catch (error) {
+      result = {
+        resultJson: serializeWorkerSessionToolResult(workerSessionToolErrorResult(error)),
+      };
     }
     // The tool may have awaited provider provisioning or another session turn.
-    // Never return its result after the source turn or placement was revoked.
+    // Neither success nor failure may return after the source turn or placement was revoked.
     const current = validate();
     return current.ok ? { ok: true, result } : current;
   };

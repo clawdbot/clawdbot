@@ -437,30 +437,38 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     expectDeliveredReply(0, { text: "Post-processing failed", isError: true });
   });
 
-  it("registers a streamed ask_user on its concrete message exactly once", async () => {
+  it("finalizes a streamed ask_user before later progress can replace it", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     const buttons = [[{ text: "One", callback_data: "ask:one" }]];
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver(
-        {
-          text: "Pick one",
-          channelData: {
-            askUser: { questionId: "ask_0123456789abcdef0123456789abcdef" },
-            telegram: { buttons },
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await dispatcherOptions.deliver(
+          {
+            text: "Pick one",
+            channelData: {
+              askUser: { questionId: "ask_0123456789abcdef0123456789abcdef" },
+              telegram: { buttons },
+            },
           },
-        },
-        { kind: "tool" },
-      );
-      return { queuedFinal: true };
-    });
+          { kind: "tool" },
+        );
+        await replyOptions?.onToolStart?.({ name: "wait", phase: "start" });
+        return { queuedFinal: true };
+      },
+    );
 
     await dispatchWithContext({ context: createContext(), textLimit: 80 });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Pick one");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Pick one",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(mockCallArg(editMessageTelegram)).toBe(123);
     expect(mockCallArg(editMessageTelegram, 0, 1)).toBe(2001);
     expect(mockCallArg(editMessageTelegram, 0, 2)).toBe("Pick one");
     expectRecordFields(mockCallArg(editMessageTelegram, 0, 3), { buttons });
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+    expect(answerDraftStream.updatePreview).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(registerChannelDelivery).toHaveBeenCalledOnce();
     const registration = mockCallArg(registerChannelDelivery) as {
@@ -496,7 +504,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "progress" });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Pick one or more");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Pick one or more",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(registerChannelDelivery).toHaveBeenCalledOnce();
   });
 

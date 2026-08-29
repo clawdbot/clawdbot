@@ -1,6 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { AuthStorage, ModelRegistry } from "../sessions/index.js";
 import {
   createModelGenerationFixture,
   publishCurrentModelGeneration,
@@ -32,7 +34,48 @@ describe("model runtime generation scope", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     resetModelGenerationFixtureState();
+  });
+
+  it.each([
+    { auth: true, registry: true },
+    { auth: true, registry: false },
+    { auth: false, registry: true },
+    { auth: false, registry: false },
+  ])("fills only missing discovery stores (auth=$auth, registry=$registry)", async (supplied) => {
+    const generation = createModelGenerationFixture({ config: {}, label: "stores" });
+    const { preparedModelRuntime } = generation;
+    const stores = preparedModelRuntime.createStores();
+    stores.authStorage.setRuntimeApiKey(generation.provider, "fixture-runtime-key");
+    const preparedStores = vi.spyOn(preparedModelRuntime, "createStores");
+    const emptyAuth = vi.spyOn(AuthStorage, "inMemory");
+    const emptyRegistry = vi.spyOn(ModelRegistry, "inMemory");
+
+    const result = await resolveModelAsync(
+      generation.provider,
+      generation.modelId,
+      preparedModelRuntime.agentDir,
+      preparedModelRuntime.config,
+      {
+        ...(supplied.auth ? { authStorage: stores.authStorage } : {}),
+        ...(supplied.registry ? { modelRegistry: stores.modelRegistry } : {}),
+        preparedModelRuntime,
+        skipAgentDiscovery: true,
+        workspaceDir: preparedModelRuntime.workspaceDir,
+      },
+    );
+
+    expect(preparedStores).not.toHaveBeenCalled();
+    const allocations = supplied.auth && supplied.registry ? 0 : 1;
+    expect(emptyAuth).toHaveBeenCalledTimes(allocations);
+    expect(emptyRegistry).toHaveBeenCalledTimes(allocations);
+    expect(result.authStorage === stores.authStorage).toBe(supplied.auth);
+    expect(result.modelRegistry === stores.modelRegistry).toBe(supplied.registry);
+    const model = expectDefined(result.model, "resolved fixture model");
+    expect(await result.modelRegistry.getApiKeyAndHeaders(model)).toMatchObject({
+      apiKey: supplied.auth || supplied.registry ? "fixture-runtime-key" : undefined,
+    });
   });
 
   it("keeps alias, suppression, static metadata, and runtime hooks on the prepared generation", async () => {

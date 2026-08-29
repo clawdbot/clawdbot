@@ -1,18 +1,19 @@
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
+import {
+  assertMediaNotDataUrl,
+  jsonResult,
+  readPositiveIntegerParam,
+  readStringArrayParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/channel-actions";
 // Discord plugin module implements runtime.messaging.send behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isDiscordThreadChannelType } from "../channel-type.js";
+import { coerceDiscordComponentParam } from "../components.js";
 import {
   createReusableDiscordReplyReference,
   resolveDiscordReplyReference,
 } from "../reply-reference.js";
-import {
-  assertMediaNotDataUrl,
-  jsonResult,
-  readBooleanParam,
-  readPositiveIntegerParam,
-  readStringArrayParam,
-  readStringParam,
-} from "../runtime-api.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../send.shared.js";
 import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
@@ -201,7 +202,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const silent = ctx.params.silent === true;
       const suppressEmbeds =
         ctx.params.suppressEmbeds === undefined ? undefined : ctx.params.suppressEmbeds === true;
-      const rawComponents = ctx.params.components;
+      const rawComponents = coerceDiscordComponentParam(ctx.params.components);
       const componentSpec = hasDiscordComponentObjectKeys(rawComponents)
         ? discordMessagingActionRuntime.readDiscordComponentSpec(rawComponents)
         : null;

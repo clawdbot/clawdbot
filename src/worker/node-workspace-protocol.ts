@@ -15,6 +15,10 @@ const ARGV_MAX_ITEMS = 128;
 const ARG_MAX_BYTES = 128 * 1024;
 const TIMEOUT_MAX_MS = 10 * 60 * 1000;
 
+export type NodeWorkerWorkspaceSeedInput =
+  | { action: "apply"; key: string }
+  | { action: "store"; key: string; maxAgeMs: number };
+
 export type NodeWorkerWorkspaceExecInput = {
   gatewayNamespace: string;
   environmentId: string;
@@ -25,6 +29,7 @@ export type NodeWorkerWorkspaceExecInput = {
   timeoutMs?: number;
   resetWorkspace?: boolean;
   transfer?: NodeWorkerWorkspaceTransferInput;
+  seed?: NodeWorkerWorkspaceSeedInput;
 };
 
 export type NodeWorkerWorkspaceExecResult = SpawnResult & { workspaceDir: string };
@@ -70,7 +75,7 @@ export function parseNodeWorkerWorkspaceExecInput(
     !hasExactKeys(
       value,
       ["gatewayNamespace", "environmentId", "sessionId", "generation", "argv"],
-      ["input", "timeoutMs", "resetWorkspace", "transfer"],
+      ["input", "timeoutMs", "resetWorkspace", "transfer", "seed"],
     )
   ) {
     throw new Error("INVALID_REQUEST: invalid node worker workspace request");
@@ -118,6 +123,35 @@ export function parseNodeWorkerWorkspaceExecInput(
   if (value.resetWorkspace !== undefined && typeof value.resetWorkspace !== "boolean") {
     throw new Error("INVALID_REQUEST: resetWorkspace must be a boolean");
   }
+  let seed: NodeWorkerWorkspaceSeedInput | undefined;
+  if (value.seed !== undefined) {
+    if (value.transfer !== undefined || value.resetWorkspace !== undefined) {
+      throw new Error(
+        "INVALID_REQUEST: workspace seed cannot combine with transfer or resetWorkspace",
+      );
+    }
+    if (
+      !isRecord(value.seed) ||
+      typeof value.seed.key !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(value.seed.key)
+    ) {
+      throw new Error("INVALID_REQUEST: workspace seed key must be a SHA-256 hex digest");
+    }
+    const { action, key, maxAgeMs } = value.seed;
+    if (action === "apply" && hasExactKeys(value.seed, ["action", "key"])) {
+      seed = { action, key };
+    } else if (
+      action === "store" &&
+      hasExactKeys(value.seed, ["action", "key", "maxAgeMs"]) &&
+      typeof maxAgeMs === "number" &&
+      Number.isSafeInteger(maxAgeMs) &&
+      maxAgeMs >= 0
+    ) {
+      seed = { action, key, maxAgeMs };
+    } else {
+      throw new Error("INVALID_REQUEST: workspace seed action or maxAgeMs is invalid");
+    }
+  }
   let transfer: NodeWorkerWorkspaceTransferInput | undefined;
   if (value.transfer !== undefined) {
     if (!isRecord(value.transfer)) {
@@ -159,6 +193,7 @@ export function parseNodeWorkerWorkspaceExecInput(
     ...(value.timeoutMs === undefined ? {} : { timeoutMs: value.timeoutMs }),
     ...(value.resetWorkspace === undefined ? {} : { resetWorkspace: value.resetWorkspace }),
     ...(transfer ? { transfer } : {}),
+    ...(seed ? { seed } : {}),
   };
 }
 
@@ -224,6 +259,39 @@ export function parseNodeWorkerWorkspaceExecResult(
     return null;
   }
   return value as NodeWorkerWorkspaceExecResult;
+}
+
+export function projectNodeWorkerWorkspaceExecResult(
+  workspaceDir: string,
+  result: SpawnResult,
+): NodeWorkerWorkspaceExecResult {
+  const projected = {
+    workspaceDir,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    code: result.code,
+    signal: result.signal,
+    killed: result.killed,
+    termination: result.termination,
+    ...(result.stdoutTruncatedBytes === undefined
+      ? {}
+      : { stdoutTruncatedBytes: result.stdoutTruncatedBytes }),
+    ...(result.stderrTruncatedBytes === undefined
+      ? {}
+      : { stderrTruncatedBytes: result.stderrTruncatedBytes }),
+    ...(result.noOutputTimedOut === undefined ? {} : { noOutputTimedOut: result.noOutputTimedOut }),
+    ...(result.outputLimitExceeded === undefined
+      ? {}
+      : { outputLimitExceeded: result.outputLimitExceeded }),
+    ...(result.outputErrorStream === undefined
+      ? {}
+      : { outputErrorStream: result.outputErrorStream }),
+  };
+  const parsed = parseNodeWorkerWorkspaceExecResult(projected);
+  if (!parsed) {
+    throw new Error("node worker workspace result violated its bounded contract");
+  }
+  return parsed;
 }
 
 export const NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES = OUTPUT_MAX_BYTES;

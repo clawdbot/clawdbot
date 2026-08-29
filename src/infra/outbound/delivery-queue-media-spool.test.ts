@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 
 const storeSpy = vi.hoisted(() => ({
   onMove: null as ((from: string, to: string, rootDir: string) => void) | null,
@@ -41,7 +42,7 @@ const {
   releaseSpoolArtifacts,
   stageQueuePayloadMedia,
 } = await import("./delivery-queue-media-spool.js");
-const { enqueueDelivery, loadPendingDeliveries } = await import("./delivery-queue-storage.js");
+const { enqueueDelivery } = await import("./delivery-queue-storage.js");
 const { upsertDeliveryQueueEntry } = await import("../delivery-queue-sqlite.js");
 const {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,

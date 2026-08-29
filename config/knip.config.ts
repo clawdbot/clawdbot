@@ -38,10 +38,12 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs!",
   "scripts/e2e/lib/codex-media-path/write-config.mjs!",
   "scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs!",
+  "scripts/e2e/lib/codex-on-demand/doctor-checks.mjs!",
   "scripts/e2e/lib/config-reload/assert-log.mjs!",
   "scripts/e2e/lib/config-reload/mutate-metadata.mjs!",
   "scripts/e2e/lib/docker-artifact-proof/write-identities.ts!",
   "scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs!",
+  "scripts/e2e/lib/doctor-install-switch/assert-exec-start.mjs!",
   "scripts/e2e/lib/doctor-install-switch/write-wrapper.mjs!",
   "scripts/e2e/lib/fixture.mjs!",
   "scripts/e2e/lib/fixtures/config.mjs!",
@@ -63,24 +65,31 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs!",
   "scripts/e2e/lib/run-with-pty.mjs!",
   "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs!",
+  // systemd-sealed-service-definition.sh executes these via Node stdin and a container path.
+  "scripts/e2e/lib/systemd-sealed-service-definition/file-mount.mjs!",
+  "scripts/e2e/lib/systemd-sealed-service-definition/paired-mounts.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/config-parking.mjs!",
+  // Capture runs in the container; sanitization runs only on the trusted host.
+  "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs!",
+  "scripts/upgrade-survivor-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
+  // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
+  "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
   "scripts/ios-release-cut.ts!",
   "scripts/ios-release-plan.ts!",
   "scripts/ios-release-signing.mts!",
   "scripts/lib/docker-plugin-selection.mjs!",
-  "scripts/list-prod-store-packages.mjs!",
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
   "scripts/live-docker-normalize-config.ts!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
-  // Mantis invokes the trusted proof collector through its workflow shell step.
-  "scripts/mantis/telegram-visible-proof.mjs!",
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
+  "scripts/pre-commit/guard-staged-content.mjs!",
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
   "scripts/pr-gates-lock.mts!",
@@ -96,7 +105,11 @@ const repositoryScriptEntries = [
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
+  // Native shell UI tests connect to this manually launched loopback Gateway fixture.
+  "scripts/test-ios-shell-gateway.mjs!",
   "scripts/update-clawtributors.ts!",
+  // The candidate binder invokes this trusted producer-identity verifier by path.
+  "scripts/verify-full-release-producer-job.mjs!",
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
   "scripts/write-plugin-sdk-entry-dts.ts!",
@@ -407,10 +420,6 @@ const config = {
     // Registry facades retain direct registration/reset compatibility seams used by focused
     // tests; the full-tree scan still audits every named export against those consumers.
     "src/agents/harness/registry.ts": ["exports"],
-    // Transitional public failover predicates stay available until their remaining callers
-    // migrate in later consolidation PRs; focused tests audit the retained behavior.
-    "src/agents/failover/classify.ts": ["exports"],
-    "src/agents/failover/provider-patterns.ts": ["exports"],
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
@@ -753,7 +762,10 @@ const config = {
       "src/matrix/send.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: bundledPluginWorkspace([
+      // The subprocess boundary tests spawn this fixture by computed URL.
+      "src/memory/fixtures/manager-search-knn-child.fixture.mjs!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: {
       ...bundledPluginWorkspace(),
       // LanceDB declares Arrow as a peer; the plugin provides it for runtime table values.

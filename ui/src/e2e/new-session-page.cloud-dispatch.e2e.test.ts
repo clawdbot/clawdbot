@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
@@ -33,6 +34,69 @@ const cloudProfileRefreshProofDir = path.join(
 );
 
 suite.define(() => {
+  it("dispatches an optionless cloud profile without a machine override", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const sessionKey = "agent:main:optionless-cloud";
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+        workspaceGit: true,
+        deferredMethods: ["sessions.dispatch"],
+        methodResponses: {
+          "agents.list": {
+            agents: [{ id: "main", workspace: WORKSPACE, workspaceGit: true }],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          },
+          "environments.list": {
+            environments: [],
+            profiles: [
+              {
+                id: "aws",
+                providerId: "crabbox",
+                machines: [{ id: "fast", label: "Fast" }],
+              },
+              { id: "machine0", providerId: "crabbox" },
+            ],
+          },
+          "worktrees.branches": {
+            branches: [{ kind: "local", name: "main" }],
+            defaultBranch: "main",
+            repositoryStatus: "git",
+          },
+          "sessions.create": { key: sessionKey },
+          "sessions.list": createdSessionListResult(sessionKey),
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      const trigger = page.locator("#new-session-where-trigger");
+      const place = page.locator("wa-popover.new-session-page__where-popover");
+      await trigger.click();
+      await place.getByRole("button", { name: "Cloud · aws" }).click();
+      await trigger.click();
+      await place.getByRole("button", { name: "Fast", exact: true }).click();
+      await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
+      await place.getByRole("button", { name: "Cloud · machine0" }).click();
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("machine0");
+      await expect.poll(() => trigger.getAttribute("data-machine-class")).toBeNull();
+      await trigger.click();
+      await expect
+        .poll(() => place.getByRole("button", { name: "Cloud · machine0" }).isDisabled())
+        .toBe(false);
+      expect(await place.getByText("Machine", { exact: true }).count()).toBe(0);
+      expect(await place.locator('[data-value^="machine:"]').count()).toBe(0);
+      await captureUiProof(page, "optionless-cloud-profile.png");
+      await page.keyboard.press("Escape");
+
+      await page.locator(".new-session-page__message").fill("Use the configured machine size");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const dispatch = await gateway.waitForRequest("sessions.dispatch");
+      expect(dispatch.params).toEqual({ key: sessionKey, agentId: "main", profileId: "machine0" });
+    });
+  });
+
   it("dispatches a cloud target before sending its first turn and shows placement", async () => {
     if (captureUiProofEnabled) {
       await mkdir(cloudProfileRefreshProofDir, { recursive: true });
@@ -193,9 +257,17 @@ suite.define(() => {
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe("off,minimal,low,medium,high");
-      await expect
-        .poll(() => page.locator(".new-session-page__composer [data-chat-speed-toggle]").count())
-        .toBe(0);
+      const fastMode = page.locator(".new-session-page__composer [data-chat-speed-toggle]");
+      await expect.poll(() => fastMode.count()).toBe(1);
+      await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("false");
+      await expect.poll(() => fastMode.getAttribute("data-chat-speed-toggle")).toBe("on");
+      expect(
+        await fastMode.evaluate((element) =>
+          element.classList.contains("chat-controls__speed-toggle"),
+        ),
+      ).toBe(true);
+      await fastMode.click();
+      await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("true");
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("");
       await thinkingSlider.press("Home");
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("off");
@@ -335,9 +407,9 @@ suite.define(() => {
       await trigger.click();
       const retainedCloudProfile = place.getByRole("button", { name: "Cloud · aws" });
       await expect.poll(() => retainedCloudProfile.isDisabled()).toBe(false);
-      expect(await retainedCloudProfile.getAttribute("title")).toBe(
-        "Cloud worker provider: crabbox",
-      );
+      await expect
+        .poll(() => tooltipTitleText(retainedCloudProfile))
+        .toBe("Cloud worker provider: crabbox");
       await expect.poll(() => place.getByRole("button", { name: /Fast/ }).isVisible()).toBe(true);
       if (captureUiProofEnabled) {
         await page.screenshot({
@@ -359,6 +431,7 @@ suite.define(() => {
         worktreeBaseRef: "main",
         worktreeName: "cloud-e2e",
         thinkingLevel: "high",
+        fastMode: true,
       });
       expect(create.params).not.toHaveProperty("attachments");
       expect(create.params).not.toHaveProperty("cwd");
@@ -392,6 +465,7 @@ suite.define(() => {
       const publishPlacement = async (
         state: "requested" | "provisioning" | "syncing" | "starting",
         generation: number,
+        label: string,
         includeNeutral = false,
       ) => {
         await gateway.setMethodResponse("sessions.list", {
@@ -427,16 +501,16 @@ suite.define(() => {
           ts: Date.now(),
         });
         await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
-        await pollLocatorText(startupStatus).toContain(`Placement: ${state}`);
+        await pollLocatorText(startupStatus).toContain(label);
       };
 
-      for (const [state, generation] of [
-        ["requested", 1],
-        ["provisioning", 2],
-        ["syncing", 3],
-        ["starting", 4],
+      for (const [state, generation, label] of [
+        ["requested", 1, "Provisioning environment…"],
+        ["provisioning", 2, "Provisioning environment…"],
+        ["syncing", 3, "Preparing workspace…"],
+        ["starting", 4, "Starting…"],
       ] as const) {
-        await publishPlacement(state, generation, state === "starting");
+        await publishPlacement(state, generation, label, state === "starting");
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       }
       expect(await gateway.getRequests("sessions.describe")).toHaveLength(
@@ -457,7 +531,7 @@ suite.define(() => {
         app.runtime?.context.navigate("chat", { pathname });
       }, controlUiSessionPath(sessionKey));
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
-      await pollLocatorText(startupStatus).toContain("Placement: starting");
+      await pollLocatorText(startupStatus).toContain("Starting…");
       expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
       expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);

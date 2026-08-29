@@ -33,6 +33,9 @@ export const icons = {
   activity: strokeIcon(svg` <path d="M22 12h-4l-3 9L9 3l-3 9H2" />`),
   clock: strokeIcon(svg` <circle cx="12" cy="12" r="10" />
     <polyline points="12 6 12 12 16 14" />`),
+  circleX: strokeIcon(svg` <circle cx="12" cy="12" r="10" />
+    <path d="m15 9-6 6" />
+    <path d="m9 9 6 6" />`),
   arrowUpRight: strokeIcon(svg` <path d="M7 17 17 7" />
     <path d="M7 7h10v10" />`),
   link: strokeIcon(svg` <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
@@ -141,12 +144,6 @@ export const icons = {
       d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
     />
     <circle cx="12" cy="12" r="3" />`),
-  slidersHorizontal: strokeIcon(svg` <line x1="4" x2="14" y1="7" y2="7" />
-    <line x1="18" x2="20" y1="7" y2="7" />
-    <line x1="4" x2="6" y1="17" y2="17" />
-    <line x1="10" x2="20" y1="17" y2="17" />
-    <line x1="14" x2="14" y1="4" y2="10" />
-    <line x1="8" x2="8" y1="14" y2="20" />`),
   bug: strokeIcon(svg` <path d="m8 2 1.88 1.88" />
     <path d="M14.12 3.88 16 2" />
     <path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1" />
@@ -249,6 +246,15 @@ export const icons = {
     />
     <path d="M12 9v4" />
     <path d="M12 17h.01" />`),
+  globeOff: strokeIcon(svg` <path
+      d="M10.114 4.462A14.5 14.5 0 0 1 12 2a10 10 0 0 1 9.313 13.643"
+    />
+    <path d="M15.557 15.556A14.5 14.5 0 0 1 12 22 10 10 0 0 1 4.929 4.929" />
+    <path d="M15.892 10.234A14.5 14.5 0 0 0 12 2a10 10 0 0 0-3.643.687" />
+    <path d="M17.656 12H22" />
+    <path d="M19.071 19.071A10 10 0 0 1 12 22 14.5 14.5 0 0 1 8.44 8.45" />
+    <path d="M2 12h10" />
+    <path d="m2 2 20 20" />`),
   hand: strokeIcon(svg` <path d="M18 11V6a2 2 0 0 0-4 0v5" />
     <path d="M14 10V4a2 2 0 0 0-4 0v6" />
     <path d="M10 10.5V6a2 2 0 0 0-4 0v8" />
@@ -264,6 +270,13 @@ export const icons = {
       d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"
     />
     <path d="m15 5 4 4" />`),
+  pipette: strokeIcon(svg` <path
+      d="m12 9-8.414 8.414A2 2 0 0 0 3 18.828v1.344a2 2 0 0 1-.586 1.414A2 2 0 0 1 3.828 21h1.344a2 2 0 0 0 1.414-.586L15 12"
+    />
+    <path
+      d="m18 9 .4.4a1 1 0 1 1-3 3l-3.8-3.8a1 1 0 1 1 3-3l.4.4 3.4-3.4a1 1 0 1 1 3 3z"
+    />
+    <path d="m2 22 .414-.414" />`),
   pencilSparkles: strokeIcon(svg` <path d="M10 3H8" />
     <path d="m15.007 5.008 3.987 3.986" />
     <path d="M20 15v4" />
@@ -298,6 +311,12 @@ export const icons = {
     <circle cx="15" cy="18" r="1.1" fill="currentColor" stroke="none" />`),
   arrowDown: strokeIcon(svg`<path d="M12 5v14m7-7-7 7-7-7" />`),
   arrowUp: strokeIcon(svg`<path d="M12 19V5m-7 7 7-7 7 7" />`),
+  audioLines: strokeIcon(svg`<path d="M2 10v3" />
+    <path d="M6 6v11" />
+    <path d="M10 3v18" />
+    <path d="M14 8v7" />
+    <path d="M18 5v13" />
+    <path d="M22 10v3" />`),
   chevronUp: strokeIcon(svg`<path d="m18 15-6-6-6 6" />`),
   chevronsUpDown: strokeIcon(svg`<path d="m7 15 5 5 5-5" />
     <path d="m7 9 5-5 5 5" />`),
@@ -348,6 +367,9 @@ export const icons = {
     <path d="M13 6h8" />
     <path d="M13 12h8" />
     <path d="M13 18h8" />`),
+  moreHorizontal: strokeIcon(svg` <circle cx="5" cy="12" r="1" />
+    <circle cx="12" cy="12" r="1" />
+    <circle cx="19" cy="12" r="1" />`),
   ...toolIcons,
 } as const;
 

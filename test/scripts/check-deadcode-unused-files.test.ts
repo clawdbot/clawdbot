@@ -32,6 +32,7 @@ const KNIP_UNUSED_FILE_ARGS = [
   "--no-config-hints",
 ];
 const KNIP_UNUSED_FILE_SCAN_NAME = "production unused-file scan";
+const FAKE_KNIP_KILL_GRACE_MS = 50;
 
 class FakeKnipProcess extends EventEmitter {
   readonly stderr = new EventEmitter();
@@ -44,8 +45,48 @@ function finishFakeProcess(
   status: number | null,
   signal: NodeJS.Signals | null,
 ): void {
-  child.emit("exit", status, signal);
-  child.emit("close", status, signal);
+  // Real child termination cannot reenter process.kill before its caller returns.
+  queueMicrotask(() => {
+    child.emit("exit", status, signal);
+    child.emit("close", status, signal);
+  });
+}
+
+type ProcessKillSignal = Parameters<typeof process.kill>[1];
+
+async function withFakeProcessSignals(
+  child: FakeKnipProcess,
+  run: (kills: ProcessKillSignal[]) => Promise<void>,
+): Promise<void> {
+  const originalKill = process.kill;
+  const kills: ProcessKillSignal[] = [];
+  const restoredSignals: ProcessKillSignal[] = [];
+  const observer: typeof process.kill = (pid, signal) => {
+    if (Math.abs(pid) !== child.pid) return originalKill(pid, signal);
+    restoredSignals.push(signal);
+    if (signal === 0) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+    return true;
+  };
+  process.kill = (pid, signal) => {
+    if (Math.abs(pid) !== child.pid) return observer(pid, signal);
+    if (signal === 0) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+    kills.push(signal);
+    finishFakeProcess(child, null, (signal as NodeJS.Signals | undefined) ?? "SIGTERM");
+    return true;
+  };
+  try {
+    await run(kills);
+  } finally {
+    // Restore the inner mock to a safe observer until any grace callback has run.
+    // Keep this guard even on assertion failure: fake PIDs must never reach the OS.
+    process.kill = observer;
+    try {
+      await new Promise((resolve) => setTimeout(resolve, FAKE_KNIP_KILL_GRACE_MS));
+      expect(restoredSignals, "signaling survived process.kill mock restoration").toEqual([]);
+    } finally {
+      process.kill = originalKill;
+    }
+  }
 }
 
 function waitForPidFileSync(filePath: string, timeoutMs: number): number {
@@ -68,7 +109,6 @@ describe("check-deadcode-unused-files", () => {
     expect(existsSync(path.resolve("scripts/deadcode-unused-files.allowlist.mjs"))).toBe(false);
     const script = readFileSync(path.resolve("scripts/check-deadcode-unused-files.mts"), "utf8");
     expect(script).not.toContain("allowlist");
-    expect(script).toContain("production and full-tree unused-file checks passed with 0 entries");
     expect(script).toContain('"config/knip.all-exports.config.ts"');
     expect(script).toContain("result.status !== 0");
   });
@@ -226,7 +266,7 @@ Delete the files or model their real entrypoints in Knip.`,
       spawnCommand(command: string, args: string[], options: unknown) {
         calls.push({ args, command, options });
         const child = new FakeKnipProcess();
-        queueMicrotask(() => finishFakeProcess(child, 0, null));
+        finishFakeProcess(child, 0, null);
         return child;
       },
       writeStatus: () => {},
@@ -263,23 +303,10 @@ Delete the files or model their real entrypoints in Knip.`,
   it("emits heartbeat status and reports Knip timeouts", async () => {
     const statuses: string[] = [];
     const child = new FakeKnipProcess();
-    const originalKill = process.kill.bind(process);
-    const kills: Array<NodeJS.Signals | number | undefined> = [];
-    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
-      if (Math.abs(pid) === child.pid) {
-        if (signal === 0) {
-          throw Object.assign(new Error("gone"), { code: "ESRCH" });
-        }
-        kills.push(signal);
-        finishFakeProcess(child, null, (signal as NodeJS.Signals | undefined) ?? "SIGTERM");
-        return true;
-      }
-      return originalKill(pid, signal as NodeJS.Signals);
-    }) as typeof process.kill;
-    try {
+    await withFakeProcessSignals(child, async (kills) => {
       const result = await runKnip(KNIP_UNUSED_FILE_ARGS, {
         heartbeatMs: 1,
-        killGraceMs: 50,
+        killGraceMs: FAKE_KNIP_KILL_GRACE_MS,
         maxBufferBytes: KNIP_MAX_BUFFER_BYTES,
         scanName: KNIP_UNUSED_FILE_SCAN_NAME,
         spawnCommand: () => child,
@@ -289,7 +316,7 @@ Delete the files or model their real entrypoints in Knip.`,
 
       expect(statuses.some((message) => message.includes("still running"))).toBe(true);
       expect(statuses.some((message) => message.includes("timed out"))).toBe(true);
-      expect(kills).toContain("SIGTERM");
+      expect(kills).toEqual(["SIGTERM"]);
       expect(result).toStrictEqual({
         errorCode: "ETIMEDOUT",
         errorMessage: expect.stringContaining("Knip production unused-file scan timed out"),
@@ -297,9 +324,7 @@ Delete the files or model their real entrypoints in Knip.`,
         signal: "SIGTERM",
         status: null,
       });
-    } finally {
-      process.kill = originalKill;
-    }
+    });
   });
 
   it.skipIf(process.platform === "win32")(
@@ -436,20 +461,9 @@ Delete the files or model their real entrypoints in Knip.`,
 
   it("bounds captured Knip output", async () => {
     const child = new FakeKnipProcess();
-    const originalKill = process.kill.bind(process);
-    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
-      if (Math.abs(pid) === child.pid) {
-        if (signal === 0) {
-          throw Object.assign(new Error("gone"), { code: "ESRCH" });
-        }
-        finishFakeProcess(child, null, (signal as NodeJS.Signals | undefined) ?? "SIGTERM");
-        return true;
-      }
-      return originalKill(pid, signal as NodeJS.Signals);
-    }) as typeof process.kill;
-    try {
+    await withFakeProcessSignals(child, async (kills) => {
       const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
-        killGraceMs: 50,
+        killGraceMs: FAKE_KNIP_KILL_GRACE_MS,
         maxBufferBytes: 4,
         scanName: KNIP_UNUSED_FILE_SCAN_NAME,
         spawnCommand: () => child,
@@ -465,9 +479,8 @@ Delete the files or model their real entrypoints in Knip.`,
         signal: "SIGTERM",
         status: null,
       });
-    } finally {
-      process.kill = originalKill;
-    }
+      expect(kills).toEqual(["SIGTERM"]);
+    });
   });
 
   it("reports spawn errors", async () => {

@@ -191,7 +191,11 @@ function createHarness(params?: {
   const runAuthFlow: RunAuthFlow | undefined =
     params?.runAuthFlow ??
     (params?.opts?.local
-      ? (vi.fn().mockResolvedValue({ exitCode: 0, signal: null }) as unknown as RunAuthFlow)
+      ? (vi.fn().mockResolvedValue({
+          exitCode: 0,
+          signal: null,
+          commandArgv: '["codex","login"]',
+        }) as unknown as RunAuthFlow)
       : undefined);
   const state = {
     agentDefaultId: params?.agentDefaultId ?? "main",
@@ -456,12 +460,30 @@ describe("tui command handlers", () => {
       initialSession: "global",
       replacementSession: "global",
     },
+    {
+      name: "same-key model",
+      command: "/models",
+      value: "private/research-only",
+      initialSession: "agent:research:incident",
+      replacementSession: "agent:research:incident",
+      sameAgent: true,
+    },
+    {
+      name: "same-key session",
+      command: "/sessions",
+      value: "agent:research:incident",
+      initialSession: "agent:research:incident",
+      replacementSession: "agent:research:incident",
+      sameAgent: true,
+    },
   ])(
-    "retires an open $name picker after its selected agent is replaced",
-    async ({ command, value, initialSession, replacementSession }) => {
+    "retires an open $name picker after its selected session incarnation is replaced",
+    async ({ command, value, initialSession, replacementSession, sameAgent }) => {
       const harness = createHarness({
         currentAgentId: "research",
         currentSessionKey: initialSession,
+        currentSessionId: "private-session",
+        sessionGeneration: 3,
         agents: [{ id: "research" }],
         listModels: vi.fn().mockResolvedValue([{ provider: "private", id: "research-only" }]),
         listSessions: vi
@@ -471,8 +493,10 @@ describe("tui command handlers", () => {
 
       await harness.handleCommand(command);
       const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
-      harness.state.currentAgentId = "ops";
+      harness.state.currentAgentId = sameAgent ? "research" : "ops";
       harness.state.currentSessionKey = replacementSession;
+      harness.state.currentSessionId = "replacement-session";
+      harness.state.sessionGeneration += 1;
       selector.onSelect?.({ value });
       await flushAsyncSelect();
 
@@ -514,6 +538,29 @@ describe("tui command handlers", () => {
       expect(harness.closeOverlay).toHaveBeenCalledExactlyOnceWith(harness.overlayHandle);
     },
   );
+
+  it("does not reveal a previous session's delayed picker failure in its replacement", async () => {
+    const selection = createDeferred();
+    const harness = createHarness({
+      currentSessionId: "private-session",
+      sessionGeneration: 2,
+      listSessions: vi
+        .fn()
+        .mockResolvedValue({ sessions: [{ key: "agent:main:other", updatedAt: 1 }] }),
+      setSession: vi.fn(() => selection.promise) as SetSessionMock,
+    });
+
+    await harness.handleCommand("/sessions");
+    const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+    selector.onSelect?.({ value: "agent:main:other" });
+    harness.state.currentSessionId = "replacement-session";
+    harness.state.sessionGeneration += 1;
+    selection.reject(new Error("private previous-session details"));
+    await flushAsyncSelect();
+
+    expect(harness.addSystem).not.toHaveBeenCalled();
+    expect(harness.closeOverlay).toHaveBeenCalledExactlyOnceWith(harness.overlayHandle);
+  });
 
   it("bounds Ctrl+P hydration to recent non-global TUI sessions", async () => {
     const listSessions = vi.fn().mockResolvedValue({
@@ -3087,7 +3134,11 @@ describe("tui command handlers", () => {
 
   it("runs /auth through the local auth flow and refreshes session info", async () => {
     const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
-    const runAuthFlow = vi.fn().mockResolvedValue({ exitCode: 0, signal: null });
+    const runAuthFlow = vi.fn().mockResolvedValue({
+      exitCode: 0,
+      signal: null,
+      commandArgv: '["codex","login"]',
+    });
     const { handleCommand, addSystem, setActivityStatus } = createHarness({
       opts: { local: true },
       refreshSessionInfo,
@@ -3105,6 +3156,25 @@ describe("tui command handlers", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
   });
 
+  it("shows the failed auth command and a safe terminal retry", async () => {
+    const runAuthFlow = vi.fn().mockResolvedValue({
+      exitCode: 1,
+      signal: null,
+      commandArgv: '["codex","login"]',
+    });
+    const { handleCommand, addSystem, setActivityStatus } = createHarness({
+      opts: { local: true },
+      runAuthFlow,
+    });
+
+    await handleCommand("/auth openai");
+
+    expect(addSystem).toHaveBeenCalledWith(
+      'auth flow failed (exit 1) — command argv: ["codex","login"]; retry provider login in a regular terminal to see its output',
+    );
+    expect(setActivityStatus).toHaveBeenLastCalledWith("error");
+  });
+
   it("rejects /auth in non-local mode", async () => {
     const { handleCommand, addSystem } = createHarness();
 
@@ -3114,7 +3184,11 @@ describe("tui command handlers", () => {
   });
 
   it("blocks /auth while an optimistic run is still pending", async () => {
-    const runAuthFlow = vi.fn().mockResolvedValue({ exitCode: 0, signal: null });
+    const runAuthFlow = vi.fn().mockResolvedValue({
+      exitCode: 0,
+      signal: null,
+      commandArgv: '["codex","login"]',
+    });
     const { handleCommand, addSystem } = createHarness({
       opts: { local: true },
       pendingSubmit: {
@@ -3431,6 +3505,35 @@ describe("tui command handlers", () => {
     expect(harness.addSystem).not.toHaveBeenCalled();
     expect(harness.pendingSystemNotices.size).toBe(0);
   });
+
+  it.each(["models", "sessions"] as const)(
+    "does not open a stale %s selector after the same session key is reset",
+    async (picker) => {
+      const deferred = createDeferred<unknown>();
+      const harness = createHarness({
+        currentSessionKey: "agent:main:main",
+        currentSessionId: "private-session",
+        sessionGeneration: 2,
+        ...(picker === "models"
+          ? { listModels: vi.fn(() => deferred.promise) }
+          : { listSessions: vi.fn(() => deferred.promise) }),
+      });
+
+      const pending = harness.handleCommand(`/${picker}`);
+      harness.state.currentSessionId = "replacement-session";
+      harness.state.sessionGeneration += 1;
+      deferred.resolve(
+        picker === "models"
+          ? [{ provider: "openai", id: "gpt-5.6-luna" }]
+          : { sessions: [{ key: "agent:main:main", updatedAt: 1 }] },
+      );
+      await pending;
+
+      expect(harness.openOverlay).not.toHaveBeenCalled();
+      expect(harness.addSystem).not.toHaveBeenCalled();
+      expect(harness.pendingSystemNotices.size).toBe(0);
+    },
+  );
 
   it.each([
     { name: "another session", initialKey: "agent:main:first", nextKey: "agent:main:second" },

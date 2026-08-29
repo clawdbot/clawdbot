@@ -1,3 +1,4 @@
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -49,6 +50,7 @@ export type TimedCronRunOutcome = CronRunOutcome &
     delivered?: boolean;
     deliveryAttempted?: boolean;
     deliveryError?: string;
+    deliverySuppressionReason?: NormalizeReplySkipReason;
     delivery?: CronDeliveryTrace;
     isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
     activeJobMarker?: CronActiveJobMarker;
@@ -68,6 +70,7 @@ export type CronJobRunResult = CronRunOutcome &
     completionStatus?: CronCompletionStatus;
     deliveryState?: CronResolvedDeliveryState;
     deliveryError?: string;
+    deliverySuppressionReason?: NormalizeReplySkipReason;
     delivery?: CronDeliveryTrace;
     delivered?: boolean;
     deliveryAttempted?: boolean;
@@ -105,7 +108,10 @@ export type StartupCatchupCandidate = {
 export type StartupDeferredJob = {
   jobId: string;
   delayMs?: number;
-  configRevision: string;
+  scheduleIdentity: string | undefined;
+  createdAtMs: number;
+  payloadKind: CronJob["payload"]["kind"];
+  scheduleActivatedAtMs: number | undefined;
   nextRunAtMs: number | undefined;
   lastRunAtMs: number | undefined;
   lastRunStatus: CronRunStatus | undefined;

@@ -228,7 +228,7 @@ function normalizedEvidence(options: {
     (validationInputs.npmTelegramPackageSpec.length > 0 ||
       validationInputs.releasePackageSpec.length > 0);
   const manifest = {
-    version: shaPinned ? 3 : 2,
+    version: 4,
     workflowName: "Full Release Validation",
     workflowRef,
     workflowSha: producerSha,
@@ -250,8 +250,10 @@ function normalizedEvidence(options: {
     childRuns: {
       normalCi: "201",
       npmTelegram: npmTelegramRequired ? "205" : "",
-      pluginPrerelease: "202",
-      releaseChecks: "203",
+      pluginPrereleaseIndependent: "202",
+      pluginPrereleaseCandidate: "206",
+      releaseChecksIndependent: "203",
+      releaseChecksCandidate: "207",
       productPerformance: {
         blocking: true,
         conclusion: "success",
@@ -269,7 +271,7 @@ function normalizedEvidence(options: {
     },
     conclusion: "success",
     manifest,
-    manifestVersion: shaPinned ? 3 : 2,
+    manifestVersion: 4,
     runAttempt: 2,
     runId,
     status: "completed",
@@ -284,7 +286,7 @@ function normalizedEvidence(options: {
       ? "manifest-v3-protected-tag-exact-sha"
       : shaPinned
         ? "manifest-v3-sha-pinned-main-ancestry"
-        : "legacy-v2-main-ancestry",
+        : "manifest-v3-branch",
     workflowRefType: "branch",
     workflowRunPath: shaPinned
       ? `.github/workflows/full-release-validation.yml@${workflowFullRef}`
@@ -294,22 +296,40 @@ function normalizedEvidence(options: {
   const roles = [
     ["normalCi", "201", 1, 1, "CI", "ci.yml", "-ci"],
     [
-      "pluginPrerelease",
+      "pluginPrereleaseIndependent",
       "202",
       2,
       1,
       "Plugin Prerelease",
       "plugin-prerelease.yml",
-      "-plugin-prerelease",
+      "-plugin-prerelease-independent",
     ],
     [
-      "releaseChecks",
+      "pluginPrereleaseCandidate",
+      "206",
+      1,
+      2,
+      "Plugin Prerelease",
+      "plugin-prerelease.yml",
+      "-plugin-prerelease-candidate",
+    ],
+    [
+      "releaseChecksIndependent",
       "203",
+      1,
+      1,
+      "OpenClaw Release Checks",
+      "openclaw-release-checks.yml",
+      "-release-checks-independent",
+    ],
+    [
+      "releaseChecksCandidate",
+      "207",
       1,
       2,
       "OpenClaw Release Checks",
       "openclaw-release-checks.yml",
-      "-release-checks",
+      "-release-checks-candidate",
     ],
     ...(npmTelegramRequired
       ? ([
@@ -369,7 +389,7 @@ function normalizedEvidence(options: {
     rerunGroup: "all",
     root,
     runReleaseSoak: soak,
-    schema: "openclaw.release-validation-evidence/v3",
+    schema: "openclaw.release-validation-evidence/v4",
     producerOnTrustedMainLineage: !protectedTagRoute,
     trustedWorkflowFullRef,
     trustedWorkflowRef,
@@ -666,6 +686,71 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       reuse: "true",
     });
   });
+
+  it("reuses strict evidence produced by an ancestor of the protected tooling tag", () => {
+    const { clone, priorSha } = getSharedRepo();
+    const producerSha = "d".repeat(40);
+    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
+    const producerRef = `release-ci/${producerSha.slice(0, 12)}-122`;
+    const record = normalizedEvidence({
+      producerSha,
+      targetSha: priorSha,
+      trustedWorkflowRef,
+      workflowRef: producerRef,
+    });
+    record.current.workflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
+    record.root.workflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
+    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+    const result = runResolver({
+      binDir,
+      fixtures,
+      repoDir: clone,
+      targetSha: priorSha,
+      trustedWorkflowRef,
+      validatorPath,
+      verifierOnMain: false,
+      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+    });
+
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({
+      evidence_run_id: "111",
+      reuse: "true",
+    });
+  });
+
+  it.each(["manifest-v3-protected-tag-diverged", "protected-tag-tooling-lineage"])(
+    "rejects unrecognized protected tooling proof %s",
+    (workflowRefProof) => {
+      const { clone, priorSha } = getSharedRepo();
+      const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
+      const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
+      const record = normalizedEvidence({
+        producerSha: VERIFIER_SHA,
+        targetSha: priorSha,
+        trustedWorkflowRef,
+        workflowRef: producerRef,
+      });
+      record.current.workflowRefProof = workflowRefProof;
+      record.root.workflowRefProof = workflowRefProof;
+      const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+      const result = runResolver({
+        binDir,
+        fixtures,
+        repoDir: clone,
+        targetSha: priorSha,
+        trustedWorkflowRef,
+        validatorPath,
+        verifierOnMain: false,
+        workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+      });
+
+      expect(result.status).toBe(0);
+      expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
+    },
+  );
 
   it.each([
     {

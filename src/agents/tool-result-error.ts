@@ -154,11 +154,12 @@ export function registerTrustedToolInputError(error: object): void {
   trustedToolInputErrors.add(error);
 }
 
-/** Authenticate a wrapper-owned failure that settled before tool implementation start. */
-export function registerTrustedToolNoStartError(error: unknown): void {
+/** Record host-owned proof that the protected operation never started, even if hooks ran. */
+export function registerTrustedToolNoStartError<T>(error: T): T {
   if (typeof error === "object" && error !== null) {
     trustedToolNoStartErrors.add(error);
   }
+  return error;
 }
 
 /** Consume one private no-start fact at the next authoritative lifecycle boundary. */

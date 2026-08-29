@@ -112,6 +112,8 @@ type MatrixNetworkConfig = {
 export type MatrixAccountConfig = Omit<MatrixConfig, "accounts">;
 
 export type MatrixConfig = {
+  /** Introduce the bot when it joins an allowed group room. Default: true. */
+  joinIntro?: boolean;
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
   /** If false, do not start Matrix. Default: true. */

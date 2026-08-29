@@ -87,35 +87,28 @@ struct SettingsProTab: View {
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
     @State var systemAgentChatStore = IOSSystemAgentChatStore()
-    @State private var navigationPath: [SettingsRoute] = []
-    let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
     let acceptsGatewaySetupRequests: Bool
     let headerSidebarAction: OpenClawSidebarHeaderAction?
-    let ownsNavigationStack: Bool
-    let navigateToRoute: ((SettingsRoute) -> Void)?
+    let navigateToRoute: (SettingsRoute) -> Void
     let onRouteChange: ((SettingsRoute?) -> Void)?
     let onApprovalNotificationsRoute: ((String) -> Void)?
     let gatewaySetupRequest: GatewaySetupRequest?
     let onGatewaySetupRequestHandled: ((Int) -> Void)?
 
     init(
-        initialRoute: SettingsRoute? = nil,
         directRoute: SettingsRoute? = nil,
         acceptsGatewaySetupRequests: Bool = false,
         headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
-        ownsNavigationStack: Bool = true,
-        navigateToRoute: ((SettingsRoute) -> Void)? = nil,
+        navigateToRoute: @escaping (SettingsRoute) -> Void,
         onRouteChange: ((SettingsRoute?) -> Void)? = nil,
         onApprovalNotificationsRoute: ((String) -> Void)? = nil,
         gatewaySetupRequest: GatewaySetupRequest? = nil,
         onGatewaySetupRequestHandled: ((Int) -> Void)? = nil)
     {
-        self.initialRoute = initialRoute
         self.directRoute = directRoute
         self.acceptsGatewaySetupRequests = acceptsGatewaySetupRequests
         self.headerSidebarAction = headerSidebarAction
-        self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
         self.onApprovalNotificationsRoute = onApprovalNotificationsRoute
@@ -129,22 +122,18 @@ struct SettingsProTab: View {
                 self.settingsContent))
     }
 
-    @ViewBuilder
     private var settingsContent: some View {
-        if let directRoute {
-            self.destination(for: directRoute)
-        } else {
-            if self.ownsNavigationStack {
-                self.settingsNavigationStack
+        Group {
+            if let directRoute {
+                self.destination(for: directRoute)
             } else {
                 self.settingsNavigationContent
             }
         }
-    }
-
-    private var settingsNavigationStack: some View {
-        NavigationStack(path: self.$navigationPath) {
-            self.settingsNavigationContent
+        // Direct routes and the Settings list share RootTabs' path. Register
+        // here so Approvals opened from Overview can also push Notifications.
+        .navigationDestination(for: SettingsRoute.self) { route in
+            self.destination(for: route)
         }
     }
 
@@ -155,9 +144,6 @@ struct SettingsProTab: View {
         }
         .font(OpenClawType.body)
         .navigationTitle("Settings")
-        .navigationDestination(for: SettingsRoute.self) { route in
-            self.destination(for: route)
-        }
         .toolbar {
             if let headerSidebarAction {
                 OpenClawSidebarToolbarItem(
@@ -177,7 +163,6 @@ struct SettingsProTab: View {
                 self.syncSettingsState()
                 self.refreshNotificationSettings()
                 self.applyGatewaySetupRequestIfNeeded()
-                self.applyInitialRouteIfNeeded()
                 self.notifyRouteChange()
             }
             .onDisappear {
@@ -225,10 +210,6 @@ struct SettingsProTab: View {
                 // Root-owned resets leave Settings mounted behind onboarding.
                 // Reload cleared credentials before the view can persist stale state.
                 self.syncAfterOnboardingReset()
-            }
-            .onChange(of: self.navigationPath) { _, _ in
-                self.invalidateGatewaySetupAttempt()
-                self.notifyRouteChange()
             }
     }
 
@@ -360,37 +341,15 @@ struct SettingsProTab: View {
         self.onGatewaySetupRequestHandled?(gatewaySetupRequest.id)
     }
 
-    var canOpenNotificationsRouteFromApprovals: Bool {
-        self.ownsNavigationStack ? self.directRoute == nil : self.navigateToRoute != nil
-    }
-
     func openNotificationsRouteFromApprovals() {
-        guard self.canOpenNotificationsRouteFromApprovals else { return }
         if let approvalID = ExecApprovalIdentifier.exact(self.appModel.pendingExecApprovalPrompt?.id) {
             self.onApprovalNotificationsRoute?(approvalID)
         }
-        if !self.ownsNavigationStack, let navigateToRoute {
-            navigateToRoute(.notifications)
-            return
-        }
-        // Push, don't replace: Back from Notifications must return to the
-        // Approvals screen the user came from, not reset to the Settings root.
-        self.navigationPath.append(.notifications)
-    }
-
-    private func applyInitialRouteIfNeeded() {
-        guard self.directRoute == nil else { return }
-        guard let initialRoute else { return }
-        guard self.navigationPath != [initialRoute] else { return }
-        self.navigationPath = [initialRoute]
+        self.navigateToRoute(.notifications)
     }
 
     private func notifyRouteChange() {
-        if let directRoute {
-            self.onRouteChange?(directRoute)
-            return
-        }
-        self.onRouteChange?(self.navigationPath.last)
+        self.onRouteChange?(self.directRoute)
     }
 }
 

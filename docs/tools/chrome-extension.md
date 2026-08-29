@@ -136,6 +136,19 @@ The extension excludes incognito tabs, internal pages such as `chrome://` and
 `chrome-extension://`, and tabs without a usable current URL. `file://` access
 also requires Chrome's **Allow access to file URLs** setting.
 
+An agent-created tab may start at `about:blank` while a CDP client initializes
+it before navigating. The extension allows that specific initial tab, keeps it
+in the OpenClaw group, and applies the same pause and access-mode controls.
+Existing blank tabs, manually grouped blanks, and other `about:` pages remain
+unavailable. Navigating away, replacing the tab, or restarting or reconnecting
+the extension ends the initial blank admission; returning to `about:blank`
+does not restore it.
+
+If creation fails before the extension returns the target, it attempts to close
+the tab only while it still owns it. Tabs you paused, moved, or navigated during
+creation are left alone. A redirect, lost connection, or worker shutdown can
+leave a tab behind; close it manually if needed.
+
 ## Automatic setup controls
 
 Settings shows redacted relay/native bootstrap status and an **Use automatic
@@ -177,6 +190,13 @@ Inspect the installation without printing credentials:
 openclaw browser extension status
 openclaw browser extension status --json
 ```
+
+An `owned` registration is not necessarily launchable. Status reports a filesystem
+readiness snapshot of its registered runtime and native entry. It does not execute
+either target or verify that its code will run successfully. If an upgrade removes
+either target, rerun `openclaw browser extension install` to repair the owned
+registration. Ownership checks still refuse foreign or malformed manifests and
+launchers.
 
 Remove only OpenClaw-owned native-host manifests and launchers:
 

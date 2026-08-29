@@ -5,7 +5,7 @@ import type { SpawnResult } from "../../process/exec.js";
 import { completeWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
-import type { WorkerTurnLaunchRequest } from "./tunnel-contract.js";
+import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -188,7 +188,7 @@ describe("worker turn launcher claim admission", () => {
     let launchCount = 0;
     const stopTunnel = vi.fn(async () => {});
     const destroy = vi.fn(async () => attachedEnvironment());
-    const launchTurn = vi.fn(async (request: WorkerTurnLaunchRequest): Promise<SpawnResult> => {
+    const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
       request.onDispatchReady?.();
       launchCount += 1;
       if (launchCount === 1) {
@@ -315,7 +315,10 @@ describe("worker turn launcher claim admission", () => {
     }
   });
 
-  it("launches only one worker loop for concurrent admission of the same run", async () => {
+  it.each([
+    { label: "without node portal support", portalAvailable: false },
+    { label: "with negotiated node portal support", portalAvailable: true },
+  ])("launches one worker loop $label", async ({ portalAvailable }) => {
     seedActivePlacement();
     const commandStarted = createDeferred();
     const commandFinished = createDeferred<{
@@ -326,13 +329,18 @@ describe("worker turn launcher claim admission", () => {
       killed: false;
       termination: "exit";
     }>();
-    const launchTurn = vi.fn((request: WorkerTurnLaunchRequest) => {
+    const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>((request) => {
       request.onDispatchReady?.();
       commandStarted.resolve();
       return commandFinished.promise;
     });
     const environments: WorkerTurnEnvironmentService = {
-      get: vi.fn(() => attachedEnvironment()),
+      get: vi.fn(() => ({
+        ...attachedEnvironment(),
+        nodeDeviceId: "cloud-node-1",
+        sshEndpoint: null,
+      })),
+      supportsNodePortal: vi.fn(async () => portalAvailable),
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery: vi.fn(() => true),
       startTunnel: vi.fn(async () => ({
@@ -396,6 +404,10 @@ describe("worker turn launcher claim admission", () => {
       permissionMode: "workspace",
       workerContainmentRoot: "/worker/workspace",
     });
+    expect(launchRequest.plan.assignment.toolAuthority.allowedToolNames.includes("portal")).toBe(
+      portalAvailable,
+    );
+    expect(environments.supportsNodePortal).toHaveBeenCalledWith(ENVIRONMENT_ID, OWNER_EPOCH);
     createWorkerSessionPlacementGate(placements).updateAckCursors({
       claim: launchRequest.turnClaim,
       transcriptSeq: 2,

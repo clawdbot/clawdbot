@@ -1,5 +1,4 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
-import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
   storeSidebarSessionOwnerFilter,
@@ -10,16 +9,6 @@ type SessionOwnerFilterContext = {
     connection: { gatewayUrl: string };
     snapshot: { selfUser?: { id: string } | null };
   };
-  sessions: Pick<
-    SessionCapability,
-    "canonicalListRevision" | "setInvolvingMeFilter" | "setOwnerFilter"
-  >;
-};
-
-type PendingFacetRefresh = {
-  revision: number;
-  scope: string;
-  settled: boolean;
 };
 
 export class SessionOwnerFilterController implements ReactiveController {
@@ -28,10 +17,12 @@ export class SessionOwnerFilterController implements ReactiveController {
   private scope: string | null = null;
   private ownerFacetResolved = false;
   private ownerOptions: readonly { id: string }[] = [];
-  private pendingFacetRefresh: PendingFacetRefresh | null = null;
+  private pendingFacetRefresh: Promise<void> | null = null;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: ReactiveControllerHost & {
+      sessionData: { resetSessionList(): void; refreshSidebarSessions(): Promise<void> };
+    },
     private readonly getContext: () => SessionOwnerFilterContext | undefined,
   ) {
     host.addController(this);
@@ -39,19 +30,7 @@ export class SessionOwnerFilterController implements ReactiveController {
 
   hostUpdated(): void {
     this.restore();
-    const pending = this.pendingFacetRefresh;
-    const context = this.getContext();
-    if (
-      pending?.settled &&
-      pending.scope === this.scope &&
-      context &&
-      context.sessions.canonicalListRevision > pending.revision
-    ) {
-      this.pendingFacetRefresh = null;
-      this.host.requestUpdate();
-      return;
-    }
-    if (pending) {
+    if (this.pendingFacetRefresh) {
       return;
     }
     if (
@@ -85,7 +64,7 @@ export class SessionOwnerFilterController implements ReactiveController {
       );
     }
     this.host.requestUpdate();
-    void this.applyRequest();
+    void this.refresh();
   }
 
   private restore(): void {
@@ -110,34 +89,25 @@ export class SessionOwnerFilterController implements ReactiveController {
     }
     this.host.requestUpdate();
     if (previousScope !== null || this.ownerId || this.involvingMe) {
-      const pending = {
-        revision: context.sessions.canonicalListRevision,
-        scope: nextScope,
-        settled: false,
-      };
-      this.pendingFacetRefresh = pending;
       this.ownerFacetResolved = false;
       this.ownerOptions = [];
-      void this.applyRequest().finally(() => {
+      const pending = this.refresh();
+      this.pendingFacetRefresh = pending;
+      void pending.finally(() => {
         if (this.pendingFacetRefresh === pending) {
-          pending.settled = true;
+          this.pendingFacetRefresh = null;
           this.host.requestUpdate();
         }
       });
     }
   }
 
-  private currentFilter() {
-    return { ownerId: this.ownerId, involvingMe: this.involvingMe };
+  private refresh(): Promise<void> {
+    this.host.sessionData.resetSessionList();
+    return this.host.sessionData.refreshSidebarSessions();
   }
 
-  private applyRequest(): Promise<void> {
-    const sessions = this.getContext()?.sessions;
-    if (!sessions) {
-      return Promise.resolve();
-    }
-    return this.involvingMe
-      ? sessions.setInvolvingMeFilter(true)
-      : sessions.setOwnerFilter(this.ownerId);
+  private currentFilter() {
+    return { ownerId: this.ownerId, involvingMe: this.involvingMe };
   }
 }

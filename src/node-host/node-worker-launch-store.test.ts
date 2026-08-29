@@ -2,9 +2,9 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
@@ -312,7 +312,7 @@ describe("node worker launch store container identity", () => {
     expect(new NodeWorkerLaunchStore({ env }).get("container-launch")).toEqual(receipt);
   });
 
-  it("lets the same-schema predecessor read and write a populated candidate container journal before candidate reopen", () => {
+  it("lets the exact v13 predecessor read and write a populated candidate container journal before candidate reopen", () => {
     const { database, env, store } = fixture();
     const databasePath = openOpenClawStateDatabase({ env }).path;
     const { planHash, supervisor } = claimLaunch(store, "candidate-container-launch");
@@ -330,9 +330,8 @@ describe("node worker launch store container identity", () => {
       nowMs: NOW_MS,
     });
     expect(hasContainerIdentityTable(database)).toBe(true);
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
+    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(13);
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 13 });
     closeOpenClawStateDatabaseForTest();
 
     const companionStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
@@ -360,13 +359,11 @@ describe("node worker launch store container identity", () => {
 
     const predecessor = new DatabaseSync(databasePath);
     try {
-      expect(predecessor.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-      });
+      expect(predecessor.prepare("PRAGMA user_version").get()).toEqual({ user_version: 13 });
       expect(() =>
         assertSqliteSchemaContains(
           predecessor,
-          "predecessor global schema",
+          "predecessor v13 global schema",
           predecessorSchema,
           predecessorCompatibility,
         ),

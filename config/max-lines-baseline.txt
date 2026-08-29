@@ -11,7 +11,6 @@ extensions/anthropic/index.test.ts
 extensions/anthropic/register.runtime.ts
 extensions/anthropic/session-catalog.test.ts
 extensions/browser/src/browser-tool.test.ts
-extensions/browser/src/browser-tool.ts
 extensions/browser/src/browser/cdp.ts
 extensions/browser/src/browser/chrome-mcp.test.ts
 extensions/browser/src/browser/chrome.executables.ts
@@ -186,7 +185,6 @@ extensions/qa-lab/src/cli.ts
 extensions/qa-lab/src/confidence-report.ts
 extensions/qa-lab/src/evidence-gallery.ts
 extensions/qa-lab/src/gateway-child.test.ts
-extensions/qa-lab/src/gateway-child.ts
 extensions/qa-lab/src/gateway-process-boundary.ts
 extensions/qa-lab/src/lab-server.test.ts
 extensions/qa-lab/src/lab-server.ts
@@ -196,7 +194,6 @@ extensions/qa-lab/src/live-transports/slack/slack-live.runtime.test.ts
 extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.test.ts
 extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.test.ts
 extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.ts
-extensions/qa-lab/src/mantis/telegram-desktop-builder.runtime.ts
 extensions/qa-lab/src/mantis/visual-task.runtime.ts
 extensions/qa-lab/src/providers/mock-openai/server.test.ts
 extensions/qa-lab/src/providers/mock-openai/server.ts
@@ -653,7 +650,6 @@ src/gateway/server-methods/sessions-files.ts
 src/gateway/server-methods/skills.ts
 src/gateway/server-methods/talk.test.ts
 src/gateway/server-methods/talk.ts
-src/gateway/server-methods/usage.ts
 src/gateway/server-node-events.test.ts
 src/gateway/server-node-events.ts
 src/gateway/server-plugins.test.ts
@@ -690,7 +686,6 @@ src/gateway/worker-environments/store.ts
 src/hooks/install.ts
 src/infra/approval-handler-runtime.ts
 src/infra/backup-create.test.ts
-src/infra/clawhub-install-trust.ts
 src/infra/command-explainer/extract.ts
 src/infra/device-pairing.test.ts
 src/infra/diagnostic-events.ts
@@ -753,7 +748,6 @@ src/plugin-sdk/test-helpers/plugin-runtime-mock.ts
 src/plugin-sdk/test-helpers/provider-discovery-contract.ts
 src/plugin-sdk/test-helpers/provider-runtime-contract.ts
 src/plugin-state/plugin-state-store.sqlite.ts
-src/plugins/bundled-plugin-metadata.test.ts
 src/plugins/capability-provider-runtime.test.ts
 src/plugins/channel-plugin-ids.test.ts
 src/plugins/clawhub.test.ts
@@ -792,7 +786,6 @@ src/plugins/provider-runtime.test.ts
 src/plugins/provider-runtime.ts
 src/plugins/providers.test.ts
 src/plugins/providers.ts
-src/plugins/registry-runtime.ts
 src/plugins/schema-validator.test.ts
 src/plugins/sdk-alias.test.ts
 src/plugins/sdk-alias.ts
@@ -880,14 +873,12 @@ ui/src/pages/chat/tool-stream.ts
 ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
 ui/src/pages/cron/view.ts
-ui/src/pages/plugins/plugins-page.ts
 ui/src/pages/plugins/view.ts
 ui/src/pages/sessions/sessions-page.ts
 ui/src/pages/sessions/view.test.ts
 ui/src/pages/sessions/view.ts
 ui/src/pages/skill-workshop/view.ts
 ui/src/pages/skills/view.ts
-ui/src/pages/usage/metrics.ts
 ui/src/pages/usage/view-details.ts
 ui/src/pages/usage/view-overview.ts
 ui/src/pages/usage/view.ts

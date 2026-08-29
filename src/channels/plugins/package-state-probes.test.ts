@@ -133,6 +133,27 @@ describe("channel package-state probes", () => {
     ).toBe(false);
   });
 
+  it.each([
+    { name: "PATH", env: { PATH: "/usr/bin" }, configured: false },
+    { name: "mixed_case_token", env: { MIXED_CASE_TOKEN: "token" }, configured: true },
+  ])("applies the safe channel env-trigger contract to $name", ({ name, env, configured }) => {
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        ...makeBundledChannelCatalogEntry({ pluginId: "env-chat", channelId: "env-chat" }),
+        channel: { id: "env-chat", configuredState: { env: { allOf: [name] } } },
+      } satisfies PluginChannelCatalogEntry,
+    ]);
+
+    expect(
+      hasBundledChannelPackageState({
+        metadataKey: "configuredState",
+        channelId: "env-chat",
+        cfg: {},
+        env,
+      }),
+    ).toBe(configured);
+  });
+
   it("prefers built bundled package-state probes when the catalog root is source", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-probe-"));
     tempDirs.push(root);

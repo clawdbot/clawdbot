@@ -129,6 +129,28 @@ function hasNonEmptyRecord(value: unknown): boolean {
   return record !== undefined && Object.keys(record).length > 0;
 }
 
+function hasRequestCompatOverrides(compat: ModelDefinitionConfig["compat"]): boolean {
+  return Object.entries(compat ?? {}).some(([key, value]) => {
+    // Native runtimes consume affirmative reasoning capabilities as turn controls.
+    // Disabling reasoning, custom labels, and payload shaping still require the authored adapter.
+    if (key === "supportsReasoningEffort") {
+      return value !== true;
+    }
+    if (key === "supportedReasoningEfforts") {
+      return !(
+        Array.isArray(value) &&
+        value.length > 0 &&
+        value.every(
+          (effort) =>
+            typeof effort === "string" &&
+            /^(minimal|low|medium|high|xhigh|max|ultra)$/u.test(effort),
+        )
+      );
+    }
+    return true;
+  });
+}
+
 /** Projects authored request behavior without exposing values or local commands. */
 export function resolveModelProviderRouteOverridePresence(params: {
   provider: string;
@@ -166,7 +188,7 @@ export function resolveModelProviderRouteOverridePresence(params: {
   return configuredModel &&
     (hasNonEmptyRecord(configuredModel.headers) ||
       hasNonEmptyRecord(configuredModel.params) ||
-      hasNonEmptyRecord(configuredModel.compat))
+      hasRequestCompatOverrides(configuredModel.compat))
     ? "present"
     : "none";
 }

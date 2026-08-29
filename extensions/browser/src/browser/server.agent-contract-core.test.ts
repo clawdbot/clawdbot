@@ -841,21 +841,20 @@ describe("browser control server", () => {
     expect((typeArgs as { submit?: boolean }).submit).toBeUndefined();
     expect((typeArgs as { slowly?: boolean }).slowly).toBeUndefined();
 
-    const press = await postJson<{ ok: boolean }>(`${base}/act`, {
-      kind: "press",
-      key: "Enter",
-    });
-    expect(press.ok).toBe(true);
-    const pressArgs = mockFirstArg(requirePwMock("pressKeyViaPlaywright"), 0, "press");
-    expectRecordFields(pressArgs, {
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      key: "Enter",
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
-    expect((pressArgs as { delayMs?: number }).delayMs).toBeUndefined();
+    for (const [index, key] of ["Enter", "Ctrl+Shift+Esc"].entries()) {
+      const press = await postJson<{ ok: boolean }>(`${base}/act`, { kind: "press", key });
+      expect(press.ok).toBe(true);
+      const pressArgs = mockFirstArg(requirePwMock("pressKeyViaPlaywright"), index, "press");
+      expectRecordFields(pressArgs, {
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        key: key === "Enter" ? "Enter" : "Control+Shift+Escape",
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: true,
+        },
+      });
+      expect((pressArgs as { delayMs?: number }).delayMs).toBeUndefined();
+    }
 
     const hover = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "hover",

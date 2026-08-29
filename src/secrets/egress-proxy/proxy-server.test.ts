@@ -297,8 +297,13 @@ describe("secret egress proxy", () => {
   it.each([
     { label: "missing", auth: undefined, expectedReason: "missing-proxy-auth" },
     {
-      label: "wrong",
+      label: "malformed",
       auth: basicProxyAuth("wrong-token"),
+      expectedReason: "invalid-proxy-auth",
+    },
+    {
+      label: "wrong",
+      auth: basicProxyAuth("A".repeat(43)),
       expectedReason: "invalid-proxy-auth",
     },
   ])("refuses $label authentication on CONNECT and forwarded requests", async (testCase) => {

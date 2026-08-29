@@ -1,5 +1,5 @@
 import { DEV_BRANCH } from "./update-channels.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { CommandRunner, UpdateStepResult } from "./update-runner-types.js";
 
 const BUILD_MAX_OLD_SPACE_MB = 8192;
 const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
@@ -27,34 +27,69 @@ function resolveBuildNodeOptions(baseOptions: string | undefined): string {
 }
 
 export function resolveBuildEnv(
-  env?: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv = process.env,
   buildCacheRoot?: string,
-): NodeJS.ProcessEnv | undefined {
-  const currentNodeOptions = env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS;
-  const nextNodeOptions = resolveBuildNodeOptions(currentNodeOptions);
-  if (nextNodeOptions === currentNodeOptions && !buildCacheRoot) {
-    return env;
-  }
+): NodeJS.ProcessEnv {
   return {
     ...env,
-    NODE_OPTIONS: nextNodeOptions,
+    OPENCLAW_UPDATE_IN_PROGRESS: "1",
+    NODE_OPTIONS: resolveBuildNodeOptions(env.NODE_OPTIONS ?? process.env.NODE_OPTIONS),
     ...(buildCacheRoot ? { BUILD_ALL_CACHE_ROOT: buildCacheRoot } : {}),
   };
 }
 
-export function resolveInstallEnv(
+async function hasExplicitPnpmPreferOfflineConfig(params: {
+  runCommand: CommandRunner;
+  cwd: string;
+  timeoutMs: number;
+  env: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  try {
+    const result = await params.runCommand(["pnpm", "config", "get", "prefer-offline"], {
+      cwd: params.cwd,
+      timeoutMs: params.timeoutMs,
+      env: params.env,
+    });
+    if (result.code !== 0) {
+      return true;
+    }
+    // pnpm reports only explicitly configured typed values; these sentinels mean absent.
+    const value = result.stdout.trim();
+    return value !== "" && value !== "undefined" && value !== "null";
+  } catch {
+    // A failed provenance check must not override an operator's possible explicit policy.
+    return true;
+  }
+}
+
+export async function resolveInstallEnv(
   manager: "pnpm" | "bun" | "npm",
-  env?: NodeJS.ProcessEnv,
-): NodeJS.ProcessEnv | undefined {
+  env: NodeJS.ProcessEnv | undefined,
+  cwd: string,
+  runCommand: CommandRunner,
+  timeoutMs: number,
+): Promise<NodeJS.ProcessEnv | undefined> {
   if (manager !== "pnpm") {
     return env;
   }
-  return {
+  const effectiveEnv = env ?? process.env;
+  const hasExplicitPreferOffline =
+    effectiveEnv.pnpm_config_prefer_offline !== undefined ||
+    effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE !== undefined;
+  const hasConfigPreferOffline = hasExplicitPreferOffline
+    ? false
+    : await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv });
+  const installEnv: NodeJS.ProcessEnv = {
     ...env,
     PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
     npm_config_resolution_mode: env?.npm_config_resolution_mode ?? "highest",
     pnpm_config_resolution_mode: env?.pnpm_config_resolution_mode ?? "highest",
   };
+  if (!hasExplicitPreferOffline && !hasConfigPreferOffline) {
+    installEnv.PNPM_CONFIG_PREFER_OFFLINE = "true";
+    installEnv.pnpm_config_prefer_offline = "true";
+  }
+  return installEnv;
 }
 
 function isSupersededInstallFailure(
@@ -70,7 +105,7 @@ function isSupersededInstallFailure(
 }
 
 function isPreflightCandidateFailure(step: UpdateStepResult): boolean {
-  return /^preflight (?:checkout|package manager|deps install(?: \(ignore scripts\))?|build|config validate|lint) \(.+\)$/u.test(
+  return /^preflight (?:reset|clean|checkout|package manager|deps install(?: \(ignore scripts\))?|build|config validate|lint) \(.+\)$/u.test(
     step.name,
   );
 }

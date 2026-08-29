@@ -97,7 +97,7 @@ describe("chat pane composer controls", () => {
       client: {},
       chatLoading: false,
       chatModelCatalog: [],
-      sessions: { state: { modelOverrides: {} }, patch: vi.fn() },
+      sessions: { state: { modelOverrides: {} }, think: () => undefined, patch: vi.fn() },
       chatModelSwitchPromises: {},
       sessionKey: "main",
       chatModelsLoading: false,
@@ -154,6 +154,26 @@ describe("chat pane composer controls", () => {
     expect(activeIcons.size).toBe(5);
   });
 
+  it("links the permission picker to the permission modes guide", () => {
+    const container = document.createElement("div");
+    render(
+      renderChatPermissionPicker({
+        canSelectFull: true,
+        mode: "workspace",
+        onSelect: () => undefined,
+      }),
+      container,
+    );
+
+    const docsLink = container.querySelector<HTMLAnchorElement>(
+      ".chat-controls__permission-learn-more",
+    );
+    expect(docsLink?.textContent?.trim()).toBe("Learn more");
+    expect(docsLink?.href).toBe("https://docs.openclaw.ai/gateway/permission-modes");
+    expect(docsLink?.target).toBe("_blank");
+    expect(docsLink?.rel.split(/\s+/).toSorted()).toEqual(["noopener", "noreferrer"]);
+  });
+
   it("patches a rootless session, clears to default, and locks full access", async () => {
     const container = document.createElement("div");
     const patch = vi.fn(async () => ({}));
@@ -163,7 +183,7 @@ describe("chat pane composer controls", () => {
       client: {},
       chatLoading: false,
       chatModelCatalog: [],
-      sessions: { state: { modelOverrides: {} }, patch },
+      sessions: { state: { modelOverrides: {} }, think: () => undefined, patch },
       chatModelSwitchPromises: {},
       sessionKey: "agent:main:permission-test",
       chatModelsLoading: false,
@@ -256,7 +276,7 @@ describe("chat pane composer controls", () => {
       client: {},
       chatLoading: false,
       chatModelCatalog: [],
-      sessions: { state: { modelOverrides: {} }, patch },
+      sessions: { state: { modelOverrides: {} }, think: () => undefined, patch },
       chatModelSwitchPromises: {},
       sessionKey: "agent:main:permission-notice",
       chatModelsLoading: false,
@@ -305,7 +325,11 @@ describe("chat pane composer controls", () => {
       client: {},
       chatLoading: false,
       chatModelCatalog: [],
-      sessions: { state: { modelOverrides: {} }, patch: vi.fn(() => pending.promise) },
+      sessions: {
+        state: { modelOverrides: {} },
+        think: () => undefined,
+        patch: vi.fn(() => pending.promise),
+      },
       chatModelSwitchPromises: {},
       sessionKey: "agent:main:remote-worker",
       chatModelsLoading: false,
@@ -390,7 +414,11 @@ describe("chat pane composer controls", () => {
       client: {},
       chatLoading: false,
       chatModelCatalog: [],
-      sessions: { state: { modelOverrides: {} }, patch: vi.fn(() => pending.promise) },
+      sessions: {
+        state: { modelOverrides: {} },
+        think: () => undefined,
+        patch: vi.fn(() => pending.promise),
+      },
       chatModelSwitchPromises: {},
       sessionKey:
         "initialSessionKey" in lifecycleCase
@@ -437,7 +465,11 @@ describe("chat pane composer controls", () => {
       client: {},
       chatLoading: false,
       chatModelCatalog: [],
-      sessions: { state: { modelOverrides: {} }, patch: vi.fn(async () => null) },
+      sessions: {
+        state: { modelOverrides: {} },
+        think: () => undefined,
+        patch: vi.fn(async () => null),
+      },
       chatModelSwitchPromises: {},
       sessionKey: "agent:main:remote-worker",
       chatModelsLoading: false,
@@ -487,6 +519,7 @@ describe("chat pane composer controls", () => {
         chatModelCatalogError: null,
         sessions: {
           state: { modelOverrides: {} },
+          think: () => undefined,
           patch: vi.fn(),
           refresh: vi.fn().mockResolvedValue(undefined),
         },

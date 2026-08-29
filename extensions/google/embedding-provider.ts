@@ -1,4 +1,5 @@
 // Google provider module implements model/runtime integration.
+import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import {
   buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
@@ -6,7 +7,6 @@ import {
   resolveEmbeddingEndpointUrl,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
-  type EmbeddingInput,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -70,7 +70,7 @@ type GeminiInlinePart = {
   inlineData: { mimeType: string; data: string };
 };
 type GeminiPart = GeminiTextPart | GeminiInlinePart;
-type GeminiEmbeddingInputPart = NonNullable<EmbeddingInput["parts"]>[number];
+type GeminiEmbeddingInputPart = NonNullable<Exclude<EmbeddingInput, string>["parts"]>[number];
 type GeminiEmbeddingRequest = {
   content: { parts: GeminiPart[] };
   taskType?: GeminiTaskType;
@@ -131,13 +131,14 @@ export function buildGeminiEmbeddingRequest(params: {
   outputDimensionality?: number;
   modelPath?: string;
 }): GeminiEmbeddingRequest {
-  const parts = params.input.parts?.map((part: GeminiEmbeddingInputPart) =>
+  const input = typeof params.input === "string" ? { text: params.input } : params.input;
+  const parts = input.parts?.map((part: GeminiEmbeddingInputPart) =>
     part.type === "text"
       ? ({ text: part.text } satisfies GeminiTextPart)
       : ({
           inlineData: { mimeType: part.mimeType, data: part.data },
         } satisfies GeminiInlinePart),
-  ) ?? [{ text: params.input.text }];
+  ) ?? [{ text: input.text }];
   const isStableEmbedding2 = normalizeGeminiModel(params.model) === "gemini-embedding-2";
   const request: GeminiEmbeddingRequest = { content: { parts } };
   if (isStableEmbedding2 && parts.every((part) => "text" in part)) {
@@ -250,39 +251,33 @@ async function fetchGeminiEmbeddingPayload(params: {
 }
 
 function normalizeGeminiBaseUrl(raw: string): string {
-  const trimmed = raw.replace(/\/+$/, "");
-  const openAiIndex = trimmed.indexOf("/openai");
-  if (openAiIndex > -1) {
-    const queryIndex = trimmed.indexOf("?", openAiIndex);
-    return normalizeGoogleApiBaseUrl(
-      `${trimmed.slice(0, openAiIndex)}${queryIndex < 0 ? "" : trimmed.slice(queryIndex)}`,
-    );
-  }
-  return normalizeGoogleApiBaseUrl(trimmed);
-}
-
-function buildGeminiModelPath(model: string): string {
-  return model.startsWith("models/") ? model : `models/${model}`;
-}
-
-function normalizeGoogleApiBaseUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  const trimmed = raw.trim();
   if (!trimmed) {
     return DEFAULT_GOOGLE_API_BASE_URL;
   }
   try {
     const url = new URL(trimmed);
     url.hash = "";
+    // OpenAI endpoint aliases and trailing slashes belong to the path, not tenant query values.
+    const openAiIndex = url.pathname.indexOf("/openai");
+    url.pathname = (openAiIndex < 0 ? url.pathname : url.pathname.slice(0, openAiIndex)).replace(
+      /\/+$/,
+      "",
+    );
     if (
       url.origin.toLowerCase() === "https://generativelanguage.googleapis.com" &&
-      url.pathname.replace(/\/+$/, "") === ""
+      url.pathname === "/"
     ) {
       url.pathname = "/v1beta";
     }
-    return url.toString().replace(/\/+$/, "");
+    return url.search ? url.href : url.href.replace(/\/$/, "");
   } catch {
     return trimmed;
   }
+}
+
+function buildGeminiModelPath(model: string): string {
+  return model.startsWith("models/") ? model : `models/${model}`;
 }
 
 export async function createGeminiEmbeddingProvider(
@@ -307,7 +302,7 @@ export async function createGeminiEmbeddingProvider(
       client,
       endpoint: embedUrl,
       body: buildGeminiEmbeddingRequest({
-        input: { text },
+        input: text,
         model: client.model,
         role: "query",
         taskType: options.taskType ?? "RETRIEVAL_QUERY",
@@ -318,7 +313,7 @@ export async function createGeminiEmbeddingProvider(
     return sanitizeGeminiEmbedding(readGeminiSingleEmbedding(payload), outputDimensionality);
   };
 
-  const embedBatchInputs = async (
+  const embedDocuments = async (
     inputs: EmbeddingInput[],
     callOptions?: { signal?: AbortSignal },
   ): Promise<number[][]> => {
@@ -346,26 +341,25 @@ export async function createGeminiEmbeddingProvider(
     return embeddings.map((values) => sanitizeGeminiEmbedding(values, outputDimensionality));
   };
 
-  const embedBatch = async (
-    texts: string[],
-    optionsLocal?: { signal?: AbortSignal },
-  ): Promise<number[][]> => {
-    return await embedBatchInputs(
-      texts.map((text) => ({
-        text,
-      })),
-      optionsLocal,
-    );
-  };
-
   return {
     provider: {
       id: "gemini",
       model: client.model,
       maxInputTokens: GEMINI_MAX_INPUT_TOKENS[client.model],
-      embedQuery,
-      embedBatch,
-      embedBatchInputs,
+      embed: async (input, callOptions) => {
+        if (callOptions?.inputType === "query") {
+          return await embedQuery(typeof input === "string" ? input : input.text, callOptions);
+        }
+        return (await embedDocuments([input], callOptions))[0] ?? [];
+      },
+      embedBatch: async (inputs, callOptions) =>
+        callOptions?.inputType === "query"
+          ? await Promise.all(
+              inputs.map((input) =>
+                embedQuery(typeof input === "string" ? input : input.text, callOptions),
+              ),
+            )
+          : await embedDocuments(inputs, callOptions),
     },
     client,
   };
@@ -428,10 +422,7 @@ async function resolveGeminiEmbeddingClient(
       });
   const model = normalizeGeminiModel(options.model);
   const modelPath = buildGeminiModelPath(model);
-  const outputDimensionality = resolveGeminiOutputDimensionality(
-    model,
-    options.outputDimensionality,
-  );
+  const outputDimensionality = resolveGeminiOutputDimensionality(model, options.dimensions);
   debugEmbeddingsLog("memory embeddings: gemini client", {
     rawBaseUrl,
     baseUrl,

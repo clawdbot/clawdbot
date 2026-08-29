@@ -270,7 +270,7 @@ describe("createPersistCronSessionEntry", () => {
       runSessionKey,
       createdActor: { type: "human", id: "profile-ada" },
       thinkingLevel: "high",
-      toolsAllow: ["image_generate", "write"],
+      toolsAllow: ["image_generate", "exec", "write"],
       toolsAllowIsDefault: true,
       scheduledToolPolicy: {
         version: 1,
@@ -279,6 +279,12 @@ describe("createPersistCronSessionEntry", () => {
         ownerAccountId: "work",
       },
       scheduledToolCallerOrigin: { kind: "local" },
+      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+      toolsAllowExecTargetRequirement: {
+        version: 1,
+        target: { version: 1, host: "gateway", ask: "always" },
+        grantIndex: 1,
+      },
       persistSessionEntry,
     });
 
@@ -291,6 +297,16 @@ describe("createPersistCronSessionEntry", () => {
     });
     expect(store[runSessionKey]?.previousSessionId).toBeUndefined();
     expect(store[runSessionKey]?.forkSource).toBeUndefined();
+    expect(store[runSessionKey]?.cronRunContinuation?.toolsAllowExecTarget).toEqual({
+      version: 1,
+      host: "gateway",
+      ask: "always",
+    });
+    expect(store[runSessionKey]?.cronRunContinuation?.toolsAllowExecTargetRequirement).toEqual({
+      version: 1,
+      target: { version: 1, host: "gateway", ask: "always" },
+      grantIndex: 1,
+    });
     expect(store[runSessionKey]?.cronRunContinuation?.scheduledToolPolicy).toEqual({
       version: 1,
       mode: "account",
@@ -367,6 +383,31 @@ describe("createPersistCronSessionEntry", () => {
     expect(store[runSessionKey]?.cronRunContinuation?.lifecycleRevision).toBe(
       replacementLifecycleRevision,
     );
+  });
+
+  it("retains the required base creator when a continuation is created after job ownership changes", async () => {
+    const creator = { type: "human", id: "profile-original-creator" } as const;
+    const lifecycleRevision = crypto.randomUUID();
+    const cronSession = makeCronSession(
+      makeSessionEntry({
+        createdVia: "cron",
+        createdActor: creator,
+        sandbox: "required",
+        lifecycleRevision,
+      }),
+    );
+    cronSession.lifecycleRevision = lifecycleRevision;
+    const runSessionKey = "agent:main:cron:job:run:required";
+    const store: Record<string, SessionEntry> = {};
+    const continuation = createCronRunContinuationSession({
+      cronSession,
+      runSessionKey,
+      createdActor: { type: "human", id: "profile-current-job-owner" },
+      persistSessionEntry: makeGuardedPersistSessionEntry(store),
+    });
+    await continuation.initialize();
+    await continuation.sync();
+    expect(store[runSessionKey]).toMatchObject({ createdActor: creator, sandbox: "required" });
   });
 
   it("persists isolated cron state only under the stable cron session key", async () => {

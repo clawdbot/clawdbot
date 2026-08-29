@@ -108,6 +108,7 @@ async function resolveBrowserHatchTarget(
           sshHint: formatControlUiSshHint({
             port: shared.port,
             ...(shared.basePath ? { basePath: shared.basePath } : {}),
+            tlsEnabled: shared.tlsConfig?.enabled === true,
           }),
         }
       : {}),
@@ -300,6 +301,7 @@ export async function runBrowserHatchHandoff(
                 ...(target.config.gateway?.controlUi?.basePath
                   ? { basePath: target.config.gateway.controlUi.basePath }
                   : {}),
+                tlsEnabled: target.tlsConfig?.enabled === true,
               })
             : undefined))
         : undefined;

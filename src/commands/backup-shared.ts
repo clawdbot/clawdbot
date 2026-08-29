@@ -24,7 +24,7 @@ import {
   type BackupResourceInventory,
 } from "./backup-resource-inventory.js";
 import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
-import { resolveUpgradeConfigSnapshot } from "./doctor/shared/automatic-upgrade-config-repair.js";
+import { resolveStartupConfigSnapshot } from "./doctor/shared/automatic-startup-config-repair.js";
 
 // DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
 // Keep bounded headroom without disabling node-tar's decompression bomb guard.
@@ -453,7 +453,7 @@ export async function resolveBackupPlanFromDisk(
 
   // Backup discovery must not initialize or migrate the state DB before snapshot validation.
   const configSnapshot = await readConfigFileSnapshot({ observe: false });
-  const discoverySnapshot = resolveUpgradeConfigSnapshot(configSnapshot) ?? configSnapshot;
+  const discoverySnapshot = resolveStartupConfigSnapshot(configSnapshot) ?? configSnapshot;
   if (includeWorkspace && discoverySnapshot.exists && !discoverySnapshot.valid) {
     throw new Error(
       `Config invalid at ${shortenHomePath(discoverySnapshot.path)}. OpenClaw cannot reliably discover custom workspaces for backup. Fix the config or rerun with --no-include-workspace for a partial backup.`,

@@ -62,6 +62,7 @@ jobs:
               "config/swiftlint.yml",
               "scripts/check-swift-tools.sh",
               "scripts/format-swift.sh",
+              "scripts/install-periphery.sh",
               "scripts/install-swift-tools.sh",
               "scripts/ios-write-swift-filelist.mjs",
               "scripts/ios-write-swift-filelist.mts",
@@ -112,8 +113,9 @@ jobs:
 
       - name: Install iOS Swift tooling
         run: |
-          brew update
-          brew install periphery
+          periphery_dir="$RUNNER_TEMP/openclaw-periphery"
+          ./scripts/install-periphery.sh "$periphery_dir"
+          echo "$periphery_dir" >> "$GITHUB_PATH"
           swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
           # Homebrew's xcodegen bottle can arrive corrupted on runner images;
           # use the repo's pinned, checksummed release installer like ci.yml.

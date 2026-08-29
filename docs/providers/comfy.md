@@ -18,13 +18,13 @@ The plugin is entirely workflow-driven: OpenClaw does not map generic `size`,
 `aspectRatio`, `resolution`, `durationSeconds`, or TTS-style controls onto
 your graph.
 
-| Property     | Detail                                                                           |
-| ------------ | -------------------------------------------------------------------------------- |
-| Provider     | `comfy`                                                                          |
-| Model        | `comfy/workflow`                                                                 |
-| Shared tools | `image_generate`, `video_generate`, `music_generate`                             |
-| Auth         | None for local ComfyUI; `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for Comfy Cloud |
-| API          | ComfyUI `/prompt` / `/history` / `/view`; Comfy Cloud `/api/*`                   |
+| Property     | Detail                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| Provider     | `comfy`                                                                                    |
+| Model        | `comfy/workflow`                                                                           |
+| Shared tools | `image_generate`, `video_generate`, `music_generate`                                       |
+| Auth         | Optional `headers` for local HTTP auth; `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud |
+| API          | ComfyUI `/prompt` / `/history` / `/view`; Comfy Cloud `/api/*`                             |
 
 ## What it supports
 
@@ -215,8 +215,17 @@ Comfy supports shared top-level connection settings plus per-capability workflow
 | --------------------- | ---------------------- | ------------------------------------------------------------------------------------- |
 | `mode`                | `"local"` or `"cloud"` | Connection mode. Defaults to `"local"`.                                               |
 | `baseUrl`             | string                 | Defaults to `http://127.0.0.1:8188` for local or `https://cloud.comfy.org` for cloud. |
-| `apiKey`              | string                 | Optional inline key, alternative to `COMFY_API_KEY` / `COMFY_CLOUD_API_KEY` env vars. |
+| `apiKey`              | string or SecretRef    | Optional cloud key, alternative to `COMFY_API_KEY` / `COMFY_CLOUD_API_KEY` env vars.  |
 | `allowPrivateNetwork` | boolean                | Allow a private/LAN `baseUrl` in cloud mode or a local private-DNS FQDN.              |
+| `headers`             | object                 | Extra request headers; each value accepts a string or SecretRef.                      |
+
+Use `headers.Authorization` for a ComfyUI instance behind HTTP authentication.
+Prefer a [secret reference](/gateway/configuration-reference#secrets) for credentials.
+Headers apply to uploads, workflow submissions, polling, and downloads in both
+modes. They override default headers case-insensitively, except `Content-Type`
+on image uploads: the runtime sets the multipart boundary. An unavailable
+header SecretRef fails before any request is sent. Reflected header values are
+redacted from response errors.
 
 <Note>
 In `local` mode, loopback/private IP literals and single-label service names such as `http://comfyui:8188` work without `allowPrivateNetwork`. Public-looking private-DNS FQDNs such as `https://comfy.local.example.com` require `allowPrivateNetwork: true`. Private-origin trust stays scoped to the configured scheme, hostname, and port; local redirects cannot leave the configured hostname, while cloud redirects to public CDNs are checked with the default SSRF policy.
@@ -226,14 +235,16 @@ In `local` mode, loopback/private IP literals and single-label service names suc
 
 These keys apply inside the `image`, `video`, or `music` sections:
 
-| Key                          | Required | Default  | Description                                                                  |
-| ---------------------------- | -------- | -------- | ---------------------------------------------------------------------------- |
-| `workflow` or `workflowPath` | Yes      | --       | Inline workflow JSON, or path to the ComfyUI workflow JSON file.             |
-| `promptNodeId`               | Yes      | --       | Node ID that receives the text prompt.                                       |
-| `promptInputName`            | No       | `"text"` | Input name on the prompt node.                                               |
-| `outputNodeId`               | No       | --       | Node ID to read output from. If omitted, all matching output nodes are used. |
-| `pollIntervalMs`             | No       | `1500`   | Polling interval in milliseconds for job completion.                         |
-| `timeoutMs`                  | No       | `300000` | Timeout in milliseconds for the workflow run.                                |
+| Key                          | Required | Default  | Description                                                                                                                                     |
+| ---------------------------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workflow` or `workflowPath` | Yes      | --       | Inline workflow JSON, or path to the ComfyUI workflow JSON file.                                                                                |
+| `promptNodeId`               | Yes      | --       | Node ID that receives the text prompt.                                                                                                          |
+| `promptInputName`            | No       | `"text"` | Input name on the prompt node.                                                                                                                  |
+| `seedNodeId`                 | No       | --       | Node ID whose input receives a fresh random seed on every submission. Omit to reuse whatever seed is baked into the workflow file on every run. |
+| `seedInputName`              | No       | `"seed"` | Input name on the seed node.                                                                                                                    |
+| `outputNodeId`               | No       | --       | Node ID to read output from. If omitted, all matching output nodes are used.                                                                    |
+| `pollIntervalMs`             | No       | `1500`   | Polling interval in milliseconds for job completion.                                                                                            |
+| `timeoutMs`                  | No       | `300000` | Timeout in milliseconds for the workflow run.                                                                                                   |
 
 The `image` and `video` sections also support a reference-image input node:
 

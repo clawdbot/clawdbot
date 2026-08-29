@@ -56,12 +56,6 @@ function planFor(
   }).plan;
 }
 
-function writeCandidatePackage(scripts: Record<string, string>): string {
-  const root = tempDirs.make("openclaw-docker-plan-candidate-");
-  writeFileSync(join(root, "package.json"), JSON.stringify({ scripts }));
-  return root;
-}
-
 function requireFirstLane(plan: ReturnType<typeof planFor>) {
   const [lane] = plan.lanes;
   if (!lane) {
@@ -144,65 +138,18 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
-  it("omits a package-script lane unavailable from the candidate", () => {
-    const plan = planFor({
-      candidatePackageRoot: writeCandidatePackage({}),
-      selectedLaneNames: ["update-run-package-self-upgrade"],
-    });
-
-    expect(plan.lanes).toEqual([]);
-  });
-
-  it("keeps a package-script lane available from the candidate", () => {
-    const plan = planFor({
-      candidatePackageRoot: writeCandidatePackage({
-        "test:docker:update-run-package-self-upgrade": "node test.mjs",
-      }),
-      selectedLaneNames: ["update-run-package-self-upgrade"],
-    });
-
-    expect(plan.lanes.map((lane) => lane.name)).toEqual(["update-run-package-self-upgrade"]);
-  });
-
-  it("keeps trusted upgrade harness lanes without candidate package scripts", () => {
-    const plan = planFor({
-      candidatePackageRoot: writeCandidatePackage({}),
-      selectedLaneNames: [
-        "upgrade-survivor",
-        "published-upgrade-survivor",
-        "root-managed-vps-upgrade",
-        "update-migration",
-        "update-run-package-self-upgrade",
-      ],
-    });
-
-    expect(plan.lanes.map((lane) => lane.name)).toEqual([
-      "upgrade-survivor",
-      "published-upgrade-survivor",
-      "root-managed-vps-upgrade",
-      "update-migration",
-    ]);
-  });
-
-  it("fails when the selected candidate package manifest is missing", () => {
-    expect(() =>
-      planFor({
-        candidatePackageRoot: tempDirs.make("openclaw-docker-plan-missing-package-"),
-        selectedLaneNames: ["update-run-package-self-upgrade"],
-      }),
-    ).toThrow(/package\.json/);
-  });
-
-  it("fails when the selected candidate package manifest is malformed", () => {
-    const root = tempDirs.make("openclaw-docker-plan-malformed-package-");
-    writeFileSync(join(root, "package.json"), "{");
-
-    expect(() =>
-      planFor({
-        candidatePackageRoot: root,
-        selectedLaneNames: ["update-run-package-self-upgrade"],
-      }),
-    ).toThrow(SyntaxError);
+  it.each([
+    ["release-typed-onboarding", ["@openclaw/codex"]],
+    ["npm-onboard-channel-agent", ["@openclaw/codex"]],
+    ["npm-onboard-discord-channel-agent", ["@openclaw/codex"]],
+    ["npm-onboard-slack-channel-agent", ["@openclaw/codex"]],
+    ["npm-onboard-discord-candidate-channel-agent", ["@openclaw/codex", "@openclaw/discord"]],
+    ["npm-onboard-slack-candidate-channel-agent", ["@openclaw/codex", "@openclaw/slack"]],
+  ] as const)("requests only the matching companions for %s", (name, packages) => {
+    const plan = planFor({ selectedLaneNames: [name] });
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([name]);
+    expect(plan.needs.prepublishPluginRegistry).toBe(true);
+    expect(plan.requiredPrepublishPluginPackages).toEqual(packages);
   });
 
   it("finds a named lane through the expanded catalog", () => {
@@ -401,7 +348,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       bareImage: true,
       e2eImage: true,
       functionalImage: true,
-      liveImage: true,
+      liveImage: false,
       package: true,
       prepublishPluginRegistry: true,
     });
@@ -453,7 +400,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
     expect(targeted.lanes.map(summarizeLane)).toEqual([
       {
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 bash scripts/e2e/gateway-concurrency-docker.sh",
+        command:
+          'OPENCLAW_SKIP_DOCKER_BUILD=1 bash -c \'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/e2e/gateway-concurrency-docker.sh"\'',
         imageKind: "functional",
         live: false,
         name: "gateway-concurrency",
@@ -1484,7 +1432,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       bareImage: true,
       e2eImage: true,
       functionalImage: false,
-      liveImage: true,
+      liveImage: false,
       package: true,
       prepublishPluginRegistry: false,
     });
@@ -1540,7 +1488,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(lane.resources).toEqual(["docker", "live", "live:openai", "npm"]);
     expect(lane.stateScenario).toBe("empty");
     expect(plan.needs.bareImage).toBe(true);
-    expect(plan.needs.liveImage).toBe(true);
+    expect(plan.needs.liveImage).toBe(false);
     expect(plan.needs.package).toBe(true);
   });
 
@@ -1619,7 +1567,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       bareImage: true,
       e2eImage: true,
       functionalImage: true,
-      liveImage: true,
+      liveImage: false,
       package: true,
       prepublishPluginRegistry: false,
     });

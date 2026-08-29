@@ -468,34 +468,29 @@ export async function handleInlineActions(params: {
       }
     }
 
-    const rewrittenBody = skillInvocation.command.promptTemplate
-      ? expandBundleCommandPromptTemplate(
-          skillInvocation.command.promptTemplate,
-          skillInvocation.args,
-        )
-      : [
-          `Use the "${skillInvocation.command.skillName}" skill for this request.`,
-          skillInvocation.args ? `User input:\n${skillInvocation.args}` : null,
-        ]
-          .filter((entry): entry is string => Boolean(entry))
-          .join("\n\n");
-    ctx.Body = rewrittenBody;
-    ctx.agentText = rewrittenBody;
-    ctx.BodyForAgent = rewrittenBody;
-    sessionCtx.Body = rewrittenBody;
-    sessionCtx.agentText = rewrittenBody;
-    sessionCtx.BodyForAgent = rewrittenBody;
-    sessionCtx.BodyStripped = rewrittenBody;
-    cleanedBody = rewrittenBody;
+    if (skillInvocation.command.promptTemplate) {
+      const rewrittenBody = expandBundleCommandPromptTemplate(
+        skillInvocation.command.promptTemplate,
+        skillInvocation.args,
+      );
+      ctx.Body = rewrittenBody;
+      ctx.agentText = rewrittenBody;
+      ctx.BodyForAgent = rewrittenBody;
+      sessionCtx.Body = rewrittenBody;
+      sessionCtx.agentText = rewrittenBody;
+      sessionCtx.BodyForAgent = rewrittenBody;
+      sessionCtx.BodyStripped = rewrittenBody;
+      cleanedBody = rewrittenBody;
+    }
   }
 
   const referenced =
     allowTextCommands &&
     (hasSkillReferences || hasSkillSlashCandidate) &&
-    !skillInvocation &&
+    !skillInvocation?.command.promptTemplate &&
     (hasSkillSlashCandidate || resolveSlashCommandName(cleanedBody) === null)
       ? expandExplicitSkillReferences({
-          text: hasSkillReferences ? explicitSkillReferenceBody : cleanedBody,
+          text: explicitSkillReferenceBody,
           skillCommands,
           allSkillCommands,
         })

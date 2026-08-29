@@ -277,15 +277,15 @@ describe("memory_search unavailable payloads", () => {
     });
   });
 
-  it("returns explicit unavailable metadata for non-quota failures", async () => {
+  it("does not infer migration recovery from non-quota error text", async () => {
     setMemorySearchImpl(async () => {
-      throw new Error("embedding provider timeout");
+      throw new Error("embedding provider timeout; run openclaw doctor --fix");
     });
 
     const tool = createMemorySearchToolOrThrow();
     const result = await tool.execute("generic", { query: "hello" });
     expectUnavailableMemorySearchDetails(result.details, {
-      error: "embedding provider timeout",
+      error: "embedding provider timeout; run openclaw doctor --fix",
       warning: "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",
     });

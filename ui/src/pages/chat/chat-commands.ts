@@ -469,7 +469,7 @@ export async function dispatchChatSlashCommand(
     );
   }
 
-  if (result.sessionPatch && "modelOverride" in result.sessionPatch) {
+  if (result.modelChanged) {
     if (targetIsCurrent()) {
       await host.refreshCurrentSessionTools?.();
     }

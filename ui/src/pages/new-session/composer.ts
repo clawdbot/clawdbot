@@ -521,7 +521,9 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       @dragover=${attachmentDropHandlers.onDragover}
     >
       <div
-        class="agent-chat__input${options.dictationActive ? " agent-chat__input--dictating" : ""}"
+        class="agent-chat__input agent-chat__input--mobile-toolbar${options.dictationActive
+          ? " agent-chat__input--dictating"
+          : ""}"
       >
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
         <div class="agent-chat__composer-lede">${options.dictationStatus ?? nothing}</div>
@@ -542,6 +544,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               ${ref(options.textareaController.ref)}
               class="new-session-page__message"
               rows="1"
+              ?autofocus=${globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
               ?disabled=${options.submitting || options.messageLocked}
               ?readonly=${options.dictationActive}
               placeholder=${animatedPlaceholder}

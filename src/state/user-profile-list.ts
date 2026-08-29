@@ -1,14 +1,21 @@
 import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
-import { normalizeUserProfileAvatarMime, userProfilesDb } from "./user-profiles-internal.js";
+import {
+  selectResolvedUserProfileById,
+  normalizeUserProfileAvatarMime,
+  userProfilesDb,
+} from "./user-profiles-internal.js";
 import {
   ensureUserProfilesSchema,
+  UserProfileNotFoundError,
   hasEnsuredUserProfileRoleSchema,
 } from "./user-profiles-schema.js";
 
@@ -86,4 +93,63 @@ export function hasMultipleSessionSharingIdentities(
       .limit(2),
   ).rows;
   return profiles.length >= 2;
+}
+
+type UserProfileDisplay = {
+  id: string;
+  displayName: string | null;
+  avatarRevision: string;
+  hasAvatar: boolean;
+};
+
+/** Existing one-hop aliases are identity facts; this read never creates profile storage. */
+export function readUserProfileAliases(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): ReadonlySet<string> {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "user_profiles")) {
+        return new Set([profileId]);
+      }
+      const canonicalId = selectResolvedUserProfileById(db, profileId)?.id ?? profileId;
+      return new Set([
+        profileId,
+        ...executeSqliteQuerySync(
+          db,
+          userProfilesDb(db)
+            .selectFrom("user_profiles")
+            .select("id")
+            .where((eb) =>
+              eb.or([eb("id", "=", canonicalId), eb("merged_into", "=", canonicalId)]),
+            ),
+        ).rows.map((row) => row.id),
+      ]);
+    }, options) ?? new Set([profileId])
+  );
+}
+
+export function getUserProfileDisplay(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): UserProfileDisplay {
+  const profile = withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) =>
+      tableExists(db, "user_profiles") ? selectResolvedUserProfileById(db, profileId) : undefined,
+    options,
+  );
+  if (!profile) {
+    throw new UserProfileNotFoundError(profileId);
+  }
+  const avatarMime = normalizeUserProfileAvatarMime(profile.avatar_mime);
+  const avatarRevision =
+    profile.avatar_sha256 && avatarMime
+      ? `${profile.avatar_sha256}-${avatarMime.slice("image/".length)}`
+      : String(profile.updated_at);
+  return {
+    id: profile.id,
+    displayName: profile.display_name,
+    avatarRevision,
+    hasAvatar: profile.avatar !== null,
+  };
 }

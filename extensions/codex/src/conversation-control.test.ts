@@ -72,8 +72,16 @@ vi.mock("./app-server/shared-client.js", () => ({
   }),
   withLeasedCodexAppServerClientStartSelectionRetry: async (params: {
     lease: { client?: unknown };
-    run: (client: unknown) => Promise<unknown>;
-  }) => await params.run(params.lease.client),
+    options?: { timeoutMs?: number };
+    run: (
+      client: unknown,
+      requestOptions: () => { timeoutMs: number; assertCurrent: () => void },
+    ) => Promise<unknown>;
+  }) =>
+    await params.run(params.lease.client, () => ({
+      timeoutMs: params.options?.timeoutMs ?? 60_000,
+      assertCurrent: () => undefined,
+    })),
 }));
 
 describe("codex conversation controls", () => {

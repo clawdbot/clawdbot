@@ -51,6 +51,9 @@ export function createGatewayWsTestRequestContext(
     unsubscribeAllSessionEvents: vi.fn(),
     nodeRegistry: overrides.nodeRegistry ?? { unregister: vi.fn() },
     nodeUnsubscribeAll: vi.fn(),
+    broadcast: vi.fn(),
+    incrementPresenceVersion: vi.fn(() => 1),
+    getHealthVersion: vi.fn(() => 1),
   };
 }
 

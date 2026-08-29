@@ -131,13 +131,9 @@ function normalizeProviderConfig(
     language: normalizeOptionalString(raw?.language),
     model: normalizeOptionalString(raw?.model) ?? normalizeOptionalString(raw?.sttModel),
     prompt: normalizeOptionalString(raw?.prompt),
-    silenceDurationMs: normalizeNonNegativeInteger(raw?.silenceDurationMs),
+    silenceDurationMs: asSafeIntegerInRange(raw?.silenceDurationMs, { min: 0 }),
     vadThreshold: normalizeVadThreshold(raw?.vadThreshold),
   };
-}
-
-function normalizeNonNegativeInteger(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function normalizeVadThreshold(value: unknown): number | undefined {

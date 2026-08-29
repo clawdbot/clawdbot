@@ -433,35 +433,38 @@ describe("irc inbound behavior", () => {
     );
   });
 
-  it("admits a sender matching a full nick!user@host DM allowlist entry", async () => {
-    const coreRuntime = createPluginRuntimeMock();
-    const runtime = createRuntimeEnv();
-    setIrcRuntime(coreRuntime as never);
+  it.each(["alice!ident@example.com", "alice@example.com"])(
+    "admits a sender matching the host-bound DM allowlist entry %s",
+    async (entry) => {
+      const coreRuntime = createPluginRuntimeMock();
+      const runtime = createRuntimeEnv();
+      setIrcRuntime(coreRuntime as never);
 
-    await handleIrcInbound({
-      message: createMessage({
-        target: "alice",
-        senderNick: "alice",
-        senderUser: "ident",
-        senderHost: "example.com",
-        text: "hello",
-      }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["alice!ident@example.com"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
-      config: { channels: { irc: {} } } as CoreConfig,
-      runtime,
-      sendReply: vi.fn(async () => {}),
-    });
+      await handleIrcInbound({
+        message: createMessage({
+          target: "alice",
+          senderNick: "alice",
+          senderUser: "ident",
+          senderHost: "example.com",
+          text: "hello",
+        }),
+        account: createAccount({
+          config: {
+            dmPolicy: "allowlist",
+            allowFrom: [entry],
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+          },
+        }),
+        config: { channels: { irc: {} } } as CoreConfig,
+        runtime,
+        sendReply: vi.fn(async () => {}),
+      });
 
-    expect(
-      (coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } })
-        .mock.calls.length,
-    ).toBe(1);
-  });
+      expect(
+        (coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } })
+          .mock.calls.length,
+      ).toBe(1);
+    },
+  );
 });

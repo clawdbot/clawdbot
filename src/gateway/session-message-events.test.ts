@@ -219,6 +219,7 @@ function attributedMessageProjection(value: unknown) {
     content: message.content,
     __openclaw: {
       senderId: metadata.senderId,
+      senderIdentity: metadata.senderIdentity,
       senderName: metadata.senderName,
       senderUsername: metadata.senderUsername,
       senderProfileAvatarUrl: metadata.senderProfileAvatarUrl,
@@ -272,6 +273,17 @@ describe("session.message websocket events", () => {
         );
       };
       const declaredKeys = ["agent:main:watch-00", "agent:main:watch-01"];
+      const replacementKey = "agent:main:replacement";
+      const storePath = await createSessionStoreFile();
+      await writeSessionStore({
+        storePath,
+        entries: Object.fromEntries(
+          [...declaredKeys, replacementKey].map((key) => [
+            key,
+            { sessionId: key, updatedAt: Date.now() },
+          ]),
+        ),
+      });
       const declaredPresence = onceMessage(observerWs, (message) => {
         const entry = findWatchedEntry(message);
         return (
@@ -318,7 +330,6 @@ describe("session.message websocket events", () => {
         )?.watchedSessions,
       ).toEqual(declaredKeys);
 
-      const replacementKey = "agent:main:replacement";
       const replacementPresence = onceMessage(observerWs, (message) => {
         const entry = findWatchedEntry(message);
         return Array.isArray(entry?.watchedSessions) && entry.watchedSessions[0] === replacementKey;
@@ -1019,6 +1030,10 @@ describe("session.message websocket events", () => {
         agentId: "main",
         agentSessionKey: "cron:job-webchat",
         sourceSessionKey: sessionKey,
+        sourceSessionGeneration: {
+          sessionId,
+          lifecycleRevision: "current-cron-revision",
+        },
         runSessionKey: "cron:job-webchat:run:3000",
         sessionId: "detached-cron-session",
         lifecycleRevision: "detached-cron-revision",
@@ -1033,7 +1048,7 @@ describe("session.message websocket events", () => {
           error: new Error("WebChat uses canonical session events"),
         },
         deliveryRequested: true,
-        skipHeartbeatDelivery: false,
+        undeliveredRunStatus: "ok",
         spawnOnlyHandoff: false,
         sourceDeliveryOutcome: {
           visibleDeliveries: [],
@@ -1175,6 +1190,7 @@ describe("session.message websocket events", () => {
             idempotencyKey: params.idempotencyKey,
             sender: {
               id: profile.id,
+              identity: { type: "profile", id: profile.id },
               name: params.senderName,
               username: "ada",
             },
@@ -1212,6 +1228,7 @@ describe("session.message websocket events", () => {
         content: text,
         __openclaw: {
           senderId: profile.id,
+          senderIdentity: { type: "profile", id: profile.id },
           senderName,
           senderUsername: "ada",
           senderProfileAvatarUrl: avatarUrl,

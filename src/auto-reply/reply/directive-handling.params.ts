@@ -1,7 +1,9 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { AgentModelPrimaryWriteTarget } from "../../agents/agent-scope.js";
 /** Parameter contracts for the canonical directive transaction handler. */
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import type { ModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MsgContext } from "../templating.js";
@@ -25,6 +27,7 @@ type HandleDirectiveOnlyCoreParams = {
   aliasIndex: ModelAliasIndex;
   policyAliasIndex?: ModelAliasIndex;
   allowedModelKeys: Set<string>;
+  modelPolicy?: ModelVisibilityPolicy;
   allowedModelCatalog: Awaited<
     ReturnType<typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog>
   >;
@@ -35,6 +38,7 @@ type HandleDirectiveOnlyCoreParams = {
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
   canPersistStickyModelSelection?: boolean;
+  stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
 };
 
 /** Full directive-only command handler inputs. */
@@ -54,7 +58,12 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   /** Mixed messages consume the transaction outcome without repeating persistence. */
   persistenceState?: {
     outcome:
-      | { kind: "pending" | "applied"; provider: string; model: string }
+      | {
+          kind: "pending" | "applied";
+          provider: string;
+          model: string;
+          modelCatalog?: ModelCatalogEntry[];
+        }
       | { kind: "rejected"; errorText: string };
   };
 };

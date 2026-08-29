@@ -1,9 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Normalizes plugin config and resolves effective enablement, slots, and activation sources. */
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createEffectiveEnableStateResolver,
@@ -18,7 +15,6 @@ import {
 import {
   isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
   normalizePluginsConfigWithResolverCore,
-  type NormalizePluginId,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -44,45 +40,16 @@ const BUILT_IN_PLUGIN_ALIAS_LOOKUP = new Map<string, string>([
   ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS.map(([, pluginId]) => [pluginId, pluginId] as const),
 ]);
 
-function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
-  const lookup = new Map<string, string>();
-  for (const [alias, pluginId] of BUILT_IN_PLUGIN_ALIAS_FALLBACKS) {
-    lookup.set(alias, pluginId);
-  }
-  return lookup;
-}
-
-function normalizePluginIdWithLookup(
-  id: string,
-  getAliasLookup: () => ReadonlyMap<string, string>,
-): string {
-  const trimmed = normalizeOptionalString(id) ?? "";
-  const normalized = normalizeOptionalLowercaseString(trimmed) ?? "";
-  const builtInAlias = BUILT_IN_PLUGIN_ALIAS_LOOKUP.get(normalized);
-  if (builtInAlias) {
-    return builtInAlias;
-  }
-  return getAliasLookup().get(normalized) ?? normalized;
-}
-
-function createScopedPluginIdNormalizer(): NormalizePluginId {
-  let lookup: ReadonlyMap<string, string> | undefined;
-  return (id) =>
-    normalizePluginIdWithLookup(id, () => {
-      lookup ??= getBundledPluginAliasLookup();
-      return lookup;
-    });
-}
-
 /** Normalizes user/config plugin ids into the canonical lowercase key form. */
 export function normalizePluginId(id: string): string {
-  return normalizePluginIdWithLookup(id, getBundledPluginAliasLookup);
+  const normalized = normalizeOptionalLowercaseString(id) ?? "";
+  return BUILT_IN_PLUGIN_ALIAS_LOOKUP.get(normalized) ?? normalized;
 }
 
 export const normalizePluginsConfig = (
   config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
-  return normalizePluginsConfigWithResolverCore(config, createScopedPluginIdNormalizer());
+  return normalizePluginsConfigWithResolverCore(config, normalizePluginId);
 };
 
 /** Resolves the enabled plugin selected to own the context-engine slot. */

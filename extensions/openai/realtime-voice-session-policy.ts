@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   isProviderAuthProfileConfigured,
   resolveProviderAuthProfileApiKey,
@@ -242,22 +242,18 @@ export function normalizeProviderConfig(
     voice: normalizeOpenAIRealtimeVoice(raw?.speakerVoice ?? raw?.voice),
     temperature: asFiniteNumber(raw?.temperature),
     vadThreshold: asUnitInterval(raw?.vadThreshold),
-    silenceDurationMs: asNonNegativeInteger(raw?.silenceDurationMs),
-    prefixPaddingMs: asNonNegativeInteger(raw?.prefixPaddingMs),
+    silenceDurationMs: asSafeIntegerInRange(raw?.silenceDurationMs, { min: 0 }),
+    prefixPaddingMs: asSafeIntegerInRange(raw?.prefixPaddingMs, { min: 0 }),
     interruptResponseOnInputAudio:
       typeof raw?.interruptResponseOnInputAudio === "boolean"
         ? raw.interruptResponseOnInputAudio
         : undefined,
-    minBargeInAudioEndMs: asNonNegativeInteger(raw?.minBargeInAudioEndMs),
+    minBargeInAudioEndMs: asSafeIntegerInRange(raw?.minBargeInAudioEndMs, { min: 0 }),
     reasoningEffort: normalizeOptionalString(raw?.reasoningEffort),
     azureEndpoint: normalizeOptionalString(raw?.azureEndpoint),
     azureDeployment: normalizeOptionalString(raw?.azureDeployment),
     azureApiVersion: normalizeOptionalString(raw?.azureApiVersion),
   };
-}
-
-function asNonNegativeInteger(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function asUnitInterval(value: unknown): number | undefined {

@@ -69,6 +69,8 @@ export function createGatewayAuxHandlers(
     validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
     /** Abort-wins guard: a tombstoned run must not mint standing authority. */
     hasRunAbortMarker?: (runId: string) => boolean;
+    /** Config-driven default expiry stamp for freshly minted standing grants. */
+    resolveGrantDefaultExpiresAtMs?: (nowMs: number) => number | null;
     chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
     registerWorkerTurnClaimClosedHandler?: (
       handler: (claim: WorkerSessionTurnClaim) => void,
@@ -96,6 +98,9 @@ export function createGatewayAuxHandlers(
       resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
       resolveAllowedDecisions,
       ...(resolveStandingGrantMint ? { resolveStandingGrantMint } : {}),
+      ...(params.resolveGrantDefaultExpiresAtMs
+        ? { resolveStandingGrantExpiresAtMs: params.resolveGrantDefaultExpiresAtMs }
+        : {}),
       onLifecycle: params.onApprovalLifecycle,
       // Timeout expiry is gateway-clock truth: publish the terminal like a
       // resolve so reviewer surfaces need not infer it from their own clocks.
@@ -375,6 +380,14 @@ export function createGatewayAuxHandlers(
         loadExecApprovalHandlers,
       ),
       "exec.approval.resolve": createLazyHandler("exec.approval.resolve", loadExecApprovalHandlers),
+      "exec.approval.grants.list": createLazyHandler(
+        "exec.approval.grants.list",
+        loadExecApprovalHandlers,
+      ),
+      "exec.approval.grants.revoke": createLazyHandler(
+        "exec.approval.grants.revoke",
+        loadExecApprovalHandlers,
+      ),
       "plugin.approval.list": createLazyHandler("plugin.approval.list", loadPluginApprovalHandlers),
       "plugin.approval.request": createLazyHandler(
         "plugin.approval.request",

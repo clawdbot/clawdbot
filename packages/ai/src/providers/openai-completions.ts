@@ -11,7 +11,7 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
-import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { reasoningTagTextPolicy, type OpenAICompletionsOptions } from "../provider-options.js";
 import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
@@ -21,6 +21,7 @@ import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-
 import {
   createOpenAIProviderAcceptanceHook,
   isOpenAICompletionsThinkingEnabled,
+  resolveOpenAIClientBaseUrl,
 } from "../transports/openai-transport-shared.js";
 import {
   transportAbortError,
@@ -207,6 +208,7 @@ export const streamOpenAICompletions: StreamFunction<
           provisionalCommentaryTags,
           signal: options?.signal,
           emitReasoning: shouldEmitReasoning,
+          strictReasoningTags: reasoningTagTextPolicy.isStrict(options),
           firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
           abortFirstEventStream: firstEventAbort.abort,
           onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
@@ -334,9 +336,12 @@ function createClient(
         }
       : headers;
 
+  const baseUrl = isCloudflareProvider(model.provider)
+    ? resolveCloudflareBaseUrl(model)
+    : model.baseUrl;
   return new OpenAI({
     apiKey,
-    baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
+    baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),
     dangerouslyAllowBrowser: true,
     defaultHeaders,
     // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.

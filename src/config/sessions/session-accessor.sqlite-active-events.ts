@@ -182,12 +182,20 @@ export function readSessionTranscriptBoundedActiveContextCore(
       database: projection.database,
       ...projection.resolved,
     });
+    // Migrated transcripts may place a delivery mirror before the header or lack the auxiliary
+    // identity rows entirely. Select the canonical stored event by type so runtime keeps its version.
     const header = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       db
         .selectFrom("transcript_events")
         .select("event_json")
         .where("session_id", "=", projection.resolved.sessionId)
+        .where(
+          /* kysely-allow-raw: the canonical transcript event type is stored inside event_json. */
+          sql<string>`json_extract(event_json, '$.type')`,
+          "=",
+          "session",
+        )
         .orderBy("seq", "asc")
         .limit(1),
     );
@@ -208,7 +216,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
           "active.active_position",
           "active.event_seq",
           /* kysely-allow-raw: active-context byte caps exclude rows before fetching or parsing. */
-          sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
+          sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
         ])
         .where("active.session_id", "=", projection.resolved.sessionId)
         .$if(fence !== undefined, (query) =>
@@ -427,7 +435,7 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
           "active.event_seq",
           "active.message_position",
           /* kysely-allow-raw: SQLite byte length avoids fetching or parsing excluded JSON. */
-          sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
+          sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
         ])
         .where("active.session_id", "=", projection.resolved.sessionId)
         .where("active.message_position", "is not", null)
@@ -637,7 +645,7 @@ export function readSessionTranscriptBoundedMessageTailPage(
         .select([
           "active.message_position",
           /* kysely-allow-raw: byte budget covers the exact newline-terminated JSON event. */
-          sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
+          sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
         ])
         .where("active.session_id", "=", projection.resolved.sessionId)
         .where("active.message_position", "in", positions)

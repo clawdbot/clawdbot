@@ -1,12 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { resolveSessionBoundaryPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
 import { emitAgentEvent, onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
 import {
   isGatewaySubordinateWorkAdmissionClosed,
   tryBeginGatewayRootWorkAdmission,
@@ -72,6 +75,51 @@ afterEach(async () => {
 });
 
 describe("experience review auto apply", () => {
+  it("does not occupy the foreground session lane", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-session-lane-");
+    const foregroundSessionKey = "agent:main:main";
+    const reviewStarted = createDeferred();
+    const releaseReview = createDeferred();
+    runEmbeddedAgent.mockImplementation(async (params) =>
+      enqueueCommandInLane(resolveSessionLane(params.sessionKey ?? params.sessionId), async () => {
+        reviewStarted.resolve();
+        await releaseReview.promise;
+        return {};
+      }),
+    );
+
+    const review = runSkillExperienceReview(
+      {
+        ctx: {
+          sessionId: "foreground-session",
+          sessionKey: foregroundSessionKey,
+          workspaceDir,
+          modelProviderId: "openai",
+          modelId: "gpt-test",
+          foregroundPromptContext: foregroundPromptContext(workspaceDir),
+        },
+        config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
+      },
+      { getCurrentConfig: () => ({}) },
+    );
+    await reviewStarted.promise;
+
+    const foregroundStarted = createDeferred();
+    const foreground = enqueueCommandInLane(resolveSessionLane(foregroundSessionKey), async () => {
+      foregroundStarted.resolve();
+    });
+    try {
+      await withTestTimeout(
+        foregroundStarted.promise,
+        1_000,
+        "foreground work did not start while the review was active",
+      );
+    } finally {
+      releaseReview.resolve();
+      await Promise.all([review, foreground]);
+    }
+  });
+
   it("keeps detached review events out of foreground session presentation", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-hidden-events-");
     const observed: Array<
@@ -136,11 +184,14 @@ describe("experience review auto apply", () => {
       unsubscribe();
     }
 
-    expect(observed).toEqual([
+    expect(observed.slice(0, 2)).toEqual([
       ["assistant", false, false, false, undefined],
       ["tool", false, false, false, undefined],
-      ["lifecycle", false, false, false, "agent:main:main"],
     ]);
+    expect(observed[2]?.slice(0, 4)).toEqual(["lifecycle", false, false, false]);
+    expect(observed[2]?.[4]).toMatch(
+      /^agent:main:internal-session-effects:skill-workshop-review_/u,
+    );
     expect(getAgentRunContext(reviewRunId)).toBeUndefined();
   });
 
@@ -187,6 +238,7 @@ describe("experience review auto apply", () => {
           sandboxSessionKey: "agent:main:main",
           trigger: "user",
           promptCacheKey: foregroundPromptCacheKey,
+          messageActionTurnCapability: "closed-foreground-capability",
           reasoningLevel: "on",
         },
       },
@@ -214,14 +266,28 @@ describe("experience review auto apply", () => {
         sessionPersistence: "detached",
         silentExpected: true,
         allowEmptyAssistantReplyAsSilent: true,
+        cleanupBundleMcpOnRunEnd: true,
         terminalReplyExpectation: "optional",
         promptCacheKey: foregroundPromptCacheKey,
+        sandboxSessionKey: "agent:main:main",
+        sessionId: expect.stringMatching(/^internal-session-effects-skill-workshop-review_/u),
+        sessionKey: expect.stringMatching(
+          /^agent:main:internal-session-effects:skill-workshop-review_/u,
+        ),
+        skillWorkshopOrigin: {
+          agentId: "main",
+          runId: "foreground-run",
+          sessionKey: "agent:main:main",
+        },
         trigger: "user",
         reasoningLevel: "on",
       }),
     );
+    const reviewSessionKey = runEmbeddedAgent.mock.calls[0]?.[0].sessionKey;
+    expect(reviewSessionKey).not.toBe("agent:main:main");
+    expect(runEmbeddedAgent.mock.calls[0]?.[0].messageActionTurnCapability).toBeUndefined();
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("sessionTarget");
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("disableMessageTool");
-    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
   });
 
   it("records provider input buckets for the detached review run", async () => {

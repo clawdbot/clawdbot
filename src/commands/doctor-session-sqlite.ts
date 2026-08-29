@@ -74,18 +74,9 @@ import {
   assertDoctorSqliteMaintenancePathsNotAliased,
   isDestructiveDoctorSessionSqliteMode,
 } from "./doctor-sqlite-maintenance-lock.js";
-export {
-  restoreSessionSqliteMigrationRun,
-  writeSessionSqliteMigrationFailureReports,
-} from "./doctor-session-sqlite-migration-run.js";
 export type {
-  DoctorSessionSqliteIssue,
-  DoctorSessionSqliteMode,
   DoctorSessionSqliteOptions,
   DoctorSessionSqliteReport,
-  DoctorSessionSqliteRestoreConflict,
-  DoctorSessionSqliteRestoreReport,
-  DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
@@ -107,14 +98,10 @@ export async function runDoctorSessionSqlite(
 ): Promise<DoctorSessionSqliteReport> {
   const env = options.env ?? process.env;
   const cfg = resolveDoctorSessionSqliteConfig(options);
-  const targets = resolveDoctorSessionSqliteTargets({
-    allAgents: options.allAgents,
-    agent: options.agent,
-    cfg,
-    env,
-    mode: options.mode,
-    store: options.store,
-  });
+  const targets = filterLegacySessionStoreTargets(
+    resolveDoctorSessionSqliteTargets({ ...options, cfg, env }),
+    options.mode,
+  );
   if (isDestructiveDoctorSessionSqliteMode(options.mode)) {
     const maintenancePaths = resolveDoctorSessionSqliteMaintenancePaths(targets);
     assertDoctorSqliteMaintenancePathsNotAliased(
@@ -241,10 +228,7 @@ function resolveDoctorSessionSqliteTargets(params: {
   store?: string;
 }): SessionStoreTarget[] {
   if (params.store) {
-    return filterLegacySessionStoreTargets(
-      resolveSessionStoreTargets(params.cfg, { store: params.store }, { env: params.env }),
-      params.mode,
-    );
+    return resolveSessionStoreTargets(params.cfg, { store: params.store }, { env: params.env });
   }
   if (params.mode === "restore" || params.mode === "recover") {
     const candidates = resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, {
@@ -257,16 +241,10 @@ function resolveDoctorSessionSqliteTargets(params: {
     return candidates.filter((target) => normalizeAgentId(target.agentId) === requestedAgentId);
   }
   if (params.agent) {
-    return filterLegacySessionStoreTargets(
-      resolveAgentSessionStoreTargetsSync(params.cfg, params.agent, { env: params.env }),
-      params.mode,
-    );
+    return resolveAgentSessionStoreTargetsSync(params.cfg, params.agent, { env: params.env });
   }
   if (params.allAgents) {
-    const targets = filterLegacySessionStoreTargets(
-      resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env }),
-      params.mode,
-    );
+    const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env });
     if (params.mode !== "dry-run" && params.mode !== "import" && params.mode !== "validate") {
       return targets;
     }
@@ -285,9 +263,7 @@ function resolveDoctorSessionSqliteTargets(params: {
     }));
     return [...legacyTargets, ...targets];
   }
-  return resolveSessionStoreTargets(params.cfg, {}, { env: params.env }).filter((target) =>
-    fs.existsSync(target.storePath),
-  );
+  return resolveSessionStoreTargets(params.cfg, {}, { env: params.env });
 }
 
 function filterLegacySessionStoreTargets(
@@ -297,7 +273,9 @@ function filterLegacySessionStoreTargets(
   if (mode === "inspect" || mode === "compact" || mode === "restore" || mode === "recover") {
     return targets;
   }
-  return targets.filter((target) => fs.existsSync(target.storePath));
+  return targets.filter(
+    (target) => !target.storePath.endsWith(".sqlite") && fs.existsSync(target.storePath),
+  );
 }
 
 async function inspectOrMigrateTarget(params: {
@@ -309,9 +287,14 @@ async function inspectOrMigrateTarget(params: {
   target: SessionStoreTarget;
 }): Promise<DoctorSessionSqliteTargetReport> {
   const issues: DoctorSessionSqliteIssue[] = [];
-  const allRecords = readLegacySessionRecords(params.target, issues, {
-    allowMissingStore: params.mode === "inspect" || params.mode === "compact",
-  });
+  // Exact SQLite locators are maintenance targets, never legacy import sources.
+  // Keeping them out of the file path also prevents archiving a live database.
+  const isSqliteStore = params.target.storePath.endsWith(".sqlite");
+  const allRecords = isSqliteStore
+    ? []
+    : readLegacySessionRecords(params.target, issues, {
+        allowMissingStore: params.mode === "inspect" || params.mode === "compact",
+      });
   const records = shouldFilterLegacySessionRecordsByTarget(params.target)
     ? allRecords.filter((record) =>
         isLegacySessionRecordOwnedByTarget(params.cfg, params.target, record.sessionKey),
@@ -329,20 +312,19 @@ async function inspectOrMigrateTarget(params: {
     sqliteEntries: readSqliteEntryCount(params.target),
     sqlitePath: resolveTargetSqlitePath(params.target),
     storePath: params.target.storePath,
-    unreferencedJsonlFiles: listUnreferencedJsonlFiles(params.target.storePath, [
-      ...referencedTranscriptFiles,
-    ]),
+    unreferencedJsonlFiles: isSqliteStore
+      ? []
+      : listUnreferencedJsonlFiles(params.target.storePath, [...referencedTranscriptFiles]),
   });
-  if (params.mode === "inspect") {
-    report.sqliteEntries = readSqliteEntryCount(params.target);
-    appendSqliteDbStats(params.target, report);
-    appendActiveSqliteTranscriptFileIssues(params.target, report);
-    return report;
-  }
   if (params.mode === "compact") {
-    compactSqliteDatabase(params.target, report, { env: params.env });
+    await compactSqliteDatabase(params.target, report, { env: params.env });
     report.sqliteEntries = readSqliteEntryCount(params.target);
+  }
+  if (isSqliteStore || params.mode === "inspect" || params.mode === "compact") {
     appendSqliteDbStats(params.target, report);
+    if (params.mode !== "compact") {
+      appendActiveSqliteTranscriptFileIssues(params.target, report);
+    }
     return report;
   }
   if (params.mode === "import") {
@@ -374,12 +356,10 @@ async function inspectOrMigrateTarget(params: {
       );
     }
     if (validationPassed) {
-      // Post-import compact retrofits auto_vacuum=INCREMENTAL onto pre-flip
-      // databases and returns the pages the import churn freed.
-      compactSqliteDatabase(params.target, report, {
-        closeImportedHandle: true,
+      // Finalization enables incremental vacuum where needed and releases free pages.
+      await compactSqliteDatabase(params.target, report, {
         env: params.env,
-        migrateOlderSchema: true,
+        operation: "import-finalize",
       });
     }
   }
@@ -1202,25 +1182,19 @@ function appendSqliteDbStats(
   }
 }
 
-function compactSqliteDatabase(
+async function compactSqliteDatabase(
   target: SessionStoreTarget,
   report: DoctorSessionSqliteTargetReport,
   options: {
-    closeImportedHandle?: boolean;
     env?: NodeJS.ProcessEnv;
-    migrateOlderSchema?: boolean;
+    operation?: "import-finalize";
   } = {},
-): void {
+): Promise<void> {
   try {
-    if (options.closeImportedHandle) {
+    if (options.operation === "import-finalize") {
       closeOpenClawAgentDatabaseByPath(resolveTargetSqlitePath(target));
     }
-    report.compact = options.migrateOlderSchema
-      ? compactDoctorSessionSqliteTarget(target, {
-          env: options.env,
-          migrateOlderSchema: true,
-        })
-      : compactDoctorSessionSqliteTarget(target, { env: options.env });
+    report.compact = await compactDoctorSessionSqliteTarget(target, options);
   } catch (err) {
     report.issues.push({
       code: "sqlite_compact_failed",

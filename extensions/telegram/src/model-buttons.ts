@@ -11,7 +11,6 @@
  * - mdl_back              - back to providers list
  */
 import { createHash } from "node:crypto";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fitsTelegramCallbackData } from "./approval-callback-data.js";
@@ -83,10 +82,6 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
       return { type: "list-ref", digest: opaqueProviderMatch[1], page };
     }
   }
-  if (!trimmed.startsWith("mdl_")) {
-    return null;
-  }
-
   if (trimmed === CALLBACK_PREFIX.providers || trimmed === CALLBACK_PREFIX.back) {
     return { type: trimmed === CALLBACK_PREFIX.providers ? "providers" : "back" };
   }
@@ -102,34 +97,14 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
   }
 
   // mdl_sel/{model} (compact fallback)
-  const compactSelMatch = trimmed.match(/^mdl_sel\/(.+)$/);
-  if (compactSelMatch) {
-    const modelRef = compactSelMatch[1];
-    if (modelRef) {
-      return {
-        type: "select",
-        model: modelRef,
-      };
-    }
+  const compactModel = trimmed.match(/^mdl_sel\/(.+)$/)?.[1];
+  if (compactModel) {
+    return { type: "select", model: compactModel };
   }
 
   // mdl_sel_{provider/model}
-  const selMatch = trimmed.match(/^mdl_sel_(.+)$/);
-  if (selMatch) {
-    const modelRef = selMatch[1];
-    if (modelRef) {
-      const slashIndex = modelRef.indexOf("/");
-      if (slashIndex > 0 && slashIndex < modelRef.length - 1) {
-        return {
-          type: "select",
-          provider: modelRef.slice(0, slashIndex),
-          model: modelRef.slice(slashIndex + 1),
-        };
-      }
-    }
-  }
-
-  return null;
+  const [, provider, model] = trimmed.match(/^mdl_sel_([^/]+)\/(.+)$/) ?? [];
+  return provider && model ? { type: "select", provider, model } : null;
 }
 
 export function buildModelSelectionCallbackData(params: {
@@ -164,42 +139,30 @@ export function resolveModelSelection(params: {
   byProvider: ReadonlyMap<string, ReadonlySet<string>>;
 }): ResolveModelSelectionResult {
   const callback = params.callback;
-  if (callback.type === "select-ref") {
-    const matches = params.providers.flatMap((provider) =>
-      [...(params.byProvider.get(provider) ?? [])]
-        .filter((model) => hashOpaqueCallback("model", provider, model) === callback.digest)
-        .map((model) => ({ provider, model })),
-    );
-    return matches.length === 1
-      ? { kind: "resolved", ...expectDefined(matches[0], "single matching model") }
-      : {
-          kind: "ambiguous",
-          model: callback.digest,
-          matchingProviders: matches.map(({ provider }) => provider),
-        };
-  }
-  if (callback.provider) {
+  if (callback.type === "select" && callback.provider) {
     return {
       kind: "resolved",
       provider: callback.provider,
       model: callback.model,
     };
   }
-  const matchingProviders = params.providers.filter((id) =>
-    params.byProvider.get(id)?.has(callback.model),
-  );
-  if (matchingProviders.length === 1) {
-    return {
-      kind: "resolved",
-      provider: expectDefined(matchingProviders.at(0), "single matching model provider"),
-      model: callback.model,
-    };
-  }
-  return {
-    kind: "ambiguous",
-    model: callback.model,
-    matchingProviders,
-  };
+  const matches = params.providers.flatMap((provider) => {
+    const models = params.byProvider.get(provider);
+    if (callback.type === "select") {
+      return models?.has(callback.model) ? [{ provider, model: callback.model }] : [];
+    }
+    return [...(models ?? [])]
+      .filter((model) => hashOpaqueCallback("model", provider, model) === callback.digest)
+      .map((model) => ({ provider, model }));
+  });
+  const [match] = matches;
+  return matches.length === 1 && match
+    ? { kind: "resolved", ...match }
+    : {
+        kind: "ambiguous",
+        model: callback.type === "select" ? callback.model : callback.digest,
+        matchingProviders: matches.map(({ provider }) => provider),
+      };
 }
 
 export function resolveModelListCallback(params: {
@@ -213,8 +176,9 @@ export function resolveModelListCallback(params: {
   const matches = params.providers.filter(
     (provider) => hashOpaqueCallback("provider", provider) === callback.digest,
   );
-  return matches.length === 1
-    ? { provider: expectDefined(matches[0], "single matching provider"), page: callback.page }
+  const [provider] = matches;
+  return matches.length === 1 && provider !== undefined
+    ? { provider, page: callback.page }
     : undefined;
 }
 
@@ -236,32 +200,13 @@ function isCurrentModelSelection(params: {
  * Build provider selection keyboard with 2 providers per row.
  */
 export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
-  if (providers.length === 0) {
-    return [];
-  }
-
   const rows: ButtonRow[] = [];
-  let currentRow: ButtonRow = [];
-
-  for (const provider of providers) {
-    const button = {
+  for (const [index, provider] of providers.entries()) {
+    (rows[Math.floor(index / 2)] ??= []).push({
       text: `${provider.id} (${provider.count})`,
       callback_data: buildProviderListCallbackData(provider.id, 1),
-    };
-
-    currentRow.push(button);
-
-    if (currentRow.length === 2) {
-      rows.push(currentRow);
-      currentRow = [];
-    }
+    });
   }
-
-  // Push any remaining button
-  if (currentRow.length > 0) {
-    rows.push(currentRow);
-  }
-
   return rows;
 }
 

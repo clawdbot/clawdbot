@@ -109,6 +109,18 @@ function createHandler(
   return { broadcastToConnIds, handler };
 }
 
+const ownerGoal = {
+  schemaVersion: 1 as const,
+  id: "goal-ops",
+  objective: "Ops only",
+  status: "active" as const,
+  createdAt: 1,
+  updatedAt: 2,
+  tokenStart: 0,
+  tokensUsed: 3,
+  continuationTurns: 0,
+};
+
 const PRIVATE_SESSION_FIELDS =
   "agentId session message owner goal status hasActiveRun activeRunIds model responseUsage".split(
     " ",
@@ -147,7 +159,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     loadGatewaySessionRowMock.mockReturnValue(sessionRow);
     readSessionMessageCountAsyncMock.mockResolvedValue(undefined);
     resolveTranscriptSessionKeyBySessionIdMock.mockReturnValue(undefined);
-    loadGatewaySessionRowMock.mockReturnValue(sessionRow);
     runtimeConfigState.value = {};
     sessionRow.key = "agent:main:main";
     sessionRow.thinkingLevel = "ultra";
@@ -586,17 +597,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   ])("$name", async ({ agentId }) => {
     runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["ops", "research"]);
     sessionRow.key = "global";
-    const goal = {
-      schemaVersion: 1 as const,
-      id: "goal-ops",
-      objective: "Ops only",
-      status: "active" as const,
-      createdAt: 1,
-      updatedAt: 2,
-      tokenStart: 0,
-      tokensUsed: 3,
-      continuationTurns: 0,
-    };
+    const goal = { ...ownerGoal };
     loadGatewaySessionRowMock.mockReturnValue({ ...sessionRow, goal });
     const getSessionMessageSubscribers = vi.fn((sessionKey: string) =>
       sessionKey === "global"
@@ -933,6 +934,23 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
 });
 
 describe("createLifecycleEventBroadcastHandler", () => {
+  it("keeps delayed key-only deletes as invalidations without borrowing a replacement", () => {
+    const broadcastToConnIds = vi.fn();
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
+      chatAbortControllers: new Map(),
+    });
+    handler({ sessionKey: sessionRow.key, reason: "delete" });
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      { sessionKey: sessionRow.key, agentId: "main", reason: "delete", ts: expect.any(Number) },
+      new Set(["observer"]),
+      expect.any(Object),
+    );
+    expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     resolveEmbeddedAgentRunProgressStateMock.mockReturnValue(undefined);
@@ -1002,17 +1020,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
   ])("$name", ({ agentId }) => {
     runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["ops", "research"]);
     sessionRow.key = "global";
-    const goal = {
-      schemaVersion: 1 as const,
-      id: "goal-ops",
-      objective: "Ops only",
-      status: "active" as const,
-      createdAt: 1,
-      updatedAt: 2,
-      tokenStart: 0,
-      tokensUsed: 3,
-      continuationTurns: 0,
-    };
+    const goal = { ...ownerGoal };
     loadGatewaySessionRowMock.mockReturnValue({ ...sessionRow, goal });
     const activeRun = {
       ...createActiveRun(true),

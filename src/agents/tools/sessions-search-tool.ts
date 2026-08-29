@@ -1,6 +1,5 @@
 /** Full-text search over visible session transcripts. */
 import { Type } from "typebox";
-import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
@@ -33,14 +32,12 @@ import {
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
 import {
-  createAgentToAgentPolicy,
   createSessionVisibilityRowChecker,
   formatSessionToolAccessDenial,
   resolveDisplaySessionKey,
-  resolveEffectiveSessionToolsVisibility,
-  resolveSandboxedSessionToolContext,
   resolveSessionReference,
   resolveSessionToolAccess,
+  resolveSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
 
@@ -372,14 +369,16 @@ export function createSessionsSearchTool(opts?: {
           max: SESSIONS_SEARCH_MAX_LIMIT,
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
       const requestedSessionKey = readToolStringParam(params, "sessionKey");
-      const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
-        resolveSandboxedSessionToolContext({
-          cfg,
-          agentSessionKey: opts?.agentSessionKey,
-          requesterAgentId: opts?.agentId,
-          sandboxed: opts?.sandboxed,
-        });
+      const {
+        cfg,
+        mainKey,
+        alias,
+        effectiveRequesterKey,
+        mainSessionKey,
+        restrictToSpawned,
+        sessionVisibility: visibility,
+        a2aPolicy,
+      } = resolveSessionToolContext(opts);
       const requesterAgentId = resolveSessionAgentId({
         sessionKey: effectiveRequesterKey,
         config: cfg,
@@ -447,11 +446,6 @@ export function createSessionsSearchTool(opts?: {
         };
       }
 
-      const visibility = resolveEffectiveSessionToolsVisibility({
-        cfg,
-        sandboxed: opts?.sandboxed === true,
-      });
-      const a2aPolicy = createAgentToAgentPolicy(cfg);
       const defaultAgentId = requesterAgentId;
       const rowGuard = createSessionVisibilityRowChecker({
         action: "history",

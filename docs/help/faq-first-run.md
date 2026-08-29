@@ -126,7 +126,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     You rarely need both:
 
     - If the chat already supports commands and replies, same-chat `/approve` works through the shared path.
-    - When a supported native channel can infer approvers safely, OpenClaw auto-enables DM-first native approvals if `channels.<channel>.execApprovals.enabled` is unset or `"auto"`.
+    - For supported native clients, set `channels.<channel>.execApprovals.enabled: "auto"` or `true` and configure approvers or the channel's supported owner identity. Discord and Slack require explicit enablement; Telegram treats unset as `"auto"`.
     - When native approval cards/buttons are available, that UI is primary; only mention a manual `/approve` command if the tool result says chat approvals are unavailable.
     - Use `approvals.exec` only when prompts must also reach other chats or explicit ops rooms.
     - Use `channels.<channel>.execApprovals.target: "channel"` or `"both"` only when you want approval prompts posted back into the originating room/topic.

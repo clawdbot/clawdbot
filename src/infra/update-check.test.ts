@@ -606,11 +606,58 @@ describe("formatGitInstallLabel", () => {
 });
 
 describe("checkUpdateStatus registry behavior", () => {
+  it.each([
+    { channel: "stable", tag: "latest" },
+    { channel: "beta", tag: "beta" },
+    { channel: "dev", tag: "dev" },
+  ] as const)("preserves $channel registry failures in status", async ({ channel, tag }) => {
+    for (const queryTag of channel === "beta" ? ["beta", "latest"] : [tag]) {
+      mockHttp.intercept({
+        url: `https://registry.npmjs.org/openclaw/${queryTag}`,
+        reply: { status: 503, body: "unavailable" },
+      });
+    }
+
+    const status = await checkUpdateStatus({
+      root: null,
+      includeRegistry: true,
+      registryChannel: channel,
+      timeoutMs: 1000,
+    });
+
+    expect(status.registry).toEqual({ latestVersion: null, tag, error: "HTTP 503" });
+  });
+
+  it.each(["beta", "latest"])(
+    "uses the available beta-channel target when %s fails",
+    async (failedTag) => {
+      const selectedTag = failedTag === "beta" ? "latest" : "beta";
+      for (const tag of ["beta", "latest"]) {
+        mockHttp.intercept({
+          url: `https://registry.npmjs.org/openclaw/${tag}`,
+          reply:
+            tag === failedTag
+              ? { status: 503, body: "unavailable" }
+              : { json: { version: "2026.6.6" } },
+        });
+      }
+
+      const status = await checkUpdateStatus({
+        root: null,
+        includeRegistry: true,
+        registryChannel: "beta",
+        timeoutMs: 1000,
+      });
+
+      expect(status.registry).toEqual({ latestVersion: "2026.6.6", tag: selectedTag });
+    },
+  );
+
   it("reports unsupported_git_channel for Git status without querying npm", async () => {
     await withTestDir({ prefix: "openclaw-update-check-git-channel-" }, async (root) => {
       await fs.writeFile(
         path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", packageManager: "pnpm@10.0.0" }),
+        JSON.stringify({ name: "openclaw", packageManager: "pnpm@12.0.0" }),
         "utf8",
       );
       await runCommandWithTimeout(["git", "init"], { cwd: root, timeoutMs: 1000 });

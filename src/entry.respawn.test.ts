@@ -49,6 +49,34 @@ describe("buildCliRespawnPlan", () => {
     ).toBeNull();
   });
 
+  it.each(["darwin", "linux", "win32"] as const)(
+    "leaves foreground Gmail shutdown with its lifecycle owner on %s",
+    (platform) => {
+      for (const args of [
+        ["webhooks", "gmail", "run", "--account", "fixture@example.com"],
+        ["--profile", "fixture", "webhooks", "gmail", "run"],
+      ]) {
+        expect(
+          buildCliRespawnPlan({
+            argv: ["node", "openclaw", ...args],
+            env: {},
+            execArgv: [],
+            autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+            platform,
+          }),
+        ).toBeNull();
+      }
+      expect(
+        buildCliRespawnPlan({
+          argv: ["node", "openclaw", "webhooks", "gmail", "setup"],
+          env: {},
+          execArgv: [],
+          platform,
+        }),
+      ).not.toBeNull();
+    },
+  );
+
   it("adds NODE_EXTRA_CA_CERTS and warning suppression in one respawn", () => {
     const plan = buildCliRespawnPlan({
       argv: ["node", "openclaw", "status"],

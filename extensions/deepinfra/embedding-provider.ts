@@ -31,6 +31,8 @@ export async function createDeepInfraEmbeddingProvider(
     id: "deepinfra",
     client,
     errorPrefix: "DeepInfra embeddings API error",
+    // DeepInfra query and document payloads are identical, so arrays stay one provider batch.
+    batchQueryInputs: true,
   });
   return { provider, client };
 }

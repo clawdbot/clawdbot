@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -113,7 +114,7 @@ function prepareAgentFacts(
   });
   const credentials = authFacts.credentials;
   const templateAuthStorage = authFacts.authStorage;
-  const configuredModelRefs = collectPreparedModelRuntimeConfiguredRefs(
+  const rawConfiguredModelRefs = collectPreparedModelRuntimeConfiguredRefs(
     input.config,
     input.agentId,
   );
@@ -123,7 +124,12 @@ function prepareAgentFacts(
     authStore: authFacts.store,
     templateAuthStorage,
     credentials,
-    configuredModelRefs,
+    // Keep order and case-distinct refs: registry lookup remains exact-case even
+    // where static/dynamic completion deduplicates case-insensitive merge keys.
+    configuredModelRefs: rawConfiguredModelRefs.flatMap(({ value }) => {
+      const ref = parseModelCatalogRef(value);
+      return ref ? [ref] : [];
+    }),
     // Gateway startup prepares only providers named by config/model selection. An unrelated
     // stored credential must not pull that provider's complete catalog into the admission path.
     providerIds: [
@@ -132,7 +138,8 @@ function prepareAgentFacts(
           input.config,
           credentials,
           catalogMode === "live",
-          configuredModelRefs,
+          rawConfiguredModelRefs,
+          input.agentId,
         ),
         ...parseConfiguredModelVisibilityEntries({
           cfg: input.config,
@@ -242,8 +249,14 @@ export async function prepareWorkspaceBuildGroup(
     };
     const configuredProviderIds = [
       ...new Set([
-        ...collectPreparedModelRuntimeProviderIds(input.config, {}, false),
         ...inputs.flatMap(({ config, agentId }) => [
+          ...collectPreparedModelRuntimeProviderIds(
+            config,
+            {},
+            false,
+            collectPreparedModelRuntimeConfiguredRefs(config, agentId),
+            agentId,
+          ),
           ...parseConfiguredModelVisibilityEntries({ cfg: config, agentId }).providerWildcards,
         ]),
         ...(options.providerDiscoveryProviderIds ?? []).map(normalizeProviderId).filter(Boolean),
@@ -344,7 +357,6 @@ export async function prepareWorkspaceBuildGroup(
     const agentFacts: PreparedModelRuntimeAgentFacts[] = [];
     for (const facts of agentBaseFacts) {
       const configuredRuntimeModels = prepareConfiguredRuntimeModels({
-        config: facts.input.config,
         configuredModelRefs: facts.configuredModelRefs,
         metadataSnapshot: pluginMetadataSnapshot,
         ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
@@ -373,18 +385,8 @@ export async function prepareWorkspaceBuildGroup(
       }
       const configuredGeneratedCatalogPluginIds = [
         ...new Set(
-          facts.configuredModelRefs.flatMap(({ value }) => {
-            const separator = value.indexOf("/");
-            if (separator <= 0 || separator >= value.length - 1) {
-              return [];
-            }
-            const provider = normalizeProviderId(value.slice(0, separator));
-            const modelId = value.slice(separator + 1).trim();
-            if (
-              !provider ||
-              !modelId ||
-              configuredEntryKeys.has(modelCatalogEntryKey({ provider, id: modelId }))
-            ) {
+          facts.configuredModelRefs.flatMap(({ provider, modelId }) => {
+            if (configuredEntryKeys.has(modelCatalogEntryKey({ provider, id: modelId }))) {
               return [];
             }
             const pluginId = resolvePluginModelCatalogOwnerPluginId({
