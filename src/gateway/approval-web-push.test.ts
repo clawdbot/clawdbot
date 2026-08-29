@@ -141,7 +141,8 @@ describe("approval Web Push delivery", () => {
     );
     listTerminalWebPushApprovalDeliveryIdsMock.mockReturnValue({
       approvalIds: [],
-      truncated: false,
+      nextAfterApprovalId: null,
+      throughApprovalId: null,
     });
     resolveUserProfileIdMock.mockImplementation((profileId: string) => profileId);
     resolveOperatorRolePolicyForProfileMock.mockReturnValue(undefined);
@@ -546,6 +547,37 @@ describe("approval Web Push delivery", () => {
     },
   );
 
+  it("drains terminal recovery beyond the first 1,024 approvals", async () => {
+    const firstPage = Array.from(
+      { length: 1_024 },
+      (_, index) => `exec:terminal-${String(index).padStart(4, "0")}`,
+    );
+    const finalApprovalId = "exec:terminal-1024";
+    listTerminalWebPushApprovalDeliveryIdsMock
+      .mockReturnValueOnce({
+        approvalIds: firstPage,
+        nextAfterApprovalId: firstPage.at(-1),
+        throughApprovalId: finalApprovalId,
+      })
+      .mockReturnValueOnce({
+        approvalIds: [finalApprovalId],
+        nextAfterApprovalId: null,
+        throughApprovalId: finalApprovalId,
+      });
+
+    const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
+    await createApprovalWebPushDelivery({
+      getRuntimeConfig: () => ({}),
+    }).recoverTerminalDeliveries();
+
+    expect(listTerminalWebPushApprovalDeliveryIdsMock).toHaveBeenNthCalledWith(1, {});
+    expect(listTerminalWebPushApprovalDeliveryIdsMock).toHaveBeenNthCalledWith(2, {
+      afterApprovalId: firstPage.at(-1),
+      throughApprovalId: finalApprovalId,
+    });
+    expect(listWebPushApprovalDeliveryTargetsMock).toHaveBeenCalledTimes(1_025);
+  });
+
   it("recovers a terminal replacement from durable targets after process restart", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
@@ -573,7 +605,8 @@ describe("approval Web Push delivery", () => {
 
     listTerminalWebPushApprovalDeliveryIdsMock.mockReturnValue({
       approvalIds: [record.id],
-      truncated: false,
+      nextAfterApprovalId: null,
+      throughApprovalId: record.id,
     });
     const restartedProcess = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
     await restartedProcess.recoverTerminalDeliveries();
@@ -621,7 +654,8 @@ describe("approval Web Push delivery", () => {
       if (mode === "restart") {
         listTerminalWebPushApprovalDeliveryIdsMock.mockReturnValue({
           approvalIds: [record.id],
-          truncated: false,
+          nextAfterApprovalId: null,
+          throughApprovalId: record.id,
         });
         const restartedProcess = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
         await restartedProcess.recoverTerminalDeliveries();
@@ -668,7 +702,8 @@ describe("approval Web Push delivery", () => {
       if (mode === "restart") {
         listTerminalWebPushApprovalDeliveryIdsMock.mockReturnValue({
           approvalIds: [record.id],
-          truncated: false,
+          nextAfterApprovalId: null,
+          throughApprovalId: record.id,
         });
         const restartedProcess = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
         await restartedProcess.recoverTerminalDeliveries();

@@ -399,15 +399,20 @@ export function createApprovalWebPushDelivery(params: {
     handleResolved: handleTerminal,
     handleExpired: handleTerminal,
     async recoverTerminalDeliveries(): Promise<void> {
-      const { approvalIds, truncated } = listTerminalWebPushApprovalDeliveryIds(params.stateDir);
-      if (truncated) {
-        params.log?.warn?.(
-          "approval Web Push terminal recovery reached its 1024-approval startup bound",
-        );
-      }
-      for (const approvalId of approvalIds) {
-        await handleTerminal({ id: approvalId });
-      }
+      let afterApprovalId: string | undefined;
+      let throughApprovalId: string | undefined;
+      do {
+        const page = listTerminalWebPushApprovalDeliveryIds({
+          stateDir: params.stateDir,
+          ...(afterApprovalId ? { afterApprovalId } : {}),
+          ...(throughApprovalId ? { throughApprovalId } : {}),
+        });
+        throughApprovalId = page.throughApprovalId ?? undefined;
+        for (const approvalId of page.approvalIds) {
+          await handleTerminal({ id: approvalId });
+        }
+        afterApprovalId = page.nextAfterApprovalId ?? undefined;
+      } while (afterApprovalId);
     },
   };
 }

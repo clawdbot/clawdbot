@@ -428,16 +428,21 @@ export function deleteWebPushApprovalDeliveryTargets(params: {
   }, webPushStateDatabaseOptions(params.stateDir));
 }
 
-/** Discover terminal approvals whose request notifications still need replacement. */
-export function listTerminalWebPushApprovalDeliveryIds(stateDir?: string): {
+/** Page through a stable snapshot of terminal approvals that still need replacement. */
+export function listTerminalWebPushApprovalDeliveryIds(params: {
+  stateDir?: string;
+  afterApprovalId?: string;
+  throughApprovalId?: string;
+}): {
   approvalIds: string[];
-  truncated: boolean;
+  nextAfterApprovalId: string | null;
+  throughApprovalId: string | null;
 } {
-  ensureWebPushApprovalDeliverySchema(stateDir);
-  const database = openOpenClawStateDatabase(webPushStateDatabaseOptions(stateDir));
-  const rows = executeSqliteQuerySync(
-    database.db,
-    getNodeSqliteKysely<WebPushDatabase>(database.db)
+  ensureWebPushApprovalDeliverySchema(params.stateDir);
+  const database = openOpenClawStateDatabase(webPushStateDatabaseOptions(params.stateDir));
+  const stateDb = getNodeSqliteKysely<WebPushDatabase>(database.db);
+  const terminalApprovalQuery = () =>
+    stateDb
       .selectFrom("web_push_approval_deliveries")
       .innerJoin(
         "operator_approvals",
@@ -446,15 +451,42 @@ export function listTerminalWebPushApprovalDeliveryIds(stateDir?: string): {
       )
       .select("web_push_approval_deliveries.approval_id")
       .distinct()
-      .where("operator_approvals.status", "!=", "pending")
+      .where("operator_approvals.status", "!=", "pending");
+  const throughApprovalId =
+    params.throughApprovalId ??
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      terminalApprovalQuery().orderBy("web_push_approval_deliveries.approval_id", "desc").limit(1),
+    )?.approval_id;
+  if (!throughApprovalId) {
+    return { approvalIds: [], nextAfterApprovalId: null, throughApprovalId: null };
+  }
+  let pageQuery = terminalApprovalQuery().where(
+    "web_push_approval_deliveries.approval_id",
+    "<=",
+    throughApprovalId,
+  );
+  if (params.afterApprovalId) {
+    pageQuery = pageQuery.where(
+      "web_push_approval_deliveries.approval_id",
+      ">",
+      params.afterApprovalId,
+    );
+  }
+  const rows = executeSqliteQuerySync(
+    database.db,
+    pageQuery
       .orderBy("web_push_approval_deliveries.approval_id", "asc")
       .limit(WEB_PUSH_APPROVAL_RECOVERY_MAX_APPROVALS + 1),
   ).rows;
+  const approvalIds = rows
+    .slice(0, WEB_PUSH_APPROVAL_RECOVERY_MAX_APPROVALS)
+    .map((row) => row.approval_id);
   return {
-    approvalIds: rows
-      .slice(0, WEB_PUSH_APPROVAL_RECOVERY_MAX_APPROVALS)
-      .map((row) => row.approval_id),
-    truncated: rows.length > WEB_PUSH_APPROVAL_RECOVERY_MAX_APPROVALS,
+    approvalIds,
+    nextAfterApprovalId:
+      rows.length > WEB_PUSH_APPROVAL_RECOVERY_MAX_APPROVALS ? (approvalIds.at(-1) ?? null) : null,
+    throughApprovalId,
   };
 }
 

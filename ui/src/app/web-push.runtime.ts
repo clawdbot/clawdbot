@@ -169,7 +169,7 @@ export async function reconcileWebPushCapability(
 ): Promise<WebPushCapabilityPatch> {
   const result = await reconcileExistingWebPushSubscription(client);
   return {
-    subscribed: result.state !== "missing",
+    subscribed: result.state === "registered",
     preferences: result.state === "registered" ? await getWebPushPreferences(client) : null,
     error: result.state === "vapid-mismatch" ? result.error : null,
   };

@@ -544,9 +544,10 @@ describe("approval delivery target persistence", () => {
         databaseOptions: { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } },
       }).outcome,
     ).toBe("resolved");
-    expect(listTerminalWebPushApprovalDeliveryIds(tmpDir)).toEqual({
+    expect(listTerminalWebPushApprovalDeliveryIds({ stateDir: tmpDir })).toEqual({
       approvalIds: [approvalId],
-      truncated: false,
+      nextAfterApprovalId: null,
+      throughApprovalId: approvalId,
     });
 
     deleteWebPushApprovalDeliveryTargets({
@@ -630,9 +631,13 @@ describe("approval delivery target persistence", () => {
       baseDir: tmpDir,
     });
     expect(rebound.subscriptionId).toBe(original.subscriptionId);
-    expect(listTerminalWebPushApprovalDeliveryIds(tmpDir).approvalIds).toContain(approvalId);
+    expect(listTerminalWebPushApprovalDeliveryIds({ stateDir: tmpDir }).approvalIds).toContain(
+      approvalId,
+    );
     expect(listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).toEqual([]);
-    expect(listTerminalWebPushApprovalDeliveryIds(tmpDir).approvalIds).not.toContain(approvalId);
+    expect(listTerminalWebPushApprovalDeliveryIds({ stateDir: tmpDir }).approvalIds).not.toContain(
+      approvalId,
+    );
   });
 });
 

@@ -418,7 +418,7 @@ describe("web push Gateway reconciliation", () => {
 
     secondKey.resolve(encodedVapidKey([4, 9, 8, 7]));
     await vi.waitFor(() => expect(capability.snapshot.error).toContain("another Gateway"));
-    expect(capability.snapshot.subscribed).toBe(true);
+    expect(capability.snapshot.subscribed).toBe(false);
 
     firstKey.resolve(encodedVapidKey([4, 1, 2, 3]));
     await vi.waitFor(() =>
@@ -428,7 +428,7 @@ describe("web push Gateway reconciliation", () => {
       ),
     );
     expect(capability.snapshot.error).toContain("another Gateway");
-    expect(capability.snapshot.subscribed).toBe(true);
+    expect(capability.snapshot.subscribed).toBe(false);
     capability.dispose();
   });
 });
