@@ -2422,7 +2422,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^scripts\/write-plugin-sdk-entry-dts\.ts$/u,
-    ["build-all", "prepare-extension-package-boundary-artifacts"],
+    ["build-all", "declaration-stage", "tsdown-build"],
   ],
   [/^scripts\/pr-lib\/worktree\.sh$/u, ["test/vitest/vitest.tooling.config.ts"]],
   [/^scripts\/dev\/gateway-smoke\.ts$/u, ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"]],

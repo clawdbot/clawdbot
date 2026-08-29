@@ -1750,27 +1750,10 @@ export async function runTsdownBuildInvocation(
   });
 }
 
-export async function runTsdownBuild(argv: string[] = process.argv.slice(2)): Promise<number> {
-  const args = parseTsdownBuildArgs(argv);
-  if (args.help) {
-    console.log(tsdownBuildUsage());
-    return 0;
-  }
-  const plan = prepareTsdownBuildExecution(
-    { args: args.forwardedArgs },
-    {
-      reportShortfall(shortfall) {
-        if (shortfall.fatal) {
-          console.error(shortfall.message);
-        } else {
-          console.warn(shortfall.message);
-        }
-      },
-    },
-  );
-  if (!plan) {
-    return 1;
-  }
+/** Execute CLI and staged declaration plans with the same diagnostics and deadlines. */
+export async function executeTsdownBuildPlan(
+  plan: NonNullable<ReturnType<typeof prepareTsdownBuildExecution>>,
+) {
   let result: TsdownBuildResult | undefined;
   for (const [index, invocation] of plan.invocations.entries()) {
     const startedAt = performance.now();
@@ -1783,7 +1766,12 @@ export async function runTsdownBuild(argv: string[] = process.argv.slice(2)): Pr
     console.log(
       `[tsdown-build] invocation ${index + 1}/${plan.invocations.length} finished in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
     );
-    if (result.status !== 0 || result.hasIneffectiveDynamicImport || result.fatalUnresolvedImport) {
+    if (
+      result.timedOut ||
+      result.status !== 0 ||
+      result.hasIneffectiveDynamicImport ||
+      result.fatalUnresolvedImport
+    ) {
       break;
     }
   }
@@ -1815,6 +1803,30 @@ export async function runTsdownBuild(argv: string[] = process.argv.slice(2)): Pr
   }
 
   return 1;
+}
+
+export async function runTsdownBuild(argv: string[] = process.argv.slice(2)): Promise<number> {
+  const args = parseTsdownBuildArgs(argv);
+  if (args.help) {
+    console.log(tsdownBuildUsage());
+    return 0;
+  }
+  const plan = prepareTsdownBuildExecution(
+    { args: args.forwardedArgs },
+    {
+      reportShortfall(shortfall) {
+        if (shortfall.fatal) {
+          console.error(shortfall.message);
+        } else {
+          console.warn(shortfall.message);
+        }
+      },
+    },
+  );
+  if (!plan) {
+    return 1;
+  }
+  return executeTsdownBuildPlan(plan);
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

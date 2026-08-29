@@ -193,9 +193,13 @@ ${publish(2)}
       });
       const pids: number[] = [];
       try {
-        for (const pidPath of pidPaths) pids.push(await waitForPidFile(pidPath, 10_000));
+        for (const pidPath of pidPaths) {
+          pids.push(await waitForPidFile(pidPath, 10_000));
+        }
         expect(pids.every(isProcessAlive)).toBe(true);
-        if (abort) abortController.abort();
+        if (abort) {
+          abortController.abort();
+        }
         expect(await releaseAndWait()).toMatchObject({
           message: expect.stringContaining(
             abort ? "canceled after sibling failure" : "timed out after 100ms",
@@ -211,18 +215,24 @@ ${publish(2)}
           ).toBe(true);
         } else if (runner === "managed-inherit") {
           expect(stdout.mock.calls.some(([chunk]) => String(chunk) === "shutdown-tail")).toBe(true);
-        } else expect(output).toBe("shutdown-tail");
+        } else {
+          expect(output).toBe("shutdown-tail");
+        }
       } finally {
         await releaseAndWait();
         stdout.mockRestore();
-        for (const pidPath of [...pidPaths].reverse()) {
-          if (!fs.existsSync(pidPath)) continue;
+        for (const pidPath of pidPaths.toReversed()) {
+          if (!fs.existsSync(pidPath)) {
+            continue;
+          }
           const pid = Number(fs.readFileSync(pidPath, "utf8"));
-          if (!Number.isSafeInteger(pid) || pid <= 1) continue;
+          if (!Number.isSafeInteger(pid) || pid <= 1) {
+            continue;
+          }
           try {
             process.kill(pid, "SIGKILL");
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+            expect((error as NodeJS.ErrnoException).code).toBe("ESRCH");
           }
           await waitForDead(pid, 2_000);
         }
@@ -265,7 +275,7 @@ ${publish(2)}
   it("uses Windows shell normalization when the platform override is win32", () => {
     expect(
       createManagedCommandSpawnSpec({
-        args: ["-p", "tsconfig.plugin-sdk.dts.json", "--listFilesOnly", "--noEmit"],
+        args: ["-p", "packages/plugin-sdk/tsconfig.json", "--listFilesOnly", "--noEmit"],
         bin: "C:\\repo\\node_modules\\.bin\\tsgo",
         comSpec: "C:\\Windows\\System32\\cmd.exe",
         env: {},
@@ -276,7 +286,7 @@ ${publish(2)}
         "/d",
         "/s",
         "/c",
-        "C:\\repo\\node_modules\\.bin\\tsgo -p tsconfig.plugin-sdk.dts.json --listFilesOnly --noEmit",
+        "C:\\repo\\node_modules\\.bin\\tsgo -p packages/plugin-sdk/tsconfig.json --listFilesOnly --noEmit",
       ],
       command: "C:\\Windows\\System32\\cmd.exe",
       options: {
@@ -569,7 +579,9 @@ ${publish(2)}
       const baseline = new Map(signals.map((signal) => [signal, process.listenerCount(signal)]));
       const warnings: string[] = [];
       const onWarning = (warning: Error) => {
-        if (warning.name === "MaxListenersExceededWarning") warnings.push(warning.message);
+        if (warning.name === "MaxListenersExceededWarning") {
+          warnings.push(warning.message);
+        }
       };
       process.on("warning", onWarning);
       const stdout = vi.spyOn(process.stdout, "write");
@@ -611,13 +623,13 @@ ${publish(2)}
                 .join("")
                 .split("\n")
                 .filter((line) => line.startsWith(`managed-parallel-${kind}-`))
-                .sort();
+                .toSorted();
             await waitFor(() => lines().length === commands.length);
             expect(lines()).toEqual(
               Array.from(
                 { length: 12 },
                 (_, index) => `managed-parallel-${kind}-${index}-π`,
-              ).sort(),
+              ).toSorted(),
             );
           }
         }
@@ -831,7 +843,7 @@ ${publishReadyPidScript(2)}
   posixIt.concurrent.for(["timeout", "sibling failure"])(
     "fails closed within the cleanup budget when an escaped child holds output after $0",
     { timeout: 25_000 },
-    async (mode, { expect }) => {
+    async (mode, { expect: expectConcurrent }) => {
       // Concurrent rows own their roots; the shared afterEach can run while a sibling is alive.
       const dir = fs.mkdtempSync(
         path.join(fs.realpathSync(os.tmpdir()), "openclaw-managed-held-output-"),
@@ -887,32 +899,36 @@ require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(le
         escapedPid = await waitForPidFile(pidPath, 10_000);
         const parentPid = await waitForPidFile(parentPidPath, 10_000);
         const canceledAt = Date.now();
-        if (mode === "sibling failure") fs.writeFileSync(failPath, "fail");
-        else await releaseAndWait();
+        if (mode === "sibling failure") {
+          fs.writeFileSync(failPath, "fail");
+        } else {
+          await releaseAndWait();
+        }
         const failure = await outcome;
         const cleanupFailure = {
           code: "EPROCESSGROUP_CLEANUP_FAILED",
           processTreeState: "indeterminate",
         };
         if (mode === "timeout") {
-          expect(failure).toMatchObject(cleanupFailure);
-          expect(child?.stdout?.destroyed).toBe(true);
-          expect(child?.stderr?.destroyed).toBe(true);
+          expectConcurrent(failure).toMatchObject(cleanupFailure);
+          expectConcurrent(child?.stdout?.destroyed).toBe(true);
+          expectConcurrent(child?.stderr?.destroyed).toBe(true);
         } else {
-          expect(failure).toBeInstanceOf(AggregateError);
-          expect(failure).toMatchObject({
+          expectConcurrent(failure).toBeInstanceOf(AggregateError);
+          expectConcurrent(failure).toMatchObject({
             message: "primary failed with exit code 2; sibling cleanup could not be verified",
             errors: [{ message: "primary failed with exit code 2" }, cleanupFailure],
           });
         }
-        expect(Date.now() - canceledAt).toBeLessThan(12_000);
-        expect(isProcessAlive(parentPid)).toBe(false);
-        expect(isProcessAlive(escapedPid)).toBe(true);
+        expectConcurrent(Date.now() - canceledAt).toBeLessThan(12_000);
+        expectConcurrent(isProcessAlive(parentPid)).toBe(false);
+        expectConcurrent(isProcessAlive(escapedPid)).toBe(true);
       } finally {
         fs.writeFileSync(failPath, "fail");
         await releaseAndWait();
-        if (!escapedPid && fs.existsSync(pidPath))
+        if (!escapedPid && fs.existsSync(pidPath)) {
           escapedPid = Number(fs.readFileSync(pidPath, "utf8"));
+        }
         if (escapedPid && isProcessAlive(escapedPid)) {
           process.kill(escapedPid, "SIGKILL");
           await waitForDead(escapedPid, 2_000);
@@ -1082,7 +1098,9 @@ child.once("message", () => process.exit(0));
         if (fs.existsSync(descendantPidPath)) {
           const descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
           if (Number.isSafeInteger(descendantPid) && descendantPid > 1) {
-            if (isProcessAlive(descendantPid)) process.kill(descendantPid, "SIGKILL");
+            if (isProcessAlive(descendantPid)) {
+              process.kill(descendantPid, "SIGKILL");
+            }
             await waitForDead(descendantPid, 2_000);
           }
         }

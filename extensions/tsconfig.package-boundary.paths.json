@@ -3,7 +3,7 @@
   "compilerOptions": {
     "paths": {
       "openclaw/plugin-sdk/*": [
-        "../dist/plugin-sdk/*.d.ts"
+        "../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"
       ],
       "openclaw/plugin-sdk/provider-setup": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/provider-setup.d.ts"
@@ -566,320 +566,302 @@
       "openclaw/plugin-sdk/llm": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/llm.d.ts"
       ],
-      "openclaw/plugin-sdk/account-id": [
-        "../dist/plugin-sdk/account-id.d.ts"
-      ],
-      "openclaw/plugin-sdk/channel-entry-contract": [
-        "../dist/plugin-sdk/channel-entry-contract.d.ts"
-      ],
       "openclaw/plugin-sdk/browser-maintenance": [
         "../packages/plugin-sdk/dist/extensions/browser/browser-maintenance.d.ts"
       ],
-      "openclaw/plugin-sdk/channel-secret-basic-runtime": [
-        "../dist/plugin-sdk/channel-secret-basic-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/error-runtime": [
-        "../dist/plugin-sdk/error-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/secret-ref-runtime": [
-        "../dist/plugin-sdk/secret-ref-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/ssrf-runtime": [
-        "../dist/plugin-sdk/ssrf-runtime.d.ts"
-      ],
       "@openclaw/qa-channel/api.js": [
-        "../dist/plugin-sdk/extensions/qa-channel/api.d.ts"
+        "../.artifacts/extension-package-boundary/plugins/qa-channel/api.d.ts"
       ],
       "@openclaw/memory-core/api.js": [
-        "../dist/plugin-sdk/extensions/memory-core/api.d.ts"
+        "../.artifacts/extension-package-boundary/plugins/memory-core/api.d.ts"
       ],
       "@openclaw/matrix/test-api.js": [
-        "../dist/plugin-sdk/extensions/matrix/test-api.d.ts"
+        "../.artifacts/extension-package-boundary/plugins/matrix/test-api.d.ts"
       ],
       "@openclaw/discord/api.js": [
-        "../dist/plugin-sdk/extensions/discord/api.d.ts"
+        "../.artifacts/extension-package-boundary/plugins/discord/api.d.ts"
       ],
       "@openclaw/slack/api.js": [
-        "../dist/plugin-sdk/extensions/slack/api.d.ts"
+        "../.artifacts/extension-package-boundary/plugins/slack/api.d.ts"
       ],
       "@openclaw/telegram/api.js": [
-        "../dist/plugin-sdk/extensions/telegram/api.d.ts"
+        "../.artifacts/extension-package-boundary/plugins/telegram/api.d.ts"
       ],
       "@openclaw/whatsapp/api.js": [
-        "../dist/plugin-sdk/extensions/whatsapp/api.d.ts"
+        "../.artifacts/extension-package-boundary/plugins/whatsapp/api.d.ts"
       ],
       "@openclaw/ai": [
-        "../dist/plugin-sdk/packages/ai/src/index.d.ts"
+        "../packages/plugin-sdk/dist/packages/ai/src/index.d.ts"
       ],
       "@openclaw/ai/diagnostics": [
-        "../dist/plugin-sdk/packages/ai/src/utils/diagnostics.d.ts"
+        "../packages/plugin-sdk/dist/packages/ai/src/utils/diagnostics.d.ts"
       ],
       "@openclaw/ai/event-stream": [
-        "../dist/plugin-sdk/packages/ai/src/utils/event-stream.d.ts"
+        "../packages/plugin-sdk/dist/packages/ai/src/utils/event-stream.d.ts"
       ],
       "@openclaw/ai/providers": [
-        "../dist/plugin-sdk/packages/ai/src/providers.d.ts"
+        "../packages/plugin-sdk/dist/packages/ai/src/providers.d.ts"
       ],
       "@openclaw/ai/transports": [
-        "../dist/plugin-sdk/packages/ai/src/transports.d.ts"
+        "../packages/plugin-sdk/dist/packages/ai/src/transports.d.ts"
       ],
       "@openclaw/ai/types": [
-        "../dist/plugin-sdk/packages/ai/src/types.d.ts"
+        "../packages/plugin-sdk/dist/packages/ai/src/types.d.ts"
       ],
       "@openclaw/ai/validation": [
-        "../dist/plugin-sdk/packages/ai/src/validation.d.ts"
+        "../packages/plugin-sdk/dist/packages/ai/src/validation.d.ts"
       ],
       "@openclaw/ai/internal/anthropic": [
-        "../dist/plugin-sdk/packages/ai/src/internal/anthropic.d.ts"
+        "../packages/plugin-sdk/dist/packages/ai/src/internal/anthropic.d.ts"
       ],
       "@openclaw/ai/internal/openai": [
-        "../dist/plugin-sdk/packages/ai/src/internal/openai.d.ts"
+        "../packages/plugin-sdk/dist/packages/ai/src/internal/openai.d.ts"
       ],
       "@openclaw/ai/internal/retry-after": [
-        "../dist/plugin-sdk/packages/ai/src/internal/retry-after.d.ts"
+        "../packages/plugin-sdk/dist/packages/ai/src/internal/retry-after.d.ts"
       ],
       "@openclaw/ai/internal/runtime": [
-        "../dist/plugin-sdk/packages/ai/src/internal/runtime.d.ts"
+        "../packages/plugin-sdk/dist/packages/ai/src/internal/runtime.d.ts"
       ],
       "@openclaw/ai/internal/shared": [
-        "../dist/plugin-sdk/packages/ai/src/internal/shared.d.ts"
+        "../packages/plugin-sdk/dist/packages/ai/src/internal/shared.d.ts"
       ],
       "@openclaw/llm-core": [
-        "../dist/plugin-sdk/packages/llm-core/src/index.d.ts"
+        "../packages/plugin-sdk/dist/packages/llm-core/src/index.d.ts"
       ],
       "@openclaw/llm-core/diagnostics": [
-        "../dist/plugin-sdk/packages/llm-core/src/utils/diagnostics.d.ts"
+        "../packages/plugin-sdk/dist/packages/llm-core/src/utils/diagnostics.d.ts"
       ],
       "@openclaw/llm-core/event-stream": [
-        "../dist/plugin-sdk/packages/llm-core/src/utils/event-stream.d.ts"
+        "../packages/plugin-sdk/dist/packages/llm-core/src/utils/event-stream.d.ts"
       ],
       "@openclaw/llm-core/types": [
-        "../dist/plugin-sdk/packages/llm-core/src/types.d.ts"
+        "../packages/plugin-sdk/dist/packages/llm-core/src/types.d.ts"
       ],
       "@openclaw/llm-core/validation": [
-        "../dist/plugin-sdk/packages/llm-core/src/validation.d.ts"
+        "../packages/plugin-sdk/dist/packages/llm-core/src/validation.d.ts"
       ],
       "@openclaw/llm-core/*": [
-        "../dist/plugin-sdk/packages/llm-core/src/*.d.ts"
+        "../packages/plugin-sdk/dist/packages/llm-core/src/*.d.ts"
       ],
       "@openclaw/model-catalog-core": [
-        "../dist/plugin-sdk/packages/model-catalog-core/src/index.d.ts"
+        "../packages/plugin-sdk/dist/packages/model-catalog-core/src/index.d.ts"
       ],
       "@openclaw/model-catalog-core/configured-model-refs": [
-        "../dist/plugin-sdk/packages/model-catalog-core/src/configured-model-refs.d.ts"
+        "../packages/plugin-sdk/dist/packages/model-catalog-core/src/configured-model-refs.d.ts"
       ],
       "@openclaw/model-catalog-core/model-catalog-refs": [
-        "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-refs.d.ts"
+        "../packages/plugin-sdk/dist/packages/model-catalog-core/src/model-catalog-refs.d.ts"
       ],
       "@openclaw/model-catalog-core/model-catalog-normalize": [
-        "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-normalize.d.ts"
+        "../packages/plugin-sdk/dist/packages/model-catalog-core/src/model-catalog-normalize.d.ts"
       ],
       "@openclaw/model-catalog-core/model-catalog-types": [
-        "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-types.d.ts"
+        "../packages/plugin-sdk/dist/packages/model-catalog-core/src/model-catalog-types.d.ts"
       ],
       "@openclaw/model-catalog-core/provider-id": [
-        "../dist/plugin-sdk/packages/model-catalog-core/src/provider-id.d.ts"
+        "../packages/plugin-sdk/dist/packages/model-catalog-core/src/provider-id.d.ts"
       ],
       "@openclaw/model-catalog-core/provider-model-id-normalization": [
-        "../dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalization.d.ts"
+        "../packages/plugin-sdk/dist/packages/model-catalog-core/src/provider-model-id-normalization.d.ts"
       ],
       "@openclaw/model-catalog-core/provider-model-id-normalize": [
-        "../dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalize.d.ts"
+        "../packages/plugin-sdk/dist/packages/model-catalog-core/src/provider-model-id-normalize.d.ts"
       ],
       "@openclaw/model-catalog-core/*": [
-        "../dist/plugin-sdk/packages/model-catalog-core/src/*.d.ts"
+        "../packages/plugin-sdk/dist/packages/model-catalog-core/src/*.d.ts"
       ],
       "@openclaw/markdown-core": [
-        "../dist/plugin-sdk/packages/markdown-core/src/index.d.ts"
+        "../packages/plugin-sdk/dist/packages/markdown-core/src/index.d.ts"
       ],
       "@openclaw/markdown-core/code-spans": [
-        "../dist/plugin-sdk/packages/markdown-core/src/code-spans.d.ts"
+        "../packages/plugin-sdk/dist/packages/markdown-core/src/code-spans.d.ts"
       ],
       "@openclaw/markdown-core/fences": [
-        "../dist/plugin-sdk/packages/markdown-core/src/fences.d.ts"
+        "../packages/plugin-sdk/dist/packages/markdown-core/src/fences.d.ts"
       ],
       "@openclaw/markdown-core/frontmatter": [
-        "../dist/plugin-sdk/packages/markdown-core/src/frontmatter.d.ts"
+        "../packages/plugin-sdk/dist/packages/markdown-core/src/frontmatter.d.ts"
       ],
       "@openclaw/markdown-core/ir": [
-        "../dist/plugin-sdk/packages/markdown-core/src/ir.d.ts"
+        "../packages/plugin-sdk/dist/packages/markdown-core/src/ir.d.ts"
       ],
       "@openclaw/markdown-core/render": [
-        "../dist/plugin-sdk/packages/markdown-core/src/render.d.ts"
+        "../packages/plugin-sdk/dist/packages/markdown-core/src/render.d.ts"
       ],
       "@openclaw/markdown-core/render-aware-chunking": [
-        "../dist/plugin-sdk/packages/markdown-core/src/render-aware-chunking.d.ts"
+        "../packages/plugin-sdk/dist/packages/markdown-core/src/render-aware-chunking.d.ts"
       ],
       "@openclaw/markdown-core/tables": [
-        "../dist/plugin-sdk/packages/markdown-core/src/tables.d.ts"
+        "../packages/plugin-sdk/dist/packages/markdown-core/src/tables.d.ts"
       ],
       "@openclaw/markdown-core/types": [
-        "../dist/plugin-sdk/packages/markdown-core/src/types.d.ts"
+        "../packages/plugin-sdk/dist/packages/markdown-core/src/types.d.ts"
       ],
       "@openclaw/markdown-core/*": [
-        "../dist/plugin-sdk/packages/markdown-core/src/*.d.ts"
+        "../packages/plugin-sdk/dist/packages/markdown-core/src/*.d.ts"
       ],
       "@openclaw/media-generation-core": [
-        "../dist/plugin-sdk/packages/media-generation-core/src/index.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-generation-core/src/index.d.ts"
       ],
       "@openclaw/media-generation-core/capability-model-ref": [
-        "../dist/plugin-sdk/packages/media-generation-core/src/capability-model-ref.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-generation-core/src/capability-model-ref.d.ts"
       ],
       "@openclaw/media-generation-core/catalog": [
-        "../dist/plugin-sdk/packages/media-generation-core/src/catalog.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-generation-core/src/catalog.d.ts"
       ],
       "@openclaw/media-generation-core/model-ref": [
-        "../dist/plugin-sdk/packages/media-generation-core/src/model-ref.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-generation-core/src/model-ref.d.ts"
       ],
       "@openclaw/media-generation-core/normalization": [
-        "../dist/plugin-sdk/packages/media-generation-core/src/normalization.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-generation-core/src/normalization.d.ts"
       ],
       "@openclaw/media-generation-core/*": [
-        "../dist/plugin-sdk/packages/media-generation-core/src/*.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-generation-core/src/*.d.ts"
       ],
       "@openclaw/media-core": [
-        "../dist/plugin-sdk/packages/media-core/src/index.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-core/src/index.d.ts"
       ],
       "@openclaw/media-core/attachment-classify": [
-        "../dist/plugin-sdk/packages/media-core/src/attachment-classify.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-core/src/attachment-classify.d.ts"
       ],
       "@openclaw/media-core/base64": [
-        "../dist/plugin-sdk/packages/media-core/src/base64.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-core/src/base64.d.ts"
       ],
       "@openclaw/media-core/constants": [
-        "../dist/plugin-sdk/packages/media-core/src/constants.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-core/src/constants.d.ts"
       ],
       "@openclaw/media-core/content-length": [
-        "../dist/plugin-sdk/packages/media-core/src/content-length.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-core/src/content-length.d.ts"
       ],
       "@openclaw/media-core/file-name": [
-        "../dist/plugin-sdk/packages/media-core/src/file-name.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-core/src/file-name.d.ts"
       ],
       "@openclaw/media-core/inbound-path-policy": [
-        "../dist/plugin-sdk/packages/media-core/src/inbound-path-policy.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-core/src/inbound-path-policy.d.ts"
       ],
       "@openclaw/media-core/inline-image-data-url": [
-        "../dist/plugin-sdk/packages/media-core/src/inline-image-data-url.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-core/src/inline-image-data-url.d.ts"
       ],
       "@openclaw/media-core/media-source-url": [
-        "../dist/plugin-sdk/packages/media-core/src/media-source-url.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-core/src/media-source-url.d.ts"
       ],
       "@openclaw/media-core/mime": [
-        "../dist/plugin-sdk/packages/media-core/src/mime.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-core/src/mime.d.ts"
       ],
       "@openclaw/media-core/read-byte-stream-with-limit": [
-        "../dist/plugin-sdk/packages/media-core/src/read-byte-stream-with-limit.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-core/src/read-byte-stream-with-limit.d.ts"
       ],
       "@openclaw/media-core/*": [
-        "../dist/plugin-sdk/packages/media-core/src/*.d.ts"
+        "../packages/plugin-sdk/dist/packages/media-core/src/*.d.ts"
       ],
       "@openclaw/normalization-core/record-coerce": [
-        "../dist/plugin-sdk/packages/normalization-core/src/record-coerce.d.ts"
+        "../packages/plugin-sdk/dist/packages/normalization-core/src/record-coerce.d.ts"
       ],
       "@openclaw/normalization-core/string-coerce": [
-        "../dist/plugin-sdk/packages/normalization-core/src/string-coerce.d.ts"
+        "../packages/plugin-sdk/dist/packages/normalization-core/src/string-coerce.d.ts"
       ],
       "@openclaw/normalization-core/*": [
-        "../dist/plugin-sdk/packages/normalization-core/src/*.d.ts"
+        "../packages/plugin-sdk/dist/packages/normalization-core/src/*.d.ts"
       ],
       "@openclaw/retry": [
-        "../dist/plugin-sdk/packages/retry/src/index.d.ts"
+        "../packages/plugin-sdk/dist/packages/retry/src/index.d.ts"
       ],
       "@openclaw/workboard-contract": [
         "../packages/workboard-contract/src/index.ts"
       ],
       "@openclaw/acp-core": [
-        "../dist/plugin-sdk/packages/acp-core/src/index.d.ts"
+        "../packages/plugin-sdk/dist/packages/acp-core/src/index.d.ts"
       ],
       "@openclaw/acp-core/meta": [
-        "../dist/plugin-sdk/packages/acp-core/src/meta.d.ts"
+        "../packages/plugin-sdk/dist/packages/acp-core/src/meta.d.ts"
       ],
       "@openclaw/acp-core/session": [
-        "../dist/plugin-sdk/packages/acp-core/src/session.d.ts"
+        "../packages/plugin-sdk/dist/packages/acp-core/src/session.d.ts"
       ],
       "@openclaw/acp-core/session-interaction-mode": [
-        "../dist/plugin-sdk/packages/acp-core/src/session-interaction-mode.d.ts"
+        "../packages/plugin-sdk/dist/packages/acp-core/src/session-interaction-mode.d.ts"
       ],
       "@openclaw/acp-core/session-lineage-meta": [
-        "../dist/plugin-sdk/packages/acp-core/src/session-lineage-meta.d.ts"
+        "../packages/plugin-sdk/dist/packages/acp-core/src/session-lineage-meta.d.ts"
       ],
       "@openclaw/acp-core/types": [
-        "../dist/plugin-sdk/packages/acp-core/src/types.d.ts"
+        "../packages/plugin-sdk/dist/packages/acp-core/src/types.d.ts"
       ],
       "@openclaw/acp-core/runtime/error-text": [
-        "../dist/plugin-sdk/packages/acp-core/src/runtime/error-text.d.ts"
+        "../packages/plugin-sdk/dist/packages/acp-core/src/runtime/error-text.d.ts"
       ],
       "@openclaw/acp-core/runtime/errors": [
-        "../dist/plugin-sdk/packages/acp-core/src/runtime/errors.d.ts"
+        "../packages/plugin-sdk/dist/packages/acp-core/src/runtime/errors.d.ts"
       ],
       "@openclaw/acp-core/runtime/session-identifiers": [
-        "../dist/plugin-sdk/packages/acp-core/src/runtime/session-identifiers.d.ts"
+        "../packages/plugin-sdk/dist/packages/acp-core/src/runtime/session-identifiers.d.ts"
       ],
       "@openclaw/acp-core/runtime/session-identity": [
-        "../dist/plugin-sdk/packages/acp-core/src/runtime/session-identity.d.ts"
+        "../packages/plugin-sdk/dist/packages/acp-core/src/runtime/session-identity.d.ts"
       ],
       "@openclaw/acp-core/runtime/types": [
-        "../dist/plugin-sdk/packages/acp-core/src/runtime/types.d.ts"
+        "../packages/plugin-sdk/dist/packages/acp-core/src/runtime/types.d.ts"
       ],
       "@openclaw/acp-core/*": [
-        "../dist/plugin-sdk/packages/acp-core/src/*.d.ts"
+        "../packages/plugin-sdk/dist/packages/acp-core/src/*.d.ts"
       ],
       "@openclaw/terminal-core": [
-        "../dist/plugin-sdk/packages/terminal-core/src/index.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/index.d.ts"
       ],
       "@openclaw/terminal-core/ansi": [
-        "../dist/plugin-sdk/packages/terminal-core/src/ansi.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/ansi.d.ts"
       ],
       "@openclaw/terminal-core/decorative-emoji": [
-        "../dist/plugin-sdk/packages/terminal-core/src/decorative-emoji.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/decorative-emoji.d.ts"
       ],
       "@openclaw/terminal-core/health-style": [
-        "../dist/plugin-sdk/packages/terminal-core/src/health-style.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/health-style.d.ts"
       ],
       "@openclaw/terminal-core/links": [
-        "../dist/plugin-sdk/packages/terminal-core/src/links.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/links.d.ts"
       ],
       "@openclaw/terminal-core/note": [
-        "../dist/plugin-sdk/packages/terminal-core/src/note.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/note.d.ts"
       ],
       "@openclaw/terminal-core/osc-progress": [
-        "../dist/plugin-sdk/packages/terminal-core/src/osc-progress.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/osc-progress.d.ts"
       ],
       "@openclaw/terminal-core/palette": [
-        "../dist/plugin-sdk/packages/terminal-core/src/palette.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/palette.d.ts"
       ],
       "@openclaw/terminal-core/progress-line": [
-        "../dist/plugin-sdk/packages/terminal-core/src/progress-line.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/progress-line.d.ts"
       ],
       "@openclaw/terminal-core/prompt-select-styled": [
-        "../dist/plugin-sdk/packages/terminal-core/src/prompt-select-styled.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/prompt-select-styled.d.ts"
       ],
       "@openclaw/terminal-core/prompt-select-styled-params": [
-        "../dist/plugin-sdk/packages/terminal-core/src/prompt-select-styled-params.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/prompt-select-styled-params.d.ts"
       ],
       "@openclaw/terminal-core/prompt-style": [
-        "../dist/plugin-sdk/packages/terminal-core/src/prompt-style.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/prompt-style.d.ts"
       ],
       "@openclaw/terminal-core/restore": [
-        "../dist/plugin-sdk/packages/terminal-core/src/restore.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/restore.d.ts"
       ],
       "@openclaw/terminal-core/safe-text": [
-        "../dist/plugin-sdk/packages/terminal-core/src/safe-text.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/safe-text.d.ts"
       ],
       "@openclaw/terminal-core/stream-writer": [
-        "../dist/plugin-sdk/packages/terminal-core/src/stream-writer.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/stream-writer.d.ts"
       ],
       "@openclaw/terminal-core/table": [
-        "../dist/plugin-sdk/packages/terminal-core/src/table.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/table.d.ts"
       ],
       "@openclaw/terminal-core/terminal-link": [
-        "../dist/plugin-sdk/packages/terminal-core/src/terminal-link.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/terminal-link.d.ts"
       ],
       "@openclaw/terminal-core/theme": [
-        "../dist/plugin-sdk/packages/terminal-core/src/theme.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/theme.d.ts"
       ],
       "@openclaw/terminal-core/*": [
-        "../dist/plugin-sdk/packages/terminal-core/src/*.d.ts"
+        "../packages/plugin-sdk/dist/packages/terminal-core/src/*.d.ts"
       ],
       "@openclaw/*.js": [
         "../packages/plugin-sdk/dist/extensions/*.d.ts",
@@ -889,17 +871,8 @@
         "../packages/plugin-sdk/dist/extensions/*",
         "../extensions/*"
       ],
-      "openclaw/plugin-sdk/qa-channel": [
-        "../dist/plugin-sdk/src/plugin-sdk/qa-channel.d.ts"
-      ],
-      "openclaw/plugin-sdk/qa-channel-protocol": [
-        "../dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts"
-      ],
-      "openclaw/plugin-sdk/qa-runtime": [
-        "../dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts"
-      ],
       "@openclaw/plugin-sdk/*": [
-        "../dist/plugin-sdk/*.d.ts"
+        "../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"
       ],
       "openclaw/plugin-sdk/doctor-repair-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/doctor-repair-runtime.d.ts"

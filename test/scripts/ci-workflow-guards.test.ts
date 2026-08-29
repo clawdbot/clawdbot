@@ -5320,8 +5320,14 @@ server.listen(0, "127.0.0.1", () => {
     expect(hostedLintCache.with).toEqual(boundaryCache.with);
     const fingerprintReference = "${{ steps.extension-boundary-inputs.outputs.fingerprint }}";
     expect(boundaryCache.with.key).toBe(
-      "${{ runner.os }}-extension-package-boundary-v2-${{ steps.extension-boundary-inputs.outputs.fingerprint }}",
+      "${{ runner.os }}-extension-package-boundary-v4-${{ steps.extension-boundary-inputs.outputs.fingerprint }}",
     );
+    expect(boundaryCache.with.path.trim().split("\n")).toEqual([
+      "packages/plugin-sdk/dist",
+      ".artifacts/extension-package-boundary/plugins",
+      ".artifacts/extension-package-boundary/*.json",
+      ".artifacts/extension-package-boundary/compile",
+    ]);
     const fingerprintSteps = [additionalJob, checkShardJob].map((job) =>
       expectDefined(
         job.steps.find(
@@ -5332,9 +5338,7 @@ server.listen(0, "127.0.0.1", () => {
     );
     for (const step of fingerprintSteps) {
       expect(step.id).toBe("extension-boundary-inputs");
-      expect(step.run).toContain(
-        "scripts/prepare-extension-package-boundary-artifacts.mts --print-input-fingerprint",
-      );
+      expect(step.run).toContain('fingerprint="$(git rev-parse HEAD)"');
       expect(step.run).toContain('echo "enabled=false" >> "$GITHUB_OUTPUT"');
     }
     expect(fingerprintSteps[0]?.run).toBe(fingerprintSteps[1]?.run);
@@ -5346,8 +5350,8 @@ server.listen(0, "127.0.0.1", () => {
     );
     expect(lintMount.with.commit).toBe("false");
 
-    // Every cache and sticky-disk consumer uses the script-owned fingerprint;
-    // no workflow-local source list can drift from declaration freshness.
+    // Transport keys use the same commit; native owner records independently
+    // validate source content and output integrity after restoration.
     const restoreStep = additionalJob.steps.find(
       (step: WorkflowStep) => step.name === "Restore extension boundary artifacts from sticky disk",
     );
@@ -5368,6 +5372,12 @@ server.listen(0, "127.0.0.1", () => {
     // would burn wall clock on a discarded clone.
     expect(seedStep.if).toContain("github.event_name != 'pull_request'");
     expect(seedStep.if).toContain("steps.boundary-sticky-restore.outputs.restored == 'false'");
+    expect(seedStep.run).toContain(
+      "rsync -aR --exclude='*.lock*' .artifacts/extension-package-boundary",
+    );
+    for (const step of [restoreStep, lintRestoreStep]) {
+      expect(step.run).toContain("for payload in packages .artifacts;");
+    }
   });
 
   it("keeps the Gradle sticky disk on O(1) per-task protected keys", () => {

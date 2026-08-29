@@ -138,11 +138,7 @@ describe("package scripts", () => {
     expect(directNodeEnvScripts).toEqual([]);
   });
 
-  it.each([
-    { scriptName: "build:docker", expectedCount: 2 },
-    { scriptName: "build:plugin-sdk:strict-smoke", expectedCount: 1 },
-    { scriptName: "build:strict-smoke", expectedCount: 1 },
-  ])(
+  it.each([{ scriptName: "build:docker", expectedCount: 2 }])(
     "runs TypeScript steps in $scriptName through the tooling bootstrap",
     ({ scriptName, expectedCount }) => {
       const script = expectDefined(
@@ -183,7 +179,7 @@ describe("package scripts", () => {
 
   it("runs runtime postbuild before plugin SDK strict export checks", () => {
     expect(readPackageJson().scripts["build:plugin-sdk:strict-smoke"]).toBe(
-      "node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import ./scripts/tsx.mjs scripts/write-plugin-sdk-entry-dts.ts && node --import ./scripts/tsx.mjs scripts/check-plugin-sdk-exports.mts",
+      "node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/check-plugin-sdk-exports.mts",
     );
   });
 
