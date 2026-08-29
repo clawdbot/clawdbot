@@ -34,7 +34,18 @@ type CompletedToolCall = {
   args: string;
 };
 
+type PendingAssistantTranscript = {
+  event: RealtimeServerEvent;
+  final: boolean;
+};
+
+type TranscriptReorderBarrier = {
+  pending: PendingAssistantTranscript[];
+  timer: ReturnType<typeof globalThis.setTimeout>;
+};
+
 const MAX_REALTIME_TOOL_ARGUMENT_BYTES = 256_000;
+const REALTIME_TALK_TRANSCRIPT_REORDER_GRACE_MS = 1_000;
 // Realtime defines no replay window, so evicting terminal IDs could execute a
 // very late duplicate. End an extreme session instead of weakening dedupe.
 const MAX_COMPLETED_TOOL_CALL_IDS = 1_024;
@@ -51,6 +62,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private responseActive = false;
   private responseCreateInFlight = false;
   private responseCreatePending = false;
+  private transcriptReorderBarrier: TranscriptReorderBarrier | null = null;
   private readonly responseOutcomes = new RealtimeTalkResponseOutcomeOwner(
     MAX_COMPLETED_TOOL_CALL_IDS,
   );
@@ -284,6 +296,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.responseActive = false;
     this.responseCreateInFlight = false;
     this.responseCreatePending = false;
+    this.resetTranscriptReordering();
   }
 
   private failConnection(detail: string): void {
@@ -370,17 +383,18 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
             });
           }
         }
+        this.flushPendingAssistantTranscripts();
         return;
       case "conversation.output_transcript.delta":
       case "response.output_text.delta":
       case "response.audio_transcript.delta":
       case "response.output_audio_transcript.delta":
-        this.emitAssistantTranscript(event, false);
+        this.emitOrQueueAssistantTranscript(event, false);
         return;
       case "response.output_text.done":
       case "response.audio_transcript.done":
       case "response.output_audio_transcript.done":
-        this.emitAssistantTranscript(event, true);
+        this.emitOrQueueAssistantTranscript(event, true);
         break;
       case "response.function_call_arguments.delta":
       case "response.function_call_arguments.done":
@@ -388,6 +402,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         // responses. Only the completed response owns executable calls.
         break;
       case "input_audio_buffer.speech_started":
+        this.beginTranscriptReordering();
         this.ctx.callbacks.onStatus?.("listening", "Speech detected");
         this.emitTalkEvent({ type: "turn.started", payload: { source: event.type } });
         return;
@@ -453,6 +468,51 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         });
 
       default:
+    }
+  }
+
+  private beginTranscriptReordering(): void {
+    const pending = this.transcriptReorderBarrier?.pending ?? [];
+    if (this.transcriptReorderBarrier) {
+      globalThis.clearTimeout(this.transcriptReorderBarrier.timer);
+    }
+    // Provider finals can overtake input transcription. Bound the ordering
+    // barrier so a missing input event cannot suppress assistant output forever.
+    this.transcriptReorderBarrier = {
+      pending,
+      timer: globalThis.setTimeout(() => {
+        this.flushPendingAssistantTranscripts();
+      }, REALTIME_TALK_TRANSCRIPT_REORDER_GRACE_MS),
+    };
+  }
+
+  private emitOrQueueAssistantTranscript(event: RealtimeServerEvent, final: boolean): void {
+    if (this.transcriptReorderBarrier) {
+      this.transcriptReorderBarrier.pending.push({ event, final });
+      return;
+    }
+    this.emitAssistantTranscript(event, final);
+  }
+
+  private flushPendingAssistantTranscripts(): void {
+    const barrier = this.transcriptReorderBarrier;
+    if (!barrier) {
+      return;
+    }
+    globalThis.clearTimeout(barrier.timer);
+    this.transcriptReorderBarrier = null;
+    for (const transcript of barrier.pending) {
+      if (this.closed) {
+        return;
+      }
+      this.emitAssistantTranscript(transcript.event, transcript.final);
+    }
+  }
+
+  private resetTranscriptReordering(): void {
+    if (this.transcriptReorderBarrier) {
+      globalThis.clearTimeout(this.transcriptReorderBarrier.timer);
+      this.transcriptReorderBarrier = null;
     }
   }
 

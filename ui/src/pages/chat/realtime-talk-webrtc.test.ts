@@ -711,6 +711,60 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  it("orders final user speech before assistant output when provider events arrive reversed", async () => {
+    stubAnswerSdpFetch();
+    const onTranscript = vi.fn();
+    const transport = createOpenAiTransport({}, { onTranscript });
+
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    dispatchRealtimeEvent(peer, { type: "input_audio_buffer.speech_started" });
+    dispatchRealtimeEvent(peer, {
+      type: "response.audio_transcript.delta",
+      item_id: "response-1",
+      delta: "hi",
+    });
+    dispatchRealtimeEvent(peer, {
+      type: "response.audio_transcript.done",
+      item_id: "response-1",
+      transcript: "hi there",
+    });
+    dispatchTranscription(peer, "hello");
+
+    expect(onTranscript.mock.calls.map(([event]) => `${event.role}:${event.text}`)).toEqual([
+      "user:hello",
+      "assistant:hi",
+      "assistant:hi there",
+    ]);
+    transport.stop();
+  });
+
+  it("releases assistant output when finalized user transcription never arrives", async () => {
+    stubAnswerSdpFetch();
+    const onTranscript = vi.fn();
+    const transport = createOpenAiTransport({}, { onTranscript });
+
+    await transport.start();
+    vi.useFakeTimers();
+    const peer = FakePeerConnection.instances[0];
+    dispatchRealtimeEvent(peer, { type: "input_audio_buffer.speech_started" });
+    dispatchRealtimeEvent(peer, {
+      type: "response.audio_transcript.done",
+      item_id: "response-1",
+      transcript: "hi there",
+    });
+
+    expect(onTranscript).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onTranscript).toHaveBeenCalledWith({
+      role: "assistant",
+      text: "hi there",
+      final: true,
+    });
+    transport.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("stops processing the current provider event when a transcript callback closes it", async () => {
     stubAnswerSdpFetch();
     const onTalkEvent = vi.fn();
@@ -718,7 +772,15 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     const transport = createOpenAiTransport({}, { onTranscript, onTalkEvent });
 
     await transport.start();
-    dispatchTranscription(FakePeerConnection.instances[0], "overflow");
+    const peer = FakePeerConnection.instances[0];
+    dispatchRealtimeEvent(peer, { type: "input_audio_buffer.speech_started" });
+    dispatchRealtimeEvent(peer, {
+      type: "response.audio_transcript.done",
+      item_id: "response-1",
+      transcript: "must not emit",
+    });
+    onTalkEvent.mockClear();
+    dispatchTranscription(peer, "overflow");
 
     expect(onTranscript).toHaveBeenCalledOnce();
     expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual(["session.closed"]);
