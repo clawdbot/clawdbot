@@ -9,7 +9,7 @@ import {
   createToolStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { XAI_GROK_OAUTH_BASE_URL } from "./provider-catalog.js";
+import { XAI_GROK_OAUTH_BASE_URL } from "./model-definitions.js";
 import { isXaiProviderId } from "./provider-id.js";
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([

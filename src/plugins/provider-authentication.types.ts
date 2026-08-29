@@ -21,6 +21,8 @@ export type ProviderAuthResult = {
    * The caller still persists auth-profile bindings separately.
    */
   configPatch?: Partial<OpenClawConfig>;
+  /** Transient config used only for setup's immediate inference probe. Never persist it. */
+  inferenceProbeConfigPatch?: Partial<OpenClawConfig>;
   defaultModel?: string;
   notes?: string[];
   /**

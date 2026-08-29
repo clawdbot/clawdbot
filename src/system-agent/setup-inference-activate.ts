@@ -186,9 +186,19 @@ async function activateSetupInferenceUnredacted(
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
         ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
       });
+      const stagedProbeConfig = plan.executionConfig
+        ? await applySystemAgentModelSelection({
+            config: plan.executionConfig,
+            model: plan.persistModelRef,
+            ...(params.agentId ? { targetAgentId: testPlan.routeAgentId } : {}),
+            ...(agentRuntimeId ? { agentRuntimeId } : {}),
+            ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
+          })
+        : undefined;
       testPlan = {
         ...plan,
         config: stagedConfig,
+        ...(stagedProbeConfig ? { executionConfig: stagedProbeConfig } : {}),
         routeAgentId: resolveAmbientOwnerAgentId(stagedConfig, params.agentId),
       };
     }
@@ -340,9 +350,17 @@ async function activateSetupInferenceUnredacted(
       requestedAgentId,
       routeDeps,
     );
+    const probeExecutionRoute = testPlan.executionConfig
+      ? await resolveSystemAgentConfiguredRouteFromConfig(
+          testPlan.executionConfig,
+          requestedAgentId,
+          routeDeps,
+        )
+      : stagedExecutionRoute;
     if (
       !stagedRoute ||
       !stagedExecutionRoute ||
+      !probeExecutionRoute ||
       stagedRoute.runner !== testPlan.runner ||
       stagedRoute.provider !== testPlan.provider ||
       stagedRoute.model !== testPlan.model ||
@@ -371,7 +389,7 @@ async function activateSetupInferenceUnredacted(
     if (testPlan.runner === "embedded" && stagedRoute.runner === "embedded") {
       testPlan = {
         ...testPlan,
-        executionConfig: stagedExecutionRoute.runConfig,
+        executionConfig: probeExecutionRoute.runConfig,
         agentDir: hasPreparedAuthProfiles ? testAgentDir : stagedRoute.agentDir,
         ...(stagedRoute.agentHarnessRuntimeOverride
           ? { agentHarnessRuntimeOverride: stagedRoute.agentHarnessRuntimeOverride }
@@ -380,7 +398,7 @@ async function activateSetupInferenceUnredacted(
     } else {
       testPlan = {
         ...testPlan,
-        executionConfig: stagedExecutionRoute.runConfig,
+        executionConfig: probeExecutionRoute.runConfig,
         ...(!hasPreparedAuthProfiles ? { agentDir: stagedRoute.agentDir } : {}),
       };
     }
@@ -405,8 +423,8 @@ async function activateSetupInferenceUnredacted(
     try {
       stagedOwnerPluginArtifacts = withPluginRuntimeRegistryScope(codexProbePluginRegistry, () =>
         (deps.captureSystemAgentOwnerPluginArtifacts ?? captureSystemAgentOwnerPluginArtifacts)({
-          config: stagedExecutionRoute.runConfig,
-          executionRoute: stagedExecutionRoute,
+          config: probeExecutionRoute.runConfig,
+          executionRoute: probeExecutionRoute,
           deps,
         }),
       );

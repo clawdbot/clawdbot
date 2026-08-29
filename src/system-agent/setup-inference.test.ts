@@ -61,6 +61,7 @@ import {
   verifySetupInferenceConfig as verifySetupInferenceConfigImpl,
 } from "./setup-inference.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
+import { resolveXaiOAuthAutoModelId } from "../../extensions/xai/model-id.js";
 import {
   installSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
@@ -2797,6 +2798,70 @@ describe("activateSetupInference", () => {
       });
       expect(configHarness.current()).toMatchObject({
         agents: { defaults: { model: `openai/gpt-5.5@${activatedProfileId}` } },
+      });
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("uses a provider OAuth probe overlay without persisting its dynamic catalog row", async () => {
+    const { stateDir, initialConfig } = await createMainAgentFixture();
+    const runAuth = vi.fn(async () => ({
+      profiles: [{
+        profileId: "xai:default",
+        credential: {
+          type: "oauth" as const, provider: "xai", access: "access-token",
+          refresh: "refresh-token", expires: Date.now() + 60_000,
+        },
+      }],
+      defaultModel: "xai/auto",
+      configPatch: {
+        models: { providers: { xai: {
+          baseUrl: "https://cli-chat-proxy.grok.com/v1", api: "openai-responses" as const,
+          auth: "oauth" as const, models: [],
+        } } },
+      },
+      inferenceProbeConfigPatch: {
+        models: { providers: { xai: {
+          baseUrl: "https://cli-chat-proxy.grok.com/v1", api: "openai-responses" as const,
+          models: [{ id: "auto", name: "Grok", api: "openai-responses" as const, baseUrl: "https://cli-chat-proxy.grok.com/v1", reasoning: true, input: ["text" as const], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200_000, maxTokens: 8192, params: { canonicalModelId: "grok-4.6" } }],
+        } } },
+      },
+    }));
+    const provider: ProviderPlugin = {
+      id: "xai", label: "xAI", pluginId: "xai",
+      auth: [{ id: "oauth", label: "OAuth", kind: "oauth", run: runAuth }],
+    };
+    const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams & { authProfileId?: string }) => {
+      const auto = params.config?.models?.providers?.xai?.models.find((model) => model.id === "auto");
+      expect(params.config?.models?.providers?.xai?.auth).toBe("oauth");
+      expect(resolveXaiOAuthAutoModelId(auto?.id ?? "", auto?.params)).toBe("grok-4.6");
+      expect(auto?.baseUrl).toBe("https://cli-chat-proxy.grok.com/v1");
+      return successfulRun("xai", "auto", params);
+    });
+    const configHarness = createConfigTransformHarness(initialConfig);
+    try {
+      const result = await activateSetupInference({
+        kind: "provider-auth", authChoice: "xai", useRealAuthProfileStore: true,
+        workspace: "/tmp/openclaw-workspace", prompter: { note: vi.fn(async () => {}) } as never,
+        deps: {
+          readConfigFileSnapshot: mockConfigSnapshot(initialConfig, { includeMetadata: true }),
+          resolvePluginProviders: () => [provider],
+          resolveManifestProviderAuthChoice: () => ({
+            pluginId: "xai", providerId: "xai", methodId: "oauth", choiceId: "xai",
+            choiceLabel: "xAI OAuth", appGuidedAuth: "oauth",
+          }),
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        },
+      });
+      expect(result).toMatchObject({ ok: true, modelRef: "xai/auto" });
+      expect(runEmbeddedAgent.mock.calls[0]?.[0].config.models?.providers?.xai).toMatchObject({
+        baseUrl: "https://cli-chat-proxy.grok.com/v1",
+        models: [expect.objectContaining({ id: "auto", params: { canonicalModelId: "grok-4.6" } })],
+      });
+      expect(configHarness.current().models?.providers?.xai).toMatchObject({
+        auth: "oauth", baseUrl: "https://cli-chat-proxy.grok.com/v1", models: [],
       });
     } finally {
       await removeOAuthTestTempRoot(stateDir);

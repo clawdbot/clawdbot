@@ -152,6 +152,8 @@ export function buildOauthProviderAuthResult(params: {
   credentialExtra?: Record<string, unknown>;
   /** Explicit config patch to emit after model-ref normalization. */
   configPatch?: Partial<OpenClawConfig>;
+  /** Transient config used only for setup's immediate inference probe. */
+  inferenceProbeConfigPatch?: Partial<OpenClawConfig>;
   /** Optional setup notes forwarded to provider login callers. */
   notes?: string[];
 }): ProviderAuthResult {
@@ -190,6 +192,9 @@ export function buildOauthProviderAuthResult(params: {
           },
         } as Partial<OpenClawConfig>),
     ),
+    ...(params.inferenceProbeConfigPatch
+      ? { inferenceProbeConfigPatch: params.inferenceProbeConfigPatch }
+      : {}),
     defaultModel,
     notes: params.notes,
   };

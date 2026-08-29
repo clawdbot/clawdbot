@@ -18,6 +18,7 @@ import {
   applyProviderPluginAuthMethodResultConfig,
   runProviderPluginAuthMethodUnpersisted,
 } from "../plugins/provider-auth-choice.js";
+import { applyProviderAuthConfigPatch } from "../plugins/provider-auth-choice-helpers.js";
 import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choices.js";
 import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
@@ -606,12 +607,16 @@ export async function buildTestPlan(params: {
             profiles: [] as ProviderAuthResult["profiles"],
             selectedProfileId: undefined,
           };
+      const probeConfig = result.inferenceProbeConfigPatch
+        ? applyProviderAuthConfigPatch(preparedAuth.config, result.inferenceProbeConfigPatch)
+        : preparedAuth.config;
       return {
         runner: "embedded",
         ...ref,
         modelRef,
         agentDir: params.agentDir,
         config: preparedAuth.config,
+        ...(probeConfig !== preparedAuth.config ? { executionConfig: probeConfig } : {}),
         agentId: "openclaw",
         routeAgentId,
         ...(preparedAuth.selectedProfileId

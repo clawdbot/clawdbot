@@ -15,6 +15,7 @@ import {
   buildXaiCatalogModels,
   resolveXaiCatalogEntry,
   XAI_BASE_URL,
+  XAI_GROK_OAUTH_BASE_URL,
   XAI_DEFAULT_CONTEXT_WINDOW,
   XAI_IMAGE_MODELS,
   XAI_DEFAULT_MAX_TOKENS,
@@ -23,7 +24,6 @@ import { XAI_OAUTH_AUTO_MODEL_ID } from "./model-id.js";
 
 const PROVIDER_ID = "xai";
 const XAI_MODELS_ENDPOINT = `${XAI_BASE_URL}/models`;
-export const XAI_GROK_OAUTH_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 const XAI_GROK_OAUTH_MODELS_ENDPOINT = `${XAI_GROK_OAUTH_BASE_URL}/models`;
 const XAI_GROK_OAUTH_SETTINGS_ENDPOINT = `${XAI_GROK_OAUTH_BASE_URL}/settings`;
 const XAI_MODELS_CACHE_TTL_MS = 60_000;

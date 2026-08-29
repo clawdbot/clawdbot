@@ -8,6 +8,7 @@ import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXaiDeviceCodeAuthMethod, createXaiOAuthAuthMethod } from "./xai-oauth-entry.js";
 import { refreshXaiOAuthCredential } from "./xai-oauth.js";
+import { normalizeXaiResolvedModel } from "./provider-models.js";
 
 const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
@@ -332,27 +333,25 @@ describe("xAI OAuth", () => {
       update: vi.fn(),
       stop: vi.fn(),
     };
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse({
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      switch (requestUrl(url)) {
+        case XAI_OAUTH_DISCOVERY_URL:
+          return jsonResponse({
           authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
           device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
           token_endpoint: "https://auth.x.ai/oauth2/token",
-        }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({
+          });
+        case "https://auth.x.ai/oauth2/device/code":
+          return jsonResponse({
           device_code: "device-code-1",
           user_code: "ABCD-1234",
           verification_uri: "https://accounts.x.ai/oauth2/device",
           verification_uri_complete: "https://accounts.x.ai/oauth2/device?user_code=ABCD-1234",
           expires_in: 900,
           interval: 5,
-        }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({
+          });
+        case "https://auth.x.ai/oauth2/token":
+          return jsonResponse({
           access_token: createJwt({ exp: 4, sub: "acct-1" }),
           refresh_token: "refresh-1",
           id_token: createJwt({
@@ -361,8 +360,15 @@ describe("xAI OAuth", () => {
             name: "Dev User",
           }),
           expires_in: 120,
-        }),
-      );
+          });
+        case "https://cli-chat-proxy.grok.com/v1/models":
+          return jsonResponse({ data: [{ id: "grok-4.6", api_backend: "responses" }] });
+        case "https://cli-chat-proxy.grok.com/v1/settings":
+          return jsonResponse({ default_model: "grok-4.6" });
+        default:
+          throw new Error(`unexpected fetch URL: ${requestUrl(url)}`);
+      }
+    });
     vi.stubGlobal("fetch", fetchImpl);
     const deviceCode = vi.fn(async () => {});
     const openUrl = vi.fn(async () => {});
@@ -431,6 +437,20 @@ describe("xAI OAuth", () => {
       primary: "xai/auto",
     });
     expect(result.configPatch?.agents?.defaults?.models?.["xai/auto"]?.alias).toBe("Grok");
+    expect(result.configPatch?.models?.providers?.xai).toMatchObject({
+      auth: "oauth", baseUrl: "https://cli-chat-proxy.grok.com/v1",
+    });
+    expect(result.configPatch?.models?.providers?.xai?.models?.find((model) => model.id === "auto")).toBeUndefined();
+    const auto = result.inferenceProbeConfigPatch?.models?.providers?.xai?.models?.find(
+      (model) => model.id === "auto",
+    );
+    expect(auto).toMatchObject({
+      baseUrl: "https://cli-chat-proxy.grok.com/v1",
+      params: { canonicalModelId: "grok-4.6" },
+    });
+    expect(normalizeXaiResolvedModel({ ...auto!, provider: "xai" })).toMatchObject({
+      id: "grok-4.6", baseUrl: "https://cli-chat-proxy.grok.com/v1",
+    });
     expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
     expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
   });
