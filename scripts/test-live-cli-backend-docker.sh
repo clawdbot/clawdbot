@@ -176,12 +176,6 @@ export npm_config_cache="$NPM_CONFIG_CACHE"
 mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
-run_setup_command() {
-  openclaw_live_run_setup_command \
-    "${OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS:?missing live CLI backend setup timeout seconds}" \
-    "live CLI backend setup" \
-    "$@"
-}
 trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
 source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 openclaw_live_stage_mounted_auth
@@ -195,21 +189,9 @@ fi
 if [ -z "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ] && [ -n "$binary_name" ]; then
   export OPENCLAW_LIVE_CLI_BACKEND_COMMAND="$NPM_CONFIG_PREFIX/bin/$binary_name"
 fi
-package_has_explicit_version() {
-  case "$1" in
-    @*/*@*) return 0 ;;
-    *@*)
-      [[ "$1" != @* ]]
-      return
-      ;;
-    *) return 1 ;;
-  esac
-}
-if [ -n "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ] && [ ! -x "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" ] && [ -n "$docker_package" ]; then
-  run_setup_command npm install -g "$docker_package"
-elif [ -n "$docker_package" ] && package_has_explicit_version "$docker_package"; then
-  run_setup_command npm install -g "$docker_package"
-fi
+openclaw_live_prepare_cli_backend \
+  "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:?missing CLI backend command}" \
+  "$docker_package" "$OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS"
 if [ -n "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ] && [ -x "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" ]; then
   echo "==> CLI backend binary: ${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}"
   "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" -V || "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" --version || true

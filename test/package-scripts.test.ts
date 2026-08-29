@@ -345,6 +345,11 @@ describe("package scripts", () => {
     expect(readWindowsCiCoverageScript()).toContain(
       "test/scripts/openclaw-cross-os-installer.windows.test.ts",
     );
+    expect(
+      readWindowsCiPartScripts()
+        .flatMap(readWindowsCiTargets)
+        .filter((target) => target === "test/scripts/install-ps1.test.ts"),
+    ).toHaveLength(1);
   });
 
   it("runs env launcher coverage in Windows CI", () => {

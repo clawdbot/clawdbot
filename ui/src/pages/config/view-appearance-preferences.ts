@@ -212,6 +212,10 @@ export function renderChatPreferencesSection(
     (props.composerHoldToRecord ?? UI_APPEARANCE_DEFAULTS.composerHoldToRecord) !==
       UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
   );
+  const collapseTaskProgressDefaultDescription = renderSettingsDefaultDescription(
+    t("common.disabled"),
+    props.chatCollapseTaskProgress !== UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
+  );
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.chat} class="settings-section">
       <div class="settings-section__header">
@@ -223,6 +227,13 @@ export function renderChatPreferencesSection(
           description: html`${t("configView.chatPrefs.messageWidthHint")}<br />
             ${messageWidthDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           control: messageWidthInput,
+        })}
+        ${renderSettingsToggleRow({
+          title: t("configView.chatPrefs.collapseTaskProgress"),
+          description: html`${t("configView.chatPrefs.collapseTaskProgressHint")}<br />
+            ${collapseTaskProgressDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+          checked: props.chatCollapseTaskProgress,
+          onChange: props.setChatCollapseTaskProgress,
         })}
         ${renderSettingsSelectRow({
           title: t("chat.sendShortcut"),

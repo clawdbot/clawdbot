@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretRef } from "../config/types.secrets.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -1292,7 +1293,29 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("loads plugin-owned tools when manifest config signals point at configured non-env SecretRefs", () => {
+  it.each<{
+    name: string;
+    apiKey: SecretRef;
+    secrets: OpenClawConfig["secrets"];
+  }>([
+    {
+      name: "explicit file provider",
+      apiKey: { source: "file", provider: "vault", id: "/xai/tool-key" },
+      secrets: {
+        providers: {
+          vault: { source: "file", path: "/tmp/openclaw-secrets.json", mode: "json" },
+        },
+      },
+    },
+    {
+      name: "store default shadowing file",
+      apiKey: { source: "store", provider: "shared", id: "TOOL_API_KEY" },
+      secrets: {
+        defaults: { store: "shared" },
+        providers: { shared: { source: "file", path: "/tmp/unused-store-alias-fixture.json" } },
+      },
+    },
+  ])("loads plugin-owned tools when manifest config signals use $name", ({ apiKey, secrets }) => {
     const base = createContext();
     const config = {
       ...base.config,
@@ -1302,25 +1325,13 @@ describe("resolvePluginTools optional tools", () => {
           xai: {
             config: {
               webSearch: {
-                apiKey: {
-                  source: "file",
-                  provider: "vault",
-                  id: "/xai/tool-key",
-                },
+                apiKey,
               },
             },
           },
         },
       },
-      secrets: {
-        providers: {
-          vault: {
-            source: "file",
-            path: "/tmp/openclaw-secrets.json",
-            mode: "json",
-          },
-        },
-      },
+      secrets,
     } as const;
     installToolManifestSnapshot({
       config,

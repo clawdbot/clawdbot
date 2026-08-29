@@ -143,129 +143,22 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
     expect(input.attempt.media).toBe(media);
   });
 
-  it.each([
-    {
-      name: "facts-only",
-      message: { __openclaw: { media: [{ path: "/tmp/fact.png", contentType: "image/png" }] } },
-      expectedPath: "/tmp/fact.png",
-    },
-    {
-      name: "both-equal",
-      message: {
-        MediaPath: "/tmp/equal.png",
-        __openclaw: { media: [{ path: "/tmp/equal.png", contentType: "image/png" }] },
-      },
-      expectedPath: "/tmp/equal.png",
-    },
-    {
-      name: "both-conflict",
-      message: {
-        MediaPath: "/tmp/legacy-conflict.png",
-        __openclaw: { media: [{ path: "/tmp/canonical.png", contentType: "image/png" }] },
-      },
-      expectedPath: "/tmp/canonical.png",
-    },
-    {
-      name: "sparse",
-      message: {
-        __openclaw: { media: [{}, { path: "/tmp/sparse.png", contentType: "image/png" }] },
-      },
-      expectedPath: "/tmp/sparse.png",
-      expectedIndex: 1,
-    },
-    {
-      name: "type-only",
-      message: { __openclaw: { media: [{ contentType: "image/png" }] } },
-      expectedPath: undefined,
-    },
-    {
-      name: "media-only",
-      message: {
-        role: "user",
-        content: "",
-        __openclaw: { media: [{ path: "/tmp/media-only.png", kind: "image" }] },
-      },
-      expectedPath: "/tmp/media-only.png",
-    },
-  ])("hydrates $name persisted rows through canonical media", async (testCase) => {
+  it("delegates recorder resolution and ingress facts to the canonical hydrator", async () => {
     const base = createInput();
-    const persistedMessage = {
-      role: "user" as const,
-      content: "inspect",
-      ...testCase.message,
-    };
+    const recorder = {
+      message: undefined,
+      resolveMessage: vi.fn(),
+    } as unknown as NonNullable<PromptExecutionInput["attempt"]["userTurnTranscriptRecorder"]>;
+    const media = [{ path: "/tmp/offloaded.png", contentType: "image/png" }];
     const input = createInput({
-      attempt: {
-        ...base.attempt,
-        userTurnTranscriptRecorder: {
-          message: persistedMessage,
-          resolveMessage: vi.fn(async () => persistedMessage),
-        } as unknown as NonNullable<PromptExecutionInput["attempt"]["userTurnTranscriptRecorder"]>,
-      },
-    });
-
-    await prepareEmbeddedAttemptPromptExecution(input);
-
-    const call = hoisted.detectAndLoadPromptImages.mock.calls.at(-1)?.[0];
-    const expectedIndex = "expectedIndex" in testCase ? (testCase.expectedIndex ?? 0) : 0;
-    expect(call?.media?.[expectedIndex]?.path).toBe(testCase.expectedPath);
-  });
-
-  it("uses persisted facts and layout as the current-turn provenance authority", async () => {
-    const base = createInput();
-    const persistedMessage = {
-      role: "user" as const,
-      content: "compare",
-      MediaPaths: ["/tmp/legacy-inline.png", "/tmp/legacy-offloaded.png"],
-      MediaTypes: ["image/png", "image/png"],
-      __openclaw: {
-        media: [
-          {
-            path: "/tmp/inline.png",
-            contentType: "image/png",
-            hydrationSuppressed: true,
-          },
-          { path: "/tmp/offloaded.png", contentType: "image/png" },
-        ],
-        mediaImageLayout: {
-          slots: [
-            { kind: "inline", factIndex: 0 },
-            { kind: "offloaded", factIndex: 1 },
-          ],
-        },
-      },
-    };
-    const input = createInput({
-      attempt: {
-        ...base.attempt,
-        media: [{ path: "/tmp/offloaded.png", contentType: "image/png" }],
-        userTurnTranscriptRecorder: {
-          message: persistedMessage,
-          resolveMessage: vi.fn(async () => persistedMessage),
-        } as unknown as NonNullable<PromptExecutionInput["attempt"]["userTurnTranscriptRecorder"]>,
-      },
+      attempt: { ...base.attempt, media, userTurnTranscriptRecorder: recorder },
     });
 
     await prepareEmbeddedAttemptPromptExecution(input);
 
     expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith(
-      expect.objectContaining({
-        media: [
-          expect.objectContaining({
-            path: "/tmp/inline.png",
-            kind: "image",
-            hydrationSuppressed: true,
-          }),
-          expect.objectContaining({ path: "/tmp/offloaded.png", kind: "image" }),
-        ],
-        mediaImageLayout: {
-          slots: [
-            { kind: "inline", factIndex: 0 },
-            { kind: "offloaded", factIndex: 1 },
-          ],
-          suppressedFactIndexes: [],
-        },
-      }),
+      expect.objectContaining({ media, userTurnTranscriptRecorder: recorder }),
     );
+    expect(recorder.resolveMessage).not.toHaveBeenCalled();
   });
 });

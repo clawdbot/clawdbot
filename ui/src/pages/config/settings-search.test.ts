@@ -8,6 +8,23 @@ afterEach(async () => {
 });
 
 describe("findSettingsSearchBlocks", () => {
+  it("finds the task progress disclosure preference in Chat settings", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "task progress",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "appearance",
+        label: "Chat",
+        hash: "#settings-appearance-chat",
+      }),
+    ]);
+  });
+
   it("uses word prefixes instead of arbitrary substrings for short queries", () => {
     const matches = findSettingsSearchBlocks({
       query: "cp",

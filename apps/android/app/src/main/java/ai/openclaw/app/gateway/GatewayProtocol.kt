@@ -792,6 +792,7 @@ enum class GatewayEvent(
   ConnectChallenge("connect.challenge"),
   Agent("agent"),
   Chat("chat"),
+  ChatMetadataChanged("chat.metadata.changed"),
   UiCommand("ui.command"),
   SessionApproval("session.approval"),
   SessionMessage("session.message"),

@@ -50,7 +50,10 @@ export async function installTalkBrowserFixtures(page: Page) {
         ],
         getUserMedia: async (constraints: unknown) => {
           state.constraints.push(constraints);
-          return { getTracks: () => [track] };
+          return {
+            getAudioTracks: () => [track],
+            getTracks: () => [track],
+          };
         },
       },
     });
@@ -108,6 +111,16 @@ export async function installTalkBrowserFixtures(page: Page) {
 async function installWebRtcSdpResponseFixture(page: Page, fixture: WebRtcSdpResponseFixture) {
   await page.addInitScript(() => {
     const proofWindow = window as Window & { openclawWebRtcSdpE2e?: WebRtcSdpE2eProof };
+    const microphoneTrack = { stop() {} };
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: async () => ({
+          getAudioTracks: () => [microphoneTrack],
+          getTracks: () => [microphoneTrack],
+        }),
+      },
+    });
     proofWindow.openclawWebRtcSdpE2e = {
       bodyCancelCount: 0,
       bodyCancelResolvedCount: 0,

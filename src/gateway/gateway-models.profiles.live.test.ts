@@ -41,7 +41,6 @@ import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   readLiveTestConfig,
-  requiresLiveProfileCredential,
   resolveLiveCredentialPrecedence,
 } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
@@ -2864,7 +2863,10 @@ function buildLiveGatewayAuthProfileStore(params: {
         );
       }
     } else if (
-      !requiresLiveProfileCredential(provider, params.requireProfileKeys ?? REQUIRE_PROFILE_KEYS)
+      resolveLiveCredentialPrecedence(
+        provider,
+        params.requireProfileKeys ?? REQUIRE_PROFILE_KEYS,
+      ) === "env-first"
     ) {
       if (auth.mode !== "aws-sdk") {
         if (!auth.apiKey) {
@@ -3886,7 +3888,7 @@ describe("latestAssistantTextAfterBaseline", () => {
   it("correlates Anthropic refusal probes after the runtime scrubs their trigger", () => {
     const nonce = "0123456789abcdef0123456789abcdef";
     const expected = `Reply with the single word ok. Test trigger: ${ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL}_${nonce}`;
-    const scrubbed = `Reply with the single word ok. Test trigger: ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_${nonce}`;
+    const scrubbed = `Reply with the single word ok. Test trigger: [redacted]_${nonce}`;
     const redacted = redactSecrets(expected);
 
     expect(matchesLiveProbeUserText(scrubbed, expected)).toBe(true);
@@ -3906,7 +3908,7 @@ describe("latestAssistantTextAfterBaseline", () => {
     ).toEqual([{ role: "assistant", content: "ok", stopReason: "stop" }]);
     expect(
       matchesLiveProbeUserText(
-        "Reply with the single word ok. Test trigger: ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_ffffffffffffffffffffffffffffffff",
+        "Reply with the single word ok. Test trigger: [redacted]_ffffffffffffffffffffffffffffffff",
         expected,
       ),
     ).toBe(false);
@@ -6553,7 +6555,13 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                       providerFilter: PROVIDERS,
                       config: cfg,
                       env: process.env,
-                    }) && isHighSignalLiveModelRef({ provider: m.provider, id: m.id }),
+                    }) &&
+                    isHighSignalLiveModelRef({
+                      provider: m.provider,
+                      id: m.id,
+                      config: cfg,
+                      workspaceDir,
+                    }),
                 );
         }
         logProgress(`[all-models] wanted=${wanted.length} total=${all.length}`);

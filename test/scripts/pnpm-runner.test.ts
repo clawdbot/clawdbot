@@ -1,14 +1,78 @@
 // Pnpm Runner tests cover pnpm runner script behavior.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPnpmRunnerSpawnSpec, resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { buildCmdExeCommandLine } from "../../scripts/windows-cmd-helpers.mjs";
 
 describe("resolvePnpmRunner", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([
+    { name: "supplied env", env: "selected", override: false, entrypoint: "pnpm.cjs" },
+    { name: "explicit override", env: "selected", override: true, entrypoint: "pnpm.mjs" },
+    { name: "default process env", env: "default", override: false, entrypoint: "pnpm-cli.cjs" },
+    { name: "empty env with override", env: "empty", override: true, entrypoint: "pnpm.mjs" },
+  ])("executes with $name at the child boundary", ({ env: envMode, override, entrypoint }) => {
+    const tempDir = realpathSync(mkdtempSync(path.join(os.tmpdir(), "pnpm-runner-env-")));
+    const parentPath = path.join(tempDir, "pnpm-cli.cjs");
+    const selectedPath = path.join(tempDir, "pnpm.cjs");
+    const overridePath = path.join(tempDir, "pnpm.mjs");
+    try {
+      for (const file of [parentPath, selectedPath, overridePath]) {
+        writeFileSync(
+          file,
+          `console.log(JSON.stringify({
+            entrypoint: process.argv[1],
+            npmExecPath: process.env.npm_execpath ?? null,
+            args: process.argv.slice(2),
+          }));\n`,
+        );
+      }
+      const env =
+        envMode === "selected"
+          ? { npm_execpath: selectedPath }
+          : envMode === "empty"
+            ? {}
+            : undefined;
+      const params = {
+        cwd: tempDir,
+        env,
+        npmExecPath: override ? overridePath : undefined,
+        pnpmArgs: ["literal & argument"],
+        stdio: "pipe",
+      };
+      // Windows worker env copies are case-sensitive. Set the default environment
+      // in a real main thread so launcher selection and child inheritance agree.
+      const result = spawnSync(process.execPath, ["--input-type=module", "-"], {
+        encoding: "utf8",
+        input: `
+          import { spawnSync } from "node:child_process";
+          process.env.npm_execpath = ${JSON.stringify(parentPath)};
+          const { createPnpmRunnerSpawnSpec } = await import(${JSON.stringify(new URL("../../scripts/pnpm-runner.mts", import.meta.url).href)});
+          const spec = createPnpmRunnerSpawnSpec(${JSON.stringify(params)});
+          const result = spawnSync(spec.command, spec.args, { ...spec.options, encoding: "utf8" });
+          if (result.error) throw result.error;
+          process.stdout.write(result.stdout);
+          process.stderr.write(result.stderr);
+          process.exitCode = result.status ?? 1;
+        `,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        entrypoint: path.join(tempDir, entrypoint),
+        npmExecPath:
+          envMode === "selected" ? selectedPath : envMode === "empty" ? null : parentPath,
+        args: ["literal & argument"],
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 
   it("uses npm_execpath when it points to a JS pnpm entrypoint", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "pnpm-runner-"));
@@ -242,19 +306,28 @@ describe("resolvePnpmRunner", () => {
     });
   });
 
-  posixIt("does not resolve executables from the parent PATH for an explicit empty env", () => {
-    expect(
-      resolvePnpmRunner({
-        npmExecPath: "",
-        env: {},
-        pnpmArgs: ["exec", "vitest", "run"],
-        platform: "linux",
-      }),
-    ).toEqual({
-      command: "pnpm",
-      args: ["exec", "vitest", "run"],
-      shell: false,
-    });
+  posixIt("does not resolve parent npm_execpath or PATH for an explicit empty env", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "pnpm-runner-empty-env-"));
+    const npmExecPath = path.join(tempDir, "pnpm");
+    try {
+      writeFileSync(npmExecPath, "#!/usr/bin/env node\n");
+      chmodSync(npmExecPath, 0o755);
+      vi.stubEnv("npm_execpath", npmExecPath);
+      vi.stubEnv("PATH", tempDir);
+      expect(
+        resolvePnpmRunner({
+          env: {},
+          pnpmArgs: ["exec", "vitest", "run"],
+          platform: "linux",
+        }),
+      ).toEqual({
+        command: "pnpm",
+        args: ["exec", "vitest", "run"],
+        shell: false,
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   posixIt("resolves relative PATH entries from the child working directory", () => {

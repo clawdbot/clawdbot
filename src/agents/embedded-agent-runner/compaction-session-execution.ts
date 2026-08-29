@@ -38,6 +38,8 @@ import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compa
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { createAgentSessionForEmbeddedRunner } from "../sessions/sdk.js";
+import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
+import { normalizeUsage, type UsageLike } from "../usage.js";
 import { resolveCompactionFailure } from "./compact-reasons.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import {
@@ -67,6 +69,7 @@ import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
+import { readCompactionUsageRecorder } from "./run/compaction-usage-bridge.js";
 import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import { applySystemPromptToSession } from "./system-prompt.js";
@@ -148,6 +151,18 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         sessionTarget,
       });
       compactionSessionManager = sessionManager;
+      const usageRecorder = readCompactionUsageRecorder(params.contextEngineRuntimeContext);
+      const recordUsage = usageRecorder
+        ? (usage: UsageLike) => {
+            const normalized = normalizeUsage(usage);
+            if (normalized) {
+              usageRecorder(normalized);
+            }
+          }
+        : undefined;
+      if (recordUsage) {
+        setSessionModelUsageSink(sessionManager, recordUsage);
+      }
       const settingsManager = createPreparedEmbeddedAgentSettingsManager({
         cwd: effectiveCwd,
         agentDir,
@@ -446,6 +461,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             extraParams: effectiveExtraParams,
             customInstructions: params.customInstructions,
             config: params.config,
+            onUsage: recordUsage,
             requestOptions: {
               apiKey: transportApiKey,
               sessionId: params.sessionId,
@@ -631,6 +647,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     });
     return fail(failure.reason, failure.error);
   } finally {
+    setSessionModelUsageSink(compactionSessionManager, null);
     if (!checkpointSnapshotRetained) {
       await compactionCheckpointStore.cleanupSnapshot(checkpointSnapshot);
     }

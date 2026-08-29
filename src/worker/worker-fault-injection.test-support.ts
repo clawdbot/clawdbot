@@ -72,6 +72,7 @@ const BUNDLE_ARTIFACT = {
 };
 const PROVIDER: WorkerProvider = {
   id: "fake",
+  resolveAllocation: async () => ({ leaseId: "lease-fault", sharedHost: false }),
   provision: async () => ({ leaseId: "lease-fault", ssh: SSH_ENDPOINT }),
   inspect: async () => ({ status: "active" }),
   destroy: async () => {},

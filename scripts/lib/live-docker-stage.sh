@@ -83,6 +83,23 @@ openclaw_live_run_setup_command() {
   fi
 }
 
+openclaw_live_prepare_cli_backend() {
+  local command_path="${1:?CLI command required}"
+  local package="${2:-}"
+  local timeout_seconds="${3:?setup timeout required}"
+  local pinned=0
+  case "$package" in
+    @*/*@* | [!@]*@*) pinned=1 ;;
+  esac
+  if [[ -n "$package" ]] && { [[ ! -x "$(command -v "$command_path" || true)" ]] || ((pinned)); }; then
+    openclaw_live_run_setup_command "$timeout_seconds" "live CLI backend setup" npm install -g "$package" || return $?
+  fi
+  if [[ ! -x "$(command -v "$command_path" || true)" ]]; then
+    echo "ERROR: CLI backend executable was not provisioned: $command_path (package=${package:-none})." >&2
+    return 127
+  fi
+}
+
 openclaw_live_stage_source_tree() {
   local dest_dir="${1:?destination directory required}"
   local stage_mode="${OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE:-copy}"

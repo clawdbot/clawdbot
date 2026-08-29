@@ -69,7 +69,7 @@ export class BoundaryInputSnapshot {
     string,
     { files: string[]; roots: string[]; options: ts.CompilerOptions }
   >();
-  private topology?: string;
+  private topology?: { name: string; directory: string }[];
   private tools?: string;
   readonly rootDir: string;
   constructor(rootDir: string) {
@@ -131,13 +131,12 @@ export class BoundaryInputSnapshot {
     return result;
   }
 
-  private namespace() {
+  private namespace(outputRoot?: string) {
     if (this.topology === undefined) {
-      const names: string[] = [];
+      const names: { name: string; directory: string }[] = [];
       const visited = new Map<string, boolean>();
       const active = new Set<string>();
-      const visit = (directory: string, installed = false) => {
-        const realDirectory = fs.realpathSync(directory);
+      const visit = (directory: string, realDirectory: string, installed = false) => {
         if (
           active.has(realDirectory) ||
           visited.get(realDirectory) === true ||
@@ -149,8 +148,9 @@ export class BoundaryInputSnapshot {
         // Upgrade that traversal once; active ancestors still fence link cycles.
         visited.set(realDirectory, installed);
         active.add(realDirectory);
+        const add = (name: string) => names.push({ name, directory: realDirectory });
         const entries = fs
-          .readdirSync(directory, { withFileTypes: true })
+          .readdirSync(realDirectory, { withFileTypes: true })
           .toSorted((left, right) => (left.name < right.name ? -1 : 1));
         for (const entry of entries) {
           const file = path.join(directory, entry.name);
@@ -159,6 +159,12 @@ export class BoundaryInputSnapshot {
             !installed &&
             [".git", ".artifacts", ".claude", ".agents", ".local", "dist"].includes(entry.name)
           ) {
+            continue;
+          }
+          // Tool scratch (.vite-temp bundles, jiti/vitest caches) churns under
+          // installed roots while sibling tasks run and would flip the topology
+          // digest mid-compile. Resolution never enters dot-entries except .pnpm.
+          if (installed && entry.name !== ".pnpm" && entry.name.startsWith(".")) {
             continue;
           }
           if (
@@ -170,22 +176,27 @@ export class BoundaryInputSnapshot {
           }
           let isDirectory = entry.isDirectory();
           if (entry.isSymbolicLink()) {
-            names.push(`${id}->${fs.readlinkSync(file)}`);
+            add(`${id}->${fs.readlinkSync(file)}`);
             try {
               isDirectory = fs.statSync(file).isDirectory();
             } catch (error) {
               if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
                 throw error;
               }
-              names.push(`${id}:missing`);
+              add(`${id}:missing`);
               continue;
             }
-            names.push(`${id}:${isDirectory ? "directory" : "file"}`);
+            add(`${id}:${isDirectory ? "directory" : "file"}`);
           }
           if (isDirectory) {
-            visit(file, installed || entry.name === "node_modules");
+            // Extend the canonical parent path for ordinary children; resolve only links.
+            // Rewalking every ancestor multiplies metadata calls across installed trees.
+            const canonical = entry.isSymbolicLink()
+              ? fs.realpathSync(file)
+              : path.join(realDirectory, entry.name);
+            visit(file, canonical, installed || entry.name === "node_modules");
           } else if (/\.(?:[cm]?[jt]sx?|json)$/u.test(entry.name)) {
-            names.push(id);
+            add(id);
           }
         }
         active.delete(realDirectory);
@@ -193,10 +204,21 @@ export class BoundaryInputSnapshot {
       // A failed lookup can be outside declared roots. Name/existence changes in
       // the local resolution namespace invalidate conservatively; unrelated byte
       // edits do not. Installed package contents are included, not just lockfiles.
-      visit(this.rootDir);
-      this.topology = digest(names.toSorted().join("\0"));
+      visit(this.rootDir, fs.realpathSync(this.rootDir));
+      this.topology = names.toSorted((left, right) => (left.name < right.name ? -1 : 1));
     }
-    return this.topology;
+    // Workspace aliases can expose this producer's outputs as installed inputs.
+    // Keep their link identities, and retain the same subtree for other consumers.
+    return digest(
+      this.topology
+        .filter(
+          ({ directory }) =>
+            !outputRoot ||
+            (directory !== outputRoot && !directory.startsWith(`${outputRoot}${path.sep}`)),
+        )
+        .map(({ name }) => name)
+        .join("\0"),
+    );
   }
 
   private toolchain() {
@@ -214,13 +236,14 @@ export class BoundaryInputSnapshot {
     return this.tools;
   }
 
-  signature(config: string, args: string[], inputs: string[]) {
+  signature(config: string, args: string[], inputs: string[], outputRoot?: string) {
     const parsed = this.config(config);
     return digest(
       JSON.stringify(
         [
           ARTIFACT_CACHE_VERSION,
-          this.namespace(),
+          this.namespace(outputRoot),
+          outputRoot,
           this.toolchain(),
           config,
           args,
@@ -247,7 +270,7 @@ export class BoundaryInputSnapshot {
     try {
       return (
         record?.inputs !== undefined &&
-        record.signature === this.signature(config, args, record.inputs) &&
+        record.signature === this.signature(config, args, record.inputs, outputRoot) &&
         required.every((file) => Object.hasOwn(record.outputs, file)) &&
         (!outputRoot ||
           listCacheFiles(
@@ -272,6 +295,7 @@ export class BoundaryInputSnapshot {
     outputs: string[],
     before: BoundaryInputSnapshot,
     startedAt: number,
+    outputRoot?: string,
   ): ArtifactRecord {
     const info: { fileNames: string[]; fileInfos: unknown[]; packageJsons?: string[] } = JSON.parse(
       this.read(buildInfo).bytes.toString("utf8"),
@@ -292,9 +316,9 @@ export class BoundaryInputSnapshot {
     ]
       .map((file) => portableRelativePath(this.rootDir, file))
       .toSorted();
-    const signature = this.signature(config, args, inputs);
+    const signature = this.signature(config, args, inputs, outputRoot);
     if (
-      before.namespace() !== this.namespace() ||
+      before.namespace(outputRoot) !== this.namespace(outputRoot) ||
       before.toolchain() !== this.toolchain() ||
       JSON.stringify(before.config(config)) !== JSON.stringify(this.config(config)) ||
       before.config(config).files.some((file) => before.hash(file) !== this.hash(file))

@@ -311,7 +311,7 @@ function toolRequiredDenyFindings(
           message: `${toolPostureLabel(entry)} does not deny required tool '${tool}'.`,
           requirement: `oc://${policyDocName}/${requirementBase}/denyTools`,
           fixHint:
-            "Add the tool or group to tools.deny/agents.list[].tools.deny, or update policy after review.",
+            "Add the tool or group to tools.deny/agents.entries.<id>.tools.deny, or update policy after review.",
         }),
       );
     }

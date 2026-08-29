@@ -106,6 +106,7 @@ function resolveThinkingPolicyContext(params: {
     ? normalizeProviderId(thinkingPolicyProvider ?? providerRaw)
     : "";
   return {
+    catalogEntry: candidate,
     normalizedProvider,
     modelId,
     modelKey,
@@ -233,6 +234,7 @@ export function resolveThinkingProfile(params: {
   const providerProfileParams = {
     provider: context.normalizedProvider,
     context: providerContext,
+    ...(context.catalogEntry ? { catalogEntry: context.catalogEntry } : {}),
   };
   const providerProfile =
     typeof params.providerPolicySource === "object"

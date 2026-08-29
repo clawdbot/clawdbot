@@ -68,6 +68,8 @@ export function buildGatewaySessionEventFields(params: {
     previousSessionId: sessionRow.previousSessionId,
     label: params.label ?? sessionRow.label ?? null,
     icon: sessionRow.icon ?? null,
+    // Explicit null so subscribed clients drop a cleared color during merge-reconcile.
+    color: sessionRow.color ?? null,
     channelAvatarUrl: sessionRow.channelAvatarUrl ?? null,
     // Explicit null so subscribed clients drop a cleared category during merge-reconcile.
     category: sessionRow.category ?? null,

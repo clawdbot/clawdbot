@@ -318,6 +318,7 @@ describeLive("subagent announce live", () => {
         auth: { mode: "token", token },
         controlUiEnabled: false,
       });
+      await server.startupSettled;
       client = await createGatewayClient({ port, token });
 
       let initialError: unknown;
@@ -510,6 +511,7 @@ describeLive("subagent announce live", () => {
         auth: { mode: "token", token },
         controlUiEnabled: false,
       });
+      await server.startupSettled;
       client = await createGatewayClient({ port, token });
 
       let initialError: unknown;
@@ -726,6 +728,7 @@ describeLive("subagent announce live", () => {
         auth: { mode: "token", token },
         controlUiEnabled: false,
       });
+      await server.startupSettled;
       client = await createGatewayClient({ port, token });
 
       let initialError: unknown;

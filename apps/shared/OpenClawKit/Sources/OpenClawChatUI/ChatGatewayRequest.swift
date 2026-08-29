@@ -364,6 +364,7 @@ public enum OpenClawChatGatewayRequests {
         expectedSessionID: String? = nil,
         label: String??,
         category: String??,
+        color: String?? = nil,
         pinned: Bool?,
         archived: Bool?,
         unreadPatch: OpenClawChatSessionUnreadPatch?) -> OpenClawChatGatewayRequest
@@ -379,6 +380,9 @@ public enum OpenClawChatGatewayRequests {
         }
         if let category {
             params["category"] = category.map(AnyCodable.init) ?? AnyCodable(NSNull())
+        }
+        if let color {
+            params["color"] = color.map(AnyCodable.init) ?? AnyCodable(NSNull())
         }
         if let pinned {
             params["pinned"] = AnyCodable(pinned)

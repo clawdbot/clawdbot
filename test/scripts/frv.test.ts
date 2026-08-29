@@ -418,6 +418,55 @@ describe("FRV immutable plan eligibility", () => {
 });
 
 describe("FRV continuation preflight", () => {
+  it("rejects parent-owned candidate artifacts before any GitHub access", async () => {
+    const selected = child("normalCi", "101");
+    const parentOwnedPlan = {
+      ...plan([selected]),
+      candidate: { producer: { runId: "77" } },
+    };
+    let reads = 0;
+    let mutations = 0;
+    const read = async () => {
+      reads += 1;
+      throw new Error("unexpected GitHub read");
+    };
+    const mutate = async () => {
+      mutations += 1;
+    };
+
+    await expect(
+      continueFailed(parentOwnedPlan, "77", {
+        getAttemptJobs: read,
+        getJobLog: read,
+        getParentJobs: read,
+        getRun: read,
+        getRunAttempt: read,
+        repository: REPOSITORY,
+        rerunFailed: mutate,
+        rerunParent: mutate,
+        verify: mutate,
+      }),
+    ).rejects.toThrow(
+      "parent-owned sealed candidate artifacts do not survive parent reruns; start a fresh all-group FRV",
+    );
+    expect(reads).toBe(0);
+    expect(mutations).toBe(0);
+  });
+
+  it.each([
+    ["candidate-free", undefined],
+    ["externally produced", { producer: { runId: "88" } }],
+  ])("allows %s plans through candidate ownership preflight", async (_label, candidate) => {
+    const selected = child("normalCi", "101");
+    await expect(
+      preflightContinuation(
+        { ...plan([selected]), candidate },
+        "77",
+        preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
+      ),
+    ).resolves.toMatchObject({ id: 77 });
+  });
+
   it("rejects fail-fast roots before any rerun mutation", async () => {
     const selected = child("normalCi", "101");
     let mutations = 0;

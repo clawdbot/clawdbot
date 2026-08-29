@@ -20,7 +20,7 @@ pr_subcommand_classification() {
     ls | ci-dispatch)
       printf 'advisory\n'
       ;;
-    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run)
+    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover)
       printf 'landing\n'
       ;;
     *) return 1 ;;
@@ -158,7 +158,7 @@ is_locked_pr_command() {
 
 is_main_only_pr_command() {
   case "$1" in
-    prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run) return 0 ;;
+    prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -214,6 +214,9 @@ Usage:
     --auto-merge selects pinned immediate squash for MERGEABLE/CLEAN, auto for MERGEABLE/BEHIND.
     OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery
+    Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
+    Keeps prior evidence and reruns admission; requires the same head/method and no auto/queue/admin route.
 
   --dev-wrapper permits a mismatched local wrapper only for subcommands
   classified advisory. OPENCLAW_PR_DEV_WRAPPER=1 is equivalent.
@@ -311,6 +314,9 @@ main() {
         usage
         exit 2
       fi
+      ;;
+    merge-recover)
+      [ "$#" -eq 3 ] && [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = "--confirmed-operator-recovery" ] || { usage; exit 2; }
       ;;
     review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify)
       [ "$#" -ge 1 ] || { usage; exit 2; }
@@ -441,6 +447,9 @@ main() {
         auto_merge=true
       fi
       merge_run "$pr" "$auto_merge"
+      ;;
+    merge-recover)
+      merge_run "$1" false "$2"
       ;;
     *)
       usage

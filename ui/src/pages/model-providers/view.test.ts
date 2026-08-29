@@ -31,6 +31,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     refreshing: false,
     error: null,
     providerUsageFailed: false,
+    supplementalLoading: false,
     updatedAt: 1,
     costDays: 30,
     credentialAgentLabel: "Writer",

@@ -1301,6 +1301,47 @@ describe("dispatchReplyFromConfig", () => {
     }
   });
 
+  it("lets low-level channel turns reach queue resolution while a reply operation is active", async () => {
+    setNoAbort();
+    const { createRuntimeChannel } = await import("../../plugins/runtime/runtime-channel.js");
+    const lowLevelDispatch = createRuntimeChannel().reply.dispatchReplyFromConfig;
+    const sessionKey = "agent:main:dingtalk-connector:direct:1";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => {
+      activeOperation.abortByUser();
+      activeOperation.complete();
+      return { text: "newest reply" } satisfies ReplyPayload;
+    });
+    const resultPromise = lowLevelDispatch({
+      ctx: buildTestCtx({
+        Provider: "dingtalk-connector",
+        Surface: "dingtalk-connector",
+        SessionKey: sessionKey,
+        BodyForAgent: "interrupt this active turn",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    try {
+      await vi.waitFor(() => expect(replyResolver).toHaveBeenCalledOnce());
+      await expect(resultPromise).resolves.toMatchObject({ queuedFinal: true });
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "newest reply" });
+    } finally {
+      if (!activeOperation.result) {
+        activeOperation.complete();
+      }
+      await Promise.allSettled([resultPromise]);
+    }
+  });
+
   it("lets Gateway-owned turns reach queue resolution while a reply operation is active", async () => {
     setNoAbort();
     const sessionKey = "agent:main:main";

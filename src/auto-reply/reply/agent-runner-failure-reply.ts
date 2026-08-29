@@ -35,7 +35,13 @@ import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildCodexLoginRecovery } from "../codex-login-recovery.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -309,6 +315,28 @@ export function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload:
     marked.isError = true;
   }
   return marked;
+}
+
+export function markPostCompactionModelFailurePayload(
+  postCompactionModelFailure: true | undefined,
+  payload: ReplyPayload,
+): ReplyPayload {
+  return postCompactionModelFailure === true &&
+    payload.isError === true &&
+    isReplyPayloadTerminalContent(payload) &&
+    typeof payload.text === "string"
+    ? setReplyPayloadMetadata(payload, { postCompactionModelFailure: true })
+    : payload;
+}
+
+export function renderPostCompactionModelFailurePayload(payload: ReplyPayload): ReplyPayload {
+  return getReplyPayloadMetadata(payload)?.postCompactionModelFailure === true &&
+    typeof payload.text === "string"
+    ? copyReplyPayloadMetadata(payload, {
+        ...payload,
+        text: `⚠️ Context compaction succeeded, but the later model request still failed. ${payload.text.replace(/^⚠️\s*/u, "")}`,
+      })
+    : payload;
 }
 
 export function buildTerminalAgentRunFailureReplyPayload(params: {

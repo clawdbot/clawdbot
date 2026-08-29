@@ -21,6 +21,7 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
+import { renderPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import {
@@ -316,7 +317,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         suppressionReason: preparation.reason,
       };
     }
-    const payload = preparation.payload;
+    const payload = renderPostCompactionModelFailurePayload(preparation.payload);
     const payloadMetadata = getReplyPayloadMetadata(payload);
     const expectedWriterRunId = normalizeOptionalString(params.replyOptions?.runId);
     const expectedLifecycleRevision = sessionStoreEntry.entry?.lifecycleRevision;
@@ -676,7 +677,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
   }
 
-  const dispatchAcquisition = await state.ensureDispatchReplyOperation("dispatch");
+  const dispatchAcquisition = await state.ensureDispatchReplyOperation(
+    state.activeRunSafeCommandTurn ? "command_resolution" : "dispatch",
+  );
   if (dispatchAcquisition.status === "aborted") {
     return { status: "complete" as const, result: state.finishReplyOperationAbortedDispatch() };
   }

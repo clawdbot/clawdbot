@@ -543,10 +543,18 @@ describe("skill experience review prompt", () => {
     expect(prompt).toContain("One mutation at most, smallest mutation first");
     expect(prompt).toContain("prepare_patch with one non-empty unique old_string, then patch");
     expect(prompt).toContain("Reading and preparing do not spend the mutation");
+    expect(prompt).toContain("Only writable workspace skills can be read or updated");
+    expect(prompt).toContain("only when no writable skill covers this class of work");
     expect(prompt).toContain("Writable skills:");
     expect(prompt).toContain("- release-runbook — Ship releases");
     expect(prompt).toContain("- local-notes — Local workflow (user-authored)");
     expect(prompt).not.toContain("Trajectory:");
+
+    const emptyWorkspacePrompt = buildSkillExperienceReviewPrompt({
+      ctx: { runId: "run-1" },
+      existingSkills: [],
+    });
+    expect(emptyWorkspacePrompt).toContain("Writable skills: none.");
   });
 
   it("caps used and writable skill lists", () => {
@@ -576,7 +584,10 @@ describe("skill experience review prompt", () => {
     const prompt = build(usedSkills.toReversed());
 
     expect(prompt).toBe(build(usedSkills));
-    const receipt = prompt.slice(prompt.indexOf("Skills actually used in this trajectory"));
+    const receipt = prompt.slice(
+      prompt.indexOf("Skills actually used in this trajectory"),
+      prompt.indexOf("\n\nWritable skills:"),
+    );
     expect(receipt).toContain(
       "Skills actually used in this trajectory (authoritative runtime receipt):",
     );

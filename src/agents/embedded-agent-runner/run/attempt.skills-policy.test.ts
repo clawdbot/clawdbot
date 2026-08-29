@@ -159,7 +159,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
 
     reviewRunEmbeddedAgent.mockImplementation(async (params: RunEmbeddedAgentParams) => {
       snapshots.push(captureToolSurface(params));
-      return {};
+      return { meta: { durationMs: 1 } };
     });
     const reviewCandidate: ExperienceReviewCandidate = {
       ctx: {

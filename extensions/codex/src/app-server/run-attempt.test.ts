@@ -1799,8 +1799,8 @@ describe("runCodexAppServerAttempt", () => {
       stream: "tool",
       data: {
         phase: "start",
-        hideFromChannelProgress: true,
         name: "python",
+        itemId: "call-1",
         toolCallId: "call-1",
         args: { code: "print('hi')" },
       },
@@ -1809,8 +1809,8 @@ describe("runCodexAppServerAttempt", () => {
       stream: "tool",
       data: {
         phase: "result",
-        hideFromChannelProgress: true,
         name: "python",
+        itemId: "call-1",
         toolCallId: "call-1",
         isError: true,
         result: {

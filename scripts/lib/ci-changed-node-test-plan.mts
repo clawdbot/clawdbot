@@ -62,6 +62,7 @@ const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane
   "scripts/e2e/cron-mcp-cleanup-seed.ts": ["cron-mcp-cleanup"],
   "scripts/e2e/docker-openai-seed.ts": MCP_DOCKER_SEED_LANES,
   "scripts/e2e/lib/mcp-code-mode-probe-server.ts": ["mcp-code-mode-gateway"],
+  "scripts/e2e/lib/mcp-code-mode/scenario.sh": ["mcp-code-mode-gateway"],
   "scripts/e2e/lib/update-channel-switch/assertions.mjs": ["update-channel-switch"],
   "scripts/e2e/mcp-channels-seed.ts": ["mcp-channels"],
   "scripts/e2e/mcp-code-mode-gateway-seed.ts": ["mcp-code-mode-gateway"],

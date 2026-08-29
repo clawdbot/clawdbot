@@ -18,7 +18,7 @@ const native = path.join(
   path.dirname(require.resolve("@typescript/native-preview/package.json")),
   "lib/tsgo.js",
 );
-function fixture(noEmit = false) {
+function fixture(noEmit = false, outputRoot = "dist") {
   const root = fs.realpathSync(roots.make("native-boundary-cache-"));
   const write = (file: string, bytes: string) => {
     const target = path.join(root, file);
@@ -35,7 +35,7 @@ function fixture(noEmit = false) {
         allowJs: true,
         declaration: true,
         incremental: true,
-        outDir: "dist",
+        outDir: outputRoot,
         rootDir: ".",
         skipLibCheck: true,
       },
@@ -52,7 +52,7 @@ function fixture(noEmit = false) {
   write("unrelated/source.ts", "export const unrelated = 1;");
   write("src/api.test.ts", "export const test = 1;");
   const config = "tsconfig.json";
-  const buildInfo = "dist/.tsbuildinfo";
+  const buildInfo = `${outputRoot}/.tsbuildinfo`;
   const args = [
     "-p",
     path.join(root, config),
@@ -61,9 +61,11 @@ function fixture(noEmit = false) {
     path.join(root, buildInfo),
     "--listEmittedFiles",
   ];
+  const ownedOutputRoot = noEmit ? undefined : path.join(root, outputRoot);
   const prepare = () => {
+    fs.mkdirSync(path.join(root, outputRoot), { recursive: true });
     const before = new BoundaryInputSnapshot(root);
-    before.signature(config, args, []);
+    before.signature(config, args, [], ownedOutputRoot);
     fs.rmSync(path.join(root, buildInfo), { force: true });
     const startedAt = Date.now();
     const result = spawnSync(process.execPath, [native, ...args], { encoding: "utf8" });
@@ -83,11 +85,121 @@ function fixture(noEmit = false) {
       run.files,
       run.before,
       run.startedAt,
+      ownedOutputRoot,
     );
-  return { root, write, config, args, prepare, seal, outputRoot: noEmit ? undefined : "dist" };
+  return { root, write, config, args, prepare, seal, outputRoot: ownedOutputRoot };
 }
 
 describe("native owner content records", () => {
+  it("traverses deep namespace candidates without resolving ordinary ancestors again", () => {
+    const f = fixture(true);
+    const depth = 32;
+    const nested = `namespace/${"nested/".repeat(depth)}`;
+    f.write(`${nested}candidate.ts`, "export {};");
+    const originalRealpath = fs.realpathSync;
+    let resolutions = 0;
+    fs.realpathSync = new Proxy(originalRealpath, {
+      apply(target, receiver, args) {
+        resolutions += 1;
+        return Reflect.apply(target, receiver, args);
+      },
+    });
+    let first: string;
+    try {
+      const snapshot = new BoundaryInputSnapshot(f.root);
+      first = snapshot.signature(f.config, f.args, []);
+      expect(snapshot.signature(f.config, f.args, [])).toBe(first);
+    } finally {
+      fs.realpathSync = originalRealpath;
+    }
+    expect(resolutions).toBeLessThan(depth);
+    f.write(`${nested}added.ts`, "export {};");
+    expect(new BoundaryInputSnapshot(f.root).signature(f.config, f.args, [])).not.toBe(first);
+  });
+
+  it("seals a cold producer reached through its own workspace package alias", () => {
+    const f = fixture(false, "packages/sdk/dist");
+    f.write("packages/sdk/package.json", '{"name":"fixture-sdk","type":"module"}');
+    fs.mkdirSync(path.join(f.root, "node_modules"));
+    fs.symlinkSync("../packages/sdk", path.join(f.root, "node_modules/fixture-sdk"), "dir");
+    fs.symlinkSync(".", path.join(f.root, "packages/sdk/self"), "dir");
+
+    const record = f.seal(f.prepare());
+    expect(record.outputs["packages/sdk/dist/src/api.d.ts"]).toBeDefined();
+    expect(
+      new BoundaryInputSnapshot(f.root).matches(
+        record,
+        f.config,
+        f.args,
+        Object.keys(record.outputs),
+        f.outputRoot,
+      ),
+    ).toBe(true);
+    fs.unlinkSync(path.join(f.root, "node_modules/fixture-sdk"));
+    expect(
+      new BoundaryInputSnapshot(f.root).matches(
+        record,
+        f.config,
+        f.args,
+        Object.keys(record.outputs),
+        f.outputRoot,
+      ),
+    ).toBe(false);
+  });
+
+  it("retains upstream output topology when a producer snapshot is reused by a consumer", () => {
+    const f = fixture(false, "packages/sdk/dist");
+    f.write("packages/sdk/package.json", '{"name":"fixture-sdk","type":"module"}');
+    f.write("consumer.json", '{"extends":"./base.json","files":["consumer.ts"]}');
+    f.write(
+      "consumer.ts",
+      'import { value } from "fixture-sdk/dist/nested/value.js"; const expected: 1 = value;',
+    );
+    fs.mkdirSync(path.join(f.root, "node_modules"));
+    fs.symlinkSync("../packages/sdk", path.join(f.root, "node_modules/fixture-sdk"), "dir");
+    const producer = f.prepare();
+    const shared = new BoundaryInputSnapshot(f.root);
+    shared.record(
+      f.config,
+      f.args,
+      "packages/sdk/dist/.tsbuildinfo",
+      producer.files,
+      producer.before,
+      producer.startedAt,
+      f.outputRoot,
+    );
+    const config = "consumer.json";
+    const metadata = ".artifacts/consumer.tsbuildinfo";
+    const args = [
+      "-p",
+      path.join(f.root, config),
+      "--noEmit",
+      "--incremental",
+      "--tsBuildInfoFile",
+      path.join(f.root, metadata),
+    ];
+    shared.signature(config, args, []);
+    const startedAt = Date.now();
+    const compiled = spawnSync(process.execPath, [native, ...args], { encoding: "utf8" });
+    expect(compiled.status, compiled.stdout + compiled.stderr).toBe(0);
+    const record = new BoundaryInputSnapshot(f.root).record(
+      config,
+      args,
+      metadata,
+      [metadata],
+      shared,
+      startedAt,
+    );
+    const matches = () =>
+      new BoundaryInputSnapshot(f.root).matches(record, config, args, [metadata]);
+    expect(matches()).toBe(true);
+    f.write("packages/sdk/dist/nested/value.ts", 'export const value = "changed";');
+    expect(matches()).toBe(false);
+    const changed = spawnSync(process.execPath, [native, ...args], { encoding: "utf8" });
+    expect(changed.status, changed.stdout + changed.stderr).toBe(1);
+    expect(changed.stdout).toContain("TS2322");
+  });
+
   it.each(["node_modules", "package", "source"])(
     "invalidates new resolution candidates behind linked %s directories",
     (layout) => {
@@ -165,6 +277,28 @@ describe("native owner content records", () => {
     expect(matches()).toBe(true);
     fs.unlinkSync(link);
     fs.symlinkSync(`${target}-other`, link, kind === "directory" ? "dir" : "file");
+    expect(matches()).toBe(false);
+  });
+
+  it("ignores tool scratch churn under installed roots", () => {
+    const f = fixture(true);
+    fs.mkdirSync(path.join(f.root, "node_modules"));
+    const run = f.prepare();
+    // Sibling config loads mint these between the before and seal walks.
+    f.write("node_modules/.vite-temp/vitest.config.ts.timestamp-1-a.mjs", "export default {};");
+    const record = f.seal(run);
+    const matches = () =>
+      new BoundaryInputSnapshot(f.root).matches(
+        record,
+        f.config,
+        f.args,
+        Object.keys(record.outputs),
+      );
+    expect(matches()).toBe(true);
+    fs.rmSync(path.join(f.root, "node_modules/.vite-temp"), { recursive: true });
+    f.write("node_modules/.cache/jiti/config.deadbeef.mjs", "export default {};");
+    expect(matches()).toBe(true);
+    f.write("node_modules/.pnpm/pkg@1.0.0/node_modules/pkg/index.js", "export const value = 1;");
     expect(matches()).toBe(false);
   });
 

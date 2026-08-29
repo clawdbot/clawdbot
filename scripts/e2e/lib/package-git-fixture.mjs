@@ -43,6 +43,8 @@ function prepare(root) {
   ensureDependencyIgnores(root);
   const packageJsonPath = path.join(root, "package.json");
   const packageJson = readJson(packageJsonPath);
+  // npm still resolves omitted dev dependencies; this fixture runs the packed runtime.
+  delete packageJson.devDependencies;
   packageJson.scripts = {
     ...packageJson.scripts,
     openclaw: "node openclaw.mjs",

@@ -977,7 +977,7 @@ print_log_tail "$LOG_PATH"
 
     expect(buildIndex).toBeGreaterThanOrEqual(0);
     expect(unsetIndex).toBeGreaterThan(buildIndex);
-    expect(script).toContain("host/testbox mode flags that can change packaged behavior");
+    expect(unsetIndex).toBeLessThan(script.indexOf("docker_e2e_run_with_harness"));
   });
 
   it("wraps centralized Docker builds with the timeout helper", () => {
@@ -5163,7 +5163,6 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
 
   it("wires the Codex npm plugin live assertion boundary into Docker", () => {
     const runner = readFileSync(CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH, "utf8");
-    const assertions = readFileSync("scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs", "utf8");
     expectTextToIncludeAll(runner, [
       "docker_e2e_print_log /tmp/openclaw-codex-plugin-pack.log",
       "scripts/e2e/lib/plugins/npm-registry-server.mjs",
@@ -5195,11 +5194,6 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       "final=true and send exactly",
     ]);
     expect(runner).not.toContain("--timeout 420");
-    expectTextToIncludeAll(assertions, [
-      'Requested agent harness "codex" is not registered',
-      "Unknown model: codex/",
-      'Agent harness runtime "codex" is not present in the prepared registry.',
-    ]);
   });
 
   it("prints the OpenAI chat-tools gateway log when startup exits early", () => {

@@ -268,7 +268,7 @@ function resolveCodexHarnessThinkingLevel(raw: string | undefined): CodexHarness
   return normalized as CodexHarnessThinkingLevel;
 }
 
-function resolveCodexHarnessExpectedRequestEffort(modelId: string): string | null {
+function resolveCodexHarnessExpectedAppServerEffort(modelId: string): string | null {
   const configured = process.env.OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT;
   if (configured?.trim()) {
     const expected = resolveCodexHarnessThinkingLevel(configured);
@@ -742,7 +742,7 @@ function recordCodexAttemptIdentity(params: {
   expect(turnStarting?.data).toMatchObject({ model: expectedModel });
   const actualEffort = turnStarting?.data?.effort;
   const actualCollaborationEffort = turnStarting?.data?.collaborationEffort;
-  const expectedEffort = resolveCodexHarnessExpectedRequestEffort(expectedModel);
+  const expectedEffort = resolveCodexHarnessExpectedAppServerEffort(expectedModel);
   expect(actualEffort ?? null).toBe(expectedEffort);
   expect(actualCollaborationEffort ?? null).toBe(actualEffort ?? null);
   if (CODEX_HARNESS_FULL_CONTEXT) {

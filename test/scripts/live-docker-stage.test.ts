@@ -1,6 +1,6 @@
 // Live Docker Stage tests cover live docker stage script behavior.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -52,6 +52,60 @@ describe("live Docker state staging", () => {
     expect(settings.privacy).toEqual({ usageStatisticsEnabled: false });
     expect(readFileSync(settingsPath, "utf8")).not.toContain("test-gemini-key");
     expect(readFileSync(settingsPath, "utf8")).not.toContain("test-google-key");
+  });
+
+  it("installs missing CLI executables and refreshes pinned packages", () => {
+    const root = tempDirs.make("openclaw-live-stage-cli-");
+    const binDir = path.join(root, "bin");
+    mkdirSync(binDir);
+    const npmPath = path.join(binDir, "npm");
+    writeFileSync(
+      npmPath,
+      '#!/usr/bin/env bash\nset -eu\nprintf "%s\\n" "$3" >> "$INSTALL_LOG"\nprintf "#!/usr/bin/env bash\\nprintf fixture-ok" > "$CLI_PATH"\nchmod +x "$CLI_PATH"\n',
+    );
+    chmodSync(npmPath, 0o755);
+    const installLog = path.join(root, "installs.log");
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -euo pipefail; source "$1"; openclaw_live_prepare_cli_backend "$CLI_PATH" @fixture/backend 10; "$CLI_PATH"; openclaw_live_prepare_cli_backend "$CLI_PATH" @fixture/backend 10; openclaw_live_prepare_cli_backend "$CLI_PATH" @fixture/backend@1.0.0 10',
+        "test",
+        stageScriptPath,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH}`,
+          CLI_PATH: path.join(binDir, "fixture"),
+          INSTALL_LOG: installLog,
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("fixture-ok");
+    expect(readFileSync(installLog, "utf8").trim().split("\n")).toEqual([
+      "@fixture/backend",
+      "@fixture/backend@1.0.0",
+    ]);
+  });
+
+  it("fails explicitly when a selected backend has no executable or install package", () => {
+    const root = tempDirs.make("openclaw-live-stage-cli-missing-");
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -euo pipefail; source "$1"; openclaw_live_prepare_cli_backend "$2" "" 10',
+        "test",
+        stageScriptPath,
+        path.join(root, "missing-cli"),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(127);
+    expect(result.stderr).toContain("CLI backend executable was not provisioned:");
   });
 
   it("keeps repo-local generated artifacts out of the source copy", () => {

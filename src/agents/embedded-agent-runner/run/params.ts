@@ -386,6 +386,8 @@ export type RunEmbeddedAgentParams = {
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   /** Synchronous private observer for the sanitized per-tool result. */
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
+  /** Reports a committed generic recovery compaction before its retry starts. */
+  onAutoCompactionSucceeded?: (count: number) => void;
   onAgentEvent?: (evt: EmbeddedAgentEvent) => void | Promise<void>;
   onToolStreamBoundary?: () => void | Promise<void>;
   /**

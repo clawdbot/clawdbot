@@ -28,10 +28,7 @@ import type {
 } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
-import {
-  loadCachedSessionSharingSnapshot,
-  type SessionSharingSnapshot,
-} from "./session-sharing-snapshot-cache.js";
+import { loadCachedSessionSharingSnapshot } from "./session-sharing-snapshot-cache.js";
 import {
   isRequiredSessionTargetMethod,
   isSessionProfileDependentMethod,
@@ -628,16 +625,13 @@ export function resolveSessionMutationAuthorization(params: {
   };
 }
 
-function loadSharingSnapshot(
-  cfg: OpenClawConfig,
-  sessionKey: string,
-  agentId?: string,
-): SessionSharingSnapshot {
+function loadSharingSnapshot(params: Parameters<typeof resolveSessionSharingTarget>[0]) {
+  const { sessionKey, agentId } = params;
   return loadCachedSessionSharingSnapshot({
     agentId,
     sessionKey,
     resolve: () => {
-      const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId });
+      const target = resolveSessionSharingTarget(params);
       return {
         canonicalKey: target?.canonicalKey ?? sessionKey,
         canonicalAgentId: target?.agentId ?? agentId,
@@ -678,8 +672,15 @@ export function canReceiveSessionEvent(params: {
   }
   const hidesForeignSessions = operatorSessionCap(client, cfg) === "none";
   const sharing = prepareSessionSharing({ cfg, client });
+  // Discovery remains lazy; these facts belong only to this recipient check, never a socket send.
+  const lookup: Omit<Parameters<typeof resolveSessionSharingTarget>[0], "sessionKey"> = {
+    cfg,
+    agentId: params.agentId,
+    storeCache: new Map(),
+    targetDiscoveryCache: new Map(),
+  };
   const visible = sessionKeys.every((sessionKey) => {
-    const snapshot = loadSharingSnapshot(cfg, sessionKey, params.agentId);
+    const snapshot = loadSharingSnapshot({ ...lookup, sessionKey });
     const isCreator = sharing.isCreator(snapshot.createdActor);
     if (snapshot.incognito || (hidesForeignSessions && !isCreator)) {
       return false;
@@ -690,7 +691,7 @@ export function canReceiveSessionEvent(params: {
     if (event !== "session.typing") {
       return false;
     }
-    const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId: params.agentId });
+    const target = resolveSessionSharingTarget({ ...lookup, sessionKey });
     return target !== null && canManageSessionSharing(sharing.roleForTarget(target));
   });
   if (!visible || event !== "session.suggestion") {
@@ -704,7 +705,7 @@ export function canReceiveSessionEvent(params: {
     return true;
   }
   return sessionKeys.every((sessionKey) => {
-    const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId: params.agentId });
+    const target = resolveSessionSharingTarget({ ...lookup, sessionKey });
     return target !== null && sharing.roleForTarget(target) !== "viewer";
   });
 }

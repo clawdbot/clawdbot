@@ -27,11 +27,7 @@ import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-co
 import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type {
-  AssistantMessage,
-  AssistantMessageEventStreamLike,
-  ImageContent,
-} from "../llm/types.js";
+import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
 import { createWorkerBrowserToolRuntime, type WorkerBrowserRuntime } from "./browser-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 import {
@@ -39,7 +35,7 @@ import {
   toAgentMessage,
   toWorkerInferenceContext,
 } from "./embedded-agent-transcript.runtime.js";
-import type { WorkerBrowserLaunchDescriptor } from "./launch-descriptor.js";
+import type { WorkerBrowserLaunchDescriptor, WorkerLaunchPlan } from "./launch-descriptor.js";
 import {
   WORKER_LOCAL_TOOL_NAMES,
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
@@ -86,8 +82,7 @@ type RunWorkerEmbeddedTurnParams = {
   sessionId: string;
   sessionKey: string;
   runId: string;
-  prompt: string;
-  images?: ImageContent[];
+  prompt: WorkerLaunchPlan["assignment"]["prompt"];
   modelRef: WorkerInferenceModelRef;
   inference: WorkerEmbeddedInferenceClient;
   transcript: WorkerEmbeddedTranscriptClient;
@@ -324,7 +319,8 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     }
     await session.agent.prompt({
       role: "user",
-      content: [{ type: "text", text: params.prompt }, ...(params.images ?? [])],
+      content:
+        typeof params.prompt === "string" ? [{ type: "text", text: params.prompt }] : params.prompt,
       timestamp: Date.now(),
     });
     await session.agent.waitForIdle();

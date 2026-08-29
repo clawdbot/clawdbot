@@ -7,6 +7,7 @@ import {
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import {
@@ -14,11 +15,16 @@ import {
   type NodeWorkerLaunchInput,
   type NodeWorkerSupervisorReceipt,
 } from "../../worker/node-supervisor-protocol.js";
+import { measureWorkerProcessTurnBytes } from "../../worker/worker-process-protocol.js";
+import { buildNodeInvokeRequest, serializeNodeEvent } from "../node-invoke-request.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
+import {
+  createNodeWorkerLaunchAdapter,
+  measureNodeWorkerLaunchBytes,
+} from "./node-launch-adapter.js";
 
 const DEVICE_ID = "device-session-host";
 const WORKER_RUNS = {
@@ -132,10 +138,35 @@ function launchRequest(input = launchInput()) {
 describe("node worker launch adapter", () => {
   it("re-arms only a settled pre-admission deadline with fresh idempotent launch identities", async () => {
     const input = launchInput();
+    input.descriptor.assignment.systemPrompt = '"\\\0\n漢😀'.repeat(10_000);
+    input.descriptor.assignment.systemPrompt += "x".repeat(
+      WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES - measureNodeWorkerLaunchBytes(DEVICE_ID, input),
+    );
+    const bound = measureNodeWorkerLaunchBytes(DEVICE_ID, input);
+    expect(bound).toBe(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES);
     const launches: NodeWorkerLaunchInput[] = [];
     const delays: number[] = [];
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
       const attempt = request.params as NodeWorkerLaunchInput;
+      const frameBytes = Buffer.byteLength(
+        serializeNodeEvent(
+          "node.invoke.request",
+          buildNodeInvokeRequest({
+            id: "00000000-0000-0000-0000-000000000000",
+            nodeId: request.node.nodeId,
+            command: request.command,
+            params: attempt,
+            timeoutMs: request.timeoutMs!,
+            idempotencyKey: request.idempotencyKey,
+          }),
+        ),
+      );
+      expect(frameBytes).toBeLessThanOrEqual(bound);
+      expect(measureWorkerProcessTurnBytes(attempt.descriptor)).toBeLessThanOrEqual(bound);
+      console.info(
+        "worker-admission-rearm",
+        JSON.stringify({ turnIdLength: attempt.launchId.length, frameBytes, bound }),
+      );
       launches.push(attempt);
       return wire({
         ...receipt(attempt, "completed"),

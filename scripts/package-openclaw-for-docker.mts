@@ -328,7 +328,8 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
     );
     const useProcessGroup = process.platform !== "win32";
     const env = options.env ?? process.env;
-    // Keep POSIX command selection stable; only Windows needs explicit npm/pnpm shim handling.
+    // POSIX callers own PATH; retain that selection while supporting Corepack-only builders.
+    const npmExecPath = process.platform === "win32" ? env.npm_execpath : "";
     const invocation: {
       args: string[];
       command: string;
@@ -336,8 +337,8 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
       shell: boolean;
       windowsVerbatimArguments?: boolean;
     } =
-      process.platform === "win32" && command === "pnpm"
-        ? resolvePnpmRunner({ cwd, env, npmExecPath: env.npm_execpath, pnpmArgs: args })
+      command === "pnpm"
+        ? resolvePnpmRunner({ cwd, env, npmExecPath, pnpmArgs: args })
         : process.platform === "win32" && command === "npm"
           ? resolveNpmRunner({ env, npmArgs: args })
           : { args, command, shell: false };

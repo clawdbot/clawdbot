@@ -199,6 +199,7 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
     const validatedConfig = validatePluginConfig({
+      origin: candidate.origin,
       schema: manifestRecord.configSchema,
       cacheKey: manifestRecord.schemaCacheKey,
       value: entry?.config,

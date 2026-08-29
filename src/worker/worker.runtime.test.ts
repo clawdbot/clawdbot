@@ -58,7 +58,11 @@ import {
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import {
+  buildWorkerConnectParams,
+  parseWorkerLaunchDescriptor,
+  type WorkerLaunchDescriptor,
+} from "./launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import {
@@ -119,6 +123,7 @@ const WORKER_INFERENCE_START_TIMEOUT_MS = 90_000;
 
 type InferencePlan =
   | "text"
+  | "read-image"
   | "tool"
   | "safe-tool"
   | "background-tool"
@@ -221,6 +226,7 @@ class FakeWorkerGateway {
   }
 
   async start(): Promise<void> {
+    // Leave room for the isolated test temp root within macOS Unix socket limits.
     this.rootDir = await mkdtemp(path.join(tmpdir(), "oc-wg-"));
     this.socketPath = path.join(this.rootDir, "gateway.sock");
     const listening = once(this.webSocketServer, "listening");
@@ -551,6 +557,14 @@ class FakeWorkerGateway {
     });
     const plan = this.options.inferencePlans?.[this.inferencePlanIndex] ?? "text";
     this.inferencePlanIndex += 1;
+    if (plan === "read-image") {
+      this.sendToolCallTurn(socket, frame.params, {
+        args: { path: "attachment.png" },
+        toolCallId: "read-attachment",
+        toolName: "read",
+      });
+      return;
+    }
     if (plan === "hold") {
       return;
     }
@@ -891,15 +905,21 @@ describe("worker runtime", () => {
         mimeType: "image/png",
       },
     ];
-    launch.assignment.images = images;
+    const prompt = [
+      { type: "text" as const, text: "Inspect the attached image and PDF page." },
+      ...images,
+    ];
+    launch.assignment.prompt = prompt;
     launch.assignment.suppressPromptTranscript = true;
 
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    await expect(runWorkerDescriptor(parseWorkerLaunchDescriptor(launch))).resolves.toMatchObject({
+      status: "completed",
+    });
 
     expect(gateway.inferenceRequests[0]?.context.messages).toEqual([
       {
         role: "user",
-        content: [{ type: "text", text: launch.assignment.prompt }, ...images],
+        content: prompt,
         timestamp: expect.any(Number),
       },
     ]);
@@ -909,6 +929,45 @@ describe("worker runtime", () => {
       ),
     ).toEqual(["assistant"]);
   });
+  it.each(["input", "tool"] as const)(
+    "settles a real image above 64 KiB through %s",
+    async (source) => {
+      const { gateway, workspaceDir, launch } = await setup({
+        inferencePlans: ["read-image", "text"],
+      });
+      const png = createNoisyPngBuffer(256, 256);
+      expect(png.length).toBeGreaterThan(64 * 1024);
+      const image = { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" };
+      await writeFile(path.join(workspaceDir, "attachment.png"), png);
+      if (source === "input") {
+        launch.assignment.prompt = [image];
+        launch.assignment.initialMessages = [{ role: "user", content: [image], timestamp: 1 }];
+      }
+
+      const result = await runWorkerDescriptor(parseWorkerLaunchDescriptor(launch));
+
+      expect(result.status).toBe("completed");
+      expect(gateway.inferenceRequests).toHaveLength(2);
+      if (source === "input") {
+        expect(
+          gateway.inferenceRequests[0]?.context.messages
+            .filter((message) => message.role === "user")
+            .map((message) => message.content),
+        ).toEqual([[image], [image]]);
+      }
+      const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
+      const toolResult = messages.find((message) => message.role === "toolResult");
+      expect(toolResult).toMatchObject({ role: "toolResult", toolName: "read", isError: false });
+      expect(toolResult?.content).toContainEqual(image);
+      expect(gateway.inferenceRequests[1]?.context.messages).toContainEqual(toolResult);
+      expect(messages.at(-1)?.role).toBe("assistant");
+      expect(
+        gateway.applicationOrder.findIndex((entry) => entry === "live:lifecycle:finishing"),
+      ).toBeGreaterThan(
+        gateway.applicationOrder.findLastIndex((entry) => entry.startsWith("transcript:")),
+      );
+    },
+  );
 
   it("runs a full embedded turn through remote inference, live events, and transcript commits", async () => {
     const { gateway, workspaceDir, launch } = await setup();

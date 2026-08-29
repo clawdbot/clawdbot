@@ -176,6 +176,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "configView.chatPrefs.messageWidth",
       "configView.chatPrefs.messageWidthHint",
+      "configView.chatPrefs.collapseTaskProgress",
+      "configView.chatPrefs.collapseTaskProgressHint",
       "chat.sendShortcut",
       "chat.sendShortcutEnter",
       "chat.sendShortcutModifierEnter",
@@ -198,7 +200,7 @@ export const SETTINGS_SEARCH_TARGETS = {
       "chat.composer.holdToRecordSettingDescription",
     ],
     aliases:
-      "keyboard enter follow-up followup steer queue microphone voice audio input codex claude terminal viewer camera dictation dictate width",
+      "keyboard enter follow-up followup steer queue microphone voice audio input codex claude terminal viewer camera dictation dictate width task progress checklist collapse expand",
   },
   appearanceConnection: {
     routeId: "appearance",

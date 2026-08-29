@@ -180,13 +180,21 @@ describe("attemptServerEndpointCompaction", () => {
   it("leaves the durable transcript intact when policy would redact the canonical window", async () => {
     const session = createSession();
     const before = structuredClone(session.sessionManager.getBranch());
+    const onUsage = vi.fn();
     const { result } = attempt({
       sessionManager: session.sessionManager,
       context: { systemPrompt: "system", messages: session.messages },
       config: { logging: { redactPatterns: ["remember copper"] } },
+      onUsage,
     });
 
     await expect(result).resolves.toBeUndefined();
+    expect(onUsage).toHaveBeenCalledOnce();
+    expect(onUsage).toHaveBeenCalledWith({
+      input_tokens: 1_000,
+      output_tokens: 200,
+      dropped_message_count: 1,
+    });
     expect(session.sessionManager.getBranch()).toEqual(before);
   });
 

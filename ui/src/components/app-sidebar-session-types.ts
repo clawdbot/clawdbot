@@ -94,6 +94,7 @@ export type SidebarRecentSession = {
   draftOwnedBySelf?: boolean;
   category?: string;
   icon?: string;
+  color?: string;
   channelAvatarUrl?: string;
   boardFace?: BoardFace;
   channel?: string;
@@ -146,6 +147,7 @@ export type SidebarSessionHovercardRow = Pick<
   | "createdActor"
   | "createdAt"
   | "channelAvatarUrl"
+  | "color"
   | "endedAt"
   | "hasAutomation"
   | "label"
@@ -243,6 +245,7 @@ export type SidebarSessionPatch = {
   unread?: boolean;
   label?: string | null;
   icon?: string | null;
+  color?: string | null;
   category?: string | null;
 };
 

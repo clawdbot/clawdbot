@@ -47,6 +47,12 @@ the transport callback instead of dispatching an event that was not made
 durable. At claim time it decodes the versioned payload, re-runs `inspect`, and
 rejects an id or lane mismatch before delivery.
 
+`onDurableAdmission(raw, context)` runs after every durable enqueue, including
+duplicates. `context.isNew` is `true` if and only if this admission inserted the
+`(queue_name, event_id)` row. It does not indicate claim ownership or eventual
+delivery. If retention previously pruned the row, a later admission may insert
+it again and report `isNew: true`.
+
 `deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`, `onFailed`,
 `onCancelled`, `onAbandoned`, and `abortSignal`. Use `onFailed` for delivery
 errors, `onCancelled` for explicit pre-adoption cancellation that must preserve

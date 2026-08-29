@@ -72,6 +72,14 @@ BASELINE_RAW="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE:?missing OPENCLAW_UPGRADE_SUR
 CANDIDATE_KIND="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND:-tarball}"
 CANDIDATE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
+OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL="stable"
+if [ "$SCENARIO" = "prerelease-plugin-registry" ] ||
+  { [ "$UPDATE_RESTART_MODE" = "auto-auth" ] &&
+    [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] &&
+    [[ "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:-}" =~ -(alpha|beta)\.[1-9][0-9]*$ ]]; }; then
+  OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL="beta"
+fi
+export OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL
 ROOT_MANAGED_VPS="${OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS:-0}"
 COMMAND_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
 CURRENT_PHASE="setup"
@@ -1208,14 +1216,14 @@ repair_fixture_plugin_consent() {
   fi
   if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
     local attempts=1
-    if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    local minimum_attempts=1
+    if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] || [ "$update_repair_required" = "1" ]; then
       attempts=complete
-    elif [ "$update_repair_required" = "1" ]; then
-      attempts=2
+      minimum_attempts=2
     fi
     phase assert-prepublish-recovery-requests node \
       "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
-      assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version" "$clawhub_security_mode" "$attempts"
+      assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version" "$clawhub_security_mode" "$attempts" "$minimum_attempts"
   fi
 }
 

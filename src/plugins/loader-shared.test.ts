@@ -9,7 +9,7 @@ import type { PluginCandidate } from "./discovery.js";
 import {
   createManifestPluginRecord,
   createPluginCandidatesFromManifestRegistry,
-  validatePluginConfig,
+  validatePluginConfig as validatePluginConfigByOrigin,
 } from "./loader-shared.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
 import {
@@ -24,6 +24,12 @@ const emptyObjectSchema = {
   additionalProperties: false,
   properties: {},
 } as const;
+
+function validatePluginConfig(
+  params: Omit<Parameters<typeof validatePluginConfigByOrigin>[0], "origin">,
+) {
+  return validatePluginConfigByOrigin({ ...params, origin: "global" });
+}
 
 function withSchemaKeyword(key: "if" | "then" | "else", value: unknown) {
   return { [key]: value };
@@ -144,7 +150,56 @@ describe("validatePluginConfig source values", () => {
   });
 });
 
+describe("validatePluginConfig manifest schema isolation", () => {
+  it("returns an error instead of throwing on a structurally invalid schema", () => {
+    const result = validatePluginConfig({
+      schema: {
+        type: "object",
+        properties: { mode: { $ref: "#/$defs/Mode" } },
+      },
+      value: {},
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok ? [] : result.error.join(" ")).toContain("invalid schema");
+  });
+
+  it("returns an error instead of throwing when a schema is nested past the stack limit", () => {
+    let schema: Record<string, unknown> = { type: "object" };
+    for (let depth = 0; depth < 3_000; depth++) {
+      schema = { type: "object", properties: { nested: schema } };
+    }
+
+    expect(validatePluginConfig({ schema, value: {} })).toMatchObject({ ok: false });
+  });
+
+  it("keeps malformed bundled schemas on the throwing path", () => {
+    expect(() =>
+      validatePluginConfigByOrigin({
+        origin: "bundled",
+        schema: {
+          type: "object",
+          properties: { mode: { $ref: "#/$defs/Mode" } },
+        },
+        value: {},
+      }),
+    ).toThrow("invalid schema");
+  });
+});
+
 describe("validatePluginConfig empty schema classification", () => {
+  it("validates an empty-looking schema carrying an unresolvable $ref", () => {
+    // The empty-config shortcut answers before the schema is ever compiled, so a schema it
+    // cannot reason about must fall through to validation instead of being silently accepted.
+    const result = validatePluginConfig({
+      schema: { ...emptyObjectSchema, $ref: "#/$defs/Missing" },
+      value: {},
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok ? [] : result.error.join(" ")).toContain("invalid schema");
+  });
+
   it("validates pattern properties instead of requiring empty config", () => {
     const schema = {
       ...emptyObjectSchema,
@@ -200,13 +255,18 @@ describe("validatePluginConfig empty schema classification", () => {
     withSchemaKeyword("if", true),
     withSchemaKeyword("then", { minProperties: 1 }),
     withSchemaKeyword("else", { minProperties: 1 }),
-  ])("keeps standalone conditional keywords on the empty-config path: %o", (keyword) => {
+  ])("keeps a closed empty schema closed under an inert conditional keyword: %o", (keyword) => {
+    // A standalone if/then/else imposes nothing, but it also takes the schema off the
+    // empty-config shortcut, so the closed-object rejection has to come from validation.
     expect(
       validatePluginConfig({
         schema: { ...emptyObjectSchema, ...keyword },
         value: { unexpected: true },
       }),
-    ).toEqual({ ok: false, error: ["<root>: config must be empty"] });
+    ).toMatchObject({ ok: false });
+    expect(
+      validatePluginConfig({ schema: { ...emptyObjectSchema, ...keyword }, value: {} }),
+    ).toMatchObject({ ok: true });
   });
 });
 

@@ -5,11 +5,9 @@ import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import pMap from "p-map";
 import { formatMs } from "./lib/check-timing-summary.mts";
-import { runManagedCommand } from "./lib/managed-child-process.mts";
 import {
-  isE2eBuildSkipped,
+  prepareE2eVitestRuntime,
   prepareVitestRuntime,
-  runE2eGlobalSetup,
 } from "./lib/vitest-build-prerequisites.mts";
 import {
   isCiLikeEnv,
@@ -310,18 +308,11 @@ async function main() {
     return;
   }
 
-  const runBuildCommand = (commandArgs: string[], env: NodeJS.ProcessEnv) =>
-    runManagedCommand({ bin: process.execPath, args: commandArgs, cwd: process.cwd(), env });
   const e2eSpecs = runSpecs.filter((spec) => spec.config === "test/vitest/vitest.e2e.config.ts");
   if (e2eSpecs.length > 0) {
-    if (!isE2eBuildSkipped(baseEnv)) {
-      console.error("[test] preparing E2E runtime before Vitest workers");
-      await runE2eGlobalSetup(runBuildCommand, baseEnv);
-      // E2E preparation also covers runtime/private-QA readers. Only a completed
-      // owner may tell config-level setup to reuse that shared generation.
-      for (const spec of e2eSpecs) {
-        spec.env = { ...spec.env, OPENCLAW_E2E_USE_PREBUILT_DIST: "1" };
-      }
+    const preparedEnv = await prepareE2eVitestRuntime(baseEnv);
+    for (const spec of e2eSpecs) {
+      spec.env = { ...spec.env, ...preparedEnv };
     }
   } else {
     const code = await prepareVitestRuntime(

@@ -167,15 +167,6 @@ async function readSessionCompanionContext(params: {
       if (params.signal?.aborted) {
         return { kind: "unavailable" };
       }
-      if (page.events.length !== page.scannedMessages) {
-        if (contextMessages.length === 0) {
-          return { kind: "unavailable" };
-        }
-        // A partial older page can contain holes around oversized rows. Keep
-        // only the complete newer pages, then verify their snapshot below.
-        stoppedAtOlderByteBoundary = true;
-        break;
-      }
       const pageSnapshot = {
         activeLeafEntryId: page.activeLeafEntryId,
         generation: page.snapshot.generation,
@@ -192,13 +183,27 @@ async function readSessionCompanionContext(params: {
         return { kind: "unavailable" };
       }
       totalMessages = page.totalMessages;
+      const pageIsPartial = page.newestContiguousEventCount !== page.scannedMessages;
+      // Sparse bounded pages may include older rows beyond an oversized gap.
+      // Only the contiguous newest suffix is authoritative companion context.
+      const pageEvents =
+        page.newestContiguousEventCount === page.events.length
+          ? page.events
+          : page.events.slice(page.events.length - page.newestContiguousEventCount);
       rawBytes += page.serializedBytes;
       scannedMessages += page.scannedMessages;
       offset += page.scannedMessages;
       contextMessages = [
-        ...sanitizeContextMessages(readPageMessages(page.events)),
+        ...sanitizeContextMessages(readPageMessages(pageEvents)),
         ...contextMessages,
       ].slice(-CONTEXT_MAX_MESSAGES);
+      if (pageIsPartial) {
+        if (contextMessages.length === 0) {
+          return { kind: "unavailable" };
+        }
+        stoppedAtOlderByteBoundary = true;
+        break;
+      }
       if (page.scannedMessages === 0 || offset >= totalMessages) {
         break;
       }

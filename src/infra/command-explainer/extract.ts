@@ -37,6 +37,7 @@ type MutableExplanation = {
   risks: CommandRisk[];
   hasParseError: boolean;
   nextCommandIndex: number;
+  remainingNodes: number;
 };
 
 type DynamicArgument = {
@@ -66,7 +67,17 @@ type WalkState = {
   parentCommandId?: string;
 };
 
+type WalkFrame = {
+  node: TreeSitterNode;
+  context: CommandContext;
+  state: WalkState;
+};
+
 const MAX_WRAPPER_PAYLOAD_DEPTH = 2;
+// Wrapper payload reparses share this budget, so one explanation has one fixed work bound.
+const MAX_COMMAND_EXPLANATION_NODES = 50_000;
+
+export class CommandExplanationWorkLimitError extends Error {}
 
 const PARSEABLE_SHELL_WRAPPERS = new Set<string>(POSIX_PARSEABLE_SHELL_WRAPPERS);
 
@@ -440,8 +451,21 @@ function decodeAnsiCString(text: string): string {
   return decodeAnsiCStringWithOffsets(text).value;
 }
 
-function hasDynamicWordPart(node: TreeSitterNode): boolean {
-  return DYNAMIC_WORD_NODE_TYPES.has(node.type) || node.namedChildren.some(hasDynamicWordPart);
+function hasDynamicWordPart(root: TreeSitterNode): boolean {
+  const pending = [root];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (!node) {
+      break;
+    }
+    if (DYNAMIC_WORD_NODE_TYPES.has(node.type)) {
+      return true;
+    }
+    for (const child of node.namedChildren) {
+      pending.push(child);
+    }
+  }
+  return false;
 }
 
 function shellWordValue(node: TreeSitterNode): ShellWordValue {
@@ -573,16 +597,26 @@ function argvFromDeclarationCommand(node: TreeSitterNode, state: WalkState): Com
 }
 
 function appendTestCommandArguments(
-  node: TreeSitterNode,
+  root: TreeSitterNode,
   parsed: CommandArgv,
   state: WalkState,
 ): void {
-  if (node.type === "test_operator" || COMMAND_ARGUMENT_NODE_TYPES.has(node.type)) {
-    appendCommandArgument(node, parsed, state);
-    return;
-  }
-  for (const child of node.namedChildren) {
-    appendTestCommandArguments(child, parsed, state);
+  const pending = [root];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (!node) {
+      break;
+    }
+    if (node.type === "test_operator" || COMMAND_ARGUMENT_NODE_TYPES.has(node.type)) {
+      appendCommandArgument(node, parsed, state);
+      continue;
+    }
+    for (let index = node.namedChildren.length - 1; index >= 0; index -= 1) {
+      const child = node.namedChildren[index];
+      if (child) {
+        pending.push(child);
+      }
+    }
   }
 }
 
@@ -887,12 +921,12 @@ function recordCommandRisks(
   }
 }
 
-async function walk(
+async function visitNode(
   node: TreeSitterNode,
   output: MutableExplanation,
   context: CommandContext,
   state: WalkState,
-): Promise<void> {
+): Promise<CommandContext> {
   recordShape(node, output);
 
   const span = spanFromNode(node, state.spanBase);
@@ -1004,8 +1038,37 @@ async function walk(
       }
     }
   }
-  for (const child of node.namedChildren) {
-    await walk(child, output, childContext, state);
+  return childContext;
+}
+
+async function walk(
+  root: TreeSitterNode,
+  output: MutableExplanation,
+  rootContext: CommandContext,
+  rootState: WalkState,
+): Promise<void> {
+  if (root.descendantCount > output.remainingNodes) {
+    throw new CommandExplanationWorkLimitError(
+      "Shell command syntax is too complex to explain safely",
+    );
+  }
+  output.remainingNodes -= root.descendantCount;
+
+  // Shell syntax is model-controlled, so keep depth-first traversal off the call stack.
+  const pending: WalkFrame[] = [{ node: root, context: rootContext, state: rootState }];
+  while (pending.length > 0) {
+    const frame = pending.pop();
+    if (!frame) {
+      break;
+    }
+    const { node, context, state } = frame;
+    const childContext = await visitNode(node, output, context, state);
+    for (let index = node.namedChildren.length - 1; index >= 0; index -= 1) {
+      const child = node.namedChildren[index];
+      if (child) {
+        pending.push({ node: child, context: childContext, state });
+      }
+    }
   }
 }
 
@@ -1188,6 +1251,7 @@ export async function explainShellCommand(source: string): Promise<CommandExplan
       risks: [],
       hasParseError: tree.rootNode.hasError,
       nextCommandIndex: 0,
+      remainingNodes: MAX_COMMAND_EXPLANATION_NODES,
     };
     await walk(tree.rootNode, output, "top-level", {
       wrapperPayloadDepth: 0,

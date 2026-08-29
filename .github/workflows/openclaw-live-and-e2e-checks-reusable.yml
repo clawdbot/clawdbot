@@ -941,6 +941,7 @@ jobs:
       live_models_count: ${{ steps.plan.outputs.live_models_count }}
       live_models_matrix: ${{ steps.plan.outputs.live_models_matrix }}
       live_models_omitted_json: ${{ steps.plan.outputs.live_models_omitted_json }}
+      live_image_extensions: ${{ steps.live_image.outputs.live_image_extensions }}
     steps:
       - name: Checkout trusted release harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -949,6 +950,28 @@ jobs:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
+
+      - name: Checkout selected live plugin metadata
+        if: inputs.include_live_suites
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          path: .release-target
+          persist-credentials: false
+          sparse-checkout: |
+            extensions/*/openclaw.plugin.json
+            extensions/*/package.json
+          sparse-checkout-cone-mode: false
+
+      - name: Plan shared live image plugins
+        id: live_image
+        if: inputs.include_live_suites
+        env:
+          OPENCLAW_LIVE_PROVIDERS: ${{ inputs.live_model_providers }}
+        # Trusted roster/tooling, selected target metadata; no target code executes here.
+        run: |
+          live_image_extensions="$(node scripts/print-live-docker-plugin-selection.mjs .release-target)"
+          echo "live_image_extensions=$live_image_extensions" >> "$GITHUB_OUTPUT"
 
       - name: Plan release workflow matrices
         id: plan
@@ -1049,6 +1072,9 @@ jobs:
         run: scripts/sandbox-setup.sh
 
       - name: Run repo E2E suite
+        env:
+          OPENCLAW_E2E_WORKERS: "2"
+          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
         run: pnpm test:e2e
 
   validate_special_e2e:
@@ -3387,7 +3413,7 @@ jobs:
           fi
 
   prepare_live_test_image:
-    needs: validate_selected_ref
+    needs: [validate_selected_ref, plan_release_workflow_matrices]
     if: inputs.include_live_suites && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-') || startsWith(inputs.live_suite_filter, 'docker-live-models'))
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
@@ -3421,11 +3447,13 @@ jobs:
         env:
           SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
+          LIVE_IMAGE_EXTENSIONS: ${{ needs.plan_release_workflow_matrices.outputs.live_image_extensions }}
         run: |
           set -euo pipefail
           repository="${GITHUB_REPOSITORY,,}"
-          live_image_extensions="matrix,acpx,anthropic"
-          live_image_tag_suffix="${live_image_extensions//,/-}"
+          live_image_extensions="$LIVE_IMAGE_EXTENSIONS"
+          # Keep the tag within Docker's length limit as the provider roster grows.
+          live_image_tag_suffix="plugins-$(printf '%s' "$live_image_extensions" | sha256sum | cut -c1-12)"
           if [[ "$SHARED_IMAGE_POLICY" == "no-push-artifact" ]]; then
             live_image="openclaw-live-test:${SELECTED_SHA}-${live_image_tag_suffix}"
           else

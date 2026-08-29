@@ -88,9 +88,9 @@ import Testing
         try "#!/bin/sh\necho v22.22.3\n".write(to: node, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
 
-        let launch = try #require(try await CommandResolver.projectNodeHostWorkerLaunch(
+        let launch = try await CommandResolver.nodeHostWorkerLaunch(
             projectRoot: tmp,
-            searchPaths: [runtimeBin.path]))
+            searchPaths: [runtimeBin.path])
 
         #expect(launch.command == [node.path, runner.path, "node", "worker"])
         #expect(launch.currentDirectoryURL == tmp)

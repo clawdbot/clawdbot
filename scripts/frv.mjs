@@ -249,6 +249,11 @@ export async function preflightContinuation(
   client,
   repository = DEFAULT_REPOSITORY,
 ) {
+  if (plan.candidate?.producer.runId === String(rootRunId)) {
+    throw new Error(
+      "parent-owned sealed candidate artifacts do not survive parent reruns; start a fresh all-group FRV",
+    );
+  }
   if (plan.rerunGroup !== "all") {
     throw new Error("FRV continuation requires an all-group root");
   }

@@ -103,7 +103,6 @@ export type ChatPageHost = ChatHost &
     waitingApprovalResolvedIds: Set<string>;
     chatRunStatus: ChatProps["runStatus"];
     chatNewMessagesBelow: boolean;
-    chatMetadataRequestVersion: number;
     chatModelsLoading: boolean;
     sessionsLoading: boolean;
     lastErrorCode: string | null;

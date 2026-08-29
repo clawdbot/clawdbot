@@ -117,6 +117,33 @@ async function handleChatMetadataRequest({
   }
   const metadataParams = params;
   const cfg = context.getRuntimeConfig();
+  if (metadataParams.sessionKey) {
+    const requested = resolveRequestedChatAgentId({
+      cfg,
+      requestedSessionKey: metadataParams.sessionKey,
+      agentId: metadataParams.agentId,
+    });
+    if (!requested.ok) {
+      respond(false, undefined, requested.error);
+      return;
+    }
+    // The router authorizes the session selector; only the persisted entry supplies auth profiles.
+    const session = loadGatewaySessionEntryReadOnly(metadataParams.sessionKey, {
+      agentId: requested.agentId,
+    });
+    respond(
+      true,
+      await context.readChatMetadata({
+        agentId: resolveSessionAgentId({
+          sessionKey: metadataParams.sessionKey,
+          config: session.cfg,
+          agentId: requested.agentId,
+        }),
+        sessionEntry: session.entry,
+      }),
+    );
+    return;
+  }
   const resolvedAgent = resolveAgentIdOrRespondError({
     rawAgentId: metadataParams.agentId,
     respond,

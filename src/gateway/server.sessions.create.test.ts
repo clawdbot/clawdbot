@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
 import {
@@ -163,13 +163,14 @@ vi.mock("./session-transcript-readers.js", async (importOriginal) => {
   return { ...actual, readSessionMessageCountAsync: sessionTranscriptReaderMocks.readCount };
 });
 
+let gitWorkspaceTemplate: string;
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
-  setupGatewaySessionsTestHarness();
+  setupGatewaySessionsTestHarness(async (makeTempDir) => {
+    gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
+  });
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
-let gitWorkspaceTemplateRoot: string;
-let gitWorkspaceTemplate: string;
 
 async function waitForCreatedSessionRun(
   context: { chatAbortControllers: Map<string, ChatAbortControllerEntry> },
@@ -194,17 +195,6 @@ async function waitForCreatedSessionRun(
   }
   return removed;
 }
-
-beforeAll(async () => {
-  gitWorkspaceTemplateRoot = await fs.realpath(
-    await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-session-git-template-")),
-  );
-  gitWorkspaceTemplate = await createGitWorkspace(gitWorkspaceTemplateRoot);
-});
-
-afterAll(async () => {
-  await fs.rm(gitWorkspaceTemplateRoot, { recursive: true, force: true });
-});
 
 // Read the real implementations back here rather than capturing them inside the
 // mock factories: Vitest runs a factory on first import of the mocked module, and
@@ -1804,6 +1794,11 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       ownerId: key,
     });
 
+    const retainedDraft = path.join(worktree!.path, "session-draft.txt");
+    await fs.writeFile(retainedDraft, "uncommitted work survives reuse\n");
+    const originalHead = (await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"]))
+      .stdout;
+
     const recreated = await directSessionReq<{
       entry: { spawnedCwd?: string };
       worktree: { id: string; path: string; branch: string };
@@ -1815,7 +1810,12 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     expect(recreated.ok).toBe(true);
     expect(recreated.payload?.worktree).toEqual(worktree);
     expect(recreated.payload?.entry.spawnedCwd).toBe(worktree?.path);
-    expect(createSpy).toHaveBeenCalledTimes(1);
+    await expect(fs.readFile(retainedDraft, "utf8")).resolves.toBe(
+      "uncommitted work survives reuse\n",
+    );
+    expect((await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"])).stdout).toBe(
+      originalHead,
+    );
     expect(
       listRegistryWorktrees(process.env).filter(
         (record) =>

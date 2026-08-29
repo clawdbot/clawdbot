@@ -734,7 +734,7 @@ class GatewayBootstrapAuthTest {
       val lifecycleLock = readField<Any>(nodeSession, "lifecycleLock")
       val connectWithAuth =
         runtime.javaClass.declaredMethods.single { method ->
-          method.name == "connectWithAuth" && method.parameterTypes.size == 4
+          method.name == "connectWithAuth" && method.parameterTypes.size == 3
         }
       connectWithAuth.isAccessible = true
       val lockHeld = CompletableDeferred<Unit>()
@@ -751,7 +751,7 @@ class GatewayBootstrapAuthTest {
 
       val connect =
         async(lifecycleDispatcher) {
-          connectWithAuth.invoke(runtime, endpoint, auth, false, { Unit })
+          connectWithAuth.invoke(runtime, endpoint, auth, { Unit })
         }
       try {
         withTimeout(5_000) {

@@ -116,7 +116,11 @@ function readMemorySearchToolCooldown(key: string): MemoryCorpusFailure | undefi
     memorySearchToolCooldowns.delete(key);
     return undefined;
   }
-  return { error: entry.error, ...(entry.code ? { code: entry.code } : {}) };
+  return {
+    error: entry.error,
+    deadline: entry.deadline,
+    ...(entry.code ? { code: entry.code } : {}),
+  };
 }
 
 function recordMemorySearchToolCooldown(key: string, failure: MemoryCorpusFailure): void {
@@ -400,9 +404,10 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
               attempted.outcome === "unavailable"
                 ? {
                     error: attempted.error,
+                    deadline: attempted.deadline,
                     ...(attempted.code ? { code: attempted.code } : {}),
                   }
-                : { error: "memory search unavailable" };
+                : { error: "memory search unavailable", deadline: false };
             recordMemorySearchToolCooldown(cooldownKey, failure);
             return { corpus: "memory", outcome: "unavailable", value: null, ...failure };
           }
@@ -489,7 +494,11 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
               if (searchesMemory && !searchesWiki && memory?.outcome === "unavailable") {
                 return jsonResult(
                   memoryValue?.unavailableResult ??
-                    buildMemorySearchUnavailableResult(memory.error, { code: memory.code }),
+                    buildMemorySearchUnavailableResult(memory.error, {
+                      agentId,
+                      deadline: memory.deadline,
+                      code: memory.code,
+                    }),
                 );
               }
               const wikiResults = wiki?.outcome === "not-registered" ? [] : (wiki?.value ?? []);
@@ -538,7 +547,11 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
             recordMemorySearchToolCooldown(cooldownKey, failed);
           }
           return jsonResult(
-            buildMemorySearchUnavailableResult(failed.error, { code: failed.code }),
+            buildMemorySearchUnavailableResult(failed.error, {
+              agentId,
+              deadline: failed.deadline,
+              code: failed.code,
+            }),
           );
         } finally {
           cleanupStarted = true;

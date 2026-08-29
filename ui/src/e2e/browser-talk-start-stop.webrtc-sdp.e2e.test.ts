@@ -1,4 +1,5 @@
 // Control UI E2E tests cover WebRTC SDP response handling through a real page.
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -17,10 +18,22 @@ const suite = createControlUiE2eSuite({
   },
 });
 
+async function waitForWebRtcSdpFetch(page: Page) {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as Window & { openclawWebRtcSdpE2e?: WebRtcSdpE2eProof }).openclawWebRtcSdpE2e
+            ?.fetchCount ?? 0,
+      ),
+    )
+    .toBe(1);
+}
+
 suite.define(() => {
   it("cancels a failed OpenAI WebRTC SDP response body in the live Control UI", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
+      await installMockGateway(page, {
         methodResponses: {
           "talk.catalog": videoTalkCatalog("openai"),
           "talk.client.create": {
@@ -40,7 +53,7 @@ suite.define(() => {
         .poll(() => page.locator('[data-chat-talk-capability="realtime"]').count())
         .toBe(0);
       await page.getByRole("button", { name: "Start voice input" }).click();
-      await gateway.waitForRequest("talk.client.create");
+      await waitForWebRtcSdpFetch(page);
 
       const alert = page.locator('.agent-chat__talk-status[role="alert"]');
       await expect.poll(() => alert.textContent()).toContain("Realtime WebRTC setup failed (502)");
@@ -69,7 +82,7 @@ suite.define(() => {
 
   it("rejects and cancels an oversized OpenAI SDP answer before peer setup", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
+      await installMockGateway(page, {
         methodResponses: {
           "talk.catalog": videoTalkCatalog("openai"),
           "talk.client.create": {
@@ -88,8 +101,9 @@ suite.define(() => {
       await expect
         .poll(() => page.locator('[data-chat-talk-capability="realtime"]').count())
         .toBe(0);
-      await page.getByRole("button", { name: "Start voice input" }).click();
-      await gateway.waitForRequest("talk.client.create");
+      // The oversized response completes without navigation, but Playwright otherwise waits for one.
+      await page.getByRole("button", { name: "Start voice input" }).click({ noWaitAfter: true });
+      await waitForWebRtcSdpFetch(page);
 
       const alert = page.locator('.agent-chat__talk-status[role="alert"]');
       await expect

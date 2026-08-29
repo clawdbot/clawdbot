@@ -1,7 +1,12 @@
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createBoundedChildOutput } from "./bounded-child-output.js";
 
-export async function runNodeScript(scriptPath: string, env: NodeJS.ProcessEnv, timeoutMs: number) {
+export async function runNodeScript(
+  scriptPathOrArgs: string | string[],
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+  { cwd }: { cwd?: string } = {},
+) {
   const stdout = createBoundedChildOutput();
   const stderr = createBoundedChildOutput();
   let status: number | null = null;
@@ -9,7 +14,8 @@ export async function runNodeScript(scriptPath: string, env: NodeJS.ProcessEnv, 
   try {
     status = await runManagedCommand({
       bin: process.execPath,
-      args: [scriptPath],
+      args: typeof scriptPathOrArgs === "string" ? [scriptPathOrArgs] : scriptPathOrArgs,
+      cwd,
       env,
       timeoutMs,
       shell: false,

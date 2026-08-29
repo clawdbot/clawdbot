@@ -318,6 +318,7 @@ function mcpCodeModeGatewayLane() {
     "mcp-code-mode-gateway",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:mcp-code-mode-gateway",
     {
+      prepublishPluginPackages: ["@openclaw/codex"],
       resources: ["npm"],
       stateScenario: "empty",
       weight: 3,

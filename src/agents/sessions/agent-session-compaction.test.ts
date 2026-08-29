@@ -15,13 +15,17 @@ import {
 } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import { subscribeEmbeddedAgentSession } from "../embedded-agent-subscribe.js";
-import { agentSessionSetContextReplacementHook } from "./agent-session-compaction.js";
+import {
+  agentSessionAutomaticCompaction,
+  agentSessionSetContextReplacementHook,
+} from "./agent-session-compaction.js";
 import {
   createAssistant,
   createAssistantResultStream,
   createAutoCompactionSettings,
   createOverflowAssistant,
   createTestSession,
+  mockInvalidThenTextSummary,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
@@ -173,6 +177,10 @@ describe("AgentSession compaction", () => {
             retry: { enabled: false },
           }),
         });
+        const subscription = subscribeEmbeddedAgentSession({
+          session,
+          runId: "run-safeguard-summary-usage",
+        });
         const entriesBefore = structuredClone(sessionManager.getEntries());
         const messagesBefore = structuredClone(session.messages);
         const compactionEnds = collectCompactionEnds(session);
@@ -205,6 +213,10 @@ describe("AgentSession compaction", () => {
           outcomes: compactionEnds.map((event) => event.outcome.status),
           appended,
         };
+        expect(subscription.getUsageTotals()?.total ?? 0).toBe(
+          streamMocks.streamSimple.mock.calls.length * 2,
+        );
+        subscription.unsubscribe();
         expect.soft(observation).toMatchObject({
           providerCalls: 1,
           callerAbortedAtProviderEntry: false,
@@ -231,6 +243,99 @@ describe("AgentSession compaction", () => {
         releaseProvider.resolve();
         setCompactionSafeguardRuntime(sessionManager, null);
         registry.compactionProviders.splice(registry.compactionProviders.indexOf(registration), 1);
+        eventBus.clear();
+        network.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "long untrusted focus",
+      instructions: `\nKeep <API>\r\n\u0000\u202E${"😀".repeat(900)}  `,
+      expectedFocus: `Keep &lt;API&gt;\n${"😀".repeat(786)}`,
+    },
+    { name: "blank focus", instructions: " \n\t ", expectedFocus: undefined },
+    { name: "absent focus", instructions: undefined, expectedFocus: undefined },
+  ])(
+    "prepares $name for core without changing the extension input",
+    async ({ instructions, expectedFocus }) => {
+      const sessionManager = SessionManager.inMemory();
+      sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
+      sessionManager.appendMessage({
+        ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
+        timestamp: 2,
+      });
+      sessionManager.appendMessage({ role: "user", content: "split prompt", timestamp: 3 });
+      sessionManager.appendMessage({
+        ...createAssistant(testModel, [{ type: "text", text: "retained answer" }]),
+        timestamp: 4,
+      });
+      const observedInstructions: Array<string | undefined> = [];
+      const prompts: string[] = [];
+      const eventBus = createEventBus();
+      const network = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("Unexpected network request in compaction test"));
+      try {
+        const resourceLoader = createResourceLoader();
+        const extensions = resourceLoader.getExtensions();
+        extensions.extensions.push(
+          await loadExtensionFromFactory(
+            (api) => {
+              api.on("session_before_compact", (event) => {
+                observedInstructions.push(event.customInstructions);
+              });
+            },
+            sessionManager.getCwd(),
+            eventBus,
+            extensions.runtime,
+          ),
+        );
+        streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+          const message = context.messages[0];
+          if (message?.role !== "user") {
+            throw new Error("expected a user summary prompt");
+          }
+          prompts.push(
+            typeof message.content === "string"
+              ? message.content
+              : message.content.map((block) => (block.type === "text" ? block.text : "")).join(""),
+          );
+          return createAssistantResultStream(
+            createAssistant(model, [{ type: "text", text: "compacted summary" }]),
+          );
+        });
+        const { session } = await createTestSession({
+          sessionManager,
+          resourceLoader,
+          settingsManager: SettingsManager.inMemory({
+            compaction: { enabled: false, reserveTokens: 1_000, keepRecentTokens: 1 },
+            retry: { enabled: false },
+          }),
+        });
+
+        await session.compact(instructions);
+
+        expect(observedInstructions).toEqual([instructions]);
+        expect(prompts).toHaveLength(2);
+        for (const prompt of prompts) {
+          if (expectedFocus) {
+            expect.soft(prompt).toContain(`<untrusted-text>\n${expectedFocus}\n</untrusted-text>`);
+            expect.soft(prompt).not.toContain("\u0000");
+            expect.soft(prompt).not.toContain("\u202E");
+          } else {
+            expect.soft(prompt).not.toContain("Additional focus:");
+          }
+        }
+        expect(
+          sessionManager
+            .getEntries()
+            .filter((entry) => entry.type === "compaction")
+            .map((entry) => entry.fromHook),
+        ).toEqual([false]);
+        expect(network.mock.calls.length).toBe(0);
+      } finally {
         eventBus.clear();
         network.mockRestore();
       }
@@ -290,6 +395,62 @@ describe("AgentSession compaction", () => {
     expect(subscription.getCompactionCount()).toBe(1);
     expect(subscription.getLastCompactionTokensAfter()).toEqual(expect.any(Number));
     expect(subscription.getLastCompactionTokensAfter()).toBeGreaterThan(0);
+    subscription.unsubscribe();
+  });
+
+  it("accounts every automatic compaction response before summary validation", async () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
+    sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
+      timestamp: 2,
+    });
+    sessionManager.appendMessage({ role: "user", content: "latest prompt", timestamp: 3 });
+    const requestCount = mockInvalidThenTextSummary("condensed history");
+    const { session } = await createTestSession({
+      sessionManager,
+      settingsManager: createAutoCompactionSettings(),
+    });
+    const subscription = subscribeEmbeddedAgentSession({
+      session,
+      runId: "run-automatic-summary-usage",
+    });
+
+    await session[agentSessionAutomaticCompaction]();
+
+    expect(requestCount()).toBe(2);
+    expect(subscription.getUsageTotals()).toMatchObject({ input: 2, output: 2, total: 4 });
+    subscription.unsubscribe();
+  });
+
+  it("accounts branch-summary responses through the same run owner", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const rootId = sessionManager.appendMessage({ role: "user", content: "root", timestamp: 1 });
+    const abandonedId = sessionManager.appendMessage({
+      role: "user",
+      content: "abandoned branch",
+      timestamp: 2,
+    });
+    sessionManager.branch(rootId);
+    const targetId = sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "target branch" }]),
+      timestamp: 3,
+    });
+    sessionManager.branch(abandonedId);
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "branch summary" }], "stop", 7),
+      ),
+    );
+    const { session } = await createTestSession({ sessionManager });
+    const subscription = subscribeEmbeddedAgentSession({
+      session,
+      runId: "run-branch-summary-usage",
+    });
+
+    await session.navigateTree(targetId, { summarize: true });
+
+    expect(subscription.getUsageTotals()).toMatchObject({ input: 7, output: 1, total: 8 });
     subscription.unsubscribe();
   });
 

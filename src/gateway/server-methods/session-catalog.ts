@@ -415,7 +415,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           ...catalog,
           hosts: catalog.hosts.map((host) =>
             filterSessionCatalogHost(
-              requestEntries.projectHostCreatedActors(host, result.instances),
+              requestEntries.projectHostSessions(host, result.instances),
               visibility,
               {
                 requestEntries,
@@ -650,10 +650,8 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           afterBind: result.afterConversationBound,
         });
       }
-      // Adopted sessions are created under the resolved default store agent, so the
-      // key-derived agent matches the owning agent. Provider-authoritative agent
-      // identity (a `SessionCatalogContinueProviderResult.agentId`) is a follow-up
-      // that would let adapters adopt under non-default agents; see issue tracker.
+      // Session creation canonicalizes the adopted key with its resolved agent,
+      // including non-default agents. Use the returned key's owner for links and events.
       const agentId = resolveAgentIdFromSessionKey(result.sessionKey);
       if (result.upstream) {
         // Links exist only for adoptions made on this version: pre-upgrade adopted

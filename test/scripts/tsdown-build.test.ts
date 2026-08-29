@@ -1928,6 +1928,23 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(fsPromises.readFile(coreFile, "utf8")).resolves.toBe("keep\n");
   });
 
+  it.each(["OpenClaw.app", "candidates/OpenClaw.app"])(
+    "keeps the packaged Mac app intact at %s while rebuilding its replacement runtime",
+    async (appPath) => {
+      const rootDir = createTempDir("openclaw-tsdown-app-pairing-");
+      const appFile = path.join(rootDir, "dist", appPath, "Contents", "Resources", "worker.js");
+      const staleFile = path.join(rootDir, "dist", "stale.js");
+      await fsPromises.mkdir(path.dirname(appFile), { recursive: true });
+      await fsPromises.writeFile(appFile, "previous signed worker\n");
+      await fsPromises.writeFile(staleFile, "stale\n");
+
+      cleanTsdownOutputRoots({ cwd: rootDir, roots: ["dist"] });
+
+      await expect(fsPromises.readFile(appFile, "utf8")).resolves.toBe("previous signed worker\n");
+      await expectPathMissing(staleFile);
+    },
+  );
+
   it("cleans an absolute explicit output directory without rebasing it under cwd", async () => {
     const rootDir = createTempDir("openclaw-tsdown-absolute-clean-");
     const outputDir = path.join(rootDir, "custom-dist");
@@ -2415,9 +2432,11 @@ describe("runTsdownBuildInvocation", () => {
       const rootDir = createTempDir("openclaw-tsdown-timeout-");
       const childPidPath = path.join(rootDir, "child.pid");
       const termPath = path.join(rootDir, "child.term");
+      // Allocate the marker before readiness; filesystem setup must not consume termination grace.
       const childScript = [
         "const fs = require('node:fs');",
-        `process.on('SIGTERM', () => fs.writeFileSync(${JSON.stringify(termPath)}, 'SIGTERM'));`,
+        `const termFd = fs.openSync(${JSON.stringify(termPath)}, 'wx');`,
+        "process.on('SIGTERM', () => fs.writeSync(termFd, 'SIGTERM', 0));",
         `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
         "setInterval(() => {}, 1000);",
       ].join("");
@@ -2457,11 +2476,13 @@ describe("runTsdownBuildInvocation", () => {
       const rootDir = createTempDir("openclaw-tsdown-timeout-clean-");
       const cleanupPath = path.join(rootDir, "child.cleanup");
       const childPidPath = path.join(rootDir, "child.pid");
+      // Keep marker allocation outside the grace period, but require the real delayed cleanup write.
       const childScript = [
         "const fs = require('node:fs');",
+        `const cleanupFd = fs.openSync(${JSON.stringify(cleanupPath)}, 'wx');`,
         "process.on('SIGTERM', () => {",
         "  setTimeout(() => {",
-        `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean');`,
+        "    fs.writeSync(cleanupFd, 'clean', 0);",
         "    process.exit(0);",
         "  }, 50);",
         "});",

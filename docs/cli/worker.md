@@ -33,6 +33,13 @@ turns into the same environment while background processes remain. Each turn
 still receives a fresh bounded envelope, Gateway connection, and tool authority.
 The standalone command above remains a single-turn entry point.
 
+Launches must fit 25 MiB in each complete serialized form: the node invocation
+event and the managed worker input line, including the node's connection endpoint.
+The Gateway trims older complete turns when needed, without discarding the newest
+provider replay checkpoint. If that replay unit cannot fit, the turn fails before
+handoff with a visible retry instruction. The managed line limit excludes its final
+newline; standalone stdin counts every byte.
+
 Admission fails closed if the envelope is invalid, the credential is rejected,
 the bundle or protocol features do not match, or the session and owner epoch are
 no longer current. Missing, duplicate, or unknown tool names also invalidate the

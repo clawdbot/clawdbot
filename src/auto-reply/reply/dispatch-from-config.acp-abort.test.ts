@@ -9,6 +9,7 @@ import type {
   AcpRuntimeTurnInput,
 } from "../../plugin-sdk/acp-runtime.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
+import { markCommandReplyForDelivery } from "../reply-payload.js";
 import {
   acpManagerRuntimeMocks,
   acpMocks,
@@ -1235,6 +1236,183 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(replyRunRegistry.get(targetSessionKey)).toBe(targetOperation);
     expect(replyRunRegistry.get(sourceSessionKey)).toBeUndefined();
     targetOperation.complete();
+    expect(getActiveReplyRunCount()).toBe(0);
+  });
+
+  it("delivers an authorized text command acknowledgement while its session operation is active", async () => {
+    const sessionKey = "agent:main:command-reply-active";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+
+    const acknowledgement = { text: "Thinking level set to high." };
+    const replyResolver = vi.fn(async () => markCommandReplyForDelivery(acknowledgement));
+    const dispatcher = createDispatcher();
+    const dispatchPromise = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        CommandAuthorized: true,
+        CommandSource: "text",
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          commandName: "think",
+          body: "/think high",
+        },
+        SessionKey: sessionKey,
+        Body: "/think high",
+        RawBody: "/think high",
+        CommandBody: "/think high",
+        BodyForAgent: "/think high",
+      }),
+      cfg: {
+        diagnostics: { enabled: true },
+        session: { sendPolicy: { default: "allow" } },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    try {
+      type DispatchOutcome =
+        | { status: "settled"; result: Awaited<typeof dispatchPromise> }
+        | { status: "pending" };
+      const outcome = await raceWithTimeoutResult<DispatchOutcome>(
+        dispatchPromise.then((result) => ({ status: "settled" as const, result })),
+        200,
+        { status: "pending" as const },
+      );
+
+      expect(outcome).toMatchObject({
+        status: "settled",
+        result: { queuedFinal: true },
+      });
+      expect(replyResolver).toHaveBeenCalledOnce();
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(acknowledgement);
+      expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
+    } finally {
+      activeOperation.complete();
+      await dispatchPromise;
+    }
+    expect(getActiveReplyRunCount()).toBe(0);
+  });
+
+  it("keeps an executable /bash command behind active-session admission", async () => {
+    const sessionKey = "agent:main:executable-command-active";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+
+    const callerAbort = new AbortController();
+    const replyResolver = vi.fn(async () =>
+      markCommandReplyForDelivery({ text: "Shell command completed." }),
+    );
+    const dispatchPromise = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        CommandAuthorized: true,
+        CommandSource: "text",
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          commandName: "bash",
+          body: "/bash echo unsafe",
+        },
+        SessionKey: sessionKey,
+        Body: "/bash echo unsafe",
+        RawBody: "/bash echo unsafe",
+        CommandBody: "/bash echo unsafe",
+        BodyForAgent: "/bash echo unsafe",
+      }),
+      cfg: {
+        diagnostics: { enabled: true },
+        session: { sendPolicy: { default: "allow" } },
+      } as OpenClawConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: { abortSignal: callerAbort.signal },
+      replyResolver,
+    });
+
+    try {
+      await expect(
+        raceWithTimeoutResult(
+          dispatchPromise.then(() => "settled" as const),
+          100,
+          "pending" as const,
+        ),
+      ).resolves.toBe("pending");
+      expect(replyResolver).not.toHaveBeenCalled();
+    } finally {
+      callerAbort.abort();
+      activeOperation.complete();
+    }
+    await dispatchPromise;
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(getActiveReplyRunCount()).toBe(0);
+  });
+
+  it("delivers a directive acknowledgement while its terminal path stays serialized", async () => {
+    const sessionKey = "agent:main:directive-reply-active";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+
+    const acknowledgement = { text: "Thinking level set to high.", isStatusNotice: true };
+    const dispatcher = createDispatcher();
+    const dispatchPromise = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        CommandAuthorized: true,
+        CommandSource: "text",
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          commandName: "think",
+          body: "/think high",
+        },
+        SessionKey: sessionKey,
+        Body: "/think high",
+        RawBody: "/think high",
+        CommandBody: "/think high",
+        BodyForAgent: "/think high",
+      }),
+      cfg: {
+        diagnostics: { enabled: true },
+        session: { sendPolicy: { default: "allow" } },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver: async (_resolverCtx, options) => {
+        await options?.onBlockReply?.(acknowledgement);
+        return undefined;
+      },
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(acknowledgement);
+      });
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
+      await expect(
+        raceWithTimeoutResult(
+          dispatchPromise.then(() => "settled" as const),
+          100,
+          "pending" as const,
+        ),
+      ).resolves.toBe("pending");
+    } finally {
+      activeOperation.complete();
+    }
+    await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: false });
     expect(getActiveReplyRunCount()).toBe(0);
   });
 

@@ -3,18 +3,18 @@ import { toErrorObject } from "../../infra/errors.js";
 
 export const HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS = 3;
 
-export function resolveSkillHistoryScanRunFailure(
+export function assertSkillReviewRunSucceeded(
   result: Pick<EmbeddedAgentRunResult, "meta" | "payloads">,
-): Error | undefined {
+): void {
   const errorPayload = result.payloads?.find((payload) => payload.isError);
   const message =
     result.meta.error?.message.trim() ||
     result.meta.failureSignal?.message.trim() ||
-    (result.meta.aborted ? "Historical skill scan model run aborted." : undefined) ||
+    (result.meta.aborted ? "Skill review model run aborted." : undefined) ||
     errorPayload?.text?.trim();
-  return message || errorPayload
-    ? new Error(message || "Historical skill scan model run failed.")
-    : undefined;
+  if (message || errorPayload) {
+    throw new Error(message || "Skill review model run failed.");
+  }
 }
 
 export function resolveSkillHistoryScanReviewOutcome(params: {

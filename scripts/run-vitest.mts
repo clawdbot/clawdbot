@@ -19,6 +19,7 @@ import { signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { spawnTestProjectsRunner } from "./lib/test-projects-delegation.mts";
 import {
+  prepareE2eVitestRuntime,
   resolveVitestRuntimeCliSelections,
   prepareVitestRuntime,
 } from "./lib/vitest-build-prerequisites.mts";
@@ -73,6 +74,8 @@ const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.t
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
 const GATEWAY_SERVER_VITEST_CONFIG = "test/vitest/vitest.gateway-server.config.ts";
+const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
+const E2E_TEST_PROCESS_COUNT = 4;
 const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
 export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
   ["test/vitest/vitest.e2e.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
@@ -615,8 +618,8 @@ function insertVitestTargets(argv: string[], targets: string[]): string[] {
 }
 
 /**
- * Splits config-only Gateway server runs into fresh processes before the
- * non-isolated module graph reaches the worker heap limit.
+ * Bounds shared-worker lifetime with fresh processes so broad non-isolated
+ * runs do not exhaust the worker heap.
  */
 export function resolveBoundedVitestInvocations(
   argv: string[],
@@ -631,16 +634,48 @@ export function resolveBoundedVitestInvocations(
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
   const mode = resolveExplicitVitestMode(argv);
+  const isE2E = matchesVitestConfigPath(normalizedConfig, E2E_VITEST_CONFIG);
   if (
-    !matchesVitestConfigPath(normalizedConfig, GATEWAY_SERVER_VITEST_CONFIG) ||
+    (!isE2E && !matchesVitestConfigPath(normalizedConfig, GATEWAY_SERVER_VITEST_CONFIG)) ||
     mode === "watch" ||
+    hasExplicitDisabledRunFlag(argv) ||
     (mode !== "run" && parsePermissiveBooleanToken(env.CI) !== true) ||
     hasNonRunVitestSubcommand(argv) ||
     hasAlternateVitestRootArg(argv) ||
     collectExplicitProjectRouterTargetArgs(argv, cwd).length > 0 ||
-    UNBOUNDED_CONFIG_ONLY_OPTIONS.some((option) => hasVitestOption(argv, option))
+    [...UNBOUNDED_CONFIG_ONLY_OPTIONS, "--bail"].some((option) => hasVitestOption(argv, option))
   ) {
     return [argv];
+  }
+  if (isE2E) {
+    // Let Vitest own include/exclude and shard membership. Filtered and report-producing
+    // calls retain one process so small selections and aggregate outputs keep their semantics.
+    if (
+      collectExplicitFileTargetArgs(argv, (arg) => arg !== "run").length > 0 ||
+      argv.includes("--") ||
+      [
+        "--exclude",
+        "--testNamePattern",
+        "-t",
+        "--tagsFilter",
+        "--sequence.sequencer",
+        "--reporter",
+        "--reporters",
+        "--listTags",
+        "--clearCache",
+        "--standalone",
+        "--help",
+        "-h",
+        "--version",
+        "-v",
+      ].some((option) => hasVitestOption(argv, option))
+    ) {
+      return [argv];
+    }
+    return Array.from({ length: E2E_TEST_PROCESS_COUNT }, (_, index) => [
+      ...argv,
+      `--shard=${index + 1}/${E2E_TEST_PROCESS_COUNT}`,
+    ]);
   }
   const chunks = options.gatewayServerTargetChunks ?? createGatewayServerTestTargetChunks(cwd);
   return chunks.length > 1 ? chunks.map((targets) => insertVitestTargets(argv, targets)) : [argv];
@@ -1367,6 +1402,10 @@ async function main(
   const invocations = resolveBoundedVitestInvocations(vitestArgs, { env });
   const config = resolveVitestConfigArg(vitestArgs);
   const relativeConfig = config ? toRepoRelativeArg(path.resolve(config), repoRoot) : "";
+  const invocationEnv =
+    invocations.length > 1 && relativeConfig === E2E_VITEST_CONFIG
+      ? { ...env, ...(await prepareE2eVitestRuntime(env)) }
+      : env;
   // Canonical configs have known project scopes. Custom roots/projects keep
   // their own setup; never infer their runtime selection from a config name.
   if (
@@ -1379,9 +1418,9 @@ async function main(
   ) {
     const code = await prepareVitestRuntime(
       invocations.flatMap((cliArgs) =>
-        resolveVitestRuntimeCliSelections(relativeConfig, cliArgs, env),
+        resolveVitestRuntimeCliSelections(relativeConfig, cliArgs, invocationEnv),
       ),
-      env,
+      invocationEnv,
     );
     if (code !== 0) {
       process.exitCode = code;
@@ -1400,29 +1439,37 @@ async function main(
     throw error;
   }
 
+  let failedExitCode = 0;
   for (const [index, invocation] of invocations.entries()) {
     const guardedVitestArgs = resolveExplicitTestFileNoPassArgs(invocation);
-    const spawnEnv = resolveRunVitestSpawnEnv(env, guardedVitestArgs);
+    const spawnEnv = resolveRunVitestSpawnEnv(invocationEnv, guardedVitestArgs);
     if (invocations.length > 1) {
-      console.error("[vitest] Gateway server process " + (index + 1) + "/" + invocations.length);
+      console.error("[vitest] bounded process " + (index + 1) + "/" + invocations.length);
     }
-    const exitCode = await finishVitestProcess(
-      spawnWatchedVitestProcess({
-        pnpmArgs: [
-          "exec",
-          "node",
-          ...resolveVitestNodeArgs(env),
-          vitestCliEntry,
-          ...guardedVitestArgs,
-        ],
-        spawnParams: resolveVitestSpawnParams(spawnEnv),
-        env: spawnEnv,
-      }),
-    );
-    if (exitCode !== 0) {
+    const handle = spawnWatchedVitestProcess({
+      pnpmArgs: [
+        "exec",
+        "node",
+        ...resolveVitestNodeArgs(invocationEnv),
+        vitestCliEntry,
+        ...guardedVitestArgs,
+      ],
+      spawnParams: resolveVitestSpawnParams(spawnEnv),
+      env: spawnEnv,
+    });
+    const exitCode = await finishVitestProcess(handle);
+    // Ordinary test failures must not hide later files. Signals are forwarded by
+    // finishVitestProcess and stop this owner before another child is admitted.
+    if (
+      handle.getForwardedSignal() ||
+      handle.child.signalCode ||
+      (exitCode !== 0 && exitCode !== 1)
+    ) {
       return;
     }
+    failedExitCode ||= exitCode;
   }
+  process.exitCode = failedExitCode;
 }
 
 if (import.meta.main) {

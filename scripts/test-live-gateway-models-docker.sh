@@ -23,6 +23,7 @@ DOCKER_AUTH_PRESTAGED=0
 DOCKER_TRUSTED_HARNESS_CONTAINER_DIR="/trusted-harness"
 DOCKER_TRUSTED_HARNESS_MOUNT=(-v "$TRUSTED_HARNESS_DIR":"$DOCKER_TRUSTED_HARNESS_CONTAINER_DIR":ro)
 openclaw_live_init_temp_dirs
+openclaw_live_init_cli_tools_dir
 openclaw_live_init_cache_home_dir
 openclaw_live_init_managed_home
 openclaw_live_init_profile_mount
@@ -54,7 +55,7 @@ openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
 docker_packages="$(node --import tsx scripts/print-cli-backend-live-metadata.ts \
-  --docker-packages "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}")"
+  --docker-packages "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" "${OPENCLAW_LIVE_GATEWAY_MODELS:-}")"
 while IFS= read -r docker_package; do
   [ -n "$docker_package" ] || continue
   openclaw_live_run_setup_command 180 "live CLI backend setup" npm install -g "$docker_package"
@@ -72,6 +73,7 @@ if openclaw_live_uses_managed_bind_dirs; then
   openclaw_live_chown_bind_dirs_for_container_user \
     "$LIVE_IMAGE_NAME" \
     "$DOCKER_USER" \
+    "$CLI_TOOLS_DIR" \
     "$CACHE_HOME_DIR" \
     "${DOCKER_HOME_DIR:-}"
 fi
@@ -124,6 +126,7 @@ DOCKER_RUN_ARGS+=(--rm -t \
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_TRUSTED_HARNESS_MOUNT
 DOCKER_RUN_ARGS+=(\
+  -v "$CLI_TOOLS_DIR":/home/node/.npm-global \
   -v "$CACHE_HOME_DIR":/home/node/.cache \
   -v "$ROOT_DIR":/src:ro \
   -v "$CONFIG_DIR":/home/node/.openclaw \

@@ -1,6 +1,5 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Type } from "typebox";
 import { Value } from "typebox/value";
 import {
   GATEWAY_CLIENT_IDS,
@@ -16,9 +15,9 @@ import {
   WorkerConnectRequestFrameSchema,
   type WorkerTranscriptMessage,
   WorkerTranscriptMessageSchema,
+  WorkerTranscriptUserMessageSchema,
   type WorkerTranscriptCommitParams,
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
-  WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceModelRef,
@@ -28,11 +27,9 @@ import {
   WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
   WorkerInferenceModelRefSchema,
   WorkerInferenceOptionsSchema,
-  WorkerInferenceImageContentSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import type { ImageContent } from "../llm/types.js";
 import { isWorkerToolName, type WorkerToolAuthority } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import {
@@ -41,10 +38,6 @@ import {
 } from "./worker-connection-endpoint.js";
 
 const LAUNCH_VERSION = 4;
-const WorkerPromptImagesSchema = Type.Array(WorkerInferenceImageContentSchema, {
-  minItems: 1,
-  maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS - 1,
-});
 
 export type WorkerBrowserLaunchDescriptor = {
   cdpUrl: string;
@@ -63,8 +56,7 @@ type WorkerLaunchAssignment = WorkerLaunchPermissionContext & {
   agentRuntimeIdentityToken: string;
   runId: string;
   turnId: string;
-  prompt: string;
-  images?: ImageContent[];
+  prompt: string | Extract<WorkerTranscriptMessage, { role: "user" }>["content"];
   suppressPromptTranscript: boolean;
   workspaceDir: string;
   modelRef: WorkerInferenceModelRef;
@@ -197,7 +189,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
         "liveEvents",
         "toolAuthority",
       ],
-      ["systemPrompt", "images", "browser", "permissionMode", "workerContainmentRoot"],
+      ["systemPrompt", "browser", "permissionMode", "workerContainmentRoot"],
     )
   ) {
     return undefined;
@@ -224,8 +216,14 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
     value.agentRuntimeIdentityToken.length < 1 ||
     value.agentRuntimeIdentityToken.length > 16_384 ||
     !isIdentifier(value.turnId) ||
-    typeof value.prompt !== "string" ||
-    (value.images !== undefined && !Value.Check(WorkerPromptImagesSchema, value.images)) ||
+    !(
+      typeof value.prompt === "string" ||
+      Value.Check(WorkerTranscriptUserMessageSchema, {
+        role: "user",
+        content: value.prompt,
+        timestamp: 0,
+      })
+    ) ||
     typeof value.suppressPromptTranscript !== "boolean" ||
     !isIdentifier(value.workspaceDir) ||
     !isAbsoluteHostPath(value.workspaceDir) ||
@@ -312,12 +310,10 @@ function validateWorkerLaunchPlan(candidate: WorkerLaunchPlan): WorkerLaunchPlan
     candidate.admission.ownerEpoch < 1 ||
     !isWorkerTranscriptMessageFrameSafe({
       role: "user",
-      content: [
-        { type: "text", text: candidate.assignment.prompt },
-        ...(candidate.assignment.suppressPromptTranscript
-          ? []
-          : (candidate.assignment.images ?? [])),
-      ],
+      content:
+        typeof candidate.assignment.prompt === "string"
+          ? [{ type: "text", text: candidate.assignment.prompt }]
+          : candidate.assignment.prompt,
       timestamp: Number.MAX_SAFE_INTEGER,
     })
   ) {

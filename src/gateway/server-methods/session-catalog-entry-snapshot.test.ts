@@ -86,6 +86,40 @@ describe("session catalog entry snapshots", () => {
     hoisted.listSessionEntriesReadOnly.mockReset();
   });
 
+  it.each([
+    [" BLUE ", "blue"],
+    ["default", undefined],
+    ["reset", undefined],
+    ["none", undefined],
+    ["gray", undefined],
+    ["grey", undefined],
+    ["#ff0000", undefined],
+    ["invalid", undefined],
+    [undefined, undefined],
+  ])("projects provider color %s to its canonical wire value", (color, expected) => {
+    const snapshot = createSessionCatalogRequestEntrySnapshot({ cfg: {}, fallbackAgentId: "main" });
+    const host = snapshot.projectHostSessions(
+      {
+        hostId: "gateway:fixture",
+        label: "Fixture",
+        kind: "gateway",
+        connected: true,
+        sessions: [
+          {
+            threadId: "color-fixture",
+            color,
+            status: "stored",
+            archived: false,
+            canContinue: true,
+            canArchive: false,
+          },
+        ],
+      },
+      new Map(),
+    );
+    expect(host.sessions[0]?.color).toBe(expected);
+  });
+
   it("shares resolved and missing human profiles across hosts without retaining them across requests", () => {
     let label = "Before rename";
     const display = vi.spyOn(userProfiles, "getUserProfileDisplay").mockImplementation((id) => {
@@ -132,7 +166,7 @@ describe("session catalog entry snapshots", () => {
         const instances = new Map();
         snapshot.captureHostInstances(host, instances);
         return snapshot
-          .projectHostCreatedActors(host, instances)
+          .projectHostSessions(host, instances)
           .sessions.map((session) => session.createdActor);
       });
     };
@@ -295,7 +329,7 @@ describe("session catalog entry snapshots", () => {
     ];
     hoisted.listSessionEntriesReadOnly.mockReturnValue(entries);
     const snapshot = createSessionCatalogRequestEntrySnapshot({ cfg: {}, fallbackAgentId: "main" });
-    const host: Parameters<typeof snapshot.projectHostCreatedActors>[0] = {
+    const host: Parameters<typeof snapshot.projectHostSessions>[0] = {
       hostId: "gateway:fixture",
       label: "Fixture",
       kind: "gateway",
@@ -312,7 +346,7 @@ describe("session catalog entry snapshots", () => {
     };
     const instances = new Map();
     snapshot.captureHostInstances(host, instances);
-    const projected = snapshot.projectHostCreatedActors(host, instances);
+    const projected = snapshot.projectHostSessions(host, instances);
     expect(projected.sessions.map((session) => session.createdActor)).toEqual([
       {
         type: "human",

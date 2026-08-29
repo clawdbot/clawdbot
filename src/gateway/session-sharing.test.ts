@@ -275,7 +275,13 @@ describe("session sharing policy", () => {
             context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
           }).error,
         ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
-        for (const method of ["sessions.companion.ask", "sessions.companion.state"]) {
+        for (const method of [
+          "chat.history",
+          "chat.startup",
+          "chat.metadata",
+          "sessions.companion.ask",
+          "sessions.companion.state",
+        ]) {
           expect(
             resolveSessionMutationAuthorization({
               client: viewer,
@@ -443,6 +449,7 @@ describe("session sharing policy", () => {
       const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
       for (const [method, requestParams] of [
         ["chat.history", { sessionKey: foreignKey }],
+        ["chat.metadata", { sessionKey: foreignKey }],
         ["chat.send", { sessionKey: foreignKey }],
         ["mcp.app.callTool", { sessionKey: foreignKey }],
         ["mcp.app.updateModelContext", { sessionKey: foreignKey }],
@@ -806,55 +813,42 @@ describe("session sharing policy", () => {
       const context = { chatAbortControllers: new Map(), getRuntimeConfig: () => cfg } as never;
       const directRequests = (requestedKey: string) => [
         { method: "chat.history", requestParams: { sessionKey: requestedKey } },
+        { method: "chat.metadata", requestParams: { sessionKey: requestedKey } },
         { method: "chat.send", requestParams: { sessionKey: requestedKey } },
         { method: "sessions.get", requestParams: { key: requestedKey } },
         { method: "sessions.preview", requestParams: { keys: [requestedKey] } },
         { method: "sessions.search", requestParams: { sessionKeys: [requestedKey] } },
       ];
 
-      for (const visibleClient of [admin, solo]) {
-        expect(isListed(visibleClient, sessionKey, entry)).toBe(true);
+      for (const [requestClient, visible] of [
+        [admin, true],
+        [solo, true],
+        [owner, false],
+        [viewer, false],
+      ] as const) {
+        expect(isListed(requestClient, sessionKey, entry)).toBe(visible);
         expect(
           canReceiveSessionEvent({
             cfg,
-            client: visibleClient as never,
+            client: requestClient as never,
             sessionKeys: [sessionKey],
           }),
-        ).toBe(true);
+        ).toBe(visible);
         for (const requestedKey of [sessionKey, sessionAlias]) {
           for (const request of directRequests(requestedKey)) {
-            expect(
-              resolveSessionMutationAuthorization({
-                client: visibleClient,
-                ...request,
-                context,
-              }).error,
-            ).toBeNull();
-          }
-        }
-      }
-
-      for (const hiddenClient of [owner, viewer]) {
-        expect(isListed(hiddenClient, sessionKey, entry)).toBe(false);
-        expect(
-          canReceiveSessionEvent({
-            cfg,
-            client: hiddenClient as never,
-            sessionKeys: [sessionKey],
-          }),
-        ).toBe(false);
-        for (const requestedKey of [sessionKey, sessionAlias]) {
-          for (const request of directRequests(requestedKey)) {
-            expect(
-              resolveSessionMutationAuthorization({
-                client: hiddenClient,
-                ...request,
-                context,
-              }).error,
-            ).toMatchObject({
-              code: "INVALID_REQUEST",
-              message: `Incognito session "${requestedKey}" was not found.`,
+            const { error } = resolveSessionMutationAuthorization({
+              client: requestClient,
+              ...request,
+              context,
             });
+            if (visible) {
+              expect(error).toBeNull();
+            } else {
+              expect(error).toMatchObject({
+                code: "INVALID_REQUEST",
+                message: `Incognito session "${requestedKey}" was not found.`,
+              });
+            }
           }
         }
       }

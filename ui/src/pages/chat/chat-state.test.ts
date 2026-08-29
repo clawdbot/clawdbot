@@ -5,12 +5,14 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
 import {
   buildFallbackSlashCommands,
   replaceSlashCommands,
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { invalidateModelCatalogCache } from "../../lib/model-catalog-store.ts";
 import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
@@ -3546,6 +3548,66 @@ describe("refreshChatMetadata", () => {
     } as unknown as ChatPageHost;
   }
 
+  it.each(["metadata", "picker"] as const)(
+    "fences a late %s result across same-client reconnect",
+    async (kind) => {
+      const old = createDeferred<{ commands: never[]; models: typeof state.chatModelCatalog }>();
+      const ready = { id: "model", name: "Model", provider: "test", available: true };
+      const request = vi
+        .fn()
+        .mockReturnValueOnce(old.promise)
+        .mockResolvedValue({ commands: [], models: [ready] });
+      const state = createMetadataState(request);
+      const pending =
+        kind === "picker" ? refreshChatModelCatalogOnDemand(state) : refreshChatMetadata(state);
+      state.connected = false;
+      retireChatMetadataRequests(state);
+      invalidateModelCatalogCache(state.client!);
+      invalidateChatMetadataStore(state.client!);
+      expect(state.chatModelCatalog).toEqual([]);
+      state.connectionEpoch += 1;
+      state.connected = true;
+      await refreshChatMetadata(state);
+      old.resolve({
+        commands: [],
+        models: [{ ...ready, available: false, unavailableReason: "missing-auth" }],
+      });
+      await pending;
+      expect(state.chatModelCatalog).toEqual([ready]);
+      expect(state.chatModelCatalogError).toBeNull();
+      retireChatMetadataRequests(state);
+    },
+  );
+
+  it.each(["command-metadata", "patch"])(
+    "refreshes only the matching session for %s, not streaming updates",
+    async (reason) => {
+      const request = vi.fn().mockResolvedValue({ commands: [], models: [] });
+      const state = createMetadataState(request);
+      await refreshChatMetadata(state);
+      for (const [key, eventReason] of [
+        ["agent:work:other", reason],
+        [state.sessionKey, "message"],
+      ]) {
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "sessions.changed",
+          payload: { key, agentId: "work", reason: eventReason },
+        });
+      }
+      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(1);
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "sessions.changed",
+        payload: { key: state.sessionKey, agentId: "work", reason },
+      });
+      await vi.waitFor(() =>
+        expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(2),
+      );
+      retireChatMetadataRequests(state);
+    },
+  );
+
   it.each([
     {
       label: "warm",
@@ -3560,8 +3622,11 @@ describe("refreshChatMetadata", () => {
         models: Array<{ id: string; name: string; provider: string; reasoning: boolean }>;
       }>();
       const request = vi.fn((method: string, params?: unknown) => {
-        expect(method).toBe("models.list");
-        expect(params).toEqual({ view: "configured", agentId: "work", refresh: true });
+        expect(params).toEqual(
+          method === "models.list"
+            ? { view: "configured", agentId: "work", refresh: true }
+            : { agentId: "work", sessionKey: "agent:work:main" },
+        );
         return discovery.promise;
       });
       const state = createMetadataState(request, {
@@ -3592,7 +3657,7 @@ describe("refreshChatMetadata", () => {
     },
   );
 
-  it("applies agent-scoped metadata after a same-agent session switch", async () => {
+  it("does not apply session metadata after a same-agent session switch", async () => {
     let resolveMetadata:
       | ((value: {
           commands: never[];
@@ -3612,7 +3677,7 @@ describe("refreshChatMetadata", () => {
     });
     const request = vi.fn(async (method: string, params?: unknown) => {
       expect(method).toBe("chat.metadata");
-      expect(params).toEqual({ agentId: "work" });
+      expect(params).toEqual({ agentId: "work", sessionKey: "agent:work:main" });
       return await metadata;
     });
     const state = createMetadataState(request);
@@ -3625,13 +3690,11 @@ describe("refreshChatMetadata", () => {
     });
     await refresh;
 
-    expect(state.chatModelCatalog).toEqual([
-      { id: "work-model", name: "Work Model", provider: "openai", available: true },
-    ]);
+    expect(state.chatModelCatalog).toEqual([]);
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses same-agent metadata and fetches a cross-agent catalog", async () => {
+  it("isolates metadata across sessions and agents", async () => {
     const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
       commands: [],
       models: [
@@ -3647,12 +3710,15 @@ describe("refreshChatMetadata", () => {
     await refreshChatMetadata(state);
     state.sessionKey = "agent:work:second";
     await refreshChatMetadata(state);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
 
     state.sessionKey = "agent:other:main";
     await refreshChatMetadata(state);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith("chat.metadata", { agentId: "other" });
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenLastCalledWith("chat.metadata", {
+      agentId: "other",
+      sessionKey: "agent:other:main",
+    });
   });
 
   it("ignores metadata after switching to a different agent", async () => {
@@ -3758,7 +3824,7 @@ describe("refreshChatMetadata", () => {
     });
     await refresh;
 
-    expect(state.chatModelCatalog).toBe(existingCatalog);
+    expect(state.chatModelCatalog).toEqual([]);
   });
 
   it("keeps the seeded catalog and reports chat metadata failures without model fallback", async () => {

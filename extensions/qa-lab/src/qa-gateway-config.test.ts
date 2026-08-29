@@ -111,6 +111,9 @@ describe("buildQaGatewayConfig", () => {
     expect(getModelFallbacks(cfg.agents?.defaults?.model)).toEqual([
       "mock-openai/gpt-5.6-luna-alt",
     ]);
+    expect(cfg.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["mock-openai/gpt-5.6-luna", "mock-openai/gpt-5.6-luna-alt"],
+    });
     expect(getModelFallbacks(cfg.agents?.entries?.qa?.model)).toEqual([
       "mock-openai/gpt-5.6-luna-alt",
     ]);
@@ -546,6 +549,7 @@ describe("buildQaGatewayConfig", () => {
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.4");
     expect(getModelFallbacks(cfg.agents?.defaults?.model)).toBeUndefined();
+    expect(cfg.agents?.defaults?.modelPolicy).toEqual({ allow: ["openai/gpt-5.4"] });
   });
 
   it("can disable control ui for suite-only gateway children", () => {

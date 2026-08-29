@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Session memory:** capture the departing conversation before manual, daily, or idle resets close its transcript window, preserving recent messages and their trust provenance in memory artifacts.
 - **Secret egress host binding:** bind each shared-store secret to exact HTTPS destination hosts across CLI, Gateway RPC, and Control UI so unbound sentinel substitution fails closed before plaintext egress.
 - **Release validation:** defer beta candidate Parallels smoke to postpublish `release:beta-smoke` by default, keep stable/full prepublish coverage, and bound nested release workflow monitors with explicit job timeouts.
 - **macOS app profiles:** isolate named app instances across state, preferences, Keychain, Gateway services, and duplicate-instance ownership while keeping host-global login and node services untouched.
@@ -69,6 +70,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Grok web search startup:** avoid loading the full agent runtime before the first search, while preserving agent-scoped credentials and OAuth fallback behavior.
 - Gateway/subagents: keep plugin completion turns bound to the owning Gateway runtime so successful native subagents can finish delivery without losing the published reply runtime.
 - **Upgrade config repair:** retain plugin-owned channel configuration migrations alongside core schemas so `doctor --fix` can repair older settings before an external plugin is installed or granted capabilities, while preserving installed-plugin ownership and state-migration boundaries.
 
@@ -221,6 +223,7 @@ Docs: https://docs.openclaw.ai
 - **Deepgram realtime custom endpoints:** validate Voice Call streaming base URLs with secret-safe errors, preserve explicit `ws://` and `wss://` endpoints, and map HTTP schemes to their matching WebSocket transport for dedicated and self-hosted deployments. (#105334) Thanks @dwc1997.
 - **Control UI New Session reconnects:** rediscover agents, nodes, repository branches, and folder-browser state, refresh derived workspaces, gate unvalidated devices, and block ambiguous retries after Gateway client replacement while preserving the typed task and explicit choices. Fixes #106372.
 - **macOS remote node readiness:** take the main-session key from the node hello snapshot instead of opening an operator connection during node admission, preventing remote tunnel recovery from leaving Computer Use and node exec stuck in lifecycle transition.
+- **Claude CLI prompt privacy:** keep prompt-build hook context out of visible chat history while preserving ordinary user requests, native session recall, and policy-hook visibility. (#132466) Thanks @RomneyDa.
 - **Claude CLI context budgets:** honor Anthropic model and per-agent `contextTokens` limits by passing the effective limit to Claude Code's native auto-compactor and persisting the same prepared budget in OpenClaw session state. Fixes #80933. (#93198) Thanks @mushuiyu886.
 - **Transcript read failures:** propagate permission and I/O failures from streaming JSONL session reads instead of treating unreadable transcripts as empty. (#106412) Thanks @zenglingbiao.
 - **Restart sentinel diagnostics:** report SQLite read/write and legacy-file cleanup failures while preserving best-effort restart recovery behavior. (#106385) Thanks @zenglingbiao and @wendy-chsy.

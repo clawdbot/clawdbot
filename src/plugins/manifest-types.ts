@@ -299,7 +299,7 @@ export type PluginManifestSecretInputPath = {
   /** Expected resolved type for SecretRef materialization. */
   expected?: "string";
   /** Runtime owner kind used to isolate this surface when resolution fails. */
-  ownerKind?: "route";
+  ownerKind?: "capability" | "route";
 };
 
 export type PluginManifestSecretInputContracts = {

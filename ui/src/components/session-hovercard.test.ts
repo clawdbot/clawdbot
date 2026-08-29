@@ -49,6 +49,21 @@ function progressCard(): ProgressCard {
 }
 
 describe("renderSessionHovercard", () => {
+  it.each(["purple", undefined, "default"])(
+    "reflects the session color %s without unset chrome",
+    (color) => {
+      const container = document.createElement("div");
+      render(renderSessionHovercard({ row: row({ color }) }), container);
+      const dot = container.querySelector(".session-color-dot");
+      if (color === "purple") {
+        expect(dot?.getAttribute("aria-label")).toBe("Session color: Purple");
+        expect(dot?.getAttribute("style")).toContain("--session-color-purple");
+      } else {
+        expect(dot).toBeNull();
+      }
+    },
+  );
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-17T12:00:00Z"));

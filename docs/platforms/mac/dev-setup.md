@@ -29,8 +29,28 @@ pnpm install
 ```
 
 Outputs `dist/OpenClaw.app`. Packaging requires a real signing identity by
-default; ad-hoc signing is an explicit opt-in and does not preserve TCC grants.
-See [macOS signing](/platforms/mac/signing).
+default and fails if none is available. Ad-hoc signing is an explicit opt-in;
+it does not preserve TCC permissions. See [macOS signing](/platforms/mac/signing).
+
+Packaging builds the JavaScript runtime and Control UI, then provisions a
+private Node worker from the canonical package artifact for every requested
+`BUILD_ARCHS` architecture. The root worker tarball uses the repository-pinned
+pnpm packer; Corepack-only setups are supported. Packaging verifies native
+capabilities and worker readiness in temporary state before and after signing,
+then replaces the previous app. `scripts/restart-mac.sh` uses
+the same path; `SKIP_TSC=1` no longer bypasses the runtime build. Existing
+content-checked build caches still avoid unnecessary declaration work.
+
+Universal builds require both arm64 and x86_64 runtimes to execute during
+validation. Building x86_64 on Apple Silicon requires Rosetta; a missing
+architecture or nonportable native dependency fails packaging. Node downloads
+and package installation need network access. The larger app includes its
+complete private runtime; it does not update an independently managed Gateway.
+
+The private worker uses read-only core config bootstrap rather than Gateway-wide
+Doctor preflight. Node plugin validation, MCP lifecycle, and node-owned identity
+and exec-approval startup migrations remain enabled. See
+[Gateway ownership](/platforms/mac/bundled-gateway) for the boundary.
 
 Set `OPENCLAW_SKIP_MLX_TTS=1` to package a dev/proof build without the local
 MLX voice helper. This skips the `openclaw-mlx-tts` binary and its large
