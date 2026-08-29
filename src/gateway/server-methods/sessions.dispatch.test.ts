@@ -825,6 +825,13 @@ describe("sessions.dispatch", () => {
 
     const respond = await invoke(
       makeContext({
+        // Proof unavailable = the inventory cannot answer, not "row absent";
+        // an absent row proves the environment is gone and permits redispatch.
+        workerEnvironmentService: {
+          get: vi.fn(() => {
+            throw new Error("environment inventory unavailable");
+          }),
+        } as never,
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: {
           getMany: () => new Map([[sessionId, failedPlacementRecord()]]),
