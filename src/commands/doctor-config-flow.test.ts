@@ -1519,13 +1519,6 @@ vi.mock("./doctor-config-analysis.js", () => {
   };
 });
 
-vi.mock("./doctor-state-migrations.js", () => ({
-  autoMigrateLegacyState: vi.fn(async () => ({ changes: [], warnings: [] })),
-  autoMigrateLegacyStateDir: vi.fn(async () => ({ changes: [], warnings: [] })),
-  autoMigrateLegacyTaskStateSidecars: vi.fn(async () => ({ changes: [], warnings: [] })),
-  migrateLegacyMediaPersistence: vi.fn(() => ({ changes: [], warnings: [] })),
-}));
-
 function resetTerminalNoteMock() {
   terminalNoteMock.mockClear();
   return terminalNoteMock;

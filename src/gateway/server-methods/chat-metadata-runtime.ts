@@ -282,6 +282,7 @@ export function createGatewayChatMetadataRuntime(params: {
   getConfig: () => OpenClawConfig;
   getContext: () => GatewayRequestContext;
   beforeRefresh?: () => Promise<void>;
+  onChanged?: () => void;
   refreshOnRead?: boolean;
   log: {
     warn: (message: string) => void;
@@ -312,6 +313,8 @@ export function createGatewayChatMetadataRuntime(params: {
   let lastError: Error | undefined;
   let replacement: MetadataReplacement | undefined;
   let invalidationEpoch = 0;
+  let refreshVersion = 0;
+  let lastSettlement: PreparedMetadataGeneration | number | undefined;
   let refreshTail: Promise<void> = Promise.resolve();
   let pending:
     | {
@@ -390,7 +393,7 @@ export function createGatewayChatMetadataRuntime(params: {
   const buildGeneration = async (
     facts: PreparedGenerationFacts,
     epoch: number,
-  ): Promise<boolean> => {
+  ): Promise<PreparedMetadataGeneration | undefined> => {
     const agents = await Promise.all(
       facts.agents.map(async (agent): Promise<PreparedAgentMetadata> => {
         let commands: unknown[] | undefined;
@@ -417,30 +420,45 @@ export function createGatewayChatMetadataRuntime(params: {
       sessionProjectionByKey: new Map(),
     };
     if (epoch !== invalidationEpoch) {
-      return false;
+      return undefined;
     }
     await Promise.all(agents.map((agent) => projectAgent(generation, agent)));
-    if (epoch !== invalidationEpoch) {
-      return false;
-    }
-    current = generation;
-    return epoch === invalidationEpoch;
+    return generation;
   };
 
-  const runRefresh = async () => {
+  const runRefresh = async (version: number) => {
     await params.beforeRefresh?.();
+    // Ownership can change during preparation; build completion checks it again after suspension.
+    if (version !== refreshVersion) {
+      return;
+    }
     for (;;) {
-      const facts = captureGenerationFacts(deps);
-      if (current && generationFactsMatch(current.facts, facts)) {
-        return;
-      }
       const epoch = invalidationEpoch;
-      if (!(await buildGeneration(facts, epoch))) {
-        continue;
-      }
-      const latest = captureGenerationFacts(deps);
-      if (epoch === invalidationEpoch && generationFactsMatch(facts, latest)) {
-        return;
+      try {
+        const facts = captureGenerationFacts(deps);
+        if (current && generationFactsMatch(current.facts, facts)) {
+          return;
+        }
+        const generation = await buildGeneration(facts, epoch);
+        if (version !== refreshVersion) {
+          return;
+        }
+        if (
+          generation &&
+          epoch === invalidationEpoch &&
+          generationFactsMatch(facts, captureGenerationFacts(deps))
+        ) {
+          current = generation;
+          return;
+        }
+      } catch (error) {
+        // A superseded build may fail after replacement starts; only its current epoch may fail readers.
+        if (version !== refreshVersion) {
+          return;
+        }
+        if (epoch === invalidationEpoch) {
+          throw error;
+        }
       }
     }
   };
@@ -467,6 +485,10 @@ export function createGatewayChatMetadataRuntime(params: {
           const committedReplacement = replacement;
           replacement = undefined;
           committedReplacement?.resolve();
+          if (lastSettlement !== current) {
+            lastSettlement = current;
+            params.onChanged?.();
+          }
         },
         (error: unknown) => {
           if (pending?.promise !== promise) {
@@ -482,7 +504,8 @@ export function createGatewayChatMetadataRuntime(params: {
       if (pending) {
         return pending.promise;
       }
-      const promise = refreshTail.catch(() => {}).then(runRefresh);
+      const version = ++refreshVersion;
+      const promise = refreshTail.catch(() => {}).then(() => runRefresh(version));
       return trackRefresh(promise);
     }
     let facts: PreparedGenerationFacts;
@@ -499,7 +522,8 @@ export function createGatewayChatMetadataRuntime(params: {
     if (pending?.facts && generationFactsMatch(pending.facts, facts)) {
       return pending.promise;
     }
-    const promise = refreshTail.catch(() => {}).then(runRefresh);
+    const version = ++refreshVersion;
+    const promise = refreshTail.catch(() => {}).then(() => runRefresh(version));
     return trackRefresh(promise, facts);
   };
 
@@ -665,11 +689,19 @@ export function createGatewayChatMetadataRuntime(params: {
 
   const fail = (error: unknown) => {
     const replacementError = error instanceof Error ? error : new Error(formatErrorMessage(error));
+    refreshVersion += 1;
+    pending = undefined;
     current = undefined;
     lastError = replacementError;
     const failedReplacement = replacement;
     replacement = undefined;
     failedReplacement?.reject(replacementError);
+    // Unavailable reads may retry capture. Notify once for the failed epoch, not once per reader.
+    // A later ready generation is a different settlement even without another invalidation.
+    if (lastSettlement !== invalidationEpoch) {
+      lastSettlement = invalidationEpoch;
+      params.onChanged?.();
+    }
   };
 
   return { fail, invalidate, read, readStartup, refresh };

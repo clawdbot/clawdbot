@@ -8,7 +8,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { rememberChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
+import {
+  beginChatMetadataPublication,
+  subscribeChatMetadata,
+  invalidateChatMetadataStore,
+} from "../../lib/chat/chat-metadata-store.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   buildFallbackSlashCommands,
@@ -45,6 +49,7 @@ import {
 } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   admitStoredChatComposerQueueItem,
@@ -474,7 +479,10 @@ describe("refreshChat", () => {
     ).resolves.toBeUndefined();
 
     expect(host.chatMessages).toEqual([message]);
-    expect(host.request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
+    expect(host.request).toHaveBeenCalledWith("chat.metadata", {
+      agentId: "main",
+      sessionKey: host.sessionKey,
+    });
     expect(asChatPageHost(host).chatModelsLoading).toBe(true);
 
     const model = {
@@ -502,7 +510,10 @@ describe("refreshChat", () => {
       name: "Cached Model",
       provider: "openai",
     };
-    rememberChatMetadata(expectDefined(host.client, "chat host client"), "main", {
+    const client = expectDefined(host.client, "chat host client");
+    const scope = { agentId: "main", sessionKey: host.sessionKey };
+    const release = subscribeChatMetadata(client, scope, () => {});
+    beginChatMetadataPublication(client, scope).publish({
       commands: [],
       models: [cachedModel],
     });
@@ -512,6 +523,7 @@ describe("refreshChat", () => {
       deferBranches: true,
       startup: true,
     });
+    release();
 
     expect(host.chatModelCatalog).toEqual([cachedModel]);
     expect(asChatPageHost(host).chatModelsLoading).toBe(false);
@@ -546,6 +558,110 @@ describe("refreshChat", () => {
       ]),
     );
   });
+
+  it("does not let late startup metadata replace a repaired retained session", async () => {
+    const startup = createDeferred<unknown>();
+    const ready = { id: "model", name: "Model", provider: "test", available: true };
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.startup": () => startup.promise,
+        "chat.metadata": async () => ({ commands: [], models: [ready] }),
+      },
+    });
+    const refresh = refreshPageChat(asChatPageHost(host), {
+      startup: true,
+      awaitHistory: true,
+      deferBranches: true,
+    });
+    invalidateChatMetadataStore(expectDefined(host.client, "chat host client"));
+    await waitForFast(() => expect(host.chatModelCatalog).toEqual([ready]));
+    startup.resolve({
+      messages: [],
+      metadata: {
+        commands: [],
+        models: [{ ...ready, available: false, unavailableReason: "missing-auth" }],
+      },
+    });
+    await refresh;
+    expect(host.chatModelCatalog).toEqual([ready]);
+  });
+
+  it.each(["closes", "disconnects", "changes session"])(
+    "publishes shared startup metadata after its initiating pane %s",
+    async (retirement) => {
+      const startup = createDeferred<unknown>();
+      const metadata = createDeferred<unknown>();
+      const ready = { id: "model", name: "Model", provider: "test", available: true };
+      const retained = makeChatHost({
+        requestHandlers: {
+          "chat.metadata": () => metadata.promise,
+          "chat.startup": () => startup.promise,
+        },
+      });
+      const opening = makeChatHost({ client: retained.client });
+      const kept = asChatPageHost(retained);
+      const closed = asChatPageHost(opening);
+      kept.chatModelCatalog = [{ ...ready, available: false, unavailableReason: "missing-auth" }];
+      const restoring = refreshChatMetadata(kept);
+      const loading = refreshPageChat(closed, {
+        startup: true,
+        awaitHistory: true,
+        deferBranches: true,
+      });
+      retireChatMetadataRequests(closed);
+      if (retirement === "disconnects") {
+        closed.connected = false;
+      } else if (retirement === "changes session") {
+        closed.sessionKey = "agent:main:another";
+      }
+      metadata.resolve({ commands: [], models: [ready] });
+      await restoring;
+      startup.resolve({ messages: [], metadata: { commands: [], models: [ready] } });
+      await loading;
+      try {
+        await waitForFast(() => expect(kept.chatModelCatalog).toEqual([ready]));
+        expect(closed.chatModelCatalog).toEqual([]);
+      } finally {
+        retireChatMetadataRequests(kept);
+      }
+    },
+  );
+
+  it.each(["missing", "empty"])(
+    "revalidates a warm %s snapshot when startup omits metadata",
+    async (kind) => {
+      const ready = { id: "model", name: "Model", provider: "test", available: true };
+      const host = makeChatHost({
+        requestHandlers: {
+          "chat.startup": async () => ({ messages: [] }),
+          "chat.metadata": async () => ({ commands: [], models: [ready] }),
+        },
+      });
+      const client = expectDefined(host.client, "chat client");
+      const scope = { agentId: "main", sessionKey: host.sessionKey };
+      const release = subscribeChatMetadata(client, scope, () => {});
+      beginChatMetadataPublication(client, scope).publish({
+        commands: [],
+        models:
+          kind === "empty"
+            ? []
+            : [{ ...ready, available: false, unavailableReason: "missing-auth" }],
+      });
+      await refreshPageChat(asChatPageHost(host), {
+        startup: true,
+        awaitHistory: true,
+        deferBranches: true,
+      });
+      try {
+        await waitForFast(() => expect(host.chatModelCatalog).toEqual([ready]));
+        expect(asChatPageHost(host).chatModelsLoading).toBe(false);
+        expect(host.request).toHaveBeenCalledWith("chat.metadata", scope);
+      } finally {
+        release();
+        retireChatMetadataRequests(asChatPageHost(host));
+      }
+    },
+  );
 
   it.each([
     [

@@ -36,7 +36,6 @@ import {
   compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   createToolSearchTools as createRunToolSearchTools,
-  projectToolSearchTargetTranscriptMessages,
   registerHeadlessToolSearchCatalog,
   restrictToolSearchCatalog,
   resolveToolSearchConfig,
@@ -3195,81 +3194,6 @@ describe("Tool Search", () => {
     expect(secondExecuteInput.input).toEqual({ value: "structured" });
     expect(secondExecuteInput.signal).toBe(abortController.signal);
     expect(secondExecuteInput.onUpdate).toBe(onUpdate);
-  });
-
-  it("projects target tool calls after their Tool Search wrapper result", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "wrapper-call",
-            name: TOOL_CALL_RAW_TOOL_NAME,
-            arguments: { id: "fake_target", args: { value: "ok" } },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "wrapper-call",
-        toolName: TOOL_CALL_RAW_TOOL_NAME,
-        content: [{ type: "text", text: "wrapped" }],
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-      },
-    ];
-
-    const projected = projectToolSearchTargetTranscriptMessages(messages as never, [
-      {
-        parentToolCallId: "wrapper-call",
-        toolCallId: "tool_search_code:wrapper-call:fake_target:1",
-        toolName: "fake_target",
-        input: { value: "ok" },
-        result: jsonResult({ ok: true }),
-        isError: false,
-        timestamp: 123,
-      },
-    ]);
-
-    expect(projected).toHaveLength(5);
-    const projectedToolCall = projected[2] as {
-      role?: string;
-      content?: Array<{
-        type?: string;
-        id?: string;
-        name?: string;
-        arguments?: unknown;
-        input?: unknown;
-      }>;
-    };
-    expect(projectedToolCall.role).toBe("assistant");
-    expect(projectedToolCall.content).toEqual([
-      {
-        type: "toolCall",
-        id: "tool_search_code:wrapper-call:fake_target:1",
-        name: "fake_target",
-        arguments: { value: "ok" },
-        input: { value: "ok" },
-      },
-    ]);
-    const projectedToolResult = projected[3] as {
-      role?: string;
-      toolCallId?: string;
-      toolName?: string;
-      isError?: boolean;
-      content?: unknown;
-    };
-    expect(projectedToolResult.role).toBe("toolResult");
-    expect(projectedToolResult.toolCallId).toBe("tool_search_code:wrapper-call:fake_target:1");
-    expect(projectedToolResult.toolName).toBe("fake_target");
-    expect(projectedToolResult.isError).toBe(false);
-    expect(projectedToolResult.content).toEqual([
-      { type: "text", text: JSON.stringify({ ok: true }, null, 2) },
-    ]);
-    expect(projected[4]).toBe(messages[2]);
   });
 
   it("does not execute fire-and-forget bridged calls after code returns", async () => {

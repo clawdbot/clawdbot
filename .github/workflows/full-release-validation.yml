@@ -1674,8 +1674,8 @@ jobs:
           DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
         run: node scripts/full-release-validation-state.mjs verify
 
-      # Artifact v4 keeps prior attempts readable within the same workflow run.
-      # Exact IDs from the sealed plan prevent recovery from drifting to a newer upload.
+      # Exact IDs from the sealed plan prevent verification from drifting to a newer upload.
+      # Parent-owned candidate plans are rejected before same-parent continuation.
       - name: Verify sealed release candidate
         env:
           GH_TOKEN: ${{ github.token }}

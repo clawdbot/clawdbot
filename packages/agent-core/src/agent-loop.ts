@@ -15,6 +15,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
 import {
+  copyInternalToolResultAcknowledgement,
   getInternalToolExecutionPreparer,
   getInternalSyncSteeringGetter,
   type InternalToolExecutionPreparation,
@@ -1599,12 +1600,12 @@ async function finalizeExecutedToolCall(
         batch.signal,
       );
       if (afterResult) {
-        result = {
+        result = copyInternalToolResultAcknowledgement(result, {
           ...result,
           content: afterResult.content ?? result.content,
           details: afterResult.details ?? result.details,
           terminate: afterResult.terminate ?? result.terminate,
-        };
+        });
         isError = afterResult.isError ?? isError;
       }
     } catch (error) {
@@ -1658,12 +1659,12 @@ async function finalizeToolCallOutcome(
     }
     return {
       ...finalized,
-      result: {
+      result: copyInternalToolResultAcknowledgement(finalized.result, {
         ...finalized.result,
         content: afterResult.content ?? finalized.result.content,
         details: afterResult.details ?? finalized.result.details,
         terminate: afterResult.terminate ?? finalized.result.terminate,
-      },
+      }),
       isError: afterResult.isError ?? finalized.isError,
     };
   } catch (error) {
@@ -1817,17 +1818,20 @@ async function emitToolExecutionEnd(
 }
 
 function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResultMessage {
-  return withToolResultContentSource(
-    {
-      role: "toolResult",
-      toolCallId: finalized.toolCall.id,
-      toolName: finalized.toolCall.name,
-      content: finalized.result.content ?? [],
-      details: finalized.result.details,
-      isError: finalized.isError,
-      timestamp: Date.now(),
-    },
-    finalized.resultContentSource,
+  return copyInternalToolResultAcknowledgement(
+    finalized.result,
+    withToolResultContentSource(
+      {
+        role: "toolResult",
+        toolCallId: finalized.toolCall.id,
+        toolName: finalized.toolCall.name,
+        content: finalized.result.content ?? [],
+        details: finalized.result.details,
+        isError: finalized.isError,
+        timestamp: Date.now(),
+      },
+      finalized.resultContentSource,
+    ),
   );
 }
 

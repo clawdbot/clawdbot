@@ -445,7 +445,7 @@ describe("unified approval handlers", () => {
           {
             sessionId: `session-${sessionKey}`,
             updatedAt: 1,
-            createdActor: { type: "human", id: creatorId },
+            createdActor: { type: "human", source: "profile", id: creatorId },
           },
         );
       }

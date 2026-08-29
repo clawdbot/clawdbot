@@ -4,7 +4,7 @@ title: "Supervise Codex sessions"
 sidebarTitle: "Codex supervision"
 read_when:
   - You want Codex Desktop or CLI sessions to appear in OpenClaw
-  - You need to branch from or archive a stored or idle local Codex session
+  - You need to continue a stored or idle Codex session or archive a local one
   - You are exposing Codex sessions and transcript history from paired nodes
 ---
 
@@ -13,7 +13,7 @@ shows non-archived Codex CLI, VS Code, Atlas, and ChatGPT source sessions from
 the Gateway computer and opted-in paired computers in the normal sessions
 sidebar and Chat pane.
 
-The initial release deliberately keeps ownership narrow:
+Supported actions depend on the source host and its capabilities:
 
 - A stored or idle local session can create a model-locked OpenClaw Chat from
   its bounded persisted user and assistant history. The first message starts a
@@ -23,16 +23,18 @@ The initial release deliberately keeps ownership narrow:
   supervised binding prevents OpenClaw from substituting another runtime,
   model, or fallback. A separate native Codex control can still change that
   persisted pair. An already-created branch opens its existing Chat.
-- A stored session discovered from another Codex process has unknown live
+- A stored local session discovered from another Codex process has unknown live
   activity. It can branch, or it can be archived only after the operator
   confirms that no other Codex client is using it.
 - An active source stays visible but cannot create a branch or be archived until
   its current turn finishes. If it already has a supervised Chat, **Open Chat**
   remains available.
 - A session on a paired node exposes its persisted transcript through bounded,
-  cursor-paginated App Server reads. Remote continuation
-  requires a future streaming node bridge; remote archive additionally requires
-  a runner-ownership lease or equivalent fencing.
+  cursor-paginated App Server reads. A stored or idle interactive session can
+  also continue in Chat when the node permits the required catalog and
+  CLI-resume commands and the operator has `operator.admin`. Later messages
+  resume the exact native thread on that node, not a Gateway-local branch.
+  Paired-node archive remains unavailable.
 - Archived sessions are not listed. A stored or idle local session can be
   archived only after the operator confirms that no other Codex client is using
   it.
@@ -99,7 +101,7 @@ Set `appServer.homeScope: "user"` explicitly if the harness should share native
 Codex state too. Supervision honors explicit `appServer` connection settings
 instead of replacing them with its local user-home default.
 
-A Chat adopted from the **Codex** sidebar group is not an ordinary harness session.
+A Gateway-local Chat adopted from the **Codex** sidebar group is not an ordinary harness session.
 Its private supervision binding uses the supervision connection for source
 reads, canonical branch creation, history injection, and every later turn. With
 the default local connection, that preserves the native user Codex home, auth,
@@ -189,12 +191,17 @@ All three commands accept `--agent <id>` and inherit `--url`, `--token`, and `--
 Gateway client. Session listing defaults to 75,000 ms so cold paired-node
 catalogs can complete; continue and archive default to 30,000 ms. They also expose the shared
 `--expect-final` switch, which does not change these unary supervision RPCs.
-Each command requires the `operator.write` Gateway scope.
+Each shell command requests the `operator.write` Gateway scope.
 Standard `-h, --help` output is available on each subcommand.
 There is no archived or include-archived option. `sessions` can list paired
 hosts. `continue` and `archive` default to `gateway:local`; pass the listed
-opaque local `--host` id to target another local Codex store. Paired rows remain
-list-only. Archive always requires `--confirm-no-other-runner`.
+opaque local `--host` id to target another local Codex store. The shell
+`continue` command requests only `operator.write`; passing a node host does not
+request the `operator.admin` scope required for paired-node continuation. Unless
+the Gateway separately grants that scope to the authenticated identity, the
+request is refused. Use the admin-authorized Control UI flow described below
+for paired-node continuation. Archive remains Gateway-local and always requires
+`--confirm-no-other-runner`.
 
 These shell commands are distinct from the in-chat `/codex` runtime commands.
 `/codex threads [filter]` lists App Server threads available to the current
@@ -264,6 +271,15 @@ when forking from OpenClaw.
 Keep supervision enabled for this Chat. If supervision is disabled or its
 stored connection binding becomes unavailable or inconsistent, the turn fails
 closed instead of moving to an ordinary agent-home session.
+
+A new adoption snapshots the native title as a trimmed display name, capped at
+500 UTF-16 code units without splitting surrogate pairs. Native titles can be
+duplicated or blank; they do not claim unique OpenClaw labels. An explicit local
+label takes priority over the stored display name. Reopening or recovering a Chat
+preserves its existing label and title snapshot, including older automatically
+assigned labels; renaming the native source does not resync either field.
+**Fork from here** does not inherit the native response's title as a display name
+or local label.
 
 Disabling or uninstalling the `codex` plugin does not release that ownership or
 make the Chat eligible for another model. The locked Chat remains preserved but
@@ -344,11 +360,39 @@ endpoints. Opening a row in the operator terminal runs `codex resume <thread-id>
 on the owning host and relays that command's PTY; it does not expose a general
 shell or gateway-supplied argv.
 
-The terminal relay does not provide the harness continuation or archive ownership
-contracts. Remote rows therefore remain visible but do not offer **Continue** or
-**Archive**, even when the remote thread is idle. Use Codex on that computer
-through **Open in terminal**, or use a future continuation flow with a safe
-runner-ownership boundary.
+Chat continuation is a separate capability from the terminal relay. It requires
+`operator.admin` and a connected node that both advertises and permits all three
+commands:
+
+- `codex.appServer.threads.list.v1`
+- `codex.appServer.thread.turns.list.v1`
+- `codex.cli.session.resume`
+
+The CLI-resume command is a dangerous node command: it needs explicit Gateway
+command allowlisting (`gateway.nodes.commands.allow`) as well as approval of
+the node's command surface; a deny rule still blocks it. The native macOS catalog
+and terminal relay alone do not provide it, although a Mac app's embedded node
+worker can advertise additional commands. Check the actual advertised and
+permitted commands, not just the host platform. Nodes exposing only list,
+transcript, and terminal commands remain readable without Chat continuation.
+
+Open an eligible non-archived interactive row in the Control UI Chat pane and
+send a text message. Continuation freshly checks that the source is `idle` or
+`notLoaded`, creates or reopens a model-locked Chat, and binds it to the exact
+native thread on the owning node. A new Chat mirrors bounded user and assistant
+history from the newest transcript page. The catalog action itself does not
+fork or resume the native thread; the UI then forwards your draft to the bound
+Chat. That message and later turns run `codex exec resume` on the node with its
+native CLI configuration and return its final text. This text-prompt path does
+not create the Gateway-local branch or forward the full App Server harness
+events, approvals, tool calls, or structured attachments. Bound turns still
+require owner/admin authority and are blocked while OpenClaw sandboxing is active.
+
+Avoid running the same thread in another Codex client while using this Chat.
+The node prevents overlapping OpenClaw resume turns within its own process, but
+`notLoaded` does not prove that another native client is idle and there is no
+cross-process runner lease. Paired-node **Archive** remains unavailable,
+regardless of continuation or terminal capabilities.
 
 ## Metadata and permissions
 
@@ -364,7 +408,9 @@ Catalog projection excludes transcript previews, turns, rollout paths,
 the Codex home path, Git remotes, commit SHAs, and raw App Server errors. Catalog
 access and Control UI transcript reads require the `operator.write` Gateway
 scope because fleet aggregation uses the standard `node.invoke` path, even
-though both node commands are read-only.
+though both catalog node commands are read-only. Paired-node continuation
+additionally requires `operator.admin`; subsequent bound turns enforce the
+native-execution owner/admin check.
 
 `supervision.allowRawTranscripts` and `supervision.allowWriteControls` govern
 autonomous agent and standalone MCP tools. Both default to `false`. With
@@ -419,10 +465,13 @@ plugin and `supervision.enabled` are true, the current plugin allowlist permits
 `codex`, and the sessions are not archived. Restart the Gateway or node after
 changing activation.
 
-**Continue is disabled:** an unmapped row is active, belongs to a paired node,
-its host is offline, or another action is pending. Gateway-local stored and idle
-rows offer **Continue as branch** instead of unsafe exact-thread takeover. A row
-that already has a supervised Chat offers **Open Chat**.
+**Continue is disabled or refused:** an unmapped row is active or in an
+ineligible state, its host is offline, or another action is pending. For a
+paired-node row, also verify `operator.admin` and that all three continuation
+commands are advertised and permitted; terminal access alone is insufficient.
+Gateway-local stored and idle rows offer **Continue as branch** instead of
+unsafe exact-thread takeover. A row that already has a supervised Chat offers
+**Open Chat**.
 
 **Archive is disabled:** archive is available for stored/activity-unknown and
 idle Gateway-local rows after no-other-runner confirmation. Active, error,

@@ -25,7 +25,7 @@ run_hosted_prepare_gates() {
   fi
 
   local repo
-  repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+  repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
   local scripts_dir="${script_parent_dir:-}"
   if [ -z "$scripts_dir" ]; then
     scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -319,7 +319,7 @@ write_gates_env_stamp() {
 }
 
 derive_prepare_gate_change_plan() {
-  PREPARE_GATE_CHANGED_FILES=$(git diff --name-only "$PR_MAIN_SHA...HEAD")
+  PREPARE_GATE_CHANGED_FILES=$(git diff --name-only "$PR_MAIN_SHA...${1:-HEAD}") || return 1
   PREPARE_GATE_DOCS_ONLY=false
   if file_list_is_docsish_only "$PREPARE_GATE_CHANGED_FILES"; then
     PREPARE_GATE_DOCS_ONLY=true

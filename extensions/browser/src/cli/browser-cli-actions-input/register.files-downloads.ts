@@ -3,6 +3,7 @@
  */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveExistingUploadPaths } from "../../browser/paths.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
@@ -10,12 +11,7 @@ import {
   withBrowserActionTimeoutSlack,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
-import {
-  danger,
-  defaultRuntime,
-  resolveExistingUploadPaths,
-  shortenHomePath,
-} from "../core-api.js";
+import { danger, defaultRuntime, shortenHomePath } from "../core-api.js";
 import { resolveBrowserActionContext } from "./shared.js";
 
 const DEFAULT_BROWSER_HOOK_TIMEOUT_MS = 120000;

@@ -51,9 +51,11 @@ import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
+  getChatRunOwner,
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
+  setChatRunOwner,
   setChatSessionProjection,
 } from "./history-merge.ts";
 import {
@@ -62,6 +64,7 @@ import {
   roundedControlUiDurationMs,
 } from "./performance.ts";
 import {
+  adoptStartedChatRun,
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
   setChatRunError,
@@ -100,6 +103,10 @@ const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 export const CHAT_HISTORY_REQUEST_LIMIT = 100;
+// Back-scroll pages are larger than the startup tail: session open stays cheap
+// while older-history reads amortize round trips and prepend/re-anchor cycles.
+// The gateway independently bounds each response (entry cap + byte budget).
+const CHAT_HISTORY_OLDER_PAGE_LIMIT = 400;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const SESSION_MESSAGE_RELEASE_RETRY_MS = 250;
 const MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS = 3;
@@ -489,27 +496,51 @@ function applyHistoryRunSnapshot(params: {
   const inFlightRunId = run?.runId?.trim();
   if (!inFlightRunId || !run) {
     const terminalRunId = sessionInfo?.lastRunId;
+    const knownRun = terminalRunId ? currentRunProjections[terminalRunId] : undefined;
     if (
       terminalRunId &&
-      sessionInfo.lastRunError &&
-      (sessionInfo.status === "failed" || sessionInfo.status === "timeout") &&
+      (sessionInfo.status === "done" ||
+        sessionInfo.status === "failed" ||
+        sessionInfo.status === "timeout") &&
+      sessionInfo.hasActiveRun !== true &&
       !isSessionRunActive(sessionInfo) &&
       (!state.chatRunId || state.chatRunId === terminalRunId) &&
+      !state.chatQueue.some(
+        (item) =>
+          item.sendState === "sending" && item.sendRunId && item.sendRunId !== terminalRunId,
+      ) &&
+      (!knownRun ||
+        state.chatRunId === terminalRunId ||
+        getChatRunOwner(state) === terminalRunId) &&
       runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)
     ) {
-      // A create-time failure can precede the pane subscription. Recover its
-      // durable terminal through the same reducer; newer live runs win the race
-      // and an existing full diagnostic wins over the bounded session summary.
+      // A copied row cannot reclaim retired display ownership. The pane retains
+      // its accepted owner past active cleanup; unseen runs recover through the
+      // reducer, whose full diagnostic wins over the bounded history summary.
       const projection = reduceChatSessionProjection(state, {
         type: "runTerminal",
         runId: terminalRunId,
-        status: sessionInfo.status === "timeout" ? "timeout" : "error",
+        status:
+          sessionInfo.status === "done"
+            ? "completed"
+            : sessionInfo.status === "timeout"
+              ? "timeout"
+              : "error",
         errorMessage: sessionInfo.lastRunError,
       });
-      setChatRunError(
-        state,
-        projection.runs[terminalRunId]?.errorMessage ?? sessionInfo.lastRunError,
-      );
+      setChatRunOwner(state, terminalRunId);
+      const terminal = projection.runs[terminalRunId];
+      if (terminal?.errorMessage) {
+        if (state.chatRunError?.runId !== terminalRunId || !knownRun?.errorMessage) {
+          setChatRunError(state, terminal.errorMessage, terminalRunId);
+        }
+      } else if (
+        terminal?.status === "completed" &&
+        state.chatRunError?.runId &&
+        state.chatRunError.runId !== terminalRunId
+      ) {
+        state.chatRunError = null;
+      }
       reconcileChatRunFromSessionRow(state, sessionInfo, { publishRunStatus: false });
     }
     return;
@@ -541,8 +572,7 @@ function applyHistoryRunSnapshot(params: {
     // Canonical run projections change on every live delta or terminal.
     // Their identity fences ABA races where a run starts and finishes while
     // history is pending; deltas from this same live run must still merge.
-    state.chatRunId = inFlightRunId;
-    state.chatRunError = null;
+    adoptStartedChatRun(state, inFlightRunId, Date.now());
     state.chatRunSessionAbortable = run?.sessionAbortable === true;
   }
   if (!inFlightRunIsActive || state.chatRunId !== inFlightRunId) {
@@ -1770,7 +1800,7 @@ export async function loadOlderChatHistoryPage(
   const result = await client.request<ChatHistoryResult>("chat.history", {
     sessionKey,
     ...(requestAgentId ? { agentId: requestAgentId } : {}),
-    limit: CHAT_HISTORY_REQUEST_LIMIT,
+    limit: CHAT_HISTORY_OLDER_PAGE_LIMIT,
     offset,
   });
   if (!shouldApplyChatHistoryResult(state, ownership)) {

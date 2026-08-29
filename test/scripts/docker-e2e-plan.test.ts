@@ -139,12 +139,15 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 
 describe("scripts/lib/docker-e2e-plan", () => {
   it.each([
+    ["codex-media-path", ["@openclaw/codex"]],
+    ["live-mcp-code-mode-gateway", ["@openclaw/codex"]],
     ["release-typed-onboarding", ["@openclaw/codex"]],
     ["npm-onboard-channel-agent", ["@openclaw/codex"]],
     ["npm-onboard-discord-channel-agent", ["@openclaw/codex"]],
     ["npm-onboard-slack-channel-agent", ["@openclaw/codex"]],
     ["npm-onboard-discord-candidate-channel-agent", ["@openclaw/codex", "@openclaw/discord"]],
     ["npm-onboard-slack-candidate-channel-agent", ["@openclaw/codex", "@openclaw/slack"]],
+    ["mcp-code-mode-gateway", ["@openclaw/codex"]],
   ] as const)("requests only the matching companions for %s", (name, packages) => {
     const plan = planFor({ selectedLaneNames: [name] });
     expect(plan.lanes.map((lane) => lane.name)).toEqual([name]);
@@ -1362,6 +1365,29 @@ describe("scripts/lib/docker-e2e-plan", () => {
       package: false,
       prepublishPluginRegistry: false,
     });
+  });
+
+  it("runs the gateway lane with the scheduler's shared live image and plugins", () => {
+    const root = tempDirs.make("openclaw-live-gateway-image-");
+    const script = join(root, "scripts/test-live-gateway-models-docker.sh");
+    mkdirSync(dirname(script), { recursive: true });
+    writeFileSync(
+      script,
+      'printf "%s|%s|%s\\n" "$OPENCLAW_IMAGE" "$OPENCLAW_DOCKER_BUILD_EXTENSIONS" "$OPENCLAW_SKIP_DOCKER_BUILD"',
+    );
+    const lane = requireFirstLane(planFor({ selectedLaneNames: ["live-gateway"] }));
+    const output = execFileSync("/bin/bash", ["-c", lane.command], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR: root,
+        OPENCLAW_IMAGE: "openclaw:prepared-candidate",
+        OPENCLAW_DOCKER_BUILD_EXTENSIONS: "matrix acpx codex",
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
+      },
+    });
+
+    expect(output.trim()).toBe("openclaw:prepared-candidate|matrix acpx codex|1");
   });
 
   it("derives live Docker credentials from lane resources", () => {

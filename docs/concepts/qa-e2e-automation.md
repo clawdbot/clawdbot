@@ -1099,12 +1099,19 @@ QA Lab acquires an exclusive lease, heartbeats it for the duration of the
 run, and releases it on shutdown. Pool kinds are `"buzz"`, `"discord"`,
 `"slack"`, `"telegram"`, and `"whatsapp"`.
 
-The suite owns its Gateway lifecycle before startup begins, including startup
-retries and replacement processes. Transport adapters drain their driver work in
+The suite owns its Gateway lifecycle before startup begins, including packaged
+auth and plugin-repair commands, startup retries, replacement processes, and
+commands run against the active Gateway. Each CLI command has a two-minute
+execution limit. Stop closes admission immediately and settles all owned process
+groups; leader exit does not bypass shutdown or the bounded wait for inherited
+stdio to close. On POSIX, CLI commands use their own process groups, so concurrent
+commands do not replace the active Gateway's identity.
+
+Transport adapters drain their driver work in
 `cleanup()` and release Gateway-backed credentials in
 `cleanupAfterGatewayStop()`. The suite runs that second phase only when no
-Gateway was spawned or process-group termination was confirmed. A readiness
-failure or an exited group leader is not shutdown proof.
+subprocess was spawned or all owned process groups were confirmed stopped. A
+readiness failure or an exited group leader is not shutdown proof.
 
 Failed startup or replacement settles the process without finalizing its logs
 or staging directory. The caller retains the lifecycle owner and always calls
@@ -1119,6 +1126,13 @@ credentials. Log, RPC, or artifact errors are still reported, but do not prevent
 after-stop cleanup when the process group is confirmed stopped. This ordering
 requires adapters to use the two cleanup phases; it does not change broker TTLs
 or provide a durable guarantee after the QA parent or host is lost.
+
+Temporary runtime and staged-plugin directories are removed independently, and
+removal failures are reported with redacted diagnostics. A cleanup error can
+therefore leave isolated runtime or auth state on disk even when process
+termination is confirmed. Correct the filesystem problem and retry `stop()` on
+the retained lifecycle owner; confirmed termination still permits after-stop
+credential cleanup.
 
 Payload shapes the broker validates on `admin/add`:
 

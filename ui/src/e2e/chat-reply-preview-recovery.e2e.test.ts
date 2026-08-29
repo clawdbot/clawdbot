@@ -119,14 +119,21 @@ suite.define(() => {
         timestamp: 1_800_000_000_000,
         __openclaw: { id: "reconnect-source", seq: 1 },
       };
+      // Deep enough that the source's page sits beyond the upward-prefetch
+      // reach; the refresh must come from chat.message.get, not a loaded row.
+      const interveningCount = 60;
       const reply = {
         role: "user",
         content: [{ type: "text", text: "A follow-up question after reconnect." }],
-        timestamp: 1_800_000_000_017,
-        __openclaw: { id: "reconnect-reply", seq: 17, replyToId: "reconnect-source" },
+        timestamp: 1_800_000_000_001 + interveningCount,
+        __openclaw: {
+          id: "reconnect-reply",
+          seq: interveningCount + 2,
+          replyToId: "reconnect-source",
+        },
       };
       const messages = [
-        ...Array.from({ length: 15 }, (_, index) => ({
+        ...Array.from({ length: interveningCount }, (_, index) => ({
           role: index % 2 === 0 ? "assistant" : "user",
           content: [{ type: "text", text: `Conversation entry ${index + 2}.` }],
           timestamp: 1_800_000_000_001 + index,
@@ -158,7 +165,7 @@ suite.define(() => {
                 response: {
                   messages: [source],
                   hasMore: false,
-                  totalMessages: 17,
+                  totalMessages: messages.length + 1,
                   sessionId: "reply-preview-history",
                 },
               },
@@ -168,7 +175,7 @@ suite.define(() => {
             messages,
             hasMore: true,
             nextOffset: messages.length,
-            totalMessages: 17,
+            totalMessages: messages.length + 1,
             sessionId: "reply-preview-history",
           },
         },

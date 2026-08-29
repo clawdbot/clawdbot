@@ -31,11 +31,11 @@ import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
+import { prepareLineReplyPayload } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
 import {
   createFlexMessage,
   createLocationMessage,
-  createQuickReplyItems,
   pushMessagesLine,
   replyMessageLine,
   showLoadingAnimation,
@@ -215,6 +215,9 @@ export async function monitorLineProvider(
                 ? { replyOptions: { abortSignal: ingressLifecycle.abortSignal } }
                 : {}),
               delivery: {
+                // Core renders presentations inside the outbound send pipeline only,
+                // so this path resolves them before either branch reads channelData.
+                preparePayload: prepareLineReplyPayload,
                 durable: (payload, info) =>
                   resolveLineDurableReplyOptions({
                     payload,
@@ -247,7 +250,6 @@ export async function monitorLineProvider(
                       processLineMessage,
                       chunkMarkdownText,
                       replyMessageLine,
-                      createQuickReplyItems,
                       pushMessagesLine,
                       createFlexMessage,
                       buildMediaMessage: buildLineMediaMessage,

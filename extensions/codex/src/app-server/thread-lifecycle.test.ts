@@ -2392,26 +2392,23 @@ describe("Codex app-server turn params", () => {
 });
 
 describe("Codex app-server model provider selection", () => {
-  it.each(["openai", "openai"])(
-    "omits public %s modelProvider when forwarding native Codex auth on thread/start",
-    (provider) => {
-      const request = buildThreadStartParams(
-        createAttemptParams({
-          provider,
-          authProfileId: "work",
-          runtimeExternalProfileIds: ["work"],
-        }),
-        {
-          cwd: "/repo",
-          dynamicTools: [],
-          appServer: createAppServerOptions() as never,
-          developerInstructions: "test instructions",
-        },
-      );
+  it("omits public openai modelProvider when forwarding native Codex auth on thread/start", () => {
+    const request = buildThreadStartParams(
+      createAttemptParams({
+        provider: "openai",
+        authProfileId: "work",
+        runtimeExternalProfileIds: ["work"],
+      }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+      },
+    );
 
-      expect(request).not.toHaveProperty("modelProvider");
-    },
-  );
+    expect(request).not.toHaveProperty("modelProvider");
+  });
 
   it("uses the bound native Codex auth profile when deciding thread/resume modelProvider", () => {
     const request = buildThreadResumeParams(

@@ -108,6 +108,10 @@ describe("Gateway ACP completion ownership", () => {
       text: "rendered reply",
       transform: () => ({ text: "rendered reply" }),
     },
+    {
+      name: "successful runtime with post-hook warning",
+      transform: (payload) => ({ ...payload, isError: true }),
+    },
     { name: "post-hook suppression", suppressed: true, transform: () => null },
     { name: "live block replies", live: true },
     {

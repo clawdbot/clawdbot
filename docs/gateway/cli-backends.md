@@ -125,6 +125,11 @@ Claude Code subprocess. A changed model, system prompt, or tool policy starts a
 new query; persisted Claude session IDs still provide
 conversation continuity when the gateway or subprocess restarts.
 
+For local SDK-backed turns, prompt-build hook context stays private: Claude
+receives it as a native hook attachment, while OpenClaw history preserves the original user message. The
+native session retains the context for resume; imported visible history and
+cross-provider fallback preludes do not copy private hook attachments.
+
 Keep Claude Code updated, especially if the SDK reports an incompatible
 installed executable:
 
@@ -301,6 +306,8 @@ For CLIs that emit provider-specific JSONL events, set `jsonlDialect` on that ba
 Some CLI backends run an agent that compacts its own transcript, so OpenClaw must not run its safeguard summarizer against them — doing so fights the backend's own compaction and can hard-fail the turn.
 
 `claude-cli` has no harness endpoint (Claude Code compacts internally), so it declares `ownsNativeCompaction: true`. Automatic OpenClaw compaction defers to Claude Code, while an explicit `/compact` resumes the bound Claude Code session and sends its native `/compact` command. OpenClaw passes the run's effective context budget through Claude Code's documented [`CLAUDE_CODE_AUTO_COMPACT_WINDOW`](https://code.claude.com/docs/en/env-vars), keeping native auto-compaction aligned with configured Anthropic `contextTokens` limits. Native-harness sessions such as Codex keep routing to their harness compaction endpoint instead.
+
+`google-gemini-cli` also owns automatic compaction and persists its compressed session for resume. OpenClaw defers to Gemini CLI rather than running a second summarizer. Explicit `/compact` is unsupported for this backend because it does not declare a manual compaction capability.
 
 ```typescript
 api.registerCliBackend({

@@ -502,6 +502,7 @@ process.exitCode = child.status ?? 1;
     "scripts/lib/direct-run.mjs",
     "scripts/lib/tsx-cli-shim.mjs",
     "test/scripts/direct-run-entrypoints.test.ts",
+    "test/scripts/install-ps1.test.ts",
     "scripts/tsx.mjs",
   ])("routes %s through Windows CI", (changedPath) => {
     expect(detectChangedScope([changedPath]).runWindows).toBe(true);

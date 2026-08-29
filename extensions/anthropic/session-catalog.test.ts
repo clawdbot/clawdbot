@@ -736,6 +736,7 @@ describe("Claude session catalog", () => {
     );
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
+        displayName: "Source session",
         spawnedCwd: "/work/source",
         initialEntry: expect.objectContaining({
           cliBackendId: "claude-cli",
@@ -750,6 +751,7 @@ describe("Claude session catalog", () => {
         }),
       }),
     );
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
   });
 
   it("does not advertise creation without a configured Claude CLI route", () => {
@@ -1133,6 +1135,7 @@ describe("Claude session catalog", () => {
     );
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
+        displayName: "Node source",
         execNode: "node-a",
         execCwd: "/work/on-node",
         spawnedCwd: "/work/on-node",
@@ -1150,6 +1153,7 @@ describe("Claude session catalog", () => {
         }),
       }),
     );
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         command: CLAUDE_SESSION_READ_COMMAND,

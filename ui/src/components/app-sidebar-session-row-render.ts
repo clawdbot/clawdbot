@@ -168,7 +168,7 @@ export function renderRecentSession(params: {
     method: "sessions.patch",
     params: { key: session.key, pinned: !session.pinned },
   });
-  const label = display?.label ?? session.label;
+  const label = session.label;
   const { subtitle, narration } = host.sessionProjection.resolveSubtitle({
     session,
     hasDisplay: display !== undefined,
@@ -375,6 +375,8 @@ export function renderRecentSession(params: {
                 isChild: session.isChild,
                 incognito: session.incognito,
                 placementState: session.placementState,
+                placementProviderId: session.placementProviderId,
+                placementProfileId: session.placementProfileId,
                 diskSpaceStatus: session.diskSpaceStatus,
                 workspaceConflictCount: session.workspaceConflictCount,
                 outboxAttentionCount: session.outboxAttentionCount,

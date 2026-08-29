@@ -176,8 +176,8 @@ function catalogErrorMessages(catalog: SessionCatalog): string[] {
 }
 
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
-  // Adopted rows reuse the live session row so activity, unread state, and
-  // the session menu behave exactly like the regular list.
+  // Adopted rows use canonical local labels and title snapshots; native catalog
+  // refreshes must not rename them or replace the regular session presentation.
   const liveRowsByKey = new Map<string, GatewaySessionRow>();
   const liveOwnerIdBySessionKey = new Map<string, string | undefined>();
   for (const row of params.liveRows) {
@@ -474,9 +474,7 @@ function renderCatalogSessionRow(
   const rowRef = catalogRowRef(identityKey, key, catalogKey, menuOpen, params);
   const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
   if (adoptedRow) {
-    const label = session.name || session.threadId;
     return params.renderLiveRow(adoptedRow, {
-      label,
       catalogIdentityKey: identityKey,
       catalogMenuOpen: menuOpen,
       ...(rowRef ? { rowRef } : {}),

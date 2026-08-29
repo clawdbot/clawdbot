@@ -227,7 +227,7 @@ describe("session hook context wiring", () => {
       sessionStartedAt: now,
       ...buildSessionCreationStamp({
         via: "operator",
-        actor: { type: "human", id: "profile-ada" },
+        actor: { type: "human", source: "profile", id: "profile-ada" },
         sandbox: "required",
         now,
       }),

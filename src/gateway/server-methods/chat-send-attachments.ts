@@ -4,6 +4,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import {
+  SANDBOX_MEDIA_MAX_BYTES,
   stageSandboxMedia,
   type StageSandboxMediaResult,
 } from "../../auto-reply/reply/stage-sandbox-media.js";
@@ -13,7 +14,6 @@ import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
-import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
   discardPreparedInboundMedia,
@@ -57,9 +57,8 @@ function isManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
 }
 
 function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
-  // Oversized managed PDFs remain host-readable. A sandbox copy only hits the
-  // 5 MB staging cap without making the attachment more available.
-  return ref.sizeBytes > MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
+  // Host-readable managed PDFs above the staging cap do not need a sandbox copy.
+  return ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
 }
 
 // Stage media before ACK so permanent client errors stay 4xx and retryable
@@ -103,14 +102,16 @@ async function prestageMediaPathOffloads(params: {
 
     // The parser admits more than the sandbox can stage. Reject non-PDF files
     // in that gap as permanent 4xx instead of a retryable staging failure.
-    const oversizedForSandbox = refsToStage.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
+    const oversizedForSandbox = refsToStage.filter(
+      (ref) => ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES,
+    );
     if (oversizedForSandbox.length > 0) {
       const details = oversizedForSandbox
         .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
         .join(", ");
       throw new UnsupportedAttachmentError(
         "non-image-too-large-for-sandbox",
-        `attachments exceed sandbox staging limit (${MEDIA_MAX_BYTES} bytes): ${details}`,
+        `attachments exceed sandbox staging limit (${SANDBOX_MEDIA_MAX_BYTES} bytes): ${details}`,
       );
     }
 

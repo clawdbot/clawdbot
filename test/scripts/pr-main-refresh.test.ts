@@ -473,6 +473,8 @@ read -r release < "$OPENCLAW_TEST_FETCH_HOLD"
       const f = fixture();
       const prepare = f.run("prepare-run");
       expect(prepare.status, prepare.stdout + prepare.stderr).toBe(0);
+      // This case owns the nonhosted watcher's post-wait refresh contract.
+      writeFileSync(join(f.local, "gates.env"), "GATES_MODE=full\n");
       f.configure({ moveAtCi: true });
       if (strict) f.env.OPENCLAW_PR_STRICT_DRIFT = "1";
       const before = f.events().length;

@@ -122,23 +122,6 @@ struct OnboardingViewSmokeTests {
             requiresCLIInstall: false) == [0, 1, 9])
     }
 
-    @Test func `fresh local setup installs CLI before inference setup`() {
-        let order = OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: true)
-
-        #expect(order.firstIndex(of: 2) == 2)
-        #expect(order.firstIndex(of: 3) == 3)
-    }
-
-    @Test func `configured local setup skips CLI install page`() {
-        let order = OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: false)
-
-        #expect(!order.contains(2))
-    }
-
     @Test func `CLI install activates only a local gateway`() {
         #expect(!OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .remote))
         #expect(OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .local))

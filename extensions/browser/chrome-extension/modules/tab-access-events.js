@@ -25,13 +25,16 @@ export function registerTabAccessEvents({
     if (!accessEpoch || !policy.epochIsCurrent(source.tabId, accessEpoch)) {
       return;
     }
-    send({
-      type: "cdpEvent",
-      tabId: source.tabId,
-      ...(source.sessionId ? { sessionId: source.sessionId } : {}),
-      method,
-      params,
-    });
+    policy.forwardDocumentEvent(
+      {
+        type: "cdpEvent",
+        tabId: source.tabId,
+        ...(source.sessionId ? { sessionId: source.sessionId } : {}),
+        method,
+        params,
+      },
+      send,
+    );
   });
 
   chromeApi.debugger.onDetach.addListener((source, reason) => {
@@ -42,9 +45,11 @@ export function registerTabAccessEvents({
     attachedAccessEpochs.delete(source.tabId);
     send({ type: "detached", tabId: source.tabId, reason });
     if (reason !== "canceled_by_user") {
+      policy.retireTabDocument(source.tabId);
       return;
     }
     const revocation = policy.beginRevocation(source.tabId);
+    policy.retireTabDocument(source.tabId);
     void runAccessMutation(async () => {
       try {
         await accessReady;
@@ -127,6 +132,7 @@ export function registerTabAccessEvents({
   const onGroupChanged = (group) => {
     const eventRevision = ++groupEventRevision;
     scheduleTabsSync();
+    policy.invalidateDocumentGroup(group);
     if (policy.mode !== ACCESS_MODE_SELECTED) {
       return;
     }
@@ -190,5 +196,5 @@ export function registerTabAccessEvents({
     });
   };
   chromeApi.tabGroups.onUpdated.addListener(onGroupChanged);
-  chromeApi.tabGroups.onRemoved.addListener(() => onGroupChanged());
+  chromeApi.tabGroups.onRemoved.addListener((group) => onGroupChanged(group));
 }

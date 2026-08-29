@@ -132,9 +132,9 @@ describe("client voice session", () => {
   });
 
   it("creates, resumes, and enforces ownership and open state", async () => {
+    const target = { agentId: "main", sessionKey: "agent:main:main" };
     const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
+      ...target,
       provider: "google",
       origin: "client",
       voiceSessionId: "voice-1",
@@ -142,8 +142,7 @@ describe("client voice session", () => {
     });
     expect(
       createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey: "agent:main:main",
+        ...target,
         origin: "client",
         voiceSessionId,
         now: 20,
@@ -154,8 +153,7 @@ describe("client voice session", () => {
     });
     expect(() =>
       createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey: "agent:main:main",
+        ...target,
         provider: "openai",
         origin: "client",
         voiceSessionId,
@@ -171,16 +169,14 @@ describe("client voice session", () => {
     ).toThrow("does not belong");
 
     await closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
+      ...target,
       voiceSessionId,
       config: {},
       now: 30,
     });
     expect(() =>
       createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey: "agent:main:main",
+        ...target,
         origin: "client",
         voiceSessionId,
       }),
@@ -189,7 +185,9 @@ describe("client voice session", () => {
 
   it.each([false, true])("stamps Talk creation once (required=%s)", async (required) => {
     const target = { agentId: "main", sessionKey: "agent:main:talk:new" };
-    const actor = { type: "human" as const, ...(required ? { id: "profile-required" } : {}) };
+    const actor = required
+      ? { type: "human" as const, source: "profile" as const, id: "profile-required" }
+      : { type: "human" as const, source: "unknown" as const };
     const creation = required ? { actor, sandbox: "required" as const } : undefined;
     const sessionId = await ensureClientVoiceAgentSessionEntry({ ...target, creation });
 
@@ -204,7 +202,10 @@ describe("client voice session", () => {
 
     await ensureClientVoiceAgentSessionEntry({
       ...target,
-      creation: { actor: { type: "human", id: "another-profile" }, sandbox: "required" },
+      creation: {
+        actor: { type: "human", source: "profile", id: "another-profile" },
+        sandbox: "required",
+      },
     });
     expect(loadSessionEntry(target)).toEqual(original);
   });

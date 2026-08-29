@@ -978,10 +978,6 @@ function Get-CorepackCommandPath {
     return (Resolve-CommandPath -Candidates @("corepack.cmd", "corepack.exe", "corepack"))
 }
 
-function Get-PnpmCommandPath {
-    return (Resolve-CommandPath -Candidates @("pnpm.cmd", "pnpm.exe", "pnpm"))
-}
-
 function Get-WindowsCommandSafeDirectory {
     $userHome = [Environment]::GetFolderPath("UserProfile")
     if (-not [string]::IsNullOrWhiteSpace($userHome) -and (Test-Path $userHome)) {
@@ -1026,15 +1022,6 @@ function Invoke-NpmCommand {
         $CommandPath = Get-NpmCommandPath
     }
     Invoke-CommandFromWindowsSafeDirectory -CommandPath $CommandPath -Arguments $Arguments -WorkingDirectory $WorkingDirectory
-}
-
-function Invoke-CorepackCommand {
-    param([string[]]$Arguments = @())
-    $corepackCommand = Get-CorepackCommandPath
-    if (-not $corepackCommand) {
-        throw "corepack not found on PATH."
-    }
-    Invoke-CommandFromWindowsSafeDirectory -CommandPath $corepackCommand -Arguments $Arguments
 }
 
 function Get-NpmGlobalBinCandidates {
@@ -1124,11 +1111,11 @@ function Get-RepoPnpmVersion {
 function Test-PnpmCommandMatchesVersion {
     param(
         [string]$PnpmVersion,
-        [string]$RepoDir
+        [string]$RepoDir,
+        [string]$PnpmCommand
     )
 
-    $pnpmCommand = Get-PnpmCommandPath
-    if (-not $pnpmCommand) {
+    if (-not (Test-Path -LiteralPath $PnpmCommand)) {
         return $false
     }
     if ([string]::IsNullOrWhiteSpace($PnpmVersion)) {
@@ -1153,47 +1140,42 @@ function Test-PnpmCommandMatchesVersion {
 }
 
 function Ensure-Pnpm {
-    param([string]$RepoDir)
+    param([string]$RepoDir, [string]$InstallDirectory)
 
     $pnpmVersion = Get-RepoPnpmVersion -RepoDir $RepoDir
     $pnpmSpec = if ([string]::IsNullOrWhiteSpace($pnpmVersion)) { "pnpm@latest" } else { "pnpm@$pnpmVersion" }
-
-    if (Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir) {
-        return
-    }
     $corepackCommand = Get-CorepackCommandPath
     if ($corepackCommand) {
         try {
-            Invoke-CorepackCommand -Arguments @("enable") | Out-Null
-            Invoke-CorepackCommand -Arguments @("prepare", $pnpmSpec, "--activate") | Out-Null
-            if (Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir) {
-                Write-Host "[OK] pnpm installed via corepack ($pnpmSpec)" -ForegroundColor Green
-                return
+            Invoke-CommandFromWindowsSafeDirectory -CommandPath $corepackCommand -Arguments @("enable", "--install-directory", $InstallDirectory, "pnpm") | Out-Host
+            $pnpmCommand = Join-Path $InstallDirectory "pnpm.cmd"
+            if ($LASTEXITCODE -eq 0 -and (Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir -PnpmCommand $pnpmCommand)) {
+                Write-Host "[OK] pnpm selected via Corepack ($pnpmSpec)" -ForegroundColor Green
+                return $pnpmCommand
             }
         } catch {
-            # fallthrough to npm install
+            # A stale Corepack signature set must still reach npm provisioning.
         }
+        Write-Host "[!] Corepack could not provision pnpm; falling back to npm." -ForegroundColor Yellow
     }
     Write-Host "[*] Installing pnpm..." -ForegroundColor Yellow
-    $pnpmInstalled = $false
+    $npmCommand = Get-NpmCommandPath
+    $npmPrefix = Join-Path $InstallDirectory "npm"
     $lifecycleIdentity = if ($pnpmVersion) { $pnpmSpec } else { "pnpm" }
-    $lifecycleArgument = Get-NpmLifecycleAllowArgument -NpmCommand (Get-NpmCommandPath) -InstallSpec $pnpmSpec -NpmCwd (Get-Location).Path -ExactIdentity $lifecycleIdentity
-    $installArgs = @("install", "-g", $pnpmSpec)
+    $lifecycleArgument = Get-NpmLifecycleAllowArgument -NpmCommand $npmCommand -InstallSpec $pnpmSpec -NpmCwd $RepoDir -ExactIdentity $lifecycleIdentity
+    $installArgs = @("install", "-g", "--prefix", $npmPrefix, $pnpmSpec)
     if ($lifecycleArgument) { $installArgs += $lifecycleArgument }
-    try {
-        Invoke-NpmCommand -Arguments $installArgs
-        $pnpmInstalled = ($LASTEXITCODE -eq 0)
-    } catch {
-        $pnpmInstalled = $false
+    Invoke-NpmCommand -CommandPath $npmCommand -Arguments $installArgs | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not install $pnpmSpec into the installer prefix."
     }
-    if (-not $pnpmInstalled) {
-        Write-Host "[!] pnpm install hit an existing or broken shim; retrying with --force" -ForegroundColor Yellow
-        Invoke-NpmCommand -Arguments ($installArgs + @("--force"))
-    }
-    if (-not (Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir)) {
-        throw "pnpm install completed, but $pnpmSpec is not first on PATH."
+    # npm's Windows global shim lives directly in the explicit prefix, not PATH.
+    $pnpmCommand = Join-Path $npmPrefix "pnpm.cmd"
+    if (-not (Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir -PnpmCommand $pnpmCommand)) {
+        throw "Could not provision $pnpmSpec for $RepoDir."
     }
     Write-Host "[OK] pnpm installed" -ForegroundColor Green
+    return $pnpmCommand
 }
 
 # Install OpenClaw
@@ -1366,15 +1348,11 @@ function Test-NpmConfigRawKey {
 }
 
 function Test-ShouldPreferOfflinePnpmInstall {
-    param([string]$ProjectDir)
+    param([string]$ProjectDir, [string]$PnpmCommand)
     if (
         (Test-Path -LiteralPath "Env:PNPM_CONFIG_PREFER_OFFLINE") -or
         (Test-Path -LiteralPath "Env:pnpm_config_prefer_offline")
     ) {
-        return $false
-    }
-    $pnpmCommand = Get-PnpmCommandPath
-    if (-not $pnpmCommand) {
         return $false
     }
     $pushedLocation = $false
@@ -1671,7 +1649,8 @@ function Assert-GitCheckoutHasCommit {
 function Resolve-PhysicalDirectoryPath {
     param([string]$Path)
 
-    $resolved = & node -e 'process.stdout.write(require("node:fs").realpathSync(process.argv[1]))' $Path
+    # Legacy PowerShell/.cmd argument passing strips embedded quotes; keep code on stdin.
+    $resolved = 'process.stdout.write(require("node:fs").realpathSync(process.argv[2]))' | & node - $Path
     if ($LASTEXITCODE -ne 0 -or -not $resolved) {
         throw "Could not resolve directory path: $Path"
     }
@@ -1796,8 +1775,6 @@ function Install-OpenClawFromGit {
     } else {
         Write-Host "[!] Git update disabled; skipping git pull" -ForegroundColor Yellow
     }
-    Ensure-Pnpm -RepoDir $RepoDir
-
     Remove-LegacySubmodule -RepoDir $RepoDir
 
     $prevPnpmChildConcurrency = $env:PNPM_CONFIG_CHILD_CONCURRENCY
@@ -1806,9 +1783,9 @@ function Install-OpenClawFromGit {
     $prevPnpmVerifyDepsBeforeRun = $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN
     $prevPnpmSideEffectsCache = $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE
     $prevNodeOptions = $env:NODE_OPTIONS
-    $pnpmCommand = Get-PnpmCommandPath
-    if (-not $pnpmCommand) {
-        throw "pnpm not found after installation."
+    $pnpmInstallDirectory = Join-Path $script:InstallerTempDirectory ("openclaw-pnpm-" + [Guid]::NewGuid().ToString("N"))
+    $previousPnpmContext = foreach ($name in @("PATH", "COREPACK_ENABLE_DOWNLOAD_PROMPT", "NPM_CONFIG_WORKSPACE_DIR", "npm_config_workspace_dir", "PNPM_CONFIG_LOCKFILE_DIR", "pnpm_config_lockfile_dir")) {
+        [PSCustomObject]@{ Name = $name; Value = [Environment]::GetEnvironmentVariable($name, "Process") }
     }
     $env:PNPM_CONFIG_CHILD_CONCURRENCY = "1"
     $env:PNPM_CONFIG_NETWORK_CONCURRENCY = "4"
@@ -1819,8 +1796,18 @@ function Install-OpenClawFromGit {
     try {
         Push-Location -LiteralPath $RepoDir
         $pushedRepoLocation = $true
+        New-Item -ItemType Directory -Path $pnpmInstallDirectory | Out-Null
+        # Both explicit and nested commands belong to this checkout. Restore the
+        # caller's environment even when bootstrap, install, or build fails.
+        $env:PATH = "$pnpmInstallDirectory;$env:PATH"
+        # Corepack must not await terminal input in the hidden version probe.
+        $env:COREPACK_ENABLE_DOWNLOAD_PROMPT = "0"
+        $env:NPM_CONFIG_WORKSPACE_DIR = $env:npm_config_workspace_dir = $RepoDir
+        $env:PNPM_CONFIG_LOCKFILE_DIR = $env:pnpm_config_lockfile_dir = $RepoDir
+        $pnpmCommand = Ensure-Pnpm -RepoDir $RepoDir -InstallDirectory $pnpmInstallDirectory
+        $env:PATH = "$(Split-Path -Parent $pnpmCommand);$env:PATH"
         $sourceInstallArgs = @("install")
-        if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $RepoDir) {
+        if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $RepoDir -PnpmCommand $pnpmCommand) {
             $sourceInstallArgs += "--prefer-offline"
         }
         $sourceInstallArgs += @(
@@ -1865,6 +1852,12 @@ function Install-OpenClawFromGit {
         $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = $prevPnpmVerifyDepsBeforeRun
         $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = $prevPnpmSideEffectsCache
         $env:NODE_OPTIONS = $prevNodeOptions
+        foreach ($entry in $previousPnpmContext) {
+            [Environment]::SetEnvironmentVariable($entry.Name, $entry.Value, "Process")
+        }
+        if (Test-Path -LiteralPath $pnpmInstallDirectory) {
+            Remove-Item -LiteralPath $pnpmInstallDirectory -Recurse -Force
+        }
     }
 
     $entryPath = Join-Path $RepoDir "dist\\entry.js"
@@ -1891,7 +1884,7 @@ function Install-OpenClawFromGit {
     }
 
     Write-Host "[OK] OpenClaw wrapper installed to $cmdPath" -ForegroundColor Green
-    Write-Host "[i] This checkout uses pnpm. For deps, run: pnpm install (avoid npm install in the repo)." -ForegroundColor Gray
+    Write-Host "[i] Manual builds need the checkout-pinned pnpm launcher; installer bootstrap is temporary: https://docs.openclaw.ai/install/installer#source-build-toolchain" -ForegroundColor Gray
     return $true
 }
 

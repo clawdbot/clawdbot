@@ -6,14 +6,17 @@ import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
+import { normalizeUsage } from "../usage.js";
 import {
   compactEmbeddedRunForRecovery,
   createEmbeddedRunCompactionRuntime,
   type EmbeddedRunCompactionRecoveryInput,
 } from "./run/compaction-runtime.js";
+import { readCompactionUsageRecorder } from "./run/compaction-usage-bridge.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const completionMocks = vi.hoisted(() => ({
@@ -109,6 +112,7 @@ function makeRecoveryInput(
     }),
     prepareCompactedTranscriptRetry: vi.fn(async () => {}),
     armPostCompactionGuard: vi.fn(),
+    usageAccumulator: createUsageAccumulator(),
     ...overrides,
   };
 }
@@ -242,6 +246,37 @@ describe("compactEmbeddedRunForRecovery", () => {
       ),
     ).rejects.toThrow("not bound to an active session agent");
     expect(completionMocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+  });
+
+  it("accounts recovery model usage even when compaction fails", async () => {
+    const compact = vi.fn(async (params: { runtimeContext?: ContextEngineRuntimeContext }) => {
+      const usage = normalizeUsage({
+        input: 100,
+        output: 50,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 150,
+      });
+      if (!usage) {
+        throw new Error("expected normalized usage");
+      }
+      readCompactionUsageRecorder(params.runtimeContext)?.(usage);
+      return { ok: false as const, compacted: false as const, reason: "invalid summary" };
+    });
+    const usageAccumulator = createUsageAccumulator();
+
+    await compactEmbeddedRunForRecovery(
+      makeRecoveryInput({ contextEngine: makeContextEngine(compact), usageAccumulator }),
+      {
+        tokenBudget: 200_000,
+        trigger: "overflow",
+        diagId: "diag-usage",
+        attempt: 1,
+        maxAttempts: 3,
+      },
+    );
+
+    expect(usageAccumulator).toMatchObject({ input: 100, output: 50, total: 150 });
   });
 });
 

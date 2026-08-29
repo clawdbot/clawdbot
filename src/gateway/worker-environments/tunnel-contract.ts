@@ -50,6 +50,8 @@ export type WorkerTunnelStopReason = "provider-destroying" | "provider-destroyed
 export type WorkerWorkspaceCommand = {
   argv: readonly string[];
   transportRetry: "idempotent" | "never";
+  /** Local owner guard revalidated after transport awaits, immediately before dispatch. */
+  assertCurrent?: () => void;
   onDispatchReady?: () => void;
   input?: string;
   timeoutMs?: number;
@@ -121,6 +123,11 @@ export type WorkerWorkspaceTunnelHandle = {
   ownerEpoch: number;
   launchTurn?: never;
   runWorkspaceCommand(command: WorkerWorkspaceCommand): Promise<SpawnResult>;
+  stageAttachments?(request: {
+    localPath: string;
+    isAuthorized: () => boolean;
+    signal: AbortSignal;
+  }): Promise<void>;
   quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence>;
   syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;
   reconcileWorkspace(

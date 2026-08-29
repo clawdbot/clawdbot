@@ -119,7 +119,7 @@ const cases: NativeConfigCase[] = [
 ];
 
 async function readNativeConfig(startOptions: CodexAppServerStartOptions, env: NodeJS.ProcessEnv) {
-  const child = createStdioTransport(startOptions, env);
+  const child = await createStdioTransport(startOptions, env);
   const closed = new Promise<void>((resolve) => {
     child.once("close", () => resolve());
   });

@@ -273,7 +273,10 @@ export class CodexAppServerClient {
   }
 
   /** Starts a new app-server client using resolved runtime start options. */
-  static start(options?: Partial<CodexAppServerStartOptions>): CodexAppServerClient {
+  static async start(
+    options?: Partial<CodexAppServerStartOptions>,
+    assertCurrent?: () => void,
+  ): Promise<CodexAppServerClient> {
     const defaults = resolveCodexAppServerRuntimeOptions().start;
     const startOptions = {
       ...defaults,
@@ -286,7 +289,17 @@ export class CodexAppServerClient {
     if (startOptions.transport === "websocket" || startOptions.transport === "unix") {
       return new CodexAppServerClient(createWebSocketTransport(startOptions));
     }
-    return new CodexAppServerClient(createStdioTransport(startOptions));
+    // The spawn callback runs synchronously before registration; initialization
+    // stays blocked until registration finishes, without losing startup errors.
+    let client!: CodexAppServerClient;
+    try {
+      await createStdioTransport(startOptions, process.env, assertCurrent, (child) => {
+        client = new CodexAppServerClient(child);
+      });
+      return client;
+    } catch (error) {
+      throw client?.getCloseError() ?? error;
+    }
   }
 
   /** Builds a client around a fake transport for tests. */

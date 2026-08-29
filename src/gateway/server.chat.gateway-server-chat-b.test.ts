@@ -136,7 +136,8 @@ vi.mock(
   },
 );
 
-vi.mock("../plugins/provider-thinking.js", () => ({
+vi.mock("../plugins/provider-thinking.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-thinking.js")>()),
   resolveEffectiveThinkingProfile: (params: { context?: { reasoning?: boolean } }) => {
     const offOnly =
       params.context?.reasoning === false ||

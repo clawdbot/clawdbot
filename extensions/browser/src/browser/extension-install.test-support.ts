@@ -24,6 +24,29 @@ export async function writeSecurePreferences(params: {
   return file;
 }
 
+export function useNativeHostLaunchFixture() {
+  const modesToRestore: Array<{ target: string; mode: number }> = [];
+  afterEach(async () => {
+    for (const { target, mode } of modesToRestore.splice(0).toReversed()) {
+      await fs.chmod(target, mode);
+    }
+  });
+  return async (root: string, nativeHostEntry: string) => {
+    const nativeHostPath = await fs.realpath(nativeHostEntry);
+    const mode = (await fs.stat(nativeHostPath)).mode & 0o777;
+    modesToRestore.push({ target: nativeHostPath, mode });
+    await fs.chmod(nativeHostPath, mode & ~0o022);
+
+    // Built entries can inherit group-write permissions, and hosted Node can
+    // be shared-library linked. Keep the real interpreter in place behind a
+    // private launcher; never loosen the installer's target-permission guard.
+    const nodePath = path.join(root, "native-host-node");
+    const nodeExecutable = `'${process.execPath.replaceAll("'", `'"'"'`)}'`;
+    await fs.writeFile(nodePath, `#!/bin/sh\nexec ${nodeExecutable} "$@"\n`, { mode: 0o700 });
+    return { nativeHostPath, nodePath };
+  };
+}
+
 export function useExtensionInstallFixture() {
   // Register before caller cleanup hooks so Vitest restores mocks before deleting fixtures.
   const tempRoots = useAutoCleanupTempDirTracker(afterEach);

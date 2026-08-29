@@ -151,14 +151,14 @@
     "type": "function"
   },
   {
-    "description": "Spawn child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background. `agentId` targets a configured agent (see agents_list); `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require. `visible=true`: durable visible session. Default for coding, multi-step work, or results user may revisit/steer/keep — not only when a thread is requested. Shows in web UI sidebar; works without UI: completion announces back, progress checkable. `category` explicitly groups it; omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (no `mode=\"run\"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherits the caller tool-policy ceiling; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line. Session listing/addressing obeys `tools.sessions.visibility` (tree: current session + own spawn subtree; the main session sees all sessions of its agent). Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message. Native: explicit context=\"isolated\" starts clean; context=\"fork\" copies requester transcript and requires the same agent. Omitted context is isolated. Hidden child: research, parallel/batch reads, throwaway side tasks. Coding, PRs, long builds, anything worth keeping: `visible=true`. No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn, do non-overlap work while run result returns.",
+    "description": "Spawn child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background. `agentId` targets a configured agent (see agents_list); `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require. `visible=true`: durable visible session. Default for coding, multi-step work, or results user may revisit/steer/keep — not only when a thread is requested. Shows in web UI sidebar; works without UI: completion announces back, progress checkable. `category` explicitly groups it; omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode=\"run\"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line. Session listing/addressing obeys `tools.sessions.visibility` (tree: current session + own spawn subtree; the main session sees all sessions of its agent). Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message. Native: explicit context=\"isolated\" starts clean; context=\"fork\" copies requester transcript and requires the same agent. Omitted context is isolated. Hidden child: research, parallel/batch reads, throwaway side tasks. Coding, PRs, long builds, anything worth keeping: `visible=true`. No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn, do non-overlap work while run result returns.",
     "inputSchema": {
       "properties": {
         "agentId": {
           "type": "string"
         },
         "attachAs": {
-          "description": "Attachment mount hint; unavailable with visible=true.",
+          "description": "Attachment mount hint; visible=true accepts only an omitted or blank mountPath.",
           "properties": {
             "mountPath": {
               "type": "string"
@@ -167,7 +167,7 @@
           "type": "object"
         },
         "attachments": {
-          "description": "Inline snapshots; unavailable with visible=true.",
+          "description": "Inline snapshots; visible=true accepts only an empty array.",
           "items": {
             "properties": {
               "content": {
@@ -205,7 +205,7 @@
           "type": "string"
         },
         "cwd": {
-          "description": "Working directory for the child. With visible=true, paths outside configured agent workspaces require operator.admin; omit to use the target agent workspace.",
+          "description": "Child working directory. Visible paths outside configured agent workspaces require operator.admin. Omitted with worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
           "type": "string"
         },
         "label": {
@@ -217,7 +217,7 @@
           "type": "boolean"
         },
         "mode": {
-          "description": "\"run\" one-shot. Omit with visible=true; visible sessions are persistent.",
+          "description": "\"run\" one-shot. Visible sessions accept omitted/default \"run\" and remain persistent.",
           "enum": ["run"],
           "type": "string"
         },
@@ -251,7 +251,7 @@
           "type": "string"
         },
         "visible": {
-          "description": "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+          "description": "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/thinking/lightContext or attachment staging.",
           "type": "boolean"
         },
         "worktree": {

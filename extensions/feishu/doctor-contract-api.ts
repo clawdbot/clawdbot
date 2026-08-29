@@ -3,4 +3,4 @@
 // package root (src/plugins/doctor-contract-registry.ts), so separately
 // installed @openclaw/feishu builds can repair legacy streaming config before
 // schema validation rejects it.
-export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/doctor-contract.js";
+export { legacyConfigRules, normalizeCompatibilityConfig } from "./config-doctor-api.js";

@@ -215,7 +215,13 @@ export class SessionManagerPersistence extends SessionManagerCore {
       parentId: entry.parentId,
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
     } satisfies Parameters<typeof appendTranscriptMessageSync>[1]);
-    const result = appendTranscriptMessageSync(scope, appendOptions);
+    const outcome = appendTranscriptMessageSync(scope, appendOptions);
+    if (!outcome.ok) {
+      throw new Error(`Session transcript message was not persisted: ${entry.id}`, {
+        cause: outcome.error,
+      });
+    }
+    const result = outcome.value;
     if (!result) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`);
     }

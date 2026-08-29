@@ -7,6 +7,7 @@ import type {
   WorkerTranscriptCommitParams,
   WorkerTranscriptMessage,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { createNoisyPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   loadSessionEntry,
@@ -216,7 +217,22 @@ describe("worker transcript commit application", () => {
     const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
     unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
 
-    const outcome = await committer.commit({ identity: IDENTITY, request: createRequest() });
+    const image = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: createNoisyPngBuffer(256, 256).toString("base64"),
+    };
+    expect(Buffer.byteLength(image.data)).toBeGreaterThan(64 * 1024);
+    const messages = createTurnMessages();
+    const toolResult = messages[2]!;
+    if (toolResult.role !== "toolResult") {
+      throw new Error("missing read result");
+    }
+    toolResult.content.push(image);
+    const outcome = await committer.commit({
+      identity: IDENTITY,
+      request: createRequest({ messages }),
+    });
 
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) {
@@ -266,6 +282,7 @@ describe("worker transcript commit application", () => {
         message: expect.objectContaining({
           role: "toolResult",
           toolCallId: "call-read-1",
+          content: [{ type: "text", text: "Workspace ready." }, image],
         }),
       }),
     ]);

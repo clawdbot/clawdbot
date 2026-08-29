@@ -201,6 +201,7 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
       bundleMcp: false,
       pluginId: provider === "claude-cli" ? "anthropic" : "openai",
     },
+    executionTarget: { kind: "process" },
     preparedBackend: {
       backend,
       env: {},
@@ -334,6 +335,8 @@ const CLI_RESEED_PROMPT =
 
 describe("runCliAgent reliability", () => {
   beforeEach(() => {
+    // Failed attempts must not leave queued spawn results for the next case.
+    supervisorSpawnMock.mockReset();
     // Binding-flush retry timing has dedicated coverage. Reliability cases only
     // need its stable not-yet-flushed outcome, without filesystem polling/sleeps.
     setCliRunnerTestDeps({
@@ -488,7 +491,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not retry recoverable failover when no reusable CLI session was used", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({
         reason: "no-output-timeout",
@@ -513,7 +515,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not retry a resumed CLI session after the hard overall timeout", async () => {
-    supervisorSpawnMock.mockClear();
     const clearBeforeRetry = vi.fn(async () => false);
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({
@@ -545,7 +546,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not retry a resumed recoverable failover without a reseed prompt", async () => {
-    supervisorSpawnMock.mockClear();
     const clearBeforeRetry = vi.fn(async () => false);
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({
@@ -578,7 +578,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("keeps cold transcript reseed for stalled sessions without a checkpoint", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock
       .mockResolvedValueOnce(
         makeManagedRun({
@@ -631,7 +630,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("falls back to cold reseed when Claude lacks the checkpoint flag", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock
       .mockResolvedValueOnce(
         makeManagedRun({
@@ -697,7 +695,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("cold reseeds an initially armed checkpoint after a Claude downgrade", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock
       .mockResolvedValueOnce(
         makeManagedRun({
@@ -752,7 +749,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not treat unsupported-flag wording fragments as a Claude downgrade", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({
         exitCode: 1,
@@ -798,7 +794,8 @@ describe("runCliAgent reliability", () => {
   });
 
   it("preserves fresh retry for direct CLI callers without a pre-clear hook", async () => {
-    supervisorSpawnMock.mockClear();
+    // Image preparation must not consume this retry-policy fixture's budget.
+    vi.useFakeTimers({ toFake: ["Date"] });
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({
         exitCode: 1,
@@ -877,7 +874,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not retry or fail over after a confirmed message send", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
       const captureKey = input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "";
@@ -1072,7 +1068,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("surfaces a CLI failure after a delivered progress reply", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
       const captureHandle = markMcpLoopbackToolCallStarted({
@@ -1114,7 +1109,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("clears a soft-resumed binding after confirmed message send followed by failure", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
       const captureHandle = markMcpLoopbackToolCallStarted({
@@ -1172,7 +1166,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not retry context overflow after a confirmed message send", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
       const captureHandle = markMcpLoopbackToolCallStarted({
@@ -1226,7 +1219,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("preserves first-turn delivery through cleanup without binding the OpenClaw session id", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
       const captureHandle = markMcpLoopbackToolCallStarted({
@@ -1305,7 +1297,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("refreshes soft-resumed binding hashes without clearing the stored binding", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "ok" }));
     const context = buildPreparedContext({
       sessionKey: "agent:main:soft-drift-refresh",
@@ -1331,7 +1322,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("returns only the source-reply mirror after a successful CLI turn", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
       const captureHandle = markMcpLoopbackToolCallStarted({
@@ -1399,7 +1389,6 @@ describe("runCliAgent reliability", () => {
       runAgentEnd: vi.fn(async () => undefined),
     };
     setHookRunnerForTest(hookRunner);
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
       const captureHandle = markMcpLoopbackToolCallStarted({
@@ -1472,7 +1461,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("accepts empty terminal output after a confirmed message delivery", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
       const captureHandle = markMcpLoopbackToolCallStarted({
@@ -1521,7 +1509,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not persist an emitted CLI session id when sessions are disabled", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
       input.onStdout?.(
@@ -1551,7 +1538,6 @@ describe("runCliAgent reliability", () => {
 
   it("keeps unresolved internal source replies retryable", async () => {
     vi.useFakeTimers();
-    supervisorSpawnMock.mockClear();
     let captureStarted: (() => void) | undefined;
     const captureStartedPromise = new Promise<void>((resolve) => {
       captureStarted = resolve;
@@ -1606,7 +1592,6 @@ describe("runCliAgent reliability", () => {
 
   it("fails closed when an unresolved implicit send resolves to an external session route", async () => {
     vi.useFakeTimers();
-    supervisorSpawnMock.mockClear();
     let captureStarted: (() => void) | undefined;
     const captureStartedPromise = new Promise<void>((resolve) => {
       captureStarted = resolve;
@@ -1674,7 +1659,6 @@ describe("runCliAgent reliability", () => {
 
   it("bounds unresolved message sends and does not retry them", async () => {
     vi.useFakeTimers();
-    supervisorSpawnMock.mockClear();
     let captureStarted: (() => void) | undefined;
     const captureStartedPromise = new Promise<void>((resolve) => {
       captureStarted = resolve;
@@ -1732,7 +1716,6 @@ describe("runCliAgent reliability", () => {
 
   it("bounds admitted requests that have not finished uploading", async () => {
     vi.useFakeTimers();
-    supervisorSpawnMock.mockClear();
     let captureStarted: (() => void) | undefined;
     const captureStartedPromise = new Promise<void>((resolve) => {
       captureStarted = resolve;
@@ -1775,7 +1758,6 @@ describe("runCliAgent reliability", () => {
 
   it("does not treat classified non-message requests as delivery", async () => {
     vi.useFakeTimers();
-    supervisorSpawnMock.mockClear();
     let captureStarted: (() => void) | undefined;
     const captureStartedPromise = new Promise<void>((resolve) => {
       captureStarted = resolve;
@@ -1823,7 +1805,6 @@ describe("runCliAgent reliability", () => {
 
   it("fails normally after an unresolved prepared dry-run send", async () => {
     vi.useFakeTimers();
-    supervisorSpawnMock.mockClear();
     let captureStarted: (() => void) | undefined;
     const captureStartedPromise = new Promise<void>((resolve) => {
       captureStarted = resolve;
@@ -1878,7 +1859,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not retry an unclassified CLI failure with diagnostic output", async () => {
-    supervisorSpawnMock.mockClear();
     const clearBeforeRetry = vi.fn(async () => true);
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({
@@ -1909,7 +1889,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not fresh retry when the run timeout budget is exhausted", async () => {
-    supervisorSpawnMock.mockClear();
     const clearBeforeRetry = vi.fn(async () => true);
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({
@@ -1947,7 +1926,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not fresh retry context overflow when the run timeout budget is exhausted", async () => {
-    supervisorSpawnMock.mockClear();
     const clearBeforeRetry = vi.fn(async () => true);
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({
@@ -1982,7 +1960,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not fresh retry a no-output timeout after CLI diagnostic output", async () => {
-    supervisorSpawnMock.mockClear();
     enqueueSystemEventMock.mockClear();
     const clearBeforeRetry = vi.fn(async () => true);
     supervisorSpawnMock.mockResolvedValueOnce(
@@ -2019,7 +1996,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not fresh retry an empty supervisor cancellation", async () => {
-    supervisorSpawnMock.mockClear();
     const clearBeforeRetry = vi.fn(async () => true);
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({
@@ -2049,7 +2025,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not start a fresh CLI attempt when format recovery retains the binding", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({
         stdout: [
@@ -2201,7 +2176,6 @@ describe("runCliAgent reliability", () => {
         runAgentEnd: vi.fn(async () => undefined),
       };
       setHookRunnerForTest(hookRunner);
-      supervisorSpawnMock.mockClear();
       enqueueSystemEventMock.mockClear();
       requestHeartbeatMock.mockClear();
       const events: string[] = [];
@@ -2340,7 +2314,6 @@ describe("runCliAgent reliability", () => {
       runAgentEnd: vi.fn(async () => undefined),
     };
     setHookRunnerForTest(hookRunner);
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({
         exitCode: 1,
@@ -3477,7 +3450,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not fail CLI execution when persistence notification fails", async () => {
-    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({ stdout: "hello despite notification failure" }),
     );
@@ -3517,7 +3489,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not execute the CLI when approved user turn persistence fails", async () => {
-    supervisorSpawnMock.mockClear();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-persist-fail-"));
     const onUserMessagePersisted = vi.fn();
     // SQLite-backed persistence no longer fails via blocked transcript
@@ -3567,7 +3538,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("blocks CLI runs before llm_input and model execution when before_agent_run blocks", async () => {
-    supervisorSpawnMock.mockClear();
     let releaseAgentEnd: () => void = () => undefined;
     const agentEndSettled = new Promise<void>((resolve) => {
       releaseAgentEnd = resolve;
@@ -3730,7 +3700,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not rebind a reset session when a stale before_agent_run hook blocks", async () => {
-    supervisorSpawnMock.mockClear();
     const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
     const sessionKey = "agent:main:main";
     const context = makeClaudePreparedContext({
@@ -3781,7 +3750,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("persists a blocked bare-key turn under its fixed-store owner", async () => {
-    supervisorSpawnMock.mockClear();
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_agent_run"),
       runBeforeAgentRun: vi.fn(async () => ({
@@ -3845,7 +3813,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("persists before_agent_run CLI blocks through the canonical recorder", async () => {
-    supervisorSpawnMock.mockClear();
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_agent_run"),
       runBeforeAgentRun: vi.fn(async () => ({
@@ -3945,7 +3912,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("forwards channel identity context to CLI before_agent_run hooks", async () => {
-    supervisorSpawnMock.mockClear();
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_agent_run"),
       runBeforeAgentRun: vi.fn(async () => ({

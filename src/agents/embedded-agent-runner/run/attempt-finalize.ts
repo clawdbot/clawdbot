@@ -1,9 +1,8 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * Finalizes post-turn state, abort resources, and terminal trajectory artifacts.
  * It may assume stream execution and transcript writes are settled.
  */
-
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { readActiveTranscriptEntryAnchor } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -11,6 +10,10 @@ import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import {
+  projectNestedToolActivityForHooks,
+  type NestedToolActivity,
+} from "../../../sessions/nested-tool-activity.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
@@ -202,6 +205,7 @@ type CompleteEmbeddedAttemptAfterTurnInput = {
     sessionIdUsed: string;
     sessionFileUsed?: string;
     messagesSnapshot: AgentMessage[];
+    nestedToolActivities?: readonly NestedToolActivity[];
     prePromptMessageCount: number;
     contextEngineAfterTurnCheckpoint: number | null;
     lastCallUsage?: NormalizedUsage;
@@ -391,7 +395,10 @@ export async function completeEmbeddedAttemptAfterTurn(
         : undefined;
     runAgentEndSideEffects({
       event: {
-        messages: state.messagesSnapshot,
+        messages: projectNestedToolActivityForHooks(
+          state.messagesSnapshot,
+          state.nestedToolActivities ?? [],
+        ),
         success: !lifecycleForAgentEnd.aborted && !state.promptError,
         error: agentEndError,
         durationMs: Date.now() - runtime.promptStartedAt,

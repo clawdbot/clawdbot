@@ -15,7 +15,6 @@ import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   logLiveProgress,
-  requiresLiveProfileCredential,
   readLiveTestConfig,
   resolveLiveCredentialPrecedence,
   type CompleteSimpleContent,
@@ -274,10 +273,7 @@ describeLive("tool replay repair live", () => {
           return;
         }
 
-        if (
-          requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
-          !apiKeyInfo.source.startsWith("profile:")
-        ) {
+        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
           logProgress(
             `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
           );
@@ -387,10 +383,7 @@ describeLive("tool replay repair live", () => {
           return;
         }
 
-        if (
-          requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
-          !apiKeyInfo.source.startsWith("profile:")
-        ) {
+        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
           logProgress(
             `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
           );

@@ -17,6 +17,7 @@ import { resolveLineAccount } from "./accounts.js";
 import { messageAction, normalizeLineMessageActions } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { validateLineMediaUrl } from "./outbound-media.js";
+import { recordLineSentMessages } from "./outbound-message-log.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 import { resolveLinePushRetryKey, runLinePushWithRetries } from "./send-retry.js";
 import type { LineChannelData, LineOutboundMediaKind, LineSendResult } from "./types.js";
@@ -372,6 +373,9 @@ function recordLineOutboundActivity(
   accountId: string,
   delivery: { messageIds: string[]; receipt?: LineSendResult["receipt"] },
 ): void {
+  // Every LINE send funnels through here, so this is where the ids a later quote
+  // can point at become known.
+  recordLineSentMessages(accountId, delivery.messageIds);
   try {
     recordChannelActivity({
       channel: "line",

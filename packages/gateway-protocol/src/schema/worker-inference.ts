@@ -41,7 +41,7 @@ const WorkerInferenceTextContentSchema = workerInferenceObject({
   textSignature: OptionalInferenceTextSchema,
 });
 
-const WorkerInferenceImageContentSchema = workerInferenceObject({
+export const WorkerInferenceImageContentSchema = workerInferenceObject({
   type: Type.Literal("image"),
   data: Type.String({
     minLength: 1,

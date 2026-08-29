@@ -20,7 +20,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
-import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.doctor.js";
+import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.plugin-doctor.js";
 import { shortenHomePath } from "../utils.js";
 import {
   repairCanonicalSessionKeys,

@@ -33,6 +33,7 @@ export async function attemptServerEndpointCompaction(params: {
   requestOptions: Parameters<typeof requestPreparedOpenAIResponsesCompaction>[3];
   customInstructions?: string;
   config?: OpenClawConfig;
+  onUsage?: (usage: ServerEndpointCompactionResult["usage"]) => void;
 }): Promise<ServerEndpointCompactionResult | undefined> {
   if (
     params.trigger === "overflow" ||
@@ -71,6 +72,7 @@ export async function attemptServerEndpointCompaction(params: {
       params.requestOptions.timeoutMs,
       params.requestOptions.signal ? { abortSignal: params.requestOptions.signal } : undefined,
     );
+    params.onUsage?.(compacted.usage);
     const replacement = structuredClone(owner.message);
     captureOpenAIResponsesCompaction(
       replacement,

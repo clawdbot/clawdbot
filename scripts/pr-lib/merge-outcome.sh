@@ -3,13 +3,16 @@
 # textual OIDs in a blob alone would not keep historical proof alive through GC.
 merge_outcome_stop() {
   echo "Merge outcome: $*" >&2
-  echo "No merge retry. Repeated merge-run only reconciles a recorded attempt. Inspect the PR timeline, main history, and $MERGE_OUTCOME_REF; unresolved uncertainty requires operator action outside this automatic path." >&2
+  echo "No automatic merge retry. Repeated merge-run only reconciles a recorded attempt. Inspect the PR timeline, main history, and $MERGE_OUTCOME_REF; a new attempt requires explicit operator recovery through merge-recover." >&2
   return 1
 }
 
 merge_outcome_repo_identity() {
+  # gh returns the repository's REST database id as a JSON number while PR ids are
+  # GraphQL node strings. Accept either scalar so a current gh cannot fail admission
+  # closed; nameWithOwner and the url suffix still pin which repository this is.
   jq -ce '
-    . as $repo | select((.id | type == "string" and length > 0) and
+    . as $repo | select((.id | (type == "string" and length > 0) or type == "number") and
       (.nameWithOwner | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
       (.url | test("^https://[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") and endswith("/" + $repo.nameWithOwner)))
   '

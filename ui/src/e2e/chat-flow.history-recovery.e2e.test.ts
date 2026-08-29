@@ -613,7 +613,8 @@ suite.define(() => {
           const rows = Array.from(pane?.querySelectorAll<HTMLElement>("[data-chat-row-key]") ?? []);
           samples.push({
             hiddenNotice: pane?.textContent?.includes("Showing last") ?? false,
-            loading: pane?.querySelector('.chat-history-available[aria-busy="true"]') !== null,
+            loading:
+              pane?.querySelector('.chat-history-boundary__action[aria-busy="true"]') !== null,
             messageCount: pane?.state?.chatMessages?.length ?? 0,
             minOpacity: rows.reduce(
               (minimum, row) => Math.min(minimum, Number.parseFloat(getComputedStyle(row).opacity)),

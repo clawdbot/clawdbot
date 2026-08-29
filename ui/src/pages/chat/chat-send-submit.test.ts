@@ -10,10 +10,14 @@ import {
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
+import { handleChatGatewayEvent } from "./chat-gateway.ts";
+import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { retryQueuedChatMessage, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { getChatSessionProjection } from "./history-merge.ts";
+import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 const attachmentsToRelease: ChatAttachment[] = [];
 const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
@@ -636,6 +640,167 @@ describe("handleSendChat immediate local commands", () => {
 });
 
 describe("handleSendChat session ownership", () => {
+  it.each(
+    [false, true].flatMap((pendingHistory) =>
+      [false, true].map((structured) => ({ pendingHistory, structured })),
+    ),
+  )(
+    "retires the previous run error after local retry (pending history: $pendingHistory, structured: $structured)",
+    async ({ pendingHistory, structured }) => {
+      const failed: ChatHistoryResult = {
+        messages: [],
+        sessionInfo: {
+          key: "main",
+          kind: "direct",
+          updatedAt: 1,
+          status: "failed",
+          hasActiveRun: false,
+          lastRunId: "run-first",
+          lastRunError: "Earlier preparation failed. Retry after repairing the workspace.",
+        },
+      };
+      const refresh = createDeferred<ChatHistoryResult>();
+      const history = vi.fn().mockResolvedValueOnce(failed).mockReturnValue(refresh.promise);
+      const host = makeChatHost({
+        sessionKey: "main",
+        chatMessage: "Try again",
+        requestHandlers: {
+          "chat.history": history,
+          "chat.send": { status: "started" },
+        },
+      });
+      await loadChatHistory(host);
+      expect(host.chatRunError?.summary).toContain(failed.sessionInfo!.lastRunError);
+      const diagnostic = getChatSessionProjection(host, host.chatMessages).runs["run-first"];
+      const loading = pendingHistory ? loadChatHistory(host) : undefined;
+      try {
+        const sending = handleSendChat(
+          host,
+          undefined,
+          structured
+            ? { intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() } }
+            : undefined,
+        );
+        if (!structured) {
+          expect(host.chatRunError).toBeNull();
+        }
+        if (pendingHistory) {
+          expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+          refresh.resolve(failed);
+          await loading;
+        }
+        await sending;
+        const runId = String(findChatSendPayload(host).idempotencyKey);
+        expect(host.chatRunId).toBe(runId);
+        handleChatGatewayEvent(host, {
+          sessionKey: "main",
+          runId,
+          state: "final",
+          message: { role: "assistant", content: "Recovery completed." },
+        });
+
+        expect(host.chatMessages.at(-1)).toMatchObject({ content: "Recovery completed." });
+        expect(host.chatRunStatus).toMatchObject({ phase: "done", runId });
+        expect(host.chatRunId).toBeNull();
+        expect(host.lastError).toBeNull();
+        expect(getChatSessionProjection(host, host.chatMessages).runs["run-first"]).toEqual(
+          diagnostic,
+        );
+        expect(host.chatRunError).toBeNull();
+      } finally {
+        reconcileChatRunLifecycle(host, { clearRunStatus: true });
+      }
+    },
+  );
+
+  it.each(["live", "history"] as const)(
+    "does not let an ACK resurrect a run or clear its %s terminal diagnostic",
+    async (source) => {
+      const ack = createDeferred<{ status: "started" }>();
+      const host = makeChatHost({
+        sessionKey: "main",
+        chatMessage: "Try once",
+        requestHandlers: { "chat.send": () => ack.promise },
+      });
+      const sending = handleSendChat(host);
+      try {
+        await vi.waitFor(() => expect(findChatSendPayload(host)).toBeDefined());
+        const runId = String(findChatSendPayload(host).idempotencyKey);
+        const error = "This run failed before its ACK arrived";
+        if (source === "live") {
+          handleChatGatewayEvent(host, {
+            sessionKey: "main",
+            runId,
+            state: "error",
+            errorMessage: error,
+          });
+        } else {
+          host.request.mockImplementationOnce(async () => ({
+            messages: [],
+            sessionInfo: {
+              key: "main",
+              kind: "direct",
+              updatedAt: 1,
+              status: "failed",
+              hasActiveRun: false,
+              lastRunId: runId,
+              lastRunError: error,
+            },
+          }));
+          await loadChatHistory(host, { deferBranches: true });
+        }
+        const diagnostic = host.chatRunError;
+        expect(diagnostic?.summary).toContain(error);
+        ack.resolve({ status: "started" });
+        await sending;
+        expect(host.chatRunId).toBeNull();
+        expect(host.chatRunError).toEqual(diagnostic);
+      } finally {
+        ack.resolve({ status: "started" });
+        await sending;
+        reconcileChatRunLifecycle(host, { clearRunStatus: true });
+      }
+    },
+  );
+
+  it.each(["done", "failed"] as const)(
+    "does not apply older %s history over a pending send",
+    async (status) => {
+      const ack = createDeferred<{ status: "started" }>();
+      const host = makeChatHost({
+        sessionKey: "main",
+        chatMessage: "A new turn",
+        requestHandlers: {
+          "chat.send": () => ack.promise,
+          "chat.history": {
+            messages: [],
+            sessionInfo: {
+              key: "main",
+              kind: "direct",
+              updatedAt: 1,
+              status,
+              hasActiveRun: false,
+              lastRunId: "old-run",
+              ...(status === "failed" ? { lastRunError: "Old failure" } : {}),
+            },
+          },
+        },
+      });
+      const sending = handleSendChat(host);
+      try {
+        await vi.waitFor(() => expect(findChatSendPayload(host)).toBeDefined());
+        await loadChatHistory(host);
+        expect(host.chatRunId).toBeNull();
+        expect(host.chatRunError).toBeNull();
+        expect(getChatSessionProjection(host, host.chatMessages).runs["old-run"]).toBeUndefined();
+      } finally {
+        ack.resolve({ status: "started" });
+        await sending;
+        reconcileChatRunLifecycle(host, { clearRunStatus: true });
+      }
+    },
+  );
+
   it.each(["later turn", ""])(
     "retains %j and attachments until account recovery is ready",
     async (message) => {
@@ -683,12 +848,24 @@ describe("handleSendChat session ownership", () => {
     host.connected = true;
     readiness.mockReturnValue(true);
     const drain = retryReconnectableQueuedChatSends(host);
+    const loading = loadChatHistory(host);
     await vi.waitFor(() =>
       expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything()),
     );
     readiness.mockReturnValue(false);
-    history.resolve({ messages: [], sessionInfo: { hasActiveRun: false, status: "done" } });
+    history.resolve({
+      messages: [],
+      sessionInfo: {
+        key: host.sessionKey,
+        hasActiveRun: false,
+        status: "failed",
+        lastRunId: "previous-run",
+        lastRunError: "Earlier preparation failed",
+      },
+    });
     await drain;
+    await loading;
+    expect(host.chatRunError?.summary).toContain("Earlier preparation failed");
     expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
     expect(host.chatQueue).toMatchObject([
       { text: "offline later turn", sendAttempts: 0, sendRunId: originalId },
@@ -699,6 +876,7 @@ describe("handleSendChat session ownership", () => {
     expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
     pending = false;
     await retryReconnectableQueuedChatSends(host);
+    expect(host.chatRunError).toBeNull();
     expect(findChatSendPayload(host)).toMatchObject({
       message: "offline later turn",
       idempotencyKey: originalId,

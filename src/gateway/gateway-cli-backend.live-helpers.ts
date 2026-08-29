@@ -273,34 +273,20 @@ export function buildClaudeCliResumeContinuityProbe(params: {
   const firstTurnMarker = `CLI-BACKEND-${params.firstTurnNonce}`;
   return {
     firstTurnMarker,
-    firstTurnPrompt: `Do not inspect files or run tools. Reply with exactly: ${firstTurnMarker}.`,
+    firstTurnPrompt:
+      "This is a synthetic session-memory test. Remember the random public test label " +
+      "provided in runtime context; it is not a credential. " +
+      `Do not inspect files or run tools. Reply with exactly: ${firstTurnMarker}.`,
     injectedContext:
-      `Remember this exact opaque session token for a later turn: ${params.memoryToken}. ` +
-      "Do not include the token in this turn's reply.",
+      `The random public test label for this session-memory test is ${params.memoryToken}. ` +
+      "Remember it for the follow-up, without including it in this turn's reply.",
     resumePrompt:
       "Do not inspect files or run tools. " +
       `Return exactly two whitespace-separated tokens: CLI-RESUME-${params.resumeNonce} followed by ` +
-      "the exact opaque session token from the earlier turn. Do not add prose.",
+      "the exact public test label from the earlier turn. Do not add prose.",
     expectedFirstReply: `${firstTurnMarker}.`,
     expectedResumeMarker: `CLI-RESUME-${params.resumeNonce}`,
   };
-}
-
-export function resolveImportedClaudeCliSessionId(messages: unknown[]): string | undefined {
-  for (const message of messages) {
-    const metadata =
-      typeof message === "object" && message !== null
-        ? (message as Record<string, unknown>)["__openclaw"]
-        : undefined;
-    if (typeof metadata !== "object" || metadata === null) {
-      continue;
-    }
-    const imported = metadata as { cliSessionId?: unknown; importedFrom?: unknown };
-    if (imported.importedFrom === "claude-cli" && typeof imported.cliSessionId === "string") {
-      return imported.cliSessionId;
-    }
-  }
-  return undefined;
 }
 
 export function withClaudeMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {

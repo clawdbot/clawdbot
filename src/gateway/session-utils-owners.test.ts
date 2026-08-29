@@ -51,7 +51,10 @@ it("lets configured agents win id-only owner facet collisions", () => {
       actorOrder.map((type, index) => [
         `agent:main:${index}`,
         {
-          createdActor: { type, id: "shared-id" },
+          createdActor:
+            type === "human"
+              ? { type, source: "profile", id: "shared-id" }
+              : { type, id: "shared-id" },
           createdVia: "operator",
           sessionId: `session-${index}`,
           updatedAt: 2 - index,
@@ -83,13 +86,13 @@ it("returns the complete deterministic owner facet independently of pagination",
     "agent:main:ada": {
       archivedAt: 3,
       archivedBy: { type: "human", id: "profile-bob" },
-      createdActor: { type: "human", id: "profile-ada" },
+      createdActor: { type: "human", source: "profile", id: "profile-ada" },
       createdVia: "operator",
       sessionId: "session-ada",
       updatedAt: 2,
     },
     "agent:main:bob": {
-      createdActor: { type: "human", id: "profile-bob" },
+      createdActor: { type: "human", source: "profile", id: "profile-bob" },
       createdVia: "operator",
       sessionId: "session-bob",
       updatedAt: 1,
@@ -148,13 +151,13 @@ it("returns the complete deterministic owner facet independently of pagination",
 it("prepends an owner window without advancing shared-page pagination", () => {
   const store: Record<string, SessionEntry> = {
     "agent:main:foreign-newest": {
-      createdActor: { type: "human", id: "profile-ada" },
+      createdActor: { type: "human", source: "profile", id: "profile-ada" },
       createdVia: "operator",
       sessionId: "session-foreign-newest",
       updatedAt: 2,
     },
     "agent:main:owner-older": {
-      createdActor: { type: "human", id: "profile-bob" },
+      createdActor: { type: "human", source: "profile", id: "profile-bob" },
       createdVia: "operator",
       sessionId: "session-owner-older",
       updatedAt: 1,
@@ -178,18 +181,31 @@ it("prepends an owner window without advancing shared-page pagination", () => {
 
 it("projects only durable profiles and configured agents as effective owners", () => {
   const cases = [
-    { createdActor: { type: "human" as const, id: "profile-ada" }, ownerId: "profile-ada" },
     {
-      createdActor: { type: "human" as const, id: "profile:channel:opaque" },
+      createdActor: { type: "human" as const, source: "profile" as const, id: "profile-ada" },
+      ownerId: "profile-ada",
+    },
+    {
+      createdActor: {
+        type: "human" as const,
+        source: "profile" as const,
+        id: "profile:channel:opaque",
+      },
       createdVia: "operator",
       ownerId: "profile:channel:opaque",
     },
     { createdActor: { type: "agent" as const, id: "research" }, ownerId: "research" },
-    { createdActor: { type: "human" as const, id: "discord:channel:123" } },
+    {
+      createdActor: {
+        type: "human" as const,
+        source: "channel" as const,
+        id: "discord:channel:123",
+      },
+    },
     { createdActor: { type: "agent" as const, id: "agent:roboclaw:discord:channel:456" } },
     { createdActor: { type: "system" as const, id: "system-import" } },
     {
-      createdActor: { type: "human" as const, id: "profile-ada" },
+      createdActor: { type: "human" as const, source: "profile" as const, id: "profile-ada" },
       createdVia: "operator",
       owner: { actor: { type: "human" as const, id: "slack:channel:789" } },
     },
@@ -256,22 +272,22 @@ it("projects only durable profiles and configured agents as effective owners", (
   ).toEqual(
     cases.map(({ createdActor, ownerId }, index) => ({
       key: `agent:main:owner-${index}`,
-      createdActor,
+      createdActor: { type: createdActor.type, id: createdActor.id },
       owner: ownerId ? { type: createdActor.type, id: ownerId } : undefined,
     })),
   );
 });
 
-it("filters immutable creator and effective owner separately while preserving projections", () => {
-  const store: Record<string, SessionEntry> = {
+it("filters immutable creator and effective owner separately while preserving projections", async () => {
+  const store = {
     "agent:main:default-owner": {
-      createdActor: { type: "human", id: "profile-ada" },
+      createdActor: { type: "human", source: "profile", id: "profile-ada" },
       createdVia: "operator",
       sessionId: "session-default-owner",
       updatedAt: 2,
     },
     "agent:main:assigned-owner": {
-      createdActor: { type: "human", id: "profile-ada" },
+      createdActor: { type: "human", source: "profile", id: "profile-ada" },
       createdVia: "operator",
       owner: {
         actor: { type: "human", id: "profile-bob" },
@@ -282,13 +298,13 @@ it("filters immutable creator and effective owner separately while preserving pr
       updatedAt: 1,
     },
     "agent:main:other-creator": {
-      createdActor: { type: "human", id: "profile-bob" },
+      createdActor: { type: "human", source: "profile", id: "profile-bob" },
       createdVia: "operator",
       owner: { actor: { type: "human", id: "profile-ada" } },
       sessionId: "session-other-creator",
       updatedAt: 0,
     },
-  };
+  } satisfies Record<string, SessionEntry>;
   const result = listSessionsFromStore({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owners",
@@ -350,12 +366,60 @@ it("filters immutable creator and effective owner separately while preserving pr
     createdActor: { id: "profile-ada", label: "Ada" },
     owner: { actor: { id: "profile-bob", label: "Bob" } },
   });
+
+  const viewer = {
+    connect: { scopes: ["operator.read"] },
+    authenticatedUserProfile: { profileId: "profile-ada" },
+  } as GatewayClient;
+  const entryFilter = createSessionListEntryFilter({ client: viewer });
+  const actors = [
+    { type: "human", source: "profile" },
+    { type: "human", source: "channel" },
+    { type: "human", source: "unknown" },
+    { type: "agent" },
+    { type: "system" },
+  ] as const;
+  for (const actor of actors) {
+    const rows: Record<string, SessionEntry> = {
+      "agent:main:shared": {
+        sessionId: "shared",
+        updatedAt: 2,
+        createdVia: "cron",
+        createdActor: { ...actor, id: "profile-ada" },
+      },
+      "agent:main:draft": {
+        sessionId: "draft",
+        updatedAt: 1,
+        createdVia: "cron",
+        createdActor: { ...actor, id: "profile-ada" },
+        visibility: "draft",
+      },
+      "agent:main:other-creator": store["agent:main:other-creator"],
+    };
+    const query = {
+      cfg: {},
+      storePath: "/tmp/openclaw-session-owners",
+      store: rows,
+      opts: { creatorId: "profile-ada" },
+    };
+    expect
+      .soft(listSessionsFromStore(query).sessions.map((row) => row.key))
+      .toEqual(["agent:main:shared", "agent:main:draft"]);
+    const authorized = await listSessionsFromStoreAsync({ ...query, entryFilter });
+    expect
+      .soft(authorized.sessions.map((row) => row.key))
+      .toEqual(
+        actor.type === "human" && actor.source === "profile"
+          ? ["agent:main:shared", "agent:main:draft"]
+          : ["agent:main:shared"],
+      );
+  }
 });
 
 it("deduplicates participants in order, excludes the owner, and filters sessions involving the viewer", () => {
   const store: Record<string, SessionEntry> = {
     "agent:main:owned": {
-      createdActor: { type: "human", id: "profile-ada" },
+      createdActor: { type: "human", source: "profile", id: "profile-ada" },
       createdVia: "operator",
       participants: [{ identity: { type: "profile", id: "profile-bob" } }],
       participantCount: 1,
@@ -363,7 +427,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
       updatedAt: 3,
     },
     "agent:main:participating": {
-      createdActor: { type: "human", id: "profile-bob" },
+      createdActor: { type: "human", source: "profile", id: "profile-bob" },
       createdVia: "operator",
       participants: [
         { identity: { type: "profile", id: "profile-bob" } },
@@ -379,7 +443,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
       updatedAt: 2,
     },
     "agent:main:channel-collision": {
-      createdActor: { type: "human", id: "profile-bob" },
+      createdActor: { type: "human", source: "profile", id: "profile-bob" },
       createdVia: "operator",
       participants: [
         {
@@ -397,7 +461,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
       updatedAt: 1,
     },
     "agent:main:legacy-collision": {
-      createdActor: { type: "human", id: "profile-bob" },
+      createdActor: { type: "human", source: "profile", id: "profile-bob" },
       createdVia: "operator",
       participants: [
         { identity: { type: "legacy", id: "profile-ada", actorType: "human", source: null } },
@@ -407,7 +471,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
       updatedAt: 1,
     },
     "agent:main:unrelated": {
-      createdActor: { type: "human", id: "profile-bob" },
+      createdActor: { type: "human", source: "profile", id: "profile-bob" },
       createdVia: "operator",
       sessionId: "session-unrelated",
       updatedAt: 1,
@@ -483,7 +547,7 @@ it.each(["spawn", "talk", "cron"] as const)(
       ...buildSessionCreationStamp({
         via,
         ...inheritSessionCreationPolicy(
-          { createdActor: { type: "human", id: "former" }, sandbox: "required" },
+          { createdActor: { type: "human", source: "profile", id: "former" }, sandbox: "required" },
           { type: "agent", id: "research" },
         ),
         now: 1,
@@ -520,7 +584,7 @@ it.each(["spawn", "talk", "cron"] as const)(
         updatedAt: 2,
         createdVia,
         sandbox,
-        createdActor: { type: "human", id: "current" },
+        createdActor: { type: "human", source: "unknown", id: "current" },
       };
     }
     const query = {
@@ -577,7 +641,7 @@ it.each(["spawn", "talk", "cron"] as const)(
     expect(associated.sessions[1]?.participants).toEqual([
       { identity: { type: "agent", id: "research" } },
     ]);
-    expect(child.createdActor).toEqual({ type: "human", id: "former" });
+    expect(child.createdActor).toEqual({ type: "human", source: "profile", id: "former" });
     expect(child.participants).toEqual([{ identity: { type: "agent", id: "research" } }]);
   },
 );
@@ -674,7 +738,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
   } as OpenClawConfig;
   const store: Record<string, SessionEntry> = {
     global: {
-      createdActor: { type: "human", id: "profile-bob" },
+      createdActor: { type: "human", source: "profile", id: "profile-bob" },
       createdVia: "operator",
       sessionId: "session-global",
       subject: "needle global",
@@ -688,7 +752,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
     },
     "agent:main:shared": {
       boardFace: "chat",
-      createdActor: { type: "human", id: "profile-ada" },
+      createdActor: { type: "human", source: "profile", id: "profile-ada" },
       createdVia: "operator",
       label: "focus",
       lastInteractionAt: now - 5,
@@ -698,7 +762,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
       visibility: "shared",
     },
     "agent:main:draft": {
-      createdActor: { type: "human", id: "profile-ada" },
+      createdActor: { type: "human", source: "profile", id: "profile-ada" },
       createdVia: "operator",
       sessionId: "session-main-draft",
       subject: "needle hidden draft",
@@ -706,7 +770,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
       visibility: "draft",
     },
     "agent:work:shared": {
-      createdActor: { type: "human", id: "profile-bob" },
+      createdActor: { type: "human", source: "profile", id: "profile-bob" },
       createdVia: "operator",
       sessionId: "session-work-shared",
       subject: "needle work",
@@ -715,7 +779,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
     },
     "agent:main:archived": {
       archivedAt: now - 10,
-      createdActor: { type: "human", id: "profile-bob" },
+      createdActor: { type: "human", source: "profile", id: "profile-bob" },
       createdVia: "operator",
       sessionId: "session-main-archived",
       subject: "needle archived",
