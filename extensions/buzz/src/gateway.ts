@@ -74,7 +74,11 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
     .filter(([, config]) => config.enabled !== false)
     .map(([channelId]) => parseBuzzTarget(channelId));
   if (channelIds.length === 0) {
-    throw new Error("Buzz requires at least one channels.buzz.groups entry");
+    const { configPath } = resolveBuzzAccountConfig({
+      cfg: ctx.cfg,
+      accountId: account.accountId,
+    });
+    throw new Error(`Buzz requires at least one enabled ${configPath}.groups entry`);
   }
   const configuredChannelIds = new Set(channelIds);
   const profileName = resolveBuzzProfileName({ cfg: ctx.cfg, account, channelIds });

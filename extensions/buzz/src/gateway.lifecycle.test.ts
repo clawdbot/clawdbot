@@ -194,6 +194,43 @@ describe("Buzz gateway lifecycle", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each(
+    [
+      { label: "implicit root", accountId: "default", nested: false, path: "channels.buzz" },
+      { label: "named", accountId: "ada", nested: true, path: "channels.buzz.accounts.ada" },
+      {
+        label: "explicit default",
+        accountId: "default",
+        nested: true,
+        path: "channels.buzz.accounts.default",
+      },
+    ].flatMap((scope) =>
+      [
+        { rooms: "missing", groups: undefined },
+        { rooms: "empty", groups: {} },
+        { rooms: "disabled", groups: { [CHANNEL_ID]: { enabled: false } } },
+      ].map((rooms) => Object.assign({}, scope, rooms)),
+    ),
+  )(
+    "reports the $label account path when rooms are $rooms",
+    async ({ accountId, nested, path, groups }) => {
+      const cfg = createBuzzConfig();
+      const selected = { relayUrl: "wss://buzz.example.com", privateKey: PRIVATE_KEY, groups };
+      cfg.channels!.buzz = nested
+        ? { ...cfg.channels!.buzz, accounts: { [accountId]: selected } }
+        : selected;
+      const account = resolveBuzzAccount({ cfg, accountId });
+      const abortController = new AbortController();
+      await expect(
+        startBuzzGatewayAccount(
+          createStartAccountContext({ account, cfg, abortSignal: abortController.signal }),
+        ),
+      ).rejects.toThrow(`Buzz requires at least one enabled ${path}.groups entry`);
+      expect(gatewayMocks.startBuzzBus).not.toHaveBeenCalled();
+      expect(gatewayMocks.recoveryLookup).not.toHaveBeenCalled();
+    },
+  );
+
   it("invalidates cached room targets after initial discovery and newer room metadata", async () => {
     const invalidateDirectoryCache = vi.fn();
     const { abortController, lifecycle } = startTestGateway({
