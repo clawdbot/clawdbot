@@ -156,6 +156,17 @@ describe("node worker portal stream command", () => {
   );
 
   it("closes an attached Gateway socket without a readiness frame when loopback refuses", async () => {
+    let attached = false;
+    let closed = false;
+    const frames: unknown[] = [];
+    // Allocate the Gateway first so it cannot reuse the released target port.
+    const gatewayUrl = await listenGateway((ws) => {
+      attached = true;
+      ws.on("message", (data) => frames.push(data));
+      ws.once("close", () => {
+        closed = true;
+      });
+    });
     const unavailable = net.createServer();
     await new Promise<void>((resolve) => {
       unavailable.listen(0, "127.0.0.1", resolve);
@@ -171,17 +182,6 @@ describe("node worker portal stream command", () => {
           return;
         }
         resolve();
-      });
-    });
-
-    let attached = false;
-    let closed = false;
-    const frames: unknown[] = [];
-    const gatewayUrl = await listenGateway((ws) => {
-      attached = true;
-      ws.on("message", (data) => frames.push(data));
-      ws.once("close", () => {
-        closed = true;
       });
     });
 
