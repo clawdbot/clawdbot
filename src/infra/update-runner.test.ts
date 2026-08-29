@@ -894,6 +894,23 @@ describe("runGatewayUpdate", () => {
     ]);
   });
 
+  it("uses the sole remote when main tracks the local repository", async () => {
+    const { localRoot } = await createRecreatedReleaseTagFixture();
+    await runRealGit(localRoot, "remote", "remove", "skipped");
+    await runRealGit(localRoot, "config", "branch.main.remote", ".");
+    const reachedMutation = new Error("reached release mutation");
+
+    await expect(
+      runWithCommand(createRealGitUpdateRunner(), {
+        cwd: localRoot,
+        channel: "stable",
+        beforeGitMutation: async () => {
+          throw reachedMutation;
+        },
+      }),
+    ).rejects.toBe(reachedMutation);
+  });
+
   it("records fetch-config probe failures in steps and progress", async () => {
     await setupGitCheckout();
     const onStepStart = vi.fn();

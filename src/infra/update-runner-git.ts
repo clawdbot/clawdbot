@@ -427,9 +427,10 @@ export async function updateGitCheckout(params: {
       return buildError("fetch-failed");
     }
     const configuredMainRemote = mainRemoteStep.stdoutTail?.trim() ?? "";
-    const releaseRemote = configuredMainRemote
-      ? configuredMainRemote !== "." && remotes.includes(configuredMainRemote)
-        ? configuredMainRemote
+    const configuredReleaseRemote = configuredMainRemote === "." ? "" : configuredMainRemote;
+    const releaseRemote = configuredReleaseRemote
+      ? remotes.includes(configuredReleaseRemote)
+        ? configuredReleaseRemote
         : null
       : remotes.length === 1
         ? (remotes.at(0) ?? null)
@@ -438,7 +439,9 @@ export async function updateGitCheckout(params: {
           : null;
     if (!releaseRemote) {
       return buildError(
-        !configuredMainRemote && remotes.length > 1 ? "ambiguous-release-remote" : "fetch-failed",
+        !configuredReleaseRemote && remotes.length > 1
+          ? "ambiguous-release-remote"
+          : "fetch-failed",
       );
     }
     let remoteTagsOutput = "";
