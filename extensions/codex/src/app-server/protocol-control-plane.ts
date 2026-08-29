@@ -138,7 +138,7 @@ export type CodexAppsInstalledResponse = {
   apps: CodexInstalledApp[];
 };
 
-export type CodexAppToolSummary = {
+type CodexAppToolSummary = {
   name: string;
   title: string | null;
   description: string;
