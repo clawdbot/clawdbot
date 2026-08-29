@@ -4547,6 +4547,11 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       diagnostics: [],
     });
     const repairedPluginDir = tempDirs.make("openclaw-plugin-repaired-generation-");
+    fs.writeFileSync(
+      path.join(repairedPluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/plugin-demo", version: "1.0.0" }),
+      "utf8",
+    );
     mocks.updateNpmInstalledPlugins.mockResolvedValue({
       changed: true,
       config: {
