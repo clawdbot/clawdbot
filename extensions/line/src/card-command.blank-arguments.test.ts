@@ -71,8 +71,11 @@ describe("/card with blank arguments", () => {
     async (args) => {
       const message = await renderedMessage(args);
 
-      // A template that cannot be rendered validly degrades to a text message,
-      // which carries no altText; requiredTextFields covers its text instead.
+      // A carousel that cannot be rendered validly now degrades to a text reply,
+      // which carries no altText. No blank-argument input reaches that path, so
+      // this still asserts altText on every case; if one ever degrades, the first
+      // assertion fails rather than silently skipping the second.
+      expect("altText" in message).toBe(true);
       if ("altText" in message) {
         expect(message.altText.trim()).not.toBe("");
       }
