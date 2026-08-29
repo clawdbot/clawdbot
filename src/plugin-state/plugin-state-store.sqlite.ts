@@ -198,6 +198,23 @@ function insertPluginStateEntryIfAbsent(
   return Number(result.numAffectedRows ?? 0) > 0;
 }
 
+// Key and value move in a single UPDATE so created_at/expires_at survive:
+// eviction orders rows by age, and a rekeyed row must keep its real age.
+function rekeyPluginStateEntryRow(
+  db: DatabaseSync,
+  params: { pluginId: string; namespace: string; key: string; nextKey: string; valueJson: string },
+): void {
+  executeSqliteQuerySync(
+    db,
+    getPluginStateKysely(db)
+      .updateTable("plugin_state_entries")
+      .set({ entry_key: params.nextKey, value_json: params.valueJson })
+      .where("plugin_id", "=", params.pluginId)
+      .where("namespace", "=", params.namespace)
+      .where("entry_key", "=", params.key),
+  );
+}
+
 function selectPluginStateEntry(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; key: string; now: number },
@@ -969,6 +986,73 @@ export function pluginStateUpdate(params: {
       "register",
       "PLUGIN_STATE_WRITE_FAILED",
       "Failed to update plugin state entry.",
+    );
+  }
+}
+
+export function pluginStateRekey(params: {
+  pluginId: string;
+  namespace: string;
+  key: string;
+  nextKey: string;
+  valueJson: string;
+  env?: NodeJS.ProcessEnv;
+}): "rekeyed" | "missing" | "conflict" {
+  try {
+    return runWriteTransaction(
+      "rekey",
+      (store) => {
+        const now = Date.now();
+        deleteExpiredPluginStateEntries(store.db, now, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+        });
+        const existing = selectPluginStateEntry(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          key: params.key,
+          now,
+        });
+        if (!existing) {
+          // The source row expired or vanished; the rekey is complete either
+          // way when the target already holds a live row.
+          return selectPluginStateEntry(store.db, {
+            pluginId: params.pluginId,
+            namespace: params.namespace,
+            key: params.nextKey,
+            now,
+          })
+            ? "rekeyed"
+            : "missing";
+        }
+        const conflict = selectPluginStateEntry(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          key: params.nextKey,
+          now,
+        });
+        if (conflict) {
+          // The target key is already owned; the caller decides whether the
+          // now-duplicate source row should be dropped. Never overwrite here.
+          return "conflict";
+        }
+        rekeyPluginStateEntryRow(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          key: params.key,
+          nextKey: params.nextKey,
+          valueJson: params.valueJson,
+        });
+        return "rekeyed";
+      },
+      envOptions(params.env),
+    );
+  } catch (error) {
+    throw wrapPluginStateError(
+      error,
+      "rekey",
+      "PLUGIN_STATE_WRITE_FAILED",
+      "Failed to rekey plugin state entry.",
     );
   }
 }

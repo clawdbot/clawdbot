@@ -13,6 +13,7 @@ import {
   pluginStateRegister,
   pluginStateRegisterIfAbsent,
   pluginStateRegisterSequencedJournalEntry,
+  pluginStateRekey,
   pluginStateUpdate,
 } from "./plugin-state-store.sqlite.js";
 import type {
@@ -143,22 +144,23 @@ function prepareRegisterParams(
   value: unknown,
   defaultTtlMs?: number,
   opts?: { ttlMs?: number },
+  operation: PluginStateStoreOperation = "register",
 ): PreparedRegisterParams {
-  const normalizedKey = validateKey(key, "register");
+  const normalizedKey = validateKey(key, operation);
   const json = serializePluginStoreJson({
     value,
     label: "plugin state value",
     maxBytes: MAX_PLUGIN_STATE_VALUE_BYTES,
     errors: {
-      invalid: (message) => invalidInput(message, "register"),
+      invalid: (message) => invalidInput(message, operation),
       limit: (message) =>
         new PluginStateStoreError(message, {
           code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-          operation: "register",
+          operation,
         }),
     },
   });
-  const ttlMs = validateOptionalTtlMs(opts?.ttlMs, "register") ?? defaultTtlMs;
+  const ttlMs = validateOptionalTtlMs(opts?.ttlMs, operation) ?? defaultTtlMs;
   return {
     key: normalizedKey,
     valueJson: json,
@@ -202,6 +204,7 @@ function createKeyedStoreForPluginId<T>(
     registerIfAbsent: async (...args) => store.registerIfAbsent(...args),
     update: async (...args) => store.update(...args),
     deleteIf: async (...args) => store.deleteIf(...args),
+    rekey: async (...args) => store.rekey(...args),
     lookup: async (...args) => store.lookup(...args),
     consume: async (...args) => store.consume(...args),
     delete: async (...args) => store.delete(...args),
@@ -277,6 +280,30 @@ function createSyncKeyedStoreForPluginId<T>(
         namespace,
         key: normalizedKey,
         predicate: (current) => predicate(current as T),
+        ...(env ? { env } : {}),
+      });
+    },
+    rekey(key, nextKey, value) {
+      const normalizedKey = validateKey(key, "rekey");
+      const normalizedNextKey = validateKey(nextKey, "rekey");
+      if (normalizedKey === normalizedNextKey) {
+        // A self-rekey has no defined outcome: the source would be its own
+        // live target, which is neither a move nor a two-key conflict.
+        throw invalidInput("plugin state rekey requires distinct keys", "rekey");
+      }
+      const prepared = prepareRegisterParams(
+        normalizedNextKey,
+        value,
+        defaultTtlMs,
+        undefined,
+        "rekey",
+      );
+      return pluginStateRekey({
+        pluginId,
+        namespace,
+        key: normalizedKey,
+        nextKey: prepared.key,
+        valueJson: prepared.valueJson,
         ...(env ? { env } : {}),
       });
     },

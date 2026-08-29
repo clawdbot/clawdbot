@@ -255,11 +255,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
             `Retained unrecognized Memory Wiki source sync row for ${vaultRoot}: ${retainedKey}`,
           );
         }
-        if (result.capacityRetainedKeys.length > 0) {
-          // One aggregate warning: a full 20,000-row namespace must not flood
-          // the doctor report with per-row lines.
+        for (const capacityKey of result.capacityRetainedKeys) {
           warnings.push(
-            `Memory Wiki source sync namespace is full; retained ${result.capacityRetainedKeys.length} legacy ownership row(s) for ${vaultRoot} (e.g. ${result.capacityRetainedKeys[0]}). Rerun doctor after other state frees namespace capacity to finish the migration.`,
+            `Memory Wiki source sync host lacks atomic rekey and the namespace is full; retained legacy ownership row for ${vaultRoot}: ${capacityKey}. Update OpenClaw and rerun doctor to finish the migration.`,
           );
         }
       }

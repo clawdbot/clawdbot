@@ -173,6 +173,17 @@ export function createCapacityCappedKeyedStore(cap: number) {
       values.set(key, value);
       return true;
     },
+    async rekey(key, nextKey, value) {
+      if (!values.has(key)) {
+        return values.has(nextKey) ? "rekeyed" : "missing";
+      }
+      if (values.has(nextKey)) {
+        return "conflict";
+      }
+      values.delete(key);
+      values.set(nextKey, value);
+      return "rekeyed";
+    },
     async lookup(key) {
       return values.get(key) as T | undefined;
     },

@@ -81,10 +81,10 @@ type LegacyImportedSourceSyncMigrationResult = {
   translatedCount: number;
   prunedCount: number;
   retainedKeys: string[];
-  // Legacy rows retained because the reject-new namespace is full and the
-  // register-first replacement has no spare slot; the next doctor run retries
-  // them. Retaining beats deleting first, which would open a window where the
-  // only durable ownership record is gone.
+  // Legacy rows restored after a racing writer claimed the freed slot
+  // mid-rekey; the next doctor run retries them. Only reachable on hosts
+  // without atomic rekey support, where a full namespace cannot hold the
+  // temporary register-first replacement.
   capacityRetainedKeys: string[];
 };
 
@@ -170,14 +170,12 @@ export async function migrateLegacyImportedSourceSyncKeys(params: {
     path.resolve(configuredPath),
   );
 
-  // Register-first migration: write the scoped replacement, then delete the
-  // legacy row. A kill between the two steps leaves the legacy duplicate
-  // behind, which reruns converge away; deleting first would open a window
-  // where the only durable ownership record is gone. A full reject-new
-  // namespace has no spare slot for the replacement, so the legacy row is
-  // retained for the next doctor run instead; one freed slot rolls the whole
-  // namespace forward, because each translate consumes that slot and its
-  // delete frees it back.
+  // Two rekey paths, chosen by host capability. Stores with atomic rekey move
+  // key and value in one slot-neutral transaction: no register-first spare
+  // slot, no delete-first window, so a process kill mid-rekey can never drop
+  // the only durable ownership record, full namespaces converge in one pass,
+  // and reruns stay idempotent. Stores without it fall back to register-first
+  // and retain the legacy row at capacity rather than opening a kill window.
   const migrateRow = async (
     row: LegacyImportedSourceSyncRow,
     nextSyncKey: string,
@@ -188,6 +186,17 @@ export async function migrateLegacyImportedSourceSyncKeys(params: {
       return "migrated";
     }
     const nextValue = { ...row.entry, vaultRootKey, syncKey: nextSyncKey };
+    if (raw.rekey) {
+      const outcome = await raw.rekey(row.storeKey, nextStoreKey, nextValue);
+      if (outcome === "conflict") {
+        // A racing writer owns the scoped key, so the replacement is already
+        // durable and the legacy duplicate can go.
+        await raw.delete(row.storeKey);
+      }
+      // "rekeyed" moved the row; "missing" means it vanished mid-pass. Either
+      // way no legacy row remains.
+      return "migrated";
+    }
     try {
       // registerIfAbsent, not register: a racing sync that wrote the scoped
       // key after the lookup above owns the newer row, and an upsert would
@@ -201,8 +210,8 @@ export async function migrateLegacyImportedSourceSyncKeys(params: {
       if (!isPluginStateLimitExceeded(error)) {
         throw error;
       }
-      // No spare slot: keep the legacy row durable and retry on the next
-      // doctor run instead of deleting it first.
+      // No atomic rekey and no spare slot: keep the legacy row durable and
+      // retry on the next doctor run instead of deleting it first.
       return "capacity";
     }
   };

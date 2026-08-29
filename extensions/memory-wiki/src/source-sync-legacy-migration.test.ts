@@ -283,7 +283,7 @@ describe("memory wiki source sync legacy key migration", () => {
     ).toBeUndefined();
   });
 
-  it("retains legacy rows in a full namespace for the next doctor run", async () => {
+  it("migrates legacy rows in a full namespace without a spare slot", async () => {
     const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const vaultRoot = path.join(stateDir, "vault");
     const capped = createCapacityCappedKeyedStore(2);
@@ -322,32 +322,35 @@ describe("memory wiki source sync legacy key migration", () => {
         unsafeLocalConfiguredPaths: [],
       });
 
-    // A full reject-new namespace has no spare slot for the register-first
-    // replacement, so the legacy row stays durable and the migration defers
-    // to the next doctor run instead of deleting the only ownership record.
+    // Slot-neutral atomic rekey moves the legacy row onto its scoped key in
+    // one transaction, so a full namespace converges in a single run with no
+    // external deletion and no retained rows.
     await expect(migrate()).resolves.toEqual({
-      translatedCount: 0,
+      translatedCount: 1,
       prunedCount: 0,
       retainedKeys: [],
-      capacityRetainedKeys: ["/tmp/legacy-at-capacity.md"],
+      capacityRetainedKeys: [],
     });
 
     expect(capped.values.size).toBe(2);
     const syncKeys = [...capped.values.values()].map(
       (value) => (value as { syncKey: string }).syncKey,
     );
-    expect(syncKeys.toSorted()).toEqual(["/tmp/legacy-at-capacity.md", "bridge:/tmp/full.md"]);
+    expect(syncKeys.toSorted()).toEqual([
+      "bridge:/tmp/full.md",
+      "bridge:/tmp/legacy-at-capacity.md",
+    ]);
 
-    // Reruns stay no-ops while the namespace stays full.
+    // Reruns are no-ops once every row is scoped.
     await expect(migrate()).resolves.toEqual({
       translatedCount: 0,
       prunedCount: 0,
       retainedKeys: [],
-      capacityRetainedKeys: ["/tmp/legacy-at-capacity.md"],
+      capacityRetainedKeys: [],
     });
   });
 
-  it("registers the scoped replacement before deleting the legacy row and retains it at capacity", async () => {
+  it("rekeys atomically with no delete-first window, even in a full namespace", async () => {
     const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const vaultRoot = path.join(stateDir, "vault");
     const legacySyncKey = "/tmp/order.md";
@@ -364,13 +367,20 @@ describe("memory wiki source sync legacy key migration", () => {
       renderFingerprint: "fp",
     };
 
-    const runWithCap = async (cap: number, seedScoped: boolean) => {
+    const runWithCap = async (cap: number, seedScoped: boolean, withRekey = true) => {
       const capped = createCapacityCappedKeyedStore(cap);
       const ops: string[] = [];
       const openKeyedStore = <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
         const store = capped.openKeyedStore<T>(options);
         return {
           ...store,
+          // Hosts predating atomic rekey expose no rekey method at all.
+          rekey: withRekey
+            ? async (key: string, nextKey: string, value: T) => {
+                ops.push(`rekey:${key}->${nextKey}`);
+                return store.rekey?.(key, nextKey, value) ?? "missing";
+              }
+            : undefined,
           async register(key, value) {
             ops.push(`register:${key}`);
             await store.register(key, value);
@@ -403,18 +413,25 @@ describe("memory wiki source sync legacy key migration", () => {
       return { ops, result };
     };
 
-    // Register-first when there is room: the replacement is durable before the
-    // legacy row goes, so a kill mid-migration leaves a converging duplicate,
-    // never a missing ownership record.
+    // Atomic rekey moves key and value in one slot-neutral transaction: no
+    // delete ever precedes the replacement, with room to spare or at capacity.
     await expect(runWithCap(4, false)).resolves.toEqual({
-      ops: [`registerIfAbsent:${scopedStoreKey}`, `delete:${legacyStoreKey}`],
+      ops: [`rekey:${legacyStoreKey}->${scopedStoreKey}`],
+      result: { translatedCount: 1, prunedCount: 0, retainedKeys: [], capacityRetainedKeys: [] },
+    });
+    await expect(runWithCap(2, true)).resolves.toEqual({
+      ops: [`rekey:${legacyStoreKey}->${scopedStoreKey}`],
       result: { translatedCount: 1, prunedCount: 0, retainedKeys: [], capacityRetainedKeys: [] },
     });
 
-    // At capacity the replacement has no slot: the legacy row stays durable
-    // and the next doctor run retries it instead of opening a delete-first
-    // window.
-    await expect(runWithCap(2, true)).resolves.toEqual({
+    // Legacy hosts without rekey: registerIfAbsent-first when there is room,
+    // and the legacy row stays durable at capacity instead of entering a
+    // delete-first window — the next doctor run retries it.
+    await expect(runWithCap(4, false, false)).resolves.toEqual({
+      ops: [`registerIfAbsent:${scopedStoreKey}`, `delete:${legacyStoreKey}`],
+      result: { translatedCount: 1, prunedCount: 0, retainedKeys: [], capacityRetainedKeys: [] },
+    });
+    await expect(runWithCap(2, true, false)).resolves.toEqual({
       ops: [`registerIfAbsent:${scopedStoreKey}`],
       result: {
         translatedCount: 0,
@@ -425,7 +442,7 @@ describe("memory wiki source sync legacy key migration", () => {
     });
   });
 
-  it("never overwrites a racing scoped row during migration", async () => {
+  it("never overwrites a racing scoped row on hosts without atomic rekey", async () => {
     const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const vaultRoot = path.join(stateDir, "vault");
     const legacySyncKey = "/tmp/race.md";
@@ -446,6 +463,8 @@ describe("memory wiki source sync legacy key migration", () => {
       const store = capped.openKeyedStore<T>(options);
       return {
         ...store,
+        // Hosts predating atomic rekey expose no rekey method at all.
+        rekey: undefined,
         async registerIfAbsent(key, value) {
           // A concurrent sync wins the race after the migration's lookup:
           // inject its newer scoped row before the insert-if-absent runs.
@@ -540,7 +559,7 @@ describe("memory wiki source sync legacy key migration", () => {
     ).resolves.toBe(0);
   });
 
-  it("prunes a stale row at capacity, then translates the retained row on the next run", async () => {
+  it("prunes a stale row and translates a legacy row in one full-namespace run", async () => {
     const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const vaultRoot = path.join(stateDir, "vault");
     const capped = createCapacityCappedKeyedStore(2);
@@ -576,24 +595,8 @@ describe("memory wiki source sync legacy key migration", () => {
       store,
     );
 
-    // At capacity the bridge row's register-first replacement has no spare
-    // slot, so the run retains it while the stale row still prunes through
-    // the canonical salvage path.
-    await expect(
-      migrateLegacyImportedSourceSyncKeys({
-        vaultRoot,
-        openKeyedStore: capped.openKeyedStore,
-        unsafeLocalConfiguredPaths: [],
-      }),
-    ).resolves.toEqual({
-      translatedCount: 0,
-      prunedCount: 1,
-      retainedKeys: [],
-      capacityRetainedKeys: ["/tmp/legacy-bridge-at-capacity.md"],
-    });
-    await expect(fs.access(pageAbsPath)).rejects.toMatchObject({ code: "ENOENT" });
-
-    // The slot the prune freed lets the next run translate the retained row.
+    // The bridge row rekeys slot-neutrally and the stale row prunes through
+    // the canonical salvage path; both finish in the same run at capacity.
     await expect(
       migrateLegacyImportedSourceSyncKeys({
         vaultRoot,
@@ -602,7 +605,7 @@ describe("memory wiki source sync legacy key migration", () => {
       }),
     ).resolves.toEqual({
       translatedCount: 1,
-      prunedCount: 0,
+      prunedCount: 1,
       retainedKeys: [],
       capacityRetainedKeys: [],
     });
@@ -611,6 +614,7 @@ describe("memory wiki source sync legacy key migration", () => {
       (value) => (value as { syncKey: string }).syncKey,
     );
     expect(syncKeys).toEqual(["bridge:/tmp/legacy-bridge-at-capacity.md"]);
+    await expect(fs.access(pageAbsPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("keeps a page that another live row still owns when pruning", async () => {

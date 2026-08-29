@@ -357,9 +357,9 @@ describe("memory-wiki doctor source sync migration", () => {
     ).resolves.toBeNull();
   });
 
-  it("retains legacy rows at namespace capacity and converges once capacity frees", async () => {
+  it("rekeys a full legacy namespace in one pass and skips the JSON import until capacity frees", async () => {
     // Ordering invariant: the JSON preflight only sees scoped rows until the
-    // scoped-keys pass runs, so the exported migration order is part of the fix.
+    // rekey pass runs, so the exported migration order is part of the fix.
     const migrationIds = stateMigrations.map((migration) => migration.id);
     expect(migrationIds.indexOf("memory-wiki-source-sync-group-scoped-keys")).toBeLessThan(
       migrationIds.indexOf("memory-wiki-source-sync-json-to-plugin-state"),
@@ -407,20 +407,20 @@ describe("memory-wiki doctor source sync migration", () => {
         },
       })}\n`,
     );
-    const scopedKeys = requireStateMigration("memory-wiki-source-sync-group-scoped-keys");
+    const rekey = requireStateMigration("memory-wiki-source-sync-group-scoped-keys");
     const jsonImport = requireStateMigration("memory-wiki-source-sync-json-to-plugin-state");
 
-    // Full namespace: the register-first replacement has no spare slot, so the
-    // legacy rows stay durable behind one aggregate warning instead of entering
-    // a delete-first window. The JSON preflight then counts the physical rows
-    // and skips with a warning instead of crashing the write mid-import.
-    // Before the fix this import threw PLUGIN_STATE_LIMIT_EXCEEDED out of
-    // migrateLegacyState.
-    await expect(scopedKeys.migrateLegacyState(params)).resolves.toEqual({
-      changes: [],
-      warnings: [
-        `Memory Wiki source sync namespace is full; retained ${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES} legacy ownership row(s) for ${vaultRoot} (e.g. /tmp/source-0.md). Rerun doctor after other state frees namespace capacity to finish the migration.`,
+    // Full namespace: the slot-neutral rekey deletes each legacy row before
+    // registering its scoped replacement, so every row translates in one pass
+    // with no spare slot and no external deletion. The JSON preflight then
+    // counts the physical rows and skips with a warning instead of crashing
+    // the write mid-import. Before the fix this import threw
+    // PLUGIN_STATE_LIMIT_EXCEEDED out of migrateLegacyState.
+    await expect(rekey.migrateLegacyState(params)).resolves.toEqual({
+      changes: [
+        `Migrated Memory Wiki source sync ownership -> group-scoped keys (${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES} translated, 0 stale pruned)`,
       ],
+      warnings: [],
     });
     await expect(jsonImport.migrateLegacyState(params)).resolves.toEqual({
       changes: [],
@@ -430,17 +430,14 @@ describe("memory-wiki doctor source sync migration", () => {
     });
     await expect(fs.stat(legacyPath)).resolves.toBeDefined();
 
-    // Once any capacity frees (rows a later source sync prunes), the pass
-    // converges: each translate consumes one spare slot and its delete frees
-    // it back, so one free slot rolls the whole namespace forward. The JSON
-    // import then merges cleanly.
+    // Once removed sources free capacity (rows a later source sync prunes),
+    // the ordered pass converges: the rekey is a no-op and the JSON import
+    // merges cleanly.
     for (const storeKey of [...capped.values.keys()].slice(0, 2)) {
       capped.values.delete(storeKey);
     }
-    await expect(scopedKeys.migrateLegacyState(params)).resolves.toEqual({
-      changes: [
-        `Migrated Memory Wiki source sync ownership -> group-scoped keys (${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES - 2} translated, 0 stale pruned)`,
-      ],
+    await expect(rekey.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
       warnings: [],
     });
     await expect(jsonImport.migrateLegacyState(params)).resolves.toEqual({
@@ -454,7 +451,7 @@ describe("memory-wiki doctor source sync migration", () => {
     expect(Object.keys(state.entries)).toHaveLength(MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES - 1);
     expect(state.entries["bridge:gamma"]?.renderFingerprint).toBe("gamma");
     await expect(fs.stat(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(scopedKeys.detectLegacyState(params)).resolves.toBeNull();
+    await expect(rekey.detectLegacyState(params)).resolves.toBeNull();
   }, 30_000);
 
   it("detects and migrates legacy import-run records into plugin state", async () => {

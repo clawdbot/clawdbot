@@ -18,6 +18,18 @@ export type PluginStateKeyedStore<T> = {
   ) => Promise<boolean>;
   /** Atomically deletes an existing entry when its current value matches. */
   deleteIf?: (key: string, predicate: (current: T) => boolean) => Promise<boolean>;
+  /**
+   * Atomically moves an entry to a new key and replaces its value in one
+   * transaction, preserving the row's creation time and TTL. Slot-neutral:
+   * namespace capacity limits do not apply because the row count is unchanged.
+   * Returns "rekeyed" when the row was moved — and also when `key` already
+   * vanished but a live row at `nextKey` makes the rekey's end state
+   * idempotently true. Returns "conflict" (and changes nothing) when both
+   * keys hold live entries, and "missing" when neither key holds one.
+   * Throws PLUGIN_STATE_INVALID_INPUT when `key` and `nextKey` are equal —
+   * a self-rekey has no defined outcome.
+   */
+  rekey?: (key: string, nextKey: string, value: T) => Promise<"rekeyed" | "missing" | "conflict">;
   lookup(key: string): Promise<T | undefined>;
   consume(key: string): Promise<T | undefined>;
   delete(key: string): Promise<boolean>;
@@ -36,6 +48,18 @@ export type PluginStateSyncKeyedStore<T> = {
   ) => boolean;
   /** Atomically deletes an existing entry when its current value matches. */
   deleteIf?: (key: string, predicate: (current: T) => boolean) => boolean;
+  /**
+   * Atomically moves an entry to a new key and replaces its value in one
+   * transaction, preserving the row's creation time and TTL. Slot-neutral:
+   * namespace capacity limits do not apply because the row count is unchanged.
+   * Returns "rekeyed" when the row was moved — and also when `key` already
+   * vanished but a live row at `nextKey` makes the rekey's end state
+   * idempotently true. Returns "conflict" (and changes nothing) when both
+   * keys hold live entries, and "missing" when neither key holds one.
+   * Throws PLUGIN_STATE_INVALID_INPUT when `key` and `nextKey` are equal —
+   * a self-rekey has no defined outcome.
+   */
+  rekey?: (key: string, nextKey: string, value: T) => "rekeyed" | "missing" | "conflict";
   lookup(key: string): T | undefined;
   consume(key: string): T | undefined;
   delete(key: string): boolean;
@@ -68,6 +92,7 @@ export type PluginStateStoreOperation =
   | "open"
   | "ensure-schema"
   | "register"
+  | "rekey"
   | "lookup"
   | "consume"
   | "delete"
