@@ -45,6 +45,9 @@ export async function cleanupCodexAttempt(
   // Exact-thread cron authority exists only while this creator turn owns the
   // live client/thread. Retained model callbacks must fail after cleanup begins.
   prompt.context.attemptTools.scheduledAppAuthoritySourceRef.current = undefined;
+  // Join late cancellation before releasing the subscription, but do not let a
+  // failed terminal RPC skip resource cleanup. Surface that failure below.
+  await state.abortCleanup.catch(() => undefined);
   try {
     steeringQueueRef.current?.cancel();
     if (params.isFinalFallbackAttempt !== false) {
@@ -203,4 +206,5 @@ export async function cleanupCodexAttempt(
       clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
     });
   }
+  await state.abortCleanup;
 }
