@@ -1183,3 +1183,64 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.state().posts).toBe(1);
   });
 });
+
+describePosix("merge_outcome_repo_identity", () => {
+  // gh reports the repository id as a REST database number while PR ids stay GraphQL
+  // node strings, so admission has to accept both scalars. Requiring a string here
+  // failed every merge closed on a current gh.
+  const identity = (repo: unknown) =>
+    spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -euo pipefail; . "$1"; printf '%s' "$2" | merge_outcome_repo_identity`,
+        "bash",
+        join(scripts, "pr-lib/merge-outcome.sh"),
+        JSON.stringify(repo),
+      ],
+      { encoding: "utf8" },
+    );
+
+  it("accepts the numeric repository id gh actually returns", () => {
+    const run = identity({
+      id: 1103012935,
+      nameWithOwner: "openclaw/openclaw",
+      url: "https://github.com/openclaw/openclaw",
+    });
+    expect(run.status, run.stderr).toBe(0);
+    expect(JSON.parse(run.stdout).id).toBe(1103012935);
+  });
+
+  it("accepts a GraphQL node string repository id", () => {
+    const run = identity({
+      id: "R_kgDOQb6kRw",
+      nameWithOwner: "openclaw/openclaw",
+      url: "https://github.com/openclaw/openclaw",
+    });
+    expect(run.status, run.stderr).toBe(0);
+  });
+
+  it.each([
+    ["a missing id", { id: null }],
+    ["an empty string id", { id: "" }],
+    ["an object id", { id: { node: "x" } }],
+  ])("still rejects %s", (_label, overrides) => {
+    const run = identity({
+      nameWithOwner: "openclaw/openclaw",
+      url: "https://github.com/openclaw/openclaw",
+      ...overrides,
+    });
+    expect(run.status).not.toBe(0);
+    expect(run.stdout).toBe("");
+  });
+
+  it("still rejects a url that does not belong to the named repository", () => {
+    const run = identity({
+      id: 1103012935,
+      nameWithOwner: "openclaw/openclaw",
+      url: "https://github.com/attacker/openclaw",
+    });
+    expect(run.status).not.toBe(0);
+    expect(run.stdout).toBe("");
+  });
+});
