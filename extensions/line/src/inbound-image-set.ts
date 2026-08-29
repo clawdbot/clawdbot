@@ -37,7 +37,7 @@ type PendingImageSet<TEvent, TLifecycle> = {
 };
 
 /** The whole set, ordered the way the sender picked it. */
-export type LineImageSetDelivery<TEvent, TLifecycle> = {
+type LineImageSetDelivery<TEvent, TLifecycle> = {
   events: readonly TEvent[];
   lifecycles: readonly TLifecycle[];
   /**
@@ -48,6 +48,7 @@ export type LineImageSetDelivery<TEvent, TLifecycle> = {
   finish: () => void;
 };
 
+/** Ordered by the index the sender picked, falling back to arrival. */
 function orderedParts<TEvent, TLifecycle>(
   pending: PendingImageSet<TEvent, TLifecycle>,
 ): readonly PendingImageSetPart<TEvent, TLifecycle>[] {
