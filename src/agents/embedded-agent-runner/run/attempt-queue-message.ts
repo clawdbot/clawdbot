@@ -4,10 +4,8 @@
 import { toErrorObject } from "../../../infra/errors.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
-import {
-  hasPromptImageInput,
-  type PromptImageOrderEntry,
-} from "../../../media/prompt-image-order.js";
+import { hasPromptImageInput } from "../../../media/prompt-image-input.js";
+import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import {
   cancelPendingAgentQuestionForSession,
