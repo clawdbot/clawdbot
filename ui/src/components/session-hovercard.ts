@@ -275,7 +275,13 @@ function renderSessionContext({
   ]
     .filter(Boolean)
     .join(" ");
-  if (!creatorLabel && !context && visibleParticipants.length === 0) {
+  if (
+    !creatorLabel &&
+    !context &&
+    visibleParticipants.length === 0 &&
+    row?.boardFace !== "dashboard" &&
+    row?.hasAutomation !== true
+  ) {
     return nothing;
   }
   if (row?.channelAvatarUrl) {
@@ -387,6 +393,30 @@ function renderSessionContext({
               </div>`
             : nothing}`
       : nothing}
+    ${row?.boardFace === "dashboard"
+      ? html`<div
+          class="session-hovercard__context-row"
+          aria-label=${t("sessionsView.dashboardAvailable")}
+        >
+          <span class="session-hovercard__context-icon" aria-hidden="true"
+            >${icons.layoutDashboard}</span
+          >
+          <span class="session-hovercard__context-value session-hovercard__context-text"
+            >${t("sessionsView.dashboardAvailable")}</span
+          >
+        </div>`
+      : nothing}
+    ${row?.hasAutomation === true
+      ? html`<div
+          class="session-hovercard__context-row"
+          aria-label=${t("sessionsView.automationAttached")}
+        >
+          <span class="session-hovercard__context-icon" aria-hidden="true">${icons.clock}</span>
+          <span class="session-hovercard__context-value session-hovercard__context-text"
+            >${t("sessionsView.automationAttached")}</span
+          >
+        </div>`
+      : nothing}
   </div>`;
 }
 
@@ -491,6 +521,8 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
     input.row?.channelAvatarUrl ||
     input.row?.createdActor ||
     input.row?.workContext ||
+    input.row?.boardFace === "dashboard" ||
+    input.row?.hasAutomation === true ||
     hasOtherParticipant,
   );
   const lastMessagePreview = input.progressCard

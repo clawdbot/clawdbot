@@ -1,7 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -343,24 +342,8 @@ suite.define(() => {
     const plainKey = "agent:main:plain-session";
     const longKey = "agent:main:long-title-session";
     const unreadKey = "agent:main:unread-session";
-    const homeKey = "agent:main:main";
     await installMockGateway(page, {
-      featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
       methodResponses: {
-        "board.get": {
-          cases: [homeKey, busyKey, plainKey, longKey, unreadKey].map((sessionKey) => ({
-            match: { sessionKey },
-            response: {
-              sessionKey,
-              revision: 1,
-              tabs:
-                sessionKey === homeKey || sessionKey === busyKey || sessionKey === unreadKey
-                  ? [{ tabId: "overview", title: "Overview", position: 0, chatDock: "right" }]
-                  : [],
-              widgets: [],
-            },
-          })),
-        },
         "sessions.list": chatSessionListResponse([
           {
             key: unreadKey,
@@ -388,6 +371,7 @@ suite.define(() => {
             },
             incognito: true,
             hasAutomation: true,
+            boardFace: "dashboard",
             status: "running",
             unread: true,
           },
@@ -435,34 +419,12 @@ suite.define(() => {
       await previewToggle.click();
       await busyRow.locator(".sidebar-recent-session__subtitle").waitFor();
       const sidebar = page.locator("openclaw-app-sidebar");
-      const homeBoard = sidebar
-        .locator(".nav-item--home")
-        .getByRole("img", { name: "Dashboard available" })
-        .locator("svg");
-      const sessionBoard = busyRow.getByRole("img", { name: "Dashboard available" }).locator("svg");
+      expect(await sidebar.getByRole("img", { name: "Dashboard available" }).count()).toBe(0);
+      expect(await sidebar.getByRole("img", { name: "Automation attached" }).count()).toBe(0);
       const ordinaryBadge = busyRow.locator(".session-row-badge--incognito svg");
-      await homeBoard.waitFor({ state: "visible" });
-      await sessionBoard.waitFor({ state: "visible" });
-      const automationBadge = busyRow
-        .getByRole("img", { name: "Automation attached" })
-        .locator("svg");
       for (const colorScheme of ["dark", "light"] as const) {
         await page.emulateMedia({ colorScheme });
         await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(colorScheme);
-        const automationStyle = await automationBadge.evaluate((element) => {
-          const style = getComputedStyle(element);
-          return { color: style.color, strokeWidth: style.strokeWidth };
-        });
-        for (const board of [homeBoard, sessionBoard]) {
-          expect
-            .soft(
-              await board.evaluate((element) => {
-                const style = getComputedStyle(element);
-                return { color: style.color, strokeWidth: style.strokeWidth };
-              }),
-            )
-            .toEqual(automationStyle);
-        }
         for (const reducedMotion of ["no-preference", "reduce"] as const) {
           await page.emulateMedia({ reducedMotion });
           const spinnerColors = await busyRow
@@ -507,14 +469,10 @@ suite.define(() => {
           });
         }
         badgeSizes.push(
-          await Promise.all(
-            [homeBoard, sessionBoard, ordinaryBadge].map((icon) =>
-              icon.evaluate((element) => {
-                const { height, width } = element.getBoundingClientRect();
-                return { height, width };
-              }),
-            ),
-          ),
+          await ordinaryBadge.evaluate((element) => {
+            const { height, width } = element.getBoundingClientRect();
+            return { height, width };
+          }),
         );
       }
 
@@ -579,7 +537,7 @@ suite.define(() => {
       expect(layout.state.right).toBeLessThanOrEqual(layout.endcap.right);
       expect(layout.spinner.left).toBeGreaterThanOrEqual(layout.endcap.left);
       expect(layout.spinner.right).toBeLessThanOrEqual(layout.endcap.right);
-      expect(layout.atoms.length).toBeGreaterThanOrEqual(3);
+      expect(layout.atoms).toHaveLength(2);
       for (const atom of layout.atoms) {
         expect(atom.left).toBeGreaterThanOrEqual(layout.endcap.left);
         expect(atom.right).toBeLessThanOrEqual(layout.endcap.right);
@@ -672,12 +630,8 @@ suite.define(() => {
         });
       }
       await plainRow.waitFor();
-      for (const sizes of badgeSizes) {
-        expect(sizes).toEqual([
-          { height: 12, width: 12 },
-          { height: 12, width: 12 },
-          { height: 12, width: 12 },
-        ]);
+      for (const size of badgeSizes) {
+        expect(size).toEqual({ height: 12, width: 12 });
       }
     } finally {
       await suite.closeBrowserContext(context);

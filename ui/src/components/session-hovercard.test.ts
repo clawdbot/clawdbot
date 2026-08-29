@@ -85,6 +85,40 @@ describe("renderSessionHovercard", () => {
     expect(container.querySelector(".session-hovercard__excerpt")).toBeNull();
   });
 
+  it.each([
+    { name: "dashboard", facts: { boardFace: "dashboard" }, labels: ["Dashboard available"] },
+    { name: "automation", facts: { hasAutomation: true }, labels: ["Automation attached"] },
+    {
+      name: "both",
+      facts: { boardFace: "dashboard", hasAutomation: true },
+      labels: ["Dashboard available", "Automation attached"],
+    },
+    { name: "absent", facts: {}, labels: [] },
+    { name: "disabled", facts: { boardFace: "chat", hasAutomation: false }, labels: [] },
+  ] satisfies { name: string; facts: Partial<SidebarRecentSession>; labels: string[] }[])(
+    "renders $name session facts without other metadata",
+    ({ facts, labels }) => {
+      const container = document.createElement("div");
+      render(
+        renderSessionHovercard({
+          row: row({ createdActor: undefined, workContext: undefined, ...facts }),
+        }),
+        container,
+      );
+
+      const metadata = container.querySelector(".session-hovercard__section--metadata");
+      expect(Boolean(metadata)).toBe(labels.length > 0);
+      const contextRows = [...container.querySelectorAll(".session-hovercard__context-row")];
+      expect(contextRows.map((context) => context.textContent?.trim())).toEqual(labels);
+      expect(contextRows.map((context) => context.getAttribute("aria-label"))).toEqual(labels);
+      for (const context of contextRows) {
+        expect(
+          context.querySelector('.session-hovercard__context-icon[aria-hidden="true"] svg'),
+        ).not.toBeNull();
+      }
+    },
+  );
+
   it("renders the channel avatar with gateway auth instead of an initials span", () => {
     const container = document.createElement("div");
     const channelAvatarUrl = "/__openclaw__/channel-avatar/agent%3Amain%3Awork";

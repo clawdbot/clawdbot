@@ -59,7 +59,6 @@ function renderSessionRowBadge(
 export function renderSessionRowBadges(params: {
   isChild?: boolean;
   incognito?: boolean;
-  hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   hasApproval?: boolean;
   outboxAttentionCount?: number;
@@ -68,7 +67,6 @@ export function renderSessionRowBadges(params: {
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
 }) {
-  const hasAutomation = !params.isChild && params.hasAutomation;
   const pullRequestLabel = params.pullRequest
     ? formatSessionPullRequestSummary(params.pullRequest)
     : undefined;
@@ -103,7 +101,6 @@ export function renderSessionRowBadges(params: {
       : "";
   if (
     !params.incognito &&
-    !hasAutomation &&
     !pullRequestLabel &&
     !params.hasApproval &&
     attentionCount === 0 &&
@@ -141,9 +138,6 @@ export function renderSessionRowBadges(params: {
           icons.lock,
           "session-row-badge--incognito",
         )
-      : nothing}
-    ${hasAutomation
-      ? renderSessionRowBadge(t("sessionsView.automationAttached"), icons.clock)
       : nothing}
     ${pullRequestLabel
       ? renderSessionRowBadge(
