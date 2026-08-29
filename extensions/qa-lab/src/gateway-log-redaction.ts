@@ -145,6 +145,15 @@ export function formatQaGatewayLogsForError(logs: string) {
 export function createQaGatewayCliError(error: unknown): Error {
   // Candidate errors can carry credentials in nested causes, spawnargs, or output.
   // Retain only a bounded, redacted message, including for lifecycle-held failures.
-  const message = coerceErrorMessage(error);
-  return new Error(sliceUtf16Safe(redactQaGatewayDebugText(message), 0, 2_048));
+  let message = redactQaGatewayDebugText(coerceErrorMessage(error));
+  const maxChars = 2_048;
+  if (message.length > maxChars) {
+    // Doctor can print setup panels before its terminal error. Preserve both
+    // ends after redaction so the bounded diagnostic retains the failure.
+    // Keep the tail on this line so slicing cannot create a workflow command.
+    const marker = "\n… output omitted … ";
+    const edgeChars = Math.floor((maxChars - marker.length) / 2);
+    message = `${sliceUtf16Safe(message, 0, edgeChars)}${marker}${sliceUtf16Safe(message, -edgeChars)}`;
+  }
+  return new Error(message);
 }
