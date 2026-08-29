@@ -62,6 +62,16 @@ preferences and Keychain use system services, and AppKit/WebKit tests can open
 windows and helper processes. Local subsets need a verified OS sandbox as well
 as test-owned resources. See [native test safety](https://docs.openclaw.ai/platforms/mac/dev-setup#run-native-tests-safely).
 
+The `macos-swift` CI job builds tests once, then runs them through
+`scripts/test-macos-native.mts`. The full suite retains default-profile behavior;
+named-profile AppState isolation tests run separately. Each process gets private
+home, config/state paths, and a short temporary directory before the test bundle
+loads. The launcher keeps those resources until the test process group exits.
+The disposable runner owns default preferences and system-service state; a named
+profile gets a fresh preferences domain. The launcher itself is not a sandbox.
+Local `scripts/prepush-ci.sh` keeps Swift lint/build checks but reports native
+test proof as incomplete and requires the exact commit's `macos-swift` CI result.
+
 ## Packaging flows
 
 Development bundle (signed but not notarized):

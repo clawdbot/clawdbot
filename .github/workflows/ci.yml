@@ -3938,6 +3938,14 @@ jobs:
     steps:
       - *platform_checkout_step
 
+      - name: Setup Node.js for native test tooling
+        env:
+          REQUESTED_NODE_VERSION: ${{ env.NODE_VERSION }}
+        run: |
+          set -euo pipefail
+          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
+
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: |
           if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
@@ -4137,7 +4145,17 @@ jobs:
           else
             swift_test_args+=(--no-parallel)
           fi
-          swift test "${swift_test_args[@]}"
+          if [[ -f scripts/test-macos-native.mts ]]; then
+            node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip AppStateIsolationTests
+            node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter AppStateIsolationTests
+          elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+            # Frozen release targets predate the resource-owner script and its tests.
+            # Their original suite still runs only on this disposable macOS worker.
+            swift test "${swift_test_args[@]}"
+          else
+            echo "Current CI targets must provide scripts/test-macos-native.mts." >&2
+            exit 1
+          fi
 
       - name: Render isolated macOS health fixtures
         id: health-render

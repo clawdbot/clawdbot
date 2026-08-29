@@ -349,7 +349,7 @@ Runner choice follows contributor trust, not whether a pull request came from a 
 
 ### Runner backend modes
 
-The `macos-swift` lane runs Swift tests once per job. Automatic first attempts use parallel execution; manual dispatches and rerun attempts use serial execution. A failing test fails the job without an in-job retry.
+The `macos-swift` lane builds Swift tests once and runs each test once per job. The ordinary suite retains default-profile behavior; AppState isolation tests run in a separate named-profile process through the same resource-owning launcher. Both run only on the disposable macOS worker. Automatic first attempts use parallel execution; manual dispatches and rerun attempts use serial execution. A failing test fails the job without an in-job retry. See [native test safety](/platforms/mac/dev-setup#run-native-tests-safely).
 
 The repository variable `OPENCLAW_CI_RUNNER_BACKEND` controls the runner backend for `ci.yml`:
 

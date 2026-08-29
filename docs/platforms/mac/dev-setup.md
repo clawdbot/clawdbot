@@ -76,6 +76,38 @@ windows, and WebKit starts helper processes. A temporary `HOME`, `TMPDIR`, or
 named app profile alone is not a sandbox: fixed preferences domains and
 Keychain access can still reach macOS services outside those directories.
 
+The `macos-swift` GitHub CI job builds the tests with the runner's normal
+SwiftPM caches, then runs the built suite through `scripts/test-macos-native.mts`.
+Each invocation selects private `HOME` and `CFFIXED_USER_HOME`,
+`OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, and short `TMPDIR` before any test
+bundle loads. The full suite explicitly selects the default profile, preserving
+its local Gateway lifecycle contracts. AppState isolation tests run separately
+with a unique named profile; no test is run twice. The child environment excludes
+inherited app settings and credentials while retaining toolchain and runtime
+loader paths. Resources remain available for process-lifetime singletons and
+retained windows; the launcher removes its files after the managed process group
+finishes. The disposable runner owns default preferences and system-service
+state; named-profile preferences use a fresh domain and are also discarded with
+the runner.
+If process cleanup cannot be verified, the launcher fails and retains its files.
+CI environment markers only catch accidental invocation; they do not enforce
+isolation or make an operator desktop safe.
+
+For a focused rerun **inside that disposable macOS CI runner**, after the normal
+test build:
+
+```bash
+node scripts/test-macos-native.mts named \
+  --package-path apps/macos --build-system native --enable-code-coverage \
+  --skip-build --filter AppStateIsolationTests
+```
+
+The ordinary CI invocation preserves its existing serial/parallel selection and
+coverage. Local `scripts/prepush-ci.sh` runs Swift lint/format checks and a release
+build, but does not run native tests. For native changes it exits nonzero with a
+requirement to obtain the exact commit's `macos-swift` CI result; local build
+success is not native test success.
+
 On an operator desktop, run only an audited subset inside an OS sandbox that
 blocks operator files, preferences and Keychain services, unwanted network
 access, and desktop/helper processes. A Swift test filter is not itself an
@@ -87,8 +119,15 @@ nonpersistent WebKit data stores, ephemeral loopback fixture endpoints, and
 temporary files rooted in `FileManager.temporaryDirectory`. Unix-domain socket
 fixtures require a short test-owned `TMPDIR`; an overlong path fails rather than
 silently writing outside that directory. The cooperative `TestIsolation` helper
-serializes and restores participating tests' environment
-and defaults mutations; it does not isolate the process from the host.
+serializes and restores participating tests' environment and selected defaults
+mutations. Config-only scopes also own a temporary state directory for config
+health/audit writes and remove it when the async body finishes, including errors.
+Callers still own their config fixture files and must join any async work before
+leaving the scope. Unscoped temporary files are removed with the launcher's
+process resources. Never change `OPENCLAW_PROFILE` inside a test: `AppProfile`
+and `AppDefaults` freeze their identity for the process. Tests needing another
+singleton identity require a fresh process. The cooperative helper does not
+isolate unrelated tests or the process from the host.
 
 ## Troubleshooting
 

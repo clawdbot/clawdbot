@@ -6669,10 +6669,14 @@ exit 1
       const callsPath = path.join(root, "swift-calls");
       const outputPath = path.join(root, "github-output");
       mkdirSync(binDir, { recursive: true });
+      symlinkSync(path.resolve("scripts"), path.join(root, "scripts"), "dir");
       writeFileSync(
         path.join(binDir, "swift"),
         `#!/usr/bin/env bash
 set -euo pipefail
+SWIFT_CALLS=${JSON.stringify(callsPath)}
+GITHUB_OUTPUT=${JSON.stringify(outputPath)}
+BUILD_EXIT_CODE=${buildExitCode}
 printf '%s\\n' "$*" >> "$SWIFT_CALLS"
 if [[ "\${1:-}" == "build" ]]; then
   [[ ! -s "$GITHUB_OUTPUT" ]] || exit 24
@@ -6688,10 +6692,13 @@ test_count="$(grep -c '^test ' "$SWIFT_CALLS")"
         cwd: root,
         env: {
           ...process.env,
-          BUILD_EXIT_CODE: String(buildExitCode),
+          CI: "true",
+          GITHUB_ACTIONS: "true",
+          RUNNER_OS: "macOS",
+          RUNNER_TEMP: root,
+          HOME: root,
           GITHUB_OUTPUT: outputPath,
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
-          SWIFT_CALLS: callsPath,
           SWIFT_TEST_EXECUTION: execution,
         },
       });
@@ -6703,7 +6710,7 @@ test_count="$(grep -c '^test ' "$SWIFT_CALLS")"
           ? [
               `test --package-path apps/macos --build-system native --enable-code-coverage --skip-build --${
                 execution === "parallel" ? "parallel" : "no-parallel"
-              }`,
+              } --skip AppStateIsolationTests`,
             ]
           : []),
       ]);
