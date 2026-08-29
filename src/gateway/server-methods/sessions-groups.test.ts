@@ -4,7 +4,9 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const groupMocks = vi.hoisted(() => ({
   NotFound: class SessionGroupNotFoundError extends Error {},
+  put: vi.fn(),
   rename: vi.fn(),
+  targetsByName: vi.fn(() => new Map()),
   update: vi.fn(),
 }));
 const pathMocks = vi.hoisted(() => ({
@@ -17,10 +19,13 @@ vi.mock("../session-groups.js", () => ({
   listSessionGroupDefaults: vi.fn(() => []),
   listSessionGroups: vi.fn(() => []),
   listSidebarSectionOrder: vi.fn(() => []),
-  putSessionGroups: vi.fn(() => []),
+  putSessionGroups: groupMocks.put,
   renameSessionGroup: groupMocks.rename,
   SessionGroupNotFoundError: groupMocks.NotFound,
   updateSessionGroupDefaults: groupMocks.update,
+}));
+vi.mock("../session-group-mutation-targets.js", () => ({
+  resolveSessionGroupMutationTargetsByName: groupMocks.targetsByName,
 }));
 vi.mock("./workspace-path-containment.js", () => ({
   isWorkspacePathContainmentCurrent: pathMocks.isCurrent,
@@ -52,6 +57,36 @@ function renameOptions(params: Record<string, unknown>, respond: ReturnType<type
     context: { getRuntimeConfig: () => ({}) },
   } as unknown as GatewayRequestHandlerOptions;
 }
+
+describe("sessions.groups.put", () => {
+  beforeEach(() => {
+    groupMocks.put.mockReset();
+    groupMocks.put.mockReturnValue([]);
+    groupMocks.targetsByName.mockReset();
+    groupMocks.targetsByName.mockReturnValue(new Map());
+  });
+
+  it("preserves assigned categories omitted by a stale reorder snapshot", async () => {
+    groupMocks.targetsByName.mockReturnValue(
+      new Map([["P1 issues from beta feedback", [{ sessionKey: "agent:main:child" }]]]),
+    );
+    const respond = vi.fn();
+    await expectDefined(
+      sessionGroupHandlers["sessions.groups.put"],
+      'sessionGroupHandlers["sessions.groups.put"] test invariant',
+    )(updateOptions({ names: ["Papercuts"] }, respond));
+
+    expect(groupMocks.put).toHaveBeenCalledWith(
+      ["Papercuts", "P1 issues from beta feedback"],
+      undefined,
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ok: true, groups: [], sectionOrder: [] },
+      undefined,
+    );
+  });
+});
 
 describe("sessions.groups.update", () => {
   beforeEach(() => {

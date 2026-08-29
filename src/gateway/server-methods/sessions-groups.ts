@@ -72,7 +72,14 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const groups = putSessionGroups(params.names, params.sectionOrder);
+    // `put` also powers reorder-only clients. Their catalog snapshot can lag
+    // behind a category assignment, so preserve every group that still owns
+    // sessions. Explicit group deletion remains responsible for clearing
+    // memberships before removing the catalog entry.
+    const inUseNames = [
+      ...resolveSessionGroupMutationTargetsByName(context.getRuntimeConfig()).keys(),
+    ];
+    const groups = putSessionGroups([...params.names, ...inUseNames], params.sectionOrder);
     respond(true, { ok: true, groups, sectionOrder: listSidebarSectionOrder() }, undefined);
     // Catalog-only changes still need to reach other open clients.
     emitSessionsChanged(context, { reason: "groups" });
