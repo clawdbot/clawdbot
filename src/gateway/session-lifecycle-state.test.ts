@@ -245,6 +245,32 @@ describe("session lifecycle state", () => {
     expect(completed.lifecycleRunId).toBeUndefined();
   });
 
+  it("does not reopen a terminal row when its same-run start persistence arrives late", async () => {
+    const completed = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 2_000,
+        status: "done",
+        startedAt: 1_000,
+        endedAt: 2_000,
+        runtimeMs: 1_000,
+        lastRunId: "run-a",
+      },
+      {
+        ts: 2_100,
+        sessionId: "session-id",
+        runId: "run-a",
+        data: { phase: "start", startedAt: 1_000 },
+      },
+    );
+
+    expect(completed).toMatchObject({
+      status: "done",
+      endedAt: 2_000,
+      lastRunId: "run-a",
+    });
+  });
+
   it("keeps provider lifecycle ownership while recording the client terminal run", async () => {
     const started = await persistLifecycle(
       { sessionId: "session-id", updatedAt: 900 },

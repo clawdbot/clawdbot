@@ -388,6 +388,20 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       ) {
         return null;
       }
+      const eventRunId = normalizeLifecycleRunId(params.event.runId);
+      const eventClientRunId = normalizeLifecycleRunId(params.event.clientRunId);
+      const terminalRunId = normalizeLifecycleRunId(entry.lastRunId);
+      if (
+        phase === "start" &&
+        entry.status !== "running" &&
+        terminalRunId !== undefined &&
+        (eventRunId === terminalRunId || eventClientRunId === terminalRunId)
+      ) {
+        // A delayed start from a terminalized run must not reopen the row after
+        // its end write commits; lifecycle events are delivered in order, but
+        // their async persistence can settle out of order.
+        return null;
+      }
       const patch = derivePersistedSessionLifecyclePatch({
         entry,
         event: params.event,
