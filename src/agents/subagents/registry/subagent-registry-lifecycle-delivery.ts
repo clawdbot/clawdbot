@@ -13,6 +13,7 @@ import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtim
 import {
   completeTaskRunByRunId,
   failTaskRunByRunId,
+  finalizeTaskRunByRunId,
   setDetachedTaskDeliveryStatusByRunId,
 } from "../../../tasks/detached-task-runtime.js";
 import { resolveRequiredCompletionDeliveryFailureTerminalResult } from "../../../tasks/task-completion-contract.js";
@@ -242,6 +243,33 @@ export const safeSetSubagentTaskDeliveryStatus = (
       runId: maskLifecycleIdentifier(target.runId, "run"),
       childSessionKey: maskLifecycleIdentifier(target.sessionKey, "session"),
       deliveryStatus: args.deliveryStatus,
+    });
+  }
+};
+
+export const safeReconcileSubagentTaskAfterRequesterSettle = (
+  params: SubagentLifecycleOptions,
+  entry: SubagentRunRecord,
+) => {
+  safeSetSubagentTaskDeliveryStatus(params, { entry, deliveryStatus: "delivered" });
+  const terminal = resolveFinalizedSubagentTaskState(entry);
+  if (!terminal || terminal.status !== "succeeded") {
+    return;
+  }
+  const target = resolveSubagentTaskTarget(params, entry);
+  try {
+    finalizeTaskRunByRunId({
+      runId: target.runId,
+      runtime: "subagent",
+      sessionKey: target.sessionKey,
+      ...terminal,
+      clearError: true,
+    });
+  } catch (err) {
+    params.warn("failed to finalize requester-settled subagent task", {
+      error: buildSafeLifecycleErrorMeta(err),
+      runId: maskLifecycleIdentifier(target.runId, "run"),
+      childSessionKey: maskLifecycleIdentifier(target.sessionKey, "session"),
     });
   }
 };

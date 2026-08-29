@@ -18,6 +18,7 @@ import type {
 import {
   buildSafeLifecycleErrorMeta,
   maskLifecycleIdentifier,
+  safeReconcileSubagentTaskAfterRequesterSettle,
   safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
@@ -138,10 +139,7 @@ const completeRequesterSettleWakeBatch = (
   }
   for (const entry of settledDeliveries) {
     if (outcome?.delivered) {
-      safeSetSubagentTaskDeliveryStatus(params, {
-        entry,
-        deliveryStatus: "delivered",
-      });
+      safeReconcileSubagentTaskAfterRequesterSettle(params, entry);
     } else if (outcome) {
       const error = outcome.error ?? outcome.reason ?? "requester settle wake failed";
       safeSetSubagentTaskDeliveryStatus(params, {

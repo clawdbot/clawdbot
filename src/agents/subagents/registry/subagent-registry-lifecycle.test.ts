@@ -91,6 +91,7 @@ function waitForLifecycleState<T>(assertion: () => T | Promise<T>): Promise<T> {
 const taskExecutorMocks = vi.hoisted(() => ({
   completeTaskRunByRunId: vi.fn(),
   failTaskRunByRunId: vi.fn(),
+  finalizeTaskRunByRunId: vi.fn(),
   setDetachedTaskDeliveryStatusByRunId: vi.fn(),
 }));
 
@@ -131,6 +132,7 @@ const sessionReconciliationMocks = vi.hoisted(() => ({
 vi.mock("../../../tasks/detached-task-runtime.js", () => ({
   completeTaskRunByRunId: taskExecutorMocks.completeTaskRunByRunId,
   failTaskRunByRunId: taskExecutorMocks.failTaskRunByRunId,
+  finalizeTaskRunByRunId: taskExecutorMocks.finalizeTaskRunByRunId,
   setDetachedTaskDeliveryStatusByRunId: taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId,
 }));
 
@@ -480,6 +482,7 @@ describe("subagent registry lifecycle hardening", () => {
     vi.clearAllMocks();
     taskExecutorMocks.completeTaskRunByRunId.mockReset();
     taskExecutorMocks.failTaskRunByRunId.mockReset();
+    taskExecutorMocks.finalizeTaskRunByRunId.mockReset();
     taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReset();
     gatewayMocks.callGateway.mockReset();
     gatewayMocks.callGateway.mockResolvedValue({});
@@ -4848,6 +4851,15 @@ describe("requester settle wake trigger", () => {
     });
     expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
       expect.objectContaining({ deliveryStatus: "delivered" }),
+    );
+    expect(taskExecutorMocks.finalizeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: entry.runId,
+        runtime: "subagent",
+        sessionKey: entry.childSessionKey,
+        status: "succeeded",
+        clearError: true,
+      }),
     );
   });
 
