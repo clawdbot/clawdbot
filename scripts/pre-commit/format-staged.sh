@@ -42,7 +42,8 @@ fi
 
 restage_files=()
 for file in "${files[@]}"; do
-  if ! git check-ignore --no-index -q -- "$file"; then
+  # check-ignore rejects global literal magic; ./ keeps leading-colon names literal too.
+  if ! git --no-literal-pathspecs check-ignore --no-index -q -- "./$file"; then
     restage_files+=("$file")
   fi
 done

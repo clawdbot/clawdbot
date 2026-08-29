@@ -182,6 +182,7 @@
   "direct-dm-guard-policy",
   "discord",
   "device-bootstrap",
+  "diagnostic-flags",
   "diagnostic-runtime",
   "error-runtime",
   "extension-shared",

@@ -7,6 +7,7 @@ export function createExtensionCodexAppServerAttemptExtraVitestConfig(
   return createScopedVitestConfig(
     [
       "extensions/codex/src/app-server/run-attempt.agent-end-context.test.ts",
+      "extensions/codex/src/app-server/run-attempt.channel-tool-progress.test.ts",
       "extensions/codex/src/app-server/run-attempt-lifecycle-controller.test.ts",
       "extensions/codex/src/app-server/run-attempt-thread-cleanup.test.ts",
       "extensions/codex/src/app-server/run-attempt.channel-tool-progress.test.ts",

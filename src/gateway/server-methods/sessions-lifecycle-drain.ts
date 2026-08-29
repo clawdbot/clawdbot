@@ -28,7 +28,10 @@ import {
 } from "../worker-environments/inference-control-internal.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
-import { prepareSessionWorkerPlacementStop } from "../worker-environments/session-placement-lifecycle.js";
+import {
+  prepareSessionWorkerPlacementMutationCheck,
+  prepareSessionWorkerPlacementStop,
+} from "../worker-environments/session-placement-lifecycle.js";
 import {
   abortChatRunsForSessionKeyWithPartials,
   createChatAbortOps,
@@ -213,10 +216,20 @@ export async function prepareSessionLifecycleDrain(
     }
     // Safe reclaim must finish before the archive or delete can commit.
     await reclaim();
+    const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
+      context: params.context,
+      sessionId: params.sessionId,
+    });
     return {
       release,
-      hasAuthoritativeWork: () =>
-        hasAuthoritativeSessionWork(params, workerDrain, terminalDrain, workIdentities),
+      hasAuthoritativeWork: () => {
+        try {
+          assertPlacementCurrent();
+        } catch {
+          return true;
+        }
+        return hasAuthoritativeSessionWork(params, workerDrain, terminalDrain, workIdentities);
+      },
     };
   } catch (error) {
     release();

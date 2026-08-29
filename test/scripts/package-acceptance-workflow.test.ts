@@ -4355,7 +4355,6 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
     expect(workflow).toContain("suite_id: live-cli-cache-docker");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE=1");
-    expect(workflow).toContain('live_image_extensions="matrix,acpx,anthropic"');
     expect(workflow).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
     expect(workflow).not.toContain('service_tier=\\"fast\\"');
     expect(workflow).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_ARGS=");

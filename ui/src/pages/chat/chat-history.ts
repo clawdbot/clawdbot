@@ -1778,6 +1778,24 @@ export function retryChatHistoryLoad(
   return retry;
 }
 
+async function requestOlderChatHistoryPage(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  requestAgentId: string | undefined,
+  offset: number,
+): Promise<ChatHistoryResult> {
+  const result = await client.request<ChatHistoryResult>("chat.history", {
+    sessionKey,
+    ...(requestAgentId ? { agentId: requestAgentId } : {}),
+    limit: CHAT_HISTORY_OLDER_PAGE_LIMIT,
+    offset,
+  });
+  return {
+    ...result,
+    messages: visibleChatHistoryMessages(result.messages),
+  };
+}
+
 export async function loadOlderChatHistoryPage(
   state: ChatState,
   offset: number,
@@ -1797,19 +1815,80 @@ export async function loadOlderChatHistoryPage(
     sessionKey,
     requestAgentId,
   );
-  const result = await client.request<ChatHistoryResult>("chat.history", {
-    sessionKey,
-    ...(requestAgentId ? { agentId: requestAgentId } : {}),
-    limit: CHAT_HISTORY_OLDER_PAGE_LIMIT,
-    offset,
-  });
+  const result = await requestOlderChatHistoryPage(client, sessionKey, requestAgentId, offset);
   if (!shouldApplyChatHistoryResult(state, ownership)) {
     return undefined;
   }
-  return {
-    ...result,
-    messages: visibleChatHistoryMessages(result.messages),
+  return result;
+}
+
+export type StagedOlderHistoryPage = {
+  claim: {
+    client: GatewayBrowserClient;
+    connectionEpoch: number;
+    sessionKey: string;
+    agentId?: string;
+    /** Projection fence: any later history request or reset (tail reload,
+     * rewind, branch switch) advances the version and voids this page even
+     * when the replacement projection lands on the same cursor. */
+    historyVersion: number;
   };
+  requestedOffset: number;
+  result: ChatHistoryResult;
+};
+
+// The staged prefetch deliberately skips beginChatHistoryRequest: request
+// ownership is last-writer-wins, so a background fetch bumping the version
+// could invalidate a concurrent tail load's apply. The claim below carries the
+// same facts and the pane validates it at consume time instead.
+export async function fetchStagedOlderHistoryPage(
+  state: ChatState,
+  offset: number,
+): Promise<StagedOlderHistoryPage | undefined> {
+  if (!state.client || !state.connected) {
+    return undefined;
+  }
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
+  const sessionKey = state.sessionKey;
+  const historyVersion = getChatHistoryPaneRequests(state).historyVersion;
+  const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
+    ? resolveUiSelectedSessionAgentId(state)
+    : undefined;
+  const result = await requestOlderChatHistoryPage(client, sessionKey, requestAgentId, offset);
+  return {
+    claim: {
+      client,
+      connectionEpoch,
+      sessionKey,
+      historyVersion,
+      ...(requestAgentId ? { agentId: requestAgentId } : {}),
+    },
+    requestedOffset: offset,
+    result,
+  };
+}
+
+/** A staged page is valid only for the exact connection, session, and the
+ * pagination cursor it was fetched at; any drift means the reactive path must
+ * refetch (tail reloads rebase offsets, resets reuse session keys). */
+export function isStagedOlderHistoryPageCurrent(
+  state: ChatState,
+  staged: StagedOlderHistoryPage,
+): boolean {
+  const claim = staged.claim;
+  const pagination = state.chatHistoryPagination;
+  return (
+    state.client === claim.client &&
+    state.connected &&
+    state.connectionEpoch === claim.connectionEpoch &&
+    getChatHistoryPaneRequests(state).historyVersion === claim.historyVersion &&
+    state.sessionKey === claim.sessionKey &&
+    (!isUiSelectedGlobalSessionKey(state, claim.sessionKey) ||
+      resolveUiSelectedSessionAgentId(state) === claim.agentId) &&
+    pagination.hasMore &&
+    pagination.nextOffset === staged.requestedOffset
+  );
 }
 
 export function applyChatAgentsList(

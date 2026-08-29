@@ -178,7 +178,8 @@ if (!recordPath || !configPath || !stateDir) {
 const record = (value) => fs.appendFileSync(recordPath, JSON.stringify(value) + "\\n");
 const fail = async (code, message) => {
   await new Promise((resolve) => process.stderr.write(
-    message + "\\ncontext retained\\n" + "diagnostic ".repeat(400), resolve));
+    message + "\\ncontext retained\\n" + "diagnostic ".repeat(400) +
+    "\\nterminal failure: Authorization: Bearer fixture-tail-secret", resolve));
   process.exit(code);
 };
 const authDbPath = path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite");
@@ -1734,6 +1735,7 @@ describe("buildQaRuntimeEnv", () => {
       expect(error.message).toContain(`${prefix}${detail}\ncontext retained\n`);
       expect(error.cause.message.length).toBeLessThanOrEqual(prefix.length + 2_048);
       expect(error.cause.message).not.toContain("diagnostic ".repeat(400));
+      expect(error.cause.message).toContain("terminal failure: Authorization: Bearer <redacted>");
       expect(error.cause).not.toHaveProperty("cause");
       const records = await readJsonLines(recordPath);
       expect(records.map((record) => record.kind)).toEqual(
@@ -1757,6 +1759,7 @@ describe("buildQaRuntimeEnv", () => {
         expect(diagnostic).not.toContain(submittedKey);
       }
       expect(diagnostic).not.toContain("fixture-plugin-secret");
+      expect(diagnostic).not.toContain("fixture-tail-secret");
       const tempRoots = await readdir(tempParentDir);
       expect(tempRoots).toHaveLength(1);
       for (const stream of ["stdout", "stderr"]) {

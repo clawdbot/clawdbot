@@ -795,6 +795,8 @@ suite.define(() => {
           fullPage: true,
         });
       }
+      // The second applied page staged one background prefetch (offset 22);
+      // the now-scrollable transcript must not consume or chain beyond it.
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 300);
       });
@@ -802,7 +804,7 @@ suite.define(() => {
         (await gateway.getRequests("chat.history")).map(
           (request) => (request.params as { offset?: number } | undefined)?.offset,
         ),
-      ).toEqual([2, 6]);
+      ).toEqual([2, 6, 22]);
     } finally {
       await suite.closeBrowserContext(context);
       if (artifactDir && proofVideo) {
@@ -850,6 +852,18 @@ suite.define(() => {
                 messages: older,
                 hasMore: false,
                 totalMessages: 140,
+                sessionId: "native-scrollback",
+                thinkingLevel: null,
+              },
+            },
+            {
+              // Served to the background prefetch staged after the successful
+              // older page below reports more history at offset 140.
+              match: { offset: 140 },
+              response: {
+                messages: [],
+                hasMore: false,
+                totalMessages: 180,
                 sessionId: "native-scrollback",
                 thinkingLevel: null,
               },
@@ -941,35 +955,28 @@ suite.define(() => {
         fullPage: true,
       });
     }
-    expect((await gateway.getRequests("chat.history")).at(-1)?.params).toMatchObject({
-      limit: 400,
-      offset: 100,
-    });
-    const firstPageRequestCount = (await gateway.getRequests("chat.history")).length;
+    // The applied page reports more history, so the pane stages the next page
+    // (offset 140) in the background without entering the loading state.
+    await expect
+      .poll(() => gateway.getRequests("chat.history").then((requests) => requests.length))
+      .toBe(failedRequestCount + 2);
+    const requestsAfterPrefetch = await gateway.getRequests("chat.history");
+    expect(requestsAfterPrefetch.at(-2)?.params).toMatchObject({ limit: 400, offset: 100 });
+    expect(requestsAfterPrefetch.at(-1)?.params).toMatchObject({ limit: 400, offset: 140 });
     await page.evaluate(
       () =>
         new Promise<void>((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
         }),
     );
-    expect(await gateway.getRequests("chat.history")).toHaveLength(firstPageRequestCount);
-    await gateway.deferNext("chat.history");
+    // Single staging slot: the parked page must not chain further prefetches.
+    expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 2);
+    // Consuming the staged page needs no round trip: the exhausted empty page
+    // applies instantly and removes the boundary and its sentinel.
     await showEarlier.click();
-    await gateway.waitForRequest("chat.history", { after: firstPageRequestCount });
-    expect((await gateway.getRequests("chat.history")).at(-1)?.params).toMatchObject({
-      limit: 400,
-      offset: 140,
-    });
-    await gateway.resolveDeferred("chat.history", {
-      messages: [],
-      hasMore: false,
-      totalMessages: 180,
-      sessionId: "native-scrollback",
-      thinkingLevel: null,
-    });
     await expect.poll(() => page.locator(".chat-history-sentinel").count()).toBe(0);
     expect(await page.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
-    expect(await gateway.getRequests("chat.history")).toHaveLength(firstPageRequestCount + 1);
+    expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 2);
     await page.close();
   });
 });
