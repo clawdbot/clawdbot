@@ -69,7 +69,7 @@ import {
 } from "./compaction-safeguard-quality.js";
 import {
   getCompactionSafeguardRuntime,
-  setCompactionSafeguardCancelReason,
+  setCompactionSafeguardCancellation,
 } from "./compaction-safeguard-runtime.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
@@ -967,7 +967,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       containsRealConversation(
         stripRuntimeContextCustomMessages(collectSessionContextMessages(ctx.sessionManager)),
       );
-    setCompactionSafeguardCancelReason(ctx.sessionManager, undefined);
+    setCompactionSafeguardCancellation(ctx.sessionManager, undefined);
     if (!hasRealConversation) {
       // When there are no summarizable messages AND no real turn-prefix content,
       // cancelling compaction leaves context unchanged but the SDK re-triggers
@@ -1138,7 +1138,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "was not called and model was not passed through runtime registry.",
         );
       }
-      setCompactionSafeguardCancelReason(
+      setCompactionSafeguardCancellation(
         ctx.sessionManager,
         "Compaction safeguard could not resolve a summarization model.",
       );
@@ -1147,7 +1147,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
     const authResult = await resolveModelAuth(ctx, model);
     if (!authResult.ok) {
-      setCompactionSafeguardCancelReason(ctx.sessionManager, authResult.reason);
+      setCompactionSafeguardCancellation(ctx.sessionManager, authResult.reason);
       return { cancel: true };
     }
     try {
@@ -1334,7 +1334,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               "Compaction safeguard: corrective generation failed; " +
                 `reasonCode=corrective_generation_failed attempt=${attempt + 1}`,
             );
-            setCompactionSafeguardCancelReason(
+            setCompactionSafeguardCancellation(
               ctx.sessionManager,
               "Compaction safeguard finalized summary failed quality checks and corrective generation failed.",
             );
@@ -1381,7 +1381,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "Compaction safeguard: required quality facts exceed finalized artifact budget; " +
               `requiredChars>${MAX_COMPACTION_SUMMARY_CHARS} identifierCount=${identifiers.length}`,
           );
-          setCompactionSafeguardCancelReason(
+          setCompactionSafeguardCancellation(
             ctx.sessionManager,
             "Compaction safeguard required facts exceed the finalized summary budget.",
           );
@@ -1407,7 +1407,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "Compaction safeguard: finalized summary failed quality checks; " +
               `reasonCodes=${reasonCodes.join(",")} reasonCount=${quality.reasons.length}`,
           );
-          setCompactionSafeguardCancelReason(
+          setCompactionSafeguardCancellation(
             ctx.sessionManager,
             "Compaction safeguard finalized summary failed quality checks.",
           );
@@ -1439,9 +1439,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       log.warn(
         `Compaction summarization failed; cancelling compaction to preserve history: ${message}`,
       );
-      setCompactionSafeguardCancelReason(
+      setCompactionSafeguardCancellation(
         ctx.sessionManager,
         `Compaction safeguard could not summarize the session: ${message}`,
+        error,
       );
       return { cancel: true };
     }

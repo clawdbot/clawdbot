@@ -25,9 +25,9 @@ import { jsonResult } from "../tools/common.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
 import * as compactionQualityModule from "./compaction-safeguard-quality.js";
 import {
-  consumeCompactionSafeguardCancelReason,
+  consumeCompactionSafeguardCancellation,
   getCompactionSafeguardRuntime,
-  setCompactionSafeguardCancelReason,
+  setCompactionSafeguardCancellation,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "./compaction-safeguard.js";
@@ -889,22 +889,38 @@ describe("compaction-safeguard runtime registry", () => {
     });
   });
 
-  it("consumes cancel reasons without dropping other runtime fields", () => {
+  it("consumes cancellation provenance once without dropping other runtime fields", () => {
     const sm = {};
+    const error = Object.assign(new Error("provider unavailable"), { status: 503 });
     setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.6 });
-    setCompactionSafeguardCancelReason(sm, "no API key");
+    setCompactionSafeguardCancellation(sm, "summarization failed", error);
 
-    expect(consumeCompactionSafeguardCancelReason(sm)).toBe("no API key");
-    expect(consumeCompactionSafeguardCancelReason(sm)).toBeNull();
+    expect(consumeCompactionSafeguardCancellation(sm)).toEqual({
+      reason: "summarization failed",
+      error: expect.objectContaining({ message: "provider unavailable", status: 503 }),
+    });
+    expect(consumeCompactionSafeguardCancellation(sm)).toBeNull();
     expect(getCompactionSafeguardRuntime(sm)).toEqual({ maxHistoryShare: 0.6 });
   });
 
-  it("clears cancel reason when set to undefined", () => {
+  it("replaces provider failure provenance with an intentional decline atomically", () => {
     const sm = {};
-    setCompactionSafeguardCancelReason(sm, "temporary reason");
-    expect(consumeCompactionSafeguardCancelReason(sm)).toBe("temporary reason");
-    setCompactionSafeguardCancelReason(sm, undefined);
-    expect(consumeCompactionSafeguardCancelReason(sm)).toBeNull();
+    setCompactionSafeguardCancellation(sm, "summary failed", new Error("request timed out"));
+    setCompactionSafeguardCancellation(sm, "quality guard declined");
+
+    expect(consumeCompactionSafeguardCancellation(sm)).toEqual({
+      reason: "quality guard declined",
+    });
+    expect(getCompactionSafeguardRuntime(sm)).toBeNull();
+  });
+
+  it("clears the pending cancellation and its error before another attempt", () => {
+    const sm = {};
+    setCompactionSafeguardCancellation(sm, "summary failed", new Error("request timed out"));
+    setCompactionSafeguardCancellation(sm, undefined);
+
+    expect(consumeCompactionSafeguardCancellation(sm)).toBeNull();
+    expect(getCompactionSafeguardRuntime(sm)).toBeNull();
   });
 
   it("wires oversized safeguard runtime values when config validation is bypassed", () => {
@@ -1756,7 +1772,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(result).not.toHaveProperty("compaction");
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
     expect(messagesToSummarize).toStrictEqual(transcriptBefore);
-    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBe(
+    expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toBe(
       "Compaction safeguard could not summarize the session: " +
         "Failed to summarize dropped messages. | dropped prefix unavailable",
     );
@@ -1877,7 +1893,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     await expect(compactionHandler(event, mockContext)).rejects.toBe(abortError);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
     expect(messagesToSummarize).toStrictEqual(transcriptBefore);
   });
 
@@ -2091,7 +2107,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(result).toEqual({ cancel: true });
     expect(result).not.toHaveProperty("compaction");
     expect(event.preparation.messagesToSummarize).toStrictEqual(transcriptBefore);
-    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toContain(
+    expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toContain(
       "Cannot convert undefined or null to object",
     );
   });
@@ -2250,7 +2266,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summary).toContain(`## Pending user asks\n${latestAsk}`);
     expect(summary).toContain(`## Exact identifiers\n${identifier}`);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 
   it("restores source identifiers omitted by an oversized generated summary", async () => {
@@ -2293,7 +2309,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
     expect(summary).toContain(`## Exact identifiers\nNone.\n${identifier}`);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 
   it("keeps real sections when a re-distilled identifier list outgrows the budget", async () => {
@@ -2352,7 +2368,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(identifiersSection.length).toBeLessThanOrEqual(
       MAX_COMPACTION_SUMMARY_CHARS * 0.25 + 200,
     );
-    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 
   it("keeps surplus budget out of the protected sections when trimming", () => {
@@ -2436,7 +2452,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(identifiersSection.length).toBeLessThanOrEqual(
       MAX_COMPACTION_SUMMARY_CHARS * 0.25 + 200,
     );
-    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 
   it("restores source identifiers omitted by a generated summary that fits the budget", async () => {
@@ -2478,7 +2494,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summary).toContain(`## Exact identifiers\nNone.\n${identifier}`);
     expect(summary).not.toContain(SUMMARY_TRUNCATED_MARKER.trim());
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 
   it("fails closed when audit-required tail sections cannot fit the artifact cap", async () => {
@@ -2519,7 +2535,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result).toEqual({ cancel: true });
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBe(
+    expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toBe(
       "Compaction safeguard required facts exceed the finalized summary budget.",
     );
   });
@@ -2753,7 +2769,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     await expect(handler(event, context)).rejects.toBe(abortError);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
-    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 
   it.each([true, false])(
@@ -2831,7 +2847,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
         expect(finalSummary).toContain("## Pending user asks\nNone.");
       } else {
         expect(result).toEqual({ cancel: true });
-        expect(consumeCompactionSafeguardCancelReason(sessionManager)).toContain(
+        expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toContain(
           "failed quality checks",
         );
       }
@@ -3116,7 +3132,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(auditInput.summary).toContain(identifier);
     expect(auditInput.summary).toContain(latestAsk);
     expect(mockAuditSummaryQuality.mock.results[0]?.value).toEqual({ ok: true, reasons: [] });
-    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 
   it("retries when generated summary misses headings even if preserved turns contain them", async () => {
@@ -3370,7 +3386,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(requireRecord(mockCallArg(mockSummarizeInStages, 1)).customInstructions).toContain(
       "Additional requirements:",
     );
-    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBe(
+    expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toBe(
       "Compaction safeguard finalized summary failed quality checks and corrective generation failed.",
     );
     const terminalWarnings = compactionLogger.warn.mock.calls.flat().join("\n");

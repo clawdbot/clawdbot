@@ -1092,16 +1092,15 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("../embedded-agent-helpers.js", () => ({
-    ensureSessionHeader: vi.fn(async () => {}),
-    pickFallbackThinkingLevel: vi.fn((params: { message?: string; attempted?: Set<string> }) =>
-      params.message?.includes("Reasoning is mandatory") && !params.attempted?.has("minimal")
-        ? "minimal"
-        : undefined,
-    ),
-    validateAnthropicTurns: vi.fn((m: unknown[]) => m),
-    validateGeminiTurns: vi.fn((m: unknown[]) => m),
-  }));
+  vi.doMock("../embedded-agent-helpers.js", async () => {
+    const { pickFallbackThinkingLevel } = await import("../embedded-agent-helpers/thinking.js");
+    return {
+      ensureSessionHeader: vi.fn(async () => {}),
+      pickFallbackThinkingLevel,
+      validateAnthropicTurns: vi.fn((m: unknown[]) => m),
+      validateGeminiTurns: vi.fn((m: unknown[]) => m),
+    };
+  });
 
   vi.doMock("../agent-project-settings.js", () => ({
     createPreparedEmbeddedAgentSettingsManager: createPreparedEmbeddedAgentSettingsManagerMock,

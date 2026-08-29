@@ -4,7 +4,7 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -12,6 +12,19 @@ import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  createAssistant,
+  createAssistantResultStream,
+  createTestSession,
+  registerAgentSessionLoopTestLifecycle,
+  testModel,
+} from "../sessions/agent-session-loop-correctness.test-support.js";
+import { createResourceLoader } from "../sessions/agent-session-loop-resource-loader.test-support.js";
+import { generateSummary as generateRealSummary } from "../sessions/compaction/compaction.js";
+import { createEventBus } from "../sessions/event-bus.js";
+import { createExtensionRuntime, loadExtensionFromFactory } from "../sessions/extensions/loader.js";
+import { SessionManager } from "../sessions/session-manager.js";
+import { SettingsManager } from "../sessions/settings-manager.js";
 import {
   acquireAgentRunPreparedModelRuntimeMock,
   attemptServerEndpointCompactionMock,
@@ -1681,6 +1694,199 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     if (fallbackCall[3] === undefined) {
       throw new Error("Expected fallback resolve-model options");
     }
+  });
+
+  describe("safeguard failure provenance", () => {
+    registerAgentSessionLoopTestLifecycle();
+    const originalHistoryLimit = expectDefined(
+      limitHistoryTurnsMock.getMockImplementation(),
+      "history-limit fixture implementation",
+    );
+
+    let safeguard: typeof import("../agent-hooks/compaction-safeguard.js").default;
+    let setSafeguardRuntime: typeof import("../agent-hooks/compaction-safeguard-runtime.js").setCompactionSafeguardRuntime;
+    let summaryBridge: typeof import("../sessions/index.js").generateSummary;
+
+    beforeAll(async () => {
+      // The outer harness resets modules and mocks the session SDK. Retain the real
+      // disposable session fixture above, but share the safeguard registry with the runner.
+      safeguard = (await import("../agent-hooks/compaction-safeguard.js")).default;
+      setSafeguardRuntime = (await import("../agent-hooks/compaction-safeguard-runtime.js"))
+        .setCompactionSafeguardRuntime;
+      summaryBridge = (await import("../sessions/index.js")).generateSummary;
+    });
+
+    afterEach(() => {
+      vi.mocked(summaryBridge).mockReset().mockResolvedValue("summary");
+      limitHistoryTurnsMock.mockImplementation(originalHistoryLimit);
+    });
+
+    it.each([
+      { scenario: "provider timeout", errorMessage: "request timed out", outcome: "fallback" },
+      {
+        scenario: "provider rate limit",
+        errorMessage: "429 rate limit exceeded",
+        outcome: "fallback",
+      },
+      { scenario: "intentional quality rejection", errorMessage: undefined, outcome: "cancel" },
+      { scenario: "explicit model timeout", errorMessage: "request timed out", outcome: "cancel" },
+      {
+        scenario: "reasoning-mandatory rejection",
+        errorMessage: "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
+        outcome: "thinking",
+      },
+    ] as const)(
+      "keeps model fallback boundaries for $scenario",
+      async ({ scenario, errorMessage, outcome }) => {
+        const [
+          { createAgentSessionForEmbeddedRunner },
+          { guardSessionManager },
+          { resolveEmbeddedAgentStreamFn },
+          { buildEmbeddedExtensionFactories },
+        ] = await Promise.all([
+          import("../sessions/sdk.js"),
+          import("../session-tool-result-guard-wrapper.js"),
+          import("./stream-resolution.js"),
+          import("./extensions.js"),
+        ]);
+        const fallback = outcome === "fallback";
+        const primary = "summary-primary";
+        const backup = "summary-backup";
+        const explicitModel = scenario === "explicit model timeout";
+        const fallbackSummary = [
+          "## Decisions",
+          "Review the deployment checklist before rollout.",
+          "## Open TODOs",
+          "Compare the remaining options.",
+          "## Constraints/Rules",
+          "None.",
+          "## Pending user asks",
+          "Compare the remaining options.",
+          "## Exact identifiers",
+          "None.",
+        ].join("\n");
+        const sessionManager = SessionManager.inMemory(TEST_WORKSPACE_DIR);
+        for (const content of [
+          "Review the deployment checklist.",
+          "Compare the remaining options.",
+          "Keep the rollout notes.",
+        ]) {
+          sessionManager.appendMessage({ role: "user", content, timestamp: 1 });
+        }
+        const originalMessages = sessionManager.buildSessionContext().messages;
+        const settingsManager = SettingsManager.inMemory({
+          compaction: { enabled: false, reserveTokens: 1_024, keepRecentTokens: 1 },
+          retry: { enabled: false },
+        });
+        const extension = await loadExtensionFromFactory(
+          safeguard,
+          TEST_WORKSPACE_DIR,
+          createEventBus(),
+          createExtensionRuntime(),
+        );
+        const requestedModels: string[] = [];
+        const requestedThinking: Array<string | undefined> = [];
+        const stream = vi.fn<StreamFn>((activeModel, _context, options) => {
+          requestedModels.push(activeModel.id);
+          requestedThinking.push(options?.reasoning);
+          const rejected =
+            activeModel.id === primary &&
+            errorMessage &&
+            !(outcome === "thinking" && options?.reasoning === "minimal");
+          return createAssistantResultStream(
+            rejected
+              ? { ...createAssistant(activeModel, [], "error"), errorMessage }
+              : createAssistant(activeModel, [
+                  {
+                    type: "text",
+                    text: outcome === "cancel" ? "Missing required sections." : fallbackSummary,
+                  },
+                ]),
+          );
+        });
+        vi.mocked(summaryBridge).mockImplementation(generateRealSummary);
+        vi.mocked(guardSessionManager).mockReturnValue(sessionManager);
+        limitHistoryTurnsMock.mockImplementation((messages) => messages);
+        resolveEffectiveCompactionModeMock.mockReturnValue("safeguard");
+        vi.mocked(resolveEmbeddedAgentStreamFn).mockReturnValue(stream);
+        vi.mocked(buildEmbeddedExtensionFactories).mockImplementation(({ model }) => {
+          setSafeguardRuntime(sessionManager, {
+            model,
+            contextWindowTokens: 128_000,
+            recentTurnsPreserve: 0,
+            qualityGuardEnabled: true,
+            qualityGuardMaxRetries: 0,
+          });
+          return [];
+        });
+        vi.mocked(createAgentSessionForEmbeddedRunner).mockImplementation(
+          async ({ model, thinkingLevel }) => {
+            if (!model) {
+              throw new Error("Expected the prepared compaction model");
+            }
+            const created = await createTestSession({
+              model: {
+                ...testModel,
+                ...model,
+                reasoning: outcome === "thinking",
+                maxTokens: 1_024,
+              },
+              sessionManager,
+              settingsManager,
+              resourceLoader: createResourceLoader(extension.handlers),
+            });
+            created.session.setThinkingLevel(thinkingLevel ?? "off");
+            return created;
+          },
+        );
+        const config = {
+          agents: {
+            defaults: {
+              model: { primary: `openai/${primary}`, fallbacks: [`openai/${backup}`] },
+              compaction: {
+                mode: "safeguard" as const,
+                thinkingLevel: "off" as const,
+                ...(explicitModel ? { model: `openai/${primary}` } : {}),
+                recentTurnsPreserve: 0,
+                qualityGuard: { enabled: true, maxRetries: 0 },
+              },
+            },
+          },
+        };
+        const configBefore = structuredClone(config);
+
+        const result = await compactEmbeddedAgentSessionDirect(
+          wrappedCompactionArgs({ provider: "openai", model: primary, config }),
+        );
+
+        expect([...new Set(requestedModels)], JSON.stringify(result)).toEqual(
+          fallback ? [primary, backup] : [primary],
+        );
+        expect(config).toEqual(configBefore);
+        if (outcome !== "cancel") {
+          if (outcome === "thinking") {
+            expect([...new Set(requestedThinking)]).toEqual(["off", "minimal"]);
+          }
+          expect(result).toMatchObject({
+            ok: true,
+            compacted: true,
+            result: { summary: fallbackSummary },
+          });
+          expect(
+            sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
+          ).toMatchObject({
+            summary: fallbackSummary,
+          });
+        } else {
+          expect(result).toMatchObject({ ok: false, compacted: false });
+          expect(result.reason).toMatch(explicitModel ? /timed out/i : /quality/i);
+          expect(sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(
+            false,
+          );
+          expect(sessionManager.buildSessionContext().messages).toEqual(originalMessages);
+        }
+      },
+    );
   });
 
   it("plans runtime plugins for the canonical model behind a fallback alias", async () => {
