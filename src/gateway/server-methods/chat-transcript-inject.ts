@@ -5,6 +5,11 @@ import { persistSessionTranscriptTurn } from "../../config/sessions/session-acce
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  readSessionTranscriptRunId,
+  resolveTerminalAssistantTranscriptRunId,
+} from "../../sessions/transcript-events.js";
+import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 type AssistantMessageContent = Extract<AppendMessageArg, { role: "assistant" }>["content"];
@@ -21,7 +26,7 @@ type GatewayInjectedTranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
-  /** Set when the writer-queue predicate declined the append; not an error. */
+  /** Set when the commit predicate declined the append; not an error. */
   skipped?: boolean;
   error?: string;
 };
@@ -78,17 +83,6 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
-  /**
-   * Runs inside the session writer queue, so a durable-state read plus the
-   * append decision it drives stays race-free against other transcript
-   * writers on this session.
-   */
-  shouldAppend?: (context: {
-    agentId?: string;
-    sessionId?: string;
-    sessionKey?: string;
-    storePath?: string;
-  }) => Promise<boolean> | boolean;
   now?: number;
   config?: OpenClawConfig;
 }): Promise<GatewayInjectedTranscriptAppendResult> {
@@ -121,6 +115,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     content: [{ type: "text", text: params.message }],
   };
   const rawDeliveryFacts = applyAssistantDeliveryDirectives(rawDeliveryMessage).openclawDelivery;
+  const abortRunId = params.abortMeta?.runId;
   const messageBody: AppendMessageArg & Record<string, unknown> = applyAssistantDeliveryDirectives({
     role: "assistant",
     // Gateway-injected assistant messages can include non-model content blocks (e.g. embedded TTS audio).
@@ -172,10 +167,18 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
           {
             message: messageBody,
             idempotencyLookup: "scan-assistant",
-            ...(params.shouldAppend
+            ...(params.abortMeta
               ? {
-                  shouldAppend: async (context) => {
-                    predicateDeclined = !(await params.shouldAppend?.(context));
+                  shouldAppendInTransaction: (latestAssistantMessage: unknown) => {
+                    const committedRunId = resolveTerminalAssistantTranscriptRunId(
+                      latestAssistantMessage,
+                      readSessionTranscriptRunId(latestAssistantMessage),
+                    );
+                    const committedText = extractAssistantPhaseText(latestAssistantMessage)?.trim();
+                    // The same run can commit before its live buffer clears. Recheck after
+                    // BEGIN IMMEDIATE so a direct writer cannot land between this fact and insert.
+                    predicateDeclined =
+                      committedRunId === abortRunId && committedText === params.message.trim();
                     return !predicateDeclined;
                   },
                 }

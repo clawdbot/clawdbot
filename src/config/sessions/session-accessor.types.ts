@@ -378,6 +378,11 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
    * after asynchronous predicate work finishes.
    */
   shouldAppend?: (context: SessionTranscriptTurnWriteContext) => Promise<boolean> | boolean;
+  /**
+   * Rechecks the newest assistant row after the write transaction begins.
+   * Direct synchronous writers bypass the process queue, so prepared facts can be stale.
+   */
+  shouldAppendInTransaction?: (latestAssistantMessage: unknown) => boolean;
 };
 
 export type SessionTranscriptTurnWriteContext = {

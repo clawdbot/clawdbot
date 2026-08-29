@@ -18,10 +18,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import {
-  readSessionTranscriptRunId,
-  resolveTerminalAssistantTranscriptRunId,
-} from "../../sessions/transcript-events.js";
-import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
 } from "./chat-assistant-content.js";
@@ -34,7 +30,7 @@ type TranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
-  /** Set when the writer-queue predicate declined the append; not an error. */
+  /** Set when the commit predicate declined the append; not an error. */
   skipped?: boolean;
   error?: string;
 };
@@ -47,13 +43,6 @@ type AssistantTranscriptScopeParams = {
 };
 
 type ResolvedAssistantTranscriptScope = SessionTranscriptWriteScope & { sessionId: string };
-
-type LastCommittedAssistantRow = {
-  /** Text blocks joined; undefined when the row carries no text content. */
-  text: string | undefined;
-  /** Run identity stored on the row; absent when the writer attached none. */
-  runId?: string;
-};
 
 export type SourceReplyTranscriptMirrorMetadata = NonNullable<
   ReturnType<typeof getReplyPayloadMetadata>
@@ -267,34 +256,6 @@ async function transcriptExists(scope: SessionTranscriptWriteScope): Promise<boo
   return found !== undefined;
 }
 
-/**
- * Reads the text and terminal run identity of the last committed assistant
- * row, or undefined when none exists. A settled run commits its final
- * assistant row before the lifecycle end event clears the live buffer, so
- * abort paths compare against this fact instead of re-persisting buffered
- * text that is already durable.
- */
-export async function readLastCommittedAssistantRow(
-  scope: AssistantTranscriptScopeParams,
-): Promise<LastCommittedAssistantRow | undefined> {
-  // Newest-first single-row probe, matching the transcriptExists read pattern.
-  const found = await findTranscriptEvent(
-    { ...scope, sessionId: scope.sessionId },
-    (event) => transcriptEventMessage(event)?.role === "assistant",
-  ).catch(() => undefined);
-  const message = found ? transcriptEventMessage(found.event) : undefined;
-  if (!message) {
-    return undefined;
-  }
-  // Only a terminal row carries its run's reply; a tool-call row must not
-  // claim ownership of the buffered text.
-  const runId = resolveTerminalAssistantTranscriptRunId(
-    message,
-    readSessionTranscriptRunId(message),
-  );
-  return { text: extractAssistantTranscriptText(message), ...(runId ? { runId } : {}) };
-}
-
 export async function appendAssistantTranscriptMessage(params: {
   sessionKey: string;
   message: string;
@@ -306,13 +267,6 @@ export async function appendAssistantTranscriptMessage(params: {
   agentId?: string;
   createIfMissing?: boolean;
   idempotencyKey?: string;
-  /** Writer-queue predicate: false skips the append atomically with the write. */
-  shouldAppend?: (context: {
-    agentId?: string;
-    sessionId?: string;
-    sessionKey?: string;
-    storePath?: string;
-  }) => Promise<boolean> | boolean;
   abortMeta?: {
     aborted: true;
     origin: "rpc" | "stop-command" | "placement-abandon";
@@ -328,7 +282,6 @@ export async function appendAssistantTranscriptMessage(params: {
   if (!params.createIfMissing && !(await transcriptExists(scope))) {
     return { ok: false, error: "transcript not found" };
   }
-
   const appended = await appendInjectedAssistantMessageToTranscript({
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
@@ -338,7 +291,6 @@ export async function appendAssistantTranscriptMessage(params: {
     label: params.label,
     content: params.content,
     idempotencyKey: params.idempotencyKey,
-    ...(params.shouldAppend ? { shouldAppend: params.shouldAppend } : {}),
     abortMeta: params.abortMeta,
     ttsSupplement: params.ttsSupplement,
     config: params.cfg,

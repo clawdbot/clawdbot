@@ -26,10 +26,7 @@ import {
   normalizeOptionalChatText as normalizeOptionalText,
   normalizeUnknownChatText as normalizeUnknownText,
 } from "./chat-text-normalization.js";
-import {
-  appendAssistantTranscriptMessage,
-  readLastCommittedAssistantRow,
-} from "./chat-transcript-persistence.js";
+import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type AbortOrigin = "rpc" | "stop-command" | "placement-abandon";
@@ -86,11 +83,6 @@ export async function persistAbortedPartials(params: {
       throw new Error("Placement abandonment transcript session changed before persistence");
     }
     const sessionId = entry?.sessionId ?? snapshot.sessionId;
-    // A run that committed its final assistant row keeps the same text in its
-    // live buffer until the lifecycle end clears it. Appending the abort
-    // partial then would duplicate the committed reply in the transcript. The
-    // committed-row read runs inside the session writer queue, so the decision
-    // is atomic with the append against a racing final commit.
     const appended = await appendAssistantTranscriptMessage({
       sessionKey: params.sessionKey,
       message: snapshot.text,
@@ -99,19 +91,6 @@ export async function persistAbortedPartials(params: {
       ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
       createIfMissing: true,
       idempotencyKey: `${snapshot.runId}:assistant`,
-      shouldAppend: async (writerContext) => {
-        const committed = await readLastCommittedAssistantRow({
-          sessionKey: params.sessionKey,
-          sessionId: writerContext.sessionId ?? sessionId,
-          storePath: writerContext.storePath ?? storePath,
-          ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
-        });
-        // Text equality alone cannot prove this run's reply committed: an
-        // unrelated run may have committed the same reply, and dropping the
-        // abort partial then would silently lose the abort record. Skip only
-        // when the terminal row carries this exact run's identity.
-        return !(committed?.runId === snapshot.runId && committed?.text === snapshot.text);
-      },
       cfg,
       abortMeta: {
         aborted: true,
