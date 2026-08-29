@@ -4,6 +4,7 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
+import { CodexAppServerEventProjector } from "./event-projector.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
   createParams as createSharedParams,
@@ -755,6 +756,44 @@ describe("Codex app-server main thread cleanup", () => {
       expect(close).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects late cancellation after failed finalization enters cleanup", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(harness.client);
+    const abort = new AbortController();
+    const params = createParams(
+      path.join(tempDir, "failed-finalization.jsonl"),
+      path.join(tempDir, "failed-finalization-workspace"),
+    );
+    params.abortSignal = abort.signal;
+    const projectionError = new Error("terminal projection failed");
+    const run = runCodexAppServerAttempt(params, {
+      bindingStore: testCodexAppServerBindingStore,
+    });
+    const failure = run.catch((error: unknown) => error);
+    const initialize = await waitForHarnessRequest(harness, "initialize");
+    harness.send({
+      id: initialize.id,
+      result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+    });
+    const threadStart = await waitForHarnessRequest(harness, "thread/start");
+    harness.send({ id: threadStart.id, result: threadStartResult() });
+    const turnStart = await waitForHarnessRequest(harness, "turn/start");
+    harness.send({ id: turnStart.id, result: turnStartResult() });
+    vi.spyOn(CodexAppServerEventProjector.prototype, "buildResult").mockImplementationOnce(() => {
+      throw projectionError;
+    });
+    harness.send({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+    });
+    const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe");
+    abort.abort("cancelled during cleanup");
+    const methods = harness.writes.map((write) => JSON.parse(write).method);
+    harness.send({ id: unsubscribe.id, result: {} });
+    expect(methods).not.toContain("turn/interrupt");
+    expect(await failure).toBe(projectionError);
+  });
 
   it("gracefully retires a shared Codex client when a failed turn cannot unsubscribe", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");

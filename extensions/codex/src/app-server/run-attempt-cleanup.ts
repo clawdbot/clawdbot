@@ -45,6 +45,9 @@ export async function cleanupCodexAttempt(
   // Exact-thread cron authority exists only while this creator turn owns the
   // live client/thread. Retained model callbacks must fail after cleanup begins.
   prompt.context.attemptTools.scheduledAppAuthoritySourceRef.current = undefined;
+  // Finalization can throw before freezing. Close cancellation admission before
+  // any teardown await so it cannot replace the cleanup promise being joined.
+  freezeRunTerminalOutcome();
   // Join late cancellation before releasing the subscription, but do not let a
   // failed terminal RPC skip resource cleanup. Surface that failure below.
   await state.abortCleanup.catch(() => undefined);
@@ -198,7 +201,6 @@ export async function cleanupCodexAttempt(
       runAbortController.signal.removeEventListener("abort", abortListener);
     });
     await runCleanupStep("codex-steering-cancel", () => steeringQueueRef.current?.cancel());
-    await runCleanupStep("codex-terminal-freeze", freezeRunTerminalOutcome);
     await runCleanupStep("codex-reply-backend-detach", () =>
       params.replyOperation?.detachBackend(handle),
     );
