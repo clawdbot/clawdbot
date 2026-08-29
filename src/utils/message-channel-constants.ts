@@ -18,6 +18,9 @@ export function internalSessionConversationId(
 // rejected as "unknown channel".
 const INTERNAL_NON_DELIVERY_CHANNELS = [
   "heartbeat",
+  // System-event wake providers emitted by the heartbeat runner alongside "heartbeat".
+  "cron-event",
+  "exec-event",
   "cron",
   "webhook",
   "voice",
