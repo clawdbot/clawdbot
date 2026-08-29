@@ -289,6 +289,10 @@ describe("current attachments in an active remote placement", () => {
           return { meta: { durationMs: 1 } };
         },
       );
+      if (executionMode === "remote-exec") {
+        // At most one setup, three PDF chunks, and one image chunk.
+        expect(vi.mocked(tunnel.runWorkspaceCommand).mock.calls.length).toBeLessThanOrEqual(5);
+      }
       expect(tunnel.syncWorkspace).not.toHaveBeenCalled();
       expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
       const retainedFiles =

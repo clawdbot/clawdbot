@@ -6,7 +6,7 @@ import type { NodeWorkerWorkspaceTransferInput } from "./node-workspace-transfer
 const IDENTIFIER_MAX_CHARS = 256;
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const REQUEST_MAX_BYTES = 256 * 1024;
-const INPUT_MAX_BYTES = 128 * 1024;
+export const NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES = 128 * 1024;
 const OUTPUT_MAX_BYTES = 64 * 1024;
 const STDERR_MAX_BYTES = 16 * 1024;
 const ARGV_MAX_ITEMS = 128;
@@ -107,7 +107,8 @@ export function parseNodeWorkerWorkspaceExecInput(
   }
   if (
     value.input !== undefined &&
-    (typeof value.input !== "string" || Buffer.byteLength(value.input, "utf8") > INPUT_MAX_BYTES)
+    (typeof value.input !== "string" ||
+      Buffer.byteLength(value.input, "utf8") > NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES)
   ) {
     throw new Error("INVALID_REQUEST: workspace command input exceeds its bound");
   }
