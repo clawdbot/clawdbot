@@ -238,11 +238,11 @@ describe("formatAssistantErrorText", () => {
     expect(userFacing).not.toContain("deepseek-v4-flash:0731");
   });
 
-  it("surfaces token limits from provider-wrapped HTTP errors", () => {
-    const msg = makeAssistantError(
-      "OpenAI API error (400): max_tokens (384000) exceeds model's maximum output tokens (65536)",
-    );
-
+  it.each([
+    "OpenAI API error (400): max_tokens (384000) exceeds model's maximum output tokens (65536)",
+    "Error: OpenAI API error (400): max_tokens (384000) exceeds model's maximum output tokens (65536)",
+  ])("surfaces token limits from provider-wrapped HTTP error %s", (raw) => {
+    const msg = makeAssistantError(raw);
     expect(formatAssistantErrorText(msg)).toBe(
       "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
     );

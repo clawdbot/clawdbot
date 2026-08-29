@@ -2,8 +2,8 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
+  extractErrorHttpStatus,
   extractLeadingHttpStatus,
-  extractProviderWrappedHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
   isGenericProviderInternalError,
@@ -53,10 +53,10 @@ const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
-const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
+export const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
   "LLM request failed: provider rejected the request schema or tool payload.";
 const PROVIDER_OUTPUT_TOKEN_LIMIT_RE =
-  /^['"]?(max_(?:tokens|output_tokens|completion_tokens|new_tokens))['"]?\s*(?:[:=]\s*)?\(?(\d[\d,]*)\)?\s+exceeds?\b.{0,120}?\b(?:maximum|max|limit)\b(?:\s+(?:output\s+)?tokens?)?(?:\s+(?:is|of)|\s*[:=])?\s*\(?(\d[\d,]*)\)?(?:\D|$)/i;
+  /^['"]?max_(?:tokens|output_tokens|completion_tokens|new_tokens)['"]?\s*(?:[:=]\s*)?\(?(\d[\d,]*)\)?\s+exceeds?\b.{0,120}?\b(?:maximum|max|limit)\b(?:\s+(?:output\s+)?tokens?)?(?:\s+(?:is|of)|\s*[:=])?\s*\(?(\d[\d,]*)\)?(?:\D|$)/i;
 
 /** Format billing copy with optional provider/model and credential context. */
 export function formatBillingErrorMessage(
@@ -84,18 +84,12 @@ export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 /** Surface only bounded numeric limit facts, never arbitrary provider-controlled error text. */
 export function renderFormatErrorCopy(raw: string): string {
   const trimmed = raw.trim();
-  const providerWrappedStatus = extractProviderWrappedHttpStatus(trimmed);
-  const normalized = providerWrappedStatus ? trimmed : trimmed.replace(ERROR_PREFIX_RE, "").trim();
-  const providerWrappedRest = providerWrappedStatus?.rest;
-  const candidate =
-    extractLeadingHttpStatus(normalized)?.rest ??
-    (providerWrappedRest ? extractLeadingHttpStatus(providerWrappedRest)?.rest : undefined) ??
-    providerWrappedRest ??
-    extractProviderWrappedHttpStatus(normalized)?.rest ??
-    normalized;
+  const normalized =
+    extractErrorHttpStatus(trimmed)?.rest ?? trimmed.replace(ERROR_PREFIX_RE, "").trim();
+  const candidate = extractErrorHttpStatus(normalized)?.rest ?? normalized;
   const match = candidate.length <= 300 ? candidate.match(PROVIDER_OUTPUT_TOKEN_LIMIT_RE) : null;
-  const [, parameter, value, maximum] = match ?? [];
-  if (!parameter || !value || !maximum) {
+  const [, value, maximum] = match ?? [];
+  if (!value || !maximum) {
     return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
   }
   return `LLM request rejected: configured maxTokens is ${value}, above the provider maximum of ${maximum}. Lower maxTokens and try again.`;

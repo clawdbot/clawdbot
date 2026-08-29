@@ -10,6 +10,8 @@ import {
 } from "./user-copy.js";
 
 describe("failover user copy", () => {
+  const tokenLimitCopy =
+    "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.";
   it("renders transient copy from the classified reason", () => {
     const raw = "429 Too Many Requests: model overloaded";
     expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw })).toBe(
@@ -29,29 +31,20 @@ describe("failover user copy", () => {
     ).toBe("⚠️ rate limit: service overloaded, try again in 30 seconds");
   });
 
-  it("surfaces token limits through common Error HTTP wrappers", () => {
-    const expected =
-      "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.";
-    expect(
-      renderFormatErrorCopy(
-        "Error: 400 max_tokens (384000) exceeds model's maximum output tokens (65536)",
-      ),
-    ).toBe(expected);
-    expect(
-      renderFormatErrorCopy(
-        "OpenAI API error (400): max_tokens (384000) exceeds model's maximum output tokens (65536)",
-      ),
-    ).toBe(expected);
-    expect(
-      renderFormatErrorCopy(
-        "Azure OpenAI API error (400): max_tokens (384000) exceeds model's maximum output tokens (65536)",
-      ),
-    ).toBe(expected);
-    expect(
-      renderFormatErrorCopy(
-        "OpenAI API error (400): 400 max_tokens (384000) exceeds model's maximum output tokens (65536)",
-      ),
-    ).toBe(expected);
+  it.each([
+    "Error: 400 max_tokens (384000) exceeds model's maximum output tokens (65536)",
+    "OpenAI API error (400): max_output_tokens (384000) exceeds model's maximum output tokens (65536)",
+    "Azure OpenAI API error (400): max_completion_tokens (384000) exceeds model's maximum output tokens (65536)",
+    "OpenAI API error (400): 400 max_new_tokens (384000) exceeds model's maximum output tokens (65536)",
+  ])("surfaces token limits from %s", (raw) => {
+    expect(renderFormatErrorCopy(raw)).toBe(tokenLimitCopy);
+  });
+
+  it("keeps overlong provider-controlled limit text generic", () => {
+    const raw = `400 max_tokens (384000) exceeds ${"x".repeat(301)} maximum output tokens (65536)`;
+    expect(renderFormatErrorCopy(raw)).toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
   });
 
   it("renders structured cooldown durations and exhausted model sets", () => {
