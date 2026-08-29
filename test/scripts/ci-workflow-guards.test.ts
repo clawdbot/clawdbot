@@ -4474,14 +4474,14 @@ NODE
     "preserves pnpm hard links and validates cached importers offline",
     async ({ onTestFinished, signal }) => {
       const fixtureDirs = createTempDirTracker();
-      const registryLifecycle: { stop?: () => Promise<void> } = {};
-      const stopRegistry = async () => await registryLifecycle.stop?.();
+      // oxlint-disable-next-line prefer-const -- Failure cleanup can run before the registry is started.
+      let stopRegistry: (() => Promise<void>) | undefined;
       let readyTimeout: NodeJS.Timeout | undefined;
       // Timeout does not join the test body. Keep close and deletion in one hook,
       // outside afterEach, so a failed join cannot release the registry's files.
       onTestFinished(async () => {
         clearTimeout(readyTimeout);
-        await stopRegistry();
+        await stopRegistry?.();
         fixtureDirs.cleanup();
       });
       const root = fixtureDirs.make("openclaw-dependency-cache-");
@@ -4578,7 +4578,7 @@ server.listen(0, "127.0.0.1", () => {
       });
       const failures: unknown[] = [];
       registryServer.on("error", (error) => failures.push(error));
-      registryLifecycle.stop = async () => {
+      stopRegistry = async () => {
         if (!registryDidClose) {
           registryServer.kill("SIGTERM");
         }
