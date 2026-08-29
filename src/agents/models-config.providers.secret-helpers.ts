@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveEnvApiKey, type EnvApiKeyLookupOptions } from "./model-auth-env.js";
 import {
@@ -14,7 +15,6 @@ import {
   resolveNonEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 /**
  * Secret-aware provider config helpers.
@@ -201,21 +201,13 @@ export function resolveApiKeyFromCredential(
   return undefined;
 }
 
-/** Lists auth profile ids whose provider aliases match the requested provider. */
-export function listAuthProfilesForProvider(store: AuthProfileStore, provider: string): string[] {
-  const providerKey = resolveProviderIdForAuth(provider);
-  return Object.entries(store.profiles)
-    .filter(([, cred]) => resolveProviderIdForAuth(cred.provider) === providerKey)
-    .map(([id]) => id);
-}
-
 /** Resolves the first usable API key from matching auth profiles. */
 export function resolveApiKeyFromProfiles(params: {
   provider: string;
   store: AuthProfileStore;
   env?: NodeJS.ProcessEnv;
 }): ProfileApiKeyResolution | undefined {
-  const ids = listAuthProfilesForProvider(params.store, params.provider);
+  const ids = listProfilesForProvider(params.store, params.provider);
   for (const id of ids) {
     const resolved = resolveApiKeyFromCredential(params.store.profiles[id], params.env);
     if (resolved) {
