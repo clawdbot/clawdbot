@@ -102,21 +102,20 @@ LINE-specific settings:
 - **Crash recovery.** Every drain pass opens with a recovery sweep that reclaims
   any claim whose owning Gateway process is no longer running, so a delivery lost
   to a hard crash is retried on the next sweep rather than after a timeout. The
-  30-minute claim lease is the fallback bound for the opposite case: it caps how
-  long a claim stays protected while its owner still looks alive — a running
-  process, or a reused PID whose process identity cannot be verified. Events
-  accepted while the Gateway is stopping are still persisted and drain after the
-  next start.
-- **Duplicate suppression window.** Completed and failed queue records are
-  retained for up to 30 days, subject to a cap of 4096 records each per account —
-  whichever limit is reached first. The cap is an independent pruning limit, not a
-  reporting detail: it keeps the most recently updated 4096 records of each kind
-  and drops the rest, so a busy account can evict a record well before 30 days.
-  LINE prunes on every admission rather than on a timer, so the cap applies as
-  soon as it is exceeded. While a record exists, a redelivered webhook for the
-  same event is acknowledged without a second dispatch; once it is gone — by age
-  or by cap — a redelivery is admitted and dispatched again, so handlers with
-  external side effects should not treat this window as a substitute for their own
+  30-minute claim lease is the fallback bound for the opposite case: without a
+  successful lease refresh, it caps how long a claim stays protected solely
+  because its owner PID still looks alive — including a reused PID whose process
+  identity cannot be verified. Events accepted while the Gateway is stopping are
+  still persisted and drain after the next start.
+- **Duplicate suppression window.** On every admission, LINE removes completed
+  and failed queue records older than 30 days, then keeps the most recently
+  updated 4096 records of each kind per account. Because pruning runs before the
+  new event is queued rather than on a timer, records can remain past 30 days on
+  an idle account, and a newly completed record can put the count above 4096 until
+  the next admission. While a record exists, a redelivered webhook for the same
+  event is acknowledged without a second dispatch; once it is gone — by age or by
+  cap — a redelivery is admitted and dispatched again, so handlers with external
+  side effects should not treat this window as a substitute for their own
   idempotency.
 
 The `500`-on-persistence-failure contract only helps if LINE re-sends the event.
