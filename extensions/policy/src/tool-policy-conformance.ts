@@ -30,7 +30,7 @@ const POLICY_TOOL_GROUPS: Record<string, readonly string[]> = {
     "video_generate",
     "tts",
   ],
-  "group:fs": ["read", "write", "edit", "apply_patch"],
+  "group:fs": ["read", "grep", "find", "ls", "write", "edit", "apply_patch"],
   "group:runtime": ["exec", "process", "code_execution"],
   "group:web": ["web_search", "web_fetch", "x_search"],
   "group:memory": ["memory_search", "memory_get"],

@@ -192,8 +192,9 @@ Cross-cutting notes not obvious from the rule tables below:
   applicable defaults/agent and `workspaceAccess` to `none` or `ro`. Missing or
   `off` sandbox mode does not satisfy a read-only policy.
 - `agents.workspace.denyTools` accepts `exec`, `process`, `write`, `edit`,
-  `apply_patch`. The config tool-deny groups `group:fs` (file mutation) and
-  `group:runtime` (shell/process) satisfy the equivalent posture.
+  `apply_patch`. The config tool-deny groups `group:fs` (file discovery, reads,
+  and mutation) and `group:runtime` (shell/process) satisfy the equivalent
+  posture.
 - Exec-approvals checks read the live SQLite approvals document only when
   an `execApprovals` rule is present; a missing or invalid artifact is
   unobservable evidence, not a synthetic pass.

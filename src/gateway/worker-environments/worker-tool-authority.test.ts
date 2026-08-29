@@ -80,6 +80,9 @@ describe("resolveWorkerToolAuthority", () => {
   it("keeps the deterministic complete worker surface when no policy narrows it", () => {
     expect(authority()).toEqual([
       "read",
+      "grep",
+      "find",
+      "ls",
       "write",
       "edit",
       "apply_patch",
@@ -99,6 +102,9 @@ describe("resolveWorkerToolAuthority", () => {
       }).allowedToolNames,
     ).toEqual([
       "read",
+      "grep",
+      "find",
+      "ls",
       "write",
       "edit",
       "apply_patch",
@@ -120,6 +126,15 @@ describe("resolveWorkerToolAuthority", () => {
 
   it("projects runtime caps with canonical write-to-apply_patch semantics", () => {
     expect(authority({ toolsAllow: ["write"] })).toEqual(["write", "apply_patch"]);
+    expect(authority({ toolsAllow: ["group:fs"] })).toEqual([
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "write",
+      "edit",
+      "apply_patch",
+    ]);
     expect(authority({ toolsAllow: [] })).toEqual([]);
     expect(authority({ toolsAllow: ["web_search"] })).toEqual([]);
     expect(authority({ toolsAllow: ["sessions_send"] })).toEqual(["sessions_send"]);

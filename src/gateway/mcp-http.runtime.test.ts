@@ -227,17 +227,22 @@ describe("resolveMcpLoopbackScopedTools", () => {
   });
 
   it("exposes explicitly granted coding tools through the mediated loopback surface", async () => {
-    resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["read", "exec", "browser"]));
+    resolveGatewayScopedTools.mockReturnValue(
+      scopedToolFixture(["read", "grep", "find", "ls", "exec", "browser"]),
+    );
 
     const scoped = await resolveMcpLoopbackScopedTools(
       scopeParams({
-        toolsAllow: ["read", "exec", "browser"],
+        toolsAllow: ["read", "grep", "find", "ls", "exec", "browser"],
         nodeExecAllowed: true,
       }),
     );
 
     expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual([
       "read",
+      "grep",
+      "find",
+      "ls",
       "exec",
       "browser",
     ]);
@@ -250,7 +255,7 @@ describe("resolveMcpLoopbackScopedTools", () => {
     expect(call.excludeToolNames?.has("read")).toBe(false);
     expect(call.excludeToolNames?.has("exec")).toBe(false);
     expect(call.excludeToolNames?.has("write")).toBe(true);
-    expect(call.mediatedToolNames).toEqual(new Set(["read", "exec"]));
+    expect(call.mediatedToolNames).toEqual(new Set(["read", "grep", "find", "ls", "exec"]));
   });
 
   it.each([

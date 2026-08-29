@@ -198,7 +198,7 @@ async function runWorkerEmbeddedTurnWithResources(
   const omittedToolNames = permissionToolPolicy?.readOnly
     ? new Set<WorkerToolName>(["write", "edit", "apply_patch"])
     : undefined;
-  const activeToolNames = WORKER_TOOL_NAMES.filter(
+  let activeToolNames = WORKER_TOOL_NAMES.filter(
     (name) => allowedToolNameSet.has(name) && !omittedToolNames?.has(name),
   );
   const headlessApprovalText = params.permissionMode
@@ -210,6 +210,7 @@ async function runWorkerEmbeddedTurnWithResources(
     containmentRoot: params.workerContainmentRoot,
     includeBaseCodingTools: true,
     includeShellTools: true,
+    allowDiscoveryHelperProcesses: allowedToolNameSet.has("exec"),
     workspaceOnly: permissionToolPolicy?.workspaceOnly ?? false,
     readOnly: permissionToolPolicy?.readOnly ?? false,
     modelContextWindowTokens: model.contextWindow,
@@ -330,6 +331,10 @@ async function runWorkerEmbeddedTurnWithResources(
             allowedToolNameSet.has(tool.name),
           )
         : [];
+      const availableSessionToolNames = new Set(sessionTools.map((tool) => tool.name));
+      activeToolNames = activeToolNames.filter(
+        (name) => discoveredToolNames.has(name) || availableSessionToolNames.has(name),
+      );
 
       return await createAgentSession({
         cwd: params.cwd,

@@ -3,11 +3,11 @@ import { join, relative, sep } from "node:path";
 import ignore from "ignore";
 import { readRegularFileSync } from "../infra/regular-file.js";
 
-const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
+export const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"] as const;
 // Ignore files are line-oriented pattern lists; a few MiB is generous headroom
 // for monorepos while preventing a malicious or runaway file from OOMing the
 // workspace scanner.
-const IGNORE_FILE_MAX_BYTES = 4 * 1024 * 1024;
+export const IGNORE_FILE_MAX_BYTES = 4 * 1024 * 1024;
 const IGNORE_MATCHER_MAX_PATTERNS = 20_000;
 const IGNORE_PATTERN_MAX_CHARS = 16 * 1024;
 const IGNORE_MATCHER_MAX_PATTERN_CHARS = IGNORE_FILE_MAX_BYTES;
@@ -166,6 +166,16 @@ function addFailClosedSubtree(matcher: IgnoreMatcher, prefix: string): void {
   }
 }
 
+export function excludeIgnoreRulesSubtree(
+  matcher: IgnoreMatcher,
+  relativeDir: string,
+  ignoreCase: boolean,
+): void {
+  getIgnoreMatcherState(matcher, ignoreCase);
+  const prefix = relativeDir ? `${normalizeNativePathSeparators(relativeDir)}/` : "";
+  addFailClosedSubtree(matcher, prefix);
+}
+
 function parseIgnorePatterns(
   content: string,
   prefix: string,
@@ -198,6 +208,30 @@ function parseIgnorePatterns(
   return { patterns, chars: patternChars };
 }
 
+export function addIgnoreFileContent(params: {
+  matcher: IgnoreMatcher;
+  content: string;
+  relativeDir: string;
+  ignoreCase: boolean;
+}): boolean {
+  const state = getIgnoreMatcherState(params.matcher, params.ignoreCase);
+  const prefix = params.relativeDir ? `${normalizeNativePathSeparators(params.relativeDir)}/` : "";
+  const parsed = parseIgnorePatterns(params.content, prefix, {
+    patterns: IGNORE_MATCHER_MAX_PATTERNS - state.patternCount,
+    chars: IGNORE_MATCHER_MAX_PATTERN_CHARS - state.patternChars,
+  });
+  if (parsed === COMPLEX_IGNORE_FILE) {
+    addFailClosedSubtree(params.matcher, prefix);
+    return false;
+  }
+  if (parsed.patterns.length > 0) {
+    params.matcher.add(parsed.patterns);
+    state.patternCount += parsed.patterns.length;
+    state.patternChars += parsed.chars;
+  }
+  return true;
+}
+
 export const normalizeNativePathSeparators = (pathValue: string) => pathValue.split(sep).join("/");
 
 /** Adds nested ignore-file rules to a matcher using paths relative to the scan root. */
@@ -220,9 +254,7 @@ export function addIgnoreRules(
   const matcher = ig ?? ignore();
   // node-ignore does not expose its configured case mode. Keep its default;
   // callers supplying ignorecase:false must carry that fact alongside it.
-  const state = getIgnoreMatcherState(matcher, options?.ignoreCase ?? true);
   const relativeDir = relative(rootDir, dir);
-  const prefix = relativeDir ? `${normalizeNativePathSeparators(relativeDir)}/` : "";
 
   for (const filename of IGNORE_FILE_NAMES) {
     const ignorePath = join(dir, filename);
@@ -236,24 +268,21 @@ export function addIgnoreRules(
       // the scan surface files the user asked to hide. Stop here so a later
       // ignore file in this directory cannot negate the exclusion and reopen a
       // subtree whose policy could not be parsed.
-      addFailClosedSubtree(matcher, prefix);
+      excludeIgnoreRulesSubtree(matcher, relativeDir, options?.ignoreCase ?? true);
       break;
     }
     if (content === null) {
       continue;
     }
-    const parsed = parseIgnorePatterns(content, prefix, {
-      patterns: IGNORE_MATCHER_MAX_PATTERNS - state.patternCount,
-      chars: IGNORE_MATCHER_MAX_PATTERN_CHARS - state.patternChars,
-    });
-    if (parsed === COMPLEX_IGNORE_FILE) {
-      addFailClosedSubtree(matcher, prefix);
+    if (
+      !addIgnoreFileContent({
+        matcher,
+        content,
+        relativeDir,
+        ignoreCase: options?.ignoreCase ?? true,
+      })
+    ) {
       break;
-    }
-    if (parsed.patterns.length > 0) {
-      matcher.add(parsed.patterns);
-      state.patternCount += parsed.patterns.length;
-      state.patternChars += parsed.chars;
     }
   }
   return matcher;

@@ -6,12 +6,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSandboxPath } from "../sandbox-paths.js";
+import type { SandboxFsDiscoveryBridge } from "../sandbox/fs-bridge.discovery.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "../sandbox/fs-bridge.js";
 
 /** Creates a sandbox fs bridge from a caller-provided path resolver. */
 export function createSandboxFsBridgeFromResolver(
   resolvePath: (filePath: string, cwd?: string) => SandboxResolvedPath,
-): SandboxFsBridge {
+): SandboxFsBridge & SandboxFsDiscoveryBridge {
   return {
     resolvePath: ({ filePath, cwd }) => resolvePath(filePath, cwd),
     copyFile: async ({ sourcePath, destinationPath, cwd, mkdir = true }) => {
@@ -33,6 +34,17 @@ export function createSandboxFsBridgeFromResolver(
         throw new Error(`Expected hostPath for ${target.containerPath}`);
       }
       return fs.readFile(target.hostPath);
+    },
+    listDirectory: async ({ filePath, cwd }) => {
+      const target = resolvePath(filePath, cwd);
+      if (!target.hostPath) {
+        throw new Error(`Expected hostPath for ${target.containerPath}`);
+      }
+      const entries = await fs.readdir(target.hostPath, { withFileTypes: true });
+      return entries.map((entry) => ({
+        name: entry.name,
+        type: entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other",
+      }));
     },
     writeFile: async ({ filePath, cwd, data, mkdir = true }) => {
       const target = resolvePath(filePath, cwd);

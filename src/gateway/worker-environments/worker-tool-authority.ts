@@ -6,7 +6,7 @@ import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-poli
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { logWarn } from "../../logger.js";
 import {
-  WORKER_REQUIRED_LOCAL_TOOL_NAMES,
+  WORKER_LOCAL_TOOL_NAMES,
   WORKER_SESSION_TOOL_NAMES,
   type WorkerOptionalLocalToolName,
   type WorkerToolName,
@@ -92,10 +92,15 @@ export function resolveWorkerToolAuthority(params: {
   }
   const runtimeCappedTools = applyEmbeddedAttemptToolsAllow(
     [
-      ...WORKER_REQUIRED_LOCAL_TOOL_NAMES,
-      ...(params.availableOptionalToolNames ?? []).filter(
-        (name) => name !== "computer" || turn.modelHasVision !== false,
-      ),
+      ...WORKER_LOCAL_TOOL_NAMES.filter((name) => {
+        if (name !== "browser" && name !== "computer") {
+          return true;
+        }
+        return (
+          params.availableOptionalToolNames?.includes(name) === true &&
+          (name !== "computer" || turn.modelHasVision !== false)
+        );
+      }),
       ...WORKER_SESSION_TOOL_NAMES.filter((name) =>
         name === "skill_workshop"
           ? turn.skillLibraryAuthoring !== undefined

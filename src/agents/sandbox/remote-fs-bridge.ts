@@ -27,6 +27,7 @@ import {
   resolveRemoteCanonicalPath,
   type RemoteCanonicalPath,
 } from "./remote-fs-bridge-canonical-path.js";
+import { listRemoteSandboxDirectory } from "./remote-fs-bridge-directory-listing.js";
 import {
   buildRemoteProtectedSkillRoots,
   compareRemoteMountsByContainerPath,
@@ -401,6 +402,10 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     };
   }
 
+  async listDirectory(params: { filePath: string; cwd?: string; signal?: AbortSignal }) {
+    return await listRemoteSandboxDirectory(this, params);
+  }
+
   private getMounts(): RemoteMountInfo[] {
     const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
     const agentRoot = path.resolve(this.sandbox.agentWorkspaceDir);
@@ -449,7 +454,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     return mounts;
   }
 
-  private resolveTarget(params: { filePath: string; cwd?: string }): ResolvedRemotePath {
+  resolveTarget(params: { filePath: string; cwd?: string }): ResolvedRemotePath {
     const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
     const mounts = this.getMounts();
     const input = params.filePath.trim();
@@ -614,7 +619,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     return result.stdout.toString("utf8").trim() === "1";
   }
 
-  private async resolveCanonicalPath(params: {
+  async resolveCanonicalPath(params: {
     containerPath: string;
     mountRootPath: string;
     action: string;
@@ -716,7 +721,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     };
   }
 
-  private async runMutation(params: {
+  async runMutation(params: {
     args: string[];
     stdin?: Buffer | string;
     signal?: AbortSignal;

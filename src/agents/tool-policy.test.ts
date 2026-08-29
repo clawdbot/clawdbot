@@ -32,6 +32,9 @@ describe("tool-policy", () => {
     expect(set.has("bash")).toBe(false);
     expect(set.has("apply_patch")).toBe(true);
     expect(set.has("read")).toBe(true);
+    expect(set.has("grep")).toBe(true);
+    expect(set.has("find")).toBe(true);
+    expect(set.has("ls")).toBe(true);
     expect(set.has("write")).toBe(true);
     expect(set.has("edit")).toBe(true);
   });

@@ -26,6 +26,7 @@ type MockChild = ChildProcessWithoutNullStreams & {
 };
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -175,6 +176,58 @@ it.each(["stdout", "stderr"] as const)(
   },
 );
 
+it("terminates fd when the search exceeds its time limit", async () => {
+  const child = createChild();
+  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(ensureTool).mockResolvedValue("fd");
+
+  const tool = createFindToolDefinition("/workspace", { timeoutMs: 5 });
+
+  await expect(
+    tool.execute("call-timeout", { pattern: "*.ts" }, undefined, undefined, {} as never),
+  ).rejects.toThrow("Find timed out after 5ms; narrow path or pattern");
+  expect(child.killMock).toHaveBeenCalledOnce();
+});
+
+it("starts the search timeout after resolving fd", async () => {
+  vi.useFakeTimers();
+  const child = createChild();
+  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  let resolveEnsureTool: ((value: string) => void) | undefined;
+  vi.mocked(ensureTool).mockImplementationOnce(
+    async () =>
+      await new Promise<string>((resolve) => {
+        resolveEnsureTool = resolve;
+      }),
+  );
+
+  const tool = createFindToolDefinition("/workspace", { timeoutMs: 5 });
+  const result = tool.execute(
+    "call-install",
+    { pattern: "*.ts" },
+    undefined,
+    undefined,
+    {} as never,
+  );
+  const settlement = vi.fn();
+  void result.then(settlement, settlement);
+
+  await vi.advanceTimersByTimeAsync(0);
+  expect(ensureTool).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(10);
+  expect(settlement).not.toHaveBeenCalled();
+
+  resolveEnsureTool?.("fd");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(spawnCommand).toHaveBeenCalledOnce();
+  child.stdout.end();
+  child.stderr.end();
+  child.emit("close", 0, null);
+  await expect(result).resolves.toMatchObject({
+    content: [{ type: "text", text: "No files found matching pattern" }],
+  });
+});
+
 it.each([
   { name: "inside a repository", gitBoundary: true, expected: false },
   { name: "outside a repository", gitBoundary: false, expected: true },
@@ -205,6 +258,9 @@ it.each([
 
   const args = vi.mocked(spawnCommand).mock.calls[0]?.[0] as string[];
   expect(args.includes("--no-require-git")).toBe(expected);
+  expect(ensureTool).toHaveBeenCalledWith("fd", true, {
+    requiredHelpFlag: expected ? "--no-require-git" : undefined,
+  });
 });
 
 it.each([

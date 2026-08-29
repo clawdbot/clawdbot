@@ -126,8 +126,39 @@ describe("ensureTool", () => {
     expect(minimumLockWaitMs).toBeGreaterThan(lockOptions.stale);
   });
 
+  it("does not share installations across different capability requirements", async () => {
+    const completions: Array<() => void> = [];
+    withFileLockMock.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          completions.push(() => resolve("/tools/fd"));
+        }),
+    );
+    const { ensureTool } = await import("./tools-manager.js");
+
+    const defaultInstall = ensureTool("fd", true);
+    const standaloneInstall = ensureTool("fd", true, {
+      requiredHelpFlag: "--no-require-git",
+    });
+
+    await vi.waitFor(() => expect(withFileLockMock).toHaveBeenCalledTimes(2));
+    for (const complete of completions) {
+      complete();
+    }
+    await expect(Promise.all([defaultInstall, standaloneInstall])).resolves.toEqual([
+      "/tools/fd",
+      "/tools/fd",
+    ]);
+  });
+
   it("reuses an installation published while waiting for the file lock", async () => {
     const binaryPath = join(tempAgentDir!, "bin", "fd");
+    spawnSyncMock.mockImplementation((command) => ({
+      error: command === binaryPath && existsSync(binaryPath) ? undefined : new Error("ENOENT"),
+      status: command === binaryPath && existsSync(binaryPath) ? 0 : null,
+      stderr: Buffer.alloc(0),
+      stdout: Buffer.alloc(0),
+    }));
     withFileLockMock.mockImplementationOnce(
       async (_path: string, _options: FileLockOptions, fn: () => Promise<unknown>) => {
         mkdirSync(join(tempAgentDir!, "bin"), { recursive: true });
@@ -365,20 +396,62 @@ describe("ensureTool exit-status handling", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("reports a binary present when it spawns and exits 0", async () => {
+  it("accepts a working fd binary when no optional capability is required", async () => {
     const { ensureTool } = await import("./tools-manager.js");
-    spawnSyncMock.mockReturnValue({
+    spawnSyncMock.mockImplementation(() => ({
       error: undefined,
       status: 0,
       stderr: Buffer.alloc(0),
-      stdout: Buffer.alloc(0),
-    });
+      stdout: Buffer.from("fdfind 8.6.0"),
+    }));
     await expect(ensureTool("fd", true)).resolves.toBe("fd");
-    expect(spawnSyncMock).toHaveBeenCalledWith("fd", ["--version"], {
+    expect(spawnSyncMock).toHaveBeenNthCalledWith(1, "fd", ["--version"], {
       killSignal: "SIGKILL",
       stdio: "pipe",
       timeout: 5_000,
     });
+    expect(spawnSyncMock).toHaveBeenCalledOnce();
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects fd binaries that lack standalone gitignore support", async () => {
+    const { ensureTool } = await import("./tools-manager.js");
+    spawnSyncMock.mockImplementation((command, args: string[]) => {
+      if (command === "fd" && args.includes("--version")) {
+        return {
+          error: undefined,
+          status: 0,
+          stderr: Buffer.alloc(0),
+          stdout: Buffer.from("fdfind 8.6.0"),
+        };
+      }
+      if (command === "fd" && args.includes("--help")) {
+        return {
+          error: undefined,
+          status: 0,
+          stderr: Buffer.alloc(0),
+          stdout: Buffer.from("--no-ignore-parent"),
+        };
+      }
+      return {
+        error: new Error("ENOENT"),
+        status: null,
+        stderr: Buffer.alloc(0),
+        stdout: Buffer.alloc(0),
+      };
+    });
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("unavailable", { status: 503 }),
+      release,
+      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
+    });
+
+    await expect(
+      ensureTool("fd", true, { requiredHelpFlag: "--no-require-git" }),
+    ).resolves.toBeUndefined();
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
   });
 });

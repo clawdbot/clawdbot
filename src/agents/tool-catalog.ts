@@ -74,6 +74,24 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     profiles: ["coding"],
   },
   {
+    id: "grep",
+    description: "Search file contents",
+    sectionId: "fs",
+    profiles: ["coding"],
+  },
+  {
+    id: "find",
+    description: "Find files by glob",
+    sectionId: "fs",
+    profiles: ["coding"],
+  },
+  {
+    id: "ls",
+    description: "List directory contents",
+    sectionId: "fs",
+    profiles: ["coding"],
+  },
+  {
     id: "write",
     description: "Create or overwrite files",
     sectionId: "fs",

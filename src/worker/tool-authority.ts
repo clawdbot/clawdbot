@@ -1,5 +1,6 @@
-export const WORKER_REQUIRED_LOCAL_TOOL_NAMES = [
-  "read",
+const WORKER_DISCOVERY_LOCAL_TOOL_NAMES = ["grep", "find", "ls"] as const;
+
+const WORKER_REQUIRED_LOCAL_TOOL_TAIL_NAMES = [
   "write",
   "edit",
   "apply_patch",
@@ -7,10 +8,17 @@ export const WORKER_REQUIRED_LOCAL_TOOL_NAMES = [
   "process",
 ] as const;
 
+export const WORKER_REQUIRED_LOCAL_TOOL_NAMES = [
+  "read",
+  ...WORKER_REQUIRED_LOCAL_TOOL_TAIL_NAMES,
+] as const;
+
 const WORKER_OPTIONAL_LOCAL_TOOL_NAMES = ["browser", "computer"] as const;
 
 export const WORKER_LOCAL_TOOL_NAMES = [
-  ...WORKER_REQUIRED_LOCAL_TOOL_NAMES,
+  "read",
+  ...WORKER_DISCOVERY_LOCAL_TOOL_NAMES,
+  ...WORKER_REQUIRED_LOCAL_TOOL_TAIL_NAMES,
   ...WORKER_OPTIONAL_LOCAL_TOOL_NAMES,
 ] as const;
 

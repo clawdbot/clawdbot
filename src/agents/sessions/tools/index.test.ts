@@ -22,7 +22,11 @@ const factories = [
       names.map((name) => createTool(name, cwd, options)),
     names,
   },
-  { name: "coding", create: createCodingTools, names: ["read", "bash", "edit", "write"] },
+  {
+    name: "coding",
+    create: createCodingTools,
+    names: ["read", "grep", "find", "ls", "bash", "edit", "write"],
+  },
   { name: "read-only", create: createReadOnlyTools, names: ["read", "grep", "find", "ls"] },
   {
     name: "all",

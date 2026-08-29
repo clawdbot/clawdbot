@@ -114,6 +114,26 @@ export function buildPinnedMkdirpPlan(params: {
   });
 }
 
+export function buildPinnedListPlan(params: {
+  check: PathSafetyCheck;
+  pinned: PinnedSandboxDirectoryEntry;
+}): SandboxFsCommandPlan {
+  return buildPinnedMutationPlan({
+    checks: [params.check],
+    args: ["list", params.pinned.mountRootPath, params.pinned.relativePath],
+  });
+}
+
+export function buildPinnedDirectoryStatPlan(params: {
+  check: PathSafetyCheck;
+  pinned: PinnedSandboxDirectoryEntry;
+}): SandboxFsCommandPlan {
+  return buildPinnedMutationPlan({
+    checks: [params.check],
+    args: ["stat-directory", params.pinned.mountRootPath, params.pinned.relativePath],
+  });
+}
+
 export function buildPinnedRemovePlan(params: {
   check: PathSafetyCheck;
   pinned: PinnedSandboxEntry;

@@ -18,6 +18,11 @@ export type SandboxFsStat = {
   mtimeMs: number;
 };
 
+export type SandboxFsDirectoryEntry = {
+  name: string;
+  type: "file" | "directory" | "other";
+};
+
 /** Filesystem operations exposed across the sandbox boundary. */
 export type SandboxFsBridge = {
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
@@ -71,4 +76,10 @@ export type SandboxFsBridge = {
     cwd?: string;
     signal?: AbortSignal;
   }): Promise<SandboxFsStat | null>;
+  /** Lists a directory through a bounded backend operation when discovery is supported. */
+  listDirectory?(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<SandboxFsDirectoryEntry[]>;
 };

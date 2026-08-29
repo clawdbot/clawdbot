@@ -10,6 +10,10 @@ import {
   SANDBOX_CREATE_EXISTS_EXIT_CODE,
   SANDBOX_PINNED_MUTATION_PYTHON,
 } from "./fs-bridge-mutation-python.js";
+import {
+  SANDBOX_FS_DIRECTORY_MAX_BYTES,
+  SANDBOX_FS_DIRECTORY_MAX_ENTRIES,
+} from "./fs-bridge.discovery.js";
 
 function runMutation(args: string[], input?: string) {
   return spawnSync("python3", ["-c", SANDBOX_PINNED_MUTATION_PYTHON, ...args], {
@@ -172,6 +176,64 @@ const FORCED_EXDEV_WITH_SOURCE_REPLACEMENT_MUTATION_PYTHON = FORCED_EXDEV_MUTATI
 );
 
 describe("sandbox pinned mutation helper", () => {
+  it("lists directory entries without following symbolic links", async () => {
+    await withTestDir({ prefix: "openclaw-mutation-helper-list-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(path.join(workspace, "nested"), { recursive: true });
+      await fs.writeFile(path.join(workspace, "note.txt"), "hello");
+      await fs.symlink("note.txt", path.join(workspace, "note-link"));
+
+      const result = runMutation(["list", workspace, ""]);
+
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual([
+        { name: "nested", type: "directory" },
+        { name: "note-link", type: "other" },
+        { name: "note.txt", type: "file" },
+      ]);
+    });
+  });
+
+  it("stops collecting directory entries at the bridge boundary", async () => {
+    await withTestDir({ prefix: "openclaw-mutation-helper-list-limit-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      await Promise.all(
+        ["one.txt", "two.txt", "three.txt"].map((name) =>
+          fs.writeFile(path.join(workspace, name), name),
+        ),
+      );
+      const source = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+        `SANDBOX_FS_DIRECTORY_MAX_ENTRIES = ${SANDBOX_FS_DIRECTORY_MAX_ENTRIES}`,
+        "SANDBOX_FS_DIRECTORY_MAX_ENTRIES = 2",
+      );
+
+      const result = runMutationWithSource(source, ["list", workspace, ""]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toMatch(/directory listing exceeds entry limit/i);
+    });
+  });
+
+  it("stops serializing directory entries at the bridge byte boundary", async () => {
+    await withTestDir({ prefix: "openclaw-mutation-helper-list-bytes-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.writeFile(path.join(workspace, "entry-with-a-long-name.txt"), "value");
+      const source = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+        `SANDBOX_FS_DIRECTORY_MAX_BYTES = ${SANDBOX_FS_DIRECTORY_MAX_BYTES}`,
+        "SANDBOX_FS_DIRECTORY_MAX_BYTES = 16",
+      );
+
+      const result = runMutationWithSource(source, ["list", workspace, ""]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toMatch(/directory listing exceeds byte limit/i);
+    });
+  });
+
   it("writes through a pinned directory fd", async () => {
     await withTestDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
       const workspace = path.join(root, "workspace");

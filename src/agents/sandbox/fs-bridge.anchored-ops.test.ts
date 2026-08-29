@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { supportsSandboxFsDiscovery } from "./fs-bridge.discovery.js";
 import {
   createSandbox,
   createSandboxFsBridge,
@@ -80,6 +81,37 @@ describe("sandbox fs bridge anchored ops", () => {
         Buffer.from(testCase.contents),
       );
       expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    });
+  });
+
+  it("lists directories from a mount-relative pinned path", async () => {
+    await withTempDir("openclaw-fs-bridge-contract-list-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
+      mockedExecDockerRaw.mockImplementation(async (args) => {
+        const script = getDockerScript(args);
+        if (script.includes('readlink -f -- "$cursor"')) {
+          return dockerExecResult(`${getDockerArg(args, 1)}\n`);
+        }
+        if (getDockerArg(args, 1) === "list") {
+          return dockerExecResult('[{"name":"note.txt","type":"file"}]');
+        }
+        return dockerExecResult("");
+      });
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+      });
+      if (!supportsSandboxFsDiscovery(bridge)) {
+        throw new Error("expected sandbox discovery bridge");
+      }
+
+      await expect(bridge.listDirectory({ filePath: "nested" })).resolves.toEqual([
+        { name: "note.txt", type: "file" },
+      ]);
+      const listCall = requireDockerCall(findCallByDockerArg(1, "list"), "list");
+      expect(getDockerArg(listCall[0], 2)).toBe("/workspace");
+      expect(getDockerArg(listCall[0], 3)).toBe("nested");
+      expect(listCall[0]).not.toContain("/workspace/nested");
     });
   });
 
@@ -298,6 +330,31 @@ describe("sandbox fs bridge anchored ops", () => {
       expect(getDockerArg(args, 1)).toBe("/workspace/nested");
       expect(getDockerArg(args, 2)).toBe("file.txt");
       expect(args).not.toContain("/workspace/nested/file.txt");
+    });
+  });
+
+  it("stats nested directories through the real filesystem boundary", async () => {
+    await withTempDir("openclaw-fs-bridge-stat-directory-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
+      mockedExecDockerRaw.mockImplementation(async (args) => {
+        const script = getDockerScript(args);
+        if (script.includes('readlink -f -- "$cursor"')) {
+          return dockerExecResult(`${getDockerArg(args, 1)}\n`);
+        }
+        if (script.includes('stat -c "%F|%s|%y"')) {
+          return dockerExecResult("directory|4096|2026-01-01 00:00:00.000000000 +0000\n");
+        }
+        return dockerExecResult("");
+      });
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+      });
+
+      await expect(bridge.stat({ filePath: "nested" })).resolves.toMatchObject({
+        type: "directory",
+        size: 4096,
+      });
     });
   });
 

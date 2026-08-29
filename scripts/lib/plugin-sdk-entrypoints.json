@@ -2,6 +2,7 @@
   "core",
   "provider-setup",
   "sandbox",
+  "sandbox-fs",
   "routing",
   "runtime",
   "health",

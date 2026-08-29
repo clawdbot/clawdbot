@@ -7,10 +7,14 @@ import {
 import {
   createWritableRenameTargetResolver,
   type SandboxBackendHandle,
+} from "openclaw/plugin-sdk/sandbox";
+import {
+  createDescriptorAnchoredSandboxDirectoryListingSource,
+  listSandboxDirectoryWithinBounds,
   type SandboxFsBridge,
   type SandboxFsStat,
   type SandboxResolvedPath,
-} from "openclaw/plugin-sdk/sandbox";
+} from "openclaw/plugin-sdk/sandbox-fs";
 import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeMxcPathForComparison } from "./path-comparison.js";
 import {
@@ -55,10 +59,15 @@ class MxcFsBridge implements SandboxFsBridge {
     (target, action) => this.ensureWritable(target, action),
   );
 
+  readonly listDirectory?: NonNullable<SandboxFsBridge["listDirectory"]>;
+
   constructor(private readonly sandbox: MxcFsBridgeContext) {
     this.defaultContainerRoot = path.resolve(sandbox.containerWorkdir);
     this.protectedSkillMounts = resolveMxcProtectedSkillMounts(sandbox);
     this.workspaceMounts = resolveWorkspaceMounts(sandbox);
+    if (process.platform === "linux") {
+      this.listDirectory = (params) => this.listHostDirectory(params);
+    }
   }
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
@@ -78,6 +87,21 @@ class MxcFsBridge implements SandboxFsBridge {
       hardlinks: "reject",
       ...(params.maxBytes === undefined ? {} : { maxBytes: params.maxBytes }),
     })) as Buffer;
+  }
+
+  private async listHostDirectory(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }) {
+    params.signal?.throwIfAborted();
+    const target = this.resolveTarget(params);
+    const root = await fsRoot(target.mount.hostRoot);
+    return await listSandboxDirectoryWithinBounds({
+      source: createDescriptorAnchoredSandboxDirectoryListingSource(root),
+      relativePath: target.mountRelativePath,
+      signal: params.signal,
+    });
   }
 
   async writeFile(params: {

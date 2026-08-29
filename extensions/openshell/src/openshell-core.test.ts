@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   buildExecRemoteCommand,
   disposeSshSandboxSession,
@@ -1063,6 +1064,31 @@ describe("openshell fs bridges", () => {
       await expect(fs.readFile(path.join(workspaceDir, "owner.txt"), "utf8")).resolves.toBe(
         "owner",
       );
+      if (process.platform !== "linux") {
+        expect(typeof bridge.listDirectory).toBe("undefined");
+        return;
+      }
+      expect(typeof bridge.listDirectory).toBe("function");
+      const discoveryTools = createOpenClawCodingTools({
+        workspaceDir,
+        sandbox: { ...sandbox, backend, fsBridge: bridge },
+        toolConstructionPlan: {
+          includeBaseCodingTools: true,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: false,
+        },
+      });
+      expect(discoveryTools.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["ls", "find", "grep"]),
+      );
+      const findTool = discoveryTools.find((tool) => tool.name === "find");
+      if (!findTool) {
+        throw new Error("Expected OpenShell mirror find tool");
+      }
+      const findResult = await findTool.execute("mirror-find", { pattern: "owner.txt" });
+      expect(findResult.content[0]).toMatchObject({ type: "text", text: "owner.txt" });
       expect(cliMocks.runOpenShellCli).toHaveBeenLastCalledWith(
         expect.objectContaining({
           context: expect.objectContaining({ sandboxName: backend.runtimeId }),

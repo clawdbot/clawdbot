@@ -39,7 +39,7 @@ const CONTENT_LENGTH_RE = /^\d+$/;
 const GITHUB_RELEASE_JSON_MAX_BYTES = 1024 * 1024;
 const TOOL_INSTALL_STALE_MS =
   DOWNLOAD_TIMEOUT_MS + ARCHIVE_EXTRACT_TIMEOUT_MS + NETWORK_TIMEOUT_MS + 30_000;
-const toolInstallations = new Map<"fd" | "rg", Promise<string>>();
+const toolInstallations = new Map<string, Promise<string>>();
 const TOOL_INSTALL_LOCK_OPTIONS: FileLockOptions = {
   retries: {
     // The minimum backoff total is about 234s, beyond the full 220s install bound.
@@ -111,7 +111,7 @@ const TOOLS: Record<"fd" | "rg", ToolConfig> = {
 };
 
 // Check if a command exists in PATH by trying to run it
-function commandExists(cmd: string): boolean {
+function commandIsUsable(cmd: string, requiredHelpFlag?: string): boolean {
   try {
     const result = spawnSync(cmd, ["--version"], {
       killSignal: "SIGKILL",
@@ -122,26 +122,37 @@ function commandExists(cmd: string): boolean {
     // binary (e.g. GLIBC mismatch after a system upgrade, missing shared lib)
     // spawns fine but exits non-zero; without the status check it would be
     // misreported as available and block ensureTool's auto-install fallback.
-    return !result.error && result.status === 0;
+    if (result.error || result.status !== 0) {
+      return false;
+    }
+    if (!requiredHelpFlag) {
+      return true;
+    }
+    const help = spawnSync(cmd, ["--help"], {
+      killSignal: "SIGKILL",
+      stdio: "pipe",
+      timeout: 5_000,
+    });
+    return !help.error && help.status === 0 && String(help.stdout).includes(requiredHelpFlag);
   } catch {
     return false;
   }
 }
 
 // Get the path to a tool (system-wide or in our tools dir)
-function getToolPath(tool: "fd" | "rg"): string | null {
+function getToolPath(tool: "fd" | "rg", requiredHelpFlag?: string): string | null {
   const config = TOOLS[tool];
 
   // Check our tools directory first
   const localPath = join(TOOLS_DIR, config.binaryName + (platform() === "win32" ? ".exe" : ""));
-  if (existsSync(localPath)) {
+  if (existsSync(localPath) && commandIsUsable(localPath, requiredHelpFlag)) {
     return localPath;
   }
 
   // Check system PATH - if found, just return the command name (it's in PATH)
   const systemBinaryNames = config.systemBinaryNames ?? [config.binaryName];
   for (const systemBinaryName of systemBinaryNames) {
-    if (commandExists(systemBinaryName)) {
+    if (commandIsUsable(systemBinaryName, requiredHelpFlag)) {
       return systemBinaryName;
     }
   }
@@ -364,8 +375,9 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
   return binaryPath;
 }
 
-function installTool(tool: "fd" | "rg"): Promise<string> {
-  const currentInstallation = toolInstallations.get(tool);
+function installTool(tool: "fd" | "rg", requiredHelpFlag?: string): Promise<string> {
+  const installationKey = `${tool}:${requiredHelpFlag ?? ""}`;
+  const currentInstallation = toolInstallations.get(installationKey);
   if (currentInstallation) {
     return currentInstallation;
   }
@@ -374,19 +386,19 @@ function installTool(tool: "fd" | "rg"): Promise<string> {
   const binaryPath = join(TOOLS_DIR, config.binaryName + (platform() === "win32" ? ".exe" : ""));
   mkdirSync(TOOLS_DIR, { recursive: true });
   const installation = withFileLock(binaryPath, TOOL_INSTALL_LOCK_OPTIONS, async () => {
-    const existingPath = getToolPath(tool);
+    const existingPath = getToolPath(tool, requiredHelpFlag);
     return existingPath ?? downloadTool(tool);
   });
-  toolInstallations.set(tool, installation);
+  toolInstallations.set(installationKey, installation);
   void installation.then(
     () => {
-      if (toolInstallations.get(tool) === installation) {
-        toolInstallations.delete(tool);
+      if (toolInstallations.get(installationKey) === installation) {
+        toolInstallations.delete(installationKey);
       }
     },
     () => {
-      if (toolInstallations.get(tool) === installation) {
-        toolInstallations.delete(tool);
+      if (toolInstallations.get(installationKey) === installation) {
+        toolInstallations.delete(installationKey);
       }
     },
   );
@@ -401,8 +413,12 @@ const TERMUX_PACKAGES: Record<string, string> = {
 
 // Ensure a tool is available, downloading if necessary
 // Returns the path to the tool, or null if unavailable
-export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<string | undefined> {
-  const existingPath = getToolPath(tool);
+export async function ensureTool(
+  tool: "fd" | "rg",
+  silent = false,
+  options?: { requiredHelpFlag?: string },
+): Promise<string | undefined> {
+  const existingPath = getToolPath(tool, options?.requiredHelpFlag);
   if (existingPath) {
     return existingPath;
   }
@@ -434,7 +450,7 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
   }
 
   try {
-    const path = await installTool(tool);
+    const path = await installTool(tool, options?.requiredHelpFlag);
     if (!silent) {
       console.log(chalk.dim(`${config.name} installed to ${path}`));
     }

@@ -12,6 +12,7 @@ import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
+import { TOOL_GROUPS } from "../agents/tool-policy-shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { describeBinding } from "../commands/agents.binding-format.js";
 import { mergeAccountConfig } from "../config/channel-account-config.js";
@@ -522,7 +523,7 @@ function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
     const runtimeTools = ["exec", "process"].filter((tool) =>
       isToolAllowedByPolicies(tool, policies),
     );
-    const fsTools = ["read", "write", "edit", "apply_patch"].filter((tool) =>
+    const fsTools = (TOOL_GROUPS["group:fs"] ?? []).filter((tool) =>
       isToolAllowedByPolicies(tool, policies),
     );
     const fsWorkspaceOnly = context.tools?.fs?.workspaceOnly ?? cfg.tools?.fs?.workspaceOnly;

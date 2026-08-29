@@ -1,7 +1,7 @@
 // Grep tool streaming tests cover result limits, cancellation, and subprocess errors.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdir, writeFile } from "node:fs/promises";
+import fs, { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { validateToolArguments } from "@openclaw/llm-core/validation";
@@ -25,6 +25,7 @@ const GREP_JSON_RECORD_OVERSIZED_ERROR =
   "grep stopped because ripgrep emitted a JSON record larger than 1 MiB";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -144,6 +145,7 @@ describe("grep tool streaming", () => {
       );
     },
   );
+
   it.each([1, 3])("keeps colliding byte-path context separate at match limit %s", async (limit) => {
     const cwd = tempDirs.make("openclaw-grep-byte-path-");
     const child = createChild();
@@ -532,6 +534,41 @@ describe("grep tool streaming", () => {
   );
 
   it.each([
+    { name: "inside a repository", gitBoundary: true, expected: false },
+    { name: "outside a repository", gitBoundary: false, expected: true },
+  ])("sets --no-require-git only $name", async ({ gitBoundary, expected }) => {
+    const tempDir = tempDirs.make("openclaw-grep-rg-");
+    const searchPath = path.join(tempDir, "nested");
+    await fs.mkdir(searchPath, { recursive: true });
+    if (gitBoundary) {
+      await fs.writeFile(path.join(tempDir, ".git"), "gitdir: /tmp/example\n");
+    }
+
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const tool = createGrepToolDefinition(tempDir);
+    const result = tool.execute(
+      "call-git-boundary",
+      { pattern: "marker", path: searchPath },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 1, null);
+    await result;
+
+    const args = vi.mocked(spawnCommand).mock.calls[0]?.[0] as string[];
+    expect(args.includes("--no-require-git")).toBe(expected);
+    expect(ensureTool).toHaveBeenCalledWith("rg", true, {
+      requiredHelpFlag: expected ? "--no-require-git" : undefined,
+    });
+  });
+
+  it.each([
     {
       name: "keeps an exact-size result complete",
       matchCount: 2,
@@ -683,6 +720,78 @@ describe("grep tool streaming", () => {
 
     await expect(result).rejects.toThrow("Operation aborted");
     expect(child.killed).toBe(true);
+  });
+
+  it("terminates ripgrep when the search exceeds its time limit", async () => {
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+
+    const tool = createGrepToolDefinition(process.cwd(), { timeoutMs: 5 });
+
+    await expect(
+      tool.execute("call-timeout", { pattern: "foo" }, undefined, undefined, {} as never),
+    ).rejects.toThrow("Grep timed out after 5ms; narrow path or pattern");
+    expect(child.killed).toBe(true);
+  });
+
+  it("starts the search timeout after resolving ripgrep", async () => {
+    vi.useFakeTimers();
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    let resolveEnsureTool: ((value: string) => void) | undefined;
+    vi.mocked(ensureTool).mockImplementationOnce(
+      async () =>
+        await new Promise<string>((resolve) => {
+          resolveEnsureTool = resolve;
+        }),
+    );
+
+    const tool = createGrepToolDefinition(process.cwd(), { timeoutMs: 5 });
+    const result = tool.execute(
+      "call-install",
+      { pattern: "foo" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    const settlement = vi.fn();
+    void result.then(settlement, settlement);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ensureTool).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(settlement).not.toHaveBeenCalled();
+
+    resolveEnsureTool?.("rg");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawnCommand).toHaveBeenCalledOnce();
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 1);
+    await expect(result).resolves.toMatchObject({
+      content: [{ type: "text", text: "No matches found" }],
+    });
+  });
+
+  it("aborts custom search operations when the time limit expires", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const operations = {
+      isDirectory: () => true,
+      readFile: () => "",
+      search: ({ signal }: { signal?: AbortSignal }) =>
+        new Promise<[]>((_resolve, reject) => {
+          observedSignal = signal;
+          signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        }),
+    };
+    const tool = createGrepToolDefinition(process.cwd(), { operations, timeoutMs: 5 });
+
+    await expect(
+      tool.execute("call-timeout", { pattern: "foo" }, undefined, undefined, {} as never),
+    ).rejects.toThrow("Grep timed out after 5ms; narrow path or pattern");
+    expect(observedSignal?.aborted).toBe(true);
+    expect(spawnCommand).not.toHaveBeenCalled();
   });
 
   it("preserves abort precedence during async match formatting", async () => {

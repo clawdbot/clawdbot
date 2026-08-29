@@ -91,6 +91,24 @@ describe("security audit trust model findings", () => {
         },
       },
       {
+        name: "flags standalone unconfined discovery as filesystem exposure",
+        cfg: {
+          channels: { whatsapp: { groupPolicy: "open" } },
+          tools: {
+            allow: ["grep"],
+            elevated: { enabled: false },
+          },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+          );
+          expect(finding).toMatchObject({ severity: "warn" });
+          expect(finding?.detail).toContain("runtime=[off]");
+          expect(finding?.detail).toContain("fs=[grep]");
+        },
+      },
+      {
         name: "does not flag runtime/filesystem exposure for open groups when sandbox mode is all",
         cfg: {
           channels: { whatsapp: { groupPolicy: "open" } },

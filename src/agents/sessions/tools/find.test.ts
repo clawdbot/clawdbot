@@ -121,6 +121,49 @@ describe("find tool", () => {
     expect(result.details).toBeUndefined();
   });
 
+  it("renders the file name when the search root is a matching file", async () => {
+    const tool = createFindToolDefinition("/workspace", {
+      operations: {
+        exists: () => true,
+        isDirectory: () => false,
+        glob: () => ["/workspace/src/example.ts"],
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { pattern: "*.ts", path: "/workspace/src/example.ts" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe("example.ts");
+    expect(result.details).toBeUndefined();
+  });
+
+  it("bounds custom search operations", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const tool = createFindToolDefinition("/workspace", {
+      operations: {
+        exists: () => true,
+        glob: (_pattern, _cwd, options) =>
+          new Promise<string[]>((_resolve, reject) => {
+            observedSignal = options.signal;
+            options.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+              once: true,
+            });
+          }),
+      },
+      timeoutMs: 5,
+    });
+
+    await expect(execute(tool, 10)).rejects.toThrow(
+      "Find timed out after 5ms; narrow path or pattern",
+    );
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
   it.each([
     {
       name: "keeps an exact-size result complete",
@@ -146,10 +189,15 @@ describe("find tool", () => {
 
       const result = await execute(tool, 2);
 
-      expect(glob).toHaveBeenCalledWith("*.ts", "/workspace", {
-        ignore: ["**/node_modules/**", "**/.git/**"],
-        limit: 3,
-      });
+      expect(glob).toHaveBeenCalledWith(
+        "*.ts",
+        "/workspace",
+        expect.objectContaining({
+          ignore: ["**/node_modules/**", "**/.git/**"],
+          limit: 3,
+          signal: expect.any(AbortSignal),
+        }),
+      );
       expect(textContent(result)).toBe(expectedText);
       expect(result.details?.resultLimitReached).toBe(expectedLimitReached);
     },

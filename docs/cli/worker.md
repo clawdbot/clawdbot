@@ -61,7 +61,7 @@ the launch and names the command. A changed daemon identity remains a hard failu
 
 The process runs the normal embedded agent loop with a restricted backend:
 
-- The `read`, `write`, `edit`, `apply_patch`, `exec`, and `process` coding tools
+- The `read`, `grep`, `find`, `ls`, `write`, `edit`, `apply_patch`, `exec`, and `process` coding tools
   run locally in the worker workspace when present in the Gateway-issued turn
   authority. An empty authority runs the model with no tools.
 - Model calls use the gateway inference proxy. No local model auth profile is

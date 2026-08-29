@@ -7,6 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSandboxedReadTool, createSandboxedWriteTool } from "../agent-tools.read.js";
 import { resolveSandboxFileMutationQueueKey } from "./file-mutation-identity.js";
 import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-python.js";
+import { supportsSandboxFsDiscovery } from "./fs-bridge.discovery.js";
 import { createSandbox } from "./fs-bridge.test-helpers.js";
 import {
   createRemoteShellSandboxFsBridge,
@@ -150,6 +151,34 @@ describe("remote sandbox fs bridge", () => {
               : bridge.rename({ from: ".agents", to: "moved-instructions" });
         await expect(mutate).rejects.toThrow("read-only");
         await expect(fs.readFile(skillPath, "utf8")).resolves.toBe("managed instructions");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "lists remote directory entries through the pinned bridge helper",
+    async () => {
+      await withTempDir("openclaw-remote-fs-list-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
+        await fs.writeFile(path.join(workspaceDir, "note.txt"), "hello");
+        const { calls, runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+          runtime,
+        });
+        if (!supportsSandboxFsDiscovery(bridge)) {
+          throw new Error("expected sandbox discovery bridge");
+        }
+
+        await expect(bridge.listDirectory({ filePath: "." })).resolves.toEqual([
+          { name: "nested", type: "directory" },
+          { name: "note.txt", type: "file" },
+        ]);
+        expect(calls.some((call) => call.args?.[0] === "list")).toBe(true);
       });
     },
   );

@@ -44,6 +44,9 @@ describe("tool-catalog", () => {
     const policy = requireCoreToolProfilePolicy("coding");
     expect(policy.allow).toEqual([
       "read",
+      "grep",
+      "find",
+      "ls",
       "write",
       "edit",
       "apply_patch",
@@ -90,6 +93,14 @@ describe("tool-catalog", () => {
       "video_generate",
       "bundle-mcp",
     ]);
+  });
+
+  it("includes read-only discovery tools in the filesystem group", () => {
+    const fsTools = listCoreToolSections()
+      .find((section) => section.id === "fs")
+      ?.tools.map((tool) => tool.id);
+
+    expect(fsTools).toEqual(["read", "grep", "find", "ls", "write", "edit", "apply_patch"]);
   });
 
   it("includes bundle MCP tools in coding and messaging profile policies", () => {

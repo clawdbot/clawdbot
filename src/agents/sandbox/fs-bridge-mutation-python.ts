@@ -1,3 +1,7 @@
+import {
+  SANDBOX_PINNED_DISCOVERY_DISPATCH_PYTHON,
+  SANDBOX_PINNED_DISCOVERY_PYTHON,
+} from "./fs-bridge-discovery-python.js";
 /** Python program and reserved exit status for pinned sandbox filesystem operations. */
 import {
   SANDBOX_CREATE_EXCLUSIVE_PYTHON,
@@ -17,6 +21,7 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   `SANDBOX_READ_NOT_FOUND_EXIT_CODE = ${SANDBOX_READ_NOT_FOUND_EXIT_CODE}`,
   "import ctypes",
   "import errno",
+  "import json",
   "import os",
   "import secrets",
   "import stat",
@@ -236,6 +241,8 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "    if max_bytes < 0:",
   "        raise OSError(errno.EINVAL, 'read limit must be non-negative', basename)",
   "    read_file_impl(parent_fd, basename, max_bytes)",
+  "",
+  SANDBOX_PINNED_DISCOVERY_PYTHON,
   "",
   "def remove_tree(parent_fd, basename):",
   "    entry_stat = os.lstat(basename, dir_fd=parent_fd)",
@@ -461,6 +468,7 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "        if parent_fd is not None:",
   "            os.close(parent_fd)",
   "        os.close(root_fd)",
+  SANDBOX_PINNED_DISCOVERY_DISPATCH_PYTHON,
   "elif operation == 'mkdirp':",
   "    root_fd = open_dir(sys.argv[2])",
   "    target_fd = None",

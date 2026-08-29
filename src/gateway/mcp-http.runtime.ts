@@ -22,7 +22,17 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 // list/call traffic from the same MCP client.
 const TOOL_CACHE_TTL_MS = 30_000;
 const TOOL_CACHE_MAX_ENTRIES = 256;
-const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
+const NATIVE_TOOL_EXCLUDE = new Set([
+  "read",
+  "grep",
+  "find",
+  "ls",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+]);
 
 type CachedScopedTools = {
   agentId: string | undefined;

@@ -891,6 +891,9 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       expect(source).toContain('"openclaw/plugin-sdk/channel-entry-contract"');
       expect(source).toContain('"openclaw/plugin-sdk/config-contracts"');
       expect(source).toContain('"openclaw/plugin-sdk/runtime-env"');
+      expect(source).toContain('"openclaw/plugin-sdk/sandbox-fs"');
+      expect(source).toContain("SandboxFsDirectoryEntry");
+      expect(source).toContain("bridge.listDirectory");
       expect(source).toContain('"openclaw/plugin-sdk/tool-plugin"');
       expect(source).toContain("defineToolPlugin");
       expect(source).toContain("type PublicPluginSdkModules = [");

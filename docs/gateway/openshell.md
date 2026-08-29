@@ -155,7 +155,7 @@ its download can replace those external edits.
   from local once. If the Gateway restarts before that first use, the next use
   detects the still-empty remote workspace and seeds it; a workspace that
   already holds content is never re-seeded.
-- After that, `exec`, `read`, `write`, `edit`, and `apply_patch` operate
+- After that, `exec`, `read`, `grep`, `find`, `ls`, `write`, `edit`, and `apply_patch` operate
   directly on the remote workspace. OpenClaw does **not** sync remote changes
   back to local.
 - Initialization is serialized per remote runtime, but commands and file tools

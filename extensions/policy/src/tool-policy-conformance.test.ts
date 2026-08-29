@@ -21,6 +21,15 @@ describe("policy tool group conformance", () => {
     ]);
   });
 
+  it("keeps filesystem discovery tools in the filesystem policy group", () => {
+    const filesystemTools = ["read", "grep", "find", "ls", "write", "edit", "apply_patch"];
+
+    expect(expandPolicyToolRequirement("group:fs")).toEqual(filesystemTools);
+    for (const tool of filesystemTools) {
+      expect(toolListCoversTool(["group:fs"], tool)).toBe(true);
+    }
+  });
+
   it("matches wildcard tool requirements", () => {
     expect(toolListCoversTool(["web_*"], "web_search")).toBe(true);
     expect(toolListCoversTool(["web_*"], "memory_search")).toBe(false);

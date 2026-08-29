@@ -3,7 +3,8 @@
  *
  * Lists directory entries through local or injected operations with bounded output rendering.
  */
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
+import { opendir } from "node:fs/promises";
 import nodePath from "node:path";
 import { Type } from "typebox";
 import { toErrorObject } from "../../../infra/errors.js";
@@ -28,6 +29,41 @@ const lsSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Max entries; default 500." })),
 });
 const DEFAULT_LIMIT = 500;
+const LOCAL_DIRECTORY_READ_BUFFER_ENTRIES = 32;
+
+export type LsDirectoryEntry = string | { name: string; isDirectory: boolean };
+
+type LsDirectoryEntries = Iterable<LsDirectoryEntry> | AsyncIterable<LsDirectoryEntry>;
+
+type NormalizedLsDirectoryEntry = { name: string; isDirectory?: boolean };
+
+function compareLsDirectoryEntries(
+  left: NormalizedLsDirectoryEntry,
+  right: NormalizedLsDirectoryEntry,
+): number {
+  return left.name.toLowerCase().localeCompare(right.name.toLowerCase());
+}
+
+function retainSortedDirectoryEntry(
+  entries: NormalizedLsDirectoryEntry[],
+  entry: NormalizedLsDirectoryEntry,
+  limit: number,
+): void {
+  let low = 0;
+  let high = entries.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (compareLsDirectoryEntries(entries[middle]!, entry) <= 0) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  entries.splice(low, 0, entry);
+  if (entries.length > limit) {
+    entries.pop();
+  }
+}
 
 /**
  * Pluggable operations for the ls tool.
@@ -35,19 +71,46 @@ const DEFAULT_LIMIT = 500;
  */
 export interface LsOperations {
   /** Check if path exists */
-  exists: (absolutePath: string) => Promise<boolean> | boolean;
+  exists: (absolutePath: string, options?: { signal?: AbortSignal }) => Promise<boolean> | boolean;
   /** Get file or directory stats. Throws if not found. */
   stat: (
     absolutePath: string,
+    options?: { signal?: AbortSignal },
   ) => Promise<{ isDirectory: () => boolean }> | { isDirectory: () => boolean };
   /** Read directory entries */
-  readdir: (absolutePath: string) => Promise<string[]> | string[];
+  readdir: (
+    absolutePath: string,
+    options?: { signal?: AbortSignal },
+  ) => Promise<LsDirectoryEntries> | LsDirectoryEntries;
+}
+
+async function* readLocalDirectory(
+  absolutePath: string,
+  options?: { signal?: AbortSignal },
+): AsyncGenerator<string> {
+  options?.signal?.throwIfAborted();
+  const directory = await opendir(absolutePath, {
+    bufferSize: LOCAL_DIRECTORY_READ_BUFFER_ENTRIES,
+  });
+  try {
+    while (true) {
+      options?.signal?.throwIfAborted();
+      const entry = await directory.read();
+      options?.signal?.throwIfAborted();
+      if (!entry) {
+        return;
+      }
+      yield entry.name;
+    }
+  } finally {
+    await directory.close();
+  }
 }
 
 const defaultLsOperations: LsOperations = {
-  exists: existsSync,
-  stat: statSync,
-  readdir: readdirSync,
+  exists: (absolutePath) => existsSync(absolutePath),
+  stat: (absolutePath) => statSync(absolutePath),
+  readdir: readLocalDirectory,
 };
 
 export interface LsToolOptions {
@@ -122,48 +185,52 @@ export function createLsToolDefinition(
           const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
 
           // Check if path exists.
-          if (!(await ops.exists(dirPath))) {
+          if (!(await ops.exists(dirPath, { signal }))) {
             throw new Error(`Path not found: ${dirPath}`);
           }
 
           // Check if path is a directory.
-          const stat = await ops.stat(dirPath);
+          const stat = await ops.stat(dirPath, { signal });
           if (!stat.isDirectory()) {
             throw new Error(`Not a directory: ${dirPath}`);
           }
 
           // Read directory entries.
-          let entries: string[];
+          const entries: NormalizedLsDirectoryEntry[] = [];
+          let entryCount = 0;
+          let entryLimitReached = false;
           try {
-            entries = await ops.readdir(dirPath);
+            const source = await ops.readdir(dirPath, { signal });
+            for await (const entry of source) {
+              signal?.throwIfAborted();
+              entryCount += 1;
+              retainSortedDirectoryEntry(
+                entries,
+                typeof entry === "string" ? { name: entry } : entry,
+                effectiveLimit,
+              );
+            }
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             throw new Error(`Cannot read directory: ${message}`, { cause: error });
           }
 
-          // Sort alphabetically, case-insensitive.
-          entries.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+          entryLimitReached = entryCount > effectiveLimit;
 
           // Format entries with directory indicators.
           const results: string[] = [];
-          let entryLimitReached = false;
           for (const entry of entries) {
-            if (results.length >= effectiveLimit) {
-              entryLimitReached = true;
-              break;
-            }
-
-            const fullPath = nodePath.join(dirPath, entry);
-            let suffix = "";
-            try {
-              const entryStat = await ops.stat(fullPath);
-              if (entryStat.isDirectory()) {
-                suffix = "/";
+            let isDirectory = entry.isDirectory;
+            if (isDirectory === undefined) {
+              try {
+                const fullPath = nodePath.join(dirPath, entry.name);
+                const entryStat = await ops.stat(fullPath, { signal });
+                isDirectory = entryStat.isDirectory();
+              } catch {
+                isDirectory = false;
               }
-            } catch {
-              // Directory metadata is optional; keep names even when a symlink target is missing.
             }
-            results.push(entry + suffix);
+            results.push(entry.name + (isDirectory ? "/" : ""));
           }
 
           if (results.length === 0) {

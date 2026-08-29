@@ -5,6 +5,10 @@
   },
   "include": [
     "../../src/agents/tools/**/*.test.ts",
-    "../../src/agents/tools/**/*.test.tsx"
+    "../../src/agents/tools/**/*.test.tsx",
+    "../../src/agents/core-coding-tools.discovery-authority.test.ts",
+    "../../src/agents/core-tool-factory-descriptors.test.ts",
+    "../../src/agents/sandbox-discovery-tools.test.ts",
+    "../../src/agents/sandbox/fs-bridge.discovery.test.ts"
   ]
 }

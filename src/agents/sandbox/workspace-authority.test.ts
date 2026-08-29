@@ -78,6 +78,19 @@ describe("resolveSandboxWorkspaceAuthority", () => {
     );
   });
 
+  it("keeps filesystem discovery in the confined tool group", () => {
+    const config = configWithSandbox({ mode: "all", workspaceAccess: "rw" });
+    config.tools!.sandbox!.tools!.allow = ["group:fs"];
+
+    const result = resolveSandboxWorkspaceAuthority({
+      config,
+      agentId: "main",
+      sessionKey: "agent:main:subagent:workboard-card",
+    });
+
+    expect(result.confinementError).toBeUndefined();
+  });
+
   it("rejects Docker and shell escape configurations", () => {
     const externalBind = resolveSandboxWorkspaceAuthority({
       config: configWithSandbox({

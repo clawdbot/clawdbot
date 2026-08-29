@@ -203,6 +203,34 @@ describe("resolveGatewayScopedTools", () => {
     }
   });
 
+  it("materializes process-free discovery tools on the mediated CLI surface", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mediated-discovery-"));
+    try {
+      await fs.writeFile(path.join(workspaceDir, "sentinel.ts"), "MEDIATED_DISCOVERY_SENTINEL\n");
+      const result = resolveGatewayScopedTools({
+        cfg: {} as OpenClawConfig,
+        sessionKey: "agent:main:cron:mediated-discovery",
+        surface: "loopback",
+        workspaceDir,
+        mediatedToolNames: ["grep"],
+        excludeToolNames: ["read", "find", "ls", "write", "edit", "apply_patch", "exec", "process"],
+      });
+
+      const grepTool = result.tools.find((tool) => tool.name === "grep");
+      expect(grepTool).toBeDefined();
+      const grepResult = await grepTool?.execute?.("mediated-grep-call", {
+        pattern: "MEDIATED_DISCOVERY_SENTINEL",
+        literal: true,
+      });
+      expect(grepResult?.content[0]).toMatchObject({
+        type: "text",
+        text: "sentinel.ts:1: MEDIATED_DISCOVERY_SENTINEL",
+      });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("applies sandbox tool denies to sandboxed loopback turns", () => {
     const result = resolveGatewayScopedTools({
       cfg: {

@@ -61,6 +61,7 @@ export {
 export {
   createLsTool,
   createLsToolDefinition,
+  type LsDirectoryEntry,
   type LsOperations,
   type LsToolOptions,
 } from "./ls.js";
@@ -151,6 +152,9 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
   return [
     createReadToolDefinition(cwd, options?.read),
+    createGrepToolDefinition(cwd, options?.grep),
+    createFindToolDefinition(cwd, options?.find),
+    createLsToolDefinition(cwd, options?.ls),
     createBashToolDefinition(cwd, options?.bash),
     createEditToolDefinition(cwd, options?.edit),
     createWriteToolDefinition(cwd, options?.write),

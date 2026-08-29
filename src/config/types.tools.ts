@@ -358,7 +358,7 @@ export type ExecToolConfig = {
 
 export type FsToolsConfig = {
   /**
-   * Restrict filesystem tools (read/write/edit/apply_patch) to the agent workspace directory.
+   * Restrict filesystem tools (read/grep/find/ls/write/edit/apply_patch) to the agent workspace directory.
    * Default: false (unrestricted, matches legacy behavior).
    */
   workspaceOnly?: boolean;

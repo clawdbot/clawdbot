@@ -388,12 +388,19 @@ class OpenShellSandboxBackendImpl {
           this.syncLocalPathToRemote(localPath, remotePath),
       },
     });
+    const listDirectory = bridge.listDirectory;
     // Hold one lease across validation and both commits, not just the remote step.
     // Otherwise exec publication can erase a successful file-tool write or expose partial reads.
     return {
       resolvePath: (params) => bridge.resolvePath(params),
       readFile: (params) =>
         this.runWorkspaceOperation(() => bridge.readFile(params), params.signal),
+      ...(listDirectory
+        ? {
+            listDirectory: (params) =>
+              this.runWorkspaceOperation(() => listDirectory(params), params.signal),
+          }
+        : {}),
       writeFile: (params) =>
         this.runWorkspaceOperation(() => bridge.writeFile(params), params.signal),
       createFileExclusive: (params) =>

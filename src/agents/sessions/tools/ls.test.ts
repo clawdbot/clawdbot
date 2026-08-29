@@ -96,6 +96,60 @@ describe("ls tool", () => {
     expect(result.details).toBeUndefined();
   });
 
+  it("retains the alphabetically earliest entries while bounding results", async () => {
+    let yielded = 0;
+    let closed = false;
+    const tool = createLsToolDefinition("/workspace", {
+      operations: {
+        ...operations([]),
+        async *readdir(_absolutePath, options) {
+          try {
+            for (const name of ["zeta", "alpha", "mu", "beta"]) {
+              options?.signal?.throwIfAborted();
+              yielded += 1;
+              yield name;
+            }
+          } finally {
+            closed = true;
+          }
+        },
+      },
+    });
+
+    const result = await tool.execute("call-1", { limit: 2 }, undefined, undefined, {} as never);
+
+    expect(yielded).toBe(4);
+    expect(closed).toBe(true);
+    expect(textContent(result)).toBe(
+      "alpha\nbeta\n\n[2 entries limit reached. Use limit=4 for more]",
+    );
+    expect(result.details?.entryLimitReached).toBe(2);
+  });
+
+  it("uses backend-provided entry types without restatting", async () => {
+    const stat = vi.fn((absolutePath: string) => {
+      if (absolutePath === "/workspace") {
+        return { isDirectory: () => true };
+      }
+      throw new Error("typed entries must not be restatted");
+    });
+    const tool = createLsToolDefinition("/workspace", {
+      operations: {
+        ...operations([]),
+        stat,
+        readdir: () => [
+          { name: "directory", isDirectory: true },
+          { name: "outward-link", isDirectory: false },
+        ],
+      },
+    });
+
+    const result = await tool.execute("call-typed", {}, undefined, undefined, {} as never);
+
+    expect(textContent(result)).toBe("directory/\noutward-link");
+    expect(stat).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     {
       name: "missing path",
@@ -164,5 +218,29 @@ describe("ls tool", () => {
     await expect(result).rejects.toThrow("Operation aborted");
     listener.expectReleased();
     finishExists?.();
+  });
+
+  it("passes caller cancellation into custom directory listing operations", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const tool = createLsToolDefinition("/workspace", {
+      operations: {
+        ...operations([]),
+        readdir: (_path, options) =>
+          new Promise<string[]>((_resolve, reject) => {
+            observedSignal = options?.signal;
+            options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+              once: true,
+            });
+          }),
+      },
+    });
+    const controller = new AbortController();
+    const result = tool.execute("call-1", {}, controller.signal, undefined, {} as never);
+    await vi.waitFor(() => expect(observedSignal).toBe(controller.signal));
+
+    controller.abort();
+
+    await expect(result).rejects.toThrow("Operation aborted");
+    expect(observedSignal?.aborted).toBe(true);
   });
 });

@@ -130,11 +130,16 @@ describe("sandbox fs bridge local backend e2e", () => {
         });
 
         const bridge = createSandboxFsBridge({ sandbox });
+        await expect(bridge.stat({ filePath: workspaceDir })).resolves.toMatchObject({
+          type: "directory",
+        });
         if (workspaceAccess === "ro") {
           await expect(
             bridge.writeFile({ filePath: "nested/hello.txt", data: "blocked" }),
           ).rejects.toThrow("read-only");
-          expect(scripts).toEqual([]);
+          await expect(fs.stat(path.join(workspaceDir, "nested"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
           return;
         }
         await bridge.writeFile({ filePath: "nested/hello.txt", data: "from-backend" });

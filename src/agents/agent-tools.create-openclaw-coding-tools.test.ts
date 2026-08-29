@@ -46,6 +46,7 @@ import {
 } from "./cron-creator-authority-context.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { supportsDescriptorAnchoredSandboxDirectoryListing } from "./sandbox/fs-bridge.discovery.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
@@ -2349,6 +2350,9 @@ describe("createOpenClawCodingTools", () => {
     });
     const names = new Set(tools.map((tool) => tool.name));
     expect(names.has("read")).toBe(true);
+    expect(names.has("grep")).toBe(true);
+    expect(names.has("find")).toBe(true);
+    expect(names.has("ls")).toBe(true);
     expect(names.has("write")).toBe(true);
     expect(names.has("edit")).toBe(true);
     expect(names.has("exec")).toBe(false);
@@ -2361,6 +2365,9 @@ describe("createOpenClawCodingTools", () => {
     });
     const names = new Set(tools.map((tool) => tool.name));
     expect(names.has("read")).toBe(false);
+    expect(names.has("grep")).toBe(false);
+    expect(names.has("find")).toBe(false);
+    expect(names.has("ls")).toBe(false);
     expect(names.has("write")).toBe(false);
     expect(names.has("edit")).toBe(false);
     expect(names.has("exec")).toBe(true);
@@ -2495,6 +2502,76 @@ describe("createOpenClawCodingTools", () => {
     expect(toolNameList(tools)).not.toContain("edit");
   });
 
+  it("keeps sandbox-backed discovery available without runtime tools", async () => {
+    const workspaceDir = tempDirs.make("openclaw-sandbox-discovery-");
+    try {
+      await fs.mkdir(path.join(workspaceDir, "src"));
+      await fs.mkdir(path.join(workspaceDir, ".git"));
+      await fs.mkdir(path.join(workspaceDir, "node_modules"));
+      await fs.writeFile(path.join(workspaceDir, "src", "visible.ts"), "sandbox-marker\n");
+      await fs.writeFile(path.join(workspaceDir, "src", "ignored.ts"), "hidden-marker\n");
+      await fs.writeFile(path.join(workspaceDir, ".git", "private.ts"), "private-marker\n");
+      await fs.writeFile(
+        path.join(workspaceDir, "node_modules", "dependency.ts"),
+        "dependency-marker\n",
+      );
+      await fs.writeFile(path.join(workspaceDir, ".gitignore"), "src/ignored.ts\n");
+      const sandbox = createAgentToolsSandboxContext({
+        workspaceDir,
+        workspaceAccess: "ro",
+        fsBridge: createHostSandboxFsBridge(workspaceDir),
+        tools: {
+          allow: ["read", "grep", "find", "ls"],
+          deny: ["exec", "process"],
+        },
+      });
+
+      const tools = createOpenClawCodingTools({ workspaceDir, sandbox });
+      expect(toolNameList(tools)).toEqual(expect.arrayContaining(["read", "grep", "find", "ls"]));
+      expect(toolNameList(tools)).not.toEqual(expect.arrayContaining(["exec", "process"]));
+
+      await expect(
+        requireTool(tools, "ls").execute("sandbox-ls", { path: "." }),
+      ).resolves.toMatchObject({
+        content: [expect.objectContaining({ text: expect.stringContaining("src/") })],
+      });
+      await expect(
+        requireTool(tools, "find").execute("sandbox-find", { path: ".", pattern: "**/*.ts" }),
+      ).resolves.toMatchObject({
+        content: [expect.objectContaining({ text: "src/visible.ts" })],
+      });
+      await expect(
+        requireTool(tools, "find").execute("sandbox-find-builtins", {
+          path: ".",
+          pattern: "**/*",
+        }),
+      ).resolves.toMatchObject({
+        content: [
+          expect.objectContaining({
+            text: expect.not.stringMatching(/(?:^|\/)(?:\.git|node_modules)(?:\/|$)/m),
+          }),
+        ],
+      });
+      await expect(
+        requireTool(tools, "grep").execute("sandbox-grep", {
+          path: ".",
+          pattern: "sandbox-marker",
+          literal: true,
+        }),
+      ).resolves.toMatchObject({
+        content: [expect.objectContaining({ text: expect.stringContaining("src/visible.ts:1") })],
+      });
+      await expect(
+        requireTool(tools, "grep").execute("sandbox-grep-unsafe", {
+          path: ".",
+          pattern: "(a+)+$",
+        }),
+      ).rejects.toThrow("Unsafe or invalid grep regex");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("accepts canonical parameters for read/write/edit", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canonical-"));
     try {
@@ -2525,6 +2602,61 @@ describe("createOpenClawCodingTools", () => {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it.skipIf(!supportsDescriptorAnchoredSandboxDirectoryListing())(
+    "exposes workspace-contained discovery tools",
+    async () => {
+      const baseDir = tempDirs.make("openclaw-discovery-tools-");
+      const workspaceDir = path.join(baseDir, "tenant-a");
+      const siblingDir = path.join(baseDir, "tenant-b");
+      await fs.mkdir(workspaceDir);
+      await fs.mkdir(siblingDir);
+      await fs.writeFile(path.join(workspaceDir, "README.md"), "inside-marker\n");
+      const siblingSecretPath = path.join(siblingDir, "secret.txt");
+      await fs.writeFile(siblingSecretPath, "outside-marker\n");
+      await fs.link(siblingSecretPath, path.join(workspaceDir, "hardlink.txt"));
+      await fs.symlink(siblingDir, path.join(workspaceDir, "outside"));
+
+      try {
+        const tools = createOpenClawCodingTools({
+          workspaceDir,
+          config: { tools: { fs: { workspaceOnly: true } } },
+        });
+        const ls = requireTool(tools, "ls");
+        const grep = requireTool(tools, "grep");
+        const find = requireTool(tools, "find");
+
+        await expect(ls.execute("ls-own", { path: "." })).resolves.toMatchObject({
+          content: [expect.objectContaining({ text: expect.stringContaining("README.md") })],
+        });
+        await expect(
+          grep.execute("grep-own", { path: ".", pattern: "inside-marker", literal: true }),
+        ).resolves.toMatchObject({
+          content: [expect.objectContaining({ text: expect.stringContaining("README.md:1") })],
+        });
+        await expect(
+          grep.execute("grep-hardlink", { path: ".", pattern: "outside-marker", literal: true }),
+        ).resolves.toMatchObject({
+          content: [{ type: "text", text: "No matches found" }],
+        });
+
+        for (const [tool, args] of [
+          [ls, { path: "../tenant-b" }],
+          [ls, { path: "outside" }],
+          [grep, { path: "../tenant-b", pattern: "outside-marker", literal: true }],
+          [grep, { path: "outside", pattern: "outside-marker", literal: true }],
+          [find, { path: "../tenant-b", pattern: "**/*" }],
+          [find, { path: "outside", pattern: "**/*" }],
+        ] as const) {
+          await expect(tool.execute("discovery-escape", args)).rejects.toThrow(
+            /(Path|Symlink) escapes sandbox root/,
+          );
+        }
+      } finally {
+        await fs.rm(baseDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("records restricted memory flush writes without an active memory provider", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-workspace-"));
