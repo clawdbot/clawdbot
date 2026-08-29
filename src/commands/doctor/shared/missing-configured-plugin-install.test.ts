@@ -2955,14 +2955,19 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       typeof import("../../../plugins/update.js")
     >("../../../plugins/update.js");
     mocks.updateNpmInstalledPlugins.mockImplementationOnce(updateNpmInstalledPluginsActual);
-    mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
-      successfulInstall({
+    mocks.installPluginFromNpmSpec.mockImplementationOnce(async (params) => {
+      await params.onBeforePluginArtifactCommit({
+        pluginId: "codex",
+        stagedArtifactDir: installDir,
+        mode: "update",
+      });
+      return successfulInstall({
         pluginId: "codex",
         npmSpec: "@openclaw/codex",
         version: VERSION,
         resolution: { integrity: "sha512-new-codex" },
-      }),
-    );
+      });
+    });
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
