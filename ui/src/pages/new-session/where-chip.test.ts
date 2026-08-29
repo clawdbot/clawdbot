@@ -166,9 +166,8 @@ describe("Where chip", () => {
     const device = container.querySelector<HTMLButtonElement>('[data-value="device:macbook"]');
     expect(device?.disabled).toBe(true);
     expect(device?.textContent).toContain("This runtime does not support paired devices");
-    expect(device?.title).toBe(
-      "This runtime does not support paired devices · Slot utilization unavailable",
-    );
+    // The disabled reason owns the title; the meter's no-claim alt text stays on its aria-label.
+    expect(device?.title).toBe("This runtime does not support paired devices");
   });
 
   it("omits the devices section entirely when no devices are paired", () => {

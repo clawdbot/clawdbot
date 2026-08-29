@@ -318,7 +318,7 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
       ? nothing
       : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.offline") });
   return html`
-    <div class="settings-row device-entry" title=${capacity?.label ?? nothing}>
+    <div class="settings-row device-entry" title=${capacity?.title ?? nothing}>
       ${renderDeviceTile(deviceIcon(entry))}
       <div class="settings-row__text">
         <span class="settings-row__title">${entry.name}</span>

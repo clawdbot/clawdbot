@@ -229,7 +229,7 @@ export function renderWhereChip(params: {
                     checked: params.deviceId === device.deviceId,
                     disabled: !device.selectable,
                     title:
-                      [device.disabledReason, capacity?.label].filter(Boolean).join(" · ") ||
+                      [device.disabledReason, capacity?.title].filter(Boolean).join(" · ") ||
                       undefined,
                     onSelect: () => params.onSelectDevice(device.deviceId),
                   },

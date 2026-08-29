@@ -23,6 +23,9 @@ export function workerCapacityPresentation(params: {
     const tone = params.unavailable ? "stale" : slots.available === 0 ? "warn" : "accent";
     return {
       label,
+      // Row titles carry countable facts only; an unavailable node's title
+      // belongs to its disabled reason, not the meter's alt text.
+      title: used === null ? undefined : label,
       meter: renderCapacityMeter({ mode: "discrete", total: slots.total, used, tone, label }),
     };
   }
@@ -38,6 +41,7 @@ export function workerCapacityPresentation(params: {
   const label = t("capacityMeter.execHost");
   return {
     label,
+    title: label,
     meter: html`<span class="capacity-meter-exec" role="img" aria-label=${label}>
       <span aria-hidden="true">${icons.terminal}</span>${label}
     </span>`,
