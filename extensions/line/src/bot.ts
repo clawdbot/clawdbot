@@ -59,14 +59,21 @@ export function createLineBot(opts: LineBotOptions): LineBot {
   // a later reload replaces both the runtime config and its source, so asking
   // again after one would always answer "not mine" and pin the monitor forever.
   const startupRuntimeConfig = getRuntimeConfigSnapshot();
+  const startupRuntimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  // Without a source snapshot there is nothing to compare a distinct supplied
+  // config against, and the selector answers with the runtime config for any
+  // input. Taking that as ownership would hand a monitor started with its own
+  // config to unrelated process-global config on the next reload, so a scoped
+  // monitor stays with what it was started with.
   const followsRuntimeConfig =
     !startupRuntimeConfig ||
     startupRuntimeConfig === startupConfig ||
-    selectApplicableRuntimeConfig({
-      inputConfig: startupConfig,
-      runtimeConfig: startupRuntimeConfig,
-      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
-    }) === startupRuntimeConfig;
+    (startupRuntimeSourceConfig !== null &&
+      selectApplicableRuntimeConfig({
+        inputConfig: startupConfig,
+        runtimeConfig: startupRuntimeConfig,
+        runtimeSourceConfig: startupRuntimeSourceConfig,
+      }) === startupRuntimeConfig);
   const resolveTurnConfig = (): OpenClawConfig =>
     (followsRuntimeConfig ? getRuntimeConfigSnapshot() : undefined) ?? startupConfig;
   // Credentials and the account's own settings live under `channels.line`, whose

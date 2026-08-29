@@ -101,19 +101,29 @@ describe("the config a delivered LINE event is handled with", () => {
     expect(handled.historyLimit).toBe(75);
   });
 
-  it("keeps a config of its own rather than the process-global one", async () => {
-    // A monitor handed a config that is not what the process loaded owns it; a
-    // scoped or test monitor must not be hijacked by an unrelated global reload.
-    const ownConfig = configWithHistoryLimit(10);
-    setRuntimeConfigSnapshot(configWithHistoryLimit(33), configWithHistoryLimit(33));
-    const bot = createDeliverableBot(ownConfig);
+  // A monitor handed a config that is not what the process loaded owns it; a
+  // scoped or test monitor must not be hijacked by an unrelated global reload.
+  // Not every runtime snapshot carries the source it was built from - a pinned
+  // load publishes the config alone - and that is the case where the shared
+  // selector answers with the runtime config for any input at all.
+  it.each([
+    { label: "against a snapshot that carries its source", withSource: true },
+    { label: "against a snapshot published without its source", withSource: false },
+  ])(
+    "keeps a config of its own rather than the process-global one, $label",
+    async ({ withSource }) => {
+      const ownConfig = configWithHistoryLimit(10);
+      const startupRuntime = configWithHistoryLimit(33);
+      setRuntimeConfigSnapshot(startupRuntime, ...(withSource ? [startupRuntime] : []));
+      const bot = createDeliverableBot(ownConfig);
 
-    setRuntimeConfigSnapshot(configWithHistoryLimit(75), configWithHistoryLimit(75));
-    const handled = await bot.deliverOnce();
+      setRuntimeConfigSnapshot(configWithHistoryLimit(75), configWithHistoryLimit(75));
+      const handled = await bot.deliverOnce();
 
-    expect(handled.cfg).toBe(ownConfig);
-    expect(handled.historyLimit).toBe(10);
-  });
+      expect(handled.cfg).toBe(ownConfig);
+      expect(handled.historyLimit).toBe(10);
+    },
+  );
 
   it("keeps the account's own history limit ahead of the reloaded shared default", async () => {
     const startupConfig = {
