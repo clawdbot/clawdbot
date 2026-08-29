@@ -1734,12 +1734,14 @@ export async function prepareCliRunContext(
     // receives prior conversation context via stdin.
     const shouldPrepareOpenClawHistoryPrompt =
       !skipsTurnPreparation && (!reusableCliSessionId || allowRawTranscriptReseed);
+    const currentTurnEntryId = params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId;
     const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
       ? buildCliSessionHistoryPrompt({
           messages: await loadCliSessionReseedMessages({
             sessionTarget: params.sessionTarget,
             allowRawTranscriptReseed,
             rawTranscriptReseedReason,
+            ...(currentTurnEntryId ? { currentTurnEntryId } : {}),
           }),
           prompt: historyPromptCurrentTurn,
           maxHistoryChars: autoReseedHistoryChars,

@@ -331,9 +331,17 @@ export async function loadCliSessionReseedMessages(
   params: CliSessionHistoryParams & {
     allowRawTranscriptReseed?: boolean;
     rawTranscriptReseedReason?: RawTranscriptReseedReason;
+    currentTurnEntryId?: string;
   },
 ): Promise<unknown[]> {
-  const entries = await loadCliSessionEntries(params);
+  const loaded = await loadCliSessionEntries(params);
+  // The current user turn is admitted and persisted before CLI preparation, so it is
+  // already in the branch. It is re-rendered as <next_user_message>, and replaying the
+  // persisted copy here would hand the CLI the same ask twice. Fence on the admitted
+  // entry id, never on text: identical historical wording must survive.
+  const entries = params.currentTurnEntryId
+    ? loaded.filter((entry) => entry.id !== params.currentTurnEntryId)
+    : loaded;
   // This freshly loaded branch is reseed-owned; use persistence rather than provider timestamps.
   for (const entry of entries) {
     if (entry.type === "message") {
