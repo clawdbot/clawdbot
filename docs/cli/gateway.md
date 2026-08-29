@@ -154,7 +154,28 @@ Named profiles must also use the native service identity derived from `OPENCLAW_
 
 On Linux, `openclaw gateway install --force` refuses a sealed systemd service
 definition, or one whose write authority cannot be verified, before changing
-configuration, authentication tokens, or service files. Ask the privileged deployment owner to repair or replace the definition.
+configuration, authentication tokens, or service files. The error keeps its
+`SERVICE_DEFINITION_SEALED` or `SERVICE_DEFINITION_UNKNOWN` prefix and adds a
+reason tag and next action, without printing private paths, config, environment values,
+or underlying inspection errors.
+
+For `[unsafe-permissions]`, inspect the named artifact category locally. The
+service directory is `~/.config/systemd/user`; on a fresh install, its nearest
+existing ancestor may be `~/.config`. The service state directory belongs to the
+selected profile. Check directory metadata, not file contents:
+
+```bash
+ls -ld ~/.config ~/.config/systemd ~/.config/systemd/user
+```
+
+Missing directories are normal on a fresh install. After confirming the affected
+path is yours and is not intentionally shared, remove group/other write access
+with `chmod go-w <path>` and retry the same command. Mode `0700` is appropriate
+for private directories. Do not recursively chmod, take ownership of system
+paths, or use `sudo`/`--force` to bypass the check. Foreign-owned files and sealed
+mounts require the deployment owner; inspection failures require restoring
+filesystem or native service-manager access first.
+
 Type-wide `service.d` defaults are inspected as shared read-only inputs and do
 not require write access. Root-owned selected units and unit-specific drop-ins
 remain protected.
