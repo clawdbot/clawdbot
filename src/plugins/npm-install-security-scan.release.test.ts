@@ -672,6 +672,10 @@ describe("publishable plugin npm package install security scan", () => {
   it("accepts either complete reviewed Codex source layout", () => {
     const legacyLayout = expandReviewedFindingCounts(CODEX_LEGACY_SOURCE_FINDING_COUNTS);
     const currentLayout = expandReviewedFindingCounts(CODEX_CURRENT_SOURCE_FINDING_COUNTS);
+    const firstLegacyFinding = legacyLayout[0];
+    if (!firstLegacyFinding) {
+      throw new Error("Expected the reviewed Codex legacy source layout to be non-empty");
+    }
 
     expect(
       resolveReviewedCodexSourceLayout(CURRENT_SECURITY_INVENTORY_POLICY, legacyLayout),
@@ -688,7 +692,7 @@ describe("publishable plugin npm package install security scan", () => {
     expect(
       resolveReviewedCodexSourceLayout(FROZEN_TARGET_SECURITY_INVENTORY_POLICY, [
         ...legacyLayout,
-        legacyLayout[0],
+        firstLegacyFinding,
       ]),
     ).toBeUndefined();
     expect(selectPluginSecurityInventoryPolicy(FROZEN_TARGET_REVISION)).toBe(

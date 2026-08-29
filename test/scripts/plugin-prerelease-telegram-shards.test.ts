@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -25,6 +26,15 @@ type PluginPrereleaseMatrixRow = {
   includePatterns: string[];
   task: string;
 };
+
+const FROZEN_TARGET_EXTENSION_PLAN_URL = new URL(
+  "../fixtures/plugin-prerelease-frozen-target/scripts/lib/extension-test-plan.mjs",
+  import.meta.url,
+);
+const FROZEN_TARGET_TELEGRAM_CONFIG_URL = new URL(
+  "../fixtures/plugin-prerelease-frozen-target/test/vitest/vitest.extension-telegram.config.mjs",
+  import.meta.url,
+);
 
 function readPluginPrereleaseWorkflow() {
   return parse(readFileSync(".github/workflows/plugin-prerelease.yml", "utf8"));
@@ -92,10 +102,14 @@ function runPluginPrereleaseManifest(cwd = process.cwd()) {
 
 describe("plugin prerelease Telegram extension shards", () => {
   it("preserves target-native batches when a frozen planner has no job splitter", () => {
-    const fixtureRoot = path.resolve("test/fixtures/plugin-prerelease-frozen-target");
+    const fixtureRoot = path.resolve(
+      path.dirname(fileURLToPath(FROZEN_TARGET_EXTENSION_PLAN_URL)),
+      "../..",
+    );
     const matrix = runPluginPrereleaseManifest(fixtureRoot);
     const batchRows = matrix.include.filter((row) => row.task === "extensions-batch");
 
+    expect(existsSync(FROZEN_TARGET_TELEGRAM_CONFIG_URL)).toBe(true);
     expect(matrix.include.every((row) => row.task !== "extension-file-shard")).toBe(true);
     expect(batchRows.map((row) => row.check_name)).toEqual([
       "checks-node-extensions-shard-1",
