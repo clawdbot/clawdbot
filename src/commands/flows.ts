@@ -17,7 +17,6 @@ import {
   isTerminalTaskFlow,
   TASK_FLOW_STATUSES,
   type TaskFlowRecord,
-  type TaskFlowStatus,
 } from "../tasks/task-flow-registry.types.js";
 import {
   getTaskFlowById,
@@ -29,9 +28,9 @@ import {
   formatTaskStatusDetail,
   isTaskStatusIssue,
 } from "../tasks/task-status.js";
+import { formatTaskStatusCell, TASK_STATUS_CELL_WIDTH } from "./task-status-cell.js";
 
 const ID_PAD = 10;
-const STATUS_PAD = 10;
 const MODE_PAD = 14;
 const REV_PAD = 6;
 const CTRL_PAD = 20;
@@ -72,31 +71,11 @@ function formatFlowTimestamp(value: number | undefined | null): string {
   return timestampMsToIsoString(value) ?? "n/a";
 }
 
-function formatFlowStatusCell(status: TaskFlowStatus, rich: boolean) {
-  const padded = status.padEnd(STATUS_PAD);
-  if (!rich) {
-    return padded;
-  }
-  if (status === "succeeded") {
-    return theme.success(padded);
-  }
-  if (status === "failed" || status === "lost") {
-    return theme.error(padded);
-  }
-  if (status === "running") {
-    return theme.accentBright(padded);
-  }
-  if (status === "blocked") {
-    return theme.warn(padded);
-  }
-  return theme.muted(padded);
-}
-
 function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
   const header = [
     "TaskFlow".padEnd(ID_PAD),
     "Mode".padEnd(MODE_PAD),
-    "Status".padEnd(STATUS_PAD),
+    "Status".padEnd(TASK_STATUS_CELL_WIDTH),
     "Rev".padEnd(REV_PAD),
     "Controller".padEnd(CTRL_PAD),
     "Tasks".padEnd(14),
@@ -110,7 +89,7 @@ function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
       [
         shortToken(flow.flowId).padEnd(ID_PAD),
         flow.syncMode.padEnd(MODE_PAD),
-        formatFlowStatusCell(flow.status, rich),
+        formatTaskStatusCell(flow.status, rich),
         String(flow.revision).padEnd(REV_PAD),
         formatFlowTableCell(flow.controllerId, CTRL_PAD),
         counts.padEnd(14),
