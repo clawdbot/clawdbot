@@ -17,6 +17,7 @@ type AgentResponse = {
   type?: string;
   id?: string;
   ok?: boolean;
+  error?: { message?: string };
   payload?: {
     runId?: string;
     status?: string;
@@ -191,6 +192,45 @@ describe("gateway agent RPC contracts", () => {
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     } finally {
       second.ws.close();
+    }
+  });
+
+  test("dispatches a run woken by a cron system event instead of rejecting the channel", async () => {
+    vi.mocked(agentCommandMock).mockImplementationOnce(async () => ({
+      payloads: [{ text: "child run started" }],
+      meta: { durationMs: 1 },
+    }));
+
+    const client = await harness.openClient();
+    try {
+      const terminalPromise = onceMessage<AgentResponse>(
+        client.ws,
+        (frame) =>
+          frame.type === "res" &&
+          frame.id === "agent-cron-event" &&
+          frame.payload?.status !== "accepted",
+      );
+
+      client.ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "agent-cron-event",
+          method: "agent",
+          params: {
+            message: "spawn a child run from a cron system event",
+            sessionKey: "main",
+            channel: "cron-event",
+            idempotencyKey: "gateway-agent-cron-event-channel",
+          },
+        }),
+      );
+
+      const terminal = await terminalPromise;
+      expect(terminal.error?.message ?? null).toBeNull();
+      expect(terminal.ok).toBe(true);
+      await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
+    } finally {
+      client.ws.close();
     }
   });
 });
