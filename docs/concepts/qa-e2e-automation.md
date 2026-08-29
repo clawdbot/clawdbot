@@ -421,6 +421,10 @@ scenario owners. Transport runners apply channel and provider eligibility to
 that result instead of keeping scenario-ID allowlists. The channel driver is
 an interchangeable run-level implementation choice.
 
+For `qa suite` and `qa run --qa-profile`, omit `--scenario` to use the default
+selection. When supplied, at least one non-empty scenario ID is required;
+surrounding whitespace and blank values alongside valid IDs are ignored.
+
 Static `qa coverage` output reports the taxonomy-to-scenario mapping. Actual
 proof comes from `qa-evidence.json`, which records the executed scenario,
 coverage IDs, channel, driver actually used, and result. Channel and driver are
