@@ -1,18 +1,15 @@
 // Line tests cover channel.sendPayload plugin behavior.
-import { HTTPFetchError } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  createChannelPartialDeliveryError,
-  isChannelPartialDeliveryError,
-} from "openclaw/plugin-sdk/channel-inbound";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { chunkMarkdownText as chunkMarkdownTextForLine } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../api.js";
+import type { OpenClawConfig } from "../api.js";
 import { linePlugin } from "./channel.js";
+import { createRuntime, lineResult } from "./channel.sendPayload.test-support.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { lineOutboundAdapter } from "./outbound.js";
@@ -32,21 +29,6 @@ afterAll(() => {
   vi.resetModules();
 });
 
-type LineRuntimeMocks = {
-  pushMessageLine: ReturnType<typeof vi.fn>;
-  pushMessagesLine: ReturnType<typeof vi.fn>;
-  pushFlexMessage: ReturnType<typeof vi.fn>;
-  pushTemplateMessage: ReturnType<typeof vi.fn>;
-  pushLocationMessage: ReturnType<typeof vi.fn>;
-  pushTextMessageWithQuickReplies: ReturnType<typeof vi.fn>;
-  createQuickReplyItems: ReturnType<typeof vi.fn>;
-  buildTemplateMessageFromPayload: ReturnType<typeof vi.fn>;
-  sendMessageLine: ReturnType<typeof vi.fn>;
-  chunkMarkdownText: ReturnType<typeof vi.fn>;
-  resolveLineAccount: ReturnType<typeof vi.fn>;
-  resolveTextChunkLimit: ReturnType<typeof vi.fn>;
-};
-
 beforeEach(() => {
   vi.setSystemTime(1_800_000_000_000);
   ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();
@@ -61,86 +43,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function lineResult(messageId: string, chatId = "c1") {
-  return {
-    messageId,
-    chatId,
-    receipt: createLineSendReceipt({ messageId, chatId, kind: "text" }),
-  };
-}
-
 function createCredentialBearingHttpUrl(): string {
   const url = new URL("http://example.com/image.jpg");
   url.username = ["line", "user"].join("-");
   url.password = ["line", "fixture"].join("-");
   url.searchParams.set("auth", ["line", "query"].join("-"));
   return url.href;
-}
-
-function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
-  const pushMessageLine = vi.fn(async () => lineResult("m-text"));
-  const pushMessagesLine = vi.fn(async () => lineResult("m-batch"));
-  const pushFlexMessage = vi.fn(async () => lineResult("m-flex"));
-  const pushTemplateMessage = vi.fn(async () => lineResult("m-template"));
-  const pushLocationMessage = vi.fn(async () => lineResult("m-loc"));
-  const pushTextMessageWithQuickReplies = vi.fn(async () => lineResult("m-quick"));
-  const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
-  const buildTemplateMessageFromPayload = vi.fn(() => ({ type: "buttons" }));
-  const sendMessageLine = vi.fn(async () => lineResult("m-media"));
-  const chunkMarkdownText = vi.fn((text: string) => [text]);
-  const resolveTextChunkLimit = vi.fn(() => 123);
-  const resolveLineAccount = vi.fn(
-    ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) => {
-      const resolved = accountId ?? "default";
-      const lineConfig = (cfg.channels?.line ?? {}) as {
-        accounts?: Record<string, Record<string, unknown>>;
-      };
-      const accountConfig = resolved !== "default" ? (lineConfig.accounts?.[resolved] ?? {}) : {};
-      return {
-        accountId: resolved,
-        config: { ...lineConfig, ...accountConfig },
-      };
-    },
-  );
-
-  const runtime = {
-    channel: {
-      line: {
-        pushMessageLine,
-        pushMessagesLine,
-        pushFlexMessage,
-        pushTemplateMessage,
-        pushLocationMessage,
-        pushTextMessageWithQuickReplies,
-        createQuickReplyItems,
-        buildTemplateMessageFromPayload,
-        sendMessageLine,
-        resolveLineAccount,
-      },
-      text: {
-        chunkMarkdownText,
-        resolveTextChunkLimit,
-      },
-    },
-  } as unknown as PluginRuntime;
-
-  return {
-    runtime,
-    mocks: {
-      pushMessageLine,
-      pushMessagesLine,
-      pushFlexMessage,
-      pushTemplateMessage,
-      pushLocationMessage,
-      pushTextMessageWithQuickReplies,
-      createQuickReplyItems,
-      buildTemplateMessageFromPayload,
-      sendMessageLine,
-      chunkMarkdownText,
-      resolveLineAccount,
-      resolveTextChunkLimit,
-    },
-  };
 }
 
 describe("line outbound sendPayload", () => {
@@ -868,61 +776,6 @@ describe("line outbound sendPayload", () => {
     expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("example.com", {
       policy: { allowPrivateNetwork: false },
     });
-  });
-
-  it.each([
-    { status: 400, retryable: false },
-    { status: 429, retryable: true },
-  ])("reports an initial LINE $status as a non-dispatch", async ({ status, retryable }) => {
-    const { runtime, mocks } = createRuntime();
-    const rejection = new HTTPFetchError(`${status} - provider rejection`, {
-      status,
-      statusText: "provider rejection",
-      headers: new Headers(),
-      body: "provider rejection",
-    });
-    mocks.pushMessageLine.mockRejectedValueOnce(rejection);
-    setLineRuntime(runtime);
-
-    await expect(
-      lineOutboundAdapter.sendPayload!({
-        to: "line:user:U123",
-        text: "hello",
-        payload: { text: "hello" },
-        accountId: "default",
-        cfg: { channels: { line: {} } } as OpenClawConfig,
-      }),
-    ).rejects.toMatchObject({
-      name: "PlatformMessageNotDispatchedError",
-      retryable,
-      cause: rejection,
-    });
-  });
-
-  it("preserves partial delivery evidence with a nested LINE rejection", async () => {
-    const { runtime, mocks } = createRuntime();
-    const rejection = new HTTPFetchError("400 - provider rejection", {
-      status: 400,
-      statusText: "provider rejection",
-      headers: new Headers(),
-      body: "provider rejection",
-    });
-    const partial = createChannelPartialDeliveryError(rejection, {
-      messageIds: ["accepted-first"],
-      visibleReplySent: true,
-    });
-    mocks.pushMessageLine.mockRejectedValueOnce(partial);
-    setLineRuntime(runtime);
-
-    await expect(
-      lineOutboundAdapter.sendPayload!({
-        to: "line:user:U123",
-        text: "hello",
-        payload: { text: "hello" },
-        accountId: "default",
-        cfg: { channels: { line: {} } } as OpenClawConfig,
-      }),
-    ).rejects.toBe(partial);
   });
 
   it("rejects insecure generic media before quick-reply batch sends", async () => {
