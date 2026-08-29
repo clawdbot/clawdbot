@@ -357,7 +357,10 @@ function buildExecReviewMemoKey(input: ModelAutoReviewInput): string | undefined
   // Only memoize fully specified exec requests: without a resolved executable
   // the reviewer is assessing an unknown target, so reusing a prior verdict
   // would be unsafe. Board widget reviews have a different input shape and
-  // stay out of the memo.
+  // stay out of the memo. Node-host requests also stay out: the gateway cannot
+  // resolve the remote node executable and the remote prepare result exposes
+  // no resolved executable identity, so node reviews always bill a fresh
+  // completion until a node-owned identity joins the key contract.
   if ("kind" in input || !input.argv || !input.cwd || !input.envKeys || !input.resolvedPath) {
     return undefined;
   }

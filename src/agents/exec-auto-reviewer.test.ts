@@ -881,14 +881,16 @@ describe("createModelExecAutoReviewer", () => {
     expect(complete).toHaveBeenCalledTimes(2);
   });
 
-  it("never reuses gateway review authority for a node-host request", async () => {
+  it("bills a fresh completion for each real node-host review", async () => {
     const { reviewer, prepare, complete } = createReviewerHarness();
-    const nodeInput = { ...input, host: "node" as const };
+    // The real node host invokes the reviewer with no resolvedPath (the
+    // gateway cannot resolve the remote node executable and the remote
+    // prepare result exposes no resolved executable identity), so a node-host
+    // request never forms a memo key and must bill its own completion every
+    // time rather than silently reusing gateway-shaped memo coverage.
+    const nodeInput = { ...input, host: "node" as const, resolvedPath: undefined };
 
-    // A gateway verdict must not satisfy a node-host request: host is part of
-    // the memo key, so the node request bills its own completion rather than
-    // reusing the gateway authority.
-    await reviewer(input);
+    await reviewer(nodeInput);
     await reviewer(nodeInput);
 
     expect(prepare).toHaveBeenCalledTimes(2);
