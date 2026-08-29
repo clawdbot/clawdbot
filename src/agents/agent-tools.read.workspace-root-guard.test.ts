@@ -72,6 +72,21 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     });
   });
 
+  it("maps container workspace paths when the backend workdir is filesystem root", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/",
+    });
+
+    await wrapped.execute("tc-root-workdir", { path: "/docs/readme.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(root, "docs", "readme.md"),
+      cwd: root,
+      root,
+    });
+  });
+
   it("strips malformed XML arg-value suffixes before guarding path params", async () => {
     const { execute, tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root);
