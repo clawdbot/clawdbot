@@ -83,8 +83,6 @@ export class QaGatewayChildLifecycle {
           ? new QaSuiteInfraError(error.code, message, { cause: error })
           : new Error(message, { cause: error });
       if (result.errors.length) {
-        // Oxlint 1.78 checks cause at argument 2; AggregateError takes it at 3.
-        // oxlint-disable-next-line preserve-caught-error
         throw new AggregateError(
           [primary, ...result.errors],
           "qa gateway startup and cleanup failed",

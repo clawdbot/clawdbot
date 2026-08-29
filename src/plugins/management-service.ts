@@ -1389,7 +1389,6 @@ async function persistManagedSourceInstall(params: {
       try {
         await params.transaction?.rollback();
       } catch (rollbackError) {
-        // oxlint-disable-next-line preserve-caught-error -- Oxlint 1.78 ignores AggregateError's third-argument cause.
         throw new AggregateError(
           [error, rollbackError],
           "Plugin install failed and payload rollback failed",

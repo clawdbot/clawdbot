@@ -423,6 +423,18 @@ ratchet-down when cleanup lowers the real count.
 
 ## Local equivalents
 
+Oxlint keeps `eslint/no-redeclare` enabled for JavaScript. For `.ts`, `.tsx`,
+`.mts`, and `.cts`, `tsgo` owns declaration validity, including intentional
+type/value pairs with the same public name. `eslint/no-var` remains enabled
+for all source formats; the compiler does not reject every `var` redeclaration.
+
+`eslint/no-eval` rejects direct and indirect evaluation by default. Only
+`extensions/qa-lab/src/web-runtime.ts` allows indirect evaluation, because QA
+scenario scripts need page-global declaration semantics that Playwright's
+expression evaluation does not preserve. Direct evaluation remains an error
+there. Tests that execute emitted browser scripts use isolated `node:vm`
+contexts instead of process-global evaluation.
+
 ```bash
 pnpm changed:lanes                            # inspect the local changed-lane classifier for origin/main...HEAD
 pnpm check:changed                            # smart local check gate: changed formatting/typecheck/lint/guards by boundary lane

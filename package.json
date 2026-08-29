@@ -2145,7 +2145,7 @@
     "markdown-it": "15.0.0",
     "marked": "18.0.10",
     "oxfmt": "0.60.0",
-    "oxlint": "1.78.0",
+    "oxlint": "1.79.0",
     "oxlint-tsgolint": "7.0.2001",
     "playwright": "1.62.1",
     "postcss": "8.5.26",

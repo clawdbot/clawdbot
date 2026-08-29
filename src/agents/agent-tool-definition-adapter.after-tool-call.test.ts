@@ -10,7 +10,7 @@ import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
-    hasHooks: vi.fn((_: string) => true),
+    hasHooks: vi.fn((_hookName: string) => true),
     runAfterToolCall: vi.fn(async () => {}),
   },
   BeforeToolCallBlockedError: class BeforeToolCallBlockedError extends Error {
@@ -23,7 +23,7 @@ const hookMocks = vi.hoisted(() => ({
     }
   },
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
-  consumeAdjustedParamsForToolCall: vi.fn((_: string) => undefined as unknown),
+  consumeAdjustedParamsForToolCall: vi.fn((_toolCallId: string) => undefined as unknown),
   recordAdjustedParamsForToolCall: vi.fn(),
   recordStructuredReplayTrustForToolCall: vi.fn(),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
