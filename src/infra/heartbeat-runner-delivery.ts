@@ -108,7 +108,7 @@ function resolveHeartbeatTargetProjection(params: {
 
 function queueHeartbeatTargetAwareness(params: {
   projection: HeartbeatTargetProjection;
-  payloads: readonly NormalizedOutboundPayload[];
+  payload: NormalizedOutboundPayload;
 }) {
   try {
     // Recheck the exact pre-send lifecycle before publishing awareness. Resets
@@ -124,11 +124,8 @@ function queueHeartbeatTargetAwareness(params: {
       return;
     }
     const deliveredText = resolveMirroredTranscriptText({
-      text: params.payloads
-        .map((payload) => payload.hookContent ?? resolveOutboundPayloadMirrorText(payload))
-        .filter((text) => text.trim())
-        .join("\n"),
-      mediaUrls: params.payloads.flatMap((payload) => payload.mediaUrls),
+      text: params.payload.hookContent ?? resolveOutboundPayloadMirrorText(params.payload),
+      mediaUrls: params.payload.mediaUrls,
     });
     if (!deliveredText) {
       return;
@@ -553,8 +550,7 @@ export async function finalizeHeartbeatOutcome(params: {
     deps: params.opts.deps,
     silent: normalized.silent,
     onDeliveredPayload: targetProjection
-      ? (payload) =>
-          queueHeartbeatTargetAwareness({ projection: targetProjection, payloads: [payload] })
+      ? (payload) => queueHeartbeatTargetAwareness({ projection: targetProjection, payload })
       : undefined,
   }).catch((error: unknown) => {
     recordUnconfirmedAlert(formatErrorMessage(error));

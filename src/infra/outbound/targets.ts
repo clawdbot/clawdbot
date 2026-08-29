@@ -42,7 +42,6 @@ import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targ
 type OutboundTarget = {
   channel: string;
   to?: string;
-  /** Candidate conversation session for post-send heartbeat awareness. */
   targetSessionKey?: string;
   chatType?: ChatType;
   reason?: string;
@@ -498,6 +497,13 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   if (delivery.channel === "none" || !delivery.to) {
     return delivery;
   }
+  const rejectDelivery = (reason: string) =>
+    buildNoHeartbeatDeliveryTarget({
+      reason,
+      accountId: delivery.accountId,
+      lastChannel: delivery.lastChannel,
+      lastAccountId: delivery.lastAccountId,
+    });
   const deliveryTo = delivery.to;
   const plugin = resolveOutboundChannelPlugin({
     channel: delivery.channel,
@@ -514,12 +520,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
       chatType: delivery.chatType,
     })
   ) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "no-route",
-      accountId: delivery.accountId,
-      lastChannel: delivery.lastChannel,
-      lastAccountId: delivery.lastAccountId,
-    });
+    return rejectDelivery("no-route");
   }
   if (!resolveSessionRoute && !plugin?.messaging?.targetResolver) {
     return delivery;
@@ -543,20 +544,10 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   if (targetResolution?.ok) {
     routeResolvedTarget = targetResolution.target;
   } else if (targetResolution && isReservedTargetLiteralError(targetResolution.error)) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: ownerRouteMustBeDirect ? "no-route" : "no-target",
-      accountId: delivery.accountId,
-      lastChannel: delivery.lastChannel,
-      lastAccountId: delivery.lastAccountId,
-    });
+    return rejectDelivery(ownerRouteMustBeDirect ? "no-route" : "no-target");
   }
   if (routeResolvedTarget?.kind === "user" && heartbeat?.directPolicy === "block") {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "dm-blocked",
-      accountId: delivery.accountId,
-      lastChannel: delivery.lastChannel,
-      lastAccountId: delivery.lastAccountId,
-    });
+    return rejectDelivery("dm-blocked");
   }
   if (
     ownerRouteMustBeDirect &&
@@ -565,12 +556,10 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
       to: routeResolvedTarget?.to ?? deliveryTo,
     })
   ) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "no-route",
-      accountId: delivery.accountId,
-      lastChannel: delivery.lastChannel,
-      lastAccountId: delivery.lastAccountId,
-    });
+    return rejectDelivery("no-route");
+  }
+  if (!resolveSessionRoute) {
+    return delivery;
   }
   const route = await (async () => {
     try {
@@ -593,12 +582,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
     return delivery;
   }
   if (route.chatType === "direct" && heartbeat?.directPolicy === "block") {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "dm-blocked",
-      accountId: delivery.accountId,
-      lastChannel: delivery.lastChannel,
-      lastAccountId: delivery.lastAccountId,
-    });
+    return rejectDelivery("dm-blocked");
   }
   if (
     ownerRouteMustBeDirect &&
@@ -608,21 +592,13 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
       chatType: normalizeChatType(route.chatType),
     })
   ) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "no-route",
-      accountId: delivery.accountId,
-      lastChannel: delivery.lastChannel,
-      lastAccountId: delivery.lastAccountId,
-    });
+    return rejectDelivery("no-route");
   }
   return {
     ...delivery,
-    // Core fallback routes synthesize `user:`/`channel:` addresses for session
-    // identity only. Keep the plugin's raw delivery address unless its own
-    // route hook explicitly owns transport canonicalization.
-    to: resolveSessionRoute ? route.to : delivery.to,
-    chatType: resolveSessionRoute ? route.chatType : delivery.chatType,
-    threadId: resolveSessionRoute ? (route.threadId ?? delivery.threadId) : delivery.threadId,
+    to: route.to,
+    chatType: route.chatType,
+    threadId: route.threadId ?? delivery.threadId,
     ...(route.recipientSessionExact === true ? { targetSessionKey: route.sessionKey } : {}),
   };
 }
