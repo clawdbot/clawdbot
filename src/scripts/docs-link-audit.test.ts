@@ -46,7 +46,7 @@ describe("docs-link-audit", () => {
     fs.writeFileSync(path.join(docsRoot, "docs.json"), '{"navigation":[]}', "utf8");
     fs.writeFileSync(
       path.join(docsRoot, "page.md"),
-      "# Page\n\n~~~bash\n[not a real link](/not-a-published-route)\n~~~\n\n````md\n```text\n[not another real link](/another-not-a-published-route)\n```\n````\n\n[page](/page)\n",
+      "# Page\n\n~~~bash\n[not a real link](/not-a-published-route)\n~~~not-a-closer\n[still not a real link](/still-not-a-published-route)\n~~~\n\n````md\n```text\n[not another real link](/another-not-a-published-route)\n```\n````\n\n[page](/page)\n",
       "utf8",
     );
 

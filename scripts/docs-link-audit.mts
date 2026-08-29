@@ -502,6 +502,10 @@ export function parseFenceDelimiter(line: string): FenceDelimiter | null {
   return { marker, length: token.length };
 }
 
+function isClosingFence(line: string, fence: FenceDelimiter): boolean {
+  return line.trimStart().slice(fence.length).trim() === "";
+}
+
 export function sanitizeDocsConfigForEnglishOnly(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value
@@ -748,7 +752,11 @@ function auditDocsLinks(options: { docsDir?: string; allowExternalClawHubRoutes?
       if (fence) {
         if (!codeFence) {
           codeFence = fence;
-        } else if (fence.marker === codeFence.marker && fence.length >= codeFence.length) {
+        } else if (
+          fence.marker === codeFence.marker &&
+          fence.length >= codeFence.length &&
+          isClosingFence(line, fence)
+        ) {
           codeFence = null;
         }
         continue;
