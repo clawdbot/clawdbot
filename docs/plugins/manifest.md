@@ -199,6 +199,14 @@ Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
 both. One declaration covers the complete config-repair artifact.
 
+Channel plugins maintained in the OpenClaw source tree also expose these config
+exports through a pure `config-doctor-api.ts` entrypoint. The core package retains
+that entrypoint alongside its channel schemas when the plugin runtime is
+distributed separately. This lets `doctor --fix` migrate older configuration
+before plugin installation or capability consent. An installed plugin's doctor
+contract remains authoritative; retained entrypoints do not expose state
+migrations, install plugins, or grant capabilities.
+
 ## backupResources reference
 
 Use `backupResources` to declare plugin-owned durable data that backups must
