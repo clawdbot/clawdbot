@@ -50,7 +50,9 @@ describe("pre-auth WebSocket head admission", () => {
       socket.destroy();
       req.destroy();
       handleUpgrade.mockRestore();
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
     }
   });
 });

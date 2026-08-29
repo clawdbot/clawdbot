@@ -902,6 +902,9 @@
       ],
       "openclaw/plugin-sdk/session-store-paths": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/session-store-paths.d.ts"
+      ],
+      "openclaw/plugin-sdk/gateway-config-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/gateway-config-runtime.d.ts"
       ]
     }
   }

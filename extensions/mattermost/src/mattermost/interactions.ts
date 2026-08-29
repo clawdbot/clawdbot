@@ -1,8 +1,8 @@
 // Mattermost plugin module implements interactions behavior.
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { resolveGatewayPort } from "openclaw/plugin-sdk/state-paths";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,

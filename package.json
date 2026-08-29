@@ -99,6 +99,7 @@
     "!dist/plugin-sdk/fetch-runtime.d.ts",
     "!dist/plugin-sdk/file-access-runtime.d.ts",
     "!dist/plugin-sdk/file-lock.d.ts",
+    "!dist/plugin-sdk/gateway-config-runtime.d.ts",
     "!dist/plugin-sdk/global-singleton.d.ts",
     "!dist/plugin-sdk/group-activation.d.ts",
     "!dist/plugin-sdk/heartbeat-runtime.d.ts",
@@ -775,6 +776,9 @@
     "./plugin-sdk/security-runtime": {
       "types": "./dist/plugin-sdk/security-runtime.d.ts",
       "default": "./dist/plugin-sdk/security-runtime.js"
+    },
+    "./plugin-sdk/gateway-config-runtime": {
+      "default": "./dist/plugin-sdk/gateway-config-runtime.js"
     },
     "./plugin-sdk/gateway-method-runtime": {
       "types": "./dist/plugin-sdk/gateway-method-runtime.d.ts",

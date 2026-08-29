@@ -19,5 +19,5 @@ export {
   resolvePreferredOpenClawTmpDir,
   runPluginCommandWithTimeout,
 } from "openclaw/plugin-sdk/sandbox";
-export { resolveGatewayPort } from "openclaw/plugin-sdk/state-paths";
+export { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 export { renderQrPngBase64, renderQrPngDataUrl, writeQrPngTempFile } from "./qr-image.js";
