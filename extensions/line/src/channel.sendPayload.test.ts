@@ -6,7 +6,6 @@ import { chunkMarkdownText as chunkMarkdownTextForLine } from "openclaw/plugin-s
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { linePlugin } from "./channel.js";
-import { createRuntime, lineResult } from "./channel.sendPayload.test-support.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { createRuntime, lineResult } from "./outbound-harness.test-support.js";

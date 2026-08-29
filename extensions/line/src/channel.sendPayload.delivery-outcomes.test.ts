@@ -2,7 +2,7 @@ import { HTTPFetchError } from "@line/bot-sdk";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import { createRuntime } from "./channel.sendPayload.test-support.js";
+import { createRuntime } from "./outbound-harness.test-support.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { setLineRuntime } from "./runtime.js";
 

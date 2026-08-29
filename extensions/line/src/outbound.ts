@@ -44,7 +44,6 @@ import {
   renderLinePresentation,
 } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
-import { createLineSendReceipt } from "./send-receipt.js";
 import { LINE_RETRY_KEY_TTL_MS, resolveLineNonDispatchRetryable } from "./send-retry.js";
 import type { LineChannelData, LineSendResult, ResolvedLineAccount } from "./types.js";
 
