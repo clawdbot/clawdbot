@@ -8,6 +8,7 @@ import {
   resolveLineGroupsConfig,
 } from "./group-keys.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
+import type { LineGroupConfig } from "./types.js";
 
 describe("resolveLineGroupLookupIds", () => {
   it("expands raw ids to both prefixed candidates", () => {
@@ -32,11 +33,43 @@ describe("resolveLineGroupConfigEntry", () => {
       requireMention: false,
     });
     expect(resolveLineGroupConfigEntry(groups, { roomId: "r1" })).toEqual({
+      requireMention: true,
       systemPrompt: "Room prompt",
     });
     expect(resolveLineGroupConfigEntry(groups, { groupId: "missing" })).toEqual({
       requireMention: true,
     });
+  });
+
+  it("keeps the settings an operator only wrote on the wildcard", () => {
+    // A room entry that says nothing about mentions must not silently turn the
+    // wildcard's `requireMention: false` back into the mention-gated default.
+    const groups = {
+      "*": { requireMention: false, systemPrompt: "House rules" },
+      C1: { skills: ["deploy"] },
+    };
+
+    expect(resolveLineGroupConfigEntry(groups, { groupId: "C1" })).toEqual({
+      requireMention: false,
+      systemPrompt: "House rules",
+      skills: ["deploy"],
+    });
+  });
+
+  it("resolves mentions the same way the channel reports them", () => {
+    // The inbound gate reads this entry while `/status` and the turn's activation
+    // directive read the scope tree. They answer the same question, so a room the
+    // wildcard opened must not be gated by one and open to the other.
+    const groups: Record<string, LineGroupConfig> = {
+      "*": { requireMention: false },
+      C1: { systemPrompt: "team bot" },
+    };
+    const cfg = { channels: { line: { groups } } } as unknown as OpenClawConfig;
+
+    const entry = resolveLineGroupConfigEntry(groups, { groupId: "C1" });
+    expect(entry?.requireMention !== false).toBe(
+      resolveLineGroupRequireMention({ cfg, accountId: null, groupId: "C1" }),
+    );
   });
 });
 
