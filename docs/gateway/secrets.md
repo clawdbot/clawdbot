@@ -211,6 +211,8 @@ Define providers under `secrets.providers`:
 }
 ```
 
+> **Note**: The `default` provider is a built-in alias for each source type (env, file, exec, store) and does not need to be explicitly defined unless you want to override the default source (e.g., change the env default from process.env to a specific env file).
+
 Provider aliases are source-specific. A matching explicit provider entry wins; if an `env` or `store` default alias is also used by an entry for another source, that source's built-in provider wins. Non-default aliases and `file` or `exec` providers must resolve to an explicit entry with the matching source.
 
 <Accordion title="Env provider">
