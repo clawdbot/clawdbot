@@ -4546,6 +4546,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       ],
       diagnostics: [],
     });
+    const repairedPluginDir = tempDirs.make("openclaw-plugin-repaired-generation-");
     mocks.updateNpmInstalledPlugins.mockResolvedValue({
       changed: true,
       config: {
@@ -4554,7 +4555,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             demo: {
               source: "npm",
               spec: "@openclaw/plugin-demo@1.0.0",
-              installPath: pluginDir,
+              installPath: repairedPluginDir,
             },
           },
         },
@@ -4642,9 +4643,17 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       diagnostics: [],
     });
     const skippedMessage = 'Skipping "skipped" (missing npm spec).';
+    const repairedTargetDir = tempDirs.make("openclaw-plugin-repaired-generation-");
     mocks.updateNpmInstalledPlugins.mockResolvedValue({
       changed: true,
-      config: { plugins: { installs: records } },
+      config: {
+        plugins: {
+          installs: {
+            ...records,
+            repaired: { ...records.repaired, installPath: repairedTargetDir },
+          },
+        },
+      },
       outcomes: [
         {
           pluginId: "skipped",
@@ -4724,6 +4733,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         resolvedAt: "2026-07-10T00:00:00.000Z",
       },
     });
+    const repairedPluginDir = tempDirs.make("openclaw-plugin-repaired-generation-");
     mocks.updateNpmInstalledPlugins.mockResolvedValue({
       changed: true,
       config: {
@@ -4732,7 +4742,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             demo: {
               source: "npm",
               spec: "@openclaw/plugin-demo@1.0.0",
-              installPath: pluginDir,
+              installPath: repairedPluginDir,
             },
           },
         },
