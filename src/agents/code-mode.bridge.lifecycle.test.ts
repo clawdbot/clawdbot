@@ -587,7 +587,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
             controller.signal,
           ),
         );
-        expect(result.status).toBe("waiting");
+        expect(result.status, JSON.stringify(result)).toBe("waiting");
         const runId = result.runId as string;
         const initial = expectDefined(testing.activeRuns.get(runId), "initial snapshot");
         expect(applyCodeModeCatalog(owner).catalogReused).toBe(true);
