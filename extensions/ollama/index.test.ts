@@ -41,7 +41,8 @@ const buildOllamaModelDefinitionMock = vi.hoisted(() =>
   vi.fn((modelId: string, contextWindow?: number, capabilities?: string[]) => {
     const normalized = modelId.trim().toLowerCase();
     const isKnownCloudReasoningModel =
-      normalized === "glm-5.2:cloud" || /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized);
+      /^glm-5\.[23](-flash)?:cloud$/.test(normalized) ||
+      /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized);
     return {
       id: modelId,
       name: modelId,
@@ -2158,6 +2159,7 @@ describe("ollama plugin", () => {
       "kimi-k3",
       "glm-5.1",
       "glm-5.2",
+      "glm-5.3",
     ]);
     expect(result.provider.models).toEqual([
       expect.objectContaining({
@@ -2190,6 +2192,13 @@ describe("ollama plugin", () => {
       }),
       expect.objectContaining({
         id: "glm-5.2",
+        contextWindow: 1_000_000,
+        reasoning: true,
+        input: ["text"],
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+      }),
+      expect.objectContaining({
+        id: "glm-5.3",
         contextWindow: 1_000_000,
         reasoning: true,
         input: ["text"],

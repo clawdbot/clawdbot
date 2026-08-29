@@ -84,6 +84,8 @@ describe("ollama provider models", () => {
     const servedModels = [
       ["glm-5.1", 202_752, ["text"], true],
       ["glm-5.2", 1_000_000, ["text"], true],
+      ["glm-5.3", 1_000_000, ["text"], true],
+      ["glm-5.3-flash", 1_000_000, ["text", "image"], true],
       ["minimax-m2.7", 196_608, ["text"], true],
       ["deepseek-v4-flash", 1_048_576, ["text"], true],
       ["deepseek-v4-flash:0731", 1_048_576, ["text"], true],

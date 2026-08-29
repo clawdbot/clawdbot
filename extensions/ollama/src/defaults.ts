@@ -36,6 +36,11 @@ export const OLLAMA_CLOUD_DEFAULT_MODELS = [
     contextWindow: 1_000_000,
     capabilities: ["completion", "thinking", "tools"],
   },
+  {
+    id: "glm-5.3",
+    contextWindow: 1_000_000,
+    capabilities: ["completion", "thinking", "tools"],
+  },
 ] as const;
 
 /** Cloud models are referenced bare, `:cloud`-suffixed, and `-cloud`-suffixed. */

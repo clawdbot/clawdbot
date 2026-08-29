@@ -250,6 +250,30 @@
             }
           },
           {
+            "id": "glm-5.3",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "glm-5.3-flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
+            }
+          },
+          {
             "id": "gpt-oss:120b",
             "reasoning": true,
             "input": ["text"],

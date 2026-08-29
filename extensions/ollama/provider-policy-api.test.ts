@@ -121,7 +121,7 @@ describe("ollama provider policy public artifact", () => {
     });
   });
 
-  it.each(["glm-5.2", "deepseek-v4-pro:cloud"])(
+  it.each(["glm-5.2", "glm-5.3", "glm-5.3:cloud", "deepseek-v4-pro:cloud"])(
     "exposes full native effort for cloud model %s when lightweight projections omit metadata",
     (modelId) => {
       expect(resolveThinkingProfile({ provider: "ollama-cloud", modelId }).levels).toEqual([
