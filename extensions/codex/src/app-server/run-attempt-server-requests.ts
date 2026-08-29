@@ -176,11 +176,6 @@ export function createCodexAttemptServerRequestController(
         name: call.tool,
         arguments: call.arguments,
       });
-      projector?.recordDynamicToolCall({
-        callId: call.callId,
-        tool: call.tool,
-        arguments: call.arguments,
-      });
       emitExecutionPhaseOnce(`tool:${call.callId}`, {
         phase: "tool_execution_started",
         tool: call.tool,
@@ -206,6 +201,12 @@ export function createCodexAttemptServerRequestController(
           },
         });
       }
+      // Emit the keyed row first so channels coalesce the formatted summary into it.
+      projector?.recordDynamicToolCall({
+        callId: call.callId,
+        tool: call.tool,
+        arguments: call.arguments,
+      });
       const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({ call, config: params.config });
       const toolStartedAt = Date.now();
       let terminalDiagnosticObserved = false;

@@ -72,10 +72,19 @@ describe("Codex channel tool progress", () => {
     );
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();
+    const presentationOrder: string[] = [];
     params.messageChannel = "telegram";
     params.verboseLevel = "on";
-    params.onAgentEvent = onAgentEvent;
-    params.onToolResult = onToolResult;
+    params.onAgentEvent = (event) => {
+      onAgentEvent(event);
+      if (event.stream === "tool") {
+        presentationOrder.push(`event:${event.data.phase}`);
+      }
+    };
+    params.onToolResult = (payload) => {
+      onToolResult(payload);
+      presentationOrder.push("summary");
+    };
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -188,6 +197,7 @@ describe("Codex channel tool progress", () => {
 
     for (const testCase of cases) {
       const resultCount = onToolResult.mock.calls.length;
+      const presentationCount = presentationOrder.length;
       await testCase.drive();
       const toolEvents = onAgentEvent.mock.calls
         .map(([event]) => event)
@@ -209,6 +219,12 @@ describe("Codex channel tool progress", () => {
       expect(onToolResult.mock.calls.length, `${testCase.label} verbose callback`).toBe(
         resultCount + 1,
       );
+      if (testCase.label === "OpenClaw dynamic tool") {
+        expect(presentationOrder.slice(presentationCount, presentationCount + 2)).toEqual([
+          "event:start",
+          "summary",
+        ]);
+      }
     }
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
