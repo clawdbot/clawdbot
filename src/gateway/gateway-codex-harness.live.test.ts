@@ -272,7 +272,7 @@ function resolveCodexHarnessExpectedRequestEffort(modelId: string): string | nul
   const configured = process.env.OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT;
   if (configured?.trim()) {
     const expected = resolveCodexHarnessThinkingLevel(configured);
-    return expected === "off" ? null : expected === "ultra" ? "max" : expected;
+    return expected === "off" ? null : expected;
   }
   const supported = CODEX_HARNESS_SUPPORTED_EFFORTS.get(modelId);
   if (!supported) {
@@ -281,8 +281,8 @@ function resolveCodexHarnessExpectedRequestEffort(modelId: string): string | nul
   if (CODEX_HARNESS_THINKING === "off") {
     return null;
   }
-  // Codex preserves Ultra in config but intentionally sends Max to the model.
-  // Compare the request-facing lifecycle event to that wire contract.
+  // The lifecycle event records turn/start effort before Codex maps Ultra to Max
+  // for its downstream model request; Ultra still controls native collaboration.
   const candidates =
     CODEX_HARNESS_THINKING === "ultra"
       ? supported
@@ -297,7 +297,7 @@ function resolveCodexHarnessExpectedRequestEffort(modelId: string): string | nul
     ) ??
     candidates.at(-1) ??
     null;
-  return configuredEffort === "ultra" ? "max" : configuredEffort;
+  return configuredEffort;
 }
 
 function logCodexLiveStep(step: string, details?: Record<string, unknown>): void {
