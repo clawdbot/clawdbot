@@ -64,6 +64,20 @@ export type TabAccessPolicy = {
   epochIsCurrent(tabId: number, epoch: TabAccessEpoch): boolean;
   invalidateTab(tabId: number): void;
   retireTab(tabId: number): void;
+  retireTabDocument(tabId: number): void;
+  forwardDocumentEvent(
+    event: Record<string, unknown>,
+    send: (event: Record<string, unknown>) => void,
+  ): void;
+  navigateTab(
+    tabId: number,
+    epoch: TabAccessEpoch,
+    params: Record<string, unknown>,
+    isAttached: () => TabAccessEpoch | undefined,
+    isConnectionCurrent: () => boolean,
+    sendCommand: (method: string, params: Record<string, unknown>) => Promise<unknown>,
+  ): Promise<unknown>;
+  invalidateDocumentGroup(group?: TabGroupSnapshot): void;
   renewTabAccess(
     tabId: number,
     attachedEpoch: TabAccessEpoch | undefined,
@@ -82,6 +96,10 @@ export type TabAccessPolicy = {
   ): Promise<void>;
   inspectTab(tabId: number, epoch?: TabAccessEpoch): Promise<TabAccessState>;
   requireTab(tabId: number, epoch?: TabAccessEpoch): Promise<AccessibleBrowserTabSnapshot>;
+  requireTabAfterNavigation(
+    tabId: number,
+    epoch: TabAccessEpoch,
+  ): Promise<AccessibleBrowserTabSnapshot>;
   listAccessibleTabs(options?: {
     allowDuringTransition?: boolean;
   }): Promise<AccessibleBrowserTabSnapshot[]>;

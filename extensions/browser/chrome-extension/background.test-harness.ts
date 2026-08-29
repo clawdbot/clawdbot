@@ -74,13 +74,9 @@ export async function loadBackground({
   let tabsRemovedListener: ((tabId: number) => void) | undefined;
   let tabsReplacedListener: ((addedTabId: number, removedTabId: number) => void) | undefined;
   let tabGroupUpdatedListener: ((group?: { id: number; title?: string }) => void) | undefined;
-  let tabGroupRemovedListener: (() => void) | undefined;
+  let tabGroupRemovedListener: ((group?: { id: number; title?: string }) => void) | undefined;
   let tabsUpdatedListener:
-    | ((
-        tabId: number,
-        changeInfo: { groupId?: number; url?: string; status?: string },
-        tab?: BrowserTabSnapshot,
-      ) => void)
+    | ((tabId: number, changeInfo: Partial<BrowserTabSnapshot>, tab?: BrowserTabSnapshot) => void)
     | undefined;
   let nextStorageGet: Promise<void> | null = null;
   let nextStorageRemove: Promise<void> | null = null;
@@ -339,7 +335,7 @@ export async function loadBackground({
         }),
       },
       onRemoved: {
-        addListener: vi.fn((listener: () => void) => {
+        addListener: vi.fn((listener: typeof tabGroupRemovedListener) => {
           tabGroupRemovedListener = listener;
         }),
       },
@@ -580,6 +576,7 @@ export async function loadBackground({
     shareTab: (tabId: number) => sharedTabIds.add(tabId),
     unshareTab: (tabId: number) => sharedTabIds.delete(tabId),
     tabGroupsQuery: chromeMock.tabGroups.query,
+    tabGroupsGet: chromeMock.tabGroups.get,
     tabGroupsUpdate: chromeMock.tabGroups.update,
     tabGroupUpdatedListener,
     tabGroupRemovedListener,
@@ -594,7 +591,7 @@ export async function loadBackground({
     tabsRemovedListener,
     tabsReplacedListener,
     windowsUpdate: chromeMock.windows.update,
-    updateTab: (tabId: number, change: Partial<BrowserTabSnapshot>) => {
+    updateTab: (tabId: number, change: Partial<BrowserTabSnapshot>, notify = true) => {
       const tab = { ...tabsById.get(tabId), ...change, id: tabId };
       tabsById.set(tabId, tab);
       if (typeof change.groupId === "number") {
@@ -604,7 +601,9 @@ export async function loadBackground({
           sharedTabIds.delete(tabId);
         }
       }
-      tabsUpdatedListener?.(tabId, change, { ...tab, groupId: sharedTabIds.has(tabId) ? 7 : -1 });
+      if (notify) {
+        tabsUpdatedListener?.(tabId, change, { ...tab, groupId: sharedTabIds.has(tabId) ? 7 : -1 });
+      }
     },
   };
 }

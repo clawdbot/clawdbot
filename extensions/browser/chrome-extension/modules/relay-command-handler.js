@@ -8,6 +8,8 @@ export function createRelayCommandHandler({
   scheduleTabsSync,
   captureAccess,
   requireAccessibleTab,
+  requireNavigatedTab,
+  navigateTab,
 }) {
   return async (message, isCurrent) => {
     const { seq } = message;
@@ -20,9 +22,9 @@ export function createRelayCommandHandler({
       assertCurrent();
       send(frame);
     };
-    const requireTab = async (tabId, epoch) => {
+    const requireTab = async (tabId, epoch, check = requireAccessibleTab) => {
       assertCurrent();
-      const tab = await requireAccessibleTab(tabId, epoch);
+      const tab = await check(tabId, epoch);
       assertCurrent();
       return tab;
     };
@@ -49,12 +51,20 @@ export function createRelayCommandHandler({
           const target = message.sessionId
             ? { tabId: message.tabId, sessionId: message.sessionId }
             : { tabId: message.tabId };
-          const result = await chrome.debugger.sendCommand(
-            target,
-            message.method,
-            message.params ?? {},
+          const sendCommand = (method, params) =>
+            chrome.debugger.sendCommand(target, method, params);
+          const controlledBlank =
+            !message.sessionId &&
+            message.method === "Page.navigate" &&
+            message.params?.url === "about:blank";
+          const result = controlledBlank
+            ? await navigateTab(message.tabId, epoch, message.params, isCurrent, sendCommand)
+            : await sendCommand(message.method, message.params ?? {});
+          await requireTab(
+            message.tabId,
+            epoch,
+            controlledBlank ? requireNavigatedTab : requireAccessibleTab,
           );
-          await requireTab(message.tabId, epoch);
           reply({ type: "result", seq, result: result ?? {} });
           return;
         }

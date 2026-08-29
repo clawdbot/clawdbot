@@ -275,6 +275,7 @@ async function attachDebugger(tabId, assertCurrent, creationEpoch) {
 async function detachDebugger(tabId) {
   // Always call Chrome: an attach can complete before attachedTabs records it.
   // The unconditional detach closes that revocation race.
+  tabAccessPolicy.retireTabDocument(tabId);
   attachedTabs.delete(tabId);
   attachedAccessEpochs.delete(tabId);
   try {
@@ -418,6 +419,16 @@ const handleRelayCommand = createRelayCommandHandler({
   scheduleTabsSync,
   captureAccess: (tabId, method) => tabAccessPolicy.capture(tabId, method),
   requireAccessibleTab: (tabId, epoch) => tabAccessPolicy.requireTab(tabId, epoch),
+  requireNavigatedTab: (tabId, epoch) => tabAccessPolicy.requireTabAfterNavigation(tabId, epoch),
+  navigateTab: (tabId, epoch, params, isCurrent, sendCommand) =>
+    tabAccessPolicy.navigateTab(
+      tabId,
+      epoch,
+      params,
+      () => attachedAccessEpochs.get(tabId),
+      isCurrent,
+      sendCommand,
+    ),
 });
 
 async function sendHello(socket) {

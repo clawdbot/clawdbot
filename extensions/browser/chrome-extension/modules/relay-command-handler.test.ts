@@ -20,10 +20,12 @@ function createHarness() {
     attachDebugger: vi.fn(),
     detachDebugger: vi.fn(async () => undefined),
     createTab: vi.fn(),
-    focusWindowForTab,
     scheduleTabsSync: vi.fn(),
+    focusWindowForTab,
     captureAccess: vi.fn(() => epoch),
+    navigateTab: vi.fn(),
     requireAccessibleTab,
+    requireNavigatedTab: requireAccessibleTab,
   });
   return {
     chromeMock,

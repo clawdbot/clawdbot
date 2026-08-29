@@ -132,6 +132,21 @@ Open the extension's Settings page to change the access mode. Switching to
 Selected tabs immediately detaches ungrouped tabs, including attaches already
 in flight. Agent-created tabs stay in the OpenClaw group in either mode.
 
+An agent-created tab can initialize at `about:blank` on its creating relay
+connection until its first nonblank document commits. An explicitly commanded
+main-frame navigation of an already authorized tab can also temporarily use
+exact `about:blank`, for example during a performance trace reset. This requires
+Chrome to confirm that navigation on the same attachment; an iframe navigation
+or a blank URL alone cannot grant access.
+
+Each exception ends on the next nonblank document commit, access-mode change,
+revocation, tab closure or replacement, reconnect, or extension restart.
+A commanded blank navigation also ends on debugger detachment or when its
+original group or window changes. Pausing a blank tab still revokes access.
+Ordinary blank tabs and other internal pages remain excluded; an uncommanded return to `about:blank`
+does not restore access. Failed navigation never closes an existing tab or
+restores a URL over user navigation.
+
 The extension excludes incognito tabs, internal pages such as `chrome://` and
 `chrome-extension://`, and tabs without a usable current URL. `file://` access
 also requires Chrome's **Allow access to file URLs** setting.

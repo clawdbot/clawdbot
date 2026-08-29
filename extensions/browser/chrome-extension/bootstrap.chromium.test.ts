@@ -24,6 +24,7 @@ import { createBootstrapDiagnostic } from "./bootstrap-diagnostics.test-support.
 import chromeExtensionManifest from "./manifest.json" with { type: "json" };
 import { holdNavigationAccessCheck } from "./navigation-race.test-support.js";
 import { relayTestKey } from "./relay-key.test-support.js";
+import { assertRelayTabCreation } from "./tab-creation.test-support.js";
 
 declare const chrome: {
   runtime: { sendMessage: (message: unknown) => Promise<Record<string, unknown>> };
@@ -220,7 +221,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
             diagnostic.mark("http.request", true);
             res.once("finish", () => diagnostic.mark("http.finish", res.statusCode));
             res.writeHead(200, { "content-type": "text/html" });
-            res.end("<title>OpenClaw selected tab</title>");
+            res.end("<title>OpenClaw selected tab</title><h1>OpenClaw created destination</h1>");
             return;
           }
           res.writeHead(426);
@@ -419,6 +420,38 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           refreshConfigFromDisk: false,
         });
         const dispatcher = createBrowserRouteDispatcher(routeContext);
+        const creationPolicy = browserState.resolved.ssrfPolicy;
+        browserState.resolved.ssrfPolicy = {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["127.0.0.1"],
+        };
+        try {
+          for (const accessMode of ["all", "selected"] as const) {
+            expect(
+              await extensionPage.evaluate(
+                async (mode) =>
+                  await chrome.runtime.sendMessage({ type: "setAccessMode", accessMode: mode }),
+                accessMode,
+              ),
+            ).toMatchObject({ ok: true });
+            await assertRelayTabCreation({
+              context,
+              extensionPage,
+              dispatcher,
+              url: `http://127.0.0.1:${gatewayPort}/browser-owner-proof`,
+              accessMode,
+            });
+          }
+        } finally {
+          await extensionPage.evaluate(
+            async () =>
+              await chrome.runtime.sendMessage({
+                type: "setAccessMode",
+                accessMode: "all",
+              }),
+          );
+          browserState.resolved.ssrfPolicy = creationPolicy;
+        }
         const matchingDoctor = await dispatcher.dispatch({
           method: "GET",
           path: "/doctor",
