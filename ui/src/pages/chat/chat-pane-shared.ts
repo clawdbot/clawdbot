@@ -251,10 +251,25 @@ export type ChatPaneConnectionScope = {
 export const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
-export const CHAT_AUTOTYPE_EXEMPT_SELECTOR =
-  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox'], [data-chat-autotype-exempt]";
-export const CHAT_SPACE_ACTIVATION_SELECTOR =
-  "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='radio'], [role='switch']";
+
+const CHAT_AUTOTYPE_INTERACTIVE_ROLES = new Set([
+  "button",
+  "checkbox",
+  "combobox",
+  "link",
+  "listbox",
+  "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
+  "option",
+  "radio",
+  "slider",
+  "spinbutton",
+  "switch",
+  "tab",
+  "textbox",
+  "treeitem",
+]);
 
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
@@ -263,10 +278,21 @@ export const NEW_SESSION_LIST_LOADING_MESSAGE =
 export const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
 
-export function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boolean {
-  return event
-    .composedPath()
-    .some((target) => target instanceof Element && target.matches(selector));
+function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
+  return event.composedPath().some((target) => {
+    if (!(target instanceof HTMLElement)) {
+      return false;
+    }
+    const role = target.getAttribute("role");
+    return (
+      target.isContentEditable ||
+      target.hasAttribute("data-chat-autotype-exempt") ||
+      target.hasAttribute("tabindex") ||
+      target.tabIndex >= 0 ||
+      (role !== null && CHAT_AUTOTYPE_INTERACTIVE_ROLES.has(role)) ||
+      ("open" in target && (target as HTMLElement & { open?: boolean }).open === true)
+    );
+  });
 }
 
 export function focusChatComposerFromPrintableKeydown(
@@ -280,8 +306,7 @@ export function focusChatComposerFromPrintableKeydown(
     event.ctrlKey ||
     event.altKey ||
     event.key.length !== 1 ||
-    keyboardEventPathMatches(event, CHAT_AUTOTYPE_EXEMPT_SELECTOR) ||
-    (event.key === " " && keyboardEventPathMatches(event, CHAT_SPACE_ACTIVATION_SELECTOR)) ||
+    keyboardEventPathHasInteractiveTarget(event) ||
     document.openClawModalLayers?.size ||
     document.querySelector("[aria-modal='true']")
   ) {

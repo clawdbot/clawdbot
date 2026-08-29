@@ -8,6 +8,47 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("keeps agent-menu keyboard selection out of the new-session composer", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      await installMockGateway(page, {
+        defaultAgentId: "main",
+        methodResponses: {
+          "agents.list": {
+            agents: [
+              { id: "main", workspace: "/tmp/main" },
+              { id: "research", workspace: "/tmp/research" },
+            ],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+
+      const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
+      const trigger = picker.locator(".agent-select__trigger");
+      await trigger.waitFor({ state: "visible" });
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("ArrowDown");
+      const option = picker.getByRole("menuitemradio", { name: "research", exact: true });
+      await expect
+        .poll(() => option.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+
+      await page.keyboard.press("Space");
+
+      await expect
+        .poll(() => picker.locator(".agent-select__label").textContent())
+        .toBe("research");
+      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
+      await expect
+        .poll(() => picker.locator("wa-dropdown").evaluate((element) => element.open))
+        .toBe(false);
+    });
+  });
+
   it("preserves the first character typed outside the new-session composer", async () => {
     await suite.withPage({}, async ({ page }) => {
       await installMockGateway(page);
