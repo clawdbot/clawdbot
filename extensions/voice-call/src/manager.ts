@@ -91,6 +91,7 @@ export class CallManager {
     }
   >();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
+  private pendingHangupTimers = new Map<CallId, NodeJS.Timeout>();
   private initialMessageInFlight = new Set<CallId>();
 
   /**
@@ -348,7 +349,7 @@ export class CallManager {
   /**
    * End an active call once its last reply has finished playing to the caller.
    */
-  endCallAfterPlayback(callId: CallId, label: string, playback: PlaybackOutcome): void {
+  endCallAfterPlayback(callId: CallId, label: string, playback: PlaybackOutcome | undefined): void {
     scheduleHangupAfterPlaybackWithContext(this.getContext(), callId, label, playback);
   }
 
@@ -367,6 +368,7 @@ export class CallManager {
       endCallOperations: this.endCallOperations,
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
+      pendingHangupTimers: this.pendingHangupTimers,
       initialMessageInFlight: this.initialMessageInFlight,
       onCallAnswered: (call) => {
         this.maybeSpeakInitialMessageOnAnswered(call);

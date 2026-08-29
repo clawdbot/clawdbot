@@ -472,6 +472,7 @@ describe("voice-call outbound helpers", () => {
       providerCallIdMap: new Map([["provider-1", "call-1"]]),
       provider: { name: "twilio", playTts },
       initialMessageInFlight: new Set(),
+      pendingHangupTimers: new Map(),
       config: {
         outbound: { notifyHangupDelaySec: Number.MAX_SAFE_INTEGER },
         tts: { provider: "openai", providers: { openai: { voice: "alloy" } } },

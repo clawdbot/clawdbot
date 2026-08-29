@@ -84,4 +84,47 @@ describe("CallManager agent-requested hangup", () => {
       vi.useRealTimers();
     }
   });
+
+  it("cancels a pending grace hangup when the caller speaks again", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new FakeProvider("plivo");
+      const { manager } = await createManagerHarness(
+        { outbound: { notifyHangupDelaySec: 3 } },
+        provider,
+      );
+      const callId = await answeredCall(manager);
+      const call = manager.getCall(callId);
+
+      manager.endCallAfterPlayback(callId, "Agent hangup", "unconfirmed");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(provider.hangupCalls).toHaveLength(0);
+
+      // Caller resumes mid-grace: the stale hangup must not fire.
+      manager.processEvent({
+        id: "evt-agent-hangup-resumed",
+        type: "call.speech",
+        callId,
+        providerCallId: call?.providerCallId,
+        timestamp: Date.now(),
+        transcript: "wait are you still there",
+        isFinal: true,
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(provider.hangupCalls).toHaveLength(0);
+      expect(manager.getCall(callId)).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ends the call when the agent signs off without closing words", async () => {
+    const provider = new FakeProvider("plivo");
+    const { manager } = await createManagerHarness({}, provider);
+    const callId = await answeredCall(manager);
+
+    manager.endCallAfterPlayback(callId, "Agent hangup", undefined);
+    await vi.waitFor(() => expect(provider.hangupCalls).toHaveLength(1));
+  });
 });

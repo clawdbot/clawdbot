@@ -2244,6 +2244,37 @@ describe("VoiceCallWebhookServer classic response routing", () => {
     expect(endCallAfterPlayback).not.toHaveBeenCalled();
   });
 
+  it("ends the call for an end_call reply that carries no closing words", async () => {
+    const call = createCall(Date.now());
+    const speak = vi.fn(async () => ({ success: true, playback: "unconfirmed" }));
+    const endCallAfterPlayback = vi.fn();
+    const manager = {
+      getCall: (callId: string) => (callId === call.callId ? call : undefined),
+      speak,
+      endCallAfterPlayback,
+    } as unknown as CallManager;
+    const server = new VoiceCallWebhookServer(
+      createConfig({}),
+      manager,
+      provider,
+      {} as never,
+      undefined,
+      {} as never,
+    );
+    mocks.generateVoiceResponse
+      .mockReset()
+      .mockResolvedValue({ text: null, deliveredEarly: false, endCall: true });
+
+    await (
+      server as unknown as {
+        handleInboundResponse: (callId: string, message: string) => Promise<void>;
+      }
+    ).handleInboundResponse(call.callId, "bye");
+
+    expect(speak).not.toHaveBeenCalled();
+    expect(endCallAfterPlayback).toHaveBeenCalledWith(call.callId, "Agent hangup", undefined);
+  });
+
   it("forwards a barge-in so the hangup owner can keep the call open", async () => {
     const { call, endCallAfterPlayback } = await runClassicHangupTurn({
       speakResult: { success: true, playback: "cancelled" },

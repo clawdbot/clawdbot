@@ -33,6 +33,8 @@ type CallManagerTransientState = {
   endCallOperations: Map<CallId, Promise<CallEndResult>>;
   transcriptWaiters: Map<CallId, TranscriptWaiter>;
   maxDurationTimers: Map<CallId, NodeJS.Timeout>;
+  /** Grace-period hangups awaiting their delay; cancelled when the caller speaks again. */
+  pendingHangupTimers: Map<CallId, NodeJS.Timeout>;
   initialMessageInFlight: Set<CallId>;
 };
 

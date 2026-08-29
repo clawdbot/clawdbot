@@ -52,6 +52,7 @@ type SpeakContext = Pick<
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "pendingHangupTimers"
   | "endCallOperations"
 >;
 
@@ -65,6 +66,7 @@ type ConversationContext = Pick<
   | "activeTurnCalls"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "pendingHangupTimers"
   | "initialMessageInFlight"
   | "endCallOperations"
 >;
@@ -375,20 +377,37 @@ export async function sendDtmf(
   }
 }
 
+/** Drop a grace-period hangup that has not fired yet. */
+export function cancelPendingHangup(
+  ctx: Pick<CallManagerContext, "pendingHangupTimers">,
+  callId: CallId,
+  reason: string,
+): void {
+  const timer = ctx.pendingHangupTimers.get(callId);
+  if (!timer) {
+    return;
+  }
+  clearTimeout(timer);
+  ctx.pendingHangupTimers.delete(callId);
+  console.log(`[voice-call] Cancelled pending hangup for call ${callId} (${reason})`);
+}
+
 /**
  * Hang up once the final reply has reached the caller.
  *
  * The decision follows what actually happened to that playback, not what the
- * provider is capable of: a carrier-confirmed drain can end the call at once,
- * an unobserved playback keeps the configured notify grace so closing words are
- * not cut off, and a cancelled playback (caller barge-in) keeps the line open
- * because the caller took the floor.
+ * provider is capable of. A carrier-confirmed drain ends the call at once. An
+ * unobserved playback keeps the configured notify grace so closing words are not
+ * cut off, and that pending hangup is cancelled if the caller speaks again during
+ * the grace. A cancelled playback (caller barge-in) keeps the line open because
+ * the caller took the floor. Passing no outcome means nothing was played, so
+ * there is nothing to truncate and the call ends immediately.
  */
 export function scheduleHangupAfterPlayback(
   ctx: SpeakContext,
   callId: CallId,
   label: string,
-  playback: PlaybackOutcome,
+  playback: PlaybackOutcome | undefined,
 ): void {
   const call = ctx.activeCalls.get(callId);
   if (!call || TerminalStates.has(call.state)) {
@@ -399,6 +418,7 @@ export function scheduleHangupAfterPlayback(
     return;
   }
   const hangUp = async () => {
+    ctx.pendingHangupTimers.delete(callId);
     const currentCall = ctx.activeCalls.get(callId);
     if (!currentCall || TerminalStates.has(currentCall.state)) {
       return;
@@ -411,18 +431,23 @@ export function scheduleHangupAfterPlayback(
     }
   };
 
-  if (playback === "confirmed") {
-    console.log(`[voice-call] ${label}: playback drained, hanging up call ${callId}`);
+  if (playback !== "unconfirmed") {
+    const why = playback === "confirmed" ? "playback drained" : "nothing to play";
+    console.log(`[voice-call] ${label}: ${why}, hanging up call ${callId}`);
     void hangUp();
     return;
   }
 
+  cancelPendingHangup(ctx, callId, "superseded");
   const delaySec = ctx.config.outbound.notifyHangupDelaySec;
   const delayMs = resolveVoiceCallSecondsTimerDelayMs(delaySec, 0);
   console.log(`[voice-call] ${label}: auto-hangup in ${delaySec}s for call ${callId}`);
-  setTimeout(() => {
-    void hangUp();
-  }, delayMs);
+  ctx.pendingHangupTimers.set(
+    callId,
+    setTimeout(() => {
+      void hangUp();
+    }, delayMs),
+  );
 }
 
 export async function speakInitialMessage(

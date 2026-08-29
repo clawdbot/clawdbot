@@ -1091,8 +1091,11 @@ export class VoiceCallWebhookServer {
         finalPlayback = speakResult.playback;
       }
 
-      if (result.endCall && finalPlayback) {
-        this.logger.info(`Agent requested hangup for call ${callId}`);
+      if (result.endCall) {
+        // No playback outcome means the reply carried no audio, so nothing can be truncated.
+        this.logger.info(
+          `Agent requested hangup for call ${callId} (playback=${finalPlayback ?? "none"})`,
+        );
         this.manager.endCallAfterPlayback(callId, "Agent hangup", finalPlayback);
       }
     } catch (err) {
