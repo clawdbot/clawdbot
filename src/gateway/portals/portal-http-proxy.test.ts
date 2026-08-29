@@ -9,6 +9,7 @@ import net, { type AddressInfo } from "node:net";
 import { duplexPair, type Duplex } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { type RawData, WebSocket, WebSocketServer } from "ws";
+import { getFreePort } from "../../test-utils/ports.js";
 import type { PortalTarget } from "./portal-http-proxy.js";
 import { createGatewayPortalService, type GatewayPortalService } from "./portal-service.js";
 
@@ -760,16 +761,17 @@ describe("portal HTTP proxy", () => {
 
   it("reaches IPv6-only targets through the localhost dual-stack dial", async () => {
     // Node >=17 dev servers (Vite, Next.js) often bind ::1 only on "localhost".
+    // Probe IPv4 so localhost cannot reach the shared IPv4 fixture on the same port.
+    const v6Port = await getFreePort();
     const v6Target = createServer((req, res) => {
       res.statusCode = 200;
       res.end("v6 proxied");
     });
     await new Promise<void>((resolve, reject) => {
       v6Target.once("error", reject);
-      v6Target.listen(0, "::1", () => resolve());
+      v6Target.listen(v6Port, "::1", () => resolve());
     });
     try {
-      const v6Port = (v6Target.address() as AddressInfo).port;
       const portal = await portalService().open({ targetPort: v6Port });
       const result = await httpCall({
         port: portal.listenPort,

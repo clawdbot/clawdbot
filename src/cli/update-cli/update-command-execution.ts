@@ -24,6 +24,7 @@ import {
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
+  resolvePreparedGatewayUpdatePolicy,
   shouldBlockMutableUpdateFromGatewayServiceEnv,
   UpdateCommandAbort,
   type ManagedServiceRootRedirect,
@@ -76,6 +77,7 @@ export async function executeMutableUpdate(params: {
       : null;
   const stopManagedServiceBeforeMutableUpdate = async (
     mutationRoots: readonly string[] = [params.root],
+    phase: "inspect" | "prepare" = "prepare",
   ) => {
     if (params.updateInstallKind !== "package" && params.updateInstallKind !== "git") {
       return;
@@ -88,6 +90,8 @@ export async function executeMutableUpdate(params: {
           root: mutationRoot,
           shouldRestart: params.shouldRestart,
           jsonMode: Boolean(params.opts.json),
+          timeoutMs: params.updateStepTimeoutMs,
+          phase,
         });
         if (preManagedServiceStop.windowsTaskAutoStartRecovery) {
           params.recoveryState.windowsTaskAutoStartRecovery =
@@ -114,6 +118,10 @@ export async function executeMutableUpdate(params: {
       throw new UpdateCommandAbort();
     }
 
+    if (phase === "inspect" && preManagedServiceStop?.serviceUpdateVerdict?.kind === "foreign") {
+      preManagedServiceStop = undefined;
+    }
+
     try {
       ownedManagedUpdateContext = await captureOwnedManagedUpdateContext({
         stopState: preManagedServiceStop,
@@ -131,13 +139,6 @@ export async function executeMutableUpdate(params: {
       throw new UpdateCommandAbort();
     }
 
-    if (preManagedServiceStop?.blockMessage) {
-      params.stop();
-      defaultRuntime.error(preManagedServiceStop.blockMessage);
-      defaultRuntime.exit(1);
-      throw new UpdateCommandAbort();
-    }
-
     if (shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop })) {
       params.stop();
       const updateLabel = params.updateInstallKind === "git" ? "Git updates" : "Package updates";
@@ -151,11 +152,21 @@ export async function executeMutableUpdate(params: {
       defaultRuntime.exit(1);
       throw new UpdateCommandAbort();
     }
+
+    if (preManagedServiceStop?.blockMessage) {
+      params.stop();
+      defaultRuntime.error(preManagedServiceStop.blockMessage);
+      defaultRuntime.exit(1);
+      throw new UpdateCommandAbort();
+    }
   };
 
-  if (params.updateInstallKind === "package") {
+  if (params.updateInstallKind === "package" || params.updateInstallKind === "git") {
     try {
-      await stopManagedServiceBeforeMutableUpdate();
+      await stopManagedServiceBeforeMutableUpdate(
+        gitMutationRoots ?? undefined,
+        params.updateInstallKind === "git" ? "inspect" : "prepare",
+      );
     } catch (err) {
       if (err instanceof UpdateCommandAbort) {
         return null;
@@ -198,11 +209,7 @@ export async function executeMutableUpdate(params: {
               startedAt: params.startedAt,
               progress: params.progress,
               jsonMode: Boolean(params.opts.json),
-              allowGatewayServiceRepair: preManagedServiceStop?.serviceMatchesMutationRoot === true,
-              allowGatewayActivation:
-                params.shouldRestart &&
-                preManagedServiceStop?.stopped === true &&
-                preManagedServiceStop.serviceMatchesMutationRoot === true,
+              ...resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart),
               managedServiceEnv: preManagedServiceStop?.serviceEnv,
               invocationCwd: params.invocationCwd,
               honorPackageRoot:

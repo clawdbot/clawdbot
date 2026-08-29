@@ -61,12 +61,22 @@ export const ModelChoiceSchema = closedObject({
   alias: Type.Optional(NonEmptyString),
   tags: Type.Optional(Type.Array(NonEmptyString)),
   available: Type.Optional(Type.Boolean()),
+  unavailableReason: Type.Optional(
+    Type.Union([
+      Type.Literal("missing-auth"),
+      Type.Literal("auth-failed"),
+      Type.Literal("cooldown"),
+    ]),
+  ),
+  /** Earliest known retry time in epoch milliseconds, only for unavailable models. */
+  unavailableUntil: Type.Optional(Type.Integer({ minimum: 0 })),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
   contextWindows: Type.Optional(Type.Array(GatewayContextWindowOptionSchema)),
   contextWindowDefault: Type.Optional(NonEmptyString),
   reasoning: Type.Optional(Type.Boolean()),
   thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingDefault: Type.Optional(NonEmptyString),
+  effectiveFastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
   supportsTools: Type.Optional(Type.Boolean()),
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   apiKeySupported: Type.Optional(Type.Boolean()),

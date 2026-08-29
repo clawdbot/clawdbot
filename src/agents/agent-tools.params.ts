@@ -104,7 +104,7 @@ export const REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path"], label: "path" }],
   write: [
     { keys: ["path"], label: "path" },
-    { keys: ["content"], label: "content" },
+    { keys: ["content"], label: "content", allowEmpty: true },
   ],
   edit: [
     { keys: ["path"], label: "path" },

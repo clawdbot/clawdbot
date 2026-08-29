@@ -17,6 +17,7 @@ import {
 } from "../../scripts/verify-pr-hosted-gates.mts";
 
 const sha = "773ffd87a1e1e34451ad6e38fda37380c2569a50";
+const mainSha = "d".repeat(40);
 const previousSha = "8d86c44c6144f8f726a460914cddb8c9c201f119";
 const scheduledFallbackSha = "ad620a11e5d9ed3888b6afb3c35c4c30e8054f4e";
 const pr = 100606;
@@ -31,6 +32,8 @@ const requiredCliArgs = [
   String(pr),
   "--output",
   ".local/gates-hosted-checks.json",
+  "--main-sha",
+  mainSha,
 ];
 
 type WorkflowRunFixture = {
@@ -97,13 +100,14 @@ function queuedBuildArtifactFallbackRuns() {
   ];
 }
 
-function collectHostedGateEvidence(options: Omit<CollectHostedGateOptions, "nowMs" | "pr">) {
-  return collectHostedGateEvidenceWithReuse({ nowMs, pr, ...options });
+function collectHostedGateEvidence(
+  options: Omit<CollectHostedGateOptions, "nowMs" | "pr" | "mainSha">,
+) {
+  return collectHostedGateEvidenceRaw({ nowMs, pr, mainSha, ...options });
 }
 
 type GitExec = (args: string[], options?: { input?: string }) => string;
 type CollectHostedGateOptions = Parameters<typeof collectHostedGateEvidenceRaw>[0];
-const collectHostedGateEvidenceWithReuse = collectHostedGateEvidenceRaw;
 
 function priorSuccessfulCiRun(overrides: Partial<WorkflowRunFixture> = {}): WorkflowRunFixture {
   return {
@@ -174,6 +178,53 @@ function patchReuseOptions(
 }
 
 describe("verify-pr-hosted-gates", () => {
+  it("compares patch IDs against one main snapshot while the shared ref advances", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "openclaw-patch-snapshot-")));
+    const git: GitExec = (args, options) => {
+      const result = spawnSync("git", args, { cwd: root, encoding: "utf8", input: options?.input });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    try {
+      git(["init", "-q", "-b", "main"]);
+      git(["config", "user.name", "OpenClaw Test"]);
+      git(["config", "user.email", "test@example.invalid"]);
+      git(["config", "commit.gpgSign", "false"]);
+      git(["config", "core.hooksPath", "/dev/null"]);
+      writeFileSync(join(root, "subject.txt"), "base\n");
+      git(["add", "."]);
+      git(["commit", "-qm", "base"]);
+      const snapshot = git(["rev-parse", "HEAD"]).trim();
+      git(["update-ref", "refs/remotes/origin/main", snapshot]);
+      writeFileSync(join(root, "subject.txt"), "reviewed\n");
+      git(["commit", "-qam", "reviewed"]);
+      const target = git(["rev-parse", "HEAD"]).trim();
+      git(["commit", "--allow-empty", "-qm", "same tree, different commit"]);
+      const candidate = git(["rev-parse", "HEAD"]).trim();
+      let comparisons = 0;
+      const evidence = collectHostedGateEvidenceRaw({
+        sha: target,
+        mainSha: snapshot,
+        pr,
+        nowMs,
+        workflowRuns: [],
+        loadCiReuseCandidates: () => [priorSuccessfulCiRun({ head_sha: candidate })],
+        execGit: (args, options) => {
+          const result = git(args, options);
+          if (args[0] === "patch-id" && ++comparisons === 1)
+            git(["update-ref", "refs/remotes/origin/main", candidate]);
+          return result;
+        },
+      });
+      expect(evidence.reusedFromSha).toBe(candidate);
+      expect(evidence.patchIdMatched).toBe(true);
+      expect(comparisons).toBe(2);
+      expect(git(["rev-parse", "refs/remotes/origin/main"]).trim()).toBe(candidate);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("starts from an older target cwd without current normalization helpers", () => {
     const targetRoot = mkdtempSync(join(tmpdir(), "openclaw-hosted-gates-old-cwd-"));
     try {
@@ -357,7 +408,7 @@ describe("verify-pr-hosted-gates", () => {
 
   it("fails closed when patch-id computation errors", () => {
     const { execGit } = createPatchIdExec({
-      failCommand: `merge-base origin/main ${previousSha}`,
+      failCommand: `merge-base ${mainSha} ${previousSha}`,
     });
     expect(() =>
       collectHostedGateEvidence({
@@ -1501,6 +1552,7 @@ describe("verify-pr-hosted-gates", () => {
     expect(parseArgs(requiredCliArgs)).toEqual({
       repo: "openclaw/openclaw",
       sha,
+      mainSha,
       pr,
       recentSha: "",
       output: ".local/gates-hosted-checks.json",
@@ -1512,9 +1564,8 @@ describe("verify-pr-hosted-gates", () => {
     expect(() => parseArgs(requiredCliArgs.with(5, "zero"))).toThrow(
       "Expected --pr <positive-integer>.",
     );
-    expect(() => parseArgs(requiredCliArgs.with(requiredCliArgs.length - 1, "-h"))).toThrow(
-      "Expected --output <value>.",
-    );
+    expect(() => parseArgs(requiredCliArgs.with(7, "-h"))).toThrow("Expected --output <value>.");
+    expect(() => parseArgs(requiredCliArgs.with(9, "origin/main"))).toThrow("Usage:");
   });
 
   it("rejects duplicate hosted gate verifier CLI arguments", () => {

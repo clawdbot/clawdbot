@@ -40,7 +40,10 @@ import {
   type SessionTranscriptTurnExpectedState,
   type TranscriptEntryAnchor,
 } from "./session-accessor.js";
-import type { SessionTranscriptTurnLifecyclePatch } from "./session-transcript-turn-lifecycle.types.js";
+import type {
+  SessionLifecycleRevisionExpectation,
+  SessionTranscriptTurnLifecyclePatch,
+} from "./session-transcript-turn-lifecycle.types.js";
 import {
   applyBeforeMessageWriteToAssistant,
   type AssistantBeforeMessageWrite,
@@ -383,7 +386,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;
   expectedSessionId?: string;
-  expectedLifecycleRevision?: string;
+  expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
   expectedWriterRunId?: string;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
@@ -421,7 +424,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     agentId: params.agentId,
     sessionKey,
     ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
-    ...(params.expectedLifecycleRevision
+    ...(params.expectedLifecycleRevision !== undefined
       ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
       : {}),
     ...(params.expectedWriterRunId ? { expectedWriterRunId: params.expectedWriterRunId } : {}),
@@ -467,7 +470,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;
   expectedSessionId?: string;
-  expectedLifecycleRevision?: string;
+  expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
   expectedWriterRunId?: string;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
@@ -513,7 +516,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   }
   if (
     params.expectedLifecycleRevision !== undefined &&
-    entry?.lifecycleRevision !== params.expectedLifecycleRevision
+    entry?.lifecycleRevision !== (params.expectedLifecycleRevision ?? undefined)
   ) {
     return {
       ok: false,

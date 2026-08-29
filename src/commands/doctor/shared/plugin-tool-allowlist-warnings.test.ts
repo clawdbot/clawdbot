@@ -139,6 +139,26 @@ describe("collectPluginToolAllowlistWarnings", () => {
     ]);
   });
 
+  it("does not warn when all configured MCP servers are disabled", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: {
+          servers: {
+            supabase: {
+              url: "http://localhost:54321/mcp",
+              enabled: false,
+            },
+          },
+        },
+        tools: { sandbox: { tools: { alsoAllow: ["web_search"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
   it("uses a config-path source label when sandbox allowlist is unset", () => {
     const warnings = collectPluginToolAllowlistWarnings({
       cfg: {

@@ -801,7 +801,14 @@ catalog, API-key auth, and dynamic model resolution.
 
         Use `assertOkOrThrowProviderError(...)` for provider HTTP failures so
         plugins share capped error-body reads, JSON error parsing, and
-        request-id suffixes.
+        request-id suffixes. Pass `{ requestHeaders: headers }` as its third
+        argument when requests carry credentials: this redacts reflected header
+        values before error details and metadata are retained. Pass the same
+        option to `readProviderJsonResponse(...)` to omit unsafe parser excerpts.
+        For provider-specific failure payloads, use
+        `redactProviderResponseErrorText(text, headers)` or the bounded
+        `readProviderResponseErrorText(response, limitBytes, headers)` helper
+        from the same SDK entrypoint.
       </Tab>
       <Tab title="Realtime transcription">
         Prefer `createRealtimeTranscriptionWebSocketSession(...)` - the shared
@@ -1120,6 +1127,21 @@ catalog, API-key auth, and dynamic model resolution.
         `hint`, `envVars`, `placeholder`, `signupUrl`, `credentialPath`,
         `getCredentialValue`, `setCredentialValue`, and `createTool` are all
         required.
+
+        Search providers using `openclaw/plugin-sdk/provider-web-search` should
+        resolve `resolveSearchCacheTtlMs(searchConfig)` once per execution and
+        pass that value to both `readCachedSearchPayload(cacheKey, ttlMs)` and
+        `writeCachedSearchPayload(cacheKey, payload, ttlMs)`. A zero TTL bypasses
+        reads and writes; a positive TTL bounds entry age without extending its
+        original expiry. Reads return a payload marked `cached: true`, or
+        `undefined` on a miss. The reader's `ttlMs` argument is optional:
+        existing one-argument calls continue to use the stored expiry alone.
+
+        Both tool definitions accept `execute(args, context?)`, where the optional
+        context carries `signal?: AbortSignal`. Forward that signal to network
+        requests and check cancellation after asynchronous work. Existing
+        one-argument implementations remain valid; OpenClaw rejects late fetch
+        results after cancellation before publishing them to its fetch cache.
       </Tab>
     </Tabs>
 

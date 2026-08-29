@@ -235,20 +235,16 @@ describe("openai completions DSML", () => {
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
 
-  it("recovers DeepSeek DSML parameter tool calls emitted as text", async () => {
+  it.each(["|", "｜", "｜｜"])("recovers streamed %s DSML parameter tool calls", async (bar) => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
     const events: CapturedStreamEvent[] = [];
 
+    const content = `<${bar}DSML${bar}tool_calls><${bar}DSML${bar}invoke name="session_status"><${bar}DSML${bar}parameter name="sessionKey" string="true">current</${bar}DSML${bar}parameter></${bar}DSML${bar}invoke></${bar}DSML${bar}tool_calls>`;
     await processCompletionsStream(
       streamChunks([
-        makeCompletionsChunk(
-          {
-            content:
-              '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>',
-          },
-          "stop",
-        ),
+        ...Array.from(content, (char) => makeCompletionsChunk({ content: char })),
+        makeCompletionsChunk({}, "stop"),
       ]),
       output,
       model,

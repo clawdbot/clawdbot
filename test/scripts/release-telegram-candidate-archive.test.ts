@@ -448,7 +448,8 @@ describe("release Telegram candidate archive guard", () => {
   });
 
   it("rejects a socket entry", async () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
+    // Keep the socket path below macOS's 104-byte sockaddr_un buffer.
+    const root = tempDirs.make("sock-");
     const socketPath = path.join(root, "candidate.sock");
     const server = createServer();
     await new Promise<void>((resolve, reject) => {

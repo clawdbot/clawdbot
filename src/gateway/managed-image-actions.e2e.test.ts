@@ -38,7 +38,12 @@ describe("managed image actions Gateway E2E", () => {
     const blocks = await createManagedOutgoingMediaBlocks({
       sessionKey: SESSION_KEY,
       messageId,
-      mediaUrls: [`data:image/png;base64,${source.toString("base64")}`],
+      items: [
+        {
+          url: `data:image/png;base64,${source.toString("base64")}`,
+          trustedLocal: false,
+        },
+      ],
       stateDir,
     });
     const block = blocks.find(

@@ -79,7 +79,9 @@ function prepareModelThinkingCapability(params: {
 /** Resolves prepared thinking metadata only for the exact final model route and harness. */
 export function resolvePreparedModelThinkingCompat(params: {
   capability?: PreparedModelThinkingCapability;
-  model: Pick<Model, "provider" | "id" | "api" | "baseUrl">;
+  model: Pick<Model, "provider" | "id" | "api" | "baseUrl"> & {
+    compat?: Model["compat"] | ModelThinkingCompat;
+  };
   agentRuntime: string;
 }): ModelThinkingCompat | undefined {
   const capability = params.capability;
@@ -88,12 +90,29 @@ export function resolvePreparedModelThinkingCompat(params: {
   }
   const runtimeModelId = canonicalizeProviderModelId(capability.provider, params.model.id);
   const preparedModelId = canonicalizeProviderModelId(capability.provider, capability.modelId);
-  return normalizeProviderId(params.model.provider) === capability.provider &&
-    runtimeModelId === preparedModelId &&
-    normalizeLowercaseStringOrEmpty(params.agentRuntime) === capability.agentRuntime &&
-    (!capability.route || modelTransportRoutesMatch(params.model, capability.route))
-    ? capability.compat
-    : undefined;
+  if (
+    normalizeProviderId(params.model.provider) !== capability.provider ||
+    runtimeModelId !== preparedModelId ||
+    normalizeLowercaseStringOrEmpty(params.agentRuntime) !== capability.agentRuntime ||
+    (capability.route && !modelTransportRoutesMatch(params.model, capability.route))
+  ) {
+    return undefined;
+  }
+  const { compat, route } = capability;
+  const efforts = compat.supportedReasoningEfforts;
+  if (route || efforts === undefined) {
+    return compat;
+  }
+  // "none" disables reasoning; it is not an enabled effort tier. Harness-wide
+  // tiers may cross auth routes, but only the selected route can allow "none".
+  const routeEfforts = projectModelThinkingCompat(params.model.compat)?.supportedReasoningEfforts;
+  const enabledEfforts = efforts?.filter((effort) => effort !== "none");
+  return {
+    ...compat,
+    supportedReasoningEfforts: routeEfforts?.includes("none")
+      ? ["none", ...(enabledEfforts ?? [])]
+      : (enabledEfforts ?? efforts),
+  };
 }
 
 /** Projects the prepared capabilities needed by one selected run candidate. */

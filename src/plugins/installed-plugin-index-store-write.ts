@@ -13,6 +13,7 @@ import { resolveUserPath } from "../infra/home-dir.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { isGatewayPluginMetadataSnapshotActive } from "./current-plugin-metadata-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import {
@@ -168,7 +169,10 @@ function writePersistedInstalledPluginIndexToSqlite(
 }
 
 function clearPersistedInstalledPluginIndexCaches(): void {
-  clearPluginMetadataLifecycleCaches();
+  // Install transactions change the next boot's inventory, never the running Gateway's graph.
+  if (!isGatewayPluginMetadataSnapshotActive()) {
+    clearPluginMetadataLifecycleCaches();
+  }
   clearLoadInstalledPluginIndexInstallRecordsCache();
 }
 

@@ -121,7 +121,6 @@ export type ConfigProps = {
   localeProvenance: ServerUiPrefProvenance;
   localeResetValue?: Locale;
   onLocaleChange: (locale: Locale | undefined) => void;
-  resetLocale: () => void;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setAccent: (accent: string | undefined) => void;
@@ -172,7 +171,6 @@ export type ConfigProps = {
   chatSendShortcutProvenance: ServerUiPrefProvenance;
   chatSendShortcutResetValue: ChatSendShortcut;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
-  resetChatSendShortcut: () => void;
   chatFollowUpMode: ChatFollowUpMode | undefined;
   chatFollowUpModeOverridden: boolean;
   chatFollowUpModeProvenance: ServerUiPrefProvenance;

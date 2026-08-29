@@ -314,6 +314,29 @@ export function describeGithubCopilotProviderAuthContract(
       return requireProvider(await registerProviders(githubCopilotPlugin), "github-copilot");
     }
 
+    async function runDeviceAuthWithFakeTimers<T>(
+      run: () => T | Promise<T>,
+      openUrl: (url: string) => Promise<void>,
+    ): Promise<T> {
+      vi.useFakeTimers();
+      try {
+        const deviceCodeShown = new Promise<void>((resolve) => {
+          vi.mocked(openUrl).mockImplementation(async () => resolve());
+        });
+        const pending = Promise.resolve(run());
+        const openedBeforeCompletion = await Promise.race([
+          deviceCodeShown.then(() => true),
+          pending.then(() => false),
+        ]);
+        expect(openedBeforeCompletion).toBe(true);
+        // Browser handoff follows the profile, device-code, and prompt work.
+        await vi.advanceTimersByTimeAsync(1_000);
+        return await pending;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
     function buildCopilotSetupResponse(target: string): Response | undefined {
       if (target === "https://api.github.com/copilot_internal/user") {
         return new Response(
@@ -461,6 +484,7 @@ export function describeGithubCopilotProviderAuthContract(
     }
 
     afterEach(() => {
+      vi.useRealTimers();
       vi.unstubAllGlobals();
     });
 
@@ -469,7 +493,10 @@ export function describeGithubCopilotProviderAuthContract(
       stubGitHubDeviceFlowFetch({ accessToken: "github-device-token" });
       const ctx = buildSpyAuthContext();
 
-      const result = await provider.auth[0]?.run(ctx as never);
+      const result = await runDeviceAuthWithFakeTimers(
+        () => provider.auth[0]?.run(ctx as never),
+        ctx.openUrl,
+      );
 
       expect(result).toEqual({
         profiles: [
@@ -495,7 +522,7 @@ export function describeGithubCopilotProviderAuthContract(
       stubGitHubDeviceFlowFetch({ accessToken: "github-device-token" });
       const ctx = buildSpyAuthContext();
 
-      await provider.auth[0]?.run(ctx as never);
+      await runDeviceAuthWithFakeTimers(() => provider.auth[0]?.run(ctx as never), ctx.openUrl);
 
       expect(ctx.openUrl).toHaveBeenCalledWith("https://github.com/login/device");
       const noteCalls = (ctx.prompter.note as ReturnType<typeof vi.fn>).mock.calls;
@@ -520,7 +547,10 @@ export function describeGithubCopilotProviderAuthContract(
       const ctx = buildSpyAuthContext();
 
       try {
-        const result = await provider.auth[0]?.run(ctx as never);
+        const result = await runDeviceAuthWithFakeTimers(
+          () => provider.auth[0]?.run(ctx as never),
+          ctx.openUrl,
+        );
         expect(result?.profiles).toEqual([
           {
             profileId: "github-copilot:github",
@@ -545,7 +575,10 @@ export function describeGithubCopilotProviderAuthContract(
       stubGitHubDeviceFlowFetch({ error: "access_denied" });
       const ctx = buildSpyAuthContext();
 
-      const result = await provider.auth[0]?.run(ctx as never);
+      const result = await runDeviceAuthWithFakeTimers(
+        () => provider.auth[0]?.run(ctx as never),
+        ctx.openUrl,
+      );
 
       expect(result).toEqual({ profiles: [] });
       const noteCalls = (ctx.prompter.note as ReturnType<typeof vi.fn>).mock.calls;
@@ -559,7 +592,10 @@ export function describeGithubCopilotProviderAuthContract(
       stubGitHubDeviceFlowFetch({ error: "expired_token" });
       const ctx = buildSpyAuthContext();
 
-      const result = await provider.auth[0]?.run(ctx as never);
+      const result = await runDeviceAuthWithFakeTimers(
+        () => provider.auth[0]?.run(ctx as never),
+        ctx.openUrl,
+      );
 
       expect(result).toEqual({ profiles: [] });
       const noteCalls = (ctx.prompter.note as ReturnType<typeof vi.fn>).mock.calls;

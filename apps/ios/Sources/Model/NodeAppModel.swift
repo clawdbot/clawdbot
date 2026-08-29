@@ -542,7 +542,7 @@ final class NodeAppModel {
     @ObservationIgnored private var watchMessageFlushInFlight = false
     @ObservationIgnored var watchMessageRetryAttempts: [String: Int] = [:]
     @ObservationIgnored private var watchMessageRetryTask: Task<Void, Never>?
-    @ObservationIgnored private let appleReviewDemoChatTransport = AppleReviewDemoChatTransport()
+    @ObservationIgnored private let appleReviewDemoChatTransport = LocalFixtureChatTransport(fixture: .appleReviewDemo)
     @ObservationIgnored private var clientDatabases: OpenClawClientDatabases?
     @ObservationIgnored private var chatTranscriptCachesByGatewayID:
         [GatewayStableIdentifier.Key: OpenClawChatSQLiteTranscriptCache] = [:]
@@ -618,7 +618,7 @@ final class NodeAppModel {
             return LocalFixtureChatTransport(fixture: .appScreenshots)
         }
         if self.isAppleReviewDemoModeEnabled {
-            return AppleReviewDemoChatTransport()
+            return LocalFixtureChatTransport(fixture: .appleReviewDemo)
         }
         let mediaArtifactLoader = IOSMediaArtifactLoader { [weak self] in
             guard let config = self?.activeGatewayConnectConfig else { return nil }
@@ -1671,7 +1671,9 @@ final class NodeAppModel {
                 self.applyMainSessionKey(decoded.mainkey)
 
                 let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !selected.isEmpty, !decoded.agents.contains(where: { $0.id == selected }) {
+                if !selected.isEmpty,
+                   !decoded.agents.contains(where: { $0.id == selected && $0.isSelectableAgent })
+                {
                     self.selectedAgentId = nil
                     self.focusedChatSessionKey = nil
                 }
@@ -5149,13 +5151,13 @@ extension NodeAppModel {
         self.nodeStatusText = "Connected"
     }
 
-    private func configureLocalGatewayFixtureSession(agents: [AgentSummary]) {
+    private func configureLocalGatewayFixtureSession(_ fixture: LocalChatFixture) {
         self.mainSessionBaseKey = "main"
         self.gatewaySessionScope = "per-sender"
         self.gatewayAccentColorHex = nil
         self.selectedAgentId = nil
-        self.gatewayDefaultAgentId = "main"
-        self.gatewayAgents = agents
+        self.gatewayDefaultAgentId = fixture.defaultAgentID
+        self.gatewayAgents = fixture.agents
         self.focusedChatSessionKey = nil
         self.synchronizeTalkSessionKey()
     }
@@ -5173,7 +5175,7 @@ extension NodeAppModel {
         self.talkMode.updateGatewayConnected(false)
         self.talkMode.setEnabled(false)
         self.talkMode.statusText = "Demo mode only"
-        self.configureLocalGatewayFixtureSession(agents: AppleReviewDemoMode.agents)
+        self.configureLocalGatewayFixtureSession(.appleReviewDemo)
     }
 
     func enterScreenshotFixtureMode() {
@@ -5185,7 +5187,7 @@ extension NodeAppModel {
         self.gatewayConnected = true
         self.setOperatorConnected(true)
         self.hasOperatorAdminScope = true
-        self.configureLocalGatewayFixtureSession(agents: ScreenshotFixtureMode.agents)
+        self.configureLocalGatewayFixtureSession(.appScreenshots)
         self.talkMode.enterScreenshotFixtureMode()
     }
 }

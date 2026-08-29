@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resetProviderAuthAliasMapCacheForTest } from "../provider-auth-aliases.test-support.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { isAmbientCredentialAllowedByProviderAuthPin } from "./ambient-auth.js";
 import { saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
@@ -55,7 +55,7 @@ import { markAuthProfileSuccess } from "./profiles.js";
 
 describe("resolveAuthProfileOrder", () => {
   beforeEach(() => {
-    resetProviderAuthAliasMapCacheForTest();
+    clearPluginMetadataLifecycleCaches();
     pluginMetadataMocks.getCurrentPluginMetadataSnapshot.mockClear();
     pluginMetadataMocks.loadPluginMetadataSnapshot.mockClear();
   });

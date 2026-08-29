@@ -50,6 +50,17 @@ Discord and Telegram channel retry timings are built in and are not configurable
 - Retries apply per request (message send, media upload, reaction, poll, sticker).
 - Composite flows do not retry completed steps.
 
+### Durable outbound delivery
+
+The durable outbound queue has a separate delivery-attempt budget. When a
+delivery uses a producer claim, reservation checks the exact owner and its lease
+before charging an attempt. An expired or replaced claim does not spend the
+remaining budget; recovery can acquire a fresh claim before retrying.
+
+Lease expiry does not erase evidence that a send already started. Those entries
+still require reconciliation before replay, and an unreplaced owner can record a
+late result without authorizing another send.
+
 ## Related
 
 - [Model failover](/concepts/model-failover)

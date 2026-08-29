@@ -318,6 +318,7 @@ function assertCompanionPluginRecords(
     records: Record<string, Record<string, unknown>>,
     installPaths: Record<"codex" | "discord" | "whatsapp", string>,
   ) => void,
+  capabilityConsentSupported = true,
 ): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-companions-"));
   try {
@@ -366,7 +367,7 @@ function assertCompanionPluginRecords(
         resolvedVersion: version,
         integrity: npmIntegrity,
         installPath: discordInstallPath,
-        ...consent(npmIntegrity),
+        ...(capabilityConsentSupported ? consent(npmIntegrity) : {}),
       },
       whatsapp: {
         source: "clawhub",
@@ -377,7 +378,7 @@ function assertCompanionPluginRecords(
         artifactKind: "npm-pack",
         clawpackSha256,
         installPath: whatsappInstallPath,
-        ...consent(clawpackSha256),
+        ...(capabilityConsentSupported ? consent(clawpackSha256) : {}),
       },
       codex: {
         source: "npm",
@@ -386,7 +387,7 @@ function assertCompanionPluginRecords(
         resolvedVersion: version,
         integrity: npmIntegrity,
         installPath: codexInstallPath,
-        ...consent(npmIntegrity),
+        ...(capabilityConsentSupported ? consent(npmIntegrity) : {}),
       },
     };
     mutate?.(records, {
@@ -397,13 +398,22 @@ function assertCompanionPluginRecords(
     mkdirSync(join(stateDir, "plugins"), { recursive: true });
     writeJson(join(stateDir, "plugins", "installs.json"), { installRecords: records });
 
-    execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-companion-installs", version], {
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
+    execFileSync(
+      process.execPath,
+      [
+        ASSERTIONS_PATH,
+        "assert-companion-installs",
+        version,
+        capabilityConsentSupported ? "1" : "0",
+      ],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+        },
+        stdio: "pipe",
       },
-      stdio: "pipe",
-    });
+    );
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -710,6 +720,22 @@ describe("upgrade survivor assertions", () => {
         Reflect.deleteProperty(discord, "acceptedSurfaceIntegrity");
       }),
     ).toThrow(/discord plugin consent integrity/);
+  });
+
+  it("accepts frozen companion installs when the candidate lacks capability consent", () => {
+    expect(() => assertCompanionPluginRecords(undefined, false)).not.toThrow();
+  });
+
+  it("requires artifact integrity when the candidate lacks capability consent", () => {
+    expect(() =>
+      assertCompanionPluginRecords((records) => {
+        const discord = records.discord;
+        if (!discord) {
+          throw new Error("discord fixture missing");
+        }
+        Reflect.deleteProperty(discord, "integrity");
+      }, false),
+    ).toThrow(/discord plugin integrity missing/);
   });
 
   it.each([

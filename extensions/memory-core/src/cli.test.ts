@@ -25,6 +25,7 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatMemoryIndexOutcome } from "./cli-runtime-common.js";
 import { openMemoryCoreStateStore } from "./dreaming-state.js";
+import type { MemoryForgetReport } from "./memory-forget-report.js";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   configureMemoryCoreDreamingStateForTests,
@@ -334,7 +335,16 @@ describe("memory cli", () => {
 
   it("forwards repeated forget selectors and reports quoted lines and curated writes in both output formats", async () => {
     getRuntimeConfig.mockReturnValue(configuredAgents);
-    const report = {
+    const report: MemoryForgetReport = {
+      participantMatches: [
+        {
+          actorId: "person-one",
+          identities: [
+            { type: "profile", id: "person-one" },
+            { type: "agent", id: "person-one" },
+          ],
+        },
+      ],
       agentId: "ops",
       dryRun: true,
       sessionIds: ["session-one", "session-two"],
@@ -407,6 +417,10 @@ describe("memory cli", () => {
     await runMemoryCli(["forget", "--session", "session-one", "--agent", "ops", "--dry-run"]);
     const output = firstMockCallArg(logs, "memory forget output");
     expect(output).toContain("Source transcripts retained: 2");
+    expect(output).toContain(
+      'Raw participant selector: person-one: {"type":"profile","id":"person-one"}, {"type":"agent","id":"person-one"}',
+    );
+    expect(output).toContain("Matches select whole sessions across identity namespaces.");
     expect(output).toContain("Session resolution: session-one (live)");
     expect(output).toContain("Session resolution: session-two (unresolved)");
     expect(output).toContain("Memory artifacts: 1 files, 1 entries, 2 quoted lines");

@@ -46,6 +46,7 @@ type DaemonLifecycleOptions = {
   force?: boolean;
   wait?: string;
   restartIntent?: GatewayRestartIntent;
+  preserveDefinition?: boolean;
   disable?: boolean;
 };
 
@@ -659,6 +660,7 @@ export async function runServiceRestart(params: {
       await prepareGatewayRestartIntent();
       try {
         restartResult = await params.service.restart({
+          preserveDefinition: params.opts?.preserveDefinition,
           env: process.env,
           stdout,
           warn,

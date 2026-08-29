@@ -1,11 +1,9 @@
 // Runs Vitest through repo project selection, local scheduling policy, output
 // watchdogs, and process-group cleanup.
-import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import { constants as osConstants, tmpdir } from "node:os";
+import { constants as osConstants } from "node:os";
 import path from "node:path";
-import { createTempDirTracker } from "../test/helpers/temp-dir.ts";
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
@@ -20,15 +18,19 @@ import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-p
 import { signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { spawnTestProjectsRunner } from "./lib/test-projects-delegation.mts";
+import {
+  resolveVitestRuntimeCliSelections,
+  prepareVitestRuntime,
+} from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
+import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
 import {
   createVitestUnhandledErrorDetector,
   stripVitestAnsi,
   writeVitestUnhandledErrorSummary,
 } from "./lib/vitest-unhandled-errors.mts";
-import { spawnPnpmRunner, type PnpmRunnerParams } from "./pnpm-runner.mts";
+import { createPnpmRunnerSpawnSpec, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import {
-  createVitestProcessCompletion,
   forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
@@ -1045,23 +1047,6 @@ export function resolveImplicitVitestArgs(argv: string[], cwd = process.cwd()): 
   return argv;
 }
 
-function spawnVitestProcess({
-  pnpmArgs,
-  spawnParams,
-}: {
-  pnpmArgs: string[];
-  spawnParams: PnpmRunnerParams;
-}): ChildProcess {
-  const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
-  if (directNodeArgs) {
-    return spawn(process.execPath, directNodeArgs, spawnParams);
-  }
-  return spawnPnpmRunner({
-    pnpmArgs,
-    ...spawnParams,
-  });
-}
-
 /**
  * Installs the no-output watchdog for long-running Vitest children.
  */
@@ -1260,28 +1245,12 @@ export function spawnWatchedVitestProcess({
 }) {
   let forwardedSignal: NodeSignal | null = null;
   let diagnosticsCompletion: Promise<void> | null = null;
-  const tempDirs = createTempDirTracker();
-  let childSpawnParams = spawnParams;
-  // The POSIX completion contract joins all workers before deleting SQLite files.
-  // Own a fresh namespace outside worker module resets, never ambient PID directories.
-  if (spawnParams.detached && shouldUseDetachedVitestProcessGroup()) {
-    const childEnv = spawnParams.env ?? process.env;
-    const tempRoot = tempDirs.make(
-      "oc-vt-",
-      fs.realpathSync(childEnv.TMPDIR || childEnv.TMP || childEnv.TEMP || tmpdir()),
-    );
-    childSpawnParams = {
-      ...spawnParams,
-      env: { ...childEnv, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot },
-    };
-  }
-  let child: ChildProcess;
-  try {
-    child = spawnVitestProcess({ pnpmArgs, spawnParams: childSpawnParams });
-  } catch (error) {
-    tempDirs.cleanup();
-    throw error;
-  }
+  const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
+  const { child, completion: childCompletion } = spawnOwnedVitestProcess(
+    directNodeArgs
+      ? { command: process.execPath, args: directNodeArgs, options: spawnParams }
+      : createPnpmRunnerSpawnSpec({ pnpmArgs, ...spawnParams }),
+  );
   const teardownChildCleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
@@ -1331,28 +1300,14 @@ export function spawnWatchedVitestProcess({
     teardownChildCleanup();
     teardownNoOutputWatchdog();
   };
-  const completion = Promise.all([
-    createVitestProcessCompletion({
-      child,
-      detached: spawnParams.detached === true,
-    }),
-    forwardedOutput,
-  ])
+  const completion = Promise.all([childCompletion, forwardedOutput])
     .then(async ([{ code, signal }]) => {
       await diagnosticsCompletion;
-      tempDirs.cleanup();
       const result = unhandledErrors.finish();
       if (result) {
         writeVitestUnhandledErrorSummary(result, env);
       }
       return { code, signal: normalizeNodeSignal(signal) };
-    })
-    .catch((error: unknown) => {
-      // A failed spawn owns no handles. A failed group join may still own them.
-      if (!child.pid) {
-        tempDirs.cleanup();
-      }
-      throw error;
     })
     .finally(teardown);
 
@@ -1410,6 +1365,29 @@ async function main(
 
   const vitestArgs = resolveImplicitVitestArgs(argv);
   const invocations = resolveBoundedVitestInvocations(vitestArgs, { env });
+  const config = resolveVitestConfigArg(vitestArgs);
+  const relativeConfig = config ? toRepoRelativeArg(path.resolve(config), repoRoot) : "";
+  // Canonical configs have known project scopes. Custom roots/projects keep
+  // their own setup; never infer their runtime selection from a config name.
+  if (
+    config &&
+    !hasAlternateVitestRootArg(vitestArgs) &&
+    !hasExplicitVitestProjectArg(vitestArgs) &&
+    !hasNonRunVitestSubcommand(vitestArgs) &&
+    !hasExplicitDisabledRunFlag(vitestArgs) &&
+    !vitestArgs.some((arg) => ["--help", "-h", "--version", "-v"].includes(arg))
+  ) {
+    const code = await prepareVitestRuntime(
+      invocations.flatMap((cliArgs) =>
+        resolveVitestRuntimeCliSelections(relativeConfig, cliArgs, env),
+      ),
+      env,
+    );
+    if (code !== 0) {
+      process.exitCode = code;
+      return;
+    }
+  }
   let vitestCliEntry;
   try {
     vitestCliEntry = resolveVitestCliEntry();

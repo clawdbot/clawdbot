@@ -1,6 +1,5 @@
 /** Authorized steering and follow-up messaging for controlled subagents. */
 import crypto from "node:crypto";
-import type { ClearSessionQueueResult } from "../../../auto-reply/reply/queue.js";
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
@@ -53,6 +52,7 @@ function recordSubagentControllerParticipant(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
   entry: SubagentRunRecord;
+  promptedAt: number;
 }): void {
   const requesterAgentId = params.controller.controllerAgentId;
   if (!requesterAgentId) {
@@ -63,18 +63,15 @@ function recordSubagentControllerParticipant(params: {
     return;
   }
   recordSessionParticipantBestEffort({
-    actor: { type: "agent", id: requesterAgentId },
+    identity: { type: "agent", id: requesterAgentId },
+    promptedAt: params.promptedAt,
     agentId: targetAgentId,
     sessionKey: params.entry.childSessionKey,
-    source: "agent",
     storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId: targetAgentId }),
   });
 }
 
 type GatewayCaller = typeof callGateway;
-type AbortEmbeddedAgentRun = (sessionId: string) => boolean;
-type IsEmbeddedAgentRunActive = (sessionId: string) => boolean;
-type ClearSessionQueues = (keys: Array<string | undefined>) => ClearSessionQueueResult;
 
 const callSubagentControlGateway: GatewayCaller = async (request) => {
   // Steer/follow-up dispatch is Gateway-owned lifecycle work. Keep it on the
@@ -107,57 +104,9 @@ const callSubagentControlGateway: GatewayCaller = async (request) => {
   return await callGateway(request);
 };
 
-type SubagentMessagingDeps = {
-  callGateway: GatewayCaller;
-  abortEmbeddedAgentRun?: AbortEmbeddedAgentRun;
-  isEmbeddedAgentRunActive?: IsEmbeddedAgentRunActive;
-  clearSessionQueues?: ClearSessionQueues;
-};
-
-const defaultSubagentMessagingDeps: SubagentMessagingDeps = {
-  callGateway: callSubagentControlGateway,
-};
-
-let subagentMessagingDeps: SubagentMessagingDeps = defaultSubagentMessagingDeps;
-
 const subagentMessagingRuntimeLoader = createLazyImportLoader(
   () => import("./subagent-control.runtime.js"),
 );
-
-async function resolveSubagentMessagingRuntime(): Promise<{
-  abortEmbeddedAgentRun: AbortEmbeddedAgentRun;
-  isEmbeddedAgentRunActive: IsEmbeddedAgentRunActive;
-  clearSessionQueues: ClearSessionQueues;
-}> {
-  if (
-    subagentMessagingDeps.abortEmbeddedAgentRun &&
-    subagentMessagingDeps.isEmbeddedAgentRunActive &&
-    subagentMessagingDeps.clearSessionQueues
-  ) {
-    return {
-      abortEmbeddedAgentRun: subagentMessagingDeps.abortEmbeddedAgentRun,
-      isEmbeddedAgentRunActive: subagentMessagingDeps.isEmbeddedAgentRunActive,
-      clearSessionQueues: subagentMessagingDeps.clearSessionQueues,
-    };
-  }
-  const runtime = await subagentMessagingRuntimeLoader.load();
-  return {
-    abortEmbeddedAgentRun:
-      subagentMessagingDeps.abortEmbeddedAgentRun ?? runtime.abortEmbeddedAgentRun,
-    isEmbeddedAgentRunActive:
-      subagentMessagingDeps.isEmbeddedAgentRunActive ?? runtime.isEmbeddedAgentRunActive,
-    clearSessionQueues: subagentMessagingDeps.clearSessionQueues ?? runtime.clearSessionQueues,
-  };
-}
-
-export function setSubagentMessagingTestDeps(overrides?: Partial<SubagentMessagingDeps>) {
-  subagentMessagingDeps = overrides
-    ? {
-        ...defaultSubagentMessagingDeps,
-        ...overrides,
-      }
-    : defaultSubagentMessagingDeps;
-}
 
 /** Restarts a controlled subagent run with a new steering message. */
 export async function steerControlledSubagentRun(params: {
@@ -184,6 +133,7 @@ export async function steerControlledSubagentRun(params: {
       text: string;
     }
 > {
+  const promptedAt = Date.now();
   if (params.controller.controlScope !== "children") {
     return {
       status: "forbidden",
@@ -283,7 +233,7 @@ export async function steerControlledSubagentRun(params: {
       ? targetSession.entry.sessionId.trim()
       : undefined;
   const restartSessionId = sessionId ? crypto.randomUUID() : undefined;
-  const runtime = await resolveSubagentMessagingRuntime();
+  const runtime = await subagentMessagingRuntimeLoader.load();
 
   if (sessionId) {
     const active = runtime.isEmbeddedAgentRunActive(sessionId);
@@ -307,7 +257,7 @@ export async function steerControlledSubagentRun(params: {
   }
 
   try {
-    await subagentMessagingDeps.callGateway({
+    await callSubagentControlGateway({
       method: "agent.wait",
       params: {
         runId: params.entry.runId,
@@ -342,7 +292,7 @@ export async function steerControlledSubagentRun(params: {
   }
   try {
     const steerLifecycleGeneration = getAgentEventLifecycleGeneration();
-    const response = await subagentMessagingDeps.callGateway<{ runId: string }>({
+    const response = await callSubagentControlGateway<{ runId: string }>({
       method: "agent",
       params: {
         message: params.message,
@@ -359,7 +309,7 @@ export async function steerControlledSubagentRun(params: {
     if (typeof response?.runId === "string" && response.runId) {
       runId = response.runId;
     }
-    recordSubagentControllerParticipant(params);
+    recordSubagentControllerParticipant({ ...params, promptedAt });
     let acceptedSessionEntry: SessionEntry | undefined;
     try {
       acceptedSessionEntry = loadSessionEntry({
@@ -378,7 +328,7 @@ export async function steerControlledSubagentRun(params: {
         gatewayRunId: runId,
         expectedSessionId: acceptedSessionEntry?.sessionId,
         expectedLifecycleRevision: acceptedSessionEntry?.lifecycleRevision,
-        callGateway: subagentMessagingDeps.callGateway,
+        callGateway: callSubagentControlGateway,
         timeoutMs: 10_000,
       });
     if (!isAgentEventLifecycleGenerationCurrent(steerLifecycleGeneration)) {
@@ -445,6 +395,7 @@ export async function sendControlledSubagentMessage(params: {
   entry: SubagentRunRecord;
   message: string;
 }) {
+  const promptedAt = Date.now();
   const ownershipError = ensureSubagentControllerOwnsRun({
     cfg: params.cfg,
     controller: params.controller,
@@ -495,10 +446,10 @@ export async function sendControlledSubagentMessage(params: {
     const baselineReply = await readLatestAssistantReplySnapshot({
       sessionKey: targetSessionKey,
       limit: SUBAGENT_REPLY_HISTORY_LIMIT,
-      callGateway: subagentMessagingDeps.callGateway,
+      callGateway: callSubagentControlGateway,
     });
 
-    const response = await subagentMessagingDeps.callGateway<{ runId: string }>({
+    const response = await callSubagentControlGateway<{ runId: string }>({
       method: "agent",
       params: {
         message: params.message,
@@ -516,7 +467,7 @@ export async function sendControlledSubagentMessage(params: {
     if (responseRunId) {
       runId = responseRunId;
     }
-    recordSubagentControllerParticipant(params);
+    recordSubagentControllerParticipant({ ...params, promptedAt });
 
     const result = await waitForAgentRunAndReadUpdatedAssistantReply({
       runId,
@@ -524,7 +475,7 @@ export async function sendControlledSubagentMessage(params: {
       timeoutMs: 30_000,
       limit: SUBAGENT_REPLY_HISTORY_LIMIT,
       baseline: baselineReply,
-      callGateway: subagentMessagingDeps.callGateway,
+      callGateway: callSubagentControlGateway,
     });
     if (result.status === "timeout") {
       return { status: "timeout" as const, runId };

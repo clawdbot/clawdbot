@@ -51,6 +51,8 @@ export type OpenClawToolsOptions = {
   sandboxRoot?: string;
   sandboxContainerWorkdir?: string;
   sandboxFsBridge?: SandboxFsBridge;
+  /** Prepared effective read authorization for exporting sandbox workspace media. */
+  sandboxWorkspaceMediaReadAllowed?: boolean;
   fsPolicy?: ToolFsPolicy;
   sandboxed?: boolean;
   config?: OpenClawConfig;

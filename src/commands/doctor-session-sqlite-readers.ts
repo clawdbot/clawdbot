@@ -12,7 +12,10 @@ import {
 } from "../agents/sessions/session-manager-codec.js";
 import type { FileEntry } from "../agents/sessions/session-manager-types.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import {
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -473,17 +476,21 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
   }
 }
 
-export function resolveTargetSqlitePath(target: SessionStoreTarget): string {
-  if (target.sqlitePath) {
-    return resolveOpenClawAgentSqlitePath({ agentId: target.agentId, path: target.sqlitePath });
-  }
-  const sqliteTarget = resolveSqliteTargetFromSessionStorePath(target.storePath, {
-    agentId: target.agentId,
-  });
-  return resolveOpenClawAgentSqlitePath({
-    agentId: sqliteTarget.agentId ?? target.agentId,
-    ...(sqliteTarget.path ? { path: sqliteTarget.path } : {}),
-  });
+export function resolveTargetSqliteOptions(target: SessionStoreTarget, env?: NodeJS.ProcessEnv) {
+  return toDatabaseOptions(
+    resolveSqliteReadScope({
+      agentId: target.agentId,
+      env,
+      storePath: target.sqlitePath ?? target.storePath,
+    }),
+  );
+}
+
+export function resolveTargetSqlitePath(
+  target: SessionStoreTarget,
+  env?: NodeJS.ProcessEnv,
+): string {
+  return resolveOpenClawAgentSqlitePath(resolveTargetSqliteOptions(target, env));
 }
 
 /**
@@ -498,7 +505,7 @@ export function listExistingAgentDatabaseTargets(
 ): Array<{ agentId: string; sqlitePath: string; storePath: string }> {
   const seenPaths = new Set<string>();
   return resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }).flatMap((target) => {
-    const sqlitePath = resolveTargetSqlitePath(target);
+    const sqlitePath = resolveTargetSqlitePath(target, env);
     if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
       return [];
     }

@@ -753,6 +753,17 @@ describe("config.patch model input normalization", () => {
       },
     };
 
+    const sourceConfig = structuredClone(storedConfig);
+    expectDefined(sourceConfig.models?.providers?.myproxy?.models[0], "source model").id = "latest";
+    configWriteMocks.readConfigFileSnapshotForWrite.mockImplementationOnce(async () => {
+      const result = currentWriteSnapshot();
+      result.snapshot.sourceConfig = sourceConfig;
+      result.snapshot.resolved = sourceConfig;
+      result.snapshot.parsed = sourceConfig;
+      result.snapshot.raw = JSON.stringify(sourceConfig);
+      return result;
+    });
+
     const harness = await invokeConfigPatch({
       raw: {
         models: {

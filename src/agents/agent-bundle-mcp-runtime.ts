@@ -14,6 +14,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { logWarn } from "../logger.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
@@ -966,7 +967,9 @@ export function createSessionMcpRuntime(params: {
     return staleCatalog;
   };
   const getActiveSession = async (serverName: string) => {
-    await getCatalog();
+    const signal = getSessionMcpRequestSignal();
+    signal?.throwIfAborted();
+    await racePromiseWithAbortSignal(getCatalog(), signal);
     return requireConnectedSession(serverName);
   };
 

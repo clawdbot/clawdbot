@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -101,13 +102,17 @@ describe("doctor-contract-registry module loader", () => {
       fs.writeFileSync(filePath, "export {};\n", "utf-8");
     }
 
-    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(rootDoctorTypeScript);
+    const originalOwner = createPluginCache();
+    const resolvePath = () => resolvePluginDoctorContractArtifactPath(pluginRoot);
+    expect(withPluginCache(originalOwner, resolvePath)).toBe(rootDoctorTypeScript);
     fs.rmSync(rootDoctorTypeScript);
-    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(distDoctorTypeScript);
+    expect(withPluginCache(originalOwner, resolvePath)).toBe(rootDoctorTypeScript);
+    expect(withPluginCache(createPluginCache(), resolvePath)).toBe(distDoctorTypeScript);
     fs.rmSync(distDoctorTypeScript);
-    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(rootDoctorJavaScript);
+    expect(withPluginCache(createPluginCache(), resolvePath)).toBe(rootDoctorJavaScript);
     fs.rmSync(rootDoctorJavaScript);
-    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(rootContractTypeScript);
+    expect(withPluginCache(createPluginCache(), resolvePath)).toBe(rootContractTypeScript);
+    expect(withPluginCache(originalOwner, resolvePath)).toBe(rootDoctorTypeScript);
   });
 
   it.each([

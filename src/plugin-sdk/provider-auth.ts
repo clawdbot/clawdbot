@@ -6,7 +6,6 @@ import {
 } from "../../packages/normalization-core/src/number-coercion.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { externalCliDiscoveryForProviderAuth } from "../agents/auth-profiles/external-cli-discovery.js";
-import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
 import { resolveStoredCredentialReadOnlyAvailability } from "../agents/auth-profiles/read-only-availability.js";
@@ -91,7 +90,7 @@ export {
   promptSecretRefForSetup,
   resolveSecretInputModeForEnvSelection,
 } from "../plugins/provider-auth-input.js";
-export { normalizeApiKeyConfig } from "../agents/models-config.providers.secrets.js";
+export { normalizeApiKeyConfig } from "../agents/models-config.providers.secret-helpers.js";
 export {
   buildTokenProfileId,
   validateAnthropicSetupToken,
@@ -595,6 +594,7 @@ export async function resolveProviderAuthProfileApiKey(params: {
   /** Whether external CLI auth profiles may be discovered and included. */
   includeExternalCliAuth?: boolean;
 }): Promise<string | undefined> {
+  const { resolveApiKeyForProfile } = await import("../agents/auth-profiles/oauth.js");
   const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
   if (!agentDir || profileIds.length === 0) {
     return undefined;

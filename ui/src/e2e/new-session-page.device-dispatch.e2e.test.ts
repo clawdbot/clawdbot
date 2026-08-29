@@ -558,74 +558,89 @@ suite.define(() => {
     }
   });
 
-  it("reloads a pending device create with the same placement target", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const message = "resume on the paired device";
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.create"],
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      methodResponses: {
-        "environments.list": {
-          environments: [
-            {
-              id: "node:paired-runner",
-              type: "node",
-              label: "Paired runner",
-              status: "available",
-              sessionHost: true,
-              workerSlots: { total: 2, available: 1 },
-            },
-          ],
-          profiles: [],
+  it.each(deviceTargets)(
+    "reloads a pending $name device create with the same placement target",
+    async ({ value, target }) => {
+      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+      const page = await context.newPage();
+      const message = "resume on the paired device";
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["sessions.create"],
+        workspace: WORKSPACE,
+        workspaceGit: true,
+        methodResponses: {
+          "environments.list": {
+            environments: [
+              {
+                id: "node:paired-runner",
+                type: "node",
+                label: "Paired runner",
+                status: "available",
+                sessionHost: true,
+                workerSlots: { total: 2, available: 1 },
+              },
+            ],
+            profiles: [],
+          },
+          "worktrees.branches": {
+            branches: [{ kind: "local", name: "main" }],
+            defaultBranch: "main",
+            repositoryStatus: "git",
+          },
+          "sessions.dispatch": { placement: { state: "active", generation: 1 } },
+          "sessions.describe": { session: { sessionId: "session-device-recovery" } },
+          "sessions.send": { runId: "run-device-recovery", status: "started" },
         },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
-        "sessions.dispatch": { placement: { state: "active", generation: 1 } },
-        "sessions.send": { runId: "run-device-recovery", status: "started" },
-      },
-    });
+      });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
-      await page.locator('[data-value="device:paired-runner"]').click();
-      await page.locator(".new-session-page__message").fill(message);
-      await page.getByRole("button", { name: "Start session" }).click();
-      const firstCreate = await gateway.waitForRequest("sessions.create");
-      const sessionKey = (firstCreate.params as { key?: string }).key;
-      if (!sessionKey) {
-        throw new Error("expected a recoverable device create key");
+      try {
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("environments.list");
+        await page.locator("#new-session-where-trigger").click();
+        await page.locator(`[data-value="${value}"]`).click();
+        await page.locator(".new-session-page__message").fill(message);
+        await page.getByRole("button", { name: "Start session" }).click();
+        const firstCreate = await gateway.waitForRequest("sessions.create");
+        const sessionKey = (firstCreate.params as { key?: string }).key;
+        if (!sessionKey) {
+          throw new Error("expected a recoverable device create key");
+        }
+
+        await page.reload();
+        await gateway.waitForRequest("environments.list");
+        await expect
+          .poll(() =>
+            page
+              .locator("#new-session-where-trigger")
+              .getAttribute(value === "auto-device" ? "data-auto-device" : "data-device-id"),
+          )
+          .toBe(value === "auto-device" ? "true" : "paired-runner");
+        await expect
+          .poll(() => page.locator(".new-session-page__message").inputValue())
+          .toBe(message);
+        await page.getByRole("button", { name: "Start session" }).click();
+        const retryCreate = await gateway.waitForRequest("sessions.create");
+        expect(retryCreate.params).toMatchObject({ key: sessionKey, message: "", worktree: true });
+        expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+        await gateway.deferNext("sessions.dispatch");
+        await gateway.resolveDeferred("sessions.create", { key: sessionKey });
+        await expect(gateway.waitForRequest("sessions.dispatch")).resolves.toMatchObject({
+          params: { key: sessionKey, agentId: "main", ...target },
+        });
+        expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+        await gateway.resolveDeferred("sessions.dispatch");
+        await expect(gateway.waitForRequest("sessions.send")).resolves.toMatchObject({
+          params: { key: sessionKey, agentId: "main", message },
+        });
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+        expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(1);
+        expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
+        await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
+          timeout: 30_000,
+        });
+      } finally {
+        await context.close();
       }
-
-      await page.reload();
-      await gateway.waitForRequest("environments.list");
-      await expect
-        .poll(() => page.locator("#new-session-where-trigger").getAttribute("data-device-id"))
-        .toBe("paired-runner");
-      await expect
-        .poll(() => page.locator(".new-session-page__message").inputValue())
-        .toBe(message);
-      await page.getByRole("button", { name: "Start session" }).click();
-      const retryCreate = await gateway.waitForRequest("sessions.create");
-      expect(retryCreate.params).toMatchObject({ key: sessionKey, message: "", worktree: true });
-      await gateway.resolveDeferred("sessions.create", { key: sessionKey });
-      await expect(gateway.waitForRequest("sessions.dispatch")).resolves.toMatchObject({
-        params: { key: sessionKey, agentId: "main", deviceId: "paired-runner" },
-      });
-      await expect(gateway.waitForRequest("sessions.send")).resolves.toMatchObject({
-        params: { key: sessionKey, agentId: "main", message },
-      });
-      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
-        timeout: 30_000,
-      });
-    } finally {
-      await context.close();
-    }
-  });
+    },
+  );
 });

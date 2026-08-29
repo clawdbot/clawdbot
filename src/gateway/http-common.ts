@@ -3,7 +3,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { z } from "zod";
 import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
-import { closeRequestAfterResponse } from "../infra/http-body.js";
+import {
+  clearHttpResponseRepresentationHeaders,
+  sendHttpRequestRejection,
+} from "../infra/http-request-lifecycle.js";
 import {
   logRejectedLargePayload,
   parseContentLengthHeader,
@@ -38,20 +41,7 @@ export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
     return;
   }
   if (!res.headersSent) {
-    // Replace representation metadata, not request-owned security or CORS headers.
-    for (const header of [
-      "Content-Encoding",
-      "Content-Disposition",
-      "Content-Range",
-      "Content-Language",
-      "Content-Location",
-      "ETag",
-      "Last-Modified",
-      "Transfer-Encoding",
-      "Trailer",
-    ]) {
-      res.removeHeader(header);
-    }
+    clearHttpResponseRepresentationHeaders(res);
     res.setHeader("Cache-Control", "no-store");
     res.statusMessage = "Internal Server Error";
     respondPlainText(res, 500, res.statusMessage);
@@ -176,17 +166,21 @@ export async function readJsonBodyOrError(
         reason: "json_body_limit",
         ...(contentLength !== undefined ? { bytes: contentLength } : {}),
       });
-      closeRequestAfterResponse(req, res);
-      sendJson(res, 413, {
-        error: { message: "Payload too large", type: "invalid_request_error" },
-      });
-      return undefined;
     }
-    if (body.error === "request body timeout") {
-      closeRequestAfterResponse(req, res);
-      sendJson(res, 408, {
-        error: { message: "Request body timeout", type: "invalid_request_error" },
-      });
+    if (body.error === "payload too large" || body.error === "request body timeout") {
+      const tooLarge = body.error === "payload too large";
+      await sendHttpRequestRejection(
+        req,
+        res,
+        tooLarge ? 413 : 408,
+        JSON.stringify({
+          error: {
+            message: tooLarge ? "Payload too large" : "Request body timeout",
+            type: "invalid_request_error",
+          },
+        }),
+        "application/json; charset=utf-8",
+      );
       return undefined;
     }
     sendInvalidRequest(res, body.error);

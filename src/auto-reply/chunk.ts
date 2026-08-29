@@ -117,6 +117,7 @@ export function resolveChunkMode(
 /**
  * Split text on newlines, trimming line whitespace.
  * Blank lines are folded into the next non-empty line as leading "\n" prefixes.
+ * Leading and trailing blank lines are capped to the available UTF-16 space.
  * Long lines can be split by length (default) or kept intact via splitLongLines:false.
  */
 export function chunkByNewline(
@@ -148,12 +149,13 @@ export function chunkByNewline(
       continue;
     }
 
-    const maxPrefix = Math.max(0, lineLimit - 1);
-    const cappedBlankLines = pendingBlankLines > 0 ? Math.min(pendingBlankLines, maxPrefix) : 0;
-    const prefix = cappedBlankLines > 0 ? "\n".repeat(cappedBlankLines) : "";
+    const lineValue = trimLines ? trimmed : line;
+    // Leave room for the first whole code point before folding in blank lines.
+    const firstCodePointLength = avoidTrailingHighSurrogateBreak(lineValue, 0, 1);
+    const maxPrefix = Math.max(0, lineLimit - firstCodePointLength);
+    const prefix = "\n".repeat(Math.min(pendingBlankLines, maxPrefix));
     pendingBlankLines = 0;
 
-    const lineValue = trimLines ? trimmed : line;
     if (!splitLongLines || lineValue.length + prefix.length <= lineLimit) {
       chunks.push(prefix + lineValue);
       continue;
@@ -171,8 +173,10 @@ export function chunkByNewline(
     }
   }
 
-  if (pendingBlankLines > 0 && chunks.length > 0) {
-    chunks[chunks.length - 1] += "\n".repeat(pendingBlankLines);
+  const lastChunk = chunks.at(-1);
+  if (pendingBlankLines > 0 && lastChunk !== undefined) {
+    const trailingLines = Math.min(pendingBlankLines, Math.max(0, lineLimit - lastChunk.length));
+    chunks[chunks.length - 1] = lastChunk + "\n".repeat(trailingLines);
   }
 
   return chunks;

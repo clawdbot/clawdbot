@@ -508,6 +508,13 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 }): string {
   const runLabel = params.trigger === "cron" ? "Automation runs" : "Headless runs";
+  // The TUI and chat channels never receive automation approval cards
+  // (server-request-context canDeliverApprovals), so only name surfaces that
+  // can actually answer this run's approval.
+  const approvalSurfaceFix =
+    params.trigger === "cron" && params.host === "gateway"
+      ? "- keep the Control UI or a macOS/iOS/Android app connected and answer the next run's approval card; Allow Always mints a standing grant"
+      : "- rerun interactively and approve when prompted (Control UI, TUI, or a chat channel with exec approvals)";
   return [
     `exec denied: ${runLabel} cannot wait for interactive exec approval.`,
     `Effective host exec policy: security=${params.security} ask=${params.ask} askFallback=${params.askFallback}`,
@@ -515,7 +522,7 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
     "Fix one of these:",
     '- align both files to security="full" and ask="off" for trusted local automation',
     "- keep allowlist mode and add an explicit allowlist entry for this command",
-    "- enable Web UI, terminal UI, or chat exec approvals and rerun interactively",
+    approvalSurfaceFix,
     'Tip: run "openclaw doctor" and "openclaw approvals get --gateway" to inspect the effective policy.',
   ].join("\n");
 }

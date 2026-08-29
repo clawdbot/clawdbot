@@ -1,4 +1,7 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import {
+  createAccountListHelpers,
+  resolveChannelMediaMaxBytes,
+} from "openclaw/plugin-sdk/account-helpers";
 // Sms plugin module implements accounts behavior.
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import {
@@ -133,6 +136,11 @@ export function resolveSmsAccount(
     dmPolicy: merged.dmPolicy ?? "pairing",
     allowFrom: parseList(merged.allowFrom ?? envAllowFrom),
     textChunkLimit: parseTextChunkLimit(merged.textChunkLimit ?? envTextChunkLimit),
+    mediaMaxBytes: resolveChannelMediaMaxBytes({
+      cfg,
+      accountId: id,
+      resolveChannelLimitMb: () => merged.mediaMaxMb,
+    }),
   };
 }
 

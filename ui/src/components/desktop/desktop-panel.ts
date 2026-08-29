@@ -39,6 +39,7 @@ import {
   renderDesktopPanelHeader,
   renderDesktopPicker,
 } from "./desktop-panel-view.ts";
+import { DesktopSessionController } from "./desktop-session-controller.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
 /** `<openclaw-desktop-panel>` — dockable RFB access to Gateway desktop sources. */
@@ -47,8 +48,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ type: Boolean }) available = false;
   @property({ type: Boolean }) suppressed = false;
   @property({ type: Boolean }) documentMode = false;
-  @property({ attribute: false }) documentSource: string | null = null;
-  @property({ attribute: false }) documentSession: string | null = null;
+  @property({ attribute: false }) requestedSource: string | null = null;
+  @property({ attribute: false }) sessionKey: string | null = null;
   @property({ type: Boolean }) documentControl = false;
   @property({ attribute: false }) basePath = "";
   /** Hosted by the chat side panel, which owns visibility and geometry. */
@@ -83,7 +84,16 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   private operationId = 0;
   private launchOperationId = 0;
   private controlTakeoverRecoveryUsed = false;
-  private documentSourceResolved = false;
+  private sourceSelection: "pending" | "resolved" | "picker" = "pending";
+  private readonly sessionSource = new DesktopSessionController(
+    this,
+    () => this.environmentId,
+    (target) => {
+      this.returnToPicker();
+      this.sourceSelection = "pending";
+      void this.refreshEnvironments(undefined, target);
+    },
+  );
   private readonly mobileKeyboard = new DesktopMobileKeyboard({
     connection: () => this.connection,
     controlling: () => this.controlling,
@@ -139,27 +149,20 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         void this.refreshEnvironments();
       }
     }
-    if (changed.has("documentSource") || changed.has("documentSession")) {
-      this.documentSourceResolved = false;
-    }
     const gatewayAvailabilityChanged = changed.has("client") || changed.has("available");
-    const embeddedPresentationChanged =
-      this.embedded && (changed.has("embedded") || changed.has("presented"));
-    const documentPresentationChanged =
+    const presentationChanged =
+      gatewayAvailabilityChanged ||
+      changed.has("embedded") ||
+      changed.has("presented") ||
       changed.has("documentMode") ||
-      changed.has("documentSource") ||
-      changed.has("documentSession") ||
+      changed.has("requestedSource") ||
+      changed.has("sessionKey") ||
       changed.has("documentControl");
-    if (this.documentMode && (gatewayAvailabilityChanged || documentPresentationChanged)) {
-      if (!this.available) {
-        this.documentSourceResolved = false;
-        this.returnToPicker();
-      } else {
-        void this.refreshEnvironments();
-      }
-    } else if (this.embedded && (embeddedPresentationChanged || gatewayAvailabilityChanged)) {
+    if ((this.documentMode || this.embedded) && presentationChanged) {
+      // Release input and invalidate pending work before resolving a different session or machine.
       this.returnToPicker();
-      if (this.presented && this.available && this.client && this.refreshOnPresentation) {
+      this.sourceSelection = "pending";
+      if (this.available && (!this.embedded || (this.presented && this.refreshOnPresentation))) {
         void this.refreshEnvironments();
       }
     } else if (gatewayAvailabilityChanged) {
@@ -195,6 +198,9 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       if (detail?.environmentId) {
         void this.connectRequestedEnvironment(detail.environmentId);
       } else {
+        this.returnToPicker();
+        // An untargeted shell command opens the picker, overriding this presentation's session default.
+        this.sourceSelection = "picker";
         void this.refreshEnvironments();
       }
       return;
@@ -226,6 +232,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   private returnToPicker(): void {
+    this.sessionSource.invalidate();
     this.disconnectConnection();
     this.clearLaunchState();
     this.state = "picker";
@@ -253,7 +260,10 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.launchErrorText = null;
   }
 
-  private async refreshEnvironments(expectedOperationId?: number): Promise<boolean> {
+  private async refreshEnvironments(
+    expectedOperationId?: number,
+    resolvedSessionTarget?: string | null,
+  ): Promise<boolean> {
     const client = this.client;
     if (!client || !this.available || (this.embedded && !this.presented)) {
       return false;
@@ -272,10 +282,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     } catch (error) {
       if (operationId === this.operationId) {
         this.errorText = t("desktop.errors.listFailed", { error: formatUiError(error) });
-        if (this.documentMode && (this.documentSource !== null || this.documentSession !== null)) {
-          // A session key only names a machine once the inventory loads, so it stays out of
-          // `environmentId`; document-mode retry refreshes the inventory rather than reconnecting.
-          this.environmentId = this.documentSource;
+        if (this.requestedSource !== null || this.sessionKey !== null) {
+          // Keep an explicit target through retry; an unresolved session has no environment yet.
           this.state = "inventory-error";
         }
       }
@@ -285,27 +293,32 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       }
     }
     if (refreshed) {
-      await this.resolveDocumentSource(operationId);
+      await this.resolveRequestedSource(operationId, resolvedSessionTarget);
     }
     return refreshed;
   }
 
-  private async resolveDocumentSource(operationId: number): Promise<void> {
-    if (!this.documentMode || this.documentSourceResolved || operationId !== this.operationId) {
+  private async resolveRequestedSource(
+    operationId: number,
+    resolvedSessionTarget?: string | null,
+  ): Promise<void> {
+    if (this.sourceSelection !== "pending" || operationId !== this.operationId) {
       return;
     }
-    this.documentSourceResolved = true;
+    this.sourceSelection = "resolved";
     const requestedSource = await resolveDesktopDocumentInventoryTarget({
       client: this.client,
-      source: this.documentSource,
-      sessionKey: this.documentSession,
+      source: this.requestedSource,
+      // Embedded presenters already receive the chat owner's current placement; do not rediscover it.
+      sessionKey: this.documentMode ? this.sessionKey : null,
       environments: this.environments,
+      resolvedSessionTarget,
     });
     if (operationId !== this.operationId) {
       return;
     }
     if (requestedSource === null) {
-      if (this.documentSource !== null || this.documentSession !== null) {
+      if (this.requestedSource !== null || this.sessionKey !== null) {
         this.state = "picker";
         this.noticeText = t("desktop.sourceUnavailable");
       }
@@ -316,6 +329,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
 
   private async connectRequestedEnvironment(environmentId: string): Promise<void> {
     this.returnToPicker();
+    this.sourceSelection = "resolved";
     this.environmentId = environmentId;
     this.state = "connecting";
     const operationId = this.operationId;
@@ -607,9 +621,11 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       inventoryError: this.state === "inventory-error",
       reason: this.disconnectedReason,
       onRetry: () => {
-        if (this.state === "inventory-error" && this.documentMode) {
-          this.documentSourceResolved = false;
-          this.state = "connecting";
+        if (this.state === "inventory-error" && (this.documentMode || !this.environmentId)) {
+          if (this.sourceSelection !== "picker") {
+            this.sourceSelection = "pending";
+          }
+          this.state = "picker";
           void this.refreshEnvironments();
           return;
         }

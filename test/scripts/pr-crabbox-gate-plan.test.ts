@@ -10,6 +10,7 @@ import { createCrabboxGatePlan } from "../../scripts/pr-lib/crabbox-gate-plan.mt
 const baseSha = "a".repeat(40);
 const headSha = "b".repeat(40);
 const bootstrapSha256 = "c".repeat(64);
+const workflowSha = "d".repeat(40);
 
 describe("Crabbox PR-derived gate plan", () => {
   it("requires every executable changed path to contribute precise test targets", () => {
@@ -74,7 +75,7 @@ describe("Crabbox PR-derived gate plan", () => {
     ).toThrow(/no complete targeted test plan for package\.json/u);
   });
 
-  it("binds the exact base, head, and deterministic plan into command and summary", () => {
+  it("binds immutable proof into the command and publisher workflow into the summary", () => {
     const plan = createCrabboxGatePlan({
       baseSha,
       changedPaths: [{ path: "scripts/pr", status: "M" }],
@@ -88,6 +89,7 @@ describe("Crabbox PR-derived gate plan", () => {
     const command = buildCrabboxGateCommand(plan, bootstrapSha256);
     expect(command).toContain(`OPENCLAW_CRABBOX_GATE_BASE=${baseSha}`);
     expect(command).toContain(`OPENCLAW_CRABBOX_GATE_HEAD=${headSha}`);
+    expect(command).not.toContain("OPENCLAW_CRABBOX_GATE_WORKFLOW=");
     expect(command).toContain(`OPENCLAW_CRABBOX_GATE_PLAN_SHA256=${digest}`);
     expect(command).toContain("test/scripts/pr-merge.test.ts");
 
@@ -98,6 +100,7 @@ describe("Crabbox PR-derived gate plan", () => {
       planDigest: digest,
       runId: "run_abc123",
       targetCount: 1,
+      workflowSha,
     });
     expect(parseCrabboxGateCheckSummary(summary)).toEqual({
       baseSha,
@@ -106,6 +109,7 @@ describe("Crabbox PR-derived gate plan", () => {
       planDigest: digest,
       runId: "run_abc123",
       targetCount: 1,
+      workflowSha,
     });
   });
 });

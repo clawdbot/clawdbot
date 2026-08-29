@@ -65,6 +65,7 @@ const buildModelsProviderDataHoisted = vi.hoisted(() =>
     providers: [],
     resolvedDefault: { provider: "openai", model: "gpt-test" },
     modelNames: new Map<string, string>(),
+    modelCatalog: [],
   })),
 );
 const listSkillCommandsForAgentsHoisted = vi.hoisted(() => vi.fn(() => []));
@@ -442,12 +443,6 @@ function resetTelegramDispatchTestState() {
     created: true,
   });
   enqueueSystemEvent.mockResolvedValue(undefined);
-  buildModelsProviderData.mockResolvedValue({
-    byProvider: new Map<string, Set<string>>(),
-    providers: [],
-    resolvedDefault: { provider: "openai", model: "gpt-test" },
-    modelNames: new Map<string, string>(),
-  });
   listSkillCommandsForAgents.mockReturnValue([]);
   createChannelMessageReplyPipeline.mockReturnValue({
     responsePrefix: undefined,

@@ -4,6 +4,41 @@
 # baseline first and upgrades it to the selected candidate.
 set -euo pipefail
 
+PACKAGE_TGZ=""
+AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=""
+run_completed="0"
+diagnostics_ready=0
+cleanup_outer() {
+  local exit_status="$?"
+  trap - EXIT
+  set +e
+  # Bash 3.2 can enter EXIT with status 0 after a fatal nounset expansion.
+  # Only a successfully joined scenario may turn cleanup into a successful exit.
+  if [ "$exit_status" -eq 0 ] && [ "$run_completed" != "1" ]; then
+    echo "Upgrade survivor exited before the scenario completed." >&2
+    exit_status=1
+  fi
+  if [ "$exit_status" -ne 0 ]; then
+    if [ "$diagnostics_ready" = "1" ]; then
+      publish_diagnostics ||
+        echo "Upgrade survivor diagnostics missing; preserving original lane failure." >&2
+    else
+      echo "Upgrade survivor diagnostics missing: no private capture prepared." >&2
+    fi
+  fi
+  if [ -n "$PACKAGE_TGZ" ]; then
+    docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
+  fi
+  if [ -n "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" ]; then
+    rm -rf "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT"
+  fi
+  if [ "$exit_status" -ne 0 ]; then
+    printf '[upgrade-survivor] FAILED (exit %s)\n' "$exit_status" >&2
+  fi
+  exit "$exit_status"
+}
+trap cleanup_outer EXIT
+
 HARNESS_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$HARNESS_ROOT_DIR}" && pwd)"
 DOCKER_E2E_HARNESS_ROOT_DIR="$HARNESS_ROOT_DIR"
@@ -91,9 +126,30 @@ resolve_lane_artifact_suffix() {
 LANE_ARTIFACT_SUFFIX="$(resolve_lane_artifact_suffix)"
 LANE_ARTIFACT_SUFFIX="${LANE_ARTIFACT_SUFFIX//[^A-Za-z0-9_.-]/_}"
 ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor/$LANE_ARTIFACT_SUFFIX}"
+prepare_diagnostics_capture() {
+  # A previous attempt must never be published as this container's failure.
+  if [ -L "$ARTIFACT_DIR" ] || [ -L "$ARTIFACT_DIR/diagnostics" ] ||
+    ! rm -f "$ARTIFACT_DIR/diagnostics/raw.json" "$ARTIFACT_DIR/diagnostics/post-core.json"; then
+    echo "Upgrade survivor diagnostics missing: private capture setup failed." >&2
+    return 0
+  fi
+  diagnostics_ready=1
+}
+publish_diagnostics() {
+  # This directory is host-owned and is never mounted into the candidate.
+  local log_root="${OPENCLAW_DOCKER_ALL_LOG_DIR:-$ROOT_DIR/.artifacts/docker-tests}"
+  local diagnostic_dir
+  local private_root
+  private_root="$(cd "$ARTIFACT_DIR" && pwd)" || return
+  mkdir -p "$log_root" || return
+  log_root="$(cd "$log_root" && pwd)" || return
+  diagnostic_dir="$(mktemp -d "$log_root/upgrade-survivor-$LANE_ARTIFACT_SUFFIX.XXXXXX")" || return
+  (cd "$HARNESS_ROOT_DIR" && node --import "$HARNESS_ROOT_DIR/scripts/tsx.mjs" \
+    "$HARNESS_ROOT_DIR/scripts/upgrade-survivor-diagnostics.mjs" \
+    publish "$private_root" "$diagnostic_dir")
+}
 DOCKER_RUN_USER_ARGS=()
 OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=()
-AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=""
 PROBE_ENV_ARGS=(
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS="$PROBE_TIMEOUT_MS"
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS="$PROBE_ATTEMPT_TIMEOUT_MS"
@@ -113,14 +169,6 @@ if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
   openclaw_prepublish_plugin_registry_configure_docker_args \
     "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
 fi
-cleanup_outer() {
-  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
-  if [ -n "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" ]; then
-    rm -rf "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT"
-  fi
-}
-trap cleanup_outer EXIT
-
 if [ "$ROOT_MANAGED_VPS" = "1" ]; then
   if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
     echo "OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1 requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
@@ -156,6 +204,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
 
   mkdir -p "$ARTIFACT_DIR"
   chmod -R a+rwX "$ARTIFACT_DIR" || true
+  prepare_diagnostics_capture
 
   DOCKER_E2E_PACKAGE_ARGS=()
   CANDIDATE_RAW="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE:-current}"
@@ -249,6 +298,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
     "$IMAGE_NAME" \
     timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash /tmp/openclaw-upgrade-survivor-run.sh
+  run_completed="1"
   exit 0
 fi
 
@@ -273,6 +323,7 @@ fi
 OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
 mkdir -p "$ARTIFACT_DIR"
 chmod -R a+rwX "$ARTIFACT_DIR" || true
+prepare_diagnostics_capture
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 
@@ -293,9 +344,9 @@ docker_e2e_run_with_harness \
   -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
   -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
   -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/config-parking.mjs:/tmp/openclaw-config-parking.mjs:ro" \
-  "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
-  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-  "${DOCKER_RUN_USER_ARGS[@]}" \
+  ${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]+"${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}"} \
+  ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
+  ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
   "$IMAGE_NAME" \
  timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash -lc 'set -euo pipefail
  source scripts/lib/openclaw-e2e-instance.sh
@@ -355,6 +406,7 @@ export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR="$BASELINE_SERVICE
 gateway_pid=""
 plugin_registry_pid=""
 clawhub_fixture_pid=""
+run_completed="0"
 cleanup() {
   if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
     systemctl --user stop openclaw-gateway.service >/dev/null 2>&1 || true
@@ -366,7 +418,24 @@ cleanup() {
   openclaw_e2e_stop_process "${plugin_registry_pid:-}"
   openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"
 }
-trap cleanup EXIT
+CURRENT_PHASE="setup"
+on_exit() {
+  local result="$1"
+  trap - EXIT
+  set +e
+  if [ "$result" -eq 0 ] && [ "$run_completed" != "1" ]; then
+    echo "Upgrade survivor exited before all assertions completed." >&2
+    result=1
+  fi
+  if [ "$result" -ne 0 ]; then
+    node scripts/e2e/lib/upgrade-survivor/diagnostics.mjs capture \
+      "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT" "$CURRENT_PHASE" "$result" ||
+      echo "Upgrade survivor diagnostics missing; preserving original phase failure." >&2
+  fi
+  cleanup
+  exit "$result"
+}
+trap '"'"'on_exit $?'"'"' EXIT
 
 wait_for_fixture_port() {
   local pid="$1" port_file="$2" log_file="$3" label="$4"
@@ -468,7 +537,7 @@ NODE
      "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:-}" \
      "$fixture_root" \
      plugin_registry_pid \
-     "${registry_args[@]}"
+     ${registry_args[@]+"${registry_args[@]}"}
  }
 
 install_companion_plugins() {
@@ -479,10 +548,12 @@ install_companion_plugins() {
     park-companion-install "$OPENCLAW_CONFIG_PATH" "$authored_config"
 
   set +e
-  openclaw plugins install "npm:@openclaw/discord@$package_version" --pin --accept-capabilities
+  openclaw_e2e_fixture_plugin_command openclaw -- \
+    plugins install "npm:@openclaw/discord@$package_version" --pin
   install_status=$?
   if [ "$install_status" -eq 0 ]; then
-    openclaw plugins install "clawhub:@openclaw/whatsapp@$package_version" --accept-capabilities
+    openclaw_e2e_fixture_plugin_command openclaw -- \
+      plugins install "clawhub:@openclaw/whatsapp@$package_version"
     install_status=$?
   fi
   if [ "$install_status" -eq 0 ]; then
@@ -491,7 +562,8 @@ install_companion_plugins() {
     install_status=$?
   fi
   if [ "$install_status" -eq 0 ]; then
-    openclaw plugins install "npm:@openclaw/codex@$package_version" --pin --accept-capabilities
+    openclaw_e2e_fixture_plugin_command openclaw -- \
+      plugins install "npm:@openclaw/codex@$package_version" --pin
     install_status=$?
   fi
   node "$OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER" \
@@ -506,7 +578,8 @@ install_companion_plugins() {
     return "$restore_status"
   fi
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-    assert-companion-installs "$package_version"
+    assert-companion-installs "$package_version" \
+    "${OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED:?missing candidate capability-consent support}"
 }
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
@@ -527,6 +600,7 @@ else
 fi
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
 
+CURRENT_PHASE="install-candidate"
 openclaw_e2e_install_package "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/install.log" "upgrade survivor package" "$npm_config_prefix"
 command -v openclaw >/dev/null
 package_version="$(node -p "JSON.parse(require(\"node:fs\").readFileSync(process.argv[1] + \"/lib/node_modules/openclaw/package.json\", \"utf8\")).version" "$npm_config_prefix")"
@@ -536,6 +610,7 @@ OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 
 echo "Checking dirty-state config before update..."
+CURRENT_PHASE="prepare-state"
 OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
 OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
 configure_clawhub_fixture
@@ -545,53 +620,60 @@ if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   # shellcheck disable=SC1091
   source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
   prepare_update_restart_probe_current_install "$PORT" "$GATEWAY_LOG"
+  pre_update_service_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE")"
+  pre_update_systemctl_lines="$(wc -l <"$SYSTEMCTL_SHIM_LOG")"
 fi
 
 echo "Running package update against the mounted tarball..."
+CURRENT_PHASE="update-candidate"
 update_args=(update --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" --yes --json)
 if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
   update_args+=(--no-restart)
 fi
 set +e
-openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD OPENCLAW_ALLOW_ROOT=1 openclaw "${update_args[@]}" >/tmp/openclaw-upgrade-survivor-update.json 2>/tmp/openclaw-upgrade-survivor-update.err
+openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD OPENCLAW_ALLOW_ROOT=1 NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs" openclaw "${update_args[@]}" >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/update.json" 2>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/update.err"
 update_status=$?
 set -e
 if [ "$update_status" -ne 0 ]; then
   echo "openclaw update failed" >&2
   validate_status=0
-  openclaw_e2e_maybe_timeout "$command_timeout" openclaw config validate --json >/tmp/openclaw-upgrade-survivor-post-update-validate.json 2>/tmp/openclaw-upgrade-survivor-post-update-validate.err || validate_status=$?
+  openclaw_e2e_maybe_timeout "$command_timeout" openclaw config validate --json >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/post-update-validate.json" 2>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/post-update-validate.err" || validate_status=$?
   echo "post-update config validation probe status=$validate_status" >&2
-  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-post-update-validate.err >&2 || true
-  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-post-update-validate.json >&2 || true
-  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.err >&2 || true
-  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.json >&2 || true
+  openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/post-update-validate.err" >&2 || true
+  openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/post-update-validate.json" >&2 || true
+  openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/update.err" >&2 || true
+  openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/update.json" >&2 || true
   exit "$update_status"
 fi
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   echo "Skipping doctor repair until after restart proof."
 else
   echo "Running non-interactive doctor repair..."
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >/tmp/openclaw-upgrade-survivor-doctor.log 2>&1; then
+  CURRENT_PHASE="doctor"
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" 2>&1; then
     echo "openclaw doctor failed" >&2
-    openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-doctor.log >&2
+    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" >&2
     exit 1
   fi
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw config validate >>/tmp/openclaw-upgrade-survivor-doctor.log 2>&1; then
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw config validate >>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" 2>&1; then
     echo "post-doctor config validation failed" >&2
-    openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-doctor.log >&2
+    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" >&2
     exit 1
   fi
 fi
 
 echo "Verifying config and state survived update..."
+CURRENT_PHASE="assert-state"
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
 
 startup_summary="n/a"
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+  assert_update_restart_service_replaced "$pre_update_service_pid" "$pre_update_systemctl_lines"
   echo "Gateway restart was handled by openclaw update."
 else
   echo "Starting gateway from upgraded state..."
+  CURRENT_PHASE="start-gateway"
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
   gateway_pid="$!"
@@ -607,11 +689,12 @@ else
 fi
 
 echo "Checking gateway HTTP probes..."
+CURRENT_PHASE="http-probes"
 node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs \
   --base-url "http://127.0.0.1:$PORT" \
   --path /healthz \
   --expect live \
-  --out /tmp/openclaw-upgrade-survivor-healthz.json
+  --out "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/healthz.json"
 
 readyz_probe_args=(
   --base-url "http://127.0.0.1:$PORT"
@@ -624,14 +707,15 @@ fi
 if [ "${OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED:-}" = "1" ]; then
   readyz_probe_args+=(--allow-degraded-ready)
 fi
-readyz_probe_args+=(--out /tmp/openclaw-upgrade-survivor-readyz.json)
+readyz_probe_args+=(--out "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/readyz.json")
 node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs "${readyz_probe_args[@]}"
 
 echo "Checking gateway RPC status..."
+CURRENT_PHASE="status"
 status_start="$(node -e "process.stdout.write(String(Date.now()))")"
-if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw gateway status --url "ws://127.0.0.1:$PORT" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >/tmp/openclaw-upgrade-survivor-status.json 2>/tmp/openclaw-upgrade-survivor-status.err; then
+if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw gateway status --url "ws://127.0.0.1:$PORT" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/status.json" 2>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/status.err"; then
   echo "gateway status failed" >&2
-  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-status.err >&2
+  openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/status.err" >&2
   openclaw_e2e_print_log "$GATEWAY_LOG" >&2
   openclaw_e2e_print_log "$SYSTEMCTL_SHIM_DAEMON_LOG" >&2
   exit 1
@@ -640,10 +724,12 @@ status_end="$(node -e "process.stdout.write(String(Date.now()))")"
 status_seconds=$(((status_end - status_start + 999) / 1000))
 if [ "$status_seconds" -gt "$STATUS_BUDGET" ]; then
   echo "gateway status exceeded survivor budget: ${status_seconds}s > ${STATUS_BUDGET}s" >&2
-  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-status.json >&2
+  openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/status.json" >&2
   exit 1
 fi
-node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json /tmp/openclaw-upgrade-survivor-status.json
+node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/status.json"
 
 echo "Upgrade survivor Docker E2E passed scenario=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base} updateRestartMode=${UPDATE_RESTART_MODE} startup=${startup_summary} status=${status_seconds}s."
+run_completed="1"
 '
+run_completed="1"

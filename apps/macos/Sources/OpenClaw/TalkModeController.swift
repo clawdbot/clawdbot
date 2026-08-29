@@ -53,21 +53,23 @@ final class TalkModeController {
         }
         TalkOverlayController.shared.updatePhase(phase)
 
-        // Play distinct system sounds for each phase transition.
         if phase != previousPhase {
             Self.playPhaseSound(phase, previousPhase: previousPhase)
         }
+        self.publishPhase()
+    }
 
-        let effectivePhase = self.isPaused ? "paused" : phase.rawValue
-        Task {
-            await GatewayConnection.shared.talkMode(
-                enabled: AppStateStore.shared.talkEnabled,
-                phase: effectivePhase)
-        }
+    private func publishPhase() {
+        let state = AppStateStore.shared
+        // Preview projections stay local, including shutdown's idle phase.
+        guard !state.isPreview else { return }
+        let effectivePhase = self.isPaused ? "paused" : self.phase.rawValue
+        Task { await GatewayConnection.shared.talkMode(enabled: state.talkEnabled, phase: effectivePhase) }
     }
 
     private static func playPhaseSound(_ phase: TalkModePhase, previousPhase: TalkModePhase) {
-        guard AppStateStore.shared.talkPhaseSoundsEnabled else { return }
+        let state = AppStateStore.shared
+        guard !state.isPreview, state.talkPhaseSoundsEnabled else { return }
         let soundName: String? = switch phase {
         case .thinking:
             "Tink" // 생각 중: 짧고 가벼운 소리
@@ -135,12 +137,8 @@ final class TalkModeController {
         self.logger.info("talk paused=\(paused)")
         self.isPaused = paused
         TalkOverlayController.shared.updatePaused(paused)
-        let effectivePhase = paused ? "paused" : self.phase.rawValue
-        Task {
-            await GatewayConnection.shared.talkMode(
-                enabled: AppStateStore.shared.talkEnabled,
-                phase: effectivePhase)
-        }
+        guard !AppStateStore.shared.isPreview else { return }
+        self.publishPhase()
         Task { await TalkModeRuntime.shared.setPaused(paused) }
     }
 

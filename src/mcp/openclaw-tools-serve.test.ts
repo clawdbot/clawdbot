@@ -1,6 +1,6 @@
 // OpenClaw MCP tools tests cover core tool server startup and registration.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { hashSystemAgentOperation } from "../agents/tools/system-agent-tool.js";
+import { hashSystemAgentOperation } from "../system-agent/operator-approval.js";
 import {
   buildSystemAgentToolsMcpServerConfig,
   OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV,

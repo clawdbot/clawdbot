@@ -523,6 +523,7 @@ describe("CronPage editor state sync", () => {
         expect.objectContaining({
           name: "Agent-scoped task",
           agentId: scenario.expectedAgentId,
+          delivery: { mode: "none" },
         }),
       );
     });

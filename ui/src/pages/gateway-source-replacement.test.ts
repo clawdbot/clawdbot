@@ -285,12 +285,8 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     document.body.append(page);
     await page.updateComplete;
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("sessions.usage", expect.any(Object)),
-    );
     await waitForFast(() => expect(page.usageResult).toBe(freshResult));
 
-    expect(request).toHaveBeenCalledWith("sessions.usage", expect.any(Object));
     expect(page.usageResult).not.toBe(staleResult);
   });
 

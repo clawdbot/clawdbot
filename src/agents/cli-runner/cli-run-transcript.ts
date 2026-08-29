@@ -391,6 +391,7 @@ export async function finalizeCliContextEngineTurn(params: {
       yieldAborted: false,
       sessionIdUsed: runParams.sessionId,
       sessionKey: runParams.sessionKey,
+      sessionTarget: runParams.sessionTarget,
       sessionFile: runParams.sessionFile,
       isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
       messagesSnapshot: transcript.messagesSnapshot,

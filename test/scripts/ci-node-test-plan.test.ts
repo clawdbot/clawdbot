@@ -794,8 +794,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const stripes = shards.filter(
         (shard) => /^.+-\d+$/u.test(shard.shardName) && shard.shardName.startsWith(`${prefix}-`),
       );
-      const actual = stripes
-        .flatMap((stripe) => stripe.includePatterns ?? [])
+      // Files needing a pretest build are pulled into a sibling `-runtime`
+      // shard so only one job builds; coverage must still be complete across
+      // the stripes plus that shard.
+      const coverageShards = shards.filter((shard) => shard.shardName.startsWith(`${prefix}-`));
+      const actual = coverageShards
+        .flatMap((shard) => shard.includePatterns ?? [])
         .toSorted((a, b) => a.localeCompare(b));
       const expected = stripeConfigs
         .flatMap((config) => listMatchedTestFiles(config))
@@ -871,7 +875,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
   it("preserves runtime preparation and core-only ownership in full and compact plans", () => {
     const qaConfig = "test/vitest/vitest.extension-qa.config.ts";
-    const runtimeTarget = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
+    const runtimeTargets = [
+      "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+      "src/gateway/gateway-active-memory.test.ts",
+      "src/gateway/gateway-concurrent-streams.test.ts",
+    ];
     for (const shards of [
       createNodeTestShards(),
       createNodeTestShardBundles({ compact: true, compactMode: "pull-request" }),
@@ -881,13 +889,21 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "configs" in shard ? shard.configs : shard.groups.flatMap((group) => group.configs),
         ),
       ).not.toContain(qaConfig);
-      expect(
-        shards.find((shard) =>
+      for (const runtimeTarget of runtimeTargets) {
+        const owner = shards.find((shard) =>
           ("configs" in shard ? [shard] : shard.groups).some((group) =>
             group.includePatterns?.includes(runtimeTarget),
           ),
-        )?.pretestBuildMode,
-      ).toBe("runtime");
+        );
+        expect(owner?.pretestBuildMode, runtimeTarget).toBe("runtime");
+        if (owner && "groups" in owner) {
+          expect(
+            owner.groups?.find((group) => group.includePatterns?.includes(runtimeTarget))
+              ?.pretestBuildMode,
+            runtimeTarget,
+          ).toBe("runtime");
+        }
+      }
     }
   });
 
@@ -1550,19 +1566,36 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
     });
-    expect(gatewayCoreShards).toEqual(
+    const gatewayCoreConfigs = [
+      "test/vitest/vitest.gateway-core.config.ts",
+      "test/vitest/vitest.gateway-client.config.ts",
+    ];
+    expect(gatewayCoreShards.slice(0, 3)).toEqual(
       [1, 2, 3].map((stripe) => ({
         checkName: `checks-node-agentic-gateway-core-${stripe}`,
         shardName: `agentic-gateway-core-${stripe}`,
-        configs: [
-          "test/vitest/vitest.gateway-core.config.ts",
-          "test/vitest/vitest.gateway-client.config.ts",
-        ],
+        configs: gatewayCoreConfigs,
         includePatterns: gatewayCoreShards[stripe - 1]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
       })),
     );
+    // The pretest runtime build is charged per job, so the files that need it
+    // stay in one shard; the ordinary stripes must never carry a build mode.
+    expect(gatewayCoreShards.filter((shard) => shard.pretestBuildMode != null)).toEqual([
+      {
+        checkName: "checks-node-agentic-gateway-core-runtime",
+        shardName: "agentic-gateway-core-runtime",
+        configs: gatewayCoreConfigs,
+        includePatterns: [
+          "src/gateway/gateway-active-memory.test.ts",
+          "src/gateway/gateway-concurrent-streams.test.ts",
+        ],
+        pretestBuildMode: "runtime",
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+      },
+    ]);
     expect(gatewayMethodsShard).toEqual({
       checkName: "checks-node-agentic-gateway-methods",
       shardName: "agentic-gateway-methods",

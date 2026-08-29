@@ -8,7 +8,7 @@ import type {
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
 import {
-  assertCanonicalAgentMediaPersistenceVersion,
+  assertCanonicalAgentPersistenceVersion,
   assertExistingAgentSchemaOwner,
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
@@ -85,6 +85,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     // A newer build can migrate this file while the handle stays open, so the
     // forward-compatibility gate still runs before any reused read.
     assertSupportedAgentSchemaVersion(opened.db, pathname);
+    assertCanonicalAgentPersistenceVersion(opened.db, pathname);
     try {
       return { found: true, value: operation(opened) };
     } catch (error) {
@@ -104,7 +105,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedAgentSchemaVersion(db, pathname);
-    assertCanonicalAgentMediaPersistenceVersion(db, pathname);
+    assertCanonicalAgentPersistenceVersion(db, pathname);
     const schemaMeta = readExistingAgentSchemaMeta(db);
     if (!schemaMeta) {
       return { found: false, reason: "schema-missing" };

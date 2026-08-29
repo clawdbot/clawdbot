@@ -17,6 +17,14 @@ import { parseAudioTag } from "./audio-tags.js";
 /** Captures legacy MEDIA: attachment directives from model/tool output. */
 const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 
+const RENDERABLE_ASSISTANT_MEDIA_PREFIX_RE =
+  /^(?:https?:\/\/|data:(?:image|audio|video)\/|file:\/\/|~|\/|[a-z]:[\\/])/iu;
+
+export function isRelativeAssistantMediaReference(url: string): boolean {
+  const trimmed = url.trim();
+  return Boolean(trimmed) && !RENDERABLE_ASSISTANT_MEDIA_PREFIX_RE.test(trimmed);
+}
+
 /** Ordered output segment emitted after visible text and extracted media are separated. */
 type ParsedMediaOutputSegment =
   | {

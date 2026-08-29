@@ -1,8 +1,8 @@
 /** Resolves the exact root and entry selected by the plugin runtime loader. */
-import fs from "node:fs";
 import path from "node:path";
-import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
+import { getPluginCacheRoot } from "./plugin-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { resolvePreferredBuiltRuntimeArtifact } from "./plugin-runtime-artifact-selection.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -22,7 +22,7 @@ export function resolveCanonicalDistRuntimeSource(source: string): string {
     return source;
   }
   const candidate = `${source.slice(0, index)}${path.sep}dist${path.sep}extensions${path.sep}${source.slice(index + marker.length)}`;
-  return fs.existsSync(candidate) ? candidate : source;
+  return pluginCacheExistsSync(candidate) ? candidate : source;
 }
 
 /** Applies both loader selection phases in their runtime order. */
@@ -36,21 +36,37 @@ export function resolvePluginRuntimeArtifact(params: {
   packageManifest?: OpenClawPackageManifest;
   registry?: PluginRegistry;
 }): { source: string; rootDir: string } {
-  const rootDir = resolveCanonicalDistRuntimeSource(resolveRealpathOrAbsolute(params.rootDir));
-  const source = resolveCanonicalDistRuntimeSource(resolveRealpathOrAbsolute(params.source));
+  const rootDir = resolveCanonicalDistRuntimeSource(
+    pluginCacheRealpathSync(params.rootDir) ?? path.resolve(params.rootDir),
+  );
   const memoKey = JSON.stringify([params.pluginId, rootDir, params.entryKind]);
   const targetRegistry = params.registry ?? requireActivePluginRegistry();
   const cached = targetRegistry.pluginRuntimeArtifacts.get(memoKey);
   if (cached) {
-    targetRegistry.pluginRuntimeArtifacts.set(memoKey, cached);
     return { ...cached };
   }
-
-  const preferred = resolvePreferredBuiltRuntimeArtifact({ ...params, source, rootDir });
-  const resolved = {
-    source: resolveCanonicalDistRuntimeSource(preferred.source),
-    rootDir: resolveCanonicalDistRuntimeSource(preferred.rootDir),
-  };
+  const artifacts = getPluginCacheRoot(rootDir).runtimeArtifacts;
+  const selectionKey = JSON.stringify([
+    params.source,
+    params.entryKind,
+    params.origin,
+    params.preferBuiltPluginArtifacts,
+    params.packageManifest?.build?.bundledDist,
+  ]);
+  let resolved = artifacts.get(selectionKey);
+  if (!resolved) {
+    const source = resolveCanonicalDistRuntimeSource(
+      pluginCacheRealpathSync(params.source) ?? path.resolve(params.source),
+    );
+    const preferred = resolvePreferredBuiltRuntimeArtifact({ ...params, source, rootDir });
+    resolved = {
+      source: resolveCanonicalDistRuntimeSource(preferred.source),
+      rootDir: resolveCanonicalDistRuntimeSource(preferred.rootDir),
+    };
+    artifacts.set(selectionKey, resolved);
+  }
+  // A registry binds hooks and tools to one entry even when callers disagree on
+  // source/build preference. Only filesystem selection facts belong to the cache.
   targetRegistry.pluginRuntimeArtifacts.set(memoKey, resolved);
   return { ...resolved };
 }

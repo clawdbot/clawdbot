@@ -214,9 +214,9 @@ describe("cron view list pane", () => {
       payloadKind: "agentTurn",
       scheduleKind: "cron",
       cronExpr: "0 9 * * 1-5",
-      deliveryMode: "announce",
       name: "Repo pulse",
     });
+    expect(patch).not.toHaveProperty("deliveryMode");
     expect(String(patch.payloadText)).toContain("overnight activity");
   });
 
@@ -343,14 +343,14 @@ describe("cron view selects", () => {
       container.querySelectorAll<HTMLElement & { value: string }>("wa-select"),
     ).find((select) => select.querySelector('[slot="label"]')?.textContent === "Unit");
     expect(unit?.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("minutes");
-    // Negative control: the delivery-mode default is also the first option, so
-    // this passes before and after the fix and proves the harness reads selects.
+    // The targetless create form keeps delivery internal until the operator
+    // explicitly selects a channel delivery mode.
     const delivery = getElement(
       container,
       "wa-select#cron-delivery-mode",
       HTMLElement,
     ) as HTMLElement & { value: string };
-    expect(delivery.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("announce");
+    expect(delivery.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("none");
   });
 
   it("shows persisted non-first values in jobs filters and runs sort", () => {

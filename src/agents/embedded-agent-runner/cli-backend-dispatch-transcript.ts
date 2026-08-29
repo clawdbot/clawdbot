@@ -56,6 +56,7 @@ export function createCliDispatchTranscriptRecorder(params: {
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
+  storePath?: string;
   sessionFile?: string;
   runId: string;
   prompt: string;
@@ -78,6 +79,7 @@ export function createCliDispatchTranscriptRecorder(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    storePath: params.storePath,
     sessionFile: params.sessionFile,
     expectedLifecycleRevision: params.expectedLifecycleRevision,
     expectedWriterRunId: params.expectedWriterRunId,

@@ -599,7 +599,7 @@ describe("gatherDaemonStatus", () => {
 
   it("reports the heap limit from the installed Gateway service", async () => {
     serviceReadCommand.mockResolvedValueOnce({
-      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      programArguments: ["/bin/node", "--max-heap-size=8192", "cli", "gateway", "--port", "19001"],
       environment: {
         OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
         OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
@@ -609,7 +609,10 @@ describe("gatherDaemonStatus", () => {
 
     const status = await gatherStatus({ probe: false });
 
-    expect(status.service.gatewayHeap).toMatchObject({ appliedMiB: 6144 });
+    expect(status.service.gatewayHeap).toMatchObject({
+      nodeOptions: "--max-old-space-size=6144",
+      execArgv: ["--max-heap-size=8192"],
+    });
     expect(status.service.gatewayHeap?.memorySource).toMatch(/^(constrained|physical)$/u);
   });
 
@@ -833,7 +836,7 @@ describe("gatherDaemonStatus", () => {
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
   });
 
-  it("bounds all service-manager reads and still emits JSON after they time out", async () => {
+  it("renders Gateway-specific recovery in text and JSON after service reads time out", async () => {
     serviceIsLoaded.mockImplementationOnce(async (args?: { timeoutMs?: number }) => {
       if (args?.timeoutMs === undefined) {
         return await new Promise<boolean>(() => {});
@@ -844,7 +847,7 @@ describe("gatherDaemonStatus", () => {
       if (opts?.timeoutMs === undefined) {
         return await new Promise<{ status: string }>(() => {});
       }
-      throw new Error("systemctl show timed out");
+      throw new Error("錯誤: 系統找不到指定的檔案。");
     });
 
     const status = await gatherStatus({
@@ -865,7 +868,11 @@ describe("gatherDaemonStatus", () => {
     expect(status.service.loaded).toBeNull();
     expect(status.service.runtime).toEqual({
       status: "unknown",
-      detail: "Error: systemctl show timed out",
+      detail: "service runtime inspection failed; retry with openclaw gateway status --deep",
+      inspectionFailure: {
+        code: "service-runtime-inspection-failed",
+        detail: "錯誤: 系統找不到指定的檔案。",
+      },
     });
 
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
@@ -885,7 +892,11 @@ describe("gatherDaemonStatus", () => {
           },
           runtime: {
             status: "unknown",
-            detail: "Error: systemctl show timed out",
+            detail: "service runtime inspection failed; retry with openclaw gateway status --deep",
+            inspectionFailure: {
+              code: "service-runtime-inspection-failed",
+              detail: "錯誤: 系統找不到指定的檔案。",
+            },
           },
         },
       });
@@ -900,7 +911,10 @@ describe("gatherDaemonStatus", () => {
       const output = log.mock.calls.flat().join("\n");
       expect(output).toContain("Service: LaunchAgent (unknown)");
       expect(output).not.toContain("Service: LaunchAgent (not loaded)");
-      expect(output).toContain("Runtime: unknown (Error: systemctl show timed out)");
+      expect(output).toContain(
+        "Runtime: unknown (service runtime inspection failed; retry with openclaw gateway status --deep)",
+      );
+      expect(output).not.toContain("系統找不到指定的檔案");
     } finally {
       log.mockRestore();
       error.mockRestore();

@@ -1,15 +1,31 @@
 #!/usr/bin/env node
 
 // Regenerates package.json plugin-sdk export entries from the canonical entry list
-// and keeps the workspace facade package (@openclaw/plugin-sdk) exports aligned
-// with its src facade files.
+// and keeps workspace facade exports and private declaration aliases aligned.
 import fs from "node:fs";
 import path from "node:path";
-import { buildPluginSdkPackageExports, pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mts";
+import {
+  buildPluginSdkPackageExports,
+  pluginSdkEntrypoints,
+  privateLocalOnlyPluginSdkEntrypoints,
+} from "./lib/plugin-sdk-entries.mts";
 
 const checkOnly = process.argv.includes("--check");
 const repoRoot = process.cwd();
 let failed = false;
+
+function writeOrCheckJson(relativePath: string, value: unknown) {
+  if (checkOnly) {
+    console.error(`${relativePath} out of sync. Run \`pnpm plugin-sdk:sync-exports\`.`);
+    failed = true;
+    return;
+  }
+  fs.writeFileSync(
+    path.join(repoRoot, relativePath),
+    `${JSON.stringify(value, null, 2)}\n`,
+    "utf8",
+  );
+}
 
 function syncRootPackageExports() {
   const packageJsonPath = path.join(repoRoot, "package.json");
@@ -43,13 +59,8 @@ function syncRootPackageExports() {
   if (JSON.stringify(currentExports) === JSON.stringify(nextExports)) {
     return;
   }
-  if (checkOnly) {
-    console.error("plugin-sdk exports out of sync. Run `pnpm plugin-sdk:sync-exports`.");
-    failed = true;
-    return;
-  }
   packageJson.exports = nextExports;
-  fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
+  writeOrCheckJson("package.json", packageJson);
 }
 
 // The workspace facade package mirrors a subset of plugin SDK entrypoints for
@@ -107,16 +118,49 @@ function syncFacadePackageExports(facadeSubpaths: string[]) {
         console.error(`packages/plugin-sdk src facade ${key} is missing from exports.`);
       }
     }
-    console.error("packages/plugin-sdk exports out of sync. Run `pnpm plugin-sdk:sync-exports`.");
-    failed = true;
-    return;
   }
   facadePackageJson.exports = nextExports;
-  fs.writeFileSync(
-    facadePackageJsonPath,
-    `${JSON.stringify(facadePackageJson, null, 2)}\n`,
-    "utf8",
+  writeOrCheckJson("packages/plugin-sdk/package.json", facadePackageJson);
+}
+
+function syncPrivateDeclarationAliases(
+  relativePath: string,
+  prefix: string,
+  omitted: readonly string[] = [],
+) {
+  const config: { compilerOptions: { paths: Record<string, string[]> } } = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, relativePath), "utf8"),
   );
+  const currentPaths = config.compilerOptions.paths;
+  const nextPaths = { ...currentPaths };
+  const privateEntries = new Set(privateLocalOnlyPluginSdkEntrypoints);
+  const declarationRoot = `${prefix}packages/plugin-sdk/dist/src/plugin-sdk/`;
+  for (const [key, targets] of Object.entries(currentPaths)) {
+    const entry = /^openclaw\/plugin-sdk\/([^/*]+)$/u.exec(key)?.[1];
+    // Only canonical generated targets identify retired private aliases. Custom
+    // targets, public overrides, QA bridges and wildcard mappings stay owner-managed.
+    if (
+      entry &&
+      !privateEntries.has(entry) &&
+      targets.length === 1 &&
+      targets[0] === `${declarationRoot}${entry}.d.ts`
+    ) {
+      delete nextPaths[key];
+    }
+  }
+  for (const entry of privateEntries) {
+    const key = `openclaw/plugin-sdk/${entry}`;
+    if (omitted.includes(entry)) {
+      delete nextPaths[key];
+    } else {
+      nextPaths[key] = [`${declarationRoot}${entry}.d.ts`];
+    }
+  }
+  if (JSON.stringify(currentPaths) === JSON.stringify(nextPaths)) {
+    return;
+  }
+  config.compilerOptions.paths = nextPaths;
+  writeOrCheckJson(relativePath, config);
 }
 
 const facadeSubpaths = collectFacadeSubpaths();
@@ -125,6 +169,13 @@ if (facadeSubpaths === null) {
 }
 syncRootPackageExports();
 syncFacadePackageExports(facadeSubpaths);
+syncPrivateDeclarationAliases("extensions/tsconfig.package-boundary.paths.json", "../");
+// XAI's independent package boundary contract intentionally excludes these two
+// private aliases; its remaining custom paths are not registration projections.
+syncPrivateDeclarationAliases("extensions/xai/tsconfig.json", "../../", [
+  "channel-secret-owner-runtime",
+  "channel-secret-tts-runtime",
+]);
 if (failed) {
   process.exit(1);
 }

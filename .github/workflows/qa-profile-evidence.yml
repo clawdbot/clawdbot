@@ -387,6 +387,7 @@ jobs:
           set -euo pipefail
           selected_home="${RUNNER_TEMP}/openclaw-qa-selected-home"
           mkdir -p "$selected_home"
+          # Native pnpm reads this policy from env; the config flag also covers older targets.
           env -i \
             CI=true \
             COREPACK_HOME="${selected_home}/.cache/corepack" \
@@ -394,12 +395,13 @@ jobs:
             LANG=C.UTF-8 \
             NPM_CONFIG_USERCONFIG=/dev/null \
             PATH="$PATH" \
+            PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy \
             RUNNER_TEMP="$RUNNER_TEMP" \
             pnpm install \
               --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
-              --ignore-scripts=false \
+              --config.ignore-scripts=false \
               --config.engine-strict=false \
               --config.enable-pre-post-scripts=true \
               --config.package-import-method=copy \
@@ -556,12 +558,13 @@ jobs:
             LANG=C.UTF-8 \
             NPM_CONFIG_USERCONFIG=/dev/null \
             PATH="$PATH" \
+            PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy \
             RUNNER_TEMP="$RUNNER_TEMP" \
             pnpm install \
               --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
-              --ignore-scripts=false \
+              --config.ignore-scripts=false \
               --config.engine-strict=false \
               --config.enable-pre-post-scripts=true \
               --config.package-import-method=copy \
@@ -861,12 +864,13 @@ jobs:
             LANG=C.UTF-8 \
             NPM_CONFIG_USERCONFIG=/dev/null \
             PATH="$PATH" \
+            PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy \
             RUNNER_TEMP="$RUNNER_TEMP" \
             pnpm install \
               --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
-              --ignore-scripts=false \
+              --config.ignore-scripts=false \
               --config.engine-strict=false \
               --config.enable-pre-post-scripts=true \
               --config.package-import-method=copy \

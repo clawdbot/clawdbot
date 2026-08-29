@@ -43,12 +43,18 @@ describe("cron caller scope ownership", () => {
             sessionKey: "agent:main:main",
             turnSourceAccountId: "work",
             cronToolsAllowCapture: "final-executable-surface",
+            cronExecToolTarget: { host: "gateway", ask: "always" },
             ...source,
           },
         },
       } as never);
 
       expect(scope?.toolsAllowProvenance?.callerOrigin).toEqual(origin);
+      expect(scope?.toolsAllowExecTarget).toEqual({
+        version: 1,
+        host: "gateway",
+        ask: "always",
+      });
     },
   );
 

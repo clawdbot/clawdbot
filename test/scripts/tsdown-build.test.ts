@@ -2254,6 +2254,69 @@ describe("runTsdownBuildInvocation", () => {
     expect(output.chunks.join("")).toContain("stdout-ok");
   });
 
+  it("preserves successful declarations when the native compiler fails", async () => {
+    const rootDir = fs.realpathSync(createTempDir("openclaw-tsdown-native-dts-"));
+    const sourcePath = path.join(rootDir, "index.ts");
+    const declarationPath = path.join(rootDir, "dist", "index.d.ts");
+    fs.writeFileSync(path.join(rootDir, "package.json"), '{"type":"module"}\n');
+    fs.writeFileSync(
+      path.join(rootDir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          target: "ESNext",
+          module: "ESNext",
+          moduleResolution: "Bundler",
+          declaration: true,
+          emitDeclarationOnly: true,
+          noCheck: true,
+          noEmitOnError: false,
+          rootDir,
+        },
+        files: [sourcePath],
+      }),
+    );
+    const buildOptions = {
+      clean: false,
+      config: false,
+      cwd: rootDir,
+      entry: [sourcePath],
+      fixedExtension: false,
+      format: "esm",
+      logLevel: "error",
+      outDir: path.join(rootDir, "dist"),
+      platform: "node",
+      report: false,
+      tsconfig: path.join(rootDir, "tsconfig.json"),
+    };
+    const script = [
+      'import { build } from "tsdown";',
+      'const nativePackage = import.meta.resolve("@typescript/native-preview/package.json");',
+      'const { default: getExePath } = await import(new URL("lib/getExePath.js", nativePackage).href);',
+      `await build({ ...${JSON.stringify(buildOptions)}, dts: { generator: "tsgo", emitDtsOnly: true, tsgo: { path: getExePath() } } });`,
+    ].join("\n");
+    const output = createWriteSink();
+    // Keep compiler scratch output inside the fixture even when compilation rejects.
+    const env = { ...process.env, TMPDIR: rootDir, TEMP: rootDir, TMP: rootDir };
+    const invocation = {
+      command: process.execPath,
+      args: ["--input-type=module", "-e", script],
+      options: { stdio: ["ignore", "pipe", "pipe"], shell: false, env },
+    };
+    const runOptions = { stdout: output.sink, stderr: output.sink };
+
+    fs.writeFileSync(sourcePath, 'export const broken = "healthy";\n');
+    const healthy = await runTsdownBuildInvocation(invocation, runOptions);
+    expect(healthy.status, healthy.captured).toBe(0);
+    const declarations = fs.readFileSync(declarationPath, "utf8");
+    expect(declarations).toContain('"healthy"');
+
+    fs.writeFileSync(sourcePath, "export const broken = ;\n");
+    const failed = await runTsdownBuildInvocation(invocation, runOptions);
+    expect(failed.captured).toContain("TS1109");
+    expect(failed.status, failed.captured).toBeGreaterThan(0);
+    expect(fs.readFileSync(declarationPath, "utf8")).toBe(declarations);
+  });
+
   it("rejects malformed OPENCLAW_TSDOWN_TIMEOUT_MS values", async () => {
     const invocation = {
       command: process.execPath,
@@ -2348,23 +2411,21 @@ describe("runTsdownBuildInvocation", () => {
         "setInterval(() => {}, 1000);",
       ].join("");
       const output = createWriteSink();
-      const run = startTimeoutFixture(parentScript, output);
+      const releaseAndWait = startTimeoutFixture(parentScript, output);
       let childPid: number | undefined;
 
       try {
         // The descendant publishes its PID only after installing its SIGTERM handler.
         childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
-        run.releaseTimeout();
-        const result = await run.runPromise;
+        const result = await releaseAndWait();
 
         expect(result).toMatchObject({ timedOut: true, status: 0, signal: null, error: null });
         expect(fs.readFileSync(termPath, "utf8")).toBe("SIGTERM");
         expect(output.chunks.join("")).toContain("forcing SIGKILL");
         await waitForDead(childPid, 2_000);
       } finally {
-        run.releaseTimeout();
-        await run.runPromise;
+        await releaseAndWait();
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
           await waitForDead(childPid, 2_000);
@@ -2397,15 +2458,14 @@ describe("runTsdownBuildInvocation", () => {
         "setInterval(() => {}, 1000);",
       ].join("");
       const output = createWriteSink();
-      const run = startTimeoutFixture(parentScript, output);
+      const releaseAndWait = startTimeoutFixture(parentScript, output);
       let childPid: number | undefined;
 
       try {
         // The descendant publishes its PID only after installing its SIGTERM handler.
         childPid = await waitForPidFile(childPidPath, 2_000);
         const startedAt = Date.now();
-        run.releaseTimeout();
-        const result = await run.runPromise;
+        const result = await releaseAndWait();
 
         expect(result).toMatchObject({ timedOut: true, status: 0, signal: null, error: null });
         expect(fs.readFileSync(cleanupPath, "utf8")).toBe("clean");
@@ -2413,8 +2473,7 @@ describe("runTsdownBuildInvocation", () => {
         expect(Date.now() - startedAt).toBeLessThan(900);
         await waitForDead(childPid, 2_000);
       } finally {
-        run.releaseTimeout();
-        await run.runPromise;
+        await releaseAndWait();
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
           await waitForDead(childPid, 2_000);

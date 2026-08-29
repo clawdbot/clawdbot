@@ -227,7 +227,11 @@ suite.define(() => {
             )
             .toContainEqual({ key: "main", model: "openai/speed-only" });
         } else {
-          await expect.poll(() => effort.count()).toBe(0);
+          await expect.poll(() => effort.count()).toBe(1);
+          await expect.poll(() => effort.getAttribute("aria-label")).toBe("Fast mode: Standard");
+          await expect
+            .poll(() => composer.locator("[data-chat-speed-toggle]").getAttribute("aria-checked"))
+            .toBe("false");
           await model.click();
           await composer.locator('[data-chat-model-option="example/basic"]').click();
           await expect.poll(() => effort.count()).toBe(0);

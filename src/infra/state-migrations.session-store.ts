@@ -635,7 +635,8 @@ export async function migrateOrphanedSessionKeys(params: {
   const storeAliasCandidates = new Map<string, Set<string>>();
   const addToStoreMap = (p: string, id: string) => {
     try {
-      if (!fs.statSync(p, { throwIfNoEntry: false })?.isFile()) {
+      // Exact SQLite locators are canonical databases, never legacy JSON sources.
+      if (p.endsWith(".sqlite") || !fs.statSync(p, { throwIfNoEntry: false })?.isFile()) {
         return;
       }
     } catch {
@@ -1025,7 +1026,7 @@ function resolveLegacyAcpMetadataSessionStoreTargets(
   const agentsDirs = new Set<string>([path.join(stateDir, "agents")]);
   const targets = new Map<string, { agentId: string; storePath: string }>();
   const addTarget = (agentId: string, storePath: string) => {
-    if (!isManagedLegacySessionStorePathSafe(storePath)) {
+    if (storePath.endsWith(".sqlite") || !isManagedLegacySessionStorePathSafe(storePath)) {
       return;
     }
     const agentsDir = resolveAgentsDirFromSessionStorePath(storePath);

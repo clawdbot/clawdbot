@@ -9,7 +9,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
-import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import type { SessionAccessScope, TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
@@ -35,17 +35,16 @@ import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcri
 import type { SessionEntry } from "./types.js";
 
 /** Internal doctor/migration import target for one legacy session row. */
-type SqliteSessionImportRowsParams = {
+type SqliteSessionImportRowsParams = Pick<
+  SessionAccessScope,
+  "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
+> & {
   allowMalformedRowRepair?: boolean;
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
   preserveExactStoredKey?: boolean;
   readExactTranscriptRows?: (
     append: (row: { createdAt: number; eventJson: string }) => void,
   ) => void;
   skipIfExists?: boolean;
-  storePath?: string;
-  sessionKey: string;
   entry: SessionEntry;
   readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void | (() => void);
   transcriptMtimeMs?: number;
@@ -63,12 +62,7 @@ function resolveSqliteSessionImport(params: SqliteSessionImportRowsParams) {
   if (params.readExactTranscriptRows && params.readTranscriptEvents) {
     throw new Error("SQLite session import accepts only one transcript row source");
   }
-  const resolvedScope = resolveSqliteScope({
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.env ? { env: params.env } : {}),
-    sessionKey: params.sessionKey,
-    ...(params.storePath ? { storePath: params.storePath } : {}),
-  });
+  const resolvedScope = resolveSqliteScope(params);
   // Doctor can stage the exact legacy key so canonical repair compares every alias candidate.
   const resolved = params.preserveExactStoredKey
     ? { ...resolvedScope, sessionKey: params.sessionKey }

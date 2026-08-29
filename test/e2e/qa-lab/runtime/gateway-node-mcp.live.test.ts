@@ -3,9 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { McpServerConfig } from "../../../../src/config/types.mcp.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   NODE_MCP_COMMAND,
@@ -135,7 +136,8 @@ describe.skipIf(!LIVE_ENABLED)("OpenAI cross-placement MCP model proof", () => {
         repoRoot,
         "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs",
       );
-      let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+      const gatewayOwner = createQaGatewayChild();
+      let gateway: QaGatewayChild | undefined;
       let node: ReturnType<typeof startNodeProcess> | undefined;
       let proofError: unknown;
       const cleanupErrors: unknown[] = [];
@@ -169,7 +171,7 @@ describe.skipIf(!LIVE_ENABLED)("OpenAI cross-placement MCP model proof", () => {
           encoding: "utf8",
           mode: 0o600,
         });
-        gateway = await startQaGatewayChild({
+        gateway = await gatewayOwner.start({
           repoRoot,
           command: {
             executablePath: process.execPath,
@@ -287,7 +289,7 @@ describe.skipIf(!LIVE_ENABLED)("OpenAI cross-placement MCP model proof", () => {
       } finally {
         const stopped = await Promise.allSettled([
           ...(node ? [stopChild(node)] : []),
-          ...(gateway ? [Promise.resolve(gateway.stop())] : []),
+          stopQaGatewayFixture(gatewayOwner),
         ]);
         cleanupErrors.push(
           ...stopped.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),

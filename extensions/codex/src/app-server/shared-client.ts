@@ -1308,6 +1308,27 @@ export function clearSharedCodexAppServerClientIfCurrent(
   return false;
 }
 
+/** Captures a revocable observation of the exact shared client and native account/config. */
+export function captureSharedCodexAppServerCatalogLifetime(
+  client: CodexAppServerClient,
+): () => boolean {
+  const state = getSharedCodexAppServerClientState();
+  const entry = state.entriesByClient.get(client);
+  const key = [...state.clients].find(([, candidate]) => candidate === entry)?.[0];
+  const generation = readCodexAppServerClientDesktopGeneration(client);
+  const revision = client.getModelCatalogRevision();
+  // Detachment retires an owner even while outstanding leases keep its process alive.
+  return () =>
+    key !== undefined &&
+    state.clients.get(key) === entry &&
+    entry?.client === client &&
+    !entry.closeWhenIdle &&
+    !entry.closeError &&
+    !client.getCloseError() &&
+    client.getModelCatalogRevision() === revision &&
+    (!generation || isCodexDesktopGenerationCurrent(generation));
+}
+
 /** Retains the matching shared client and returns a release callback. */
 export function retainSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
