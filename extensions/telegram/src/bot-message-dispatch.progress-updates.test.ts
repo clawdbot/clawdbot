@@ -395,6 +395,40 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     );
   });
 
+  it("keeps raw structured detail when its formatted summary arrives", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        itemId: "command-1",
+        toolCallId: "command-1",
+        args: { command: "echo private" },
+        detailMode: "raw",
+      });
+      await replyOptions?.onToolResult?.({
+        text: "🛠️ Bash",
+        channelData: { openclawToolProgressId: "command-1" },
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { commandText: "raw", label: "Working" } },
+      },
+    });
+
+    const previewText = draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text;
+    expect(previewText).toContain("echo private");
+    expect(previewText?.match(/🛠️/gu)).toHaveLength(1);
+  });
+
   it("reopens progress drafts for queued followups after the source dispatch settles", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);

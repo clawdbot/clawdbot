@@ -125,6 +125,15 @@ export async function pushToolProgress(
   if (!canPushToolProgress(turn)) {
     return false;
   }
+  // Structured rows own detail; formatted callbacks only fill a missing keyed row.
+  if (
+    options?.id &&
+    turn.progressCompositor
+      .getSnapshot()
+      .lines.some((entry) => typeof entry === "object" && entry.id === options.id)
+  ) {
+    return true;
+  }
   return await turn.progressCompositor.pushToolProgress(
     typeof line === "string" ? buildTelegramTextToolProgressLine(line, options?.id) : line,
     options,
