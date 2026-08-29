@@ -28,6 +28,7 @@ import {
   configValuesEqual,
   defaultValue,
   isSupportedConfigValueValid,
+  isObjectPropertyNameValid,
   NO_SAFE_DEFAULT,
   objectAdditionalPropertiesSchema,
   objectPropertyKeys,
@@ -186,6 +187,7 @@ export function renderObject(
             value: objectValue,
             sourceIdentity: objectSourceIdentity,
             reservedKeys,
+            validateKey: (key) => isObjectPropertyNameValid(schema, key),
             searchCriteria: childSearchCriteria,
             onPatch: patchObjectChild,
           },
@@ -505,6 +507,7 @@ function renderMapField(
   params: ConfigNodeRenderParams & {
     value: Record<string, unknown>;
     reservedKeys: Set<string>;
+    validateKey: (key: string) => boolean;
   },
   renderNode: ConfigNodeRenderer,
 ): TemplateResult {
@@ -517,6 +520,7 @@ function renderMapField(
     unsupported,
     disabled,
     reservedKeys,
+    validateKey,
     onPatch,
     searchCriteria,
     revealSensitive,
@@ -533,6 +537,7 @@ function renderMapField(
     identity: draftId,
     sourceIdentity: params.sourceIdentity ?? value,
     existingKeys: [...new Set([...Object.keys(value), ...reservedKeys])],
+    validateKey,
   };
   const entries = Object.entries(value ?? {}).filter(([key]) => !reservedKeys.has(key));
   const visibleEntries =
@@ -590,6 +595,7 @@ function renderMapField(
           const key = event.detail.key;
           if (
             !key ||
+            !validateKey(key) ||
             Object.hasOwn(value, key) ||
             reservedKeys.has(key) ||
             onPatch(path, { ...value, [key]: event.detail.value }) === false
@@ -627,6 +633,13 @@ function renderMapField(
                           const nextKey = target.value.trim();
                           if (!nextKey || nextKey === key) {
                             target.value = key;
+                            return;
+                          }
+                          if (!validateKey(nextKey)) {
+                            target.value = key;
+                            target.setCustomValidity(t("configForm.invalidString"));
+                            target.reportValidity();
+                            target.setCustomValidity("");
                             return;
                           }
                           const nextValue = { ...value };

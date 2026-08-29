@@ -33,7 +33,20 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
   const key = pathKey(path);
   const criteria = params.searchCriteria;
 
-  if (unsupported.has(key)) {
+  if (
+    unsupported.has(key) ||
+    [...unsupported].some((pattern) => {
+      if (!pattern.includes("*")) {
+        return false;
+      }
+      const segments = pattern.split(".");
+      // Use the original segments: dynamic model/provider keys may contain dots.
+      return (
+        segments.length === path.length &&
+        segments.every((segment, index) => segment === "*" || segment === String(path[index]))
+      );
+    })
+  ) {
     return renderFieldRow({
       label,
       tags: [],

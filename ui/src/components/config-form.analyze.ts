@@ -6,7 +6,12 @@ import {
   objectPropertySchema,
   requiredPropertyKeys,
 } from "./config-form.constraints.ts";
-import { pathKey, schemaType, type JsonSchema } from "./config-form.shared.ts";
+import {
+  pathKey,
+  schemaMayAcceptString,
+  schemaType,
+  type JsonSchema,
+} from "./config-form.shared.ts";
 
 export type ConfigSchemaAnalysis = {
   schema: JsonSchema | null;
@@ -142,21 +147,26 @@ function shouldNormalizeAllOfBranch(schema: JsonSchema): boolean {
 }
 
 function hasOnlySupportedConstraintKeywords(schema: JsonSchema): boolean {
-  return Object.keys(schema).every((key) => SUPPORTED_CONSTRAINT_ONLY_KEYS.has(key));
+  return hasOnlySupportedKeywords(schema, SUPPORTED_CONSTRAINT_ONLY_KEYS);
 }
 
 function hasOnlySupportedFormKeywords(schema: JsonSchema): boolean {
+  return hasOnlySupportedKeywords(schema, SUPPORTED_FORM_SCHEMA_KEYS);
+}
+
+function hasOnlySupportedKeywords(schema: JsonSchema, supported: ReadonlySet<string>): boolean {
   return Object.keys(schema).every(
     (key) =>
-      SUPPORTED_FORM_SCHEMA_KEYS.has(key) ||
-      // JSON object keys are already strings; constrained names must remain fail-closed.
+      supported.has(key) ||
+      // Key edits use the same value validator as fields. Admit its supported
+      // string constraints without hiding the whole map behind Raw mode.
       (key === "propertyNames" &&
         typeof schema.propertyNames === "object" &&
         schema.propertyNames !== null &&
         !Array.isArray(schema.propertyNames) &&
-        Object.keys(schema.propertyNames).length === 1 &&
-        Object.hasOwn(schema.propertyNames, "type") &&
-        schema.propertyNames.type === "string"),
+        schemaMayAcceptString(schema.propertyNames) &&
+        normalizeSchemaNode({ type: "string", ...schema.propertyNames }, []).unsupportedPaths
+          .length === 0),
   );
 }
 
@@ -376,8 +386,8 @@ function normalizeSchemaNode(
           compositionBranch,
         );
         normalized.additionalProperties = res.schema ?? schema.additionalProperties;
-        if (res.unsupportedPaths.length > 0) {
-          unsupported.add(pathLabel);
+        for (const unsupportedPath of res.unsupportedPaths) {
+          unsupported.add(unsupportedPath);
         }
       }
     }
@@ -435,8 +445,8 @@ function normalizeSchemaNode(
       } else {
         const res = normalizeSchemaNode(schema.items, [...path, "*"], compositionBranch);
         normalized.items = res.schema ?? schema.items;
-        if (res.unsupportedPaths.length > 0) {
-          unsupported.add(pathLabel);
+        for (const unsupportedPath of res.unsupportedPaths) {
+          unsupported.add(unsupportedPath);
         }
       }
     }
