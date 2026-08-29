@@ -379,6 +379,28 @@ type SlackAuthorizationContext = {
   allowFromLower: string[];
 };
 
+/** Stable, non-sensitive reasons for an inbound event that never reaches dispatch. */
+export type SlackInboundDropReason =
+  | "self-message"
+  | "bot-disabled"
+  | "missing-user"
+  | "missing-sender"
+  | "channel-not-allowed"
+  | "dm-disabled"
+  | "dm-unauthorized"
+  | "configured-binding-unavailable"
+  | "ambiguous-thread"
+  | "unauthorized-sender"
+  | "unauthorized-bot"
+  | "control-command-unauthorized"
+  | "bot-missing-mention"
+  | "mention-detection-unavailable"
+  | "other-mention"
+  | "missing-mention"
+  | "empty-content"
+  | "final-route-denied"
+  | "missing-reply-target";
+
 type SlackMentionMetadata = {
   mentionedUserIds: string[];
   mentionedSubteamIds: string[];
@@ -579,30 +601,35 @@ async function authorizeSlackInboundMessage(params: {
   explicitBotMention: boolean;
   eventScope?: SlackEventScope;
   onVisibleDrop?: () => void;
+  onDrop?: (reason: SlackInboundDropReason) => void;
 }): Promise<SlackAuthorizationContext | null> {
   const { ctx, account, message, conversation } = params;
   const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBotsMode } =
     conversation;
+  const drop = (reason: SlackInboundDropReason): null => {
+    params.onDrop?.(reason);
+    return null;
+  };
 
   if (isBotMessage) {
     if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
-      return null;
+      return drop("self-message");
     }
     if (allowBotsMode === "off") {
       logVerbose(`slack: drop bot message ${message.bot_id ?? "unknown"} (allowBots=false)`);
-      return null;
+      return drop("bot-disabled");
     }
   }
 
   if (isDirectMessage && !message.user) {
     logVerbose("slack: drop dm message (missing user id)");
-    return null;
+    return drop("missing-user");
   }
 
   const senderId = message.user ?? (isBotMessage ? message.bot_id : undefined);
   if (!senderId) {
     logVerbose("slack: drop message (missing sender id)");
-    return null;
+    return drop("missing-sender");
   }
 
   if (
@@ -647,7 +674,7 @@ async function authorizeSlackInboundMessage(params: {
       }
     }
     logVerbose("slack: drop message (channel not allowed)");
-    return null;
+    return drop("channel-not-allowed");
   }
 
   const allowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
@@ -659,8 +686,9 @@ async function authorizeSlackInboundMessage(params: {
     const directUserId = message.user;
     if (!directUserId) {
       logVerbose("slack: drop dm message (missing user id)");
-      return null;
+      return drop("missing-user");
     }
+    let directMessageDropReason: SlackInboundDropReason = "dm-unauthorized";
     const allowed = await authorizeSlackDirectMessage({
       ctx,
       accountId: account.accountId,
@@ -678,9 +706,11 @@ async function authorizeSlackInboundMessage(params: {
         });
       },
       onDisabled: () => {
+        directMessageDropReason = "dm-disabled";
         logVerbose("slack: drop dm (dms disabled)");
       },
       onUnauthorized: ({ allowMatchMeta }) => {
+        directMessageDropReason = "dm-unauthorized";
         logVerbose(
           `Blocked unauthorized slack sender ${message.user} (dmPolicy=${ctx.dmPolicy}, ${allowMatchMeta})`,
         );
@@ -688,7 +718,7 @@ async function authorizeSlackInboundMessage(params: {
       log: logVerbose,
     });
     if (!allowed) {
-      return null;
+      return drop(directMessageDropReason);
     }
   }
 
@@ -711,9 +741,15 @@ export async function prepareSlackMessage(params: {
     shouldRecordDroppedHistory?: () => boolean;
     /** Handler-owned signal that a gate produced a user-visible terminal outcome. */
     onVisibleDrop?: () => void;
+    /** Handler-owned receipt for every pre-dispatch drop. */
+    onDrop?: (reason: SlackInboundDropReason) => void;
   };
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
+  const drop = (reason: SlackInboundDropReason): null => {
+    opts.onDrop?.(reason);
+    return null;
+  };
   const slackClient = opts.eventScope?.client ?? ctx.app.client;
   const threadStarterWorkspaceScope = {
     accountId: account.accountId,
@@ -751,6 +787,7 @@ export async function prepareSlackMessage(params: {
     explicitBotMention,
     eventScope: opts.eventScope,
     onVisibleDrop: opts.onVisibleDrop,
+    onDrop: opts.onDrop,
   });
   if (!authorization) {
     return null;
@@ -975,7 +1012,7 @@ export async function prepareSlackMessage(params: {
         reason: "configured ACP binding unavailable",
         target: configuredBinding.record.conversation.conversationId,
       });
-      return null;
+      return drop("configured-binding-unavailable");
     }
   }
   const senderNameForAuthPromise: Promise<
@@ -1129,7 +1166,7 @@ export async function prepareSlackMessage(params: {
       },
       "skipping ambiguous slack thread reply",
     );
-    return null;
+    return drop("ambiguous-thread");
   }
   let canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
   // Strip Slack mentions (<@U123>) before command detection so "@Labrador /new" is recognized
@@ -1171,7 +1208,7 @@ export async function prepareSlackMessage(params: {
   const senderGate = messageIngress.senderAccess.gate;
   if (isRoomish && senderGate?.allowed === false) {
     logVerbose(`Blocked unauthorized slack sender ${senderId} (not in sender allowlist)`);
-    return null;
+    return drop("unauthorized-sender");
   }
   if (
     isRoom &&
@@ -1187,7 +1224,7 @@ export async function prepareSlackMessage(params: {
       eventScope: opts.eventScope,
     }))
   ) {
-    return null;
+    return drop("unauthorized-bot");
   }
 
   const threadContextAllowFromLower = isRoom
@@ -1223,7 +1260,7 @@ export async function prepareSlackMessage(params: {
       reason: "control command (unauthorized)",
       target: senderId,
     });
-    return null;
+    return drop("control-command-unauthorized");
   }
 
   const canSeedMentionedRoomThread =
@@ -1364,7 +1401,7 @@ export async function prepareSlackMessage(params: {
     const botMentioned = isDirectMessage || effectiveWasMentioned || shouldBypassMention;
     if (!botMentioned) {
       logVerbose("slack: drop bot message (allowBots=mentions, missing mention)");
-      return null;
+      return drop("bot-missing-mention");
     }
   }
 
@@ -1374,7 +1411,7 @@ export async function prepareSlackMessage(params: {
       "skipping channel message",
     );
     await recordDroppedHistory("slack-mention-detection-unavailable");
-    return null;
+    return drop("mention-detection-unavailable");
   }
 
   // Thread participation is broad on Slack; only an explicit bot mention escapes this gate.
@@ -1388,13 +1425,13 @@ export async function prepareSlackMessage(params: {
       target: senderId,
     });
     await recordDroppedHistory("slack-other-mention");
-    return null;
+    return drop("other-mention");
   }
 
   if (isRoom && shouldRequireMention && mentionDecision.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     await recordDroppedHistory("slack-no-mention");
-    return null;
+    return drop("missing-mention");
   }
 
   const chatType = resolveSlackChatType(conversation.resolvedChannelType);
@@ -1411,7 +1448,7 @@ export async function prepareSlackMessage(params: {
   const threadStarter = await getThreadStarter();
   const resolvedMessageContent = await getMessageContent();
   if (!resolvedMessageContent) {
-    return null;
+    return drop("empty-content");
   }
   const { rawBody, effectiveDirectMedia } = resolvedMessageContent;
   const bodyForAgent = preflightAudioTranscript
@@ -1670,7 +1707,7 @@ export async function prepareSlackMessage(params: {
   );
   if (messageIngress.ingress.admission !== "dispatch") {
     logVerbose(`Blocked slack sender ${senderId} after final route binding`);
-    return null;
+    return drop("final-route-denied");
   }
   const agentContextEntities = isAgentViewMessage
     ? normalizeSlackAppContextEntities(message.app_context)
@@ -1827,7 +1864,7 @@ export async function prepareSlackMessage(params: {
   // metadata user-scoped for later session deliveries.
   const replyTarget = `channel:${message.channel}`;
   if (!replyTarget) {
-    return null;
+    return drop("missing-reply-target");
   }
 
   if (preflightAudioTranscript) {

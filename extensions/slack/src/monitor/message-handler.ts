@@ -303,6 +303,7 @@ export function createSlackMessageHandler(params: {
               } = last.opts;
               let prepared: Awaited<ReturnType<typeof prepareSlackMessage>>;
               let visibleDrop = false;
+              let dropReason: string | undefined;
               let settlementHandedOff = false;
               try {
                 const runtimeContext = resolveRuntimeContext();
@@ -316,9 +317,23 @@ export function createSlackMessageHandler(params: {
                     onVisibleDrop: () => {
                       visibleDrop = true;
                     },
+                    onDrop: (reason) => {
+                      dropReason = reason;
+                    },
                   },
                 });
                 if (!prepared) {
+                  ctx.logger.info(
+                    {
+                      provider: "slack",
+                      accountId: account.accountId,
+                      channelId: last.message.channel,
+                      messageTs: last.message.ts,
+                      source: last.opts.source,
+                      reason: dropReason ?? "unknown",
+                    },
+                    "Slack inbound message dropped before dispatch",
+                  );
                   if (visibleDrop) {
                     // The gate already produced a sender-visible notice. Commit the
                     // logical claim so a later message/app_mention twin cannot repeat it.

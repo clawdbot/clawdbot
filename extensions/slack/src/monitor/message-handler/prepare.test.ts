@@ -383,6 +383,19 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   }
 
+  it("reports a bounded reason when message preparation has no content", async () => {
+    const onDrop = vi.fn();
+    const prepared = await prepareSlackMessage({
+      ctx: createDefaultSlackCtx(),
+      account: defaultAccount,
+      message: createSlackMessage({ text: "", files: [], attachments: [] }),
+      opts: { source: "message", onDrop },
+    });
+
+    expect(prepared).toBeNull();
+    expect(onDrop).toHaveBeenCalledExactlyOnceWith("empty-content");
+  });
+
   it("queues inbound message system events without duplicating body text", async () => {
     const body =
       "please summarize the deployment, rollback checks, health checks, and follow-up items";

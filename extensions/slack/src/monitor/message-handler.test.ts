@@ -20,7 +20,7 @@ const onFlushCallbacks: Array<
 const prepareSlackMessageMock = vi.fn(
   async (_params?: {
     ctx: Parameters<typeof createSlackMessageHandler>[0]["ctx"];
-    opts: { onVisibleDrop?: () => void };
+    opts: { onVisibleDrop?: () => void; onDrop?: (reason: string) => void };
   }): Promise<{
     ctxPayload: Record<string, unknown>;
     route?: { sessionKey: string };
@@ -80,6 +80,7 @@ vi.mock("./message-handler/pipeline.runtime.js", () => ({
 
 function createContext(overrides?: {
   cfg?: OpenClawConfig;
+  logger?: { info: ReturnType<typeof vi.fn> };
   rememberSlackChannelType?: (
     channel: string | null | undefined,
     channelType: string | null | undefined,
@@ -92,11 +93,12 @@ function createContext(overrides?: {
       client: {},
     },
     runtime: {},
+    logger: overrides?.logger ?? { info: vi.fn() },
     rememberSlackChannelType: (
       channel: string | null | undefined,
       channelType: string | null | undefined,
     ) => overrides?.rememberSlackChannelType?.(channel, channelType),
-  } as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
+  } as unknown as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
 }
 
 function createHandlerWithTracker(overrides?: {
@@ -806,6 +808,47 @@ describe("createSlackMessageHandler", () => {
       expect.objectContaining({
         opts: expect.objectContaining({ source: "app_mention", wasMentioned: true }),
       }),
+    );
+    expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("records an operator-visible receipt for a pre-dispatch drop", async () => {
+    prepareSlackMessageMock.mockImplementationOnce(async (params) => {
+      params?.opts.onDrop?.("authorization");
+      return null;
+    });
+    const logger = { info: vi.fn() };
+    const context = createContext({ logger });
+    const handler = createSlackMessageHandler({
+      ctx: context,
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+    });
+    const message = {
+      type: "message" as const,
+      channel: "D111",
+      user: "U111",
+      ts: "1709000000.001883",
+      text: "hello",
+    };
+
+    const handled = handler(message as never, { source: "message", awaitDispatch: true });
+    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
+    const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    await runOnFlush([entry]);
+    await handled;
+
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "slack",
+        accountId: "default",
+        channelId: message.channel,
+        messageTs: message.ts,
+        source: "message",
+        reason: "authorization",
+      }),
+      "Slack inbound message dropped before dispatch",
     );
     expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
   });
