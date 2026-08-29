@@ -44,6 +44,21 @@ import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
+function hasValidWebPushQuietHoursTimeZone(preferences: {
+  quietHours?: { timeZone: string };
+}): boolean {
+  const timeZone = preferences.quietHours?.timeZone;
+  if (!timeZone) {
+    return true;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export const pushHandlers: GatewayRequestHandlers = {
   "push.test": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validatePushTestParams, "push.test", respond)) {
@@ -292,6 +307,14 @@ export const pushHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this user"),
+      );
+      return;
+    }
+    if (!hasValidWebPushQuietHoursTimeZone(params.preferences)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid notification quiet-hours time zone"),
       );
       return;
     }

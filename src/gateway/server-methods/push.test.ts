@@ -199,6 +199,7 @@ function createWebPushSubscribeInvokeParams(options?: {
 function createWebPushPreferencesInvokeParams(
   method: "push.web.preferences.get" | "push.web.preferences.set",
   params: Record<string, unknown>,
+  options: { userProfileId?: string } = {},
 ) {
   const respond = vi.fn();
   return {
@@ -211,7 +212,12 @@ function createWebPushPreferencesInvokeParams(
         params,
         respond: respond as never,
         context: { broadcastToConnIds: vi.fn() } as never,
-        client: { connect: { device: { id: "browser-device" } } } as never,
+        client: {
+          connect: { device: { id: "browser-device" } },
+          ...(options.userProfileId
+            ? { authenticatedUserProfile: { profileId: options.userProfileId } }
+            : {}),
+        } as never,
         req: { type: "req", id: "req-1", method },
         isWebchatConnect: () => false,
       }),
@@ -607,4 +613,66 @@ describe("push.web.preferences handlers", () => {
     expect(firstRespondCall(respond)?.[0]).toBe(false);
     expect(firstRespondCall(respond)?.[2]?.code).toBe(ErrorCodes.FORBIDDEN);
   });
+
+  it.each(["user", "device"] as const)(
+    "rejects an invalid %s quiet-hours time zone",
+    async (scope) => {
+      const userProfileId = scope === "user" ? "profile-owner" : undefined;
+      if (userProfileId) {
+        const subscription = findBoundWebPushSubscriptionByEndpoint({
+          endpoint: "https://push.example.test/subscription",
+        });
+        vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReturnValue({
+          ...expectDefined(subscription, "bound subscription fixture"),
+          userProfileId,
+        });
+      }
+      const preferences =
+        scope === "user"
+          ? {
+              categories: {
+                approvalRequested: true,
+                agentFinished: false,
+                agentQuestion: false,
+                scheduledTaskFailed: false,
+                backgroundTaskFailed: false,
+              },
+              detailLevel: "private",
+              quietHours: {
+                enabled: true,
+                startMinute: 1320,
+                endMinute: 420,
+                timeZone: "Not/A_Time_Zone",
+              },
+              agentIds: [],
+            }
+          : {
+              enabled: true,
+              label: "phone",
+              quietHours: {
+                enabled: true,
+                startMinute: 1320,
+                endMinute: 420,
+                timeZone: "Not/A_Time_Zone",
+              },
+            };
+      const { respond, invoke } = createWebPushPreferencesInvokeParams(
+        "push.web.preferences.set",
+        {
+          endpoint: "https://push.example.test/subscription",
+          scope,
+          preferences,
+        },
+        { userProfileId },
+      );
+
+      await invoke();
+
+      expect(firstRespondCall(respond)?.[0]).toBe(false);
+      expect(firstRespondCall(respond)?.[2]).toMatchObject({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "invalid notification quiet-hours time zone",
+      });
+    },
+  );
 });

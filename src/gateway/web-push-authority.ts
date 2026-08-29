@@ -52,6 +52,9 @@ function resolveCurrentWebPushTarget(params: {
   const rolePolicy = userProfileId
     ? resolveOperatorRolePolicyForProfile(userProfileId, cfg)
     : undefined;
+  if (cfg.gateway?.roles && !rolePolicy) {
+    return null;
+  }
   const allowedRoleScopes = rolePolicy ? new Set<string>(rolePolicy.scopes) : null;
   const scopes = allowedRoleScopes
     ? operatorToken.scopes.filter((scope) => allowedRoleScopes.has(scope))

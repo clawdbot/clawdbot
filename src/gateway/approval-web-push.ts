@@ -309,11 +309,7 @@ export function createApprovalWebPushDelivery(params: {
               }),
             );
         const preferences = approvalPreferences({ subscription, stateDir: params.stateDir });
-        if (
-          !visible ||
-          !webPushCategoryEnabled(preferences, "approval-resolved") ||
-          isWebPushQuietHours(preferences)
-        ) {
+        if (!visible) {
           suppressedSubscriptionIds.push(subscription.subscriptionId);
           continue;
         }

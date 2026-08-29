@@ -94,7 +94,6 @@ function notificationPreferences(approvalRequested: boolean): WebPushNotificatio
   return {
     categories: {
       approvalRequested,
-      approvalResolved: true,
       agentFinished: false,
       agentQuestion: false,
       scheduledTaskFailed: false,
@@ -163,6 +162,23 @@ describe("web push Gateway reconciliation", () => {
     capability.dispose();
   });
 
+  it("keeps subscribers independent when an older listener unsubscribes", async () => {
+    const harness = gatewayHarness();
+    const capability = createWebPushCapability(harness.gateway);
+    const first = vi.fn();
+    const second = vi.fn();
+    const stopFirst = capability.subscribe(first);
+    capability.subscribe(second);
+
+    stopFirst();
+    harness.connect(gatewayClient(Promise.resolve(encodedVapidKey([4, 1, 2, 3]))).client);
+    await vi.waitFor(() => expect(second).toHaveBeenCalled());
+
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalled();
+    capability.dispose();
+  });
+
   it("serializes rapid preference edits without dropping the latest full object", async () => {
     const firstSave = createDeferred();
     const first = notificationPreferences(true);
@@ -195,14 +211,14 @@ describe("web push Gateway reconciliation", () => {
     await vi.waitFor(() => expect(capability.snapshot.preferences).toBeTruthy());
     request.mockClear();
 
-    const firstOperation = capability.setPreferences("user", first);
+    const firstOperation = capability.run({ kind: "set", scope: "user", preferences: first });
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith(
         "push.web.preferences.set",
         expect.objectContaining({ preferences: first }),
       ),
     );
-    const secondOperation = capability.setPreferences("user", second);
+    const secondOperation = capability.run({ kind: "set", scope: "user", preferences: second });
     firstSave.resolve();
 
     await Promise.all([firstOperation, secondOperation]);
@@ -334,6 +350,19 @@ describe("web push Gateway reconciliation", () => {
       capability.dispose();
     },
   );
+
+  it("requires Home Screen installation in an iPhone browser shell without standalone", () => {
+    setNavigatorValue("userAgent", "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)");
+    Reflect.deleteProperty(navigator, "standalone");
+
+    const capability = createWebPushCapability(gatewayHarness().gateway);
+
+    expect(capability.snapshot).toMatchObject({
+      supported: false,
+      permission: "install-required",
+    });
+    capability.dispose();
+  });
 
   it("requires Home Screen installation before Web Push APIs are exposed", async () => {
     setNavigatorValue("userAgent", "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)");

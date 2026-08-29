@@ -42,7 +42,6 @@ const WebPushKeysSchema = closedObject({
 export const WebPushNotificationCategorySchema = Type.String({
   enum: [
     "approval-requested",
-    "approval-resolved",
     "agent-finished",
     "agent-question",
     "scheduled-task-failed",
@@ -56,7 +55,6 @@ export const WebPushDetailLevelSchema = Type.String({
 
 const WebPushCategoryPreferencesSchema = closedObject({
   approvalRequested: Type.Boolean(),
-  approvalResolved: Type.Boolean(),
   agentFinished: Type.Boolean(),
   agentQuestion: Type.Boolean(),
   scheduledTaskFailed: Type.Boolean(),
@@ -83,7 +81,6 @@ export const WebPushDevicePreferencesSchema = closedObject({
   categories: Type.Optional(
     closedObject({
       approvalRequested: Type.Optional(Type.Boolean()),
-      approvalResolved: Type.Optional(Type.Boolean()),
       agentFinished: Type.Optional(Type.Boolean()),
       agentQuestion: Type.Optional(Type.Boolean()),
       scheduledTaskFailed: Type.Optional(Type.Boolean()),

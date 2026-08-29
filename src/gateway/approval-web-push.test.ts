@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { BoundWebPushSubscription } from "../infra/push-web.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 
 const listDevicePairingMock = vi.fn();
@@ -85,7 +86,10 @@ function pairedOperator(deviceId: string, scopes: string[]) {
   };
 }
 
-function boundSubscription(deviceId: string, userProfileId: string | null) {
+function boundSubscription(
+  deviceId: string,
+  userProfileId: string | null,
+): BoundWebPushSubscription {
   return {
     subscriptionId: `subscription-${deviceId}-${userProfileId ?? "owner"}`,
     endpoint: `https://push.example.test/${deviceId}/${userProfileId ?? "owner"}`,
@@ -94,6 +98,7 @@ function boundSubscription(deviceId: string, userProfileId: string | null) {
     updatedAtMs: 1,
     deviceId,
     userProfileId,
+    devicePreferences: { enabled: true, label: "" },
   };
 }
 
@@ -220,26 +225,39 @@ describe("approval Web Push delivery", () => {
     const record = manager.create({ command: "echo ok" }, 60_000, "exec:role-check");
     const current = boundSubscription("current-device", "profile-current");
     const downgraded = boundSubscription("downgraded-device", "profile-downgraded");
+    const missingPolicy = boundSubscription("missing-policy-device", "profile-missing");
     const unboundProfile = boundSubscription("unbound-profile-device", null);
-    listBoundWebPushSubscriptionsMock.mockReturnValue([current, downgraded, unboundProfile]);
+    listBoundWebPushSubscriptionsMock.mockReturnValue([
+      current,
+      downgraded,
+      missingPolicy,
+      unboundProfile,
+    ]);
     listDevicePairingMock.mockReturnValue({
       pending: [],
       paired: [
         pairedOperator("current-device", ["operator.approvals", "operator.read"]),
         pairedOperator("downgraded-device", ["operator.approvals", "operator.read"]),
+        pairedOperator("missing-policy-device", ["operator.approvals", "operator.read"]),
         pairedOperator("unbound-profile-device", ["operator.approvals", "operator.read"]),
       ],
     });
-    resolveOperatorRolePolicyForProfileMock.mockImplementation((profileId: string) => ({
-      sessions: { others: "none" },
-      agents: [],
-      scopes:
-        profileId === "profile-current"
-          ? ["operator.approvals", "operator.read"]
-          : ["operator.read"],
-    }));
+    resolveOperatorRolePolicyForProfileMock.mockImplementation((profileId: string) =>
+      profileId === "profile-missing"
+        ? undefined
+        : {
+            sessions: { others: "none" },
+            agents: [],
+            scopes:
+              profileId === "profile-current"
+                ? ["operator.approvals", "operator.read"]
+                : ["operator.read"],
+          },
+    );
     isApprovalRecordVisibleToClientMock.mockImplementation(
-      ({ client }) => client?.authenticatedUserProfile?.profileId === "profile-current",
+      ({ client }) =>
+        client?.authenticatedUserProfile?.profileId === "profile-current" ||
+        client?.authenticatedUserProfile?.profileId === "profile-missing",
     );
     preparedWebPushSendMock.mockResolvedValue([
       { ok: true, subscriptionId: current.subscriptionId, statusCode: 201 },
@@ -487,6 +505,17 @@ describe("approval Web Push delivery", () => {
       const delivery = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
       await expect(delivery.handleRequested(record)).resolves.toBe(true);
       const requestOptions = preparedWebPushSendMock.mock.calls[0]?.[0]?.deliveryOptions;
+
+      delivered.devicePreferences = {
+        enabled: false,
+        label: "",
+        quietHours: {
+          enabled: true,
+          startMinute: 0,
+          endMinute: 1439,
+          timeZone: "UTC",
+        },
+      };
 
       if (terminalState === "resolved") {
         await delivery.handleResolved({ id: record.id });

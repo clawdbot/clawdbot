@@ -53,7 +53,7 @@ function createContext(
         loading: overrides.loading ?? false,
         error: null,
       },
-      enable,
+      run: enable,
     },
   } as unknown as AutoPromptContext;
   return { context, enable, requestPermission };

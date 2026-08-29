@@ -9,7 +9,6 @@ import type {
 } from "../../app/native-notifications.ts";
 import { icons } from "../../components/icons.ts";
 import {
-  renderLearnMoreLink,
   renderSettingsRow,
   renderSettingsStatus,
   renderSettingsValue,
@@ -17,12 +16,6 @@ import {
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
-
-const NOTIFICATIONS_DOCS_URL = "https://docs.openclaw.ai/web/notifications";
-
-function renderNotificationsHint(copy: string) {
-  return html`${copy} ${renderLearnMoreLink(NOTIFICATIONS_DOCS_URL)}`;
-}
 
 export type WebPushUiState = {
   supported: boolean;
@@ -59,7 +52,6 @@ type NotificationsSectionProps = {
 
 const WEB_PUSH_CATEGORIES = [
   ["approvalRequested", () => t("configView.notifications.approvalRequested")],
-  ["approvalResolved", () => t("configView.notifications.approvalResolved")],
   ["agentFinished", () => t("configView.notifications.agentFinished")],
   ["agentQuestion", () => t("configView.notifications.agentQuestion")],
   ["scheduledTaskFailed", () => t("configView.notifications.scheduledTaskFailed")],
@@ -103,7 +95,6 @@ function renderUserNotificationPreferences(
       <div class="settings-section__header">
         <h2 class="settings-section__heading">${t("configView.notifications.accountDefaults")}</h2>
       </div>
-      <p class="settings-section__desc">${t("configView.notifications.accountDefaultsHint")}</p>
       <div class="settings-group">
         ${WEB_PUSH_CATEGORIES.map(([key, label]) =>
           renderSettingsRow({
@@ -204,7 +195,6 @@ function renderUserNotificationPreferences(
           : nothing}
         ${renderSettingsRow({
           title: t("configView.notifications.onlyAgents"),
-          description: t("configView.notifications.onlyAgentsHint"),
           control: html`<input
             type="text"
             .value=${preferences.agentIds.join(", ")}
@@ -224,7 +214,6 @@ function renderUserNotificationPreferences(
 
 function renderDeviceNotificationPreferences(
   preferences: WebPushDevicePreferences,
-  durableIdentity: boolean,
   onChange: (preferences: WebPushDevicePreferences) => void,
 ) {
   const patch = (next: Partial<WebPushDevicePreferences>) => onChange({ ...preferences, ...next });
@@ -234,11 +223,6 @@ function renderDeviceNotificationPreferences(
       <div class="settings-section__header">
         <h2 class="settings-section__heading">${t("configView.notifications.installedApp")}</h2>
       </div>
-      <p class="settings-section__desc">
-        ${durableIdentity
-          ? t("configView.notifications.installedAppHint")
-          : t("configView.notifications.installedAppOwnerHint")}
-      </p>
       <div class="settings-group">
         ${renderSettingsRow({
           title: t("configView.notifications.deliverDevice"),
@@ -250,7 +234,6 @@ function renderDeviceNotificationPreferences(
         })}
         ${renderSettingsRow({
           title: t("configView.notifications.notificationLabel"),
-          description: t("configView.notifications.notificationLabelHint"),
           control: html`<input
             type="text"
             maxlength="80"
@@ -299,8 +282,8 @@ function renderDeviceNotificationPreferences(
             }}
           >
             <option value="inherit">${t("configView.notifications.inheritQuietHours")}</option>
-            <option value="on">${t("configView.notifications.on")}</option>
-            <option value="off">${t("configView.notifications.off")}</option>
+            <option value="on">${t("configForm.enumOn")}</option>
+            <option value="off">${t("configForm.enumOff")}</option>
           </select>`,
         })}
         ${deviceQuietHours?.enabled
@@ -371,7 +354,6 @@ function renderDeviceNotificationPreferences(
         ${preferences.agentIds !== undefined
           ? renderSettingsRow({
               title: t("configView.notifications.onlyAgents"),
-              description: t("configView.notifications.onlyAgentsHint"),
               control: html`<input
                 type="text"
                 .value=${preferences.agentIds.join(", ")}
@@ -406,8 +388,8 @@ function renderDeviceNotificationPreferences(
               }}
             >
               <option value="inherit">${t("configView.notifications.inherit")}</option>
-              <option value="on">${t("configView.notifications.on")}</option>
-              <option value="off">${t("configView.notifications.off")}</option>
+              <option value="on">${t("configForm.enumOn")}</option>
+              <option value="off">${t("configForm.enumOff")}</option>
             </select>`,
           }),
         )}
@@ -475,9 +457,6 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             <h2 class="settings-section__heading">${t("configView.notifications.nativeTitle")}</h2>
             <div class="settings-section__actions">${renderSettingsStatus(status)}</div>
           </div>
-          <p class="settings-section__desc">
-            ${renderNotificationsHint(t("configView.notifications.nativeHint"))}
-          </p>
           <div class="settings-group">
             ${renderSettingsRow({
               title: t("configView.notifications.permission"),
@@ -542,9 +521,6 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
               })}
             </div>
           </div>
-          <p class="settings-section__desc">
-            ${renderNotificationsHint(t("configView.notifications.unavailableHint"))}
-          </p>
           <div class="settings-group">
             <div class="settings-row">
               <div class="settings-row__text">
@@ -627,9 +603,6 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             ${renderSettingsStatus({ kind: statusKind, label: statusLabel })}
           </div>
         </div>
-        <p class="settings-section__desc">
-          ${renderNotificationsHint(t("configView.notifications.hint"))}
-        </p>
         ${push.permission === "install-required"
           ? html`<p class="settings-section__desc">
               ${t("configView.notifications.iosInstallRequired")}
@@ -684,18 +657,16 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
         </div>
       </section>
       ${push.subscribed && push.preferences
-        ? html`
+        ? html`<div class="settings-page" ?inert=${push.loading}>
             ${push.preferences.durableIdentity
               ? renderUserNotificationPreferences(push.preferences.user, (preferences) =>
                   props.onWebPushSetUserPreferences?.(preferences),
                 )
               : nothing}
-            ${renderDeviceNotificationPreferences(
-              push.preferences.device,
-              push.preferences.durableIdentity,
-              (preferences) => props.onWebPushSetDevicePreferences?.(preferences),
+            ${renderDeviceNotificationPreferences(push.preferences.device, (preferences) =>
+              props.onWebPushSetDevicePreferences?.(preferences),
             )}
-          `
+          </div>`
         : nothing}
     </div>
   `;

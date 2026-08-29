@@ -13,7 +13,6 @@ describe("Web Push notification preferences", () => {
     const preferences = normalizeWebPushNotificationPreferences(undefined);
     expect(preferences.categories).toEqual({
       approvalRequested: true,
-      approvalResolved: true,
       agentFinished: false,
       agentQuestion: false,
       scheduledTaskFailed: false,

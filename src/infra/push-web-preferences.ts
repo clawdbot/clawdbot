@@ -11,7 +11,6 @@ export const WEB_PUSH_USER_PREFERENCES_KEY = "notifications.web.v1";
 const DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES: WebPushNotificationPreferences = {
   categories: {
     approvalRequested: true,
-    approvalResolved: true,
     agentFinished: false,
     agentQuestion: false,
     scheduledTaskFailed: false,
@@ -29,7 +28,6 @@ const DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES: WebPushNotificationPreferences 
 
 const CATEGORY_KEYS = [
   "approvalRequested",
-  "approvalResolved",
   "agentFinished",
   "agentQuestion",
   "scheduledTaskFailed",
@@ -40,7 +38,6 @@ type CategoryKey = (typeof CATEGORY_KEYS)[number];
 
 const CATEGORY_TO_KEY: Record<WebPushNotificationCategory, CategoryKey> = {
   "approval-requested": "approvalRequested",
-  "approval-resolved": "approvalResolved",
   "agent-finished": "agentFinished",
   "agent-question": "agentQuestion",
   "scheduled-task-failed": "scheduledTaskFailed",

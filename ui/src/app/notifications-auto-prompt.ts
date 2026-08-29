@@ -83,7 +83,7 @@ export function autoPromptNotificationsOnSend(context: NotificationsContext): vo
     void permission
       .then((next) => {
         if (next === "granted") {
-          void context.webPush.enable();
+          void context.webPush.run({ kind: "enable" });
         }
       })
       .catch(() => {});

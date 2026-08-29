@@ -33,8 +33,15 @@ export type WebPushCapabilityAction =
 
 export type WebPushCapabilityPatch = {
   error?: string | null;
+  loading?: boolean;
+  permission?: NotificationPermission | "unsupported";
   subscribed?: boolean;
   preferences?: WebPushPreferencesResult | null;
+};
+
+export type WebPushCapabilityRuntime = {
+  run: (action: WebPushCapabilityAction) => Promise<void>;
+  dispose: () => void;
 };
 
 function swReady(): Promise<ServiceWorkerRegistration> {
@@ -230,6 +237,47 @@ export function startWebPushReconciliation(params: {
     generation += 1;
     stopGateway();
     stopEvents();
+  };
+}
+
+export function createWebPushCapabilityRuntime(params: {
+  gateway: ApplicationGateway;
+  publish: (patch: WebPushCapabilityPatch) => void;
+}): WebPushCapabilityRuntime {
+  let operation: Promise<void> | null = null;
+  const stopReconciliation = startWebPushReconciliation(params);
+  return {
+    run(action) {
+      const client = params.gateway.snapshot.client;
+      if (!client) {
+        return Promise.resolve();
+      }
+      if (!operation) {
+        params.publish({ loading: true, error: null });
+      }
+      const previous = operation;
+      const actionRun = (previous ?? Promise.resolve())
+        .then(async () => {
+          params.publish({ error: null });
+          if (params.gateway.snapshot.client !== client) {
+            throw new Error("Gateway changed before the notification change could be saved.");
+          }
+          params.publish(await runWebPushCapabilityAction(client, action));
+        })
+        .catch((error: unknown) => params.publish({ error: formatUiError(error) }));
+      const next = actionRun.finally(() => {
+        if (operation === next) {
+          operation = null;
+          params.publish({
+            loading: false,
+            permission: "Notification" in window ? Notification.permission : "unsupported",
+          });
+        }
+      });
+      operation = next;
+      return next;
+    },
+    dispose: stopReconciliation,
   };
 }
 
