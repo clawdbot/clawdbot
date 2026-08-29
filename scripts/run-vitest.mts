@@ -19,6 +19,7 @@ import { signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { spawnTestProjectsRunner } from "./lib/test-projects-delegation.mts";
 import {
+  prepareE2eVitestRuntime,
   resolveVitestRuntimeCliSelections,
   prepareVitestRuntime,
 } from "./lib/vitest-build-prerequisites.mts";
@@ -1401,6 +1402,10 @@ async function main(
   const invocations = resolveBoundedVitestInvocations(vitestArgs, { env });
   const config = resolveVitestConfigArg(vitestArgs);
   const relativeConfig = config ? toRepoRelativeArg(path.resolve(config), repoRoot) : "";
+  const invocationEnv =
+    invocations.length > 1 && relativeConfig === E2E_VITEST_CONFIG
+      ? { ...env, ...(await prepareE2eVitestRuntime(env)) }
+      : env;
   // Canonical configs have known project scopes. Custom roots/projects keep
   // their own setup; never infer their runtime selection from a config name.
   if (
@@ -1413,9 +1418,9 @@ async function main(
   ) {
     const code = await prepareVitestRuntime(
       invocations.flatMap((cliArgs) =>
-        resolveVitestRuntimeCliSelections(relativeConfig, cliArgs, env),
+        resolveVitestRuntimeCliSelections(relativeConfig, cliArgs, invocationEnv),
       ),
-      env,
+      invocationEnv,
     );
     if (code !== 0) {
       process.exitCode = code;
@@ -1437,7 +1442,7 @@ async function main(
   let failedExitCode = 0;
   for (const [index, invocation] of invocations.entries()) {
     const guardedVitestArgs = resolveExplicitTestFileNoPassArgs(invocation);
-    const spawnEnv = resolveRunVitestSpawnEnv(env, guardedVitestArgs);
+    const spawnEnv = resolveRunVitestSpawnEnv(invocationEnv, guardedVitestArgs);
     if (invocations.length > 1) {
       console.error("[vitest] bounded process " + (index + 1) + "/" + invocations.length);
     }
@@ -1445,7 +1450,7 @@ async function main(
       pnpmArgs: [
         "exec",
         "node",
-        ...resolveVitestNodeArgs(env),
+        ...resolveVitestNodeArgs(invocationEnv),
         vitestCliEntry,
         ...guardedVitestArgs,
       ],
