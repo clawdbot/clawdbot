@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   composeReleaseAttemptJobs,
   isReleaseGhArtifactMissingError,
+  MAX_RELEASE_ARTIFACT_BYTES,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
@@ -17,12 +18,15 @@ import {
   classifyReleaseSnapshot,
   formatReleaseStateOutcome,
   readChild,
+  releaseGhRetryDelayMs,
   releaseStateChildEvidence,
+  serializeReleaseArtifact,
   selectReleaseStateArtifacts,
   validateChildBinding,
   validateReleaseExecutionPlanArtifact,
   validateReleaseStateArtifact,
   verifyReleaseStateArtifacts,
+  updateReleaseTransportEpisode,
 } from "../../scripts/full-release-validation-state.mjs";
 import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
 import { waitForChildClose, waitForFile } from "../helpers/process-wait.js";
@@ -374,7 +378,9 @@ describe("full release execution plan", () => {
     ["getaddrinfo EAI_AGAIN api.github.com", "transient"],
     ["unexpected EOF", "transient"],
     ["HTTP 401: Bad credentials", "hard"],
-    ["HTTP 403: secondary rate limit", "hard"],
+    ["HTTP 403: secondary rate limit", "transient"],
+    ["HTTP 403: Resource not accessible by integration", "hard"],
+    ["HTTP 403: permission denied", "hard"],
     ["HTTP 404: workflow not found", "hard"],
     ["HTTP 410: artifact expired", "hard"],
     ["HTTP 422: invalid workflow input", "hard"],
@@ -782,7 +788,12 @@ describe("release decision policy", () => {
     expect(result).toMatchObject({ plannedRunAttempt: 1, runAttempt: 2 });
   });
 
-  it("preserves the last valid snapshot through a transient read and then recovers", async () => {
+  it.each([
+    "HTTP 503: Server Error",
+    "HTTP 429: API rate limit exceeded",
+    "HTTP 403: secondary rate limit",
+    "read ECONNRESET",
+  ])("preserves the last valid snapshot through %s and then recovers", async (message) => {
     const planned = child("normalCi");
     const previous = {
       ...planned,
@@ -794,8 +805,8 @@ describe("release decision policy", () => {
     const readRun = async () => {
       if (fail) {
         fail = false;
-        throw Object.assign(new Error("HTTP 503: Server Error"), {
-          stderr: "HTTP 503: Server Error",
+        throw Object.assign(new Error(message), {
+          stderr: message,
         });
       }
       return {
@@ -830,14 +841,12 @@ describe("release decision policy", () => {
     const degraded = await readChild(planned, previous, undefined, {
       readAttemptJobs,
       readRun,
-      transientGracePolls: 2,
     });
     expect(degraded).toMatchObject({
       conclusion: "success",
       errors: [],
       jobs: previous.jobs,
-      status: "read_degraded",
-      transientReadFailures: 1,
+      status: "transport_uncertain",
     });
     expect(
       classifyReleaseSnapshot({
@@ -850,7 +859,6 @@ describe("release decision policy", () => {
     const recovered = await readChild(planned, degraded, undefined, {
       readAttemptJobs,
       readRun,
-      transientGracePolls: 2,
     });
     expect(recovered).toMatchObject({
       conclusion: "success",
@@ -866,7 +874,7 @@ describe("release decision policy", () => {
     ).toMatchObject({ errors: [], state: "passed" });
   });
 
-  it("fails closed after the transient read grace boundary", async () => {
+  it("keeps exhausted transient reads uncertain instead of terminal", async () => {
     const planned = child("normalCi");
     const readRun = async () => {
       throw Object.assign(new Error("HTTP 503: Server Error"), {
@@ -875,14 +883,11 @@ describe("release decision policy", () => {
     };
     let snapshot: Record<string, unknown> = planned;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      snapshot = await readChild(planned, snapshot, undefined, {
-        readRun,
-        transientGracePolls: 2,
-      });
+      snapshot = await readChild(planned, snapshot, undefined, { readRun });
     }
     expect(snapshot).toMatchObject({
-      errors: [expect.objectContaining({ kind: "api_error" })],
-      transientReadFailures: 3,
+      errors: [],
+      status: "transport_uncertain",
     });
     expect(
       classifyReleaseSnapshot({
@@ -891,8 +896,8 @@ describe("release decision policy", () => {
         workflowRef: "main",
       }),
     ).toMatchObject({
-      errors: [expect.objectContaining({ kind: "api_error" })],
-      state: "orchestration_error",
+      errors: [],
+      state: "qualifying",
     });
   });
 
@@ -902,7 +907,6 @@ describe("release decision policy", () => {
       readRun: async () => {
         throw Object.assign(new Error("read ECONNRESET"), { stderr: "read ECONNRESET" });
       },
-      transientGracePolls: 2,
     });
     expect(
       classifyReleaseSnapshot({
@@ -950,6 +954,143 @@ describe("release decision policy", () => {
         workflowRef: "main",
       }),
     ).toMatchObject({ state: "orchestration_error" });
+  });
+
+  it.each(["HTTP 403: Resource not accessible by integration", "HTTP 403: Bad credentials"])(
+    "keeps %s terminal",
+    async (message) => {
+      const planned = child("normalCi");
+      const observed = await readChild(planned, planned, undefined, {
+        readRun: async () => {
+          throw Object.assign(new Error(message), { stderr: message });
+        },
+      });
+      expect(observed).toMatchObject({
+        errors: [expect.objectContaining({ kind: "api_error" })],
+        transportFailure: undefined,
+      });
+    },
+  );
+
+  it("keeps malformed child responses terminal", async () => {
+    const planned = child("normalCi");
+    const observed = await readChild(planned, planned, undefined, {
+      readRun: async () => ({}),
+    });
+    expect(observed.errors).toEqual([expect.objectContaining({ kind: "api_error" })]);
+  });
+
+  it("preserves complete composite evidence when the run read succeeds but jobs fail", async () => {
+    const planned = child("normalCi");
+    const previous = {
+      ...planned,
+      compositeJobsSha256: "f".repeat(64),
+      conclusion: "success",
+      jobs: [{ conclusion: "success", name: "test", status: "completed" }],
+      observedRunAttempts: [1],
+      plannedRunAttempt: 1,
+      status: "completed",
+      transportFailure: { errorClass: "transient" },
+    };
+    const observed = await readChild(planned, previous, undefined, {
+      readAttemptJobs: async (_runId, attempt) => {
+        if (attempt === 2) {
+          throw Object.assign(new Error("HTTP 503: Server Error"), {
+            stderr: "HTTP 503: Server Error",
+          });
+        }
+        return previous.jobs;
+      },
+      readRun: async () => ({
+        actor: { login: "github-actions[bot]" },
+        conclusion: "",
+        display_title: planned.displayTitle,
+        event: "workflow_dispatch",
+        head_branch: planned.workflowRef,
+        head_sha: planned.workflowSha,
+        id: 101,
+        path: ".github/workflows/ci.yml",
+        repository: { full_name: "openclaw/openclaw" },
+        run_attempt: 2,
+        status: "in_progress",
+        triggering_actor: { login: "github-actions[bot]" },
+      }),
+    });
+    expect(observed).toMatchObject({
+      compositeJobsSha256: previous.compositeJobsSha256,
+      jobs: previous.jobs,
+      runAttempt: 1,
+      status: "transport_uncertain",
+      transportFailure: { errorClass: "transient" },
+    });
+    expect(
+      await readChild(
+        planned,
+        {
+          ...planned,
+          status: "transport_uncertain",
+          transportFailure: { errorClass: "transient" },
+        },
+        undefined,
+        {
+          readAttemptJobs: async () => [],
+          readRun: async () => ({
+            actor: { login: "github-actions[bot]" },
+            display_title: planned.displayTitle,
+            event: "workflow_dispatch",
+            head_branch: planned.workflowRef,
+            head_sha: planned.workflowSha,
+            id: 101,
+            path: ".github/workflows/ci.yml",
+            repository: { full_name: "openclaw/openclaw" },
+            run_attempt: 1,
+            status: "in_progress",
+            triggering_actor: { login: "github-actions[bot]" },
+          }),
+        },
+      ),
+    ).toMatchObject({
+      status: "in_progress",
+      transportFailure: { errorClass: "transient" },
+    });
+  });
+
+  it("uses one fixed monotonic transport deadline until recovery", () => {
+    const uncertainChild = {
+      ...child("normalCi"),
+      transportFailure: { errorClass: "transient" },
+    };
+    const first = updateReleaseTransportEpisode(undefined, [uncertainChild], {
+      deadline: 900_000,
+      monotonicNow: 100,
+      wallNow: Date.parse("2026-08-29T00:00:00.100Z"),
+    });
+    const repeated = updateReleaseTransportEpisode(first, [uncertainChild], {
+      monotonicNow: 899_999,
+      wallNow: Date.parse("2026-08-29T01:00:00Z"),
+    });
+    const expired = updateReleaseTransportEpisode(first, [uncertainChild], {
+      monotonicNow: 900_100,
+      wallNow: Date.parse("2026-08-29T02:00:00Z"),
+    });
+    expect(repeated).toMatchObject({
+      deadlineAt: first.deadlineAt,
+      startedAt: "2026-08-29T00:00:00.000Z",
+      status: "uncertain",
+    });
+    expect(expired).toMatchObject({
+      deadlineAt: first.deadlineAt,
+      error: { kind: "transport_deadline_exceeded" },
+      status: "expired",
+    });
+    expect(
+      updateReleaseTransportEpisode(first, [{ ...uncertainChild, transportFailure: undefined }]),
+    ).toEqual({ status: "certain" });
+  });
+
+  it("caps GitHub retry sleep at the remaining transport deadline", () => {
+    expect(releaseGhRetryDelayMs(6, 105_000, 100_000)).toBe(5_000);
+    expect(releaseGhRetryDelayMs(6, 100_000, 100_000)).toBe(0);
   });
 
   it("cancels only exact active affected children", () => {
@@ -1018,6 +1159,7 @@ describe("release state artifacts", () => {
       mode,
       releaseProfile: "stable",
       rerunGroup: "ci",
+      transport: options.transport,
     });
   }
 
@@ -1139,6 +1281,153 @@ describe("release state artifacts", () => {
         { ...stateExpected(), parentRunAttempt: 2 },
       ),
     ).toMatchObject({ decision: { state: "passed" }, drain: { state: "passed" } });
+  });
+
+  it("records a blocker while transport is simultaneously uncertain", () => {
+    const transport = updateReleaseTransportEpisode(undefined, [
+      {
+        ...child("normalCi"),
+        transportFailure: { errorClass: "transient" },
+      },
+    ]);
+    const payload = artifact(
+      "decision",
+      2,
+      executionPlan({ rerunGroup: "ci" }),
+      { conclusion: "", jobs: [FAILED_JOB], status: "in_progress" },
+      { transport },
+    );
+    expect(payload).toMatchObject({
+      blockerCount: 1,
+      state: "blocked_diagnostics_running",
+      transport: { status: "uncertain" },
+    });
+  });
+
+  it("records expired transport without serializing collector internals", () => {
+    const transport = updateReleaseTransportEpisode(
+      undefined,
+      [{ ...child("normalCi"), transportFailure: { errorClass: "transient" } }],
+      {
+        deadline: 900_000,
+        monotonicNow: 0,
+        wallNow: Date.parse("2026-08-29T00:00:00Z"),
+      },
+    );
+    const expired = updateReleaseTransportEpisode(
+      transport,
+      [{ ...child("normalCi"), transportFailure: { errorClass: "transient" } }],
+      { monotonicNow: 900_000, wallNow: Date.parse("2026-08-29T00:15:00Z") },
+    );
+    const payload = artifact(
+      "decision",
+      2,
+      executionPlan({ rerunGroup: "ci" }),
+      {},
+      {
+        extraErrors: [expired.error],
+        transport: expired,
+      },
+    );
+    expect(payload.errors).toContainEqual(
+      expect.objectContaining({ kind: "transport_deadline_exceeded" }),
+    );
+    expect(payload.transport).not.toHaveProperty("deadlineMonotonicMs");
+    expect(payload.transport).not.toHaveProperty("error");
+    expect(() => validateReleaseStateArtifact(payload, stateExpected(), "decision")).not.toThrow();
+  });
+
+  it("does not create fail-fast cancellation targets from uncertainty alone", () => {
+    const snapshots = [
+      {
+        ...child("normalCi"),
+        status: "transport_uncertain",
+        transportFailure: { errorClass: "transient" },
+      },
+    ];
+    const decision = classifyReleaseSnapshot({
+      children: snapshots,
+      releaseProfile: "stable",
+      workflowRef: "main",
+    });
+    expect(decision).toMatchObject({ blockers: [], state: "qualifying" });
+    expect(affectedActiveRunIds(snapshots, decision.blockers)).toEqual([]);
+  });
+
+  it("keeps a complete deterministic 31-entry blocker index", () => {
+    const jobs = Array.from({ length: 31 }, (_, index) => ({
+      ...FAILED_JOB,
+      completed_at: `2026-08-29T00:00:${String(index).padStart(2, "0")}Z`,
+      name: `failed-${String(index).padStart(2, "0")}`,
+    }));
+    const payload = artifact("decision", 2, executionPlan({ rerunGroup: "ci" }), {
+      conclusion: "failure",
+      jobs,
+    });
+    expect(payload.blockers).toHaveLength(25);
+    expect(payload.blockerIndex).toHaveLength(31);
+    expect(payload).toMatchObject({
+      blockerCount: 31,
+      firstPrimaryFailure: { job: "failed-00", kind: "job_failure" },
+    });
+    expect(() => validateReleaseStateArtifact(payload, stateExpected(), "decision")).not.toThrow();
+  });
+
+  it("keeps a maximal paginated retry blocker index within the artifact budget", () => {
+    const attempts = Array.from({ length: 5 }, (_unused, attempt) => ({
+      jobs: Array.from({ length: 100 }, (_, offset) => {
+        const index = attempt * 100 + offset;
+        return {
+          ...FAILED_JOB,
+          name: `failed-${String(index).padStart(3, "0")}`,
+          url: `https://example.invalid/jobs/${"x".repeat(960)}-${index}`,
+        };
+      }),
+      runAttempt: attempt + 1,
+    }));
+    const composite = composeReleaseAttemptJobs(attempts, {
+      effectiveRunAttempt: 5,
+      plannedRunAttempt: 1,
+    });
+    const payload = artifact("decision", 2, executionPlan({ rerunGroup: "ci" }), {
+      compositeJobsSha256: composite.sha256,
+      conclusion: "failure",
+      jobs: composite.jobs,
+      observedRunAttempts: attempts.map(({ runAttempt }) => runAttempt),
+      plannedRunAttempt: 1,
+      runAttempt: 5,
+    });
+    const bytes = Buffer.byteLength(serializeReleaseArtifact(payload), "utf8");
+    expect(payload.blockerIndex).toHaveLength(500);
+    expect(bytes).toBeLessThanOrEqual(MAX_RELEASE_ARTIFACT_BYTES);
+  });
+
+  it("reads legacy v2 evidence without claiming blocked-list completeness", () => {
+    const passed = structuredClone(artifact("decision"));
+    const blocked = structuredClone(stateArtifact("decision", "blocked_complete"));
+    for (const payload of [passed, blocked]) {
+      delete payload.blockerCount;
+      delete payload.blockerIndex;
+      delete payload.firstPrimaryFailure;
+      delete payload.transport;
+    }
+    expect(validateReleaseStateArtifact(passed, stateExpected(), "decision")).toMatchObject({
+      blockerCount: null,
+      transport: { status: "certain" },
+    });
+    expect(validateReleaseStateArtifact(blocked, stateExpected(), "decision")).toMatchObject({
+      blockerCount: null,
+      state: "blocked_complete",
+      transport: null,
+    });
+  });
+
+  it("rejects malformed complete blocker evidence", () => {
+    const payload = structuredClone(stateArtifact("decision", "blocked_complete"));
+    payload.blockerCount = Number(payload.blockerCount) + 1;
+    expect(() => validateReleaseStateArtifact(payload, stateExpected(), "decision")).toThrow(
+      "release state machine evidence is invalid",
+    );
   });
 
   it("round-trips mixed-case composite jobs through state validation", () => {
@@ -2482,8 +2771,8 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       "releaseChecksIndependent",
       "releaseChecksCandidate",
     ]);
-    expect(restored.children.filter((child) => phasedKeys.has(child.key))).toEqual(
-      sealed.children.filter((child) => phasedKeys.has(child.key)),
+    expect(restored.children.filter((entry) => phasedKeys.has(entry.key))).toEqual(
+      sealed.children.filter((entry) => phasedKeys.has(entry.key)),
     );
     expect(readFileSync(githubOutput, "utf8")).toContain("source_parent_attempt=1\n");
   });
