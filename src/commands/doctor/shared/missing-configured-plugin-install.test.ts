@@ -2980,6 +2980,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         },
       },
       env: {},
+      onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
     });
 
     const updateArg = expectRecordFields(mockCallArg(mocks.updateNpmInstalledPlugins), {
