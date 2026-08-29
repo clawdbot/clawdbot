@@ -114,6 +114,14 @@ function taskUpdatedAt(task: TaskRecord): number {
   return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
 }
 
+function compareTaskPageOrder(left: TaskRecord, right: TaskRecord): number {
+  const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
+  if (updatedDiff !== 0) {
+    return updatedDiff;
+  }
+  return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
+}
+
 export function listTaskRecordPage(params: {
   offset: number;
   limit: number;
@@ -128,27 +136,38 @@ export function listTaskRecordPage(params: {
   const statuses = params.statuses ? new Set(params.statuses) : null;
   const agentId = normalizeOptionalString(params.agentId);
   const sessionKey = normalizeOptionalString(params.sessionKey);
-  // Filtering and ordering stay registry-owned so authoritative records never
-  // cross the boundary; only the bounded selected page is defensively cloned.
-  const matching = [...tasks.values()]
-    .filter(
-      (task) =>
-        (!statuses || statuses.has(task.status)) &&
-        taskMatchesAgent(task, agentId, params.cfg) &&
-        taskMatchesRelatedSession(task, sessionKey, params.sessionAgentId, params.cfg) &&
-        (!params.filter || params.filter(task)),
-    )
-    .toSorted((left, right) => {
-      const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
-      if (updatedDiff !== 0) {
-        return updatedDiff;
+  const selectionLimit = Math.min(tasks.size, params.offset + params.limit);
+  const candidates: TaskRecord[] = [];
+  let matchingCount = 0;
+  // Keep only enough records to answer this offset page. Periodic deterministic
+  // pruning bounds each activity sort to at most two page windows.
+  for (const task of tasks.values()) {
+    if (
+      (statuses && !statuses.has(task.status)) ||
+      !taskMatchesAgent(task, agentId, params.cfg) ||
+      !taskMatchesRelatedSession(task, sessionKey, params.sessionAgentId, params.cfg) ||
+      (params.filter && !params.filter(task))
+    ) {
+      continue;
+    }
+    matchingCount += 1;
+    if (selectionLimit > 0) {
+      candidates.push(task);
+      if (candidates.length >= selectionLimit * 2) {
+        candidates.sort(compareTaskPageOrder);
+        candidates.length = selectionLimit;
       }
-      return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
-    });
-  const selected = matching.slice(params.offset, params.offset + params.limit);
+    }
+  }
+  if (params.offset >= matchingCount) {
+    return { tasks: [], hasMore: false };
+  }
+  candidates.sort(compareTaskPageOrder);
+  candidates.length = Math.min(candidates.length, selectionLimit);
+  const selected = candidates.slice(params.offset, params.offset + params.limit);
   return {
     tasks: selected.map((task) => cloneTaskRecord(task)),
-    hasMore: params.offset + selected.length < matching.length,
+    hasMore: params.offset + selected.length < matchingCount,
   };
 }
 
