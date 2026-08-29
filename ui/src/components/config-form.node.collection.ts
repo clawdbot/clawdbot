@@ -595,7 +595,6 @@ function renderMapField(
           const key = event.detail.key;
           if (
             !key ||
-            !validateKey(key) ||
             Object.hasOwn(value, key) ||
             reservedKeys.has(key) ||
             onPatch(path, { ...value, [key]: event.detail.value }) === false
@@ -610,7 +609,6 @@ function renderMapField(
             <div class="settings-subrows">
               ${visibleEntries.map(([key, entryValue]) => {
                 const valuePath = [...path, key];
-                const fallback = jsonValue(entryValue);
                 const sensitiveState = getSensitiveRenderState({
                   path: valuePath,
                   value: entryValue,
@@ -635,28 +633,25 @@ function renderMapField(
                             target.value = key;
                             return;
                           }
-                          if (!validateKey(nextKey)) {
-                            target.value = key;
-                            target.setCustomValidity(t("configForm.invalidString"));
-                            target.reportValidity();
-                            target.setCustomValidity("");
-                            return;
-                          }
-                          const nextValue = { ...value };
                           // Renaming a key that still holds server-redacted secrets would
                           // submit the sentinel under a new key: the gateway fails closed
                           // (dead-end draft), and a delete+rename fold in one autosave
                           // window silently binds the deleted entry's old credential.
-                          if (nextKey in nextValue || containsRedactedSentinel(nextValue[key])) {
+                          const error = !validateKey(nextKey)
+                            ? t("configForm.invalidString")
+                            : containsRedactedSentinel(value[key])
+                              ? t("configForm.renameRedactedBlocked")
+                              : "";
+                          if (nextKey in value || error) {
                             target.value = key;
-                            if (!(nextKey in nextValue)) {
-                              target.setCustomValidity(t("configForm.renameRedactedBlocked"));
+                            if (error) {
+                              target.setCustomValidity(error);
                               target.reportValidity();
                               target.setCustomValidity("");
                             }
                             return;
                           }
-                          nextValue[nextKey] = nextValue[key];
+                          const nextValue = { ...value, [nextKey]: value[key] };
                           delete nextValue[key];
                           if (onPatch(path, nextValue) === false) {
                             target.value = key;
@@ -695,7 +690,7 @@ function renderMapField(
                           ariaLabel: `${key}: ${t("configForm.jsonValue")}`,
                           sourceValue: entryValue,
                           rowIdentity: params.rowIdentity,
-                          fallback,
+                          fallback: jsonValue(entryValue),
                           rows: 2,
                           sensitiveState,
                           disabled,

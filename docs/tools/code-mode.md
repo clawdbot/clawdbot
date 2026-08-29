@@ -208,7 +208,7 @@ In the Control UI, open **Settings → Agents → Agent defaults**, show **Advan
 settings, and find **Models** under **Agent Defaults**. Each model has a
 **Code Mode** selector beside its runtime: **Default** removes the override,
 **On** saves `true`, and **Off** saves `false`. For agent-specific overrides,
-expand **Agent List**, then the agent's **Models**. Unsupported fields remain
+expand **Agent List**, then the agent's **Agent Model Overrides**. Unsupported fields remain
 marked for **Raw** editing without hiding the supported settings beside them.
 
 Overrides affect the selected model on future runs, including fallback models;
