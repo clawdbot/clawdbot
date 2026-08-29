@@ -526,6 +526,10 @@ describe("sessions_spawn tool", () => {
     expect(tool.description).toContain("`visible=true`: durable visible session");
     expect(tool.description).toContain("Default for coding, multi-step work");
     expect(tool.description).toContain('`mode="run"` is also accepted');
+    expect(tool.description).toContain(
+      "`attachments=[]` and omitted/blank `attachAs.mountPath` are accepted",
+    );
+    expect(tool.description).toContain("nonempty attachment staging is unsupported");
     expect(tool.description).toContain("inherits the caller tool-policy ceiling");
     expect(tool.description).toContain("session URL on the first line");
     expect(tool.description).toContain("`Owner: <label>` on the second line");
