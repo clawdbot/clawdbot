@@ -5,13 +5,12 @@ import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coer
 import type { note } from "../../packages/terminal-core/src/note.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
-import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
   resolveSessionFilePathCore,
   type resolveSessionFilePathOptions,
 } from "../config/sessions/paths.js";
+import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { clearTuiLastSessionPointers } from "../tui/tui-last-session.js";
@@ -30,6 +29,10 @@ type DoctorPrompterLike = {
   }) => Promise<boolean>;
   note?: typeof note;
 };
+
+type HeartbeatMainSessionStore =
+  | { kind: "legacy"; path: string }
+  | { kind: "sqlite"; agentId: string; path: string };
 
 type TranscriptHeartbeatSummary = {
   inspectedMessages: number;
@@ -224,7 +227,7 @@ function resolveHeartbeatMainSessionRepairCandidate(params: {
 
 function resolveHeartbeatMainRecoveryKey(params: {
   mainKey: string;
-  store: Record<string, SessionEntry>;
+  isSessionKeyOccupied: (sessionKey: string) => boolean;
   nowMs?: number;
 }): string | null {
   const parsed = parseAgentSessionKey(params.mainKey);
@@ -233,12 +236,12 @@ function resolveHeartbeatMainRecoveryKey(params: {
   }
   const stamp = formatSessionArchiveTimestamp(params.nowMs).toLowerCase();
   const base = `agent:${parsed.agentId}:heartbeat-recovered-${stamp}`;
-  if (!params.store[base]) {
+  if (!params.isSessionKeyOccupied(base)) {
     return base;
   }
   for (let index = 2; index <= 100; index += 1) {
     const candidate = `${base}-${index}`;
-    if (!params.store[candidate]) {
+    if (!params.isSessionKeyOccupied(candidate)) {
       return candidate;
     }
   }
@@ -278,19 +281,20 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
  * prevents moving a newly-human main session.
  */
 export async function repairHeartbeatPoisonedMainSession(params: {
-  cfg: OpenClawConfig;
-  store: Record<string, SessionEntry>;
-  absoluteStorePath: string;
+  mainKey: string;
+  mainEntry?: SessionEntry;
+  isSessionKeyOccupied: (sessionKey: string) => boolean;
+  store: HeartbeatMainSessionStore;
   stateDir: string;
   sessionPathOpts: ReturnType<typeof resolveSessionFilePathOptions>;
   prompter: DoctorPrompterLike;
   warnings: string[];
   changes: string[];
-}) {
-  const mainKey = resolveMainSessionKey(params.cfg);
-  const mainEntry = params.store[mainKey];
+}): Promise<boolean> {
+  const mainKey = params.mainKey;
+  const mainEntry = params.mainEntry;
   if (!mainEntry?.sessionId) {
-    return;
+    return false;
   }
   let transcriptPath: string | undefined;
   try {
@@ -302,28 +306,31 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   } catch {
     transcriptPath = undefined;
   }
+  if (transcriptPath && !fs.existsSync(transcriptPath)) {
+    transcriptPath = undefined;
+  }
   const candidate = resolveHeartbeatMainSessionRepairCandidate({
     entry: mainEntry,
     transcriptPath,
   });
   if (!candidate) {
-    return;
+    return false;
   }
   if ("declineReason" in candidate) {
     params.warnings.push(
       `- Skipped heartbeat main-session recovery for ${mainKey}: the transcript contains a JSONL record larger than ${TRANSCRIPT_RECORD_MAX_CHARS} characters, so doctor left it unchanged.`,
     );
-    return;
+    return false;
   }
   const recoveredKey = resolveHeartbeatMainRecoveryKey({
     mainKey,
-    store: params.store,
+    isSessionKeyOccupied: params.isSessionKeyOccupied,
   });
   if (!recoveredKey) {
     params.warnings.push(
       `- Main session ${mainKey} appears heartbeat-owned, but doctor could not choose a safe recovery key.`,
     );
-    return;
+    return false;
   }
   const reason =
     candidate.reason === "metadata"
@@ -340,28 +347,45 @@ export async function repairHeartbeatPoisonedMainSession(params: {
     initialValue: true,
   });
   if (!shouldRepair) {
-    return;
+    return false;
   }
   let movedEntry: SessionEntry | undefined;
-  await updateLegacySessionStore(params.absoluteStorePath, (currentStore) => {
-    const currentEntry = currentStore[mainKey];
-    const currentCandidate = resolveHeartbeatMainSessionRepairCandidate({
-      entry: currentEntry,
-      transcriptPath,
+  if (params.store.kind === "sqlite") {
+    const result = await applySessionEntryLifecycleMutation({
+      agentId: params.store.agentId,
+      removals: [
+        {
+          archiveRemovedTranscript: false,
+          expectedEntry: mainEntry,
+          sessionKey: mainKey,
+        },
+      ],
+      skipMaintenance: true,
+      storePath: params.store.path,
+      upserts: [{ entry: mainEntry, requiresRemovalSessionKey: mainKey, sessionKey: recoveredKey }],
     });
-    if (!currentCandidate || "declineReason" in currentCandidate) {
-      return;
+    if (result.removedSessionKeys.includes(mainKey)) {
+      movedEntry = mainEntry;
     }
-    if (moveHeartbeatMainSessionEntry({ store: currentStore, mainKey, recoveredKey })) {
-      movedEntry = currentEntry;
-    }
-  });
+  } else {
+    await updateLegacySessionStore(params.store.path, (currentStore) => {
+      const currentEntry = currentStore[mainKey];
+      const currentCandidate = resolveHeartbeatMainSessionRepairCandidate({
+        entry: currentEntry,
+        transcriptPath,
+      });
+      if (!currentCandidate || "declineReason" in currentCandidate) {
+        return;
+      }
+      if (moveHeartbeatMainSessionEntry({ store: currentStore, mainKey, recoveredKey })) {
+        movedEntry = currentEntry;
+      }
+    });
+  }
   if (!movedEntry) {
     params.warnings.push(`- Main session ${mainKey} changed before repair could move it.`);
-    return;
+    return false;
   }
-  params.store[recoveredKey] = movedEntry;
-  delete params.store[mainKey];
   let clearedPointers = 0;
   try {
     clearedPointers = clearTuiLastSessionPointers({
@@ -379,4 +403,5 @@ export async function repairHeartbeatPoisonedMainSession(params: {
       `- Cleared ${countLabel(clearedPointers, "stale TUI last-session pointer")} for ${mainKey}.`,
     );
   }
+  return true;
 }

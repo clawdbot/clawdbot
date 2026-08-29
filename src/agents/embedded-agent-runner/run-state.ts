@@ -34,6 +34,8 @@ export type EmbeddedAgentQueueHandle = {
   readonly diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   /** Synchronously closes diagnostic authority before this handle is evicted. */
   readonly closeDiagnostics?: () => void;
+  /** Core run start time used by live recovery projections. */
+  startedAtMs?: number;
   /** Exact authority of the concrete provider/model attempt behind this handle. */
   toolAuthorityFingerprint?: string;
   /** Atomically consumes one plain-text answer for this run's pending user-input request. */
@@ -75,6 +77,11 @@ export type ActiveEmbeddedRunSnapshot = {
   inFlightPrompt?: string;
 };
 
+export type EmbeddedRunRegistration = {
+  sessionId: string;
+  sessionKey?: string;
+};
+
 export type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
   handle?: EmbeddedAgentQueueHandle;
@@ -94,6 +101,7 @@ const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
 const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedAgentQueueHandle>(),
   activeRunsByRunId: new Map<string, EmbeddedAgentQueueHandle>(),
+  activeRunRegistrations: new WeakMap<EmbeddedAgentQueueHandle, EmbeddedRunRegistration>(),
   activeRunLifecycleGenerations: new WeakMap<EmbeddedAgentQueueHandle, string>(),
   retainedAbortabilityRunIds: new Set<string>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
@@ -102,6 +110,8 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   abandonedRunsBySessionId: new Map<string, AbandonedEmbeddedRun>(),
   abandonedRunSessionIdsByKey: new Map<string, string>(),
   abandonedRunSessionIdsByFile: new Map<string, string>(),
+  // The exact handle owns forced cleanup so a stale session id cannot release a replacement turn.
+  forcedTerminalSettlements: new WeakMap<EmbeddedAgentQueueHandle, () => Promise<void>>(),
   waiters: new Map<string, Set<EmbeddedRunWaiter>>(),
 }));
 
@@ -111,6 +121,12 @@ export const ACTIVE_EMBEDDED_RUNS =
 export const ACTIVE_EMBEDDED_RUNS_BY_RUN_ID =
   embeddedRunState.activeRunsByRunId ??
   (embeddedRunState.activeRunsByRunId = new Map<string, EmbeddedAgentQueueHandle>());
+export const ACTIVE_EMBEDDED_RUN_REGISTRATIONS =
+  embeddedRunState.activeRunRegistrations ??
+  (embeddedRunState.activeRunRegistrations = new WeakMap<
+    EmbeddedAgentQueueHandle,
+    EmbeddedRunRegistration
+  >());
 const ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS =
   embeddedRunState.activeRunLifecycleGenerations ??
   (embeddedRunState.activeRunLifecycleGenerations = new WeakMap<
@@ -138,6 +154,12 @@ export const ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY =
 export const ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE =
   embeddedRunState.abandonedRunSessionIdsByFile ??
   (embeddedRunState.abandonedRunSessionIdsByFile = new Map<string, string>());
+export const EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS =
+  embeddedRunState.forcedTerminalSettlements ??
+  (embeddedRunState.forcedTerminalSettlements = new WeakMap<
+    EmbeddedAgentQueueHandle,
+    () => Promise<void>
+  >());
 export const EMBEDDED_RUN_WAITERS =
   embeddedRunState.waiters ??
   (embeddedRunState.waiters = new Map<string, Set<EmbeddedRunWaiter>>());

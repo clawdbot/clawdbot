@@ -1,13 +1,24 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import path from "node:path";
+import {
+  appendQaChildOutput,
+  appendQaChildOutputTail,
+  createQaChildOutputCapture,
+  createQaChildOutputTail,
+  QA_CHILD_STDERR_TAIL_BYTES,
+  QA_CHILD_STDOUT_MAX_BYTES,
+  readQaChildOutput,
+  readQaChildOutputTail,
+} from "./child-output.js";
 import { createQaPosixCommandSettlement } from "./posix-command-settlement.js";
-import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
+import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
 export type QaScenarioCommandExecution = {
   args: string[];
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
+  onOutput?: (stream: "stderr" | "stdout", chunk: Buffer) => void;
   timeoutMs?: number;
 };
 
@@ -17,6 +28,8 @@ export type QaScenarioCommandResult = {
   signal?: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+  stdoutTruncated?: true;
+  stderrTruncated?: true;
 };
 
 type QaScenarioCommandTerminalResult = Pick<
@@ -24,32 +37,10 @@ type QaScenarioCommandTerminalResult = Pick<
   "exitCode" | "failureMessage" | "signal"
 >;
 
-type QaScenarioTaskkillRunner = typeof spawnSync;
-
 const QA_SCENARIO_COMMAND_TIMEOUT_KILL_GRACE_MS = 2_000;
 const QA_SCENARIO_COMMAND_TIMEOUT_FORCE_SETTLE_MS = 500;
 let timeoutKillGraceMs = QA_SCENARIO_COMMAND_TIMEOUT_KILL_GRACE_MS;
 let timeoutForceSettleMs = QA_SCENARIO_COMMAND_TIMEOUT_FORCE_SETTLE_MS;
-
-export function killQaScenarioWindowsProcessTree(
-  pid: number | undefined,
-  signal: NodeJS.Signals,
-  runTaskkill: QaScenarioTaskkillRunner = spawnSync,
-) {
-  if (pid === undefined) {
-    return false;
-  }
-  const taskkillPath = resolveQaWindowsSystem32ExePath("taskkill.exe");
-  const args = ["/pid", String(pid), "/T"];
-  const run = (force: boolean) => {
-    const result = runTaskkill(taskkillPath, force ? [...args, "/F"] : args, {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    return !result.error && result.status === 0;
-  };
-  return signal === "SIGKILL" ? run(true) : run(false) || run(true);
-}
 
 export function runQaScenarioCommandLifecycle(
   execution: QaScenarioCommandExecution,
@@ -62,8 +53,10 @@ export function runQaScenarioCommandLifecycle(
       env: execution.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
+    // Logs are diagnostics, not native test verdicts: bound retention without
+    // failing noisy commands or truncating their live onOutput stream.
+    const stdout = createQaChildOutputCapture();
+    const stderr = createQaChildOutputTail();
     const commandLabel = path.basename(execution.command);
     createQaPosixCommandSettlement({
       child,
@@ -72,10 +65,12 @@ export function runQaScenarioCommandLifecycle(
       ...(isWindows
         ? {
             windowsCleanup: {
-              alive: () => child.pid !== undefined,
               signal: (signal: NodeJS.Signals) => {
                 try {
-                  if (!killQaScenarioWindowsProcessTree(child.pid, signal)) {
+                  if (
+                    child.pid === undefined ||
+                    !runQaWindowsTaskkill({ pid: child.pid, signal })
+                  ) {
                     child.kill(signal);
                   }
                   return undefined;
@@ -123,8 +118,10 @@ export function runQaScenarioCommandLifecycle(
         resolve({
           ...result,
           ...(settlementFailure && result.exitCode === 0 ? { exitCode: 1 } : {}),
-          stdout: Buffer.concat(stdout).toString("utf8"),
-          stderr: Buffer.concat(stderr).toString("utf8"),
+          stdout: readQaChildOutput(stdout),
+          stderr: readQaChildOutputTail(stderr),
+          ...(stdout.exceeded ? { stdoutTruncated: true } : {}),
+          ...(stderr.truncated ? { stderrTruncated: true } : {}),
           ...(settlementFailure
             ? result.failureMessage
               ? { failureMessage: `${result.failureMessage}; settlement: ${settlementFailure}` }
@@ -132,12 +129,33 @@ export function runQaScenarioCommandLifecycle(
             : {}),
         });
       },
-      onStderrData: (chunk) => stderr.push(Buffer.from(chunk)),
-      onStdoutData: (chunk) => stdout.push(Buffer.from(chunk)),
+      onStderrData: (chunk) => {
+        const buffered = Buffer.from(chunk);
+        appendQaChildOutputTail(stderr, buffered);
+        execution.onOutput?.("stderr", buffered);
+      },
+      onStdoutData: (chunk) => {
+        const buffered = Buffer.from(chunk);
+        appendQaChildOutput(stdout, buffered);
+        execution.onOutput?.("stdout", buffered);
+      },
       processGroupId: isWindows ? undefined : child.pid,
       verifyAfterMs: timeoutForceSettleMs,
     });
   });
+}
+
+export function formatQaScenarioCommandOutput(result: QaScenarioCommandResult): string {
+  return [
+    result.stdoutTruncated
+      ? `[stdout truncated to first ${QA_CHILD_STDOUT_MAX_BYTES} bytes]\n`
+      : "",
+    result.stdout,
+    result.stderrTruncated
+      ? `\n[stderr truncated to last ${QA_CHILD_STDERR_TAIL_BYTES} bytes]\n`
+      : "",
+    result.stderr,
+  ].join("");
 }
 
 export function resetQaScenarioCommandCleanupTimings() {

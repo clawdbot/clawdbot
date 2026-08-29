@@ -11,6 +11,9 @@ function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string
   if (snapshot.portUsage.errors?.length) {
     lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
   }
+  if (snapshot.probeError) {
+    lines.push(`Gateway probe failed: ${snapshot.probeError}`);
+  }
   return lines;
 }
 
@@ -20,6 +23,12 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
     const actual = snapshot.versionMismatch.actual ?? "unavailable";
     lines.push(
       `Gateway version mismatch: expected ${snapshot.versionMismatch.expected}, running gateway reported ${actual}.`,
+    );
+  }
+  if (snapshot.buildIdMismatch) {
+    const actual = snapshot.buildIdMismatch.actual ?? "unavailable";
+    lines.push(
+      `Gateway build mismatch: expected ${snapshot.buildIdMismatch.expected}, running gateway reported ${actual}.`,
     );
   }
   if (snapshot.activatedPluginErrors?.length) {

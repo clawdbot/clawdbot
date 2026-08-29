@@ -16,7 +16,10 @@ import {
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildGuardedModelFetch } from "openclaw/plugin-sdk/provider-transport-runtime";
+import {
+  buildGuardedModelFetch,
+  copyProviderAcceptanceObserver,
+} from "openclaw/plugin-sdk/provider-transport-runtime";
 
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
 type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
@@ -124,7 +127,7 @@ function buildMantleAnthropicBaseOptions(
   options: SimpleStreamOptions | undefined,
   apiKey: string,
 ) {
-  return {
+  return copyProviderAcceptanceObserver(options, {
     ...(requiresDefaultSampling(model) ? {} : { temperature: options?.temperature }),
     maxTokens:
       options?.maxTokens ||
@@ -136,9 +139,10 @@ function buildMantleAnthropicBaseOptions(
     cacheRetention: options?.cacheRetention,
     sessionId: options?.sessionId,
     onPayload: options?.onPayload,
+    onResponse: options?.onResponse,
     maxRetryDelayMs: options?.maxRetryDelayMs,
     metadata: options?.metadata,
-  };
+  });
 }
 
 function adjustMaxTokensForThinking(

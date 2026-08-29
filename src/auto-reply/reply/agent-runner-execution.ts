@@ -16,8 +16,11 @@ import {
   classifyFailoverReason,
   isContextOverflowError,
 } from "../../agents/embedded-agent-helpers.js";
-import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import type { EmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
+import {
+  createDeferredEmbeddedRunLifecycleManager,
+  type DeferredEmbeddedRunLifecycleManager,
+} from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
@@ -25,6 +28,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -35,9 +39,11 @@ import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcome-store.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  bindGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -65,6 +71,7 @@ import {
   executeAgentFallbackCycle,
   type AgentFallbackCycleState,
 } from "./agent-runner-fallback-cycle.js";
+import { recordMessageToolOnlyRunOutcome } from "./agent-runner-message-tool-outcome.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
@@ -78,6 +85,7 @@ import {
   isReplyOperationRestartAbort,
   isReplyOperationUserAbort,
 } from "./reply-operation-abort.js";
+import { markReplyOperationExecutionStarted } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 
 type InternalFollowupRun = FollowupRun & {
@@ -85,8 +93,6 @@ type InternalFollowupRun = FollowupRun & {
   currentTurnImagesPrepared?: true;
   mediaImageLayout?: CurrentTurnImages["mediaImageLayout"];
 };
-
-const messageToolOutcomeLog = createSubsystemLogger("auto-reply/message-tool-outcome");
 
 function resolveRunStartupPhase(
   phase: EmbeddedAgentExecutionPhase,
@@ -121,6 +127,7 @@ async function executeAgentTurnInternalWithRetryState(
   commitMcpAppModelContext: () => void,
   preparedRunAdmission: PreparedAgentRunAdmission,
   admittedRunContext: { current?: AdmittedRunContext },
+  deferredLifecycle: DeferredEmbeddedRunLifecycleManager,
 ): Promise<AgentTurnInternalResult> {
   const heartbeatState = { didLogStrip: false };
   let autoCompactionCount = 0;
@@ -248,6 +255,9 @@ async function executeAgentTurnInternalWithRetryState(
       return;
     }
     didNotifyAgentRunStart = true;
+    if (params.replyOperation) {
+      markReplyOperationExecutionStarted(params.replyOperation);
+    }
     params.opts?.onAgentRunStart?.(runId, admittedRunContext.current?.executionIdentityToken);
   };
   const signalExecutionPhaseForTyping = (
@@ -299,6 +309,7 @@ async function executeAgentTurnInternalWithRetryState(
   const consumeTransientHttpRetry = () => transientHttpRetriesRemaining-- > 0;
   let liveModelSwitchRetries = 0;
   const fallbackCycleState: AgentFallbackCycleState = {
+    deferredLifecycle,
     lifecycleGeneration,
     autoCompactionCount,
     attemptedRuntimeProvider: fallbackProvider,
@@ -336,7 +347,7 @@ async function executeAgentTurnInternalWithRetryState(
         runtimeConfig,
         liveModelSwitchRuntimeEntry,
         runId,
-        runAbortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+        runAbortSignal: fallbackCycleState.deferredLifecycle.signal,
         currentTurnImages,
         state: fallbackCycleState,
         presentation,
@@ -369,6 +380,9 @@ async function executeAgentTurnInternalWithRetryState(
       terminalRunFailed = cycle.terminalRunFailed;
       break;
     } catch (err) {
+      if (isAgentRunRestartAbortReason(err)) {
+        throw err;
+      }
       if (err instanceof LiveSessionModelSwitchError) {
         liveModelSwitchRetries += 1;
       }
@@ -518,6 +532,9 @@ async function executeAgentTurnInternal(
   };
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const admittedRunContext: { current?: AdmittedRunContext } = {};
+  const gatewayContextResolver =
+    readChannelContextGatewayContextResolver(params.sessionCtx) ??
+    getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const preparedRunAdmission = prepareChannelRunAdmission({
     cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
     runId,
@@ -526,8 +543,16 @@ async function executeAgentTurnInternal(
     boundary: "auto-reply.agent-runner",
     evidence: params.followupRun.channelAdmissionEvidence,
     onAdmitted: (context) => {
+      bindGatewayContextResolver(context, gatewayContextResolver);
       admittedRunContext.current = context;
     },
+  });
+  const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
+    runId,
+    sessionId: params.followupRun.run.sessionId,
+    sessionKey: params.sessionKey,
+    sessionFile: params.followupRun.run.sessionFile,
+    abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
   });
   try {
     return await executeAgentTurnInternalWithRetryState(
@@ -537,8 +562,10 @@ async function executeAgentTurnInternal(
       commitMcpAppModelContext,
       preparedRunAdmission,
       admittedRunContext,
+      deferredLifecycle,
     );
   } finally {
+    await deferredLifecycle.complete();
     preparedRunAdmission.close();
     await cancelOverloadRetryNotice(overloadRetryState);
   }
@@ -660,58 +687,6 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
   }
 }
 
-function recordMessageToolOnlyRunOutcome(
-  params: AgentTurnParams,
-  result: AgentTurnExecutionResult | undefined,
-): void {
-  const sourceReplyDeliveryMode =
-    params.followupRun.run.sourceReplyDeliveryMode ?? params.opts?.sourceReplyDeliveryMode;
-  if (sourceReplyDeliveryMode !== "message_tool_only") {
-    return;
-  }
-  const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
-  if (!sessionKey) {
-    messageToolOutcomeLog.warn("message-tool-only run outcome missing session key", {
-      runId: result?.runId ?? params.opts?.runId,
-      agentId: params.followupRun.run.agentId,
-    });
-    return;
-  }
-  const outcome = result?.outcome;
-  const resolved =
-    outcome?.kind === "settled" || outcome?.kind === "rejected" ? outcome.resolved : undefined;
-  const provider = resolved?.provider ?? params.followupRun.run.provider;
-  const model = resolved?.model ?? params.followupRun.run.model;
-  const runStatus: "completed" | "errored" | "aborted" =
-    outcome?.kind === "aborted" || (outcome?.kind === "settled" && outcome.abortReason)
-      ? "aborted"
-      : !outcome || outcome.kind === "rejected" || outcome.status === "failed"
-        ? "errored"
-        : "completed";
-  const toolDelivered =
-    outcome?.kind === "settled" && hasCompletedSourceReplyDeliveryEvidence(outcome.result);
-  const values = {
-    runId: result?.runId ?? params.opts?.runId ?? "unknown",
-    sessionKey,
-    agentId: params.followupRun.run.agentId,
-    provider,
-    model,
-    outcome: toolDelivered ? ("tool_delivered" as const) : ("mute" as const),
-    runStatus,
-    occurredAt: Date.now(),
-    storePath: params.storePath,
-  };
-  try {
-    recordMessageToolRunOutcome(values);
-    messageToolOutcomeLog.info("recorded message-tool-only run outcome", values);
-  } catch (error) {
-    messageToolOutcomeLog.warn("failed to record message-tool-only run outcome", {
-      ...values,
-      error: formatErrorMessage(error),
-    });
-  }
-}
-
 /** Runs the agent turn and records its message-tool-only visible-outcome fact once. */
 export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
   const runId = params.opts?.runId ?? crypto.randomUUID();
@@ -719,9 +694,20 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
   try {
     const result = await executeAgentTurnOutcome(executionParams);
+    const terminalOutcome =
+      result.outcome.kind === "aborted" ||
+      (result.outcome.kind === "settled" && result.outcome.abortReason)
+        ? undefined
+        : result.outcome.kind === "rejected" || result.outcome.status === "failed"
+          ? "failed"
+          : "completed";
+    if (terminalOutcome) {
+      executionParams.opts?.onAgentRunTerminalOutcome?.(terminalOutcome);
+    }
     recordMessageToolOnlyRunOutcome(executionParams, result);
     return result;
   } catch (error) {
+    executionParams.opts?.onAgentRunTerminalOutcome?.("failed");
     recordMessageToolOnlyRunOutcome(executionParams, undefined);
     throw error;
   }

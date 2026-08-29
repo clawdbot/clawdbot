@@ -113,15 +113,23 @@ function projectGoogleChatLinkLabels(ir: MarkdownIR): MarkdownIR {
 }
 
 function markGoogleChatBulletLists(ir: MarkdownIR, markerToken: string): MarkdownIR {
-  let text = ir.text;
+  let characters: string[] | undefined;
   for (const item of ir.listItems ?? []) {
     const marker = item.listMarker;
-    if (item.kind !== "bullet" || !marker || text.slice(marker.start, marker.end) !== "• ") {
+    if (
+      item.kind !== "bullet" ||
+      !marker ||
+      marker.end !== marker.start + 2 ||
+      ir.text[marker.start] !== "•" ||
+      ir.text[marker.start + 1] !== " "
+    ) {
       continue;
     }
-    text = `${text.slice(0, marker.start)}${markerToken}${text.slice(marker.end)}`;
+    characters ??= ir.text.split("");
+    characters[marker.start] = markerToken[0] ?? "";
+    characters[marker.start + 1] = markerToken[1] ?? "";
   }
-  return text === ir.text ? ir : { ...ir, text };
+  return characters ? { ...ir, text: characters.join("") } : ir;
 }
 
 function projectUnsafeCodeFallbacks(ir: MarkdownIR): MarkdownIR {

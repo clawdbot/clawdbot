@@ -13,6 +13,11 @@ export type OpenClawPluginActiveModelContext = {
   modelRef?: string;
 };
 
+/** Current-turn outbound delivery capability bound to the host-selected route and media policy. */
+export type OpenClawPluginToolDelivery = {
+  send: (params: { text?: string; mediaUrl?: string }) => Promise<void>;
+};
+
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
@@ -52,6 +57,8 @@ export type OpenClawPluginToolContext = {
   resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
   /** Trusted ambient delivery route for the active agent/session. */
   deliveryContext?: DeliveryContext;
+  /** Host-bound current-route delivery. Retained copies fail after the owning turn closes. */
+  delivery?: OpenClawPluginToolDelivery;
   /** Trusted platform-native conversation id for the active inbound turn. */
   nativeChannelId?: string;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */

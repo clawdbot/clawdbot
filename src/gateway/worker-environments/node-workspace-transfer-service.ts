@@ -719,8 +719,17 @@ export function createNodeWorkspaceTransferService(options: {
 
     async closeAll(): Promise<void> {
       await temporaryRootReady;
-      await Promise.all([...contexts.keys()].map(closeEnvironment));
-      await fsp.rm(temporaryBaseRoot, { recursive: true, force: true });
+      const closed = await Promise.allSettled([...contexts.keys()].map(closeEnvironment));
+      // Shared scratch outlives every transfer context, including failed sibling cleanup.
+      closed.push(
+        ...(await Promise.allSettled([
+          fsp.rm(temporaryBaseRoot, { recursive: true, force: true }),
+        ])),
+      );
+      const failure = closed.find((result) => result.status === "rejected");
+      if (failure) {
+        throw failure.reason;
+      }
     },
   };
 }

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 // Qa Lab tests cover gateway child plugin behavior.
 import { EventEmitter, once } from "node:events";
 import { lstat, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
@@ -35,7 +35,7 @@ import {
   waitForGatewayReady,
   waitForQaGatewayRestartBoundary,
 } from "./gateway-child-readiness.js";
-import { startQaGatewayChild } from "./gateway-child.js";
+import { createQaGatewayChild } from "./gateway-child.js";
 import { readQaLiveProviderConfigOverrides } from "./providers/live-config.js";
 import {
   assertQaLiveCodexAuthAvailable,
@@ -66,11 +66,20 @@ vi.mock("./node-exec.js", () => ({
 }));
 
 const tempDirs = createTempDirHarness();
+const owners: ReturnType<typeof createQaGatewayChild>[] = [];
+function ownGateway() {
+  const owner = createQaGatewayChild();
+  owners.push(owner);
+  return owner;
+}
 
 afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
   resolveQaNodeExecPathMock.mockReset();
   qaTempPathState.preferredTmpDir = process.env.TMPDIR || "/tmp";
+  for (const owner of owners.splice(0)) {
+    await owner.stop();
+  }
   await tempDirs.cleanup();
 });
 
@@ -160,22 +169,32 @@ if (!recordPath || !configPath || !stateDir) {
   throw new Error("missing fixture environment");
 }
 const record = (value) => fs.appendFileSync(recordPath, JSON.stringify(value) + "\\n");
+const authDbPath = path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite");
 if (args[0] === "models") {
   let stdin = "";
   process.stdin.setEncoding("utf8");
   for await (const chunk of process.stdin) stdin += chunk;
   const provider = args[args.indexOf("--provider") + 1];
+  const configStat = fs.lstatSync(configPath);
   record({
     kind: "auth",
     args,
     stdin,
-    dbExists: fs.existsSync(path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite")),
+    authDbPath,
+    dbExists: fs.existsSync(authDbPath),
+    configPath,
+    configMode: configStat.mode & 0o777,
+    configRegular: configStat.isFile(),
+    configSymlink: configStat.isSymbolicLink(),
+    stateDir,
     env: {
       OPENCLAW_CLI: process.env.OPENCLAW_CLI,
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_STATE_DIR: stateDir,
     },
   });
+  fs.mkdirSync(path.dirname(authDbPath), { recursive: true });
+  fs.writeFileSync(authDbPath, "fixture auth");
   if (process.env.QA_FAIL_PROVIDER === provider) {
     process.stderr.write("Authorization: Bearer " + stdin.trim());
     process.exit(9);
@@ -186,7 +205,16 @@ if (args[0] === "models") {
   process.exit(0);
 }
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-record({ kind: "gateway", args, fixtureProfiles: config.fixtureProfiles });
+record({
+  kind: "gateway",
+  args,
+  authDbPath,
+  dbExists: fs.existsSync(authDbPath),
+  configPath,
+  authProfileIds: Object.keys(config.auth?.profiles ?? {}),
+  fixtureProfiles: config.fixtureProfiles,
+  stateDir,
+});
 process.stderr.write("fixture gateway exit");
 process.exit(17);
 `,
@@ -397,18 +425,19 @@ describe("Gateway child fixture helpers", () => {
       }),
     ]);
     expect(catalog.models[0]).not.toHaveProperty("supports_reasoning_summaries");
-    expect(
-      buildQaForcedRuntimeEnvPatch({
-        forcedRuntime: "codex",
-        providerMode: "mock-openai",
-        providerBaseUrl: "http://127.0.0.1:44080/v1",
-        codexModelCatalogPath: modelCatalogPath,
-      }),
-    ).toEqual(
+    const runtimeEnvPatch = buildQaForcedRuntimeEnvPatch({
+      forcedRuntime: "codex",
+      providerMode: "mock-openai",
+      providerBaseUrl: "http://127.0.0.1:44080/v1",
+      codexModelCatalogPath: modelCatalogPath,
+    });
+    expect(runtimeEnvPatch).toEqual(
       expect.objectContaining({
         OPENCLAW_CODEX_APP_SERVER_ARGS: `app-server -c openai_base_url=http://127.0.0.1:44080/v1 -c ${JSON.stringify(`model_catalog_json=${modelCatalogPath}`)} -c sandbox_workspace_write.exclude_tmpdir_env_var=true -c sandbox_workspace_write.exclude_slash_tmp=true --listen stdio://`,
       }),
     );
+    expect(runtimeEnvPatch).not.toHaveProperty("OPENAI_API_KEY");
+    expect(runtimeEnvPatch).not.toHaveProperty("CODEX_API_KEY");
   });
 
   it("does not stage a Codex catalog for other runtimes or live providers", async () => {
@@ -463,8 +492,9 @@ describe("buildQaRuntimeEnv", () => {
     qaTempPathState.preferredTmpDir = tempParent;
     resolveQaNodeExecPathMock.mockRejectedValueOnce(new Error("node missing"));
 
+    const owner = ownGateway();
     await expect(
-      startQaGatewayChild({
+      owner.start({
         repoRoot: process.cwd(),
         transport: {
           requiredPluginIds: [],
@@ -473,6 +503,7 @@ describe("buildQaRuntimeEnv", () => {
         transportBaseUrl: "http://127.0.0.1:43123",
       }),
     ).rejects.toThrow("node missing");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
 
     await expect(readdir(tempParent)).resolves.toStrictEqual([]);
   });
@@ -482,13 +513,15 @@ describe("buildQaRuntimeEnv", () => {
     const emptyRepo = await tempDirs.makeTempDir("qa-gateway-empty-repo-");
     qaTempPathState.preferredTmpDir = tempParent;
 
+    const owner = ownGateway();
     await expect(
-      startQaGatewayChild({
+      owner.start({
         repoRoot: emptyRepo,
         useRepoCli: true,
         transportBaseUrl: "http://127.0.0.1:43123",
       }),
     ).rejects.toThrow("OpenClaw CLI entry not found");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
 
     await expect(readdir(tempParent)).resolves.toStrictEqual([]);
   });
@@ -514,8 +547,9 @@ describe("buildQaRuntimeEnv", () => {
       await writeFile(path.join(repoRoot, "package.json"), packageContents, "utf8");
     }
 
+    const owner = ownGateway();
     await expect(
-      startQaGatewayChild({
+      owner.start({
         repoRoot,
         transport: {
           requiredPluginIds: [],
@@ -524,6 +558,7 @@ describe("buildQaRuntimeEnv", () => {
         transportBaseUrl: "http://127.0.0.1:43123",
       }),
     ).rejects.toThrow(expectedError);
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
 
     await expect(readdir(tempParent)).resolves.toStrictEqual([]);
     await expect(readdir(stagedRuntimeParent)).resolves.toStrictEqual([]);
@@ -535,8 +570,9 @@ describe("buildQaRuntimeEnv", () => {
     qaTempPathState.preferredTmpDir = preferredTempParent;
     const missingExecutable = path.join(commandTempParent, "missing-openclaw-node");
 
+    const owner = ownGateway();
     await expect(
-      startQaGatewayChild({
+      owner.start({
         repoRoot: process.cwd(),
         command: {
           executablePath: missingExecutable,
@@ -550,6 +586,7 @@ describe("buildQaRuntimeEnv", () => {
         transportBaseUrl: "http://127.0.0.1:43123",
       }),
     ).rejects.toThrow(/installed package mock auth bootstrap failed for openai: .*ENOENT/u);
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
 
     await expect(readdir(preferredTempParent)).resolves.toStrictEqual([]);
     await expect(readdir(commandTempParent)).resolves.toStrictEqual([]);
@@ -792,6 +829,7 @@ describe("buildQaRuntimeEnv", () => {
         OPENCLAW_QA_TELEGRAM_GROUP_ID: "-1001234567890",
         OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
         OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
+        "BASH_FUNC_sudo%%": "() { printf imported; }",
       },
     });
 
@@ -803,7 +841,63 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_QA_TELEGRAM_GROUP_ID).toBeUndefined();
     expect(env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN).toBeUndefined();
     expect(env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN).toBeUndefined();
+    expect(env["BASH_FUNC_sudo%%"]).toBeUndefined();
   });
+
+  it.runIf(process.platform === "linux")(
+    "scrubs inherited shell startup env before the workflow allowlist runs",
+    async () => {
+      const tempRoot = await tempDirs.makeTempDir("qa-shell-startup-env-");
+      const markerPath = path.join(tempRoot, "bash-env-ran");
+      const functionMarkerPath = path.join(tempRoot, "bash-function-ran");
+      const bashEnvPath = path.join(tempRoot, "malicious-bash-env");
+      const allowlistProbePath = path.join(tempRoot, "allowlist-probe.sh");
+      await writeFile(bashEnvPath, `printf 'ran' > ${JSON.stringify(markerPath)}\n`, "utf8");
+      await writeFile(
+        allowlistProbePath,
+        `
+          set -Eeuo pipefail
+          for key in BASH_ENV BASHOPTS ENV SHELLOPTS; do
+            ! compgen -e | grep -Fxq "$key"
+          done
+          declare -A keep_env=([SAFE_VALUE]=1)
+          while IFS= read -r key; do
+            if [[ -z "\${keep_env[$key]+x}" ]]; then
+              unset "$key"
+            fi
+          done < <(compgen -e)
+          printf '%s' "\${SAFE_VALUE:?}"
+        `,
+        "utf8",
+      );
+      const env = buildQaRuntimeEnv({
+        ...createParams({ SAFE_VALUE: "base" }),
+        runtimeEnvPatch: {
+          SAFE_VALUE: "allowlist-survived",
+          BASH_ENV: bashEnvPath,
+          BASHOPTS: "checkwinsize",
+          ENV: bashEnvPath,
+          SHELLOPTS: "braceexpand",
+          "BASH_FUNC_compgen%%": `() { printf 'ran' > ${JSON.stringify(functionMarkerPath)}; builtin compgen "$@"; }`,
+        },
+      });
+
+      for (const key of ["BASH_ENV", "BASHOPTS", "ENV", "SHELLOPTS"]) {
+        expect(env[key]).toBeUndefined();
+      }
+      expect(env["BASH_FUNC_compgen%%"]).toBeUndefined();
+
+      const result = spawnSync("/bin/bash", ["--noprofile", "--norc", allowlistProbePath], {
+        encoding: "utf8",
+        env,
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("allowlist-survived");
+      await expect(readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(functionMarkerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it("re-scrubs blocked credentials in the spawned gateway child env", async () => {
     const tempParent = await tempDirs.makeTempDir("qa-gateway-env-scrub-");
@@ -824,8 +918,9 @@ describe("buildQaRuntimeEnv", () => {
       `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify(env));`,
     ].join("\n");
 
+    const owner = ownGateway();
     await expect(
-      startQaGatewayChild({
+      owner.start({
         repoRoot: process.cwd(),
         command: {
           executablePath: process.execPath,
@@ -849,6 +944,7 @@ describe("buildQaRuntimeEnv", () => {
         transportBaseUrl: "http://127.0.0.1:43123",
       }),
     ).rejects.toThrow("gateway exited before listening");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
 
     await expect(readFile(observedEnvPath, "utf8")).resolves.toBe(
       JSON.stringify({ SAFE_VALUE: "patched" }),
@@ -1398,8 +1494,9 @@ describe("buildQaRuntimeEnv", () => {
     const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
     await mkdir(tempParentDir);
 
+    const owner = ownGateway();
     await expect(
-      startQaGatewayChild({
+      owner.start({
         repoRoot: process.cwd(),
         command: {
           executablePath: process.execPath,
@@ -1412,6 +1509,7 @@ describe("buildQaRuntimeEnv", () => {
         runtimeEnvPatch: { QA_RECORD_PATH: recordPath },
       }),
     ).rejects.toThrow("fixture gateway exit");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
 
     const records = await readJsonLines(recordPath);
     const authRecords = records.filter((record) => record.kind === "auth");
@@ -1441,16 +1539,28 @@ describe("buildQaRuntimeEnv", () => {
       ],
     ]);
     for (const record of authRecords) {
-      expect(record.dbExists).toBe(false);
       expect(record.stdin).toMatch(/^sk-qa-mock-[a-f0-9]{32}\n$/u);
       expect(record.env).toMatchObject({
         OPENCLAW_CLI: "1",
       });
+      expect(record.configMode).toBe(0o600);
+      expect(record.configRegular).toBe(true);
+      expect(record.configSymlink).toBe(false);
     }
+    expect(authRecords.map((record) => record.dbExists)).toEqual([false, true]);
+    const authConfigPaths = authRecords.map((record) => String(record.configPath));
+    expect(new Set(authConfigPaths).size).toBe(1);
+    expect(authConfigPaths[0]).toBe(
+      path.join(String(authRecords[0]?.stateDir), "qa-auth-bootstrap", "openclaw.json"),
+    );
     expect(records.at(-1)).toMatchObject({
       kind: "gateway",
-      fixtureProfiles: ["openai", "anthropic"],
+      authProfileIds: ["qa-mock-openai", "qa-mock-anthropic"],
+      dbExists: true,
     });
+    expect(records.at(-1)?.configPath).not.toBe(authConfigPaths[0]);
+    expect(records.at(-1)?.fixtureProfiles).toBeUndefined();
+    expect(new Set(records.map((record) => record.authDbPath)).size).toBe(1);
   });
 
   it("blocks packaged gateway spawn when candidate auth bootstrap fails", async () => {
@@ -1460,7 +1570,8 @@ describe("buildQaRuntimeEnv", () => {
     const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
     await mkdir(tempParentDir);
 
-    const result = startQaGatewayChild({
+    const owner = ownGateway();
+    const result = owner.start({
       repoRoot: process.cwd(),
       command: {
         executablePath: process.execPath,
@@ -1477,6 +1588,7 @@ describe("buildQaRuntimeEnv", () => {
     });
 
     const error = await result.catch((caught: unknown) => caught);
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
     expect(error).toBeInstanceOf(Error);
     if (!(error instanceof Error)) {
       throw new Error("expected package auth bootstrap error");
@@ -1486,7 +1598,13 @@ describe("buildQaRuntimeEnv", () => {
     );
     const records = await readJsonLines(recordPath);
     expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({ kind: "auth", dbExists: false });
+    expect(records[0]).toMatchObject({
+      kind: "auth",
+      dbExists: false,
+      configMode: 0o600,
+      configRegular: true,
+      configSymlink: false,
+    });
     const submittedKey = String(records[0]?.stdin).trim();
     expect(submittedKey).toMatch(/^sk-qa-mock-[a-f0-9]{32}$/u);
     expect(error.message).not.toContain(submittedKey);
@@ -1605,6 +1723,36 @@ describe("buildQaRuntimeEnv", () => {
           ? "qa gateway process tree remained alive after forced shutdown: pgid=12345 members=unknown (/proc unavailable) childExitRecorded=false"
           : "qa gateway process tree remained alive after forced shutdown: pid=12345 childExitRecorded=false",
       );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not confirm shutdown when an exited leader's group probe is denied",
+    async () => {
+      const child = Object.assign(new EventEmitter(), {
+        pid: 12345,
+        exitCode: 17,
+        signalCode: null,
+        kill: vi.fn(() => false),
+      });
+      const realKill = process.kill.bind(process);
+      const fault = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid === -child.pid) {
+          throw Object.assign(new Error("owned fake group probe denied"), { code: "EPERM" });
+        }
+        return realKill(pid, signal);
+      });
+      try {
+        await expect(
+          stopQaGatewayChildProcessTree(child as never, {
+            gracefulTimeoutMs: 1,
+            forceTimeoutMs: 1,
+            inspectLinuxProcessGroup: () => null,
+          }),
+        ).rejects.toThrow("process tree remained alive");
+      } finally {
+        fault.mockRestore();
+      }
     },
   );
 

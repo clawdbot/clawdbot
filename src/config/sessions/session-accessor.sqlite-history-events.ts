@@ -17,7 +17,9 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
+import { createTranscriptRawDeltaCursor } from "./session-accessor.sqlite-delta.js";
 import {
+  readTranscriptProjectionGeneration,
   readVisibleMessageRange,
   resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
@@ -40,6 +42,9 @@ type VisibleHistoryProjection = {
 function resolveVisibleHistoryProjection(
   projection: CurrentTranscriptProjection,
 ): VisibleHistoryProjection {
+  if (projection.state.activeEventCount === projection.state.activeMessageCount) {
+    return { boundaries: [], total: projection.state.activeMessageCount };
+  }
   const visibleMessages = resolveVisibleMessagePositions(projection);
   const db = getActiveTranscriptKysely(projection.database);
   const rows = executeSqliteQuerySync(
@@ -61,7 +66,7 @@ function resolveVisibleHistoryProjection(
         "identity.event_type",
         "identity.seq",
         /* kysely-allow-raw: history byte caps include each event's JSONL newline. */
-        sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
+        sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
       ])
       .select((eb) =>
         eb
@@ -220,7 +225,7 @@ function resolveRecentHistoryStart(
             .select([
               "active.message_position",
               /* kysely-allow-raw: excluded history payloads must not be fetched or parsed. */
-              sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
+              sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
             ])
             .where("active.session_id", "=", projection.resolved.sessionId)
             .where("active.message_position", "in", positions),
@@ -336,6 +341,15 @@ export function readRecentSessionTranscriptHistoryEvents(
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const history = resolveVisibleHistoryProjection(projection);
+    const generation = readTranscriptProjectionGeneration(projection);
+    const deltaCursor = generation
+      ? createTranscriptRawDeltaCursor({
+          agentId: projection.resolved.agentId,
+          generation,
+          lastSeq: projection.state.indexedSeq,
+          sessionId: projection.resolved.sessionId,
+        })
+      : undefined;
     const maxMessages = Math.min(
       MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
       Math.max(0, Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0)),
@@ -347,6 +361,7 @@ export function readRecentSessionTranscriptHistoryEvents(
     if (maxMessages === 0 || maxLines === 0) {
       return {
         activeLeafEntryId: projection.state.leafEventId,
+        ...(deltaCursor ? { deltaCursor } : {}),
         events: [],
         totalMessages: history.total,
       };
@@ -365,6 +380,7 @@ export function readRecentSessionTranscriptHistoryEvents(
     );
     return {
       activeLeafEntryId: projection.state.leafEventId,
+      ...(deltaCursor ? { deltaCursor } : {}),
       events: readVisibleHistoryRange(projection, selectedStart, history.total, history),
       totalMessages: history.total,
     };

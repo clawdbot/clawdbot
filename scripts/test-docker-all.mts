@@ -30,7 +30,12 @@ import {
   parseProfile,
   resolveDockerE2ePlan,
 } from "./lib/docker-e2e-plan.mts";
-import type { DockerE2eLane } from "./lib/docker-e2e-scenarios.mts";
+import { liveDockerScriptCommand, type DockerE2eLane } from "./lib/docker-e2e-scenarios.mts";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
 import { sleep } from "./lib/sleep.mjs";
 import {
   createPrepublishPluginRegistryArtifact,
@@ -40,10 +45,10 @@ import {
 
 const SCRIPT_ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT_DIR = path.resolve(process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT || SCRIPT_ROOT_DIR);
-const LIVE_DOCKER_DEFAULT_HARNESS_DIR =
-  path.basename(SCRIPT_ROOT_DIR) === ".release-harness" && ROOT_DIR !== SCRIPT_ROOT_DIR
-    ? ".release-harness"
-    : ".";
+const HARNESS_ROOT_DIR = path.resolve(
+  ROOT_DIR,
+  process.env.OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR || SCRIPT_ROOT_DIR,
+);
 const DEFAULT_FAILURE_TAIL_LINES = 80;
 const DEFAULT_LANE_TIMEOUT_MS = 120 * 60 * 1000;
 const DEFAULT_LANE_START_STAGGER_MS = 2_000;
@@ -54,7 +59,6 @@ export const SHELL_CAPTURE_MAX_CHARS = 1024 * 1024;
 export const LOG_TAIL_MAX_BYTES = 1024 * 1024;
 const SHELL_TIMEOUT_KILL_GRACE_MS = 10_000;
 const SHELL_POST_FORCE_KILL_WAIT_MS = 1_000;
-const SHELL_PROCESS_GROUP_EXIT_POLL_MS = 25;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
@@ -82,10 +86,10 @@ type SchedulerLane = Pick<DockerE2eLane, "name"> &
 type TimingStore = Awaited<ReturnType<typeof loadTimingStore>>;
 
 type ShellCommandResult = Omit<ReturnType<typeof shellCommandSkippedForShutdown>, "signal"> & {
-  signal: NodeJS.Signals | null;
+  signal: ChildProcess["signalCode"];
 };
 type ShellCaptureResult = Omit<ReturnType<typeof shellCaptureSkippedForShutdown>, "signal"> & {
-  signal: NodeJS.Signals | null;
+  signal: ChildProcess["signalCode"];
 };
 
 type ShellCommandOptions = {
@@ -550,6 +554,8 @@ export function buildLaneRerunCommand(name: string, baseEnv: NodeJS.ProcessEnv) 
     ["OPENCLAW_DOCKER_E2E_IMAGE", image || DEFAULT_E2E_FUNCTIONAL_IMAGE],
     ["OPENCLAW_DOCKER_E2E_BARE_IMAGE", baseEnv.OPENCLAW_DOCKER_E2E_BARE_IMAGE],
     ["OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE", baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE],
+    ["OPENCLAW_DOCKER_E2E_REPO_ROOT", baseEnv.OPENCLAW_DOCKER_E2E_REPO_ROOT],
+    ["OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR", baseEnv.OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR],
     ...CANDIDATE_ENV_KEYS.map((key) => [key, baseEnv[key]] as const),
     ...REGISTRY_ENV_KEYS.map((key) => [key, baseEnv[key]] as const),
     ["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC],
@@ -559,16 +565,33 @@ export function buildLaneRerunCommand(name: string, baseEnv: NodeJS.ProcessEnv) 
   if (baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND) {
     env.push(["OPENCLAW_DOCKER_ALL_PNPM_COMMAND", baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND]);
   }
-  return `${env
+  const envPrefix = env
     .filter(
       (entry): entry is readonly [string, string] => entry[1] !== undefined && entry[1] !== "",
     )
     .map(([key, value]) => `${key}=${shellQuote(value)}`)
-    .join(" ")} pnpm test:docker:all`;
+    .join(" ");
+  return prepareHarnessCommand("pnpm test:docker:all", baseEnv, envPrefix);
 }
 
-function liveDockerHarnessScriptCommand(script: string) {
-  return `bash -c 'harness="\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-${LIVE_DOCKER_DEFAULT_HARNESS_DIR}}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/${script}"'`;
+function prepareHarnessCommand(command: string, env: NodeJS.ProcessEnv, envPrefix = "") {
+  if (!/(^|\s)pnpm(?=\s)/.test(command)) {
+    return command;
+  }
+  const pinnedPnpm = env.OPENCLAW_DOCKER_ALL_PNPM_COMMAND?.trim();
+  const executable = pinnedPnpm?.includes("/") ? path.resolve(ROOT_DIR, pinnedPnpm) : pinnedPnpm;
+  const invocation = command.replace(
+    /(^|\s)pnpm(?=\s)/g,
+    (_, prefix: string) => `${prefix}${executable ? shellQuote(executable) : "pnpm"}`,
+  );
+  // Quoted environment values may themselves contain " pnpm ". Substitute only
+  // the catalog invocation, then add the already-quoted rerun assignments.
+  const prepared = envPrefix ? `${envPrefix} ${invocation}` : invocation;
+  // Corepack selects the package-manager pin before pnpm parses --dir. Enter
+  // the harness first; candidate paths have already been prepared as absolute.
+  return HARNESS_ROOT_DIR === ROOT_DIR
+    ? prepared
+    : `(cd ${shellQuote(HARNESS_ROOT_DIR)} && ${prepared})`;
 }
 
 async function loadTimingStore(file: string, enabled: boolean) {
@@ -818,7 +841,7 @@ export function resolveDockerPreflightPlatform(arch: NodeJS.Architecture = proce
 
 export function dockerPreflightSmokeCommand(arch: NodeJS.Architecture = process.arch) {
   const platform = resolveDockerPreflightPlatform(arch);
-  return `docker run --rm --platform ${shellQuote(platform)} alpine:3.20 true`;
+  return `docker run --rm --platform ${shellQuote(platform)} alpine:3.24 true`;
 }
 
 export function runShellCommand({
@@ -1057,7 +1080,7 @@ export async function runCleanupSmokePhase(
   logDir: string,
   phases: Array<Record<string, unknown>>,
 ) {
-  const command = "pnpm test:docker:cleanup";
+  const command = prepareHarnessCommand("pnpm test:docker:cleanup", baseEnv);
   const logFile = path.join(logDir, `${CLEANUP_SMOKE_NAME}.log`);
   const startedAtMs = Date.now();
   let failure: LaneResult | undefined;
@@ -1208,7 +1231,7 @@ async function prepareOpenClawPackage(baseEnv: NodeJS.ProcessEnv, logDir: string
   const packageTgz = path.join(packDir, "openclaw-current.tgz");
   await runForeground(
     "Prepare OpenClaw package once",
-    `node ${shellQuote(path.join(ROOT_DIR, "scripts/package-openclaw-for-docker.mjs"))} --source-dir ${shellQuote(ROOT_DIR)} --allow-unreleased-changelog --output-dir ${shellQuote(packDir)} --output-name openclaw-current.tgz`,
+    `node ${shellQuote(path.join(HARNESS_ROOT_DIR, "scripts/package-openclaw-for-docker.mjs"))} --source-dir ${shellQuote(ROOT_DIR)} --allow-unreleased-changelog --output-dir ${shellQuote(packDir)} --output-name openclaw-current.tgz`,
     baseEnv,
   );
   await fs.promises.access(packageTgz);
@@ -1303,10 +1326,12 @@ function laneEnv(
   const cacheName = cacheKey || name;
   const env: DockerLaneEnv = {
     ...baseEnv,
-    OPENCLAW_DOCKER_CACHE_HOME_DIR:
+    OPENCLAW_DOCKER_CACHE_HOME_DIR: path.resolve(
       process.env.OPENCLAW_DOCKER_CACHE_HOME_DIR ?? path.join(logDir, `${cacheName}-cache`),
-    OPENCLAW_DOCKER_CLI_TOOLS_DIR:
+    ),
+    OPENCLAW_DOCKER_CLI_TOOLS_DIR: path.resolve(
       process.env.OPENCLAW_DOCKER_CLI_TOOLS_DIR ?? path.join(logDir, `${cacheName}-cli-tools`),
+    ),
   };
   env.OPENCLAW_DOCKER_ALL_LANE_NAME = name;
   const image = e2eImageForLane(poolLane, baseEnv);
@@ -1330,10 +1355,7 @@ async function runLane(
   const noOutputTimeoutMs = lane.noOutputTimeoutMs;
   const logFile = path.join(logDir, `${name}.log`);
   const env = laneEnv(lane, baseEnv, logDir, lane.cacheKey);
-  const pnpmCommand = env.OPENCLAW_DOCKER_ALL_PNPM_COMMAND?.trim();
-  const command = pnpmCommand
-    ? lane.command.replace(/(^|\s)pnpm(?=\s)/g, `$1${shellQuote(pnpmCommand)}`)
-    : lane.command;
+  const command = prepareHarnessCommand(lane.command, env);
   await mkdir(env.OPENCLAW_DOCKER_CLI_TOOLS_DIR, { recursive: true });
   await mkdir(env.OPENCLAW_DOCKER_CACHE_HOME_DIR, { recursive: true });
   await fs.promises.writeFile(
@@ -1346,6 +1368,8 @@ async function runLane(
       `==> [${name}] retries: ${lane.retries ?? 0}`,
       `==> [${name}] e2e image kind: ${lane.e2eImageKind ?? "none"}`,
       `==> [${name}] e2e image: ${env.OPENCLAW_DOCKER_E2E_IMAGE ?? ""}`,
+      `==> [${name}] trusted harness: ${HARNESS_ROOT_DIR}`,
+      `==> [${name}] candidate source: ${ROOT_DIR}`,
       "",
     ].join("\n"),
   );
@@ -1625,28 +1649,11 @@ function shellCaptureSkippedForShutdown(label: string, signal: ShutdownSignal | 
 }
 
 function shellProcessGroupAlive(child: ChildProcess) {
-  if (process.platform === "win32" || !child.pid) {
-    return false;
-  }
-  try {
-    process.kill(-child.pid, 0);
-    return true;
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "EPERM";
-  }
+  return inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm" }) === "live";
 }
 
-async function waitForShellProcessGroupExit(child: ChildProcess, timeoutMs: number) {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!shellProcessGroupAlive(child)) {
-      return true;
-    }
-    await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, SHELL_PROCESS_GROUP_EXIT_POLL_MS);
-    });
-  }
-  return !shellProcessGroupAlive(child);
+function waitForShellProcessGroupExit(child: ChildProcess, timeoutMs: number) {
+  return waitForManagedProcessGroupExit(child, timeoutMs, { errorPolicy: "alive-on-eperm" });
 }
 
 async function finishTimedOutShellProcessTree(
@@ -1669,15 +1676,12 @@ async function finishTimedOutShellProcessTree(
 }
 
 function terminateChild(child: ChildProcess, signal: ShutdownSignal) {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to killing the direct child below.
-    }
-  }
-  child.kill(signal);
+  terminateManagedChild(child, signal, {
+    onChildSignalError(error) {
+      throw error;
+    },
+    useWindowsTaskkill: false,
+  });
 }
 
 function terminateActiveChildren(signal: ShutdownSignal) {
@@ -1792,6 +1796,9 @@ async function main() {
   );
 
   const baseEnv = commandEnv({
+    OPENCLAW_DOCKER_E2E_REPO_ROOT: ROOT_DIR,
+    OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR: HARNESS_ROOT_DIR,
+    OPENCLAW_LIVE_DOCKER_REPO_ROOT: ROOT_DIR,
     OPENCLAW_DOCKER_E2E_BARE_IMAGE:
       process.env.OPENCLAW_DOCKER_E2E_BARE_IMAGE ||
       process.env.OPENCLAW_DOCKER_E2E_IMAGE ||
@@ -1825,7 +1832,6 @@ async function main() {
       upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
       upgradeSurvivorTargetRoot: process.env.OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT,
       allowFrozenTargetScenarioOmissions,
-      candidatePackageRoot: ROOT_DIR,
     });
   if (omittedUnsupportedLaneNames.length > 0 && !allowFrozenTargetScenarioOmissions) {
     throw new Error(
@@ -1978,7 +1984,7 @@ async function main() {
     const buildEntries: ForegroundEntry[] = [];
     if (scheduledLanes.some((poolLane) => poolLane.needsLiveImage)) {
       buildEntries.push({
-        command: liveDockerHarnessScriptCommand("test-live-build-docker.sh"),
+        command: liveDockerScriptCommand("test-live-build-docker.sh", "", { skipBuild: false }),
         label: "shared live-test image once",
         phaseDetails: { imageKind: "live" },
         phases,
@@ -1986,7 +1992,7 @@ async function main() {
     }
     if (lanesNeedE2eImageKind(scheduledLanes, "bare")) {
       buildEntries.push({
-        command: "pnpm test:docker:e2e-build",
+        command: prepareHarnessCommand("pnpm test:docker:e2e-build", baseEnv),
         env: {
           OPENCLAW_DOCKER_E2E_IMAGE: baseEnv.OPENCLAW_DOCKER_E2E_BARE_IMAGE,
           OPENCLAW_DOCKER_E2E_TARGET: "bare",
@@ -1998,7 +2004,7 @@ async function main() {
     }
     if (lanesNeedE2eImageKind(scheduledLanes, "functional")) {
       buildEntries.push({
-        command: "pnpm test:docker:e2e-build",
+        command: prepareHarnessCommand("pnpm test:docker:e2e-build", baseEnv),
         env: {
           OPENCLAW_DOCKER_E2E_IMAGE: baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE,
           OPENCLAW_DOCKER_E2E_TARGET: "functional",

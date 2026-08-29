@@ -275,6 +275,17 @@ uses the shared typing keepalive/cleanup lifecycle. Add
 
 ### Media source params
 
+Resolve account media limits with `resolveChannelMediaMaxBytes(...)` from
+`openclaw/plugin-sdk/account-helpers`. Pass the already-merged account's
+`mediaMaxMb` through `resolveChannelLimitMb`; the helper applies the agent
+default only when the account/channel limit is absent. Its optional byte result
+must reach the actual media loader, capped by any transport ceiling. Preserve
+the loader's existing default when no limit is configured.
+
+The focused account-helper import keeps setup and account resolution free of
+media analysis runtimes. The old `media-runtime` export remains available for
+existing external plugins, but new and bundled callers should use the focused import.
+
 If your channel adds message-tool params that carry media sources, expose
 those param names through `plugin.actions.describeMessageTool(...).mediaSourceParams`.
 Core uses that explicit list for sandbox path normalization and outbound
@@ -350,11 +361,41 @@ normalizes numeric thread ids the same way core does, so prefer it over ad hoc
 should expose `messaging.resolveOutboundSessionRoute(...)` so core gets
 provider-native session and thread identity without parser shims.
 
+### Conversation route ownership
+
+Implement `messaging.resolveConversationRouteOwner(...)` when generic route
+matching cannot reproduce the channel's configured and runtime binding rules.
+The resolver receives the current config, account, and recorded conversation
+identity, including a delivery `target` when it differs from the routing peer.
+It must reuse the same precedence and provider identity grammar as inbound
+routing.
+
+Ownership inspection is synchronous and read-only. Do not refresh binding
+liveness, perform network requests, or infer missing provider facts. Return:
+
+- `{ kind: "agent", agentId }` for an agent-owned route.
+- `{ kind: "plugin", pluginId, fallbackAgentId }` for a plugin-owned runtime
+  binding. `fallbackAgentId` is the route used when that plugin has no active
+  inbound claim handler.
+- `{ kind: "unavailable" }` when authoritative owner state is temporarily
+  unavailable and the caller should retry.
+- `null` when the supplied identity is invalid or cannot be authorized.
+- `undefined` to delegate to core's generic owner resolution.
+
+Keep temporary unavailability distinct from `null`: an adapter restart is not
+proof that a previously bound conversation is unowned.
+Use `inspectConversationBinding(...)` from
+`openclaw/plugin-sdk/conversation-binding-inspection-runtime` when the resolver needs this
+available/unavailable distinction.
+
 ### Account-scoped conversation binding support
 
 Set `conversationBindings.supportsCurrentConversationBinding` when the channel
 supports generic current-conversation bindings. `createChatChannelPlugin(...)`
-sets this static capability to `true` by default.
+sets this static capability to `true` by default. Channels whose monitor owns a custom binding
+adapter must also set `bindingStore: "adapter"`; core then fails closed while
+that adapter is unavailable instead of reading or writing generic binding rows.
+Older `createManager`-only plugins retain the same adapter-owned behavior.
 
 If support differs by configured account, also implement
 `conversationBindings.isCurrentConversationBindingSupported({ accountId })`.
@@ -583,6 +624,29 @@ the channel plugin object without importing setup wizards, transport
 clients, socket listeners, subprocess launchers, or service startup modules.
 Put those runtime pieces in modules loaded from `registerFull(...)`, runtime
 setters, or lazy capability adapters.
+
+### Account schemas and inheritance
+
+Use `buildChannelAccountSchemaParts` from
+`openclaw/plugin-sdk/channel-config-schema`. Its `accountShape` leaves
+`dmPolicy` and `groupPolicy` optional, so an omitted account policy inherits
+the channel root. Spread its `rootPolicyShape` into the root schema
+only: it defaults DMs to `pairing` and groups to `allowlist`. Do not apply
+those defaults to account entries or remove them from the root; the former
+shadows operator settings and the latter can leave group access open.
+This replaces `buildCommonChannelAccountShape` and its defaulting flags.
+
+Use `mergeAccountConfig` or `resolveMergedAccountConfig` through the existing
+`openclaw/plugin-sdk/account-helpers` export for runtime inheritance. Their
+shared implementation lives at `src/config/channel-account-config.ts`;
+plugins must use the SDK import. Account fields replace root fields, including
+explicit empty collections. `nestedObjectKeys` selects shallow object merges;
+`inheritEmptyKeys` maps fields to `"array"` or `"object"` to inherit the root
+when that kind of account collection is empty. `preserveRootAllowFrom: true` removes an account wildcard
+when the root contains restrictive sender entries, retaining explicit account
+senders or falling back to the root list. These collection and allowlist rules
+are owner-selected, not universal channel defaults. Keep credentials, transport
+selection, and other channel-specific account concerns in the plugin.
 
 ### Other narrow channel subpaths
 
@@ -908,6 +972,19 @@ unrelated inbound runtime helpers.
     ```
 
     For channels that accept both canonical top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
+
+    Config-backed logout handlers can use `clearAccountFieldsFromConfigSection`
+    from `openclaw/plugin-sdk/channel-config-helpers`. Pass `cfg`, `sectionKey`,
+    `accountId`, and the plugin-owned `fields` to remove. It returns
+    `{ nextConfig, changed, cleared }` without writing config or resolving
+    credentials. Root fields clear together only for the exact `default` account
+    when at least one value is truthy. Nested fields use `clearAccountEntryFields`
+    semantics: an empty account ID selects `accounts.default`, and empty or
+    whitespace strings are removed without reporting `cleared` unless
+    `markClearedOnFieldPresence: true` is set. Unchanged config retains its object
+    identity; cleanup prunes only branches it changes. Keep file-reference
+    selection, persistence, environment reporting, and other logout side effects
+    in the plugin.
 
     If a channel intentionally applies stricter DM session routing than the
     global config, expose that behavior through `security.dmRouting` so Doctor

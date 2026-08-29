@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCompactionCheckpoint, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
   createContext,
   createGateway,
@@ -13,8 +13,6 @@ import {
   createRenderedPage,
   type TestSessionsPage,
 } from "./sessions-page.test-support.ts";
-
-vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -37,11 +35,61 @@ async function createPage(context: ApplicationContext): Promise<TestSessionsPage
 
 afterEach(() => {
   document.body.replaceChildren();
-  vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
 describe("sessions page managed roster", () => {
+  it.each([
+    {
+      name: "offers person grouping for multiple session owners despite a single-identity handshake",
+      ownerCount: 2,
+      handshakeIdentities: false,
+      available: true,
+    },
+    {
+      name: "hides person grouping for one session owner despite a multiple-identity handshake",
+      ownerCount: 1,
+      handshakeIdentities: true,
+      available: false,
+    },
+    {
+      name: "hides person grouping without session owners despite a multiple-identity handshake",
+      ownerCount: 0,
+      handshakeIdentities: true,
+      available: false,
+    },
+  ])("$name", async ({ ownerCount, handshakeIdentities, available }) => {
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    mutableGateway.emit({
+      hello: {
+        ...sessionMutationGatewayHello(),
+        policy: { hasMultipleSessionSharingIdentities: handshakeIdentities },
+      },
+    });
+    const managed = createManagedSessions();
+    const context = createContext(mutableGateway.gateway, managed.sessions);
+    const owners = [
+      { type: "human" as const, id: "profile-ada", label: "Ada Lovelace" },
+      { type: "human" as const, id: "profile-bob", label: "Bob Rivera" },
+    ].slice(0, ownerCount);
+    const page = await createRenderedPage(context, {
+      ts: 0,
+      path: "(multiple)",
+      count: owners.length,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      owners,
+      sessions: owners.map((owner, index) => ({
+        key: `agent:main:${owner.id}`,
+        kind: "direct",
+        updatedAt: index,
+        owner: { actor: owner },
+      })),
+    });
+
+    const personOption = page.querySelector('.session-groupby__select option[value="person"]');
+    expect(personOption !== null).toBe(available);
+  });
+
   it("rejects route data from an earlier same-client connection epoch", async () => {
     const client = {} as GatewayBrowserClient;
     const mutableGateway = createGateway(client);
@@ -65,7 +113,7 @@ describe("sessions page managed roster", () => {
     };
 
     mutableGateway.emit({ phase: "reconnecting", client });
-    mutableGateway.emit({ phase: "connected", client });
+    mutableGateway.emit({ phase: "connected", client, hello: sessionMutationGatewayHello() });
     document.body.append(page);
     await page.updateComplete;
     await vi.waitFor(() => expect(refreshList).toHaveBeenCalledOnce());
@@ -280,53 +328,5 @@ describe("sessions page managed roster", () => {
 
     await vi.waitFor(() => expect(listCheckpoints).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(page.checkpointItemsByKey[key]).toEqual([newCheckpoint]));
-  });
-
-  it("adopts a managed snapshot that arrives under the bulk-delete lock after its tail refresh", async () => {
-    const deleted = deferred<{
-      deleted: string[];
-      errors: string[];
-      preservedWorktrees: Array<{ id: string; branch: string; path: string }>;
-    }>();
-    const deleteMany = vi.fn(() => deleted.promise);
-    const managed = createManagedSessions({ deleteMany });
-    const context = createContext(
-      createGateway({} as GatewayBrowserClient).gateway,
-      managed.sessions,
-    );
-    const page = await createRenderedPage(context, {
-      count: 1,
-      sessions: [{ key: "before" }],
-    } as SessionsListResult);
-    const query = vi.mocked(managed.subscribeList).mock.calls[0]?.[0];
-    if (!query) {
-      throw new Error("Expected a managed query subscription");
-    }
-    managed.refreshList.mockClear();
-    page.selectedKeys = new Set(["before"]);
-    vi.mocked(showConfirmDialog).mockResolvedValue(true);
-
-    const deleting = page.deleteSelected();
-    await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledOnce());
-    const duringResult = {
-      count: 1,
-      sessions: [{ key: "arrived-during-mutation" }],
-    } as SessionsListResult;
-    managed.publish(query, {
-      result: duringResult,
-      agentId: "main",
-      loading: false,
-      error: null,
-    });
-    expect(page.result?.sessions.map((row) => row.key)).toEqual(["before"]);
-
-    deleted.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
-    await deleting;
-
-    expect(managed.refreshList).toHaveBeenCalledWith({ ...query, force: true });
-    expect(deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
-      managed.refreshList.mock.invocationCallOrder[0]!,
-    );
-    expect(page.result?.sessions.map((row) => row.key)).toEqual(["arrived-during-mutation"]);
   });
 });

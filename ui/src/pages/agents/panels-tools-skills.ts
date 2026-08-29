@@ -2,7 +2,10 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 // Control UI view renders agents panels tools skills screen content.
 import { html, nothing } from "lit";
-import { normalizeToolPolicyName } from "../../../../src/agents/tool-policy-shared.js";
+import {
+  normalizeToolPolicyName,
+  resolveToolProfilePolicy,
+} from "../../../../src/agents/tool-policy-shared.js";
 import type {
   SkillStatusEntry,
   SkillStatusReport,
@@ -20,14 +23,13 @@ import { t } from "../../i18n/index.ts";
 import {
   type AgentToolEntry,
   type AgentToolSection,
-  isAllowedByPolicy,
-  matchesList,
   resolveAgentConfig,
+  resolveAgentSkillsFilter,
   resolveToolProfileOptions,
-  resolveToolProfile,
   resolveToolSections,
 } from "../../lib/agents/display.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { SkillGroup } from "../../lib/skills-grouping.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
@@ -35,6 +37,9 @@ import {
   computeSkillReasons,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
+import type { GitHubIdentityController } from "./github-identity-controller.ts";
+import { renderGitHubIdentity } from "./github-identity-view.ts";
+import { isAllowedByPolicy, matchesList } from "./tool-policy.ts";
 
 function renderToolMetaBadges(labels: string[]) {
   if (labels.length === 0) {
@@ -169,12 +174,9 @@ function handleRuntimeToolJump(event: Event, anchorId: string) {
   window.history.replaceState(null, "", nextUrl);
 
   requestAnimationFrame(() => {
-    const reducedMotion =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     target.scrollIntoView?.({
       block: "center",
-      behavior: reducedMotion ? "auto" : "smooth",
+      behavior: resolveScrollBehavior(),
     });
     target.querySelector<HTMLElement>("summary")?.focus();
   });
@@ -237,6 +239,7 @@ export function renderAgentTools(params: {
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
   canUpdateConfig: boolean;
+  githubIdentity: GitHubIdentityController;
   onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
   onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
@@ -270,7 +273,7 @@ export function renderAgentTools(params: {
   const deny = hasAgentAllow ? [] : Array.isArray(agentTools.deny) ? agentTools.deny : [];
   const basePolicy = hasAgentAllow
     ? { allow: agentTools.allow ?? [], deny: agentTools.deny ?? [] }
-    : (resolveToolProfile(profile) ?? undefined);
+    : resolveToolProfilePolicy(profile);
   const toolIds = toolSections.flatMap((section) => section.tools.map((tool) => tool.id));
 
   const resolveAllowed = (toolId: string) => {
@@ -512,6 +515,7 @@ export function renderAgentTools(params: {
       },
       html`${renderEffectiveToolNotices(params.toolsEffectiveResult)}${runtimeAvailability}`,
     )}
+    ${renderGitHubIdentity(params.githubIdentity)}
     ${renderSettingsSection(
       { title: t("agentTools.catalogTitle") },
       html`
@@ -726,12 +730,16 @@ export function renderAgentSkills(params: {
     !params.configLoading &&
     !params.configSaving;
   const config = resolveAgentConfig(params.configForm, params.agentId);
-  const allowlist = Array.isArray(config.entry?.skills) ? config.entry?.skills : undefined;
-  const allowSet = new Set(normalizeStringEntries(allowlist ?? []));
+  const explicitAllowlist = Array.isArray(config.entry?.skills)
+    ? normalizeStringEntries(config.entry.skills)
+    : undefined;
+  const allowlist = resolveAgentSkillsFilter(params.configForm, params.agentId);
+  const allowSet = new Set(allowlist ?? []);
   const usingAllowlist = allowlist !== undefined;
+  const inheritedAllowlist = explicitAllowlist === undefined && usingAllowlist;
   const canClear =
     params.canPatchConfig &&
-    usingAllowlist &&
+    explicitAllowlist !== undefined &&
     Boolean(params.configForm) &&
     !params.configLoading &&
     !params.configSaving;
@@ -756,7 +764,13 @@ export function renderAgentSkills(params: {
       ? html`<div class="callout info">${t("agents.skillsPanel.loadConfig")}</div>`
       : nothing}
     ${usingAllowlist
-      ? html`<div class="callout info">${t("agents.skillsPanel.customAllowlist")}</div>`
+      ? html`<div class="callout info">
+          ${t(
+            inheritedAllowlist
+              ? "agents.skillsPanel.inheritedAllowlist"
+              : "agents.skillsPanel.customAllowlist",
+          )}
+        </div>`
       : html`<div class="callout info">${t("agents.skillsPanel.allEnabled")}</div>`}
     ${!reportReady && !params.loading
       ? html`<div class="callout info">${t("agents.skillsPanel.loadAgent")}</div>`
@@ -768,13 +782,6 @@ export function renderAgentSkills(params: {
         description: html`${t("agents.skillsPanel.subtitle")}
         ${totalCount > 0 ? html`<span class="mono">${enabledCount}/${totalCount}</span>` : nothing}`,
         actions: html`
-          <button
-            class="btn btn--sm"
-            ?disabled=${!canClear}
-            @click=${() => params.onClear(params.agentId)}
-          >
-            ${t("agentTools.enableAll")}
-          </button>
           <button
             class="btn btn--sm"
             ?disabled=${!editable}
@@ -833,6 +840,7 @@ export function renderAgentSkills(params: {
                     allowSet,
                     usingAllowlist,
                     editable,
+                    filterActive: Boolean(filter),
                     onToggle: params.onToggle,
                   }),
                 )}
@@ -850,10 +858,12 @@ function renderAgentSkillGroup(
     allowSet: Set<string>;
     usingAllowlist: boolean;
     editable: boolean;
+    filterActive: boolean;
     onToggle: (agentId: string, skillName: string, enabled: boolean) => void;
   },
 ) {
-  const collapsedByDefault = group.id === "workspace" || group.id === "built-in";
+  const collapsedByDefault =
+    !params.filterActive && (group.id === "workspace" || group.id === "built-in");
   return html`
     <details class="agent-skills-group" ?open=${!collapsedByDefault}>
       <summary class="agent-skills-header">

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   formatLegacyAgentMediaMigrationRequiredMessage,
   GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
@@ -35,6 +35,7 @@ const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
 });
 
 function createLifecycleDb() {
@@ -385,5 +386,26 @@ describe("formatGatewayCrashLoopManualChannelStartHint", () => {
     expect(
       formatGatewayCrashLoopManualChannelStartHint({ channelId: "telegram", accountId: "work" }),
     ).toContain(`--params '{"channel":"telegram","accountId":"work"}'`);
+  });
+
+  it.each([
+    { name: "default", profile: "", container: "", command: "openclaw" },
+    { name: "named profile", profile: "work", container: "", command: "openclaw --profile work" },
+    { name: "container", profile: "", container: "demo", command: "openclaw --container demo" },
+    {
+      name: "container and profile",
+      profile: "work",
+      container: "demo",
+      command: "openclaw --container demo",
+    },
+  ])("targets the active gateway for $name", ({ profile, container, command }) => {
+    vi.stubEnv("OPENCLAW_PROFILE", profile);
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
+
+    expect(
+      formatGatewayCrashLoopManualChannelStartHint({ channelId: "telegram", accountId: "work" }),
+    ).toBe(
+      `Start a channel manually with: ${command} gateway call channels.start --params '{"channel":"telegram","accountId":"work"}'`,
+    );
   });
 });

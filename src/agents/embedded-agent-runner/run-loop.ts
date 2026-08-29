@@ -32,7 +32,8 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-pre
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt-prompt-helpers.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
-import { createMcpAttemptCarryover } from "./run/attempt-result.js";
+import { createAttemptCarryover } from "./run/attempt-result.js";
+import { activateCodeModeReconciliation } from "./run/code-mode-reconciliation.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -221,7 +222,7 @@ export async function runPreparedEmbeddedLoop(
   let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
   // Presentation survives retry attempts, but a newer tool result must clear stale text.
   const terminalToolPresentation = createTerminalToolPresentationTracker();
-  const turnTaintState = createAgentTurnTaintState();
+  const turnTaintState = createAgentTurnTaintState(params.initialTurnTainted === true);
   const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
     terminalToolPresentation.observe(observation);
     turnTaintState.observe(observation);
@@ -310,7 +311,7 @@ export async function runPreparedEmbeddedLoop(
     });
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
-    const mcpAttemptCarryover = createMcpAttemptCarryover();
+    const attemptCarryover = createAttemptCarryover();
     while (true) {
       refreshPreparedRuntimeSnapshot();
       if (isRunRetryBudgetExhausted(runRetryBudget)) {
@@ -337,8 +338,7 @@ export async function runPreparedEmbeddedLoop(
           agentMeta: buildErrorAgentMeta({
             sessionId: sessionPromptState.sessionId,
             sessionFile: sessionPromptState.sessionFile,
-            provider,
-            model: model.id,
+            ...(attemptCarryover.modelAttempt ?? { provider, model: model.id }),
             ...outerContextTokenMeta,
             usageAccumulator,
             lastRunPromptUsage,
@@ -394,7 +394,7 @@ export async function runPreparedEmbeddedLoop(
       }
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
-      mcpAttemptCarryover.apply(dispatchedAttempt.rawAttempt);
+      attemptCarryover.apply(dispatchedAttempt.rawAttempt);
       const normalizedAttempt = await normalizeEmbeddedRunAttempt({
         runInput: admittedRunInput,
         preparedRuntime,
@@ -522,6 +522,16 @@ export async function runPreparedEmbeddedLoop(
       if (assistantFailureOutcome.action === "retry") {
         continue;
       }
+      if (
+        activateCodeModeReconciliation({
+          attempt,
+          hostOwnsToolSurface: !pluginHarnessOwnsTransport,
+          retryState: terminalRetryState,
+          activateInternalPrompt: sessionPromptState.activateInternalPrompt,
+        })
+      ) {
+        continue;
+      }
       let assistantProfileFailureReason = assistantFailureOutcome.assistantProfileFailureReason;
       const terminalToolPresentationText = terminalToolPresentation.read();
       const finalizedTerminal = await prepareTerminalWithSettledTurnFinalization({
@@ -578,33 +588,21 @@ export async function runPreparedEmbeddedLoop(
         reportedModelRef,
         finalAssistantVisibleText,
         finalAssistantRawText,
-        payloads,
         payloadsWithToolMedia,
-        timedOutDuringPrompt,
         recoveredFinalAssistantPayloadsAfterPromptTimeout,
-        hasSuccessfulFinalAssistantAfterPromptTimeout,
-        hasPartialAssistantTextAfterPromptTimeout,
         attemptToolSummary,
         failureSignal,
+        terminalToolFailure,
       } = terminalPrepared;
 
       const terminalTimeoutResult = resolveEmbeddedRunTerminalTimeout({
-        timedOutDuringPrompt,
-        hasSuccessfulFinalAssistantAfterPromptTimeout,
+        terminalPrepared,
         shouldSurfaceCodexCompletionTimeout: recovery.shouldSurfaceCodexCompletionTimeout,
         attempt: terminalAttempt,
-        hasPartialAssistantTextAfterPromptTimeout,
-        payloads,
-        payloadsWithToolMedia,
         terminalState: resolvedTerminalState,
         resolveReplayInvalid: resolveReplayInvalidForAttempt,
         setTerminalLifecycleMeta,
         startedAtMs: started,
-        agentMeta,
-        finalAssistantVisibleText,
-        finalAssistantRawText,
-        attemptToolSummary,
-        failureSignal,
       });
       if (terminalTimeoutResult) {
         return terminalTimeoutResult;
@@ -631,6 +629,7 @@ export async function runPreparedEmbeddedLoop(
         agentMeta,
         attemptToolSummary,
         failureSignal,
+        terminalToolFailure,
         maxReasoningOnlyRetryAttempts,
         maxEmptyResponseRetryAttempts,
         attemptCompactionCount: terminalAttemptCompactionCount,

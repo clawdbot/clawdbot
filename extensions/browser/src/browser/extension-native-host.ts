@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -99,7 +100,7 @@ async function validateNativeManifest(params: {
     "browser",
     "native-messaging",
   );
-  if (launcherPath !== managedRoot && !launcherPath.startsWith(`${managedRoot}${path.sep}`)) {
+  if (!isPathInside(managedRoot, launcherPath)) {
     throw new Error("launcher is outside the managed root");
   }
   const parsed: unknown = JSON.parse(await fs.readFile(manifestPath, "utf8"));

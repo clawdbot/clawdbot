@@ -17,6 +17,8 @@ export type BlockReplyContext = {
   timeoutMs?: number;
   /** Source assistant message index from the upstream stream, when available. */
   assistantMessageIndex?: number;
+  /** @internal Stable durable outbound intent owned by the producing runtime. */
+  deliveryIntentId?: string;
 };
 
 /** Context passed to onModelSelected callback with actual model used. */
@@ -70,6 +72,8 @@ export type TurnAdoptionLifecycle = {
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;
+  /** Reports that a deferred turn is still queued behind an active turn. */
+  onDeferredHeartbeat?: () => void;
   /** Deferred turn finished without owning the reply lane. */
   onAbandoned?: () => void;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
@@ -128,14 +132,16 @@ export type GetReplyOptions = {
     runId: string,
     executionIdentityToken?: ExecutionIdentityAdmissionToken,
   ) => void;
+  /** Reports the terminal agent-run classification to the shared dispatch owner. */
+  onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
   /**
    * Canonical adoption lifecycle (adopted / deferred / abandoned / settled + pre-adoption abort).
    */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
-  /** Gateway already attempted exact active-run injection for this turn. */
-  messageInjectionAttempted?: true;
+  /** Gateway-owned start-or-steer decision for this turn. */
+  messageInjectionDisposition?: "none" | "accepted" | "rejected";
   /** Current user turn is already durable; replay it without appending another copy. */
   suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
@@ -161,8 +167,6 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
-  /** Dynamic form used when verbose progress visibility can change mid-run. */
-  shouldSuppressToolErrorWarnings?: () => boolean | undefined;
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 339585,
-  "reason": "Startup growth reflects session placement move controls, ownership chips, assignment menus, participant stack, cloud worker settings navigation and machine selection, plus the session permission picker (five-option menu with Default), permission chip, and guardian review notices joining the startup chat composer path.",
-  "updatedAt": "2026-08-17"
+  "startupJsGzipBytes": 345371,
+  "reason": "Queued-send transcript bubbles (#131909), rebuilt on main a79e6517be8: measured 345371 B. Replace the conflicting 348449 B main baseline with this fresh measurement; retain the 512 B growth allowance, 64 B build variance, and 350 KiB ceiling.",
+  "updatedAt": "2026-08-28"
 }

@@ -27,6 +27,7 @@ struct CuaDriverHostCoordinatorTests {
         let launcher = CuaProcessLauncherProbe()
         var workerStops = 0
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { executable },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
@@ -34,6 +35,7 @@ struct CuaDriverHostCoordinatorTests {
                 launcher.launch(launch, onTermination: onTermination)
             },
             readinessProbe: { _ in true },
+            permissionSnapshot: { [:] },
             beforeDaemonStop: {
                 let allRunning = launcher.processes.allSatisfy(\.isRunning)
                 #expect(allRunning)
@@ -56,6 +58,47 @@ struct CuaDriverHostCoordinatorTests {
         #expect(coordinator.workerEndpoint == nil)
         #expect(workerStops == 1)
         #expect(launcher.processes.allSatisfy { !$0.isRunning })
+    }
+
+    @Test func `elevation host refuses CUA enablement before spawning a child`() async {
+        let root = self.shortTemporaryDirectory("elevation-host")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launcher = CuaProcessLauncherProbe()
+        let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
+            artifactURL: { root.appendingPathComponent("cua-driver") },
+            applicationSupportURL: { root },
+            bundleIdentifier: { "ai.openclaw.test" },
+            processLauncher: { launch, onTermination in
+                launcher.launch(launch, onTermination: onTermination)
+            },
+            readinessProbe: { _ in true },
+            permissionSnapshot: { [:] },
+            enablementAllowed: {
+                AppLaunchRuntimePlan(arguments: ["OpenClaw", "--elevation-host"]).allowsCuaComputerControl
+            })
+
+        await coordinator.setEnabled(true)
+
+        #expect(launcher.launches.isEmpty)
+        #expect(coordinator.workerEndpoint == nil)
+
+        let normalCoordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
+            artifactURL: { root.appendingPathComponent("cua-driver") },
+            applicationSupportURL: { root },
+            bundleIdentifier: { "ai.openclaw.test" },
+            processLauncher: { launch, onTermination in
+                launcher.launch(launch, onTermination: onTermination)
+            },
+            readinessProbe: { _ in true },
+            permissionSnapshot: { [:] },
+            enablementAllowed: {
+                AppLaunchRuntimePlan(arguments: ["OpenClaw"]).allowsCuaComputerControl
+            })
+        await normalCoordinator.setEnabled(true)
+        #expect(await self.waitForReadyLaunch(1, launcher: launcher, coordinator: normalCoordinator))
+        await normalCoordinator.setEnabled(false)
     }
 
     @Test func `socket directory is random owner-only and cleanup removes only its owned leaf`() throws {
@@ -117,13 +160,15 @@ struct CuaDriverHostCoordinatorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { root.appendingPathComponent("cua-driver") },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
             processLauncher: { launch, onTermination in
                 launcher.launch(launch, onTermination: onTermination)
             },
-            readinessProbe: { _ in true })
+            readinessProbe: { _ in true },
+            permissionSnapshot: { [:] })
 
         await coordinator.setEnabled(true)
         let endpoint = try #require(coordinator.workerEndpoint)
@@ -145,13 +190,15 @@ struct CuaDriverHostCoordinatorTests {
         let stale = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { root.appendingPathComponent("cua-driver") },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
             processLauncher: { launch, onTermination in
                 launcher.launch(launch, onTermination: onTermination)
             },
-            readinessProbe: { _ in true })
+            readinessProbe: { _ in true },
+            permissionSnapshot: { [:] })
 
         await coordinator.setEnabled(true)
         #expect(!FileManager.default.fileExists(atPath: stale.url.path))
@@ -173,13 +220,15 @@ struct CuaDriverHostCoordinatorTests {
             encoding: .utf8)
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { executable },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
             processLauncher: { launch, onTermination in
                 launcher.launch(launch, onTermination: onTermination)
             },
-            readinessProbe: { _ in true })
+            readinessProbe: { _ in true },
+            permissionSnapshot: { [:] })
 
         await coordinator.setEnabled(true)
 
@@ -196,13 +245,15 @@ struct CuaDriverHostCoordinatorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { executable },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
             processLauncher: { launch, onTermination in
                 launcher.launch(launch, onTermination: onTermination)
             },
-            readinessProbe: { _ in true })
+            readinessProbe: { _ in true },
+            permissionSnapshot: { [:] })
 
         await coordinator.setEnabled(true)
 
@@ -223,6 +274,7 @@ struct CuaDriverHostCoordinatorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { executable },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
@@ -237,7 +289,8 @@ struct CuaDriverHostCoordinatorTests {
                 try Data("incomplete".utf8).write(to: pidFile)
                 return launcher.launch(launch, onTermination: onTermination)
             },
-            readinessProbe: { _ in true })
+            readinessProbe: { _ in true },
+            permissionSnapshot: { [:] })
 
         await coordinator.setEnabled(true)
 
@@ -264,13 +317,15 @@ struct CuaDriverHostCoordinatorTests {
             encoding: .utf8)
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { expectedExecutable },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
             processLauncher: { launch, onTermination in
                 launcher.launch(launch, onTermination: onTermination)
             },
-            readinessProbe: { _ in true })
+            readinessProbe: { _ in true },
+            permissionSnapshot: { [:] })
 
         await coordinator.setEnabled(true)
 
@@ -299,9 +354,11 @@ struct CuaDriverHostCoordinatorTests {
             encoding: .utf8)
         _ = try CuaDriverHostCoordinator.createSocketDirectory(in: root)
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { executable },
             applicationSupportURL: { root },
-            bundleIdentifier: { "ai.openclaw.test" })
+            bundleIdentifier: { "ai.openclaw.test" },
+            permissionSnapshot: { [:] })
 
         await coordinator.shutdown()
 
@@ -386,6 +443,10 @@ struct CuaDriverHostCoordinatorTests {
         driver diagnostic
 
         """
+        // The relay's readability handler calls stop() on any empty read, which
+        // closes the pipe's read end; without suppression a racing stop turns
+        // this write into a harness-killing SIGPIPE.
+        try TestProcessSupport.suppressSIGPIPE(relay.pipe.fileHandleForWriting)
         try relay.pipe.fileHandleForWriting.write(contentsOf: Data(driverOutput.utf8))
         try relay.pipe.fileHandleForWriting.close()
         for _ in 0..<1000 where probe.events.count < 2 {
@@ -400,10 +461,12 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     @Test func `unexpected exits retry with a bounded budget while advertising unavailable`() async throws {
+        let delays = CuaRestartDelayProbe()
         let root = self.shortTemporaryDirectory("restart")
         defer { try? FileManager.default.removeItem(at: root) }
         let launcher = CuaProcessLauncherProbe()
         let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: NotificationCenter(),
             artifactURL: { root.appendingPathComponent("cua-driver") },
             applicationSupportURL: { root },
             bundleIdentifier: { "ai.openclaw.test" },
@@ -411,7 +474,8 @@ struct CuaDriverHostCoordinatorTests {
                 launcher.launch(launch, onTermination: onTermination)
             },
             readinessProbe: { _ in true },
-            restartSleep: { _ in })
+            restartSleep: { delays.append($0) },
+            permissionSnapshot: { [:] })
 
         await coordinator.setEnabled(true)
         for expectedLaunchCount in 2...6 {
@@ -425,9 +489,118 @@ struct CuaDriverHostCoordinatorTests {
         for _ in 0..<100 {
             await Task.yield()
         }
+        #expect(delays.values == [.seconds(1), .seconds(2), .seconds(4), .seconds(8), .seconds(10)])
         #expect(launcher.launches.count == 6)
         #expect(coordinator.workerEndpoint == nil)
         await coordinator.setEnabled(false)
+    }
+
+    @Test(arguments: CuaStartupSuspension.allCases, [false, true])
+    func `retired startup never publishes availability or overwrites permissions`(
+        suspension: CuaStartupSuspension,
+        disable: Bool) async throws
+    {
+        let root = self.shortTemporaryDirectory("startup-race")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let notifications = NotificationCenter()
+        let launcher = CuaProcessLauncherProbe()
+        let probe = CuaStartupProbe(suspension: suspension)
+        let restartGate = AsyncTestGate()
+        let coordinator = CuaDriverHostCoordinator(
+            notificationCenter: notifications,
+            observeNotifications: true,
+            artifactURL: { root.appendingPathComponent("cua-driver") },
+            applicationSupportURL: { root },
+            bundleIdentifier: { "ai.openclaw.test" },
+            processLauncher: { launch, onTermination in
+                launcher.launch(launch, onTermination: onTermination)
+            },
+            readinessProbe: { _ in await probe.readiness() },
+            restartSleep: { _ in await restartGate.wait() },
+            permissionSnapshot: { await probe.permissions() })
+        var availability: [CuaDriverWorkerEndpoint?] = []
+        let observer = notifications.addObserver(
+            forName: .openclawCuaDriverAvailabilityChanged,
+            object: nil,
+            queue: nil)
+        { _ in
+            // Publication is synchronous on MainActor; an asynchronous observer would miss ready -> nil.
+            MainActor.assumeIsolated { availability.append(coordinator.workerEndpoint) }
+        }
+        defer { notifications.removeObserver(observer) }
+        let startup = Task { await coordinator.setEnabled(true) }
+        var disabling: Task<Void, Never>?
+        var replacement: Task<Void, Never>?
+        var failure: (any Error)?
+        do {
+            try #require(await self.waitUntil { probe.startupEntered })
+            let child = try #require(launcher.processes.first)
+            let launch = try #require(launcher.launches.first)
+            let socketIndex = try #require(launch.arguments.firstIndex(of: "--socket")) + 1
+            let retiredDirectory = URL(fileURLWithPath: launch.arguments[socketIndex]).deletingLastPathComponent()
+            #expect(FileManager.default.fileExists(atPath: retiredDirectory.path))
+
+            // Record a newer permission baseline while the old startup result is suspended.
+            probe.snapshot = [.accessibility: .granted, .screenRecording: .granted]
+            let expectedReads = probe.permissionReads + 1
+            notifications.post(name: .openclawPermissionsChanged, object: nil)
+            try #require(await self.waitUntil { probe.permissionReads == expectedReads })
+            if disable {
+                var disableEntered = false
+                disabling = Task { @MainActor in
+                    disableEntered = true
+                    // Same-actor call runs through desiredEnabled's update before its first suspension.
+                    await coordinator.setEnabled(false)
+                }
+                try #require(await self.waitUntil { disableEntered })
+            } else {
+                child.crash(status: 7)
+                try #require(await self.waitUntil {
+                    child.closeLivenessCount == 1 &&
+                        !FileManager.default.fileExists(atPath: retiredDirectory.path)
+                })
+            }
+            #expect(availability.isEmpty)
+            probe.releaseStartup.open()
+            await startup.value
+            await disabling?.value
+            #expect(coordinator.workerEndpoint == nil)
+            #expect(availability.isEmpty)
+            await coordinator.setEnabled(false)
+
+            // A stale snapshot would make this unchanged notification restart the next healthy child.
+            replacement = Task { await coordinator.setEnabled(true) }
+            try #require(await self.waitUntil { probe.replacementEntered })
+            let replacementReads = probe.permissionReads + 1
+            notifications.post(name: .openclawPermissionsChanged, object: nil)
+            try #require(await self.waitUntil { probe.permissionReads == replacementReads })
+            probe.releaseReplacement.open()
+            await replacement?.value
+            await coordinator.setEnabled(true)
+            #expect(launcher.launches.count == 2)
+            #expect(launcher.processes[1].closeLivenessCount == 0)
+            let endpoint = try #require(coordinator.workerEndpoint)
+            #expect(availability == [endpoint])
+        } catch {
+            failure = error
+        }
+        // Release and join every task even when a prerequisite assertion fails.
+        probe.releaseStartup.open()
+        probe.releaseReplacement.open()
+        await coordinator.shutdown()
+        restartGate.open()
+        await startup.value
+        await disabling?.value
+        await replacement?.value
+        if let failure { throw failure }
+    }
+
+    private func waitUntil(_ condition: @MainActor () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !condition(), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return condition()
     }
 
     @Test func `permission changes replace the daemon generation and endpoint`() async throws {
@@ -462,7 +635,8 @@ struct CuaDriverHostCoordinatorTests {
     }
 
     private func shortTemporaryDirectory(_ label: String) -> URL {
-        URL(fileURLWithPath: "/tmp/oc-cua-\(label)-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        URL(fileURLWithPath: "/tmp", isDirectory: true).resolvingSymlinksInPath()
+            .appendingPathComponent("oc-cua-\(label)-\(UUID().uuidString.prefix(8))", isDirectory: true)
     }
 
     private func expectedExecutable(in root: URL, target: String) throws -> URL {
@@ -548,6 +722,68 @@ private final class CuaPermissionSnapshotProbe {
         .accessibility: .notGranted,
         .screenRecording: .notGranted,
     ]
+}
+
+enum CuaStartupSuspension: CaseIterable, Sendable {
+    case permissions
+    case readinessSuccess
+    case readinessFailure
+}
+
+@MainActor
+private final class CuaStartupProbe {
+    let releaseStartup = AsyncTestGate()
+    let releaseReplacement = AsyncTestGate()
+    private let suspension: CuaStartupSuspension
+    private var readinessReads = 0
+    private(set) var permissionReads = 0
+    private(set) var startupEntered = false
+    private(set) var replacementEntered = false
+    var snapshot: [Capability: CapabilityAuthorizationStatus] = [
+        .accessibility: .notGranted,
+        .screenRecording: .notGranted,
+    ]
+
+    init(suspension: CuaStartupSuspension) {
+        self.suspension = suspension
+    }
+
+    func readiness() async -> Bool {
+        self.readinessReads += 1
+        if self.readinessReads == 1 {
+            if self.suspension != .permissions {
+                self.startupEntered = true
+                await self.releaseStartup.wait()
+            }
+            return self.suspension != .readinessFailure
+        }
+        self.replacementEntered = true
+        await self.releaseReplacement.wait()
+        return true
+    }
+
+    func permissions() async -> [Capability: CapabilityAuthorizationStatus] {
+        self.permissionReads += 1
+        let snapshot = self.snapshot
+        if self.permissionReads == 1, self.suspension == .permissions {
+            self.startupEntered = true
+            await self.releaseStartup.wait()
+        }
+        return snapshot
+    }
+}
+
+private final class CuaRestartDelayProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var delays: [Duration] = []
+
+    var values: [Duration] {
+        self.lock.withLock { self.delays }
+    }
+
+    func append(_ delay: Duration) {
+        self.lock.withLock { self.delays.append(delay) }
+    }
 }
 
 @MainActor

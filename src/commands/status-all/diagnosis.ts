@@ -1,7 +1,9 @@
 // Appends the read-only diagnosis section for `openclaw status --all`.
 // Every line that can include logs, config, or connection details is redacted before display.
 
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
@@ -24,6 +26,7 @@ import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
 } from "../../plugins/status.js";
+import type { StatusGatewayDiagnosticsResult } from "../status-runtime-shared.ts";
 import {
   formatUpdateRestartActionLines,
   formatUpdateRestartStatusValue,
@@ -157,8 +160,8 @@ export async function appendStatusAllDiagnosis(params: {
   pluginCompatibility: PluginCompatibilityNotice[];
   channelsStatus: unknown;
   channelIssues: ChannelIssueLike[];
-  deliveryDiagnostics: unknown;
-  exporterDiagnostics: unknown;
+  deliveryDiagnostics: StatusGatewayDiagnosticsResult | null;
+  exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
   agentStatus?: AgentStatusLike;
   gatewayReachable: boolean;
   health: unknown;
@@ -170,6 +173,17 @@ export async function appendStatusAllDiagnosis(params: {
     const icon = status === "ok" ? ok("✓") : status === "warn" ? warn("!") : fail("✗");
     const colored = status === "ok" ? ok(label) : status === "warn" ? warn(label) : fail(label);
     lines.push(`${icon} ${colored}`);
+  };
+  const emitUnavailableDiagnostics = (diagnostic: {
+    label: string;
+    detail: string;
+    retry: string;
+  }) => {
+    emitCheck(`${diagnostic.label}: unavailable`, "warn");
+    lines.push(
+      `  ${muted(sanitizeTerminalText(redactStatusSecrets(redactSensitiveUrlLikeString(diagnostic.detail))))}`,
+    );
+    lines.push(`  ${muted(`Retry: ${diagnostic.retry}`)}`);
   };
 
   lines.push("");
@@ -284,7 +298,7 @@ export async function appendStatusAllDiagnosis(params: {
       params.tailscaleMode === "off"
         ? `Tailscale exposure: off · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
         : `Tailscale exposure: ${params.tailscaleMode} · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`;
-    emitCheck(label, okBackend && (params.tailscaleMode === "off" || hasDns) ? "ok" : "warn");
+    emitCheck(label, params.tailscaleMode === "off" || (okBackend && hasDns) ? "ok" : "warn");
     if (params.tailscale.error) {
       lines.push(`  ${muted(`error: ${params.tailscale.error}`)}`);
     }
@@ -339,33 +353,41 @@ export async function appendStatusAllDiagnosis(params: {
     }
   }
 
-  const exporterSummary = formatTelemetryExporterSummary(params.exporterDiagnostics);
-  if (exporterSummary) {
-    emitCheck(exporterSummary.title, exporterSummary.status);
-    for (const line of exporterSummary.lines) {
-      lines.push(`  ${muted(line)}`);
+  if (!params.nodeOnlyGateway && params.exporterDiagnostics) {
+    if (params.exporterDiagnostics.ok) {
+      const exporterSummary = formatTelemetryExporterSummary(params.exporterDiagnostics.value);
+      if (exporterSummary) {
+        emitCheck(exporterSummary.title, exporterSummary.status);
+        for (const line of exporterSummary.lines) {
+          lines.push(`  ${muted(line)}`);
+        }
+      }
+    } else {
+      emitUnavailableDiagnostics({
+        label: "Telemetry exporters",
+        detail: `Exporter diagnostics failed: ${params.exporterDiagnostics.error}`,
+        retry: "openclaw gateway stability --type telemetry.exporter",
+      });
     }
   }
 
-  if (params.deliveryDiagnostics != null) {
-    if (isDeliveryDiagnosticsLike(params.deliveryDiagnostics)) {
-      const received = countDeliveryEvent(params.deliveryDiagnostics, "message.received");
-      const dispatchStarted = countDeliveryEvent(
-        params.deliveryDiagnostics,
-        "message.dispatch.started",
-      );
+  if (!params.nodeOnlyGateway && params.deliveryDiagnostics?.ok) {
+    if (isDeliveryDiagnosticsLike(params.deliveryDiagnostics.value)) {
+      const deliveryDiagnostics = params.deliveryDiagnostics.value;
+      const received = countDeliveryEvent(deliveryDiagnostics, "message.received");
+      const dispatchStarted = countDeliveryEvent(deliveryDiagnostics, "message.dispatch.started");
       const dispatchCompleted = countDeliveryEvent(
-        params.deliveryDiagnostics,
+        deliveryDiagnostics,
         "message.dispatch.completed",
       );
-      const turnsCreated = countDeliveryEvent(params.deliveryDiagnostics, "session.turn.created");
-      const processed = countDeliveryEvent(params.deliveryDiagnostics, "message.processed");
+      const turnsCreated = countDeliveryEvent(deliveryDiagnostics, "session.turn.created");
+      const processed = countDeliveryEvent(deliveryDiagnostics, "message.processed");
       const hasReceivedWithoutDispatch = received > 0 && dispatchStarted === 0 && processed === 0;
       const hasDispatchWithoutTurn =
         dispatchStarted > 0 && turnsCreated === 0 && processed < dispatchStarted;
       const dispatchGap = dispatchStarted - dispatchCompleted;
       const hasDispatchGap = dispatchGap >= 2;
-      const latestAgeMs = latestDeliveryEventAgeMs(params.deliveryDiagnostics);
+      const latestAgeMs = latestDeliveryEventAgeMs(deliveryDiagnostics);
       emitCheck(
         `Inbound delivery telemetry: received ${received} · dispatch ${dispatchStarted}/${dispatchCompleted} · turns ${turnsCreated} · processed ${processed}`,
         hasReceivedWithoutDispatch || hasDispatchWithoutTurn || hasDispatchGap ? "warn" : "ok",
@@ -389,10 +411,22 @@ export async function appendStatusAllDiagnosis(params: {
         );
       }
     } else {
-      emitCheck("Inbound delivery telemetry: unavailable", "warn");
+      emitUnavailableDiagnostics({
+        label: "Inbound delivery telemetry",
+        detail: "Delivery diagnostics returned an invalid response.",
+        retry: "openclaw gateway stability",
+      });
     }
-  } else if (params.gatewayReachable && !params.nodeOnlyGateway) {
-    emitCheck("Inbound delivery telemetry: unavailable", "warn");
+  } else if (
+    !params.nodeOnlyGateway &&
+    params.deliveryDiagnostics &&
+    !params.deliveryDiagnostics.ok
+  ) {
+    emitUnavailableDiagnostics({
+      label: "Inbound delivery telemetry",
+      detail: `Delivery diagnostics failed: ${params.deliveryDiagnostics.error}`,
+      retry: "openclaw gateway stability",
+    });
   }
 
   params.progress.setLabel("Reading logs…");

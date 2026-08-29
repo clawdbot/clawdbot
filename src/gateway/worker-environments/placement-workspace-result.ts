@@ -32,6 +32,35 @@ export type WorkerWorkspacePendingResult = {
   stagedResultRef: string | null;
 };
 
+export function isCurrentWorkerWorkspacePendingResultOwner(
+  placement: WorkerSessionPlacementRecord | undefined,
+  pending: WorkerWorkspacePendingResult,
+): placement is Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }> {
+  if (
+    (placement?.state !== "active" && placement?.state !== "draining") ||
+    placement.sessionId !== pending.sessionId ||
+    placement.environmentId !== pending.environmentId ||
+    placement.activeOwnerEpoch !== pending.ownerEpoch
+  ) {
+    return false;
+  }
+  if (placement.turnClaim) {
+    // Reclaim claims after drain; worker turns claim before it. The exact live
+    // claim owns either generation shape without weakening claimless recovery.
+    return isCurrentPlacementTurnClaim(placement, {
+      sessionId: pending.sessionId,
+      claimId: pending.claimId,
+      runId: pending.runId,
+      placementGeneration: pending.placementGeneration,
+      owner: placementTurnOwner(placement),
+    });
+  }
+  return (
+    placement.generation ===
+    (placement.state === "active" ? pending.placementGeneration : pending.placementGeneration + 1)
+  );
+}
+
 function matchesWorkspaceResultClaim(
   placement: WorkerSessionPlacementRecord,
   row: StateDatabase["worker_workspace_pending_results"],

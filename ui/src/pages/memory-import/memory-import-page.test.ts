@@ -109,6 +109,22 @@ afterEach(() => {
 });
 
 describe("MemoryImportPage", () => {
+  it("does not plan memory import without admin access", async () => {
+    const request = vi.fn();
+    const context = createContext(request);
+    context.gateway.snapshot.hello = {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+      features: { methods: ["migrations.memory.plan"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    const page = await mountPage(context);
+
+    await page.updateComplete;
+    expect(request).not.toHaveBeenCalled();
+    expect(page.textContent).toContain("Memory import requires operator.admin access.");
+  });
+
   it("keeps a failed plan stable until the operator explicitly refreshes", async () => {
     const request = vi.fn(async () => {
       throw new Error("planning unavailable: OPENAI_API_KEY=sk-1234567890abcdef");

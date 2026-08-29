@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
@@ -9,6 +10,7 @@ import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { runGatewayShutdownSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
+import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 
 const loadGatewayStartupPostAttachModule = createLazyRuntimeModule(
   () => import("./server-startup-post-attach.js"),
@@ -24,15 +26,29 @@ export async function startGatewayServerCore(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  // Direct embedders have no CLI lifecycle row, so the server start boundary
+  // still owns an exact generation instead of making clients infer one.
+  const suppliedBootId = opts.bootId;
+  if (
+    suppliedBootId !== undefined &&
+    (suppliedBootId.trim() !== suppliedBootId || !suppliedBootId || suppliedBootId.length > 96)
+  ) {
+    throw new Error("Gateway boot ID must contain 1 to 96 characters");
+  }
+  const bootId = suppliedBootId ?? randomUUID();
   let releasePostReadyWork: () => void = () => {};
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
     releasePostReadyWork = resolve;
   });
   const gatewayKernel = await createGatewayKernel(port, opts);
+  if (!gatewayKernel.minimalTestGateway) {
+    // Start the Keychain read early so it overlaps bootstrap; post-attach awaits the
+    // shared promise before plugins can use TLS.
+    void beginMacOSSystemCaWarmupOnce({ log });
+  }
   let startupSettled: Promise<void>;
   const {
     beginClosePrelude,
-    clearFallbackGatewayContextForServer,
     closeOnStartupFailure,
     createCloseHandler,
     sealAndJoinRegisteredSidecarStops,
@@ -69,6 +85,7 @@ export async function startGatewayServerCore(
       kernelRuntime: { ...gatewayKernel, ...transport },
       port,
       opts,
+      bootId,
       log,
       logHealth,
       logWsControl,
@@ -116,10 +133,6 @@ export async function startGatewayServerCore(
           { name: "gateway close prelude", run: runClosePrelude },
           { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
           { name: "gateway close", run: () => close(optsLocal) },
-          {
-            name: "fallback gateway context",
-            run: () => clearFallbackGatewayContextForServer.get()(),
-          },
         ],
         onError: (message) => log.error(message),
       });

@@ -168,6 +168,18 @@ struct AppLaunchRuntimePlan: Equatable {
         self.mode == .elevationHost
     }
 
+    func resolvePaused(_ storedValue: Bool) -> Bool {
+        self.isElevationHost ? false : storedValue
+    }
+
+    func resolveComputerControlEnabled(_ storedValue: Bool) -> Bool {
+        self.isElevationHost || storedValue
+    }
+
+    func resolvePeekabooBridgeEnabled(_ storedValue: Bool) -> Bool {
+        self.isElevationHost || storedValue
+    }
+
     var allowsAutomaticPresentation: Bool {
         self.mode == .interactive
     }
@@ -187,6 +199,10 @@ struct AppLaunchRuntimePlan: Equatable {
     }
 
     var allowsInteractiveServices: Bool {
+        !self.isElevationHost
+    }
+
+    var allowsCuaComputerControl: Bool {
         !self.isElevationHost
     }
 

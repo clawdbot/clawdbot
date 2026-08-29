@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { classifyOtelGrpcMigrationOwnership } from "../commands/doctor/shared/include-migration-ownership.js";
 import { applyLegacyDoctorMigrations } from "../commands/doctor/shared/legacy-config-compat.js";
@@ -10,18 +9,13 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
-import { createConfigValidationMetadataPluginIdScope } from "../plugins/gateway-startup-plugin-ids.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import {
-  rebasePluginMetadataSnapshotManifestRegistry,
-  resolvePluginMetadataSnapshot,
-} from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { observeConfigSnapshotSync } from "./io.observe.js";
 import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
-import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
+import { resolveConfigWidePluginMetadataSnapshot } from "./io.plugin-metadata.js";
 import {
   coerceConfig,
   normalizeConfigIoDeps,
@@ -40,7 +34,7 @@ import { formatConfigIssueSummary } from "./issue-format.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import { inheritLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
-import { materializeRuntimeConfig } from "./materialize.js";
+import { copyConfigResolutionFacts } from "./resolution-facts.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
@@ -109,7 +103,9 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
         state: { pendingByPath: autoOwnerDisplaySecretByPath },
       }),
     );
-    return inheritLegacyDefaultAgentId(cfg, finalized);
+    const inherited = inheritLegacyDefaultAgentId(cfg, finalized);
+    copyConfigResolutionFacts(cfg, inherited);
+    return inherited;
   }
 
   function createValidationPluginMetadataSnapshotLoader(params: {
@@ -117,47 +113,18 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     env: NodeJS.ProcessEnv;
     allowCurrentPluginMetadata?: boolean;
   }): ValidationPluginMetadataSnapshotLoader {
-    let metadataConfig: OpenClawConfig | undefined;
-    let manifestRegistry: PluginManifestRegistry | undefined;
     let snapshot: PluginMetadataSnapshot | undefined;
-    let configWideSnapshot: PluginMetadataSnapshot | undefined;
-    const resolvePluginIdScope = (config: OpenClawConfig) =>
-      createConfigValidationMetadataPluginIdScope({
-        config,
-        env: params.env,
-      });
     return {
       load: (config) => {
-        if (manifestRegistry) {
-          return { manifestRegistry };
-        }
-        metadataConfig = config;
-        manifestRegistry = resolveConfigWidePluginManifestRegistry({
+        snapshot ??= resolveConfigWidePluginMetadataSnapshot({
           config,
           env: params.env,
           allowCurrent: params.allowCurrentPluginMetadata,
-          pluginIdScope: resolvePluginIdScope(config),
         });
-        return { manifestRegistry };
+        return { manifestRegistry: snapshot.manifestRegistry };
       },
-      getManifestRegistry: () => manifestRegistry,
-      getSnapshot: () => {
-        if (!metadataConfig) {
-          return undefined;
-        }
-        snapshot ??= resolvePluginMetadataSnapshot({
-          config: metadataConfig,
-          workspaceDir: tryResolveConfiguredAgentWorkspaceDir(metadataConfig, params.env),
-          env: params.env,
-          allowCurrent: params.allowCurrentPluginMetadata,
-          allowWorkspaceScopedCurrent: true,
-          pluginIdScope: resolvePluginIdScope(metadataConfig),
-        });
-        configWideSnapshot ??= manifestRegistry
-          ? rebasePluginMetadataSnapshotManifestRegistry(snapshot, manifestRegistry)
-          : snapshot;
-        return configWideSnapshot;
-      },
+      getManifestRegistry: () => snapshot?.manifestRegistry,
+      getSnapshot: () => snapshot,
     };
   }
 
@@ -271,15 +238,4 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
 
 export function resolveModelIdNormalizationPolicies(snapshot: PluginMetadataSnapshot | undefined) {
   return snapshot ? collectManifestModelIdNormalizationPolicies(snapshot.plugins) : undefined;
-}
-
-export function materializeConfigForLoad(
-  _context: ConfigIoContext,
-  config: OpenClawConfig,
-  _effectiveConfigRaw: unknown,
-  manifestRegistry: PluginManifestRegistry | undefined,
-): OpenClawConfig {
-  return materializeRuntimeConfig(config, "load", {
-    manifestRegistry,
-  });
 }

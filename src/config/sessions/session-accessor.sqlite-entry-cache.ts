@@ -404,28 +404,23 @@ function publishSqliteSessionEntryCacheUpsert(
     }
     const generationIsContinuous =
       cached.validityToken.sessionNodesGeneration === writeGeneration.before;
-    const entries = new Map(cached.entries);
-    entries.set(row.session_key, entry);
-    const listProjections = new Map(cached.listProjections);
-    listProjections.delete(row.session_key);
-    const updatedAtByKey = new Map(cached.updatedAtByKey);
-    const knownKey = updatedAtByKey.has(row.session_key);
-    updatedAtByKey.set(row.session_key, row.updated_at);
+    // Borrowed cache views are synchronous, so the commit owner can update one
+    // row in place without cloning every session map on each active-run write.
+    cached.entries.set(row.session_key, entry);
+    cached.listProjections.delete(row.session_key);
+    const knownKey = cached.updatedAtByKey.has(row.session_key);
+    cached.updatedAtByKey.set(row.session_key, row.updated_at);
+    if (!knownKey) {
+      cached.keys = [...cached.keys, row.session_key].toSorted();
+    }
     // Advance only across the bracketed row write. A raw write before/after this bracket leaves
     // a generation gap, while the retained data_version still exposes external commits.
-    sessionEntryCaches.set(database.db, {
-      entries,
-      keys: knownKey ? cached.keys : [...cached.keys, row.session_key].toSorted(),
-      listEntries: createLazyListProjections(entries, listProjections),
-      listProjections,
-      updatedAtByKey,
-      validityToken: generationIsContinuous
-        ? {
-            ...cached.validityToken,
-            sessionNodesGeneration: writeGeneration.after,
-          }
-        : cached.validityToken,
-    });
+    if (generationIsContinuous) {
+      cached.validityToken = {
+        ...cached.validityToken,
+        sessionNodesGeneration: writeGeneration.after,
+      };
+    }
   });
 }
 

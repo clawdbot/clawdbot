@@ -1,5 +1,22 @@
 {
   "id": "codex",
+  "backupResources": [
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/tmp/arg0"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/.tmp/plugins"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/.tmp/bundled-marketplaces"
+    }
+  ],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": true
@@ -497,7 +514,7 @@
     },
     "computerUse.autoRepair": {
       "label": "Auto Repair",
-      "help": "When true, failed Computer Use live tests repair stale scoped Computer Use MCP children before retrying once.",
+      "help": "When true, failed Computer Use live tests reload the Codex-owned MCP runtime before retrying once.",
       "advanced": true
     },
     "computerUse.marketplaceSource": {

@@ -6,9 +6,10 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
-import type { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import type { QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import type { McpServerConfig } from "../../../../src/config/types.mcp.js";
+import { signalProcessTree } from "../../../../src/process/kill-tree.js";
 
 export const TEST_TIMEOUT_MS = 180_000;
 const WAIT_TIMEOUT_MS = 30_000;
@@ -20,11 +21,12 @@ export const MCP_SERVERS = ["sse", "stdio", "streamableHttp"] as const;
 const MCP_LABELS = { sse: "sse", stdio: "stdio", streamableHttp: "streamable-http" } as const;
 type McpServerName = keyof typeof MCP_LABELS;
 
-export type GatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
+export type GatewayHandle = QaGatewayChild;
 export type CapturedChild = {
   child: ChildProcess;
   exited: Promise<void>;
   logs: () => string;
+  signalTree: (signal: "SIGTERM" | "SIGKILL") => Promise<void>;
 };
 export type HttpFixture = CapturedChild & {
   pid: number;
@@ -66,10 +68,41 @@ function captureChild(child: ChildProcess): CapturedChild {
   child.stderr?.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-200_000);
   });
+  const pid = child.pid;
+  let termPromise: Promise<void> | undefined;
+  let killPromise: Promise<void> | undefined;
+  const signalTree = (signal: "SIGTERM" | "SIGKILL") => {
+    const existing = signal === "SIGKILL" ? killPromise : termPromise;
+    if (existing) {
+      return existing;
+    }
+    const signaled = new Promise<void>((resolve) => {
+      if (pid === undefined) {
+        resolve();
+        return;
+      }
+      signalProcessTree(pid, signal, {
+        detached: process.platform !== "win32",
+        onComplete: resolve,
+      });
+    });
+    if (signal === "SIGKILL") {
+      killPromise = signaled;
+    } else {
+      termPromise = signaled;
+    }
+    return signaled;
+  };
+  const exited = once(child, "exit").then(async () => {
+    // The root PID still identifies this task-owned tree at exit delivery. Reap
+    // descendants before any retained numeric process-group authority can age.
+    await signalTree("SIGKILL");
+  });
   return {
     child,
-    exited: once(child, "exit").then(() => {}),
+    exited,
     logs: () => `stdout:\n${stdout}\nstderr:\n${stderr}`,
+    signalTree,
   };
 }
 
@@ -107,45 +140,55 @@ export async function startHttpFixture(params: {
   const captured = captureChild(
     spawn(process.execPath, [params.fixturePath, "http", "--label-prefix", params.labelPrefix], {
       cwd: process.cwd(),
+      detached: process.platform !== "win32",
       env: params.env,
       stdio: ["ignore", "pipe", "pipe"],
     }),
   );
-  const pid = captured.child.pid;
-  if (pid === undefined) {
-    throw new Error("HTTP MCP fixture did not start");
+  let transferred = false;
+  let lines: ReturnType<typeof createInterface> | undefined;
+  try {
+    const pid = captured.child.pid;
+    if (pid === undefined) {
+      throw new Error("HTTP MCP fixture did not start");
+    }
+    if (!captured.child.stdout) {
+      throw new Error("HTTP MCP fixture stdout was not piped");
+    }
+    lines = createInterface({ input: captured.child.stdout });
+    const line = await Promise.race([
+      new Promise<string>((resolve) => {
+        lines?.once("line", resolve);
+      }),
+      captured.exited.then(() => {
+        throw new Error(`HTTP MCP fixture exited before readiness:\n${captured.logs()}`);
+      }),
+      delay(WAIT_TIMEOUT_MS, undefined, { ref: false }).then(() => {
+        throw new Error(`HTTP MCP fixture readiness timed out:\n${captured.logs()}`);
+      }),
+    ]);
+    const value: unknown = JSON.parse(line);
+    if (
+      !isRecord(value) ||
+      value.type !== FIXTURE_READY_TYPE ||
+      !isRecord(value.urls) ||
+      typeof value.urls.streamableHttp !== "string" ||
+      typeof value.urls.sse !== "string"
+    ) {
+      throw new Error(`HTTP MCP fixture returned invalid readiness: ${line}`);
+    }
+    transferred = true;
+    return {
+      ...captured,
+      pid,
+      urls: { streamableHttp: value.urls.streamableHttp, sse: value.urls.sse },
+    };
+  } finally {
+    lines?.close();
+    if (!transferred) {
+      await stopChild(captured);
+    }
   }
-  if (!captured.child.stdout) {
-    throw new Error("HTTP MCP fixture stdout was not piped");
-  }
-  const lines = createInterface({ input: captured.child.stdout });
-  const line = await Promise.race([
-    new Promise<string>((resolve) => {
-      lines.once("line", resolve);
-    }),
-    captured.exited.then(() => {
-      throw new Error(`HTTP MCP fixture exited before readiness:\n${captured.logs()}`);
-    }),
-    delay(WAIT_TIMEOUT_MS, undefined, { ref: false }).then(() => {
-      throw new Error(`HTTP MCP fixture readiness timed out:\n${captured.logs()}`);
-    }),
-  ]);
-  lines.close();
-  const value: unknown = JSON.parse(line);
-  if (
-    !isRecord(value) ||
-    value.type !== FIXTURE_READY_TYPE ||
-    !isRecord(value.urls) ||
-    typeof value.urls.streamableHttp !== "string" ||
-    typeof value.urls.sse !== "string"
-  ) {
-    throw new Error(`HTTP MCP fixture returned invalid readiness: ${line}`);
-  }
-  return {
-    ...captured,
-    pid,
-    urls: { streamableHttp: value.urls.streamableHttp, sse: value.urls.sse },
-  };
 }
 
 export function startNodeProcess(gatewayPort: number, nodeEnv: NodeJS.ProcessEnv): CapturedChild {
@@ -165,6 +208,7 @@ export function startNodeProcess(gatewayPort: number, nodeEnv: NodeJS.ProcessEnv
       ],
       {
         cwd: process.cwd(),
+        detached: process.platform !== "win32",
         env: nodeEnv,
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -177,15 +221,15 @@ export async function stopChild(captured: CapturedChild | undefined): Promise<vo
     await captured?.exited.catch(() => {});
     return;
   }
-  captured.child.kill("SIGTERM");
+  await captured.signalTree("SIGTERM");
   const graceful = await Promise.race([
     captured.exited.then(() => true),
     delay(10_000, false, { ref: false }),
   ]);
   if (!graceful) {
-    captured.child.kill("SIGKILL");
-    await captured.exited;
+    await captured.signalTree("SIGKILL");
   }
+  await captured.exited;
 }
 
 export function processIsAlive(pid: number): boolean {
@@ -262,7 +306,7 @@ export async function waitForNode(
   return node;
 }
 
-export function parseProbeResult(value: unknown): ProbeResult {
+export function parseNodeMcpTextRecord(value: unknown): Record<string, unknown> {
   const payload = isRecord(value) && isRecord(value.payload) ? value.payload : value;
   if (!isRecord(payload) || !Array.isArray(payload.content)) {
     throw new Error(`MCP result omitted content: ${JSON.stringify(value)}`);
@@ -274,13 +318,20 @@ export function parseProbeResult(value: unknown): ProbeResult {
     throw new Error(`MCP result omitted text: ${JSON.stringify(value)}`);
   }
   const parsed: unknown = JSON.parse(text.text);
+  if (!isRecord(parsed)) {
+    throw new Error(`MCP text was not an object: ${text.text}`);
+  }
+  return parsed;
+}
+
+export function parseProbeResult(value: unknown): ProbeResult {
+  const parsed = parseNodeMcpTextRecord(value);
   if (
-    !isRecord(parsed) ||
     typeof parsed.label !== "string" ||
     typeof parsed.marker !== "string" ||
     typeof parsed.pid !== "number"
   ) {
-    throw new Error(`MCP result had invalid probe data: ${text.text}`);
+    throw new Error(`MCP result had invalid probe data: ${JSON.stringify(parsed)}`);
   }
   return { label: parsed.label, marker: parsed.marker, pid: parsed.pid };
 }

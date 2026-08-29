@@ -8,7 +8,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   AgentSelectionRequiredError,
-  tryResolveSystemAgentTargetAgentId,
+  tryResolveAmbientOwnerAgentId,
 } from "../../agents/agent-scope-config.js";
 import {
   listAgentIds,
@@ -711,7 +711,7 @@ export const createDoctorHandlers = (
   memoryCoreRuntime: DoctorMemoryCoreRuntime = defaultMemoryCoreRuntime,
 ): GatewayRequestHandlers => ({
   "doctor.memory.status": async ({ respond, context, params }) => {
-    const omittedAgentId = tryResolveSystemAgentTargetAgentId(context.getRuntimeConfig());
+    const omittedAgentId = tryResolveAmbientOwnerAgentId(context.getRuntimeConfig());
     const resolved = resolveDoctorMemoryAgent(context, params, respond, omittedAgentId);
     if (!resolved) {
       return;

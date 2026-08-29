@@ -21,6 +21,7 @@ import type {
   SessionLogEntry,
   SessionLogRole,
   TimeSeriesPoint,
+  UsageContextDetail,
   UsageSessionEntry,
 } from "./types.ts";
 import { renderInsightList, renderUsageToggle, USAGE_TOKEN_CATEGORIES } from "./view-overview.ts";
@@ -79,7 +80,7 @@ function renderUsageRefreshStatus(
   status: PanelRefreshStatus,
   onRetry: () => void,
   detailKey: string,
-  kind: "timeline" | "conversation",
+  kind: "timeline" | "conversation" | "context",
 ) {
   return renderPanelRefreshStatus({
     status,
@@ -276,6 +277,8 @@ function renderSessionDetailPanel(
   onLogFilterHasToolsChange: (next: boolean) => void,
   onLogFilterQueryChange: (next: string) => void,
   onLogFilterClear: () => void,
+  context: UsageContextDetail,
+  onRetryContextWeight: () => void,
   contextExpanded: boolean,
   onToggleContextExpanded: () => void,
   onClose: () => void,
@@ -385,7 +388,8 @@ function renderSessionDetailPanel(
             hasRange ? timeSeriesCursorEnd : null,
           )}
           ${renderContextPanel(
-            session.contextWeight,
+            context,
+            onRetryContextWeight,
             usage,
             contextExpanded,
             onToggleContextExpanded,
@@ -622,7 +626,7 @@ function renderTimeSeriesCompact(
             const isOutside = hasSelection && (i < rangeStartIdx || i >= rangeEndIdx);
 
             if (!breakdownByType) {
-              return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${bh}" class="ts-bar${isOutside ? " dimmed" : ""}" rx="1"><title>${tooltip}</title></rect>`;
+              return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${bh}" class="ts-bar${isOutside ? " dimmed" : ""}" rx="1" data-tooltip=${tooltip} aria-label=${tooltip}></rect>`;
             }
             let yC = padding.top + chartHeight;
             const dim = isOutside ? " dimmed" : "";
@@ -634,7 +638,7 @@ function renderTimeSeriesCompact(
                 }
                 const sh = bh * (value / val);
                 yC -= sh;
-                return svg`<rect x="${x}" y="${yC}" width="${barWidth}" height="${sh}" class="ts-bar ${className}${dim}" rx="1"><title>${tooltip}</title></rect>`;
+                return svg`<rect x="${x}" y="${yC}" width="${barWidth}" height="${sh}" class="ts-bar ${className}${dim}" rx="1" data-tooltip=${tooltip} aria-label=${tooltip}></rect>`;
               })}
             `;
           })}
@@ -797,15 +801,27 @@ function renderTimeSeriesCompact(
 }
 
 function renderContextPanel(
-  contextWeight: UsageSessionEntry["contextWeight"],
+  { weight: contextWeight, loading, status }: UsageContextDetail,
+  onRetry: () => void,
   usage: UsageSessionEntry["usage"],
   expanded: boolean,
   onToggleExpanded: () => void,
 ) {
+  const refreshStatus = renderUsageRefreshStatus(
+    status,
+    onRetry,
+    "usage.details.systemPromptBreakdown",
+    "context",
+  );
   if (!contextWeight) {
     return html`
       <div class="context-details-panel">
-        <div class="usage-empty-block">${t("usage.details.noContextData")}</div>
+        ${refreshStatus}
+        ${status.error
+          ? nothing
+          : html`<div class="usage-empty-block">
+              ${t(loading ? "usage.loading.badge" : "usage.details.noContextData")}
+            </div>`}
       </div>
     `;
   }
@@ -832,7 +848,11 @@ function renderContextPanel(
       className: "files",
       labelKey: "usage.details.files",
       tokens: charsToTokens(
-        contextWeight.injectedWorkspaceFiles.reduce((sum, file) => sum + file.injectedChars, 0),
+        contextWeight.injectedWorkspaceFiles.reduce(
+          (sum, file) =>
+            file.injectionStatus === "native_unverified" ? sum : sum + file.injectedChars,
+          0,
+        ),
       ),
       entries: contextWeight.injectedWorkspaceFiles.map(({ name, injectedChars }) => ({
         name,
@@ -843,7 +863,12 @@ function renderContextPanel(
     className,
     labelKey,
     tokens,
-    entries: entries.toSorted((left, right) => right.chars - left.chars),
+    entries: entries.toSorted((left, right) => {
+      if (left.chars === null) {
+        return right.chars === null ? 0 : 1;
+      }
+      return right.chars === null ? -1 : right.chars - left.chars;
+    }),
   }));
   const categories = [
     {
@@ -864,6 +889,7 @@ function renderContextPanel(
 
   return html`
     <div class="context-details-panel">
+      ${refreshStatus}
       <div class="context-breakdown-header">
         <div class="card-title usage-section-title">
           ${t("usage.details.systemPromptBreakdown")}
@@ -915,7 +941,11 @@ function renderContextPanel(
                     ({ name, chars }) => html`
                       <div class="context-breakdown-item">
                         <span class="mono" title=${name}>${name}</span>
-                        <span class="muted">~${formatUsageTokens(charsToTokens(chars))}</span>
+                        <span class="muted"
+                          >${chars === null
+                            ? t("usage.common.unknown")
+                            : `~${formatUsageTokens(charsToTokens(chars))}`}</span
+                        >
                       </div>
                     `,
                   )}

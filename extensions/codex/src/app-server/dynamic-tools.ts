@@ -457,6 +457,8 @@ function normalizeAcceptedSessionSpawn(result: unknown): {
 
 /** Namespace attached to OpenClaw-owned dynamic tools exposed to Codex. */
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
+const CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS = 128;
+const CODEX_DYNAMIC_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/u;
 
 // Keep OpenClaw control-path tools directly callable even when Codex tool_search
 // is unavailable or resolves a connector-only universe. Developer instructions
@@ -545,7 +547,11 @@ export function createCodexDynamicToolBridge(params: {
     ...availableProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
   ]);
-  warnQuarantinedDynamicTools(quarantinedTools);
+  warnQuarantinedDynamicTools({
+    tools: quarantinedTools,
+    availableToolCount: availableTools.length,
+    registeredToolCount: registeredSpecTools.length,
+  });
   emitQuarantinedDynamicToolDiagnostics(quarantinedTools, params.hookContext);
   const telemetry: CodexDynamicToolBridge["telemetry"] = {
     didSendViaMessagingTool: false,
@@ -819,7 +825,10 @@ export function createCodexDynamicToolBridge(params: {
           },
           terminalType,
         );
-        withDynamicToolTranscriptDetails(response, result.details);
+        withDynamicToolTranscriptDetails(
+          response,
+          asOptionalRecord(sanitizeToolResult(result))?.details,
+        );
         withDiagnosticFailureDisposition(response, resultFailureKind);
         const blocksSourceReplyTermination = hasExplicitNonSourceMessageRoute(
           executedArgs,
@@ -1237,6 +1246,28 @@ function readCodexDynamicToolDescriptor(
         },
       };
     }
+    const trimmedName = rawName.trim();
+    let nameViolation: string | undefined;
+    if (!trimmedName) {
+      nameViolation = `${rawName}.name must not be empty`;
+    } else if (trimmedName !== rawName) {
+      nameViolation = `${rawName}.name must not have leading or trailing whitespace`;
+    } else if (!CODEX_DYNAMIC_TOOL_NAME_PATTERN.test(rawName)) {
+      nameViolation = `${rawName}.name must match ^[a-zA-Z0-9_-]+$`;
+    } else if (rawName.length > CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS) {
+      nameViolation = `${rawName}.name must be at most ${CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS} characters`;
+    } else if (rawName === "mcp" || rawName.startsWith("mcp__")) {
+      nameViolation = `${rawName}.name is reserved by Codex app-server`;
+    }
+    if (nameViolation) {
+      return {
+        ok: false,
+        diagnostic: {
+          tool: rawName,
+          violations: [nameViolation],
+        },
+      };
+    }
     name = rawName;
   } catch {
     return {
@@ -1274,18 +1305,24 @@ function readCodexDynamicToolDescriptor(
   return { ok: true, name, description, parameters };
 }
 
-function warnQuarantinedDynamicTools(tools: readonly CodexDynamicToolSchemaQuarantine[]): void {
-  if (tools.length === 0) {
+function warnQuarantinedDynamicTools(params: {
+  tools: readonly CodexDynamicToolSchemaQuarantine[];
+  availableToolCount: number;
+  registeredToolCount: number;
+}): void {
+  if (params.tools.length === 0) {
     return;
   }
   const unique = new Map<string, readonly string[]>();
-  for (const tool of tools) {
+  for (const tool of params.tools) {
     unique.set(tool.tool, tool.violations);
   }
   embeddedAgentLog.warn(
-    `codex app-server quarantined ${unique.size} dynamic ${unique.size === 1 ? "tool" : "tools"} with unsupported input schemas: ${[...unique.keys()].join(", ")}`,
+    `codex app-server quarantined ${unique.size} unsupported dynamic tool ${unique.size === 1 ? "definition" : "definitions"}: ${[...unique.keys()].join(", ")}; retained ${params.availableToolCount} available and ${params.registeredToolCount} registered tools`,
     {
       tools: [...unique.entries()].map(([tool, violations]) => ({ tool, violations })),
+      availableToolCount: params.availableToolCount,
+      registeredToolCount: params.registeredToolCount,
     },
   );
 }

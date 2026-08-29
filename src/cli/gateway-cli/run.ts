@@ -55,6 +55,7 @@ import {
   formatGatewayPidList,
 } from "../../infra/gateway-processes.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
+import { isTailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -478,6 +479,7 @@ function resolveGatewayLockErrorExitCode(err: unknown): number {
 
 function resolveGatewayStartupFailureExitCode(err: unknown): number {
   return isInvalidConfigError(err) ||
+    isTailscaleRouteOwnershipConflictError(err) ||
     findOpenClawAgentDatabaseMediaMigrationRequiredError(err) ||
     findOpenClawStateDatabaseSchemaMigrationRequiredError(err)
     ? EXIT_CONFIG_ERROR
@@ -1182,6 +1184,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const startLoop = async () =>
     await runGatewayLoop({
       runtime: defaultRuntime,
+      ownsProcessLifecycle: true,
       lockPort: port,
       healthHost,
       beginBoot,
@@ -1191,6 +1194,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
         startupConfigSnapshotReadForNextStart = undefined;
         return await startGatewayServer(port, {
           bind,
+          ...(activeBootId ? { bootId: activeBootId } : {}),
           auth: authOverride,
           tailscale: tailscaleOverride,
           startupStartedAt,

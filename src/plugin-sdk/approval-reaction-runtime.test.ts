@@ -217,13 +217,22 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
   });
 
   it("builds canonical exec reaction prompts without presentation controls", () => {
-    const payload = buildApprovalReactionPromptPayloadForRequest({
-      request: execRequest,
+    const content = buildApprovalReactionPendingContentForRequest({
+      request: {
+        ...execRequest,
+        request: {
+          ...execRequest.request,
+          scope: { kind: "payment", amount: "49.99", currency: "EUR", target: "Stripe" },
+        },
+      },
       nowMs: 1_000,
     });
+    const payload = content.reactionPayload;
 
     expect(payload.text).toContain("**Exec approval required**\n**ID:** exec-approval-123");
     expect(payload.text).toContain("**Pending command:**\n```sh\ntouch /tmp/foo\n```");
+    expect(payload.text).toContain("**Scope:** Pay 49.99 EUR to Stripe");
+    expect(content.manualFallbackPayload.text).toContain("Scope: Pay 49.99 EUR to Stripe");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny");
     expect(payload.text).toContain("Allow Once: /approve exec-approval-123 allow-once");
     expect(payload.text).toContain("Allow Always: /approve exec-approval-123 allow-always");
@@ -287,6 +296,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
         request: {
           ...pluginRequest.request,
           allowedDecisions: ["allow-once", "deny"],
+          scope: { kind: "external-post", target: "github", visibility: "public" },
         },
       },
       nowMs: 1_000,
@@ -294,6 +304,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
 
     expect(payload.text).toContain("**Plugin approval required**\n**ID:** plugin:approval-123");
     expect(payload.text).toContain("**Title:** Use 1Password");
+    expect(payload.text).toContain("**Scope:** Post publicly to github");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
     expect(payload.text).not.toContain("♾️ Allow Always");
     expect(payload.text).toContain("Allow Once: /approve plugin:approval-123 allow-once");

@@ -3,11 +3,10 @@ import util from "node:util";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { isVerbose } from "../global-state.js";
-import { readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { formatJsonConsoleLine } from "./json-console-line.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
-import { getLogger } from "./logger.js";
+import { getLogger, readLoggerConfig } from "./logger.js";
 import { redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
@@ -55,25 +54,19 @@ function resolveConsoleSettings(): ConsoleSettings {
     return { level: "silent", style: normalizeConsoleStyle(undefined) };
   }
 
-  const cfg = (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
+  const cfg = (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggerConfig();
   const level = envLevel ?? normalizeConsoleLevel(cfg?.consoleLevel);
   const style = normalizeConsoleStyle(cfg?.consoleStyle);
   return { level, style };
 }
 
-function consoleSettingsChanged(a: ConsoleSettings | null, b: ConsoleSettings) {
-  if (!a) {
-    return true;
-  }
-  return a.level !== b.level || a.style !== b.style;
-}
-
 export function getConsoleSettings(): ConsoleLoggerSettings {
-  const settings = resolveConsoleSettings();
   const cached = loggingState.cachedConsoleSettings as ConsoleSettings | null;
-  if (!cached || consoleSettingsChanged(cached, settings)) {
-    loggingState.cachedConsoleSettings = settings;
+  if (cached) {
+    return cached;
   }
+  const settings = resolveConsoleSettings();
+  loggingState.cachedConsoleSettings = settings;
   return loggingState.cachedConsoleSettings as ConsoleSettings;
 }
 
@@ -142,6 +135,10 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
   "Session already closed",
   "Session already open",
 ] as const;
+
+// Node's default warning printer prefixes its single console.error call. Its
+// internal caller proves ownership so matching application errors stay ERROR.
+const NODE_PROCESS_WARNING_PREFIX = `(${process.release.name}:${process.pid}) `;
 
 function shouldSuppressConsoleMessage(message: string): boolean {
   if (SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix))) {
@@ -286,14 +283,6 @@ export function enableConsoleCapture(): void {
     }
   }
 
-  let logger: ReturnType<typeof getLogger> | null = null;
-  const getLoggerLazy = () => {
-    if (!logger) {
-      logger = getLogger();
-    }
-    return logger;
-  };
-
   const original = {
     log: console.log,
     info: console.info,
@@ -312,21 +301,35 @@ export function enableConsoleCapture(): void {
   const forward = (level: LogLevel, orig: (...args: unknown[]) => void) => {
     const forwardedConsoleCall = (...args: unknown[]) => {
       const formatted = util.format(...args);
+      let routedLevel = level;
+      if (
+        level === "error" &&
+        formatted.startsWith(NODE_PROCESS_WARNING_PREFIX) &&
+        typeof util.getCallSites === "function"
+      ) {
+        const caller = util.getCallSites(2, { sourceMap: false })[1];
+        if (
+          caller?.functionName === "writeOut" &&
+          caller.scriptName === "node:internal/process/warning"
+        ) {
+          routedLevel = "warn";
+        }
+      }
       if (shouldSuppressConsoleMessage(formatted)) {
         return;
       }
       try {
-        const resolvedLogger = getLoggerLazy();
+        const resolvedLogger = getLogger();
         // Map console levels to file logger
-        if (level === "trace") {
+        if (routedLevel === "trace") {
           resolvedLogger.trace(formatted);
-        } else if (level === "debug") {
+        } else if (routedLevel === "debug") {
           resolvedLogger.debug(formatted);
-        } else if (level === "info") {
+        } else if (routedLevel === "info") {
           resolvedLogger.info(formatted);
-        } else if (level === "warn") {
+        } else if (routedLevel === "warn") {
           resolvedLogger.warn(formatted);
-        } else if (level === "error" || level === "fatal") {
+        } else if (routedLevel === "error" || routedLevel === "fatal") {
           resolvedLogger.error(formatted);
         } else {
           resolvedLogger.info(formatted);
@@ -335,7 +338,7 @@ export function enableConsoleCapture(): void {
         // never block console output on logging failures
       }
       writeFormattedConsoleOutput({
-        level,
+        level: routedLevel,
         args,
         formatted,
         write: orig,

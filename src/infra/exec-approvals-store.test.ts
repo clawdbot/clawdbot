@@ -261,18 +261,20 @@ describe("exec approvals SQLite store", () => {
     expect(commit).not.toHaveBeenCalled();
   });
 
-  it("removes one agent and preserves unrelated policy", async () => {
+  it("removes one agent and preserves wildcard and unrelated policy", async () => {
     saveExecApprovals({
       version: 1,
       agents: {
-        removed: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/old" }] },
+        "*": { security: "deny" },
+        main: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/old" }] },
         kept: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/keep" }] },
       },
     });
-    seedAgentDeletionJournal("removed");
+    seedAgentDeletionJournal("main");
 
-    await expect(withAgentExecApprovalsRemoved("removed", async () => "ok")).resolves.toBe("ok");
+    await expect(withAgentExecApprovalsRemoved("main", async () => "ok")).resolves.toBe("ok");
     expect(loadExecApprovals().agents).toEqual({
+      "*": { security: "deny" },
       kept: expect.objectContaining({
         allowlist: [expect.objectContaining({ pattern: "/usr/bin/keep" })],
       }),

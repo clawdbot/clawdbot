@@ -2,10 +2,10 @@
  * Builds embedded-agent payload objects from attempt inputs and outcomes.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { buildCodexLoginRecovery } from "../../../auto-reply/codex-login-recovery.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   createHeartbeatToolResponsePayload,
-  getHeartbeatToolNotificationText,
   type HeartbeatToolResponse,
 } from "../../../auto-reply/heartbeat-tool-response.js";
 import {
@@ -23,7 +23,6 @@ import {
   isSilentReplyPayloadText,
   SILENT_REPLY_TOKEN,
 } from "../../../auto-reply/tokens.js";
-import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -35,6 +34,7 @@ import {
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
 } from "../../../shared/text/assistant-visible-text.js";
+import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -44,6 +44,7 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../embedded-agent-helpers.js";
+import { SYNTHESIZED_TIMEOUT_ERROR_TEXT } from "../../embedded-agent-helpers/error-text.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -54,11 +55,11 @@ import {
   extractAssistantVisibleText,
   sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
+import { isTimeoutErrorMessage } from "../../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
-import type { ToolErrorSummary, ToolRecoverySummary } from "../../tool-error-summary.js";
+import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { buildFailureWarning } from "./tool-error-warning.js";
-import { hasExplicitMutatingToolFailureAcknowledgement } from "./tool-failure-acknowledgement.js";
 
 function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
@@ -137,7 +138,6 @@ export function buildEmbeddedRunPayloads(params: {
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
-  lastToolRecovery?: ToolRecoverySummary;
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
   isHeartbeatTrigger?: boolean;
@@ -151,7 +151,7 @@ export function buildEmbeddedRunPayloads(params: {
   reasoningLevel?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
-  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
+  suppressToolErrorWarnings?: boolean;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSentTargets?: MessagingToolSend[];
@@ -160,6 +160,7 @@ export function buildEmbeddedRunPayloads(params: {
   agentId?: string;
   runId?: string;
   runAborted?: boolean;
+  deferAssistantTimeoutError?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
 }): ReplyPayload[] {
@@ -169,7 +170,7 @@ export function buildEmbeddedRunPayloads(params: {
     params.lastToolError.mutatingAction === true
       ? { toolName: params.lastToolError.toolName }
       : undefined;
-  if (params.heartbeatToolResponse && !heartbeatTerminalToolFailure && !params.lastToolRecovery) {
+  if (params.heartbeatToolResponse && !heartbeatTerminalToolFailure) {
     return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
   }
   // Internal source replies always need transcript/UI mirrors. Only a
@@ -220,19 +221,25 @@ export function buildEmbeddedRunPayloads(params: {
   const rawErrorMessage = lastAssistantNeedsErrorSurface
     ? normalizeOptionalString(assistantForPayload?.errorMessage)
     : undefined;
+  const oauthRefreshFailure = rawErrorMessage ? classifyOAuthRefreshFailure(rawErrorMessage) : null;
+  const codexLoginRecovery = buildCodexLoginRecovery({
+    provider: oauthRefreshFailure?.provider ?? params.provider,
+    oauthReason: oauthRefreshFailure?.reason,
+  });
   const errorText =
     assistantForPayload && lastAssistantNeedsErrorSurface
       ? suppressFailureArtifacts
         ? undefined
         : lastAssistantErrored || rawErrorMessage
-          ? formatUserFacingAssistantErrorText(assistantForPayload, {
+          ? (codexLoginRecovery?.hint ??
+            formatUserFacingAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
               provider: params.provider,
               providerOwner: params.providerOwner,
               model: params.model,
               authMode: params.authMode,
-            })
+            }))
           : formatAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
@@ -257,8 +264,17 @@ export function buildEmbeddedRunPayloads(params: {
   const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
   const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
   const genericErrorText = "The AI service returned an error. Please try again.";
-  if (errorText) {
-    replyItems.push({ text: errorText, isError: true });
+  const deferAssistantTimeoutError =
+    params.deferAssistantTimeoutError === true &&
+    rawErrorMessage !== undefined &&
+    isTimeoutErrorMessage(rawErrorMessage) &&
+    errorText === SYNTHESIZED_TIMEOUT_ERROR_TEXT;
+  if (errorText && !deferAssistantTimeoutError) {
+    replyItems.push({
+      text: errorText,
+      isError: true,
+      ...(codexLoginRecovery ? { presentation: codexLoginRecovery.presentation } : {}),
+    });
   }
   const reasoningText =
     suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
@@ -365,15 +381,10 @@ export function buildEmbeddedRunPayloads(params: {
                 ? [fallbackAnswerText]
                 : []
         ).filter((text) => !shouldSuppressRawErrorText(text));
-  let hasUserFacingAssistantReply =
-    completedSourceReplyViaMessageTool || params.heartbeatToolResponse?.notify === true;
-  const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
-  let hasUserFacingFailureAcknowledgement =
-    params.heartbeatToolResponse?.notify === true &&
-    (params.heartbeatToolResponse.outcome === "blocked" ||
-      hasExplicitMutatingToolFailureAcknowledgement(
-        getHeartbeatToolNotificationText(params.heartbeatToolResponse),
-      ));
+  let hasUserFacingReply =
+    Boolean(errorText) ||
+    completedSourceReplyViaMessageTool ||
+    params.heartbeatToolResponse?.notify === true;
   for (const text of answerTexts) {
     const {
       text: cleanedText,
@@ -408,25 +419,12 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push(
       ttsFacts ? setReplyPayloadMetadata(replyPayload, { tts: ttsFacts }) : replyPayload,
     );
-    hasUserFacingAssistantReply = true;
-    if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
-      hasUserFacingFailureAcknowledgement = true;
-    }
-  }
-  if (params.lastToolRecovery) {
-    const toolLabel = formatToolAggregate(params.lastToolRecovery.toolName, undefined, {
-      markdown: useMarkdown,
-    });
-    replyItems.push({ text: `✅ ${toolLabel} succeeded after retry.` });
+    hasUserFacingReply = true;
   }
   if (params.lastToolError) {
-    // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
-    // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
     const failureWarning = buildFailureWarning({
       lastToolError: params.lastToolError,
-      hasUserFacingReply: hasUserFacingAssistantReply,
-      hasUserFacingErrorReply,
-      hasUserFacingFailureAcknowledgement,
+      hasUserFacingReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
       verboseLevel: params.verboseLevel,
@@ -448,7 +446,7 @@ export function buildEmbeddedRunPayloads(params: {
           text: failureWarning.text,
           isError: true,
           nonTerminalToolErrorWarning:
-            hasUserFacingAssistantReply && failureWarning.nonTerminalToolErrorWarning,
+            hasUserFacingReply && failureWarning.nonTerminalToolErrorWarning,
         });
       }
     }
@@ -468,6 +466,12 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (item.media?.length) {
         payload.mediaUrls = item.media;
+      }
+      if (item.attachments?.length) {
+        payload.attachments = item.attachments;
+      }
+      if (item.trustedLocalMedia !== undefined) {
+        payload.trustedLocalMedia = item.trustedLocalMedia;
       }
       if (item.isError !== undefined) {
         payload.isError = item.isError;
@@ -551,6 +555,9 @@ export function buildEmbeddedRunPayloads(params: {
           }
           if (item.sourceReplyMirror.idempotencyKey) {
             sourceReplyTranscriptMirror.idempotencyKey = item.sourceReplyMirror.idempotencyKey;
+          }
+          if (item.sourceReplyMirror.transcriptOwner) {
+            sourceReplyTranscriptMirror.transcriptOwner = true;
           }
           setReplyPayloadMetadata(payload, {
             sourceReplyTranscriptMirror,

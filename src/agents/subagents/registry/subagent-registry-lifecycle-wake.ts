@@ -1,4 +1,5 @@
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   runWithGatewayIndependentRootWorkContinuation,
   runWithGatewayIndependentRootWorkAdmission,
@@ -81,6 +82,7 @@ const completeRequesterSettleWakeBatch = (
     delivery: structuredClone(entry.delivery),
     requesterSettleWake: structuredClone(entry.requesterSettleWake),
     retireAfterRequesterTurn: entry.retireAfterRequesterTurn,
+    suppressCompletionDelivery: entry.suppressCompletionDelivery,
   }));
   const settledDeliveries: SubagentRunRecord[] = [];
   for (const [runId, entry] of entries) {
@@ -104,6 +106,7 @@ const completeRequesterSettleWakeBatch = (
         delivery.lastError = outcome.error ?? outcome.reason ?? "requester settle wake failed";
         delivery.deliveredAt = undefined;
         delivery.announcedAt = undefined;
+        entry.suppressCompletionDelivery = true;
       }
       settledDeliveries.push(entry);
     }
@@ -129,6 +132,7 @@ const completeRequesterSettleWakeBatch = (
       entry.delivery = previous?.delivery;
       entry.requesterSettleWake = previous?.requesterSettleWake;
       entry.retireAfterRequesterTurn = previous?.retireAfterRequesterTurn;
+      entry.suppressCompletionDelivery = previous?.suppressCompletionDelivery;
     });
     throw error;
   }
@@ -155,6 +159,7 @@ const completeRequesterSettleWakeBatch = (
       context.deleteRequesterSettleWakeTimer(runId);
     }
     if (entry.requesterSettleWake === undefined || !params.runs.has(runId)) {
+      clearGatewayContextResolver(entry);
       params.resumedRuns.delete(runId);
       params.clearPendingLifecycleError(runId);
     }
@@ -485,6 +490,7 @@ export function completeCleanupBookkeeping(
       cleanupParams.entry.terminalOwner = previousTerminalOwner;
       throw error;
     }
+    clearGatewayContextResolver(cleanupParams.entry);
     scheduleCleanupTails({ allowRetiredRow: false, isDeleteCleanup });
     retryDeferredCompletedAnnounces(cleanupParams.runId);
     return;
@@ -506,6 +512,7 @@ export function completeCleanupBookkeeping(
         params.runs.set(cleanupParams.runId, cleanupParams.entry);
         throw error;
       }
+      clearGatewayContextResolver(cleanupParams.entry);
       scheduleCleanupTails({ allowRetiredRow: true, isDeleteCleanup });
       retryDeferredCompletedAnnounces(cleanupParams.runId);
       return;
@@ -549,6 +556,7 @@ export function completeCleanupBookkeeping(
       cleanupParams.entry.terminalOwner = previousTerminalOwner;
       throw error;
     }
+    clearGatewayContextResolver(cleanupParams.entry);
   }
   scheduleCleanupTails({ allowRetiredRow: false, isDeleteCleanup });
   retryDeferredCompletedAnnounces(cleanupParams.runId);

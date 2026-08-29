@@ -214,7 +214,6 @@ export function createOpenAIResponsesAssistantOutput(
 
 type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
-  supportsDeveloperRole?: boolean;
   replayReasoningItems?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
@@ -289,21 +288,24 @@ function convertResponsesMessagesWithStyle(
     authProfileId: options?.authProfileId,
     mode: options?.replayMode,
   });
-  const transformedMessages = providerStyle
-    ? transformProviderMessages(replayPlan.messages, model, normalizeToolCallId)
-    : transformTransportMessages(replayPlan.messages, model, normalizeToolCallId, {
-        normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds,
-        preserveUnframedToolResults: replayPlan.preserveUnframedToolResults,
-      });
+  const transformMessages = (source: Context["messages"]) =>
+    providerStyle
+      ? transformProviderMessages(source, model, normalizeToolCallId)
+      : transformTransportMessages(source, model, normalizeToolCallId, {
+          normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds,
+          preserveUnframedToolResults: replayPlan.preserveUnframedToolResults,
+        });
+  const transformedMessages = transformMessages(replayPlan.messages);
+  const transformedRetainedMessages = replayPlan.retainedMessages
+    ? transformMessages(replayPlan.retainedMessages)
+    : [];
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push(
       buildResponsesInputMessage(
         model.reasoning &&
-          (providerStyle
-            ? (model.compat as { supportsDeveloperRole?: boolean } | undefined)
-                ?.supportsDeveloperRole !== false
-            : options?.supportsDeveloperRole !== false)
+          (model.compat as { supportsDeveloperRole?: boolean } | undefined)
+            ?.supportsDeveloperRole !== false
           ? "developer"
           : "system",
         [
@@ -317,11 +319,35 @@ function convertResponsesMessagesWithStyle(
       ),
     );
   }
-  if (replayPlan.compaction) {
-    messages.push(replayPlan.compaction);
+  let replayMessages = replayPlan.compaction
+    ? [...transformedRetainedMessages, replayPlan.compaction, ...transformedMessages]
+    : transformedMessages;
+  // Responses continuation requires the complete prior input before tool output.
+  // Anchor context after the user or its compaction checkpoint, not each tool round.
+  // Other transports retain their tail placement for cross-turn prompt caching.
+  const isCarrier = (message: (typeof replayMessages)[number]) =>
+    "role" in message && message.role === "user" && message.runtimeContextCarrier === true;
+  const carriers = replayMessages.filter(isCarrier);
+  if (carriers.length > 0) {
+    const stableMessages = replayMessages.filter((message) => !isCarrier(message));
+    const insertionIndex =
+      stableMessages.findLastIndex((message) =>
+        "role" in message ? message.role === "user" : message.type === "compaction",
+      ) + 1;
+    if (insertionIndex > 0) {
+      replayMessages = [
+        ...stableMessages.slice(0, insertionIndex),
+        ...carriers,
+        ...stableMessages.slice(insertionIndex),
+      ];
+    }
   }
   let msgIndex = 0;
-  for (const msg of transformedMessages) {
+  for (const msg of replayMessages) {
+    if (!("role" in msg)) {
+      messages.push(msg);
+      continue;
+    }
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         messages.push(
@@ -362,13 +388,19 @@ function convertResponsesMessagesWithStyle(
             block.thinkingSignature &&
             (providerStyle || block.thinkingSignature.startsWith("{"))
           ) {
-            // Transport conversion skips openai-completions provenance tags; the provider
-            // conversion retains its shipped parse behavior for every non-empty signature.
-            const reasoningItem = JSON.parse(
-              block.thinkingSignature,
-            ) as ReplayableResponseReasoningItem;
+            // Persisted signatures are provider-owned data. Skip malformed or unrelated
+            // shapes so one corrupt history item cannot prevent the next request.
+            let reasoningItem: unknown;
+            try {
+              reasoningItem = JSON.parse(block.thinkingSignature);
+            } catch {
+              continue;
+            }
+            if (!isRecord(reasoningItem) || reasoningItem.type !== "reasoning") {
+              continue;
+            }
             const replayableReasoningItem = prepareOpenAIResponsesReasoningItemForReplay(
-              reasoningItem,
+              reasoningItem as ReplayableResponseReasoningItem,
               replayContext,
               readOpenAIResponsesReasoningReplayBlockMetadata(isRecord(block) ? block : {}),
               providerStyle ? { preserveUnattributedEncryptedContent: true } : undefined,

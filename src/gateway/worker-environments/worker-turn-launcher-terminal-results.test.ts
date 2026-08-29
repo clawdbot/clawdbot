@@ -110,6 +110,7 @@ describe("worker turn launcher terminal results", () => {
         async () => ({ meta: { durationMs: 1 } }),
       ),
     ).rejects.toMatchObject({
+      name: "WorkerWorkspaceReconciliationError",
       message:
         "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: gateway TLS fingerprint mismatch",
     });

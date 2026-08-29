@@ -1,5 +1,6 @@
 import type { WorkerDispatchPlacementStore } from "./placement-dispatch-failure.js";
 import { placementTurnOwner } from "./placement-record.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   deleteStagedWorkerWorkspaceResult,
@@ -9,7 +10,7 @@ import {
 } from "./workspace-result-staging.js";
 
 export const FORCED_WORKER_ABANDONMENT_ERROR =
-  "Cloud worker result abandoned by forced operator teardown";
+  "Worker result abandoned by forced operator teardown";
 
 async function tryResolveWorkspacePath(
   resolveWorkspacePath: (placement: {
@@ -98,15 +99,7 @@ export async function forceAbandonWorkerEnvironment(params: {
   for (const pending of placements.listPendingWorkspaceResults()) {
     if (pending.environmentId === environmentId) {
       const placement = placements.get(pending.sessionId);
-      if (
-        (placement?.state === "active" || placement?.state === "draining") &&
-        placement.environmentId === pending.environmentId &&
-        placement.activeOwnerEpoch === pending.ownerEpoch &&
-        placement.generation ===
-          (placement.state === "active"
-            ? pending.placementGeneration
-            : pending.placementGeneration + 1)
-      ) {
+      if (isCurrentWorkerWorkspacePendingResultOwner(placement, pending)) {
         const finalRef = pending.stagedResultRef ?? workerWorkspaceResultRef(pending.claimId);
         stagedResultCleanups.push({
           placement,
@@ -156,6 +149,7 @@ export async function forceAbandonWorkerEnvironment(params: {
         environmentId: current.environmentId,
         ownerEpoch: current.activeOwnerEpoch,
         expectedGeneration: current.generation,
+        forceLocalClaim: true,
       });
     }
     if (current && current.state !== "failed") {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
+import { applySkillProposal, proposeCreateSkill } from "../../skills/workshop/service.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
@@ -21,10 +21,22 @@ describe("skill_workshop collection restore", () => {
       prefix: "openclaw-skill-collection-restore-state-",
     });
     cleanups.push(async () => await testState.cleanup());
-    const workspaceDir = await tempDirs.make("openclaw-skill-collection-restore-");
-    await writeWorkspaceSkills(workspaceDir, [
-      { name: "duplicate", description: "Duplicate procedure" },
-    ]);
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-skill-collection-restore-"),
+    );
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      env: testState.env,
+      name: "duplicate",
+      description: "Duplicate procedure",
+      content: "# Duplicate procedure\n",
+    });
+    await applySkillProposal({
+      workspaceDir,
+      env: testState.env,
+      proposalId: proposal.record.id,
+      expectedRevisionHash: proposal.revisionHash,
+    });
     const reviewTool = createSkillWorkshopTool({
       workspaceDir,
       env: testState.env,

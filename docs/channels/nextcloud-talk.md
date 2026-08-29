@@ -160,6 +160,7 @@ Provider options:
 - `channels.nextcloud-talk.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.nextcloud-talk.streaming.block.enabled`: enable or disable block streaming for this channel.
 - `channels.nextcloud-talk.streaming.block.coalesce`: block streaming coalesce tuning.
+- `channels.nextcloud-talk.replyToMode`: reply-reference mode (`off | first | all | batched`; default: `all`). Named accounts can override it with `channels.nextcloud-talk.accounts.<id>.replyToMode`.
 - `channels.nextcloud-talk.responsePrefix`: outbound reply prefix.
 - `channels.nextcloud-talk.markdown.tables`: markdown table rendering mode (`off | bullets | code | block`).
 - `channels.nextcloud-talk.mediaMaxMb`: inbound media cap (MB).

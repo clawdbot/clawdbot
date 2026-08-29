@@ -198,12 +198,14 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
         expect(response?.status()).toBe(200);
-        await page.getByRole("radio", { name: "UI", exact: true }).click();
+        await page.getByRole("tab", { name: "UI", exact: true }).click();
 
-        const disclosure = page.locator(".config-advanced-ghost");
+        const disclosure = page.locator("details.config-advanced-disclosure");
         await expect.poll(() => disclosure.count()).toBe(1);
-        await expect.poll(() => disclosure.textContent()).toContain("2 advanced settings hidden");
-        await expect.poll(() => page.locator(".config-show-advanced").count()).toBe(1);
+        await expect.poll(() => disclosure.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => disclosure.locator(":scope > summary").textContent())
+          .toContain("Advanced settings");
         await expect
           .poll(() => page.getByText("Show Advanced Settings", { exact: true }).count())
           .toBe(0);
@@ -217,11 +219,8 @@ suite.define(() => {
           });
         }
 
-        await disclosure.click();
-        const hideAdvanced = page.locator(".config-advanced-divider__toggle");
-        await expect.poll(() => hideAdvanced.count()).toBe(1);
-        await expect.poll(() => hideAdvanced.textContent()).toContain("Hide Advanced");
-        await expect.poll(() => disclosure.count()).toBe(0);
+        await disclosure.locator(":scope > summary").click();
+        await expect.poll(() => disclosure.getAttribute("open")).not.toBeNull();
 
         if (captureUiProofEnabled) {
           await page.screenshot({
@@ -231,8 +230,8 @@ suite.define(() => {
           });
         }
 
-        await hideAdvanced.click();
-        await expect.poll(() => disclosure.count()).toBe(1);
+        await disclosure.locator(":scope > summary").click();
+        await expect.poll(() => disclosure.getAttribute("open")).toBeNull();
         await page.waitForTimeout(750);
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         expect(await gateway.getRequests("config.set")).toHaveLength(0);
@@ -263,7 +262,7 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
         expect(response?.status()).toBe(200);
-        await page.getByRole("radio", { name: "UI", exact: true }).click();
+        await page.getByRole("tab", { name: "UI", exact: true }).click();
 
         const themeInput = page
           .locator(".settings-row")

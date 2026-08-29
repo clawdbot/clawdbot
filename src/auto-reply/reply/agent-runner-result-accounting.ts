@@ -61,6 +61,10 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     storePath,
   } = context;
   let { activeSessionEntry } = context;
+  const expectedSession = {
+    sessionId: activeSessionEntry?.sessionId ?? followupRun.run.sessionId,
+    lifecycleRevision: activeSessionEntry?.lifecycleRevision,
+  };
 
   const runResult = execution.result;
   const fallbackProvider = execution.resolved.provider;
@@ -230,20 +234,32 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     runResult.meta.agentMeta.contextTokens > 0
       ? Math.floor(runResult.meta.agentMeta.contextTokens)
       : undefined;
+  const resolvedContextTokens =
+    runtimeContextTokens === undefined
+      ? resolveContextTokensForModel({
+          cfg,
+          provider: providerUsed,
+          model: modelUsed,
+          allowAsyncLoad: false,
+        })
+      : undefined;
   const contextTokensUsed =
     runtimeContextTokens ??
-    resolveContextTokensForModel({
-      cfg,
-      provider: providerUsed,
-      model: modelUsed,
-      fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
-      allowAsyncLoad: false,
-    }) ??
+    resolvedContextTokens ??
+    activeSessionEntry?.contextTokens ??
     DEFAULT_CONTEXT_TOKENS;
+  const contextTokensSource =
+    runResult.meta?.agentMeta?.contextTokensSource ??
+    (runtimeContextTokens !== undefined
+      ? "runtime"
+      : resolvedContextTokens !== undefined
+        ? "resolved-v1"
+        : undefined);
 
   await persistRunSessionUsage({
     storePath,
     sessionKey,
+    expectedSession,
     cfg,
     agentDir: followupRun.run.agentDir,
     usage,
@@ -257,11 +273,14 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     modelUsed,
     providerUsed,
     contextTokensUsed,
+    contextTokensSource,
+    contextBudgetStatus: runResult.meta?.agentMeta?.contextBudgetStatus,
     systemPromptReport: runResult.meta?.systemPromptReport,
     cliSessionId,
     cliSessionBinding,
     clearCliSessionBinding,
     preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
+    agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
   });
   if (!isHeartbeat && !preserveUserFacingSessionState && !fallbackExhausted) {
     // A completed run that executed the persisted selection consumes the
@@ -279,6 +298,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   return {
     activeSessionEntry,
     autoCompactionCount,
+    expectedSession,
     configuredFallbackModel,
     contextTokensUsed,
     didLogHeartbeatStrip,
@@ -366,6 +386,7 @@ export async function accountFollowupTurn(params: {
     const count = await incrementRunCompactionCount({
       agentId: turn.queued.run.agentId,
       cfg: turn.config,
+      expectedSession: accounting.expectedSession,
       sessionEntry: turn.session.current(),
       sessionStore: turn.sessionStore,
       sessionKey,

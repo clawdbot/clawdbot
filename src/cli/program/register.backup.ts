@@ -23,6 +23,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { addGatewayClientOptions } from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
+import { parseStrictPositiveIntOption } from "./helpers.js";
 
 /** Register backup create/verify subcommands. */
 export function registerBackupCommand(program: Command) {
@@ -230,7 +231,12 @@ function registerBackupGitCommands(backup: Command): void {
     .command("log")
     .description("Show Git backup commits")
     .requiredOption("--repository <path>", "Git backup repository directory")
-    .option("--limit <n>", "Maximum commits to show", (value) => Number.parseInt(value, 10), 20)
+    .option(
+      "--limit <n>",
+      "Maximum commits to show",
+      (value) => parseStrictPositiveIntOption(value, "--limit"),
+      20,
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {

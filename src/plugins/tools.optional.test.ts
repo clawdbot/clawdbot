@@ -24,7 +24,7 @@ const resolveCompatibleRuntimePluginRegistryMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 const loadContextMocks = vi.hoisted(() => ({
   actualResolve: undefined as
-    | typeof import("./runtime/load-context.js").resolvePluginRuntimeLoadContext
+    | typeof import("./runtime/load-context.resolve.js").resolvePluginRuntimeLoadContext
     | undefined,
   resolve: vi.fn(),
 }));
@@ -43,8 +43,8 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (params: unknown) => applyPluginAutoEnableMock(params),
 }));
 
-vi.mock("./runtime/load-context.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime/load-context.js")>();
+vi.mock("./runtime/load-context.resolve.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime/load-context.resolve.js")>();
   loadContextMocks.actualResolve = actual.resolvePluginRuntimeLoadContext;
   return {
     ...actual,
@@ -61,7 +61,7 @@ let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegist
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
-let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
+let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata.test-support.js").setCurrentPluginMetadataSnapshot;
 let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
 let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
 
@@ -551,7 +551,8 @@ describe("resolvePluginTools optional tools", () => {
     ({ getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
       await import("./runtime/gateway-request-scope.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
-    ({ setCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-snapshot.js"));
+    ({ setCurrentPluginMetadataSnapshot } =
+      await import("./current-plugin-metadata.test-support.js"));
     ({ resetPluginToolDescriptorCacheForTest } = await import("./tools.test-fixtures.js"));
   });
 
@@ -1035,6 +1036,7 @@ describe("resolvePluginTools optional tools", () => {
     const context = createContext();
     const config = context.config;
     const registry = createToolRegistry([createOptionalDemoEntry()]);
+    const preparedConfig = structuredClone(config);
     const metadataSnapshot = installToolManifestSnapshots({
       config,
       plugins: [
@@ -1048,11 +1050,11 @@ describe("resolvePluginTools optional tools", () => {
       ...createResolveToolsParams({ context, toolAllowlist: ["optional_tool"] }),
       preparedRuntime: {
         loadContext: {
-          rawConfig: config,
-          config,
-          activationSourceConfig: config,
+          rawConfig: preparedConfig,
+          config: preparedConfig,
+          activationSourceConfig: preparedConfig,
           autoEnabledReasons: {},
-          workspaceDir: "/tmp",
+          workspaceDir: "/gateway/plugin-runtime",
           env: process.env,
           logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           manifestRegistry: metadataSnapshot.manifestRegistry as never,
@@ -1985,40 +1987,6 @@ describe("resolvePluginTools optional tools", () => {
     expect(registry.diagnostics).toHaveLength(0);
   });
 
-  it("keeps the Discord-owned show_widget contextual to Discord sessions", () => {
-    const registry = setRegistry([
-      {
-        pluginId: "discord",
-        optional: false,
-        source: "/tmp/discord.js",
-        names: ["show_widget"],
-        factory: (context) =>
-          (context as { messageChannel?: string }).messageChannel === "discord"
-            ? { ...makeTool("show_widget"), description: "discord implementation" }
-            : null,
-      },
-    ]);
-
-    const discordTools = resolvePluginTools(
-      createResolveToolsParams({
-        context: { ...createContext(), messageChannel: "discord" },
-        clientCaps: ["inline-widgets"],
-      }),
-    );
-    expect(discordTools.map((tool) => [tool.name, tool.description])).toEqual([
-      ["show_widget", "discord implementation"],
-    ]);
-
-    const webTools = resolvePluginTools(
-      createResolveToolsParams({
-        context: { ...createContext(), messageChannel: "webchat" },
-        clientCaps: ["inline-widgets"],
-      }),
-    );
-    expect(webTools).toHaveLength(0);
-    expect(registry.diagnostics).toHaveLength(0);
-  });
-
   it("isolates tools with malformed required client capabilities", () => {
     const registry = setRegistry([
       {
@@ -2302,6 +2270,47 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it("executes cached plugin tools from the published generation without rescanning manifests", async () => {
+    const context = createContext();
+    const runtimeConfig: OpenClawConfig = {
+      ...context.config,
+      channels: { telegram: { enabled: false } },
+    };
+    const getRuntimeConfig = vi.fn(() => runtimeConfig);
+    const toolContext = { ...context, getRuntimeConfig };
+    const factory = vi.fn(() => makeTool("cached_generation_tool"));
+    setRegistry(
+      [
+        createNamedToolEntry("cache-generation", "cached_generation_tool", {
+          factory,
+        }),
+      ],
+      context.config,
+    );
+
+    resolvePluginTools(createResolveToolsParams({ context: toolContext }));
+    const [cachedTool] = resolvePluginTools(createResolveToolsParams({ context: toolContext }));
+    expect(cachedTool?.name).toBe("cached_generation_tool");
+    expect(getRuntimeConfig).toHaveBeenCalledTimes(2);
+
+    const manifestRegistry = await import("./manifest-registry-installed.js");
+    const manifestScan = vi
+      .spyOn(manifestRegistry, "loadPluginManifestRegistryForInstalledIndex")
+      .mockImplementation(() => {
+        throw new Error("cached plugin execution rescanned manifests");
+      });
+    try {
+      await expect(cachedTool?.execute("call", {}, undefined)).resolves.toEqual({
+        content: [{ type: "text", text: "ok" }],
+      });
+      expect(manifestScan).not.toHaveBeenCalled();
+      expect(getRuntimeConfig).toHaveBeenCalledTimes(2);
+      expect(factory).toHaveBeenCalledTimes(2);
+    } finally {
+      manifestScan.mockRestore();
+    }
+  });
+
   it("keeps cached ordinary plugin tools free of network provenance", async () => {
     const factory = vi.fn(() => makeTool("cached_ordinary_tool"));
     setRegistry([
@@ -2386,7 +2395,7 @@ describe("resolvePluginTools optional tools", () => {
 
     let result = await expectDefined(controls[0], "Code Mode exec tool").execute(
       "code-call-cached-network",
-      { code: 'return await tools.callValue("cached_network_tool", {});' },
+      { code: "return await cached_network_tool({});" },
     );
     for (
       let index = 0;
@@ -3081,7 +3090,7 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("does not widen active registry reuse to non-matching plugin tool owners", () => {
+  it("filters non-matching plugin tool owners while reusing the active registry", () => {
     installToolManifestSnapshot({
       config: createContext().config,
       plugin: createToolManifest("optional-demo", ["optional_tool"]),
@@ -3118,7 +3127,7 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(heavyFactory).not.toHaveBeenCalled();
     expect(resolveCompatibleRuntimePluginRegistryMock).toHaveBeenCalledOnce();
-    expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("does not let disabled bundled tool owners poison explicit runtime allowlists", () => {
@@ -3178,7 +3187,7 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(tools, ["memory_search", "memory_get"]);
     expect(memorySearchFactory).toHaveBeenCalledTimes(1);
     expect(resolveCompatibleRuntimePluginRegistryMock).toHaveBeenCalledOnce();
-    expectLoaderSelectedOnlyPluginIds(["memory-core"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("keeps a cold-loaded standalone registry scoped through tool callbacks", async () => {

@@ -105,6 +105,7 @@ import {
 } from "./suite-launch.runtime.js";
 import { resolveQaSuiteScenarioChannel, resolveQaSuiteScenarioChannels } from "./suite-planning.js";
 import {
+  readCompletedQaSuiteSummaryFile,
   readQaSuiteFailedOrSkippedScenarioCountFromFile,
   resolveQaReportOnlyOptionalScenarioNames as resolveQaReportOnlyOptionalScenarioNamesFromCatalog,
 } from "./suite-summary.js";
@@ -1066,58 +1067,31 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
         : {}),
     ...(runtimePair ? { runtimePair } : {}),
   });
-  switch (runtimeResult.executionKind) {
-    case "suite": {
-      const result = runtimeResult.result;
-      process.stdout.write(`QA suite report: ${result.reportPath}\n`);
-      process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
-      process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
-      const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
-        result.summaryPath,
-        {
-          optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
-            scenarioIds,
-            explicitScenarioSelection: opts.explicitScenarioSelection,
-          }),
-          requireExecutedScenario: allowFailures,
-        },
-      );
-      if (!allowFailures && blockingScenarioCount > 0) {
-        process.exitCode = 1;
-      }
-      return {
-        ...result,
-        expectedCells: runtimeResult.expectedCells,
-        observedCells: runtimeResult.observedCells,
-      };
-    }
-    case "flow": {
-      const result = runtimeResult.result;
-      process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
-      process.stdout.write(`QA suite report: ${result.reportPath}\n`);
-      process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
-      process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
-      const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
-        result.summaryPath,
-        {
-          optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
-            scenarioIds,
-            explicitScenarioSelection: opts.explicitScenarioSelection,
-          }),
-          requireExecutedScenario: allowFailures,
-        },
-      );
-      if (!allowFailures && blockingScenarioCount > 0) {
-        process.exitCode = 1;
-      }
-      return {
-        ...result,
-        expectedCells: runtimeResult.expectedCells,
-        observedCells: runtimeResult.observedCells,
-      };
-    }
+  const result = runtimeResult.result;
+  if (runtimeResult.executionKind === "flow") {
+    process.stdout.write(`QA suite watch: ${runtimeResult.result.watchUrl}\n`);
   }
-  return undefined;
+  process.stdout.write(`QA suite report: ${result.reportPath}\n`);
+  process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
+  process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
+  const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+    result.summaryPath,
+    {
+      optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
+        scenarioIds,
+        explicitScenarioSelection: opts.explicitScenarioSelection,
+      }),
+      requireExecutedScenario: allowFailures,
+    },
+  );
+  if (!allowFailures && blockingScenarioCount > 0) {
+    process.exitCode = 1;
+  }
+  return {
+    ...result,
+    expectedCells: runtimeResult.expectedCells,
+    observedCells: runtimeResult.observedCells,
+  };
 }
 
 export async function runQaParityReportCommand(opts: {
@@ -1145,9 +1119,9 @@ export async function runQaParityReportCommand(opts: {
       throw new Error("--runtime-axis requires --summary.");
     }
     const summaryPath = path.resolve(repoRoot, opts.summary);
-    const summary = JSON.parse(
-      await fs.readFile(summaryPath, "utf8"),
-    ) as QaRuntimeParitySuiteSummary;
+    const summary = (await readCompletedQaSuiteSummaryFile(
+      summaryPath,
+    )) as QaRuntimeParitySuiteSummary;
     const reportPayload: QaRuntimeParityReport = buildQaRuntimeParityReport({ summary });
     const report = renderQaRuntimeParityMarkdownReport(reportPayload);
     const reportPath = path.join(outputDir, "qa-runtime-parity-report.md");
@@ -1190,12 +1164,12 @@ export async function runQaParityReportCommand(opts: {
   }
   const candidateSummaryPath = path.resolve(repoRoot, opts.candidateSummary);
   const baselineSummaryPath = path.resolve(repoRoot, opts.baselineSummary);
-  const candidateSummary = JSON.parse(
-    await fs.readFile(candidateSummaryPath, "utf8"),
-  ) as QaParitySuiteSummary;
-  const baselineSummary = JSON.parse(
-    await fs.readFile(baselineSummaryPath, "utf8"),
-  ) as QaParitySuiteSummary;
+  const candidateSummary = (await readCompletedQaSuiteSummaryFile(
+    candidateSummaryPath,
+  )) as QaParitySuiteSummary;
+  const baselineSummary = (await readCompletedQaSuiteSummaryFile(
+    baselineSummaryPath,
+  )) as QaParitySuiteSummary;
 
   const comparison = buildQaAgenticParityComparison({
     candidateLabel: opts.candidateLabel?.trim() || QA_FRONTIER_PARITY_CANDIDATE_LABEL,
@@ -1289,9 +1263,9 @@ export async function runQaCoverageReportCommand(opts: {
       throw new Error("--match cannot be combined with --tools.");
     }
     const summary = opts.summary?.trim()
-      ? (JSON.parse(
-          await fs.readFile(path.resolve(repoRoot, opts.summary), "utf8"),
-        ) as QaToolCoverageSuiteSummary)
+      ? ((await readCompletedQaSuiteSummaryFile(
+          path.resolve(repoRoot, opts.summary),
+        )) as QaToolCoverageSuiteSummary)
       : undefined;
     const report = buildQaToolCoverageReport({ scenarios, summary });
     body = opts.json

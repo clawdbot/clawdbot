@@ -23,6 +23,7 @@ import {
   mapPreparedOutboundAcceptedPayloads,
   type PreparedOutboundBatch,
 } from "./prepared-batch.js";
+import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 export function restoreQueuedDeliveryCustody(
   params: DeliverOutboundPayloadsParams,
@@ -127,8 +128,7 @@ export async function stageAndEnqueueOutboundDelivery(
       preparedBatch: queuedPreparedBatch,
       renderedBatchPlan,
       threadId: params.threadId,
-      replyToId: params.replyToId,
-      replyToMode: params.replyToMode,
+      reply: normalizeOutboundReplyFacts(params),
       formatting: params.formatting,
       identity: params.identity,
       bestEffort: params.bestEffort,

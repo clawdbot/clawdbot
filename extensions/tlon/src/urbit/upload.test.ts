@@ -47,29 +47,32 @@ describe("uploadImageFromUrl", () => {
     vi.clearAllMocks();
   });
 
-  it("fetches image and calls uploadFile, returns uploaded URL", async () => {
-    const { buffer } = await setupSuccessfulUpload({
-      uploadedUrl: "https://memex.tlon.network/uploaded.png",
-    });
+  it.each([undefined, 1024, MAX_IMAGE_BYTES * 2])(
+    "uploads with the effective configured cap %s",
+    async (cap) => {
+      const { buffer } = await setupSuccessfulUpload({
+        uploadedUrl: "https://memex.tlon.network/uploaded.png",
+      });
 
-    const result = await uploadImageFromUrl("https://example.com/image.png");
+      const result = await uploadImageFromUrl("https://example.com/image.png", cap);
 
-    expect(result).toBe("https://memex.tlon.network/uploaded.png");
-    expect(mockReadRemoteMediaBuffer).toHaveBeenCalledWith({
-      url: "https://example.com/image.png",
-      maxBytes: MAX_IMAGE_BYTES,
-      responseHeaderTimeoutMs: 120_000,
-      readIdleTimeoutMs: 30_000,
-      ssrfPolicy: undefined,
-      requestInit: { method: "GET" },
-    });
-    expect(mockUploadFile).toHaveBeenCalledTimes(1);
-    const uploadParams = requireUploadParams();
-    expect(uploadParams.contentType).toBe("image/png");
-    const blob = uploadParams.blob;
-    expect(blob).toBeInstanceOf(Blob);
-    expect(Buffer.from(await blob!.arrayBuffer())).toEqual(buffer);
-  });
+      expect(result).toBe("https://memex.tlon.network/uploaded.png");
+      expect(mockReadRemoteMediaBuffer).toHaveBeenCalledWith({
+        url: "https://example.com/image.png",
+        maxBytes: Math.min(cap ?? MAX_IMAGE_BYTES, MAX_IMAGE_BYTES),
+        responseHeaderTimeoutMs: 120_000,
+        readIdleTimeoutMs: 30_000,
+        ssrfPolicy: undefined,
+        requestInit: { method: "GET" },
+      });
+      expect(mockUploadFile).toHaveBeenCalledTimes(1);
+      const uploadParams = requireUploadParams();
+      expect(uploadParams.contentType).toBe("image/png");
+      const blob = uploadParams.blob;
+      expect(blob).toBeInstanceOf(Blob);
+      expect(Buffer.from(await blob!.arrayBuffer())).toEqual(buffer);
+    },
+  );
 
   it("returns original URL if fetch fails", async () => {
     mockReadRemoteMediaBuffer.mockRejectedValue(new Error("HTTP 404"));
@@ -77,6 +80,13 @@ describe("uploadImageFromUrl", () => {
     const result = await uploadImageFromUrl("https://example.com/image.png");
 
     expect(result).toBe("https://example.com/image.png");
+  });
+
+  it("does not embed an unchecked URL when a configured cap rejects its bytes", async () => {
+    const error = new Error("payload exceeds maxBytes 1024");
+    mockReadRemoteMediaBuffer.mockRejectedValue(error);
+    await expect(uploadImageFromUrl("https://example.com/image.png", 1024)).rejects.toBe(error);
+    expect(mockUploadFile).not.toHaveBeenCalled();
   });
 
   it("returns original URL when the remote image exceeds the image cap", async () => {
@@ -92,14 +102,17 @@ describe("uploadImageFromUrl", () => {
     expect(mockUploadFile).not.toHaveBeenCalled();
   });
 
-  it("returns original URL if upload fails", async () => {
-    await setupSuccessfulUpload();
-    mockUploadFile.mockRejectedValue(new Error("Upload failed"));
+  it.each([undefined, 1024])(
+    "retains the bounded original URL if upload fails with cap %s",
+    async (cap) => {
+      await setupSuccessfulUpload();
+      mockUploadFile.mockRejectedValue(new Error("Upload failed"));
 
-    const result = await uploadImageFromUrl("https://example.com/image.png");
+      const result = await uploadImageFromUrl("https://example.com/image.png", cap);
 
-    expect(result).toBe("https://example.com/image.png");
-  });
+      expect(result).toBe("https://example.com/image.png");
+    },
+  );
 
   it("rejects non-http(s) URLs", async () => {
     const result = await uploadImageFromUrl("file:///etc/passwd");

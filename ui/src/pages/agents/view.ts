@@ -14,6 +14,7 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
+import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
   renderSettingsEmpty,
@@ -27,10 +28,10 @@ import {
   normalizeAgentLabel,
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
+import type { GitHubIdentityController } from "./github-identity-controller.ts";
 import type { AgentIdentityDraft } from "./panels-overview.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
 import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
@@ -122,6 +123,7 @@ type AgentsProps = {
   agentSkills: AgentSkillsState;
   toolsCatalog: ToolsCatalogState;
   toolsEffective: ToolsEffectiveState;
+  githubIdentity: GitHubIdentityController;
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
   modelCatalog: ModelCatalogEntry[];
@@ -265,13 +267,19 @@ export function renderAgents(props: AgentsProps) {
               : nothing}
             ${selectedAgent
               ? html`
-                  <button
-                    type="button"
-                    class="btn btn--sm btn--ghost"
-                    @click=${() => void copyToClipboard(selectedAgent.id)}
-                  >
-                    ${t("agents.copyId")}
-                  </button>
+                  ${keyed(
+                    selectedAgent.id,
+                    html`
+                      <button
+                        type="button"
+                        class="btn btn--sm btn--ghost"
+                        @click=${(event: Event) =>
+                          void handleCopyButton(event, selectedAgent.id, t("agents.copyId"))}
+                      >
+                        <span data-copy-label>${t("agents.copyId")}</span>
+                      </button>
+                    `,
+                  )}
                   <button
                     type="button"
                     class="btn btn--sm btn--ghost"
@@ -328,6 +336,7 @@ export function renderAgents(props: AgentsProps) {
               )}
               <div
                 id="agent-panel"
+                class="settings-stack"
                 role="tabpanel"
                 aria-labelledby=${`agents-tab-${props.activePanel}`}
               >
@@ -402,6 +411,7 @@ export function renderAgents(props: AgentsProps) {
                       runtimeSessionKey: props.runtimeSessionKey,
                       runtimeSessionMatchesSelectedAgent: props.runtimeSessionMatchesSelectedAgent,
                       canUpdateConfig: props.access.canUpdateConfig,
+                      githubIdentity: props.githubIdentity,
                       onProfileChange: props.onToolsProfileChange,
                       onOverridesChange: props.onToolsOverridesChange,
                       onConfigReload: props.onConfigReload,

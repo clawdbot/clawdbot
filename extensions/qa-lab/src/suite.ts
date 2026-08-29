@@ -9,8 +9,12 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaEvidenceTiming, QaEvidenceSummaryJson } from "./evidence-summary.js";
-import type { QaCliBackendAuthMode, QaGatewayChildCommand } from "./gateway-child.js";
-import { startQaGatewayChild } from "./gateway-child.js";
+import type {
+  QaCliBackendAuthMode,
+  QaGatewayChildCommand,
+  QaGatewayChild,
+  QaGatewayStopResult,
+} from "./gateway-child.js";
 import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import type { QaLabServerHandle, QaLabServerStartParams } from "./lab-server.types.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
@@ -272,16 +276,21 @@ export async function runQaFlowSuiteCleanupPlan(params: {
   closeWebSessions?: () => Promise<void>;
   cleanupTransportBeforeGatewayStop: () => Promise<void>;
   cleanupTransportAfterGatewayStop: () => Promise<void>;
-  stopGateway?: () => Promise<void>;
+  stopGateway: () => Promise<QaGatewayStopResult>;
   disposeAgentHarnesses: () => Promise<void>;
   stopProvider?: () => Promise<void>;
   finishLab: () => Promise<void>;
 }) {
-  const stopGateway = params.stopGateway;
-  let gatewayStopped = !stopGateway;
+  let gatewayStopped = false;
   const stopGatewayAndMark = async () => {
-    await stopGateway?.();
-    gatewayStopped = true;
+    const result = await params.stopGateway();
+    gatewayStopped = result.process !== "unconfirmed";
+    if (result.errors.length) {
+      throw new AggregateError(
+        result.errors,
+        `qa gateway child cleanup failed: ${result.errors.map((error) => String(error)).join("; ")}`,
+      );
+    }
   };
   const cleanupTransportAfterGatewayStop = async () => {
     if (gatewayStopped) {
@@ -293,7 +302,7 @@ export async function runQaFlowSuiteCleanupPlan(params: {
     // Drain transport HTTP work before stopping the gateway; otherwise a completed suite can
     // emit an unhandled response-close rejection during delivery.
     { phase: "transport before gateway stop", run: params.cleanupTransportBeforeGatewayStop },
-    ...(stopGateway ? [{ phase: "gateway stop", run: stopGatewayAndMark }] : []),
+    { phase: "gateway stop", run: stopGatewayAndMark },
     // Never release a credential-backed transport until gateway teardown proves
     // that the isolated runtime reached its terminal boundary.
     { phase: "transport after gateway stop", run: cleanupTransportAfterGatewayStop },
@@ -308,24 +317,26 @@ export function throwQaSuiteCleanupErrors(params: {
   runFailed: boolean;
   runError: unknown;
   result?: QaSuiteResult;
+  scenarios?: readonly QaSuiteScenarioResult[];
   evidenceWritten?: boolean;
 }) {
   if (params.cleanupFailures.length === 0) {
     return;
   }
   const result = params.result;
-  const scenarios = result?.scenarios ?? [];
+  const scenarios = result?.scenarios ?? params.scenarios ?? [];
+  const scenariosCompleted = result !== undefined || params.scenarios !== undefined;
   const failed = scenarios.filter((scenario) => scenario.status === "fail").length;
   const skipped = scenarios.filter((scenario) => scenario.status === "skip").length;
   const passed = scenarios.length - failed - skipped;
-  const cleanupHeadline = !result
+  const cleanupHeadline = !scenariosCompleted
     ? "QA suite cleanup failed before scenarios completed"
     : failed === 0 && skipped === 0
       ? "QA scenarios passed, but cleanup failed"
       : "QA scenarios completed, but cleanup failed";
   const message = [
     params.runFailed ? "QA suite and cleanup failed" : cleanupHeadline,
-    ...(result
+    ...(scenariosCompleted
       ? [
           `scenario counts: passed=${passed} failed=${failed} skipped=${skipped} total=${scenarios.length}`,
         ]
@@ -427,7 +438,7 @@ export async function runQaSuiteScenarioDefinitionForRuntime(
   });
 }
 
-type QaGatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type QaGatewayHandle = QaGatewayChild;
 
 export function buildQaSuiteRuntimeMetrics(params: {
   startedAt: Date;

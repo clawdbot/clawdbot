@@ -162,7 +162,13 @@ case "$TIMESTAMP_MODE" in
     timestamp_arg="--timestamp=none"
     ;;
   auto)
-    if [[ "$IDENTITY" == *"Developer ID Application"* ]]; then
+    identity_name="$IDENTITY"
+    if [[ "$IDENTITY" =~ ^[[:xdigit:]]{40}$ ]]; then
+      # A hash selector conceals the certificate class required for notarization timestamps.
+      identity_name="$(security find-identity -p codesigning -v 2>/dev/null \
+        | awk -v hash="$IDENTITY" 'toupper($2) == toupper(hash) { print }')"
+    fi
+    if [[ "$identity_name" == *"Developer ID Application"* ]]; then
       timestamp_arg="--timestamp"
     fi
     ;;
@@ -329,11 +335,21 @@ verify_team_ids() {
   fi
 }
 
+assert_no_elevation_cua_driver() {
+  [[ "$SIGNING_VARIANT" == "elevation-host" ]] || return 0
+  local cua_driver="$APP_BUNDLE/Contents/Resources/cua-driver"
+  if [[ -e "$cua_driver" || -L "$cua_driver" ]]; then
+    echo "ERROR: Elevation host must not contain bundled CUA driver: $cua_driver" >&2
+    exit 1
+  fi
+}
+
 # Sign-time twin of verify_elevation_app in mac-elevation-host.sh, which asserts the same identity
 # invariants but requires an already notarized and stapled bundle. Dropping this check defers every
 # elevation identity failure until after an Apple notarization submission has been spent.
 verify_elevation_signature() {
   [[ "$SIGNING_VARIANT" == "elevation-host" ]] || return 0
+  assert_no_elevation_cua_driver
 
   local actual_team
   actual_team="$(team_id_for "$APP_BUNDLE" || true)"
@@ -368,6 +384,7 @@ verify_elevation_signature() {
 }
 
 # Sign bundled helper binaries before signing the app bundle.
+assert_no_elevation_cua_driver
 MLX_TTS_HELPER="$APP_BUNDLE/Contents/MacOS/openclaw-mlx-tts"
 if [ -f "$MLX_TTS_HELPER" ]; then
   echo "Signing MLX TTS helper"; sign_plain_item "$MLX_TTS_HELPER"

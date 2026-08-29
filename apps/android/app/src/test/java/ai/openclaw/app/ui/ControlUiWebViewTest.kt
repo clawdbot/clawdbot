@@ -6,6 +6,7 @@ import android.content.res.Configuration
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -15,6 +16,7 @@ import androidx.compose.runtime.setValue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -59,6 +61,34 @@ class ControlUiWebViewTest {
     val lightWebView = requireNotNull(findWebView(controller.get().window.decorView))
     assertNotSame(darkWebView, lightWebView)
     assertWebViewAppearance(lightWebView, dark = false)
+
+    controller.pause().stop().destroy()
+    idleMainLooper()
+  }
+
+  @Test
+  @Config(sdk = [31])
+  fun rendererLossDetachesDeadWebViewAndCreatesReplacement() {
+    val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+    controller.get().setContent {
+      OpenClawTheme(themeMode = AppearanceThemeMode.System) {
+        TestControlUiWebView()
+      }
+    }
+    idleMainLooper()
+    val deadWebView = requireNotNull(findWebView(controller.get().window.decorView))
+
+    assertTrue(
+      deadWebView.webViewClient.onRenderProcessGone(
+        deadWebView,
+        CrashedRenderProcessDetail,
+      ),
+    )
+    assertNull(deadWebView.parent)
+    idleMainLooper()
+
+    val replacement = requireNotNull(findWebView(controller.get().window.decorView))
+    assertNotSame(deadWebView, replacement)
 
     controller.pause().stop().destroy()
     idleMainLooper()
@@ -170,6 +200,13 @@ class ControlUiWebViewTest {
       shadowOf(Looper.getMainLooper()).idle()
     }
   }
+}
+
+@Suppress("DEPRECATION")
+private object CrashedRenderProcessDetail : RenderProcessGoneDetail() {
+  override fun didCrash(): Boolean = true
+
+  override fun rendererPriorityAtExit(): Int = WebView.RENDERER_PRIORITY_IMPORTANT
 }
 
 @androidx.compose.runtime.Composable

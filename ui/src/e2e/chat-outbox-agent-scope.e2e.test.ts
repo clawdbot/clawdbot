@@ -91,12 +91,16 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       await gateway.setOnline(false);
-      await page.locator(".agent-chat__offline-hint").waitFor({ timeout: 10_000 });
+      await page
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
+        .waitFor({ timeout: 10_000 });
 
       const prompt = "deliver the work outbox independently";
       await composer.fill(prompt);
       await page.getByRole("button", { name: "Send message" }).click();
-      const queue = page.locator(".chat-queue");
+      const queue = page.locator(".chat-group.user:has(.chat-queue__item)", { hasText: prompt });
       await queue.getByText("Waiting for reconnect").waitFor({ timeout: 10_000 });
       if (artifactDir) {
         await page.screenshot({
@@ -113,7 +117,9 @@ suite.define(() => {
       });
       await gateway.setOnline(true);
       await page
-        .locator(".agent-chat__offline-hint")
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
         .waitFor({ state: "detached", timeout: 10_000 });
       await page.evaluate(async () => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {

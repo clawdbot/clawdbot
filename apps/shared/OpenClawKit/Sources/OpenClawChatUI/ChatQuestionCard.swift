@@ -256,11 +256,17 @@ public final class OpenClawQuestionCardModel: Identifiable {
     }
 
     public func terminalSummaryText(for question: Question) -> String {
-        switch self.status() {
+        // Secret questions never echo answer text into the persisted timeline;
+        // the record only carries a synthetic marker, but masking here keeps the
+        // summary honest for every secret producer, not just store-bound ones.
+        let echoedAnswers = question.issecret == true
+            ? nil
+            : self.answerValues(questionID: question.questionid)?.joined(separator: ", ")
+        return switch self.status() {
         case .answered:
-            self.answerValues(questionID: question.questionid)?.joined(separator: ", ") ?? String(localized: "Answered")
+            echoedAnswers ?? String(localized: "Answered")
         case .answeredElsewhere:
-            self.answerValues(questionID: question.questionid)?.joined(separator: ", ")
+            echoedAnswers
                 ?? String(localized: "Answered elsewhere")
         case .cancelled:
             String(localized: "Skipped")
@@ -377,16 +383,30 @@ struct OpenClawQuestionCard: View {
                 self.optionRow(question: question, option: option, now: now)
             }
             if question.options.isEmpty || question.isother == true {
-                TextField(
-                    "Other answer",
-                    text: Binding(
-                        get: { self.model.otherText[question.questionid] ?? "" },
-                        set: { self.model.setOtherText(questionID: question.questionid, value: $0) }),
-                    axis: .vertical)
-                    .font(OpenClawChatTypography.body)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(self.model.status(at: now) != .pending)
-                    .accessibilityLabel("Other answer")
+                if question.issecret == true {
+                    // Secret answers must never render on screen: masked entry, no
+                    // autocorrect/prediction capture, same submit path as free text.
+                    SecureField(
+                        "Secret value",
+                        text: Binding(
+                            get: { self.model.otherText[question.questionid] ?? "" },
+                            set: { self.model.setOtherText(questionID: question.questionid, value: $0) }))
+                        .font(OpenClawChatTypography.body)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(self.model.status(at: now) != .pending)
+                        .accessibilityLabel("Secret value")
+                } else {
+                    TextField(
+                        "Other answer",
+                        text: Binding(
+                            get: { self.model.otherText[question.questionid] ?? "" },
+                            set: { self.model.setOtherText(questionID: question.questionid, value: $0) }),
+                        axis: .vertical)
+                        .font(OpenClawChatTypography.body)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(self.model.status(at: now) != .pending)
+                        .accessibilityLabel("Other answer")
+                }
             }
         }
         #if os(macOS)
@@ -553,6 +573,17 @@ extension OpenClawChatViewModel {
     private func refreshQuestions(generation refreshGeneration: UInt64, retryIndex: Int) async {
         guard refreshGeneration == self.questionRefreshGeneration else { return }
         let stateRevision = self.questionStateRevision
+        // Released 2026.7.x gateways predate question.list and reject it with
+        // "missing scope: operator.admin" (authorization runs before dispatch),
+        // so an unadvertised method must resolve as unavailable without a call.
+        if await self.transport.gatewayAdvertisesMethod("question.list") == false {
+            guard self.questionRefreshSnapshotIsCurrent(
+                generation: refreshGeneration,
+                stateRevision: stateRevision)
+            else { return }
+            self.clearPendingQuestionsForUnavailableList()
+            return
+        }
         do {
             let records = try await self.transport.listQuestions()
             guard self.questionRefreshSnapshotIsCurrent(

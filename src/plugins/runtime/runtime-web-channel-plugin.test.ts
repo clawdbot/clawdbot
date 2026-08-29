@@ -1,7 +1,13 @@
 // Runtime web-channel plugin tests cover web channel plugin activation and runtime behavior.
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+
+const tempDirs = createTempDirTracker();
 
 afterEach(() => {
+  tempDirs.cleanup();
   vi.doUnmock("./runtime-plugin-boundary.js");
   vi.resetModules();
 });
@@ -27,29 +33,58 @@ describe("runtime web channel plugin", () => {
     authDir = "/tmp/openclaw-profile-auth";
     expect(resolveWebChannelAuthDir()).toBe("/tmp/openclaw-profile-auth");
     expect(resolveDefaultWebAuthDir).toHaveBeenCalledTimes(2);
-    expect(resolvePluginRuntimeRecordByEntryBaseNames).toHaveBeenCalledOnce();
   });
 
-  it("reuses the prepared heavy runtime before resolving plugin metadata again", async () => {
-    const extractText = vi.fn((value: string) => value);
-    const startWebLoginWithQr = vi.fn(async () => "started");
-    const resolvePluginRuntimeRecordByEntryBaseNames = vi.fn(() => ({
-      origin: "bundled",
-      source: "test",
-    }));
-    vi.doMock("./runtime-plugin-boundary.js", () => ({
-      loadPluginBoundaryModule: () => ({ extractText, startWebLoginWithQr }),
-      resolvePluginRuntimeModulePath: () => "/tmp/runtime-api.js",
-      resolvePluginRuntimeRecordByEntryBaseNames,
-    }));
+  it.each(["light", "heavy"] as const)(
+    "reloads replaced %s runtime artifacts and dependencies after plugin lifecycle clears",
+    async (kind) => {
+      const pluginRoot = fs.realpathSync(tempDirs.make("openclaw-web-runtime-replacement-"));
+      const modulePath = path.join(
+        pluginRoot,
+        kind === "light" ? "light-runtime-api.js" : "runtime-api.js",
+      );
+      const dependencyPath = path.join(pluginRoot, "dependency.js");
+      fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n', "utf8");
 
-    const runtime = await import("./runtime-web-channel-plugin.js");
+      const writeRuntime = (marker: string) => {
+        fs.writeFileSync(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`, "utf8");
+        const exportName = kind === "light" ? "resolveDefaultWebAuthDir" : "startWebLoginWithQr";
+        fs.writeFileSync(
+          modulePath,
+          `module.exports = { ${exportName}: () => ${JSON.stringify(marker)} + ":" + require("./dependency.js") };\n`,
+          "utf8",
+        );
+      };
+      writeRuntime("retired");
 
-    expect(runtime.extractText("first")).toBe("first");
-    expect(runtime.extractText("second")).toBe("second");
-    await expect(runtime.startWebLoginWithQr()).resolves.toBe("started");
-    expect(resolvePluginRuntimeRecordByEntryBaseNames).toHaveBeenCalledOnce();
-  });
+      vi.doMock("./runtime-plugin-boundary.js", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("./runtime-plugin-boundary.js")>()),
+        resolvePluginRuntimeRecordByEntryBaseNames: () => ({
+          origin: "global",
+          rootDir: pluginRoot,
+          source: path.join(pluginRoot, "index.js"),
+        }),
+        resolvePluginRuntimeModulePath: () => modulePath,
+      }));
+
+      const runtime = await import("./runtime-web-channel-plugin.js");
+      const { clearPluginMetadataLifecycleCaches } =
+        await import("../plugin-metadata-lifecycle.js");
+      const invoke = () =>
+        kind === "light"
+          ? Promise.resolve(runtime.resolveWebChannelAuthDir())
+          : runtime.startWebLoginWithQr();
+
+      await expect(invoke()).resolves.toBe("retired:retired");
+      writeRuntime("replacement");
+      await expect(invoke()).resolves.toBe("retired:retired");
+
+      clearPluginMetadataLifecycleCaches();
+
+      await expect(invoke()).resolves.toBe("replacement:replacement");
+      await expect(invoke()).resolves.toBe("replacement:replacement");
+    },
+  );
 
   it("reports heavy runtime load failures as promise rejections", async () => {
     vi.doMock("./runtime-plugin-boundary.js", () => ({

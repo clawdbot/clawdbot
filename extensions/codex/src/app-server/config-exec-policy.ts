@@ -1,4 +1,5 @@
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -65,10 +66,15 @@ export function selectGuardianSandbox(
 }
 
 export function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
+  if (value === "untrusted") {
+    throw new Error(
+      'Codex app-server approval policy "untrusted" is retired; run "openclaw doctor --fix" and use "on-request".',
+    );
+  }
   if (value === "on-failure") {
     return "on-request";
   }
-  return value === "on-request" || value === "untrusted" || value === "never" ? value : undefined;
+  return value === "on-request" || value === "never" ? value : undefined;
 }
 
 export function resolveSandbox(value: unknown): CodexAppServerSandboxMode | undefined {
@@ -99,6 +105,7 @@ function resolveOpenClawExecPolicyFromConfig(params: {
 }
 
 export function resolveOpenClawExecPolicyForCodexAppServer(params: {
+  permissionMode?: EmbeddedRunAttemptParamsV2["permissionMode"];
   execOverrides?: {
     mode?: unknown;
     security?: unknown;
@@ -108,6 +115,9 @@ export function resolveOpenClawExecPolicyForCodexAppServer(params: {
   config?: OpenClawConfig;
   agentId?: string;
 }): OpenClawExecPolicyForCodexAppServer {
+  if (params.permissionMode === "full") {
+    return { ...resolveOpenClawExecPolicyForMode("full"), touched: true };
+  }
   const basePolicy = resolveOpenClawExecPolicyFromConfig({
     config: params.config,
     agentId: params.agentId,

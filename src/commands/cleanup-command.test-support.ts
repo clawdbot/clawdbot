@@ -5,10 +5,8 @@ import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 const resolveCleanupPlanForDryRun = vi.fn();
 export const resolveCleanupPlanForRemoval = vi.fn();
-const removePath = vi.fn();
+export const removePath = vi.fn();
 export const listAgentSessionDirs = vi.fn();
-export const prepareLegacyWorkspaceStateReset = vi.fn();
-export const removeLegacyWorkspaceStateForReset = vi.fn();
 export const removeStateAndLinkedPaths = vi.fn();
 export const removeWorkspaceDirs = vi.fn();
 const gatewayServiceState = vi.hoisted(() => ({
@@ -19,11 +17,6 @@ const gatewayServiceState = vi.hoisted(() => ({
 }));
 export const gatewayService = gatewayServiceState;
 const cleanupConfigState = vi.hoisted(() => ({ isNixMode: false }));
-
-vi.mock("../agents/workspace-legacy-state.js", () => ({
-  prepareLegacyWorkspaceStateReset,
-  removeLegacyWorkspaceStateForReset,
-}));
 
 vi.mock("../config/config.js", () => ({
   get isNixMode() {
@@ -66,10 +59,8 @@ export function resetCleanupCommandMocks() {
   resolveCleanupPlanForRemoval.mockResolvedValue(cleanupPlan);
   removePath.mockResolvedValue({ ok: true });
   listAgentSessionDirs.mockResolvedValue(["/tmp/.openclaw/agents/main/sessions"]);
-  prepareLegacyWorkspaceStateReset.mockImplementation((workspaceDir: string) => ({ workspaceDir }));
-  removeLegacyWorkspaceStateForReset.mockResolvedValue({ removedPaths: [], warnings: [] });
   removeStateAndLinkedPaths.mockResolvedValue(true);
-  removeWorkspaceDirs.mockResolvedValue(undefined);
+  removeWorkspaceDirs.mockResolvedValue([]);
   gatewayService.isLoaded.mockReset().mockResolvedValue(true);
   gatewayService.stop.mockReset().mockResolvedValue(undefined);
   gatewayService.uninstall.mockReset().mockResolvedValue(undefined);
@@ -87,5 +78,10 @@ export function silenceCleanupCommandRuntime(runtime: RuntimeEnv) {
 
 export function cleanupCommandLogMessages(runtime: RuntimeEnv): string[] {
   const calls = (runtime.log as MockFn<(...args: unknown[]) => void>).mock.calls;
+  return calls.map((call) => String(call[0]));
+}
+
+export function cleanupCommandErrorMessages(runtime: RuntimeEnv): string[] {
+  const calls = (runtime.error as MockFn<(...args: unknown[]) => void>).mock.calls;
   return calls.map((call) => String(call[0]));
 }

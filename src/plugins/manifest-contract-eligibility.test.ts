@@ -270,7 +270,7 @@ describe("loadManifestContractSnapshot", () => {
     expect(mocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it("normalizes omitted config before checking unscoped snapshot compatibility", () => {
+  it("preserves configless default-discovery snapshot compatibility", () => {
     const env = { HOME: "/home/default-config" } as NodeJS.ProcessEnv;
     const snapshot = {
       index: { plugins: [{ pluginId: "demo" }] },
@@ -284,12 +284,12 @@ describe("loadManifestContractSnapshot", () => {
     });
 
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: {},
+      config: undefined,
       env,
       allowWorkspaceScopedCurrent: true,
     });
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: {},
+      config: undefined,
       env,
       allowWorkspaceScopedCurrent: true,
     });

@@ -26,6 +26,40 @@ function buildPluginPresentation(request: {
 }
 
 describe("buildApprovalPresentation", () => {
+  it.each([
+    { kind: "exec", request: { command: "printf safe" } },
+    {
+      kind: "plugin",
+      request: { title: "Review payment", description: "The plugin needs operator consent." },
+    },
+  ] as const)("sanitizes $kind scope and drops scope that exceeds its wire bound", (params) => {
+    const scope = {
+      kind: "payment",
+      amount: "49.99",
+      currency: "EUR",
+      target: "Stripe\u202E",
+    } as const;
+    const presentation = buildApprovalPresentation({
+      ...params,
+      request: { ...params.request, scope },
+      allowedDecisions,
+    });
+
+    expect(presentation).toMatchObject({
+      kind: params.kind,
+      scope: { ...scope, target: "Stripe\\u{202E}" },
+    });
+
+    const oversizedScopePresentation = buildApprovalPresentation({
+      ...params,
+      request: { ...params.request, scope: { ...scope, target: `${"x".repeat(125)}\u202E` } },
+      allowedDecisions,
+    });
+
+    expect(oversizedScopePresentation).toMatchObject({ kind: params.kind });
+    expect(oversizedScopePresentation).not.toHaveProperty("scope");
+  });
+
   it("sanitizes exec routing metadata and preserves empty values as null", () => {
     const githubToken = `ghp_${"a".repeat(100)}`;
     const presentation = buildExecPresentation({

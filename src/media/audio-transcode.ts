@@ -158,9 +158,9 @@ export async function transcodeAudioBuffer(params: {
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "tts-transcode-",
   });
-  const inPath = tmp.write(`in.${source}`, params.audioBuffer);
-  const outPath = tmp.path(`out.${target}`);
   try {
+    const inPath = tmp.write(`in.${source}`, params.audioBuffer);
+    const outPath = tmp.path(`out.${target}`);
     const result = await runAfconvert({
       args: [...recipe, inPath, outPath],
       timeoutMs: params.timeoutMs ?? 5000,

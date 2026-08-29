@@ -274,7 +274,13 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     });
     expect(usageEvents[0]?.durationMs).toEqual(expect.any(Number));
     expect(usageEvents[0]?.durationMs).toBeGreaterThanOrEqual(0);
-    expect(result?.usage).toEqual({ input_tokens: 50, output_tokens: 100, total_tokens: 160 });
+    expect(result?.usage).toEqual({
+      input_tokens: 50,
+      output_tokens: 100,
+      total_tokens: 160,
+      cache_read_tokens: 7,
+      cache_write_tokens: 3,
+    });
   });
 
   it("does not emit model.usage when diagnostics are disabled", async () => {

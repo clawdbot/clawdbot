@@ -11,6 +11,7 @@ import {
   describeFailoverError,
   FailoverError,
   findCliTimeoutError,
+  hasProviderRequestSizeCeiling,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
@@ -832,6 +833,11 @@ describe("failover-error", () => {
     it.each([
       ["availability", "WorkerRunnerUnavailableError", "The device runner is offline"],
       ["capacity", "WorkerRunnerCapacityError", "device worker capacity remained full"],
+      [
+        "workspace reconciliation",
+        "WorkerWorkspaceReconciliationError",
+        "cloud worker workspace result could not be reconciled",
+      ],
     ])("returns true for direct and nested runner %s failures", (_label, name, message) => {
       const coordination = new Error(message);
       coordination.name = name;
@@ -981,5 +987,61 @@ describe("isSignalTimeoutReason", () => {
   it("returns false for null and undefined", () => {
     expect(isSignalTimeoutReason(null)).toBe(false);
     expect(isSignalTimeoutReason(undefined)).toBe(false);
+  });
+});
+
+describe("hasProviderRequestSizeCeiling", () => {
+  const GROQ_REQUEST_CEILING_413 =
+    "413 Request too large for model `openai/gpt-oss-120b` in organization `org_x` " +
+    "service tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested 8098, " +
+    "please reduce your message size and try again.";
+
+  it("reads the fact a failover error recorded from the provider's own text", () => {
+    // The user-facing message no longer states the figures, which is the whole reason the fact
+    // is recorded at construction rather than re-read here.
+    const err = new FailoverError("Context overflow: prompt too large for the model.", {
+      reason: "context_overflow",
+      rawError: GROQ_REQUEST_CEILING_413,
+    });
+    expect(err.requestSizeCeiling).toBe(true);
+    expect(hasProviderRequestSizeCeiling(err)).toBe(true);
+  });
+
+  it("reads an unnormalized error straight from its message", () => {
+    expect(hasProviderRequestSizeCeiling(new Error(GROQ_REQUEST_CEILING_413))).toBe(true);
+  });
+
+  it("finds the fact through a wrapping error", () => {
+    const wrapped = new Error("agent run failed", {
+      cause: new FailoverError("Context overflow: prompt too large for the model.", {
+        reason: "context_overflow",
+        rawError: GROQ_REQUEST_CEILING_413,
+      }),
+    });
+    expect(hasProviderRequestSizeCeiling(wrapped)).toBe(true);
+  });
+
+  it("is false for throttling that states a requested size within the limit", () => {
+    const throttled =
+      "429 Rate limit reached for model `openai/gpt-oss-120b` on tokens per minute (TPM): " +
+      "Limit 8000, Used 7500, Requested 1000, please try again in 3.5s.";
+    expect(hasProviderRequestSizeCeiling(new Error(throttled))).toBe(false);
+    expect(
+      new FailoverError("rate limited", { reason: "rate_limit", rawError: throttled })
+        .requestSizeCeiling,
+    ).toBe(false);
+  });
+
+  it("is false for a context overflow no provider ceiling explains", () => {
+    const overflow = new FailoverError("Context overflow: prompt too large for the model.", {
+      reason: "context_overflow",
+      rawError: "400 input is too long for the model",
+    });
+    expect(hasProviderRequestSizeCeiling(overflow)).toBe(false);
+  });
+
+  it("is false for unrelated values", () => {
+    expect(hasProviderRequestSizeCeiling(undefined)).toBe(false);
+    expect(hasProviderRequestSizeCeiling(null)).toBe(false);
   });
 });

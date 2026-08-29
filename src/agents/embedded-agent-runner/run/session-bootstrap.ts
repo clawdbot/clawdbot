@@ -150,8 +150,9 @@ export async function resetNoRealConversationTokenSnapshot(params: {
   config?: RunEmbeddedAgentParams["config"];
   sessionKey?: string;
   agentId?: string;
+  sessionPersistence?: RunEmbeddedAgentParams["sessionPersistence"];
 }): Promise<void> {
-  if (!params.sessionKey) {
+  if (!params.sessionKey || params.sessionPersistence === "detached") {
     return;
   }
   const agentId = resolveSessionAgentId({
@@ -236,6 +237,9 @@ type AgentSessionWriterAdmissionSnapshot = {
 export function assertAgentHarnessRunAdmission(
   params: RunEmbeddedAgentParams,
 ): AgentSessionWriterAdmissionSnapshot | undefined {
+  if (params.sessionPersistence === "detached") {
+    return undefined;
+  }
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey) {
     return undefined;

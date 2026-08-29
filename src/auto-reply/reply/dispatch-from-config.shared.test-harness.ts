@@ -2,6 +2,8 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
+import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type {
   PluginHookBeforeDispatchResult,
@@ -85,7 +87,9 @@ const hookMocks = vi.hoisted(() => ({
     }>,
   },
   runner: {
-    hasHooks: vi.fn<(hookName?: string) => boolean>(() => false),
+    hasHooks: vi.fn<(hookName?: string, scope?: { dispatchKind?: "agent" | "acp" }) => boolean>(
+      () => false,
+    ),
     runInboundClaim: vi.fn(async () => undefined),
     runInboundClaimForPlugin: vi.fn(async () => undefined),
     runInboundClaimForPluginOutcome: vi.fn<
@@ -198,6 +202,19 @@ const sessionStoreMocks = vi.hoisted(() => ({
     },
   ),
 }));
+const placementContextMocks = vi.hoisted(() => {
+  const getMany = vi.fn<
+    (sessionIds: readonly string[]) => Map<string, WorkerSessionPlacementRecord>
+  >(() => new Map());
+  const context = {
+    workerSessionPlacementService: { getMany },
+  } satisfies SessionWorkerPlacementContext;
+  return {
+    context,
+    getMany,
+    resolveSessionWorkerPlacementContext: vi.fn(() => context),
+  };
+});
 const acpManagerRuntimeMocks = vi.hoisted(() => ({
   getAcpSessionManager: vi.fn(),
 }));
@@ -417,6 +434,7 @@ export {
   internalHookMocks,
   messageAuditMocks,
   mocks,
+  placementContextMocks,
   replyMediaPathMocks,
   runtimePluginMocks,
   sessionBindingMocks,
@@ -489,6 +507,7 @@ vi.mock("../../agents/tools/ask-user-tool.js", () => ({
 }));
 
 vi.mock("../../logging/diagnostic.js", () => ({
+  diagnosticLogger: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() },
   logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
   logMessageDispatchStarted: diagnosticMocks.logMessageDispatchStarted,
   logMessageQueued: diagnosticMocks.logMessageQueued,
@@ -527,6 +546,9 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
       sessionStoreMocks.updateSessionEntry(...args),
   };
 });
+vi.mock("../../gateway/session-worker-placement-context.js", () => ({
+  resolveSessionWorkerPlacementContext: placementContextMocks.resolveSessionWorkerPlacementContext,
+}));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   initializeGlobalHookRunner: vi.fn(),
@@ -580,6 +602,10 @@ vi.mock("../../infra/agent-events.js", () => ({
   getAgentEventLifecycleGeneration: () => "test-generation",
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
+  // Plain stub, not a spy like onAgentEvent above: no test asserts per-run subscription,
+  // and staying out of agentEventMocks keeps the sibling mockReset() calls from clearing
+  // this implementation and handing the CLI bridges an undefined unsubscribe.
+  onAgentEventForRun: () => () => {},
   registerAgentEventLifecycleRotationHandler: vi.fn(),
   runOncePerAgentRun: <T>(_runId: string, _operation: string, run: () => Promise<T>) => run(),
   withAgentRunLifecycleGeneration: <T>(_generation: string, run: () => T) => run(),

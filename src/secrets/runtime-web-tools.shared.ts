@@ -260,6 +260,7 @@ export async function resolveRuntimeWebProviderSurface<
       origin: "bundled",
       config: params.sourceConfig,
       env: { ...process.env, ...params.context.env },
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
   }
   let allProviders = params.sortProviders(
@@ -287,6 +288,7 @@ export async function resolveRuntimeWebProviderSurface<
       origin: "bundled",
       config: params.sourceConfig,
       env: { ...process.env, ...params.context.env },
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
     allProviders = params.sortProviders(
       await params.resolveProviders({

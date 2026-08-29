@@ -64,19 +64,19 @@ describe("package manager build policy", () => {
     expect(packageJson.files).toContain("THIRD_PARTY_NOTICES.md");
   });
 
-  it("includes the Crabbox wrapper runtime modules in the published root package", () => {
+  it("omits source-only Crabbox wrapper modules from the published root package", () => {
     const packageJson = readJson("package.json") as RootPackageJson;
 
-    expect(packageJson.files).toEqual(
-      expect.arrayContaining([
-        "scripts/crabbox-wrapper.mjs",
-        "scripts/crabbox-wrapper.mts",
-        "scripts/crabbox-wrapper-providers.mts",
-        "scripts/crabbox-routing-policy.mts",
-        "scripts/testbox-lease-freshness.mts",
-        "scripts/lib/tsx-cli-shim.mjs",
-      ]),
-    );
+    for (const sourcePath of [
+      "scripts/crabbox-wrapper.mjs",
+      "scripts/crabbox-wrapper.mts",
+      "scripts/crabbox-wrapper-providers.mts",
+      "scripts/crabbox-routing-policy.mts",
+      "scripts/testbox-lease-freshness.mts",
+      "scripts/lib/tsx-cli-shim.mjs",
+    ]) {
+      expect(packageJson.files).not.toContain(sourcePath);
+    }
   });
 
   it("pins forked transitive dependencies with parent-scoped npm-lock overrides", () => {

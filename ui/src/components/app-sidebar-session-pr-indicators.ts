@@ -1,22 +1,21 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import {
+  summarizeSessionPullRequests,
   scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
   type SessionPullRequestSnapshotStore,
 } from "../lib/session-pull-requests.ts";
+import type { SessionCapability } from "../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import {
-  resolveSessionPullRequestIndicatorState,
-  type SessionPullRequestIndicatorState,
-} from "./session-menu-work.ts";
 
 type IndicatorEntry = {
-  state: SessionPullRequestIndicatorState;
+  summary: SessionCatalogPullRequestSummary | undefined;
   worktreeId: string;
 };
 
@@ -25,6 +24,7 @@ type SessionPullRequestIndicatorsOptions = {
   getRows: () => readonly SidebarRecentSession[];
   getSelectedAgentId: () => string;
   getGateway: () => ApplicationGateway | undefined;
+  getSessions: () => SessionCapability | undefined;
 };
 
 /** Projects pushed PR snapshots for the currently visible worktree rows. */
@@ -59,9 +59,14 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     this.reset(false);
   }
 
-  state(sessionKey: string, worktreeId: string): SessionPullRequestIndicatorState {
+  summary(
+    sessionKey: string,
+    worktreeId: string,
+    initial?: SessionCatalogPullRequestSummary,
+  ): SessionCatalogPullRequestSummary | undefined {
     const entry = this.states.get(sessionKey);
-    return entry?.worktreeId === worktreeId ? entry.state : "none";
+    // A ready empty snapshot is authoritative; only seed a row before its first snapshot.
+    return entry?.worktreeId === worktreeId ? entry.summary : initial;
   }
 
   private scheduleRefresh(): void {
@@ -121,15 +126,34 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
       const snapshot = store.get(this.scopedKey(session.key));
       // Empty failure snapshots retain the rendered chip; snapshots carrying
       // last-known PRs can also hydrate a newly mounted row.
-      if (!snapshot || (snapshot.status !== "ready" && snapshot.pullRequests.length === 0)) {
+      if (!snapshot) {
+        const removed = this.states.delete(session.key);
+        if (removed) {
+          const sessions = this.options.getSessions();
+          if (sessions) {
+            sessions.setPullRequestSummary(
+              session.key,
+              undefined,
+              sessions.capturePullRequestEpoch(session.key),
+            );
+          }
+        }
+        changed = removed || changed;
         continue;
       }
+      if (snapshot.status !== "ready" && snapshot.pullRequests.length === 0) {
+        continue;
+      }
+      const current = this.states.get(session.key);
       const entry = {
-        state: resolveSessionPullRequestIndicatorState(snapshot.pullRequests),
+        summary: summarizeSessionPullRequests(snapshot.pullRequests, current?.summary),
         worktreeId: session.worktreeId,
       };
-      const current = this.states.get(session.key);
-      if (current?.state !== entry.state || current.worktreeId !== entry.worktreeId) {
+      if (
+        !current ||
+        current.summary !== entry.summary ||
+        current.worktreeId !== entry.worktreeId
+      ) {
         this.states.set(session.key, entry);
         changed = true;
       }

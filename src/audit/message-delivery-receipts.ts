@@ -151,7 +151,10 @@ export function pageMessageDeliveryReceiptsForRun(params: {
   offset?: number;
   limit: number;
   options: MessageDeliveryReadOptions;
-}): { receipts: DecisionReceiptV1[]; nextCursor?: OutboundMessageAuditEventCursor } {
+}): {
+  entries: Array<{ receipt: DecisionReceiptV1; selectorId: string }>;
+  nextCursor?: OutboundMessageAuditEventCursor;
+} {
   const page = pageOutboundMessageAuditEventsForRun({
     runId: params.context.runId,
     contextId: params.context.contextId,
@@ -163,7 +166,10 @@ export function pageMessageDeliveryReceiptsForRun(params: {
     database: params.options,
   });
   return {
-    receipts: page.events.map((event) => projectMessageDeliveryReceipt(event, params.context)),
+    entries: page.entries.map(({ event, rowId }) => ({
+      receipt: projectMessageDeliveryReceipt(event, params.context),
+      selectorId: `message-decision:${rowId}`,
+    })),
     ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
   };
 }

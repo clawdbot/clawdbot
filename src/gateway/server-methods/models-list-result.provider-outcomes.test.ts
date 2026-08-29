@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   type PreparedGatewayModelCatalogSnapshot,
@@ -7,6 +8,7 @@ import {
 import {
   buildModelsListResult,
   createGatewayAgentModelCatalogProjector,
+  prepareModelsListResult,
 } from "./models-list-result.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -74,7 +76,7 @@ describe("models.list provider catalog outcomes", () => {
       api: "openai-chatgpt-responses" as const,
       baseUrl: "https://chatgpt.com/backend-api/codex",
     };
-    const snapshot = {
+    const snapshot = markPreparedModelCatalogFull({
       entries: [model],
       routeVariants: [model],
       providerOutcomes: [
@@ -84,7 +86,7 @@ describe("models.list provider catalog outcomes", () => {
           status: "auth-rejected" as const,
         },
       ],
-    };
+    });
     const projector = createGatewayAgentModelCatalogProjector({
       cfg: config,
       agentId: "main",
@@ -122,12 +124,18 @@ describe("models.list provider catalog outcomes", () => {
         context,
         agentId: "main",
         params: { view: "configured" },
-        preloadedCatalog: { agentId: "main", config, snapshot, fullyDiscovered: true },
+        preloadedCatalog: { agentId: "main", config, snapshot },
         preloadedOnly: true,
         catalogProjector: projector,
       }),
     ).resolves.toEqual({
-      models: [expect.objectContaining({ id: "gpt-5.6-sol", available: false })],
+      models: [
+        expect.objectContaining({
+          id: "gpt-5.6-sol",
+          available: false,
+          unavailableReason: "auth-failed",
+        }),
+      ],
       providerOutcomes: [
         { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
       ],
@@ -192,5 +200,79 @@ describe("models.list provider catalog outcomes", () => {
       availability: true,
       selectedProfileId: "openai:accepted",
     });
+  });
+
+  it.each([
+    {
+      name: "missing credentials",
+      evaluation: { availability: undefined, unavailableReason: "missing-auth" },
+      expected: { available: false, unavailableReason: "missing-auth" },
+    },
+    {
+      name: "cooldown with its retry time",
+      evaluation: {
+        availability: false,
+        unavailableReason: "cooldown",
+        unavailableUntil: 2_000_000_000_000,
+      },
+      expected: {
+        available: false,
+        unavailableReason: "cooldown",
+        unavailableUntil: 2_000_000_000_000,
+      },
+    },
+    {
+      name: "unknown availability without an auth diagnosis",
+      evaluation: { availability: undefined },
+      expected: { available: false },
+    },
+    {
+      name: "available models without stale unavailability metadata",
+      evaluation: {
+        availability: true,
+        unavailableReason: "cooldown",
+        unavailableUntil: 2_000_000_000_000,
+      },
+      expected: { available: true },
+    },
+  ] as const)("projects $name", async ({ evaluation, expected }) => {
+    const config = {
+      agents: { defaults: { models: { "custom/test-model": {} } } },
+    } as OpenClawConfig;
+    const model = { id: "test-model", name: "Test Model", provider: "custom" };
+    const snapshot = markPreparedModelCatalogFull({ entries: [model], routeVariants: [model] });
+    const projector = createGatewayAgentModelCatalogProjector({
+      cfg: config,
+      agentId: "main",
+      snapshot,
+      metadataSnapshot,
+      preparedAuthStore: emptyAuthStore,
+    });
+    const evaluateEntry = vi.spyOn(projector, "evaluateEntry").mockResolvedValue({
+      ...evaluation,
+      routeResolution: null,
+    });
+    const evaluateNative = vi.spyOn(projector, "evaluateNative");
+    const context = {
+      getRuntimeConfig: () => config,
+      loadGatewayModelCatalogSnapshot: vi.fn(),
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayRequestContext;
+
+    const prepared = await prepareModelsListResult({
+      context,
+      params: { view: "configured" },
+      preloadedCatalog: { agentId: "main", config, snapshot },
+      preloadedOnly: true,
+      catalogProjector: projector,
+    });
+
+    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], ...expected }]);
+    const hostEvaluations = evaluateEntry.mock.calls.length;
+    evaluateNative.mockReturnValue({ availability: true, routeResolution: null });
+    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: true }]);
+    evaluateNative.mockReturnValue({ availability: false, routeResolution: null });
+    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: false }]);
+    expect(evaluateEntry).toHaveBeenCalledTimes(hostEvaluations);
   });
 });

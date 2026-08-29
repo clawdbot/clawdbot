@@ -5,8 +5,11 @@ import {
   toClientToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
+import { getChannelAgentToolMeta } from "../../channel-tools.js";
+import { isCodeModeExecTool } from "../../code-mode-control-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { normalizeToolPolicyName } from "../../tool-policy.js";
 import {
   collectReplaySafeToolNames,
   collectSideEffectToolOwners,
@@ -39,12 +42,6 @@ export function prepareEmbeddedAttemptClientTools(params: {
   uncompactedEffectiveTools: AgentTool[];
   clientTools: EmbeddedRunAttemptParams["clientTools"];
 }) {
-  const { customTools } = splitSdkTools({
-    tools: params.effectiveTools,
-    sandboxEnabled: params.sandboxEnabled,
-    toolHookContext: params.catalogToolHookContext,
-  });
-
   // Reserve synchronously so parallel client-tool batches preserve assistant source order.
   const clientToolCallSlots: EmbeddedAttemptClientToolCallSlot[] = [];
   const clientToolCallSlotIndexes = new Map<string, number>();
@@ -74,12 +71,24 @@ export function prepareEmbeddedAttemptClientTools(params: {
     isPluginTool: (tool) =>
       Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
   });
+  const coreReadAuthorized = params.uncompactedEffectiveTools.some(
+    (tool) =>
+      normalizeToolPolicyName(tool.name ?? "") === "read" &&
+      !getPluginToolMeta(tool) &&
+      !getChannelAgentToolMeta(tool),
+  );
   const isReplaySafeTool = (tool: { name?: string }) =>
     isAgentToolReplaySafe(tool, params.replaySafetyOptions);
   const replaySafeTools = new Set(params.uncompactedEffectiveTools.filter(isReplaySafeTool));
   const replaySafeToolNames = collectReplaySafeToolNames(
     params.uncompactedEffectiveTools,
     params.replaySafetyOptions,
+  );
+  // Only the marked Code Mode exec owns a resumable run; a plain shell exec of
+  // the same name must never be mistaken for one at tool completion. The marked
+  // controls exist only on the post-catalog `effectiveTools` surface.
+  const codeModeExecToolNames = new Set(
+    params.effectiveTools.filter((tool) => isCodeModeExecTool(tool)).map((tool) => tool.name),
   );
   const clientConflictToolNames = params.deferredDirectoryToolsCallable
     ? builtinToolNames
@@ -171,16 +180,23 @@ export function prepareEmbeddedAttemptClientTools(params: {
     );
   }
 
+  const { customTools } = splitSdkTools({
+    tools: params.effectiveTools,
+    sandboxEnabled: params.sandboxEnabled,
+    toolHookContext: params.catalogToolHookContext,
+  });
   const allCustomTools = [...customTools, ...clientToolDefs];
   const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(allCustomTools));
   return {
     allCustomTools,
     builtinToolNames,
+    coreBuiltinToolNames,
+    coreReadAuthorized,
     clientToolCallSlots,
     clientToolDefs,
-    clientToolLoopDetection,
     replaySafeToolNames,
     replaySafeTools,
+    codeModeExecToolNames,
     sideEffectToolOwners,
     sessionToolAllowlist,
   };

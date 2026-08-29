@@ -88,7 +88,7 @@ dump_debug_logs() {
     "$GATEWAY_LOG" \
     "$CLICKCLACK_STATE"
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 start_gateway() {
   local log_path="$1"
@@ -146,7 +146,7 @@ node scripts/e2e/lib/release-scenarios/write-cli-plugin.mjs \
   "Release Upgrade Plugin" \
   release-upgrade \
   "release-upgrade-plugin:pong"
-openclaw plugins install "$plugin_dir" --force >"$PLUGIN_INSTALL_LOG" 2>&1
+openclaw_e2e_fixture_plugin_command openclaw -- plugins install "$plugin_dir" --force >"$PLUGIN_INSTALL_LOG" 2>&1
 openclaw release-upgrade ping >"$PLUGIN_CLI_BEFORE_LOG" 2>&1
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains "$PLUGIN_CLI_BEFORE_LOG" "release-upgrade-plugin:pong"
 node scripts/e2e/lib/release-user-journey/assertions.mjs configure-clickclack "http://127.0.0.1:$CLICKCLACK_PORT"
@@ -170,10 +170,10 @@ node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains "$PLU
 
 clickclack_plugin_dir="$(mktemp -d "$scenario_tmp/clickclack-plugin.XXXXXX")"
 node scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs "$clickclack_plugin_dir"
-openclaw plugins install "$clickclack_plugin_dir" --force >"$CLICKCLACK_PLUGIN_INSTALL_LOG" 2>&1
+openclaw_e2e_fixture_plugin_command openclaw -- plugins install "$clickclack_plugin_dir" --force >"$CLICKCLACK_PLUGIN_INSTALL_LOG" 2>&1
 
 openclaw channels status --json >"$STATUS_JSON" 2>"$STATUS_ERR"
-node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-status clickclack "$STATUS_JSON"
+node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-configured clickclack "$STATUS_JSON"
 openclaw message send \
   --channel clickclack \
   --target channel:general \

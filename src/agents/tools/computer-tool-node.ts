@@ -14,6 +14,10 @@ import {
   COMPUTER_CONTRACT_MISMATCH,
   parseComputerActResult,
 } from "../../plugins/computer-use-contract.js";
+import {
+  type EligibleNodeMessages,
+  resolveEligibleNodeFromList,
+} from "../../shared/node-resolve.js";
 import { computerActionNeedsFrame, validateCapabilityBoundInput } from "./computer-tool-request.js";
 import type {
   ComputerContextEpoch,
@@ -30,12 +34,7 @@ import {
   SCREEN_SNAPSHOT_COMMAND,
 } from "./computer-tool-shared.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
-import {
-  type EligibleNodeMessages,
-  listNodes,
-  type NodeListNode,
-  resolveEligibleNodeFromList,
-} from "./nodes-utils.js";
+import { listNodes, type NodeListNode } from "./nodes-utils.js";
 
 type ComputerState =
   | { kind: "unbound" }
@@ -65,7 +64,7 @@ function isEligibleComputerNode(node: NodeListNode): boolean {
   );
 }
 
-const COMPUTER_NODE_MESSAGES: EligibleNodeMessages = {
+const COMPUTER_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
   ineligibleExact: (query, eligibleIds) =>
     `node "${query}" is not computer-capable (needs a connected node advertising ${COMPUTER_ACT_COMMAND} and ${SCREEN_SNAPSHOT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT}; ` +
     `eligible node ids: ${eligibleIds})`,
@@ -246,6 +245,47 @@ export class ComputerToolSession {
     this.setComputerState({ kind: "target", target });
   }
 
+  private prepareScreenshotTarget(target: ComputerTarget): void {
+    const frame = this.computerState;
+    const contextEpoch = this.options.contextEpoch;
+    // Retain the visible frame only until replacement pixels are verified; failures clear it.
+    if (
+      contextEpoch?.frameImageIdentity &&
+      frame.kind === "frame" &&
+      frame.target.nodeId === target.nodeId &&
+      frame.target.screenIndex === target.screenIndex &&
+      frame.contextEpoch === contextEpoch.value
+    ) {
+      return;
+    }
+    this.setTarget(target);
+  }
+
+  refreshUnchangedFrame(params: {
+    target: ComputerTarget;
+    capture: ScreenshotCapture;
+    imageIdentity?: string;
+    modelHasVision?: boolean;
+  }): ComputerFrame | undefined {
+    const frame = this.computerState;
+    const contextEpoch = this.options.contextEpoch;
+    // Without context tracking, the earlier screenshot may already have been pruned.
+    if (
+      params.modelHasVision === false ||
+      !contextEpoch?.frameImageIdentity ||
+      contextEpoch.frameImageIdentity !== params.imageIdentity ||
+      frame.kind !== "frame" ||
+      frame.target.nodeId !== params.target.nodeId ||
+      frame.target.screenIndex !== params.target.screenIndex ||
+      frame.contextEpoch !== contextEpoch.value
+    ) {
+      return undefined;
+    }
+    // Keep the model's original image/frame binding while refreshing the node's capture token.
+    frame.displayFrameId = params.capture.displayFrameId;
+    return frame;
+  }
+
   bindDeliveredFrame(params: {
     resolved: ResolvedComputerTarget;
     capture: ScreenshotCapture;
@@ -391,6 +431,7 @@ export class ComputerToolSession {
     refWidth: number,
     signal?: AbortSignal,
   ): Promise<ScreenshotCapture> {
+    this.prepareScreenshotTarget(resolved.target);
     const commandParams: ScreenSnapshotParams = {
       executionId: this.options.executionId,
       screenIndex: resolved.target.screenIndex,
@@ -398,26 +439,31 @@ export class ComputerToolSession {
       quality: SCREENSHOT_QUALITY,
       format: "jpeg",
     };
-    const payload = await invokeNodeCommand({
-      gatewayOpts: this.executionNodes.get(resolved.target.nodeId)!,
-      nodeId: resolved.target.nodeId,
-      command: SCREEN_SNAPSHOT_COMMAND,
-      commandParams,
-      signal,
-    });
-    const parsed = parseScreenSnapshotPayload(payload);
-    if (!parsed.displayFrameId) {
-      throw new Error(
-        "screen.snapshot response missing displayFrameId; update the node app before computer use",
-      );
+    try {
+      const payload = await invokeNodeCommand({
+        gatewayOpts: this.executionNodes.get(resolved.target.nodeId)!,
+        nodeId: resolved.target.nodeId,
+        command: SCREEN_SNAPSHOT_COMMAND,
+        commandParams,
+        signal,
+      });
+      const parsed = parseScreenSnapshotPayload(payload);
+      if (!parsed.displayFrameId) {
+        throw new Error(
+          "screen.snapshot response missing displayFrameId; update the node app before computer use",
+        );
+      }
+      return {
+        base64: parsed.base64,
+        displayFrameId: parsed.displayFrameId,
+        mimeType: imageMimeFromFormat(parsed.format) ?? "image/jpeg",
+        width: parsed.width,
+        height: parsed.height,
+      };
+    } catch (error) {
+      this.setTarget(resolved.target);
+      throw error;
     }
-    return {
-      base64: parsed.base64,
-      displayFrameId: parsed.displayFrameId,
-      mimeType: imageMimeFromFormat(parsed.format) ?? "image/jpeg",
-      width: parsed.width,
-      height: parsed.height,
-    };
   }
 
   async invokeComputerAct(params: {
@@ -432,7 +478,7 @@ export class ComputerToolSession {
         : undefined;
     const invokeTimeoutMs = durationMs ? durationMs + 10_000 : undefined;
     params.signal?.throwIfAborted();
-    this.setTarget(params.resolved.target);
+    this.prepareScreenshotTarget(params.resolved.target);
     if (params.wireParams.action === "left_mouse_down") {
       this.heldButtonTarget = params.resolved.target;
     }
@@ -460,6 +506,7 @@ export class ComputerToolSession {
         this.heldButtonTarget = undefined;
         actResult = { ok: true };
       } else {
+        this.setTarget(params.resolved.target);
         throw withComputerEnablementHint(err);
       }
     }

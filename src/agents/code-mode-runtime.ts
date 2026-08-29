@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { parse, tokenizer } from "acorn";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -121,9 +122,9 @@ function readCodeModeRawConfig(config?: OpenClawConfig, agentId?: string): Recor
 }
 
 function readEnabled(value: unknown): boolean | "auto" {
-  // Shipped default is "auto": code mode engages only for catalog-preferred
-  // models, so unevaluated models keep normal tool exposure by construction.
-  return typeof value === "boolean" || value === "auto" ? value : "auto";
+  // Stable option-bearing objects made `enabled` optional and defaulted it off.
+  // Automatic activation therefore requires an explicit `"auto"` selection.
+  return typeof value === "boolean" || value === "auto" ? value : false;
 }
 
 export function readPositiveInteger(value: unknown, fallback: number): number {
@@ -282,17 +283,15 @@ export function readCode(args: unknown): {
   restartSafe: boolean;
 } {
   const params = asToolParamsRecord(args);
-  const codeParam = params.code;
-  const commandParam = params.command;
-  if (
-    typeof codeParam === "string" &&
-    typeof commandParam === "string" &&
-    codeParam !== commandParam
-  ) {
+  // Full-schema tool calls can materialize an unused alias as blank.
+  // Only nonblank aliases participate in divergence checks.
+  const codeAlias = readNonBlankString(params.code);
+  const commandAlias = readNonBlankString(params.command);
+  if (codeAlias !== undefined && commandAlias !== undefined && codeAlias !== commandAlias) {
     throw new ToolInputError("code and command must match when both are provided.");
   }
-  const code = typeof commandParam === "string" ? commandParam : codeParam;
-  if (typeof code !== "string" || !code.trim()) {
+  const code = commandAlias ?? codeAlias;
+  if (code === undefined) {
     throw new ToolInputError("code or command must be a non-empty string.");
   }
   const language = params.language;

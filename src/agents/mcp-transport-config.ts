@@ -9,6 +9,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import { logWarn } from "../logger.js";
 import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import {
@@ -62,6 +63,24 @@ type ResolvedMcpTransportConfig = ResolvedStdioMcpTransportConfig | ResolvedHttp
 
 const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+const MAX_WARNED_DROPPED_STDIO_ENV_KEYS = 4096;
+// Warning state spans repeated MCP transport resolutions in one gateway process;
+// bounding it means evicted server/env pairs can re-warn instead of growing unbounded.
+const warnedDroppedStdioEnvKeys = createDedupeCache({
+  ttlMs: 0,
+  maxSize: MAX_WARNED_DROPPED_STDIO_ENV_KEYS,
+});
+
+function warnDroppedStdioEnvOnce(serverName: string, key: string): void {
+  const logServerName = sanitizeForLog(serverName);
+  const logKey = sanitizeForLog(key);
+  if (warnedDroppedStdioEnvKeys.check(JSON.stringify([serverName, key]))) {
+    return;
+  }
+  logWarn(
+    `bundle-mcp: server "${logServerName}": env "${logKey}" is blocked for stdio startup safety and was ignored.`,
+  );
+}
 
 function getPositiveNumber(rawServer: unknown, keys: readonly string[]): number | undefined {
   if (!rawServer || typeof rawServer !== "object") {
@@ -205,7 +224,6 @@ export function resolveMcpTransportConfig(
   rawServer: unknown,
   options?: { logWarnings?: boolean },
 ): ResolvedMcpTransportConfig | null {
-  const logServerName = sanitizeForLog(serverName);
   const logWarnings = options?.logWarnings !== false;
   const requestedTransport = getRequestedTransport(rawServer);
   const requestedTransportAlias = requestedTransport ? "" : getRequestedTransportAlias(rawServer);
@@ -215,9 +233,7 @@ export function resolveMcpTransportConfig(
     logWarnings
       ? {
           onDroppedEnv: (key: string) => {
-            logWarn(
-              `bundle-mcp: server "${logServerName}": env "${sanitizeForLog(key)}" is blocked for stdio startup safety and was ignored.`,
-            );
+            warnDroppedStdioEnvOnce(serverName, key);
           },
         }
       : undefined,
@@ -246,7 +262,7 @@ export function resolveMcpTransportConfig(
   ) {
     if (logWarnings) {
       logWarn(
-        `bundle-mcp: skipped server "${logServerName}" because transport "${sanitizeForLog(effectiveTransport)}" is not supported.`,
+        `bundle-mcp: skipped server "${sanitizeForLog(serverName)}" because transport "${sanitizeForLog(effectiveTransport)}" is not supported.`,
       );
     }
     return null;
@@ -273,7 +289,7 @@ export function resolveMcpTransportConfig(
   const httpReason = httpLaunch.ok ? "not an HTTP MCP server" : httpLaunch.reason;
   if (logWarnings) {
     logWarn(
-      `bundle-mcp: skipped server "${logServerName}" because ${stdioLaunch.reason} and ${httpReason}.`,
+      `bundle-mcp: skipped server "${sanitizeForLog(serverName)}" because ${stdioLaunch.reason} and ${httpReason}.`,
     );
   }
   return null;

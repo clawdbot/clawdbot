@@ -1,5 +1,6 @@
 // Browser-safe JSON Schema normalization and value checks shared by core and Control UI.
-import { Value } from "typebox/value";
+import { Guard } from "typebox/guard";
+import { Check } from "typebox/schema";
 import { isRecord } from "./record-coerce.js";
 
 type JsonSchemaObject = Record<string, unknown>;
@@ -269,7 +270,7 @@ export function jsonSchemaValuesEqual(left: unknown, right: unknown): boolean {
     return false;
   }
   try {
-    return Value.Equal(left, right);
+    return Guard.IsDeepEqual(left, right);
   } catch {
     return false;
   }
@@ -281,7 +282,7 @@ export function isJsonSchemaValueValid(schema: JsonSchemaValue, value: unknown):
     return false;
   }
   try {
-    return Value.Check(normalizeJsonSchemaForTypeBox(schema) as never, value);
+    return Check(normalizeJsonSchemaForTypeBox(schema) as never, value);
   } catch {
     return false;
   }

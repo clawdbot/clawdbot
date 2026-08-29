@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Normalizes package-acceptance inputs into the tarball shape consumed by Docker E2E.
 import { Buffer } from "node:buffer";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
@@ -20,10 +20,11 @@ import { fileURLToPath } from "node:url";
 import { isRecord as isJsonRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { toErrorObject } from "./lib/error-format.mts";
+import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
+import { validatePackageSourceDir } from "./package-source-preflight.mjs";
 import { createPrepublishPluginRegistryArtifact } from "./prepublish-plugin-registry-artifact.mjs";
 
 const ROOT_DIR = resolveRepoRoot(import.meta.url);
@@ -39,11 +40,9 @@ const FORWARDED_SIGNAL_KILL_AFTER_MS = 250;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 type ChildSignal = ChildProcess["signalCode"];
-type ProcessSignal = Parameters<ChildProcess["kill"]>[0];
 type TimerHandle = ReturnType<typeof setTimeout>;
-type ChildKiller = (signal: ProcessSignal) => void;
+type ChildKiller = (signal: NodeJS.Signals) => void;
 type ProcessTreeChild = Pick<ChildProcess, "exitCode" | "kill" | "pid" | "signalCode">;
-type ProcessTreeSignalTarget = Pick<ChildProcess, "kill" | "pid">;
 type CommandOutputBuffer = {
   text: string;
   truncatedChars: number;
@@ -193,7 +192,7 @@ Options:
   --output-name <name>        Output tarball filename. Default: ${DEFAULT_OUTPUT_NAME}
   --metadata <file>           Write package metadata JSON.
   --plugin-registry-output-dir <dir>
-                              Build an immutable registry for source=ref before cleanup.
+                              Build an immutable registry for source=ref, npm, or artifact.
   --required-plugin-packages-json <json>
                               Scoped package names to include in that registry.
   --github-output <file>      Append tarball, sha256, package name/version outputs.`;
@@ -363,7 +362,7 @@ function run(command: string, args: readonly string[], options: RunOptions = {})
     let killTimer: TimerHandle | undefined;
     let forceKillAt: number | undefined;
     const killChild: ChildKiller = (signal) =>
-      signalChildProcessTree(child, signal, { useProcessGroup });
+      terminateManagedChild(child, signal, { useProcessGroup });
     const terminateChild = () => {
       killChild("SIGTERM");
       forceKillAt = Date.now() + resolvedKillAfterMs;
@@ -477,53 +476,6 @@ async function finishTimedOutProcessTree(
     killChild("SIGKILL");
     await waitForProcessTreeExit(child, killAfterMs, useProcessGroup);
   }
-}
-
-export function signalChildProcessTree(
-  processChild: ProcessTreeSignalTarget,
-  processSignal: ProcessSignal,
-  {
-    platform = process.platform,
-    runTaskkill = (command, args, options) => spawnSync(command, args, options),
-    useProcessGroup = platform !== "win32",
-  }: {
-    platform?: typeof process.platform;
-    runTaskkill?:
-      | ((
-          command: string,
-          args: readonly string[],
-          options: { stdio: "ignore" },
-        ) => { error?: Error; status: number | null })
-      | undefined;
-    useProcessGroup?: boolean | undefined;
-  } = {},
-) {
-  if (useProcessGroup && processChild.pid) {
-    try {
-      process.kill(-processChild.pid, processSignal);
-      return;
-    } catch {
-      // The process group can disappear between timeout and cleanup.
-    }
-  }
-  if (platform === "win32" && typeof processChild.pid === "number") {
-    const taskkillPath = resolveWindowsTaskkillPath();
-    const args = ["/PID", String(processChild.pid), "/T"];
-    if (processSignal === "SIGKILL") {
-      args.push("/F");
-    }
-    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
-    if (!result?.error && result?.status === 0) {
-      return;
-    }
-    if (processSignal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
-      if (!forceResult?.error && forceResult?.status === 0) {
-        return;
-      }
-    }
-  }
-  processChild.kill(processSignal);
 }
 
 function childHasExited(child: ProcessTreeChild) {
@@ -1708,6 +1660,7 @@ async function resolveCandidate(options: PackageCandidateOptions) {
   let packageTrustedReason = "";
   let packageTrustedSourceId = "";
   let packageWorktreeDir = "";
+  let packageBuildSourceSha: string | undefined;
   let pluginRegistrySource: Awaited<ReturnType<typeof preparePackageSourceWorktree>> | undefined;
   let artifactMetadata: ArtifactMetadata = {};
   let pluginRegistryIdentity:
@@ -1725,6 +1678,7 @@ async function resolveCandidate(options: PackageCandidateOptions) {
       }
       packageSourceSha = packageSource.selectedSha;
       packageTrustedReason = packageSource.trustedReason;
+      validatePackageSourceDir(packageSource.sourceDir, { allowUnreleasedChangelog: true });
       await installPackageSourceDeps(packageSource.sourceDir);
       await run("node", [
         "scripts/package-openclaw-for-docker.mjs",
@@ -1752,12 +1706,6 @@ async function resolveCandidate(options: PackageCandidateOptions) {
         packOutput,
         options.outputName || DEFAULT_OUTPUT_NAME,
       );
-      if (options.pluginRegistryOutputDir) {
-        pluginRegistrySource = await preparePackageSourceWorktree(options.packageRef);
-        packageWorktreeDir = pluginRegistrySource.sourceDir;
-        packageRef = options.packageRef;
-        await installPackageSourceDeps(pluginRegistrySource.sourceDir);
-      }
     } else if (options.source === "url" || options.source === "trusted-url") {
       if (!options.packageUrl) {
         throw new Error(`${options.source} requires --package-url`);
@@ -1796,15 +1744,43 @@ async function resolveCandidate(options: PackageCandidateOptions) {
           : "";
       const input = await findSingleTarball(options.artifactDir);
       await fs.copyFile(input, target);
+      packageBuildSourceSha = await readPackageBuildSourceSha(target);
+      if (packageSourceSha && packageBuildSourceSha && packageSourceSha !== packageBuildSourceSha) {
+        throw new Error(
+          `artifact packageSourceSha ${packageSourceSha} does not match package build-info commit ${packageBuildSourceSha}`,
+        );
+      }
+      if (!packageSourceSha && packageBuildSourceSha) {
+        packageSourceSha = packageBuildSourceSha;
+        packageTrustedReason = "package-build-info";
+      }
+      if (options.pluginRegistryOutputDir) {
+        if (!packageBuildSourceSha) {
+          throw new Error(
+            "source=artifact requires a valid package build-info commit for prerelease plugin registry creation",
+          );
+        }
+        packageTrustedReason ||= "package-build-info";
+      }
     } else {
       throw new Error(
         `source must be one of: ref, npm, url, trusted-url, artifact. Got: ${options.source}`,
       );
     }
     if (options.pluginRegistryOutputDir && !pluginRegistrySource) {
-      throw new Error(
-        "--plugin-registry-output-dir is only supported with source=ref or source=npm",
+      if (options.source !== "npm" && options.source !== "artifact") {
+        throw new Error(
+          "--plugin-registry-output-dir is only supported with source=ref, source=npm, or source=artifact",
+        );
+      }
+      if (options.source === "npm") {
+        packageRef = options.packageRef;
+      }
+      pluginRegistrySource = await preparePackageSourceWorktree(
+        options.source === "npm" ? packageRef : packageSourceSha,
       );
+      packageWorktreeDir = pluginRegistrySource.sourceDir;
+      await installPackageSourceDeps(pluginRegistrySource.sourceDir);
     }
     if (options.pluginRegistryOutputDir && pluginRegistrySource) {
       const requiredPackages = JSON.parse(options.requiredPluginPackagesJson) as string[];
@@ -1845,7 +1821,7 @@ async function resolveCandidate(options: PackageCandidateOptions) {
   );
   const pkg = await readPackageJson(target);
   if (!packageSourceSha) {
-    packageSourceSha = await readPackageBuildSourceSha(target);
+    packageSourceSha = packageBuildSourceSha ?? (await readPackageBuildSourceSha(target));
     if (packageSourceSha && !packageTrustedReason) {
       packageTrustedReason = "package-build-info";
     }

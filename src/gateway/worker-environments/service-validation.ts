@@ -2,15 +2,41 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { WorkerMachineOptionsSchema } from "../../../packages/gateway-protocol/src/schema/environments.js";
+import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
   type WorkerDesktopEndpoint,
   type WorkerLease,
   type WorkerLeaseStatus,
+  type WorkerProvider,
   type WorkerMachineOption,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { normalizeWorkerDesktopEndpoint, normalizeWorkerSshEndpoint } from "./store.js";
+
+export function requireInheritedWorkerProfileAuthorization(
+  profileId: string,
+  providerId: string,
+  settings: unknown,
+  configuredProviderId: string | undefined,
+  serviceError: (code: "profile_not_found" | "invalid_profile", message: string) => Error,
+): void {
+  if (
+    providerId === DEVICE_WORKER_PROVIDER_ID &&
+    isRecord(settings) &&
+    typeof settings.device === "string" &&
+    profileId === `device:${settings.device}`
+  ) {
+    return;
+  }
+  if (!configuredProviderId) {
+    throw serviceError("profile_not_found", `Unknown worker profile: ${profileId}`);
+  }
+  if (normalizeCapabilityProviderId(configuredProviderId) !== providerId) {
+    throw serviceError("invalid_profile", "Inherited worker provider identity changed");
+  }
+}
 
 export function requireProviderProvisionTimeoutMs(
   timeoutMs: number | undefined,
@@ -42,7 +68,6 @@ export function normalizeWorkerMachineOptions(
     if (
       option.id.trim() !== option.id ||
       option.label.trim() !== option.label ||
-      (option.description !== undefined && option.description.trim() !== option.description) ||
       ids.has(option.id) ||
       (option.default === true && hasDefault)
     ) {
@@ -54,7 +79,8 @@ export function normalizeWorkerMachineOptions(
   return value.map((option) => ({
     id: option.id,
     label: option.label,
-    ...(option.description === undefined ? {} : { description: option.description }),
+    ...(option.cpu === undefined ? {} : { cpu: option.cpu }),
+    ...(option.memoryGb === undefined ? {} : { memoryGb: option.memoryGb }),
     ...(option.default === undefined ? {} : { default: option.default }),
   }));
 }
@@ -82,6 +108,33 @@ export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
     throw new Error("Worker provider returned an invalid inspection result");
   }
   return { status };
+}
+
+export function resolveWorkerLeaseTransportError(
+  provider: WorkerProvider,
+  transport: "node" | "ssh",
+  executionMode?: unknown,
+): WorkerProviderError | undefined {
+  const modes = provider.supportedExecutionModes;
+  if (
+    executionMode !== undefined &&
+    executionMode !== "worker-turn" &&
+    executionMode !== "remote-exec"
+  ) {
+    return new WorkerProviderError("Worker environment has an invalid placement execution mode");
+  }
+  if (
+    transport === "ssh" &&
+    (executionMode === "worker-turn" || (modes !== undefined && !modes.includes("remote-exec")))
+  ) {
+    return new WorkerProviderError("worker-turn providers must return a node lease");
+  }
+  if (executionMode !== undefined && !modes?.includes(executionMode)) {
+    return new WorkerProviderError(
+      `Worker provider ${provider.id} does not advertise ${executionMode} for its ${transport} lease`,
+    );
+  }
+  return undefined;
 }
 
 export function requireWorkerLease(value: unknown): WorkerLease {

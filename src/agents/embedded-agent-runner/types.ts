@@ -9,6 +9,7 @@ import type {
 } from "../../config/sessions/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
+import type { AgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import type {
   MessagingToolSend,
@@ -18,6 +19,7 @@ import type { McpConnectAction } from "../mcp-connect-action.js";
 import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
+import type { AgentRuntimeCredentialSource } from "../runtime-plan/types.js";
 import type { NormalizedUsage } from "../usage.js";
 
 export type BlockReplyFlushContext =
@@ -44,7 +46,10 @@ export type EmbeddedAgentMeta = {
   provider: string;
   model: string;
   contextTokens?: number;
+  contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
   agentHarnessId?: string;
+  /** Redacted credential source selected for the terminal physical model attempt. */
+  credentialSource?: AgentRuntimeCredentialSource;
   fallbackAttempts?: FallbackAttempt[];
   cliSessionBinding?: CliSessionBinding;
   clearCliSessionBinding?: boolean;
@@ -94,6 +99,7 @@ export type EmbeddedAgentMeta = {
   };
   /** Estimated USD cost of the run's accumulated usage. Omitted when the model has no cost data. */
   costUsd?: number;
+  terminalReceipt?: Omit<AgentRunTerminalReceipt, "terminalDisposition">;
 };
 
 export type TraceAttempt = {
@@ -169,6 +175,12 @@ export type EmbeddedRunFailureSignal = {
   fatalForCron: true;
 };
 
+export type EmbeddedRunTerminalToolFailure = {
+  source: "tool";
+  toolName: "exec" | "wait";
+  code: "UNKNOWN_TOOL_ID";
+};
+
 export type EmbeddedAgentRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedAgentMeta;
@@ -183,6 +195,8 @@ export type EmbeddedAgentRunMeta = {
   providerStarted?: boolean;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
+  /** An exact, successfully settled tool batch intentionally completed the turn without a reply. */
+  intentionalTerminalCompletion?: "tool-batch";
   terminalReply?: AgentRunTerminalReplySnapshot;
   yielded?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */
@@ -203,6 +217,8 @@ export type EmbeddedAgentRunMeta = {
     terminalPresentation?: boolean;
   };
   failureSignal?: EmbeddedRunFailureSignal;
+  /** Bounded, sanitized unresolved Code Mode failure for operator diagnostics. */
+  terminalToolFailure?: EmbeddedRunTerminalToolFailure;
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
   stopReason?: string;
   /** Pending tool calls when stopReason is "tool_calls". */

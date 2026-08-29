@@ -72,27 +72,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const requestedAgentId = requestedAgent.agentId;
-    const selectedAgent = validateChatSelectedAgent({
-      cfg,
-      requestedSessionKey: params.sessionKey,
-      agentId: requestedAgentId,
-    });
-    if (!selectedAgent.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
-      return;
-    }
     const sessionAgentId = resolveSessionAgentId({
       sessionKey: params.sessionKey,
       config: cfg,
-      agentId: selectedAgent.agentId,
+      agentId: requestedAgent.agentId,
     });
     // Session entry carries per-session model overrides; utility routing must
     // derive its small-model default from the provider this session actually
     // uses, not the agent's configured default.
     const { cfg: sessionCfg, entry } = loadGatewaySessionEntryReadOnly(
       params.sessionKey,
-      selectedAgent.agentId ? { agentId: selectedAgent.agentId } : undefined,
+      requestedAgent.agentId ? { agentId: requestedAgent.agentId } : undefined,
     );
     const sessionModel = resolveSessionModelRef(sessionCfg, entry, sessionAgentId);
     // Title generation pulls in the simple-completion runtime; load it lazily
@@ -124,10 +114,11 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
+    const agentIdOverride = normalizeOptionalText(p.agentId);
     const requestedAgent = resolveRequestedChatAgentId({
       cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
       requestedSessionKey: rawSessionKey,
-      agentId: p.agentId,
+      agentId: agentIdOverride,
     });
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
@@ -144,7 +135,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: rawSessionKey,
-      agentId: requestedAgentId,
+      explicitAgentId: agentIdOverride,
     });
     if (!selectedAgent.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));

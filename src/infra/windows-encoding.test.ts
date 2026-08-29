@@ -30,6 +30,11 @@ import {
   decodeWindowsTextFileBuffer,
 } from "./windows-encoding.js";
 
+const UTF16_OUTPUT_CASES = [
+  ["UTF-16LE", Buffer.from([0xff, 0xfe, 0x68, 0x00, 0x69, 0x00, 0x0a, 0x00])],
+  ["UTF-16BE", Buffer.from([0xfe, 0xff, 0x00, 0x68, 0x00, 0x69, 0x00, 0x0a])],
+] as const;
+
 describe("windows output encoding", () => {
   afterEach(() => {
     vi.resetModules();
@@ -209,6 +214,18 @@ describe("windows output encoding", () => {
     ).toBe("测试");
   });
 
+  it("falls back the whole output buffer when UTF-8 is truncated", () => {
+    const raw = Buffer.from([0xc3, 0xa9, 0xc3]);
+
+    expect(
+      decodeWindowsOutputBuffer({
+        buffer: raw,
+        platform: "win32",
+        windowsEncoding: "windows-1252",
+      }),
+    ).toBe("Ã©Ã");
+  });
+
   it("decodes legacy text files with the Windows system encoding", () => {
     const raw = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
 
@@ -274,11 +291,84 @@ describe("windows output encoding", () => {
     expect(decoder.flush()).toBe("");
   });
 
-  it("strips a leading UTF-8 BOM by default", () => {
-    const decoder = createWindowsOutputDecoder({ platform: "linux" });
+  it.each(["utf-8", "gbk"] as const)(
+    "decodes complete UTF-16 BOM output with a %s console encoding",
+    (windowsEncoding) => {
+      for (const [, raw] of UTF16_OUTPUT_CASES) {
+        const decoder = createWindowsOutputDecoder({ platform: "win32", windowsEncoding });
+        expect(decoder.decode(raw) + decoder.flush()).toBe("hi\n");
+      }
+    },
+  );
 
-    expect(decoder.decode(Buffer.from("\uFEFFhello", "utf8"))).toBe("hello");
-    expect(decoder.flush()).toBe("");
+  it.each(["utf-8", "gbk"] as const)(
+    "decodes complete UTF-16 BOM output buffers with a %s console encoding",
+    (windowsEncoding) => {
+      for (const [, raw] of UTF16_OUTPUT_CASES) {
+        expect(decodeWindowsOutputBuffer({ buffer: raw, platform: "win32", windowsEncoding })).toBe(
+          "hi\n",
+        );
+      }
+    },
+  );
+
+  it.each(UTF16_OUTPUT_CASES)("decodes %s output across every chunk boundary", (_, raw) => {
+    for (let split = 1; split < raw.length; split += 1) {
+      const decoder = createWindowsOutputDecoder({
+        platform: "win32",
+        windowsEncoding: "gbk",
+      });
+      expect(
+        decoder.decode(raw.subarray(0, split)) +
+          decoder.decode(raw.subarray(split)) +
+          decoder.flush(),
+        `split ${split}`,
+      ).toBe("hi\n");
+    }
+  });
+
+  it("keeps empty-prefix and stdout/stderr decoder state isolated", () => {
+    const stdout = createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk" });
+    const stderr = createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk" });
+    const stdoutRaw = UTF16_OUTPUT_CASES[0][1];
+    const stderrRaw = UTF16_OUTPUT_CASES[1][1];
+
+    expect(stdout.decode(Buffer.alloc(0))).toBe("");
+    expect(stderr.decode(Buffer.alloc(0))).toBe("");
+    expect(stdout.decode(stdoutRaw.subarray(0, 1))).toBe("");
+    expect(stderr.decode(stderrRaw.subarray(0, 1))).toBe("");
+    expect(stdout.decode(Buffer.alloc(0))).toBe("");
+    expect(stderr.decode(Buffer.alloc(0))).toBe("");
+    expect(stdout.decode(stdoutRaw.subarray(1)) + stdout.flush()).toBe("hi\n");
+    expect(stderr.decode(stderrRaw.subarray(1)) + stderr.flush()).toBe("hi\n");
+  });
+
+  it.each(["utf-8", "gbk"] as const)(
+    "replays unmatched and lone UTF-16 BOM prefixes through the %s path",
+    (windowsEncoding) => {
+      for (const raw of [Buffer.from([0xff, 0x41]), Buffer.from([0xfe, 0x42])]) {
+        const decoder = createWindowsOutputDecoder({ platform: "win32", windowsEncoding });
+        expect(decoder.decode(raw.subarray(0, 1))).toBe("");
+        expect(decoder.decode(raw.subarray(1)) + decoder.flush()).toBe(
+          new TextDecoder(windowsEncoding).decode(raw),
+        );
+      }
+
+      const lonePrefix = Buffer.from([0xff]);
+      const decoder = createWindowsOutputDecoder({ platform: "win32", windowsEncoding });
+      expect(decoder.decode(lonePrefix)).toBe("");
+      expect(decoder.flush()).toBe(new TextDecoder(windowsEncoding).decode(lonePrefix));
+    },
+  );
+
+  it("strips a leading UTF-8 BOM by default", () => {
+    for (const params of [
+      { platform: "linux" },
+      { platform: "win32", windowsEncoding: "utf-8" },
+    ] as const) {
+      const decoder = createWindowsOutputDecoder(params);
+      expect(decoder.decode(Buffer.from("\uFEFFhello", "utf8")) + decoder.flush()).toBe("hello");
+    }
   });
 
   it("preserves a split UTF-8 BOM when requested on POSIX", () => {

@@ -283,7 +283,10 @@ Restart the gateway after changing this value.
 
 ## Permission configuration
 
-ACP sessions run non-interactively — there is no TTY to approve or deny file-write and shell-exec permission prompts. The acpx plugin provides two config keys that control how permissions are handled:
+ACP sessions run without an interactive TTY for file-write and shell-exec
+permission prompts. This does not disable ACP form or URL elicitation during a
+channel-delivered turn: those requests use transient Gateway questions instead.
+The acpx plugin provides two config keys that control harness permissions:
 
 These ACPX harness permissions are separate from OpenClaw exec approvals and separate from CLI-backend vendor bypass flags such as Claude CLI `--permission-mode bypassPermissions`. ACPX `approve-all` is the harness-level break-glass switch for ACP sessions.
 

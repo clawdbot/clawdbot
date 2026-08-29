@@ -2,6 +2,7 @@
 import type { Model, StreamFn } from "@openclaw/llm-core";
 import {
   type AgentCoreCompletionRuntimeDeps,
+  consumeAgentCoreStream,
   resolveAgentCoreCompleteFn,
 } from "../../runtime-deps.js";
 import type { AgentMessage } from "../../types.js";
@@ -232,7 +233,7 @@ export async function generateBranchSummary(
   const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
   const streamOptions = { apiKey, headers, signal, maxTokens: maxSummaryOutputTokens };
   const response = options.streamFn
-    ? await (await options.streamFn(model, context, streamOptions)).result()
+    ? await consumeAgentCoreStream(options.streamFn(model, context, streamOptions))
     : await resolveAgentCoreCompleteFn(options.runtime)(model, context, streamOptions);
   if (response.stopReason === "aborted") {
     return err(

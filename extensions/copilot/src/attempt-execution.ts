@@ -1,4 +1,3 @@
-import type { Tool as SdkTool } from "@github/copilot-sdk";
 import type {
   AgentMessage,
   AnyAgentTool,
@@ -99,7 +98,6 @@ export async function runCopilotExecution(context: {
   let timedOut = false;
   let promptError: Error | undefined;
   let sdkSessionId: string | undefined;
-  let sessionIdUsed = input.sessionId;
   // Resumed sessions may predate the atomic journal or survive a crash. Only a
   // session created under this journal can be deleted after incomplete cleanup.
   let nativeSessionCreatedFresh = false;
@@ -170,7 +168,6 @@ export async function runCopilotExecution(context: {
             now,
             promptError: undefined,
             sdkSessionId: undefined,
-            sessionIdUsed: input.sessionId,
           }),
         );
       }
@@ -184,7 +181,6 @@ export async function runCopilotExecution(context: {
             error,
           ),
           sdkSessionId: undefined,
-          sessionIdUsed: input.sessionId,
         }),
       );
     }
@@ -203,7 +199,6 @@ export async function runCopilotExecution(context: {
           "[copilot-attempt] cwd override is not supported for sandboxed Copilot runs; omit cwd or use the agent workspace as cwd",
         ),
         sdkSessionId: undefined,
-        sessionIdUsed: input.sessionId,
       }),
     );
   }
@@ -240,7 +235,6 @@ export async function runCopilotExecution(context: {
         now,
         promptError: createPromptError("model_not_supported", toCopilotError(error).message, error),
         sdkSessionId: undefined,
-        sessionIdUsed: input.sessionId,
       }),
     );
   }
@@ -253,8 +247,10 @@ export async function runCopilotExecution(context: {
     frameImageIdentity?: string;
   } = { value: 0 };
   let codeModeEngaged: boolean | undefined;
+  let promptToolPolicy:
+    | Awaited<ReturnType<typeof createToolBridge>>["promptToolPolicy"]
+    | undefined;
   try {
-    let sdkTools: SdkTool[] = [];
     let resultContentSourceByToolName = new Map<
       string,
       NonNullable<AnyAgentTool["resultContentSource"]>
@@ -299,7 +295,7 @@ export async function runCopilotExecution(context: {
         });
         cleanupToolBridge = toolBridge.cleanup;
         codeModeEngaged = toolBridge.codeModeEngaged;
-        sdkTools = toolBridge.sdkTools;
+        promptToolPolicy = toolBridge.promptToolPolicy;
         resultContentSourceByToolName = new Map(
           toolBridge.sourceTools.flatMap((tool) =>
             tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
@@ -315,7 +311,6 @@ export async function runCopilotExecution(context: {
             error,
           ),
           sdkSessionId: undefined,
-          sessionIdUsed: input.sessionId,
         });
         return finishAttempt(result);
       }
@@ -333,7 +328,7 @@ export async function runCopilotExecution(context: {
       operation: deps.operation,
       poolAcquire,
       ringZeroSystemAgentRun,
-      sdkTools,
+      promptToolPolicy,
       sessionProvider,
       settledToolFinalization,
       signal: params.abortSignal,
@@ -362,6 +357,8 @@ export async function runCopilotExecution(context: {
         session = (await client.resumeSession(resumeSessionId, {
           ...sessionConfig,
           continuePendingWork: false,
+          // Settled finalization must not replay lifecycle from the completed turn.
+          ...(settledToolFinalization ? { suppressResumeEvent: true } : {}),
         })) as unknown as SessionLike;
         nativeSessionHistoryValidated = input.initialReplayState?.journalValidated === true;
       } catch (error: unknown) {
@@ -397,7 +394,6 @@ export async function runCopilotExecution(context: {
         "[copilot-attempt] canonical transcript persistence requires the Copilot SDK session id",
       );
     }
-    sessionIdUsed = sdkSessionId ?? input.sessionId;
     if (sdkSessionId && deps.onSessionEstablished && !settledToolFinalization) {
       try {
         deps.onSessionEstablished({
@@ -471,6 +467,7 @@ export async function runCopilotExecution(context: {
         abortActiveSession,
         bridge,
         canAcceptSteering: () => initialSdkUserValidated,
+        startedAtMs: input.startedAtMs,
         input,
         isAborted: () => aborted,
         isSettled: () => settled,
@@ -658,7 +655,6 @@ export async function runCopilotExecution(context: {
     resumeFailureRecovered,
     sdkSessionId,
     sentTurnStarted,
-    sessionIdUsed,
     settledFinalizationAssistantCompleted,
     settledToolFinalization,
     timedOut,

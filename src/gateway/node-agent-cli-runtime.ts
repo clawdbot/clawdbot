@@ -2,9 +2,9 @@
 import { randomUUID } from "node:crypto";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeInvokeResult } from "./node-registry.js";
-import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 
 export async function invokeNodeClaudeCliRun(params: {
   nodeId: string;
@@ -23,7 +23,7 @@ export async function invokeNodeClaudeCliRun(params: {
   onProgress: (chunk: string) => void;
   signal?: AbortSignal;
 }): Promise<NodeInvokeResult> {
-  const context = getFallbackGatewayContext();
+  const context = getPluginRuntimeGatewayRequestScope()?.context;
   if (!context) {
     return {
       ok: false,

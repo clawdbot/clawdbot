@@ -2,16 +2,16 @@
 import { isIP } from "node:net";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
-  hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { hasUnresolvedConfigPath } from "../config/resolution-facts.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
+import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
@@ -48,34 +48,35 @@ export function collectGatewayConfigFindings(
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
     ? cfg.gateway.trustedProxies
     : [];
-  const hasToken = typeof auth.token === "string" && auth.token.trim().length > 0;
-  const hasPassword = typeof auth.password === "string" && auth.password.trim().length > 0;
-  const envTokenConfigured = hasNonEmptyString(env.OPENCLAW_GATEWAY_TOKEN);
-  const envPasswordConfigured = hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD);
-  const tokenConfiguredFromConfig = hasConfiguredSecretInput(
-    sourceConfig.gateway?.auth?.token,
-    sourceConfig.secrets?.defaults,
-  );
-  const passwordConfiguredFromConfig = hasConfiguredSecretInput(
-    sourceConfig.gateway?.auth?.password,
-    sourceConfig.secrets?.defaults,
-  );
-  const remoteTokenConfigured = hasConfiguredSecretInput(
-    sourceConfig.gateway?.remote?.token,
-    sourceConfig.secrets?.defaults,
-  );
+  const hasToken =
+    typeof auth.token === "string" &&
+    auth.token.trim().length > 0 &&
+    !hasUnresolvedConfigPath(sourceConfig, "gateway.auth.token");
+  const hasPassword =
+    typeof auth.password === "string" &&
+    auth.password.trim().length > 0 &&
+    !hasUnresolvedConfigPath(sourceConfig, "gateway.auth.password");
+  const plan = createGatewayCredentialPlan({ config: sourceConfig, env });
   const explicitAuthMode = options.gatewayAuthOverride?.mode ?? sourceConfig.gateway?.auth?.mode;
-  const tokenCanWin =
-    hasToken || envTokenConfigured || tokenConfiguredFromConfig || remoteTokenConfigured;
+  const tokenConfigured = Boolean(
+    hasToken ||
+    plan.envToken ||
+    plan.localToken.value ||
+    plan.localToken.hasSecretRef ||
+    plan.remoteToken.value ||
+    plan.remoteToken.hasSecretRef,
+  );
   const passwordCanWin =
     explicitAuthMode === "password" ||
     (explicitAuthMode !== "token" &&
       explicitAuthMode !== "none" &&
       explicitAuthMode !== "trusted-proxy" &&
-      !tokenCanWin);
-  const tokenConfigured = tokenCanWin;
-  const passwordConfigured =
-    hasPassword || (passwordCanWin && (envPasswordConfigured || passwordConfiguredFromConfig));
+      !tokenConfigured);
+  const passwordConfigured = Boolean(
+    hasPassword ||
+    (passwordCanWin &&
+      (plan.envPassword || plan.localPassword.value || plan.localPassword.hasSecretRef)),
+  );
   const hasSharedSecret =
     explicitAuthMode === "token"
       ? tokenConfigured
@@ -84,8 +85,8 @@ export function collectGatewayConfigFindings(
         : explicitAuthMode === "none" || explicitAuthMode === "trusted-proxy"
           ? false
           : tokenConfigured || passwordConfigured;
-  const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
-  const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
+  const hasGatewayAuth = hasSharedSecret || auth.mode === "trusted-proxy";
+  const hasLoopbackAuth = hasGatewayAuth || (auth.allowTailscale && tailscaleMode === "serve");
   const allowRealIpFallback = cfg.gateway?.allowRealIpFallback === true;
   const mdnsMode = cfg.discovery?.mdns?.mode ?? "minimal";
 
@@ -114,7 +115,7 @@ export function collectGatewayConfigFindings(
         "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
     });
   }
-  if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {
+  if (bind !== "loopback" && !hasGatewayAuth) {
     findings.push({
       checkId: "gateway.bind_no_auth",
       severity: "critical",
@@ -149,7 +150,7 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  if (bind === "loopback" && controlUiEnabled && !hasGatewayAuth) {
+  if (bind === "loopback" && controlUiEnabled && !hasLoopbackAuth) {
     findings.push({
       checkId: "gateway.loopback_no_auth",
       severity: "critical",
@@ -292,7 +293,6 @@ export function collectGatewayConfigFindings(
   }
 
   if (auth.mode === "trusted-proxy") {
-    const trustedProxiesLocal = cfg.gateway?.trustedProxies ?? [];
     const trustedProxyConfig = cfg.gateway?.auth?.trustedProxy;
 
     findings.push({
@@ -307,10 +307,11 @@ export function collectGatewayConfigFindings(
         "Verify: (1) Your proxy terminates TLS and authenticates users. " +
         "(2) gateway.trustedProxies is restricted to proxy IPs only. " +
         "(3) Direct access to the Gateway port is blocked by firewall. " +
+        "Same-host proxy requests are rejected unless gateway.auth.trustedProxy.allowLoopback=true and gateway.trustedProxies includes their loopback source; enable only for a deliberate same-host trust boundary. " +
         "See /gateway/trusted-proxy-auth for setup guidance.",
     });
 
-    if (trustedProxiesLocal.length === 0) {
+    if (trustedProxies.length === 0) {
       findings.push({
         checkId: "gateway.trusted_proxy_no_proxies",
         severity: "critical",
@@ -372,7 +373,7 @@ export function collectGatewayConfigFindings(
           detail:
             "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new browser device with full admin; requests without scopes receive full admin automatically.",
           remediation:
-            "Remove operator.admin and approve admin access manually, or use per-identity roles when they become available.",
+            "Remove operator.admin and approve admin access manually, or grant admin per identity via gateway.auth.identityScopes.",
         });
       }
     }

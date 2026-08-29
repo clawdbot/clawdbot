@@ -16,8 +16,8 @@ type NavigationItem = {
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
 // Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
+// Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
-  "workboard",
   "dashboards",
   "usage",
   "cron",
@@ -28,6 +28,10 @@ export const SIDEBAR_NAV_ROUTES = [
   "apps",
   "portals",
 ] as const satisfies readonly NavigationRouteId[];
+
+// `route:workboard` shipped in browser and synced preferences before Workboard
+// became plugin-owned. Keep it as a placement slot, but not a customizable core route.
+const PERSISTED_SIDEBAR_ROUTES = ["workboard", ...SIDEBAR_NAV_ROUTES] as const;
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
 // Plugins entry for all of them, mirroring how config covers settings routes.
@@ -50,9 +54,14 @@ export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
 }
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
+export type PersistedSidebarRoute = (typeof PERSISTED_SIDEBAR_ROUTES)[number];
+
+export function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute {
+  return PERSISTED_SIDEBAR_ROUTES.includes(value as PersistedSidebarRoute);
+}
 
 export type SidebarZoneEntry =
-  | { type: "route"; route: SidebarNavRoute }
+  | { type: "route"; route: PersistedSidebarRoute }
   | { type: "workboard"; boardId: string }
   | { type: "session"; key: string };
 
@@ -71,9 +80,7 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
   }
   if (value.startsWith("route:")) {
     const route = value.slice("route:".length);
-    return SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)
-      ? { type: "route", route: route as SidebarNavRoute }
-      : null;
+    return isPersistedSidebarRoute(route) ? { type: "route", route } : null;
   }
   if (value.startsWith("session:")) {
     const key = value.slice("session:".length).trim();
@@ -178,7 +185,7 @@ export function settingsSearchTextMatches(value: string, query: string): boolean
 // by user attention: personal/look-and-feel first, system plumbing last.
 // Management surfaces (sessions, worktrees, activity, memory import) are
 // workspace destinations, not settings; model setup is a subpage of Models.
-export const SETTINGS_NAVIGATION_GROUPS = [
+const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
   {
     labelKey: "nav.settingsGroupConnections",
@@ -197,6 +204,41 @@ export const SETTINGS_NAVIGATION_GROUPS = [
     routes: ["infrastructure", "advanced", "debug", "logs", "updates", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
+
+const NON_ADMIN_SETTINGS_NAVIGATION_GROUPS = [
+  { labelKey: null, routes: ["profile", "appearance", "notifications"] },
+  {
+    labelKey: "nav.settingsGroupConnections",
+    routes: ["connection", "channels", "talk", "devices"],
+  },
+  {
+    labelKey: "nav.settingsGroupAgents",
+    routes: ["agents", "model-providers", "memory"],
+  },
+  { labelKey: "nav.settingsGroupSecurity", routes: ["approvals"] },
+  {
+    labelKey: "nav.settingsGroupSystem",
+    routes: ["advanced", "debug", "logs", "about"],
+  },
+] as const satisfies readonly SettingsNavigationGroup[];
+
+export function isSettingsNavigationRouteVisible(
+  routeId: NavigationRouteId,
+  canAdmin: boolean,
+): boolean {
+  return (
+    canAdmin ||
+    NON_ADMIN_SETTINGS_NAVIGATION_GROUPS.some((group) =>
+      group.routes.some((candidate) => candidate === routeId),
+    )
+  );
+}
+
+export function visibleSettingsNavigationGroups(
+  canAdmin: boolean,
+): readonly SettingsNavigationGroup[] {
+  return canAdmin ? SETTINGS_NAVIGATION_GROUPS : NON_ADMIN_SETTINGS_NAVIGATION_GROUPS;
+}
 
 // Settings subpages render with settings chrome but stay out of the sidebar.
 // Subpages with a visible owner keep that owner selected so users retain
@@ -399,24 +441,24 @@ export function titleForRoute(routeId: NavigationRouteId): string {
 }
 
 /** Window/tab title, markers leftmost because tabs truncate from the right.
- * Offline replaces the approval count (a stale queue is not actionable) and
- * carries the pending-outbox total; titles already ending in the brand
+ * A disconnected Gateway replaces the approval count (a stale queue is not
+ * actionable) and carries the pending-outbox total; titles already ending in the brand
  * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
 export function formatDocumentTitle(options: {
   context: string;
   attentionCount?: number;
-  offline?: boolean;
+  gatewayDisconnected?: boolean;
   queuedCount?: number;
 }): string {
   const base = options.context.endsWith("OpenClaw")
     ? options.context
     : `${options.context} — OpenClaw`;
-  if (options.offline) {
+  if (options.gatewayDisconnected) {
     const queued =
       options.queuedCount && options.queuedCount > 0
         ? ` · ${t("connection.queuedCount", { count: String(options.queuedCount) })}`
         : "";
-    return `(${t("common.offline")}${queued}) ${base}`;
+    return `(${t("connection.disconnectedTitle")}${queued}) ${base}`;
   }
   if (options.attentionCount && options.attentionCount > 0) {
     return `(${options.attentionCount}) ${base}`;

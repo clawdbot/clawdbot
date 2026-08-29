@@ -9,13 +9,13 @@ import type {
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
-  SessionMembersListResult,
+  SessionMembersListEvidenceResult as SessionSharingResult,
   SessionVisibility,
 } from "../../api/types.ts";
-import { hasMultiplePresenceIdentities } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { hasMultiplePresenceIdentities } from "../../lib/presence-users.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
@@ -29,14 +29,15 @@ import {
   type ChatPaneConnectionScope,
 } from "./chat-pane-shared.ts";
 import { resetSessionCompanion } from "./chat-session-companion.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import { clearTypingActorForSessionMessage } from "./chat-typing-presence.ts";
 import {
   canManageChatSessionSharing,
   type ChatSessionSharingState,
 } from "./components/chat-session-sharing.ts";
 
 type HeaderScope = ChatPaneConnectionScope;
+const SESSION_MEMBERS_LIST_METHOD = "session.members.listEvidence";
 
 export abstract class ChatPaneSharing extends ChatPaneBase {
   protected readonly clearSessionCompanion = async () => {
@@ -99,7 +100,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       !scope ||
       !currentRow ||
       !readSessionMethodAccess(scope.context.gateway.snapshot, {
-        method: "session.members.list",
+        method: SESSION_MEMBERS_LIST_METHOD,
         requiredScope: "operator.read",
       }).allowed
     ) {
@@ -128,7 +129,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     };
     this.setSessionSharingState(cacheKey, loadingState);
     try {
-      const result = await scope.client.request<SessionMembersListResult>("session.members.list", {
+      const result = await scope.client.request<SessionSharingResult>(SESSION_MEMBERS_LIST_METHOD, {
         sessionKey: currentRow.key,
         ...(this.sessionSharingAgentId(currentRow.key)
           ? { agentId: this.sessionSharingAgentId(currentRow.key) }
@@ -331,15 +332,6 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
 
   protected hasMultipleIdentities(): boolean {
     return hasMultiplePresenceIdentities(this.presencePayload);
-  }
-
-  protected isCurrentSessionArchived(state: ChatPageHost): boolean {
-    return (
-      state.selectedChatSessionArchived ||
-      state.sessionsResult?.sessions.some(
-        (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
-      ) === true
-    );
   }
 
   protected resetSessionSuggestions(): void {
@@ -671,6 +663,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     this.typingActors.set(event.actor.id, {
       label: event.actor.label ?? event.actor.id,
       expiresAt,
+      ...(event.preview ? { preview: event.preview } : {}),
     });
     this.typingTimers.set(
       event.actor.id,
@@ -685,13 +678,29 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     this.requestUpdate();
   }
 
-  protected typingActorViews(): { id: string; label: string }[] {
+  protected clearTypingActorForSessionMessage(payload: unknown): void {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    if (
+      clearTypingActorForSessionMessage(payload, this.typingActors, this.typingTimers, {
+        agentsList: this.context.agents.state.agentsList,
+        hello: this.context.gateway.snapshot.hello,
+        sessionKey: state.sessionKey,
+      })
+    ) {
+      this.requestUpdate();
+    }
+  }
+
+  protected typingActorViews(): { id: string; label: string; preview?: string }[] {
     return [...this.typingActors]
-      .map(([id, actor]) => ({ id, label: actor.label }))
+      .map(([id, { label, preview }]) => (preview ? { id, label, preview } : { id, label }))
       .toSorted((left, right) => left.label.localeCompare(right.label));
   }
 
-  protected sendTypingState(typing: boolean): void {
+  protected sendTypingState(typing: boolean, preview?: string): void {
     const scope = this.captureConnectionScope();
     if (!scope || !this.hasMultipleIdentities()) {
       return;
@@ -703,11 +712,14 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     if (!sessionId) {
       return;
     }
+    const draft = typing ? preview?.trim() : undefined;
+    const draftPreview = draft ? Array.from(draft).slice(-300).join("") : undefined;
     void scope.client
       .request("session.typing", {
         sessionKey,
         sessionId,
         typing,
+        ...(draftPreview ? { preview: draftPreview } : {}),
         ...scopedAgentParamsForSession(scope.state, sessionKey),
       })
       .catch(() => undefined);

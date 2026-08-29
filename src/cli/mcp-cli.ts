@@ -331,7 +331,7 @@ async function collectMcpDoctorIssues(params: {
           }
         }
         const headers = asRecord(server.headers);
-        if (headers && "Authorization" in headers) {
+        if (headers && Object.keys(headers).some((key) => key.toLowerCase() === "authorization")) {
           issues.push(
             issue("warning", "OAuth is enabled and the static Authorization header is ignored"),
           );
@@ -679,7 +679,7 @@ export function registerMcpCli(program: Command) {
         });
       } catch (err) {
         defaultRuntime.error(
-          `MCP server failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw mcp list")} to inspect configured servers.`,
+          `MCP server failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep --require-rpc")} to inspect Gateway health.`,
         );
         defaultRuntime.exit(1);
       }
@@ -829,6 +829,15 @@ export function registerMcpCli(program: Command) {
         fail(
           `MCP server "${name}" is disabled in ${loaded.path}. Run ${formatCliCommand(`openclaw mcp configure ${name} --enable`)} before probing it.`,
         );
+      }
+      // Without this the human output is a bare header: both probe loops are empty,
+      // so an operator with no servers sees no outcome and no next step. JSON keeps
+      // emitting its empty envelope so machine consumers see a stable shape.
+      if (!opts.json && Object.keys(servers).length === 0) {
+        defaultRuntime.log(
+          `No MCP servers configured in ${loaded.path}. Add one with ${formatCliCommand("openclaw mcp add <name> --command <command>")}.`,
+        );
+        return;
       }
       const runtime = createSessionMcpRuntime({
         sessionId: "openclaw-cli-mcp-probe",
@@ -1088,6 +1097,10 @@ export function registerMcpCli(program: Command) {
         if (!loaded.ok) {
           fail(loaded.error);
         }
+        const targetName = name.trim();
+        if (targetName && Object.hasOwn(loaded.mcpServers, targetName)) {
+          fail(`MCP server ${JSON.stringify(targetName)} already exists.`);
+        }
         const shouldProbe =
           opts.probe !== false && server.enabled !== false && server.auth !== "oauth";
         if (shouldProbe) {
@@ -1097,7 +1110,7 @@ export function registerMcpCli(program: Command) {
             servers: { [name]: server },
           });
         }
-        const result = await setConfiguredMcpServer({ name, server });
+        const result = await setConfiguredMcpServer({ name, server, createOnly: true });
         if (!result.ok) {
           fail(result.error);
         }
@@ -1236,6 +1249,7 @@ export function registerMcpCli(program: Command) {
           const exclude = parseCsvList(opts.exclude);
           if (include || exclude) {
             next.toolFilter = {
+              ...asRecord(next.toolFilter),
               ...(include ? { include } : {}),
               ...(exclude ? { exclude } : {}),
             };
@@ -1292,7 +1306,7 @@ export function registerMcpCli(program: Command) {
           clientMetadataUrl: opts.oauthClientMetadataUrl,
         });
         if (oauth) {
-          next.oauth = oauth;
+          next.oauth = { ...asRecord(next.oauth), ...oauth };
         }
         if (opts.clearTls) {
           delete next.sslVerify;

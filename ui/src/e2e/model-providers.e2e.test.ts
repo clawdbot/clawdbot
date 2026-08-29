@@ -95,9 +95,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         },
         "models.list": {
           cases: [
-            { match: { view: "configured" }, response: { models: [] } },
             {
-              match: { view: "all", agentId: "main", refresh: true },
+              match: { view: "configured", agentId: "main", preparedOnly: true },
+              response: { models: [] },
+            },
+            {
+              match: { view: "configured", agentId: "main", refresh: true },
               response: {
                 models: [],
                 providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
@@ -185,7 +188,8 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         (await gateway.getRequests("models.list")).filter(
           (request) => (request.params as { view?: string } | undefined)?.view === "all",
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toHaveLength(2);
 
       await readiness.getByRole("button", { name: "Connect a verified AI model" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
@@ -199,6 +203,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 1200, width: 1280 },
+      ...(recordVisuals
+        ? { recordVideo: { dir: artifactDir, size: { height: 1200, width: 1280 } } }
+        : {}),
     });
     const page = await context.newPage();
     await installMockGateway(page, {
@@ -220,7 +227,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
               provider: "claude-cli",
               displayName: "Claude",
               status: "ok",
-              profiles: [{ profileId: "anthropic:default", type: "oauth", status: "ok" }],
+              profiles: [{ profileId: "anthropic:default", type: "oauth", status: "expired" }],
               usage: {
                 providerId: "anthropic",
                 plan: "Max 20x",
@@ -301,8 +308,20 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         .toContain("anthropic");
       await expect.poll(async () => claudeCard.textContent()).toContain("Max 20x");
       await expect.poll(async () => claudeCard.textContent()).toContain("Credentials configured");
+      await expect.poll(async () => claudeCard.textContent()).not.toContain("Expired");
+      await expect.poll(async () => claudeCard.textContent()).not.toContain("Expiring");
+      await expect.poll(async () => claudeCard.textContent()).not.toContain("Not signed in");
       await expect.poll(async () => claudeCard.textContent()).toContain("$4.20");
       await claudeCard.locator(".provider-usage-progress").first().waitFor();
+      await expect.poll(() => page.getByText("Model auth expired: Claude").count()).toBe(0);
+
+      if (recordVisuals) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "claude-cli-oauth-alias.png"),
+        });
+      }
 
       const openrouterCard = page.locator(".model-providers__row", { hasText: "OpenRouter" });
       await openrouterCard.waitFor();
@@ -371,6 +390,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         const utilityField = defaults.locator(".field").nth(1);
         const utilityLabel = utilityField.locator(".model-providers__utility-label");
         await utilityField.waitFor();
+        expect(await utilityLabel.evaluate((node) => getComputedStyle(node).columnGap)).toBe("8px");
         await expect
           .poll(() => modelPickerValue(utilityField.locator("wa-select")))
           .toBe("__openclaw_automatic_utility__");
@@ -389,6 +409,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
 
         const helpButton = defaults.getByRole("button", { name: "About the utility model" });
         await expect.poll(() => helpButton.count()).toBe(1);
+        await expect.poll(() => helpButton.locator("svg").count()).toBe(1);
         expect(await helpButton.getAttribute("aria-haspopup")).toBe("dialog");
 
         const defaultColor = await helpButton.evaluate((node) => getComputedStyle(node).color);
@@ -396,6 +417,23 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         await expect
           .poll(() => helpButton.evaluate((node) => getComputedStyle(node).color))
           .not.toBe(defaultColor);
+        const hoverTooltip = utilityLabel.locator("openclaw-tooltip wa-tooltip");
+        expect(await hoverTooltip.count()).toBe(1);
+        await expect
+          .poll(() => hoverTooltip.evaluate((node) => node.hasAttribute("open")))
+          .toBe(true);
+        await expect.poll(() => hoverTooltip.textContent()).toContain("short background tasks");
+        const helpButtonBox = await helpButton.boundingBox();
+        expect(helpButtonBox).not.toBeNull();
+        expect(helpButtonBox?.width).toBeLessThanOrEqual(16);
+        expect(helpButtonBox?.height).toBeLessThanOrEqual(16);
+        if (recordVisuals) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(utilityHelpArtifactDir, `${colorScheme}-hover-tooltip-full.png`),
+          });
+        }
 
         await helpButton.click();
         const popover = page.locator("wa-popover.model-providers__utility-help-popover");
@@ -712,12 +750,15 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
 
       await openaiCard.getByRole("button", { name: "Replace key" }).click();
       await openaiCard.getByLabel("API key").fill(openaiInputValue);
+      // The { after } cursor waits for and returns the save-triggered patch,
+      // so a slow runner can't hand back an earlier config.patch stale.
       const patchCount = (await gateway.getRequests("config.patch")).length;
       await openaiCard.getByRole("button", { name: "Save" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("config.patch")).length)
-        .toBe(patchCount + 1);
-      const keyPatch = requestRaw(await gateway.waitForRequest("config.patch"));
+      const keyPatch = requestRaw(
+        await gateway.waitForRequest("config.patch", {
+          after: patchCount,
+        }),
+      );
       expect(keyPatch).toEqual({
         models: { providers: { openai: providerConfig(openaiInputValue) } },
       });
@@ -755,10 +796,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         })
         .getByRole("button", { name: "Save" })
         .click();
-      await expect
-        .poll(async () => (await gateway.getRequests("config.patch")).length)
-        .toBe(defaultPatchCount + 1);
-      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toEqual({
+      expect(
+        requestRaw(await gateway.waitForRequest("config.patch", { after: defaultPatchCount })),
+      ).toEqual({
         agents: {
           defaults: {
             model: "anthropic/claude-sonnet-4-5",
@@ -822,10 +862,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       });
       const addPatchCount = (await gateway.getRequests("config.patch")).length;
       await addSection.getByRole("button", { name: "Save provider" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("config.patch")).length)
-        .toBe(addPatchCount + 1);
-      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toEqual({
+      expect(
+        requestRaw(await gateway.waitForRequest("config.patch", { after: addPatchCount })),
+      ).toEqual({
         models: { providers: { google: providerConfig(googleInputValue) } },
       });
       await page.locator('[data-provider-id="google"]').waitFor();

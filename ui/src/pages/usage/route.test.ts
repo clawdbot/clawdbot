@@ -7,6 +7,35 @@ import { page } from "./route.ts";
 import type { UsageRouteData } from "./usage-page.ts";
 
 describe("usage route", () => {
+  it("records a provider usage request failure separately from an empty response", async () => {
+    const request = vi.fn(async (method: string) => {
+      switch (method) {
+        case "sessions.usage":
+          return { sessions: [], totals: null };
+        case "usage.cost":
+          return { daily: [] };
+        case "usage.status":
+          throw new Error("gateway transport unavailable");
+        default:
+          return {};
+      }
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const gateway = { snapshot: { phase: "connected", client } };
+    const context = {
+      gateway,
+      agentSelection: { state: { scopeId: "main" } },
+    } as unknown as ApplicationContext;
+
+    const result = (await page.loader?.(context, {} as RouteLoaderOptions)) as UsageRouteData;
+
+    expect(result.error).toBeNull();
+    expect(result.providerUsage).toEqual({
+      state: "settled",
+      result: { ok: false, error: { kind: "request-failed" } },
+    });
+  });
+
   it("redacts secrets in displayed loader failures", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.usage") {

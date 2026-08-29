@@ -34,7 +34,7 @@ function makeMismatchedWrapperRepo() {
   mkdirSync(bin, { recursive: true });
   mkdirSync(home, { recursive: true });
   // This fixture exercises wrapper trust routing, not the host command inventory.
-  for (const command of ["jq", "pnpm", "rg"]) {
+  for (const command of ["pnpm", "rg"]) {
     const commandPath = join(bin, command);
     writeFileSync(commandPath, "#!/bin/sh\nexit 0\n");
     chmodSync(commandPath, 0o755);
@@ -44,7 +44,7 @@ function makeMismatchedWrapperRepo() {
   const ghStub = join(bin, "gh");
   writeFileSync(
     ghStub,
-    '#!/bin/sh\nif [ "$1" = "pr" ] && [ "$2" = "view" ]; then\n  echo not-main\n  exit 0\nfi\nexit 0\n',
+    '#!/bin/sh\nif [ "$1" = "pr" ] && [ "$2" = "view" ]; then\n  printf \'{"baseRefName":"not-main"}\\n\'\n  exit 0\nfi\nexit 0\n',
   );
   chmodSync(ghStub, 0o755);
 
@@ -71,9 +71,22 @@ function makeMismatchedWrapperRepo() {
   git(root, ["init", "-b", "main", canonicalPath]);
   const canonical = realpathSync(canonicalPath);
   const origin = realpathSync(originPath);
+  mkdirSync(join(canonical, ".github", "workflows"), { recursive: true });
   mkdirSync(join(canonical, "scripts", "lib"), { recursive: true });
   cpSync("scripts/pr-lib", join(canonical, "scripts", "pr-lib"), { recursive: true });
   writeFileSync(join(canonical, "scripts", "pr"), readScript("scripts/pr"));
+  cpSync(
+    ".github/workflows/pr-crabbox-gate-publisher.yml",
+    join(canonical, ".github", "workflows", "pr-crabbox-gate-publisher.yml"),
+  );
+  cpSync(
+    "scripts/crabbox-untrusted-bootstrap.sh",
+    join(canonical, "scripts", "crabbox-untrusted-bootstrap.sh"),
+  );
+  cpSync(
+    "scripts/pr-crabbox-gate-publisher.mjs",
+    join(canonical, "scripts", "pr-crabbox-gate-publisher.mjs"),
+  );
   cpSync("scripts/watch-pr-ci.mjs", join(canonical, "scripts", "watch-pr-ci.mjs"));
   cpSync("scripts/watch-pr-ci.mts", join(canonical, "scripts", "watch-pr-ci.mts"));
   cpSync(
@@ -87,6 +100,11 @@ function makeMismatchedWrapperRepo() {
   cpSync("scripts/lib/plain-gh.mjs", join(canonical, "scripts", "lib", "plain-gh.mjs"));
   cpSync("scripts/lib/direct-run.mjs", join(canonical, "scripts", "lib", "direct-run.mjs"));
   cpSync("scripts/lib/tsx-cli-shim.mjs", join(canonical, "scripts", "lib", "tsx-cli-shim.mjs"));
+  cpSync(
+    "scripts/lib/local-check-runtime.mts",
+    join(canonical, "scripts", "lib", "local-check-runtime.mts"),
+  );
+  cpSync("scripts/tsx.mjs", join(canonical, "scripts", "tsx.mjs"));
   writeFileSync(
     join(canonical, "scripts", "lib", "plain-gh.sh"),
     "resolve_plain_gh_bin() { printf '/usr/bin/true\\n'; }\ngh_plain() { :; }\n",
@@ -104,7 +122,7 @@ function makeMismatchedWrapperRepo() {
   git(canonical, ["config", "commit.gpgSign", "false"]);
   git(canonical, ["config", "core.hooksPath", "/dev/null"]);
   git(canonical, ["remote", "add", "origin", origin]);
-  git(canonical, ["add", "scripts"]);
+  git(canonical, ["add", "scripts", ".github"]);
   git(canonical, ["commit", "-m", "test: canonical wrapper"]);
   git(canonical, ["push", "-u", "origin", "main"]);
   git(canonical, ["worktree", "add", "-b", "feature", linkedPath, "main"]);
@@ -201,6 +219,7 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain("scripts/verify-pr-hosted-gates.mjs");
     expect(script).toContain("scripts/verify-pr-hosted-gates.mts");
     expect(script).toContain("scripts/lib/tsx-cli-shim.mjs");
+    expect(script).toContain("scripts/tsx.mjs");
     expect(script).toContain("scripts/lib/plain-gh.mjs");
     expect(script).toContain("scripts/lib/direct-run.mjs");
     expect(script).toContain("scripts/pr review-init <PR>");
@@ -219,13 +238,15 @@ describe("scripts/pr wrappers", () => {
 
   it("routes cached reads and writer-sensitive operations through their owning gh seams", () => {
     const script = readScript("scripts/pr");
+    const common = readScript("scripts/pr-lib/common.sh");
     const worktree = readScript("scripts/pr-lib/worktree.sh");
     const review = readScript("scripts/pr-lib/review.sh");
     const push = readScript("scripts/pr-lib/push.sh");
     const merge = readScript("scripts/pr-lib/merge.sh");
 
-    expect(script).toContain('base=$(gh pr view "$pr" --json baseRefName --jq .baseRefName)');
-    expect(worktree).toContain('metadata=$(gh pr view "$pr" --json');
+    expect(script).toContain('base_json=$(read_pr_view_json "$pr" "baseRefName")');
+    expect(common).toContain('gh pr view "$pr" --json "$fields"');
+    expect(worktree).toContain('metadata=$(read_pr_view_json "$pr"');
     expect(worktree).toContain('gh_plain api --paginate "repos/{owner}/{repo}/pulls/$pr/files');
     expect(review).toContain("reviewer=$(gh_plain api user --jq .login");
     expect(review).toContain('gh_plain pr edit "$pr" --add-assignee "$reviewer"');
@@ -429,13 +450,22 @@ describe("scripts/pr wrappers", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-wrapper-revision-"));
     const repo = join(dir, "repo");
     const linked = join(dir, "linked");
+    mkdirSync(join(repo, ".github", "workflows"), { recursive: true });
     mkdirSync(join(repo, "scripts", "lib"), { recursive: true });
     mkdirSync(join(repo, "scripts", "pr-lib"), { recursive: true });
     writeFileSync(join(repo, "scripts", "pr"), readScript("scripts/pr"));
+    writeFileSync(
+      join(repo, ".github", "workflows", "pr-crabbox-gate-publisher.yml"),
+      "name: canonical\n",
+    );
+    writeFileSync(join(repo, "scripts", "crabbox-untrusted-bootstrap.sh"), "# canonical\n");
+    writeFileSync(join(repo, "scripts", "pr-crabbox-gate-publisher.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "plain-gh.sh"), "# canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "plain-gh.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "direct-run.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "tsx-cli-shim.mjs"), "// canonical\n");
+    writeFileSync(join(repo, "scripts", "lib", "local-check-runtime.mts"), "// canonical\n");
+    writeFileSync(join(repo, "scripts", "tsx.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "watch-pr-ci.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "watch-pr-ci.mts"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "verify-pr-hosted-gates.mjs"), "// canonical\n");
@@ -448,40 +478,38 @@ describe("scripts/pr wrappers", () => {
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
     expect(git(repo, ["config", "user.name", "OpenClaw Test"]).status).toBe(0);
     expect(git(repo, ["config", "user.email", "test@example.invalid"]).status).toBe(0);
-    expect(git(repo, ["add", "scripts"]).status).toBe(0);
+    expect(git(repo, ["add", "scripts", ".github"]).status).toBe(0);
     expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
     expect(git(repo, ["worktree", "add", "-b", "feature", linked]).status).toBe(0);
 
-    writeFileSync(join(linked, "scripts", "pr-lib", "merge.sh"), "# dirty linked\n");
-    const dirtyLinkedResult = spawnSync(join(linked, "scripts", "pr"), ["ls"], {
-      cwd: linked,
-      encoding: "utf8",
-    });
-    expect(dirtyLinkedResult.status).toBe(1);
-    expect(dirtyLinkedResult.stderr).toContain("scripts/pr wrapper files have uncommitted changes");
-    expect(git(linked, ["restore", "scripts/pr-lib/merge.sh"]).status).toBe(0);
+    for (const component of [
+      "scripts/pr-lib/merge.sh",
+      "scripts/watch-pr-ci.mts",
+      "scripts/verify-pr-hosted-gates.mts",
+      "scripts/lib/local-check-runtime.mts",
+    ]) {
+      writeFileSync(join(linked, component), "# dirty linked\n");
+      const dirtyResult = spawnSync(join(linked, "scripts", "pr"), ["ls"], {
+        cwd: linked,
+        encoding: "utf8",
+      });
+      expect(dirtyResult.status, component).toBe(1);
+      expect(dirtyResult.stderr, component).toContain(
+        "scripts/pr wrapper files have uncommitted changes",
+      );
+      expect(git(linked, ["restore", component]).status).toBe(0);
+    }
 
-    writeFileSync(join(linked, "scripts", "watch-pr-ci.mts"), "// dirty watcher\n");
-    const dirtyWatcherResult = spawnSync(join(linked, "scripts", "pr"), ["ls"], {
+    writeFileSync(join(linked, "scripts", "tsx.mjs"), "// dirty preloader\n");
+    const dirtyPreloaderResult = spawnSync(join(linked, "scripts", "pr"), ["ls"], {
       cwd: linked,
       encoding: "utf8",
     });
-    expect(dirtyWatcherResult.status).toBe(1);
-    expect(dirtyWatcherResult.stderr).toContain(
+    expect(dirtyPreloaderResult.status).toBe(1);
+    expect(dirtyPreloaderResult.stderr).toContain(
       "scripts/pr wrapper files have uncommitted changes",
     );
-    expect(git(linked, ["restore", "scripts/watch-pr-ci.mts"]).status).toBe(0);
-
-    writeFileSync(join(linked, "scripts", "verify-pr-hosted-gates.mts"), "// dirty verifier\n");
-    const dirtyVerifierResult = spawnSync(join(linked, "scripts", "pr"), ["ls"], {
-      cwd: linked,
-      encoding: "utf8",
-    });
-    expect(dirtyVerifierResult.status).toBe(1);
-    expect(dirtyVerifierResult.stderr).toContain(
-      "scripts/pr wrapper files have uncommitted changes",
-    );
-    expect(git(linked, ["restore", "scripts/verify-pr-hosted-gates.mts"]).status).toBe(0);
+    expect(git(linked, ["restore", "scripts/tsx.mjs"]).status).toBe(0);
 
     // A dirty canonical checkout no longer blocks a linked worktree whose
     // committed wrapper matches the origin/main trust anchor; without that
@@ -497,8 +525,8 @@ describe("scripts/pr wrappers", () => {
     );
     expect(git(repo, ["restore", "scripts/pr-lib/merge.sh"]).status).toBe(0);
 
-    writeFileSync(join(linked, "scripts", "pr-lib", "merge.sh"), "# linked\n");
-    expect(git(linked, ["add", "scripts/pr-lib/merge.sh"]).status).toBe(0);
+    writeFileSync(join(linked, "scripts", "lib", "local-check-runtime.mts"), "// linked\n");
+    expect(git(linked, ["add", "scripts/lib/local-check-runtime.mts"]).status).toBe(0);
     expect(git(linked, ["commit", "-m", "test: linked wrapper"]).status).toBe(0);
 
     const result = spawnSync(join(linked, "scripts", "pr"), ["ls"], {
@@ -511,19 +539,29 @@ describe("scripts/pr wrappers", () => {
     expect(result.stderr).toContain(
       "scripts/pr implementation differs between this worktree and the canonical checkout",
     );
+    expect(result.stderr).toContain("scripts/lib/local-check-runtime.mts");
   });
 
   it("runs the local wrapper when it matches origin/main and the canonical checkout is parked elsewhere", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-wrapper-anchor-"));
     const repo = join(dir, "repo");
     const linked = join(dir, "linked");
+    mkdirSync(join(repo, ".github", "workflows"), { recursive: true });
     mkdirSync(join(repo, "scripts", "lib"), { recursive: true });
     mkdirSync(join(repo, "scripts", "pr-lib"), { recursive: true });
     writeFileSync(join(repo, "scripts", "pr"), readScript("scripts/pr"));
+    writeFileSync(
+      join(repo, ".github", "workflows", "pr-crabbox-gate-publisher.yml"),
+      "name: canonical\n",
+    );
+    writeFileSync(join(repo, "scripts", "crabbox-untrusted-bootstrap.sh"), "# canonical\n");
+    writeFileSync(join(repo, "scripts", "pr-crabbox-gate-publisher.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "plain-gh.sh"), "# canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "plain-gh.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "direct-run.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "tsx-cli-shim.mjs"), "// canonical\n");
+    writeFileSync(join(repo, "scripts", "lib", "local-check-runtime.mts"), "// canonical\n");
+    writeFileSync(join(repo, "scripts", "tsx.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "watch-pr-ci.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "watch-pr-ci.mts"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "verify-pr-hosted-gates.mjs"), "// canonical\n");
@@ -536,7 +574,7 @@ describe("scripts/pr wrappers", () => {
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
     expect(git(repo, ["config", "user.name", "OpenClaw Test"]).status).toBe(0);
     expect(git(repo, ["config", "user.email", "test@example.invalid"]).status).toBe(0);
-    expect(git(repo, ["add", "scripts"]).status).toBe(0);
+    expect(git(repo, ["add", "scripts", ".github"]).status).toBe(0);
     expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
     // The linked worktree keeps main's wrapper; origin/main anchors trust.
     expect(git(repo, ["update-ref", "refs/remotes/origin/main", "main"]).status).toBe(0);

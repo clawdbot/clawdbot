@@ -360,7 +360,9 @@ describe("downloadDashscopeGeneratedVideos", () => {
   it("releases the guarded fetch when the remaining-budget resolver throws", async () => {
     vi.useFakeTimers();
     try {
+      const initialTimerCount = vi.getTimerCount();
       let requestSignal: AbortSignal | undefined;
+      let abortedAtFetch: boolean | undefined;
       const cancelBody = vi.fn();
       const timeoutMs = vi
         .fn<() => number>()
@@ -370,6 +372,7 @@ describe("downloadDashscopeGeneratedVideos", () => {
         });
       const fetchFn = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
         requestSignal = init?.signal ?? undefined;
+        abortedAtFetch = requestSignal?.aborted;
         return new Response(new ReadableStream({ cancel: cancelBody }), {
           status: 200,
           headers: { "content-type": "video/mp4" },
@@ -391,9 +394,9 @@ describe("downloadDashscopeGeneratedVideos", () => {
       expect(cancelBody.mock.calls[0]?.[0]).toMatchObject({
         message: "remaining-budget resolver failed",
       });
-      expect(requestSignal?.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(100);
-      expect(requestSignal?.aborted).toBe(false);
+      expect(abortedAtFetch).toBe(false);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(initialTimerCount);
     } finally {
       vi.useRealTimers();
     }

@@ -14,7 +14,7 @@ import { resolveContextEngine as resolveContextEngineImpl } from "../../context-
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { createPreparedEmbeddedAgentSettingsManager as createPreparedEmbeddedAgentSettingsManagerImpl } from "../agent-project-settings.js";
 import { OPENCLAW_AGENT_RUNTIME_ID, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -41,10 +41,12 @@ import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "../harness/compaction.js";
 import { ensureSelectedAgentHarnessPlugin as ensureSelectedAgentHarnessPluginImpl } from "../harness/runtime-plugin.js";
-import { loadAgentRuntimePluginRegistryHandle } from "../runtime-plugins.js";
+import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
+import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   clearCliSessionInStore as clearCliSessionInStoreImpl,
+  normalizeSessionTokenCount,
   recordCliCompactionInStore as recordCliCompactionInStoreImpl,
 } from "./session-store.js";
 
@@ -80,7 +82,7 @@ type CliCompactionDeps = {
   shouldPreemptivelyCompactBeforePrompt: typeof shouldPreemptivelyCompactBeforePromptImpl;
   resolveLiveToolResultMaxChars: typeof resolveLiveToolResultMaxCharsImpl;
   runContextEngineMaintenance: typeof runContextEngineMaintenanceImpl;
-  loadAgentRuntimePluginRegistryHandle: typeof loadAgentRuntimePluginRegistryHandle;
+  acquirePreparedModelRuntime: typeof acquireAgentRunPreparedModelRuntime;
   ensureSelectedAgentHarnessPlugin: typeof ensureSelectedAgentHarnessPluginImpl;
   maybeCompactAgentHarnessSession: typeof maybeCompactAgentHarnessSessionImpl;
   clearCliSessionInStore: typeof clearCliSessionInStoreImpl;
@@ -135,7 +137,7 @@ const cliCompactionDeps: CliCompactionDeps = {
   shouldPreemptivelyCompactBeforePrompt: shouldPreemptivelyCompactBeforePromptImpl,
   resolveLiveToolResultMaxChars: resolveLiveToolResultMaxCharsImpl,
   runContextEngineMaintenance: runContextEngineMaintenanceImpl,
-  loadAgentRuntimePluginRegistryHandle,
+  acquirePreparedModelRuntime: acquireAgentRunPreparedModelRuntime,
   ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPluginImpl,
   maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionImpl,
   clearCliSessionInStore: clearCliSessionInStoreImpl,
@@ -159,7 +161,7 @@ export function resetCliCompactionTestDeps(): void {
     shouldPreemptivelyCompactBeforePrompt: shouldPreemptivelyCompactBeforePromptImpl,
     resolveLiveToolResultMaxChars: resolveLiveToolResultMaxCharsImpl,
     runContextEngineMaintenance: runContextEngineMaintenanceImpl,
-    loadAgentRuntimePluginRegistryHandle,
+    acquirePreparedModelRuntime: acquireAgentRunPreparedModelRuntime,
     ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPluginImpl,
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionImpl,
     clearCliSessionInStore: clearCliSessionInStoreImpl,
@@ -168,15 +170,8 @@ export function resetCliCompactionTestDeps(): void {
   });
 }
 
-function resolvePositiveInteger(value: number | undefined): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
-
 function resolveSessionTokenSnapshot(sessionEntry: SessionEntry | undefined): number | undefined {
-  return resolvePositiveInteger(resolveFreshSessionTotalTokens(sessionEntry));
+  return normalizeSessionTokenCount(resolveFreshSessionTotalTokens(sessionEntry));
 }
 
 function isNativeHarnessCompactionSession(
@@ -420,6 +415,7 @@ async function compactNativeHarnessCliTranscript(params: {
   senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
+  pluginGeneration?: PreparedModelRuntimePluginGeneration;
 }): Promise<NativeHarnessCliCompactionOutcome> {
   let result: EmbeddedAgentCompactResult | undefined;
   try {
@@ -427,87 +423,100 @@ async function compactNativeHarnessCliTranscript(params: {
     const nativeHarnessId = params.sessionEntry.agentHarnessId?.trim();
     const modelSelectionLocked = params.sessionEntry.modelSelectionLocked === true;
     const authProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
-    const pluginRegistry = cliCompactionDeps.loadAgentRuntimePluginRegistryHandle({
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      allowGatewaySubagentBinding: true,
-      selections: [
-        {
+    const preparedRuntimeLease = await cliCompactionDeps.acquirePreparedModelRuntime(
+      {
+        config: params.cfg,
+        ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        allowGatewaySubagentBinding: true,
+        runtimePluginSelections: [
+          {
+            provider: params.provider,
+            modelId: params.model,
+            ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+            ...(nativeHarnessId ? { runtime: nativeHarnessId } : {}),
+          },
+        ],
+      },
+      params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {},
+    );
+    try {
+      const preparedModelRuntime = preparedRuntimeLease.snapshot;
+      result = await withPluginRuntimeGenerationScope(preparedModelRuntime, async () => {
+        await cliCompactionDeps.ensureSelectedAgentHarnessPlugin({
           provider: params.provider,
           modelId: params.model,
+          config: params.cfg,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.workspaceDir,
           ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-          ...(nativeHarnessId ? { runtime: nativeHarnessId } : {}),
-        },
-      ],
-    });
-    result = await withPluginRuntimeRegistryScope(pluginRegistry, async () => {
-      await cliCompactionDeps.ensureSelectedAgentHarnessPlugin({
-        provider: params.provider,
-        modelId: params.model,
-        config: params.cfg,
-        sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
-        ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-        ...(nativeHarnessId ? { agentHarnessRuntimeOverride: nativeHarnessId } : {}),
-        pluginRegistry,
+          ...(nativeHarnessId ? { agentHarnessRuntimeOverride: nativeHarnessId } : {}),
+          pluginRegistry: preparedModelRuntime.pluginRegistry,
+        });
+        return await compactWithSafetyTimeout(
+          (abortSignal) =>
+            cliCompactionDeps.maybeCompactAgentHarnessSession(
+              {
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                sessionFile: params.sessionFile,
+                workspaceDir: params.workspaceDir,
+                cwd: params.cwd,
+                agentDir: params.agentDir,
+                config: params.cfg,
+                skillsSnapshot: params.skillsSnapshot,
+                provider: params.provider,
+                model: params.model,
+                authProfileId,
+                contextTokenBudget: params.contextTokenBudget,
+                currentTokenCount: params.currentTokenCount,
+                trigger: "budget",
+                force: true,
+                messageChannel: params.messageChannel,
+                agentAccountId: params.agentAccountId,
+                senderIsOwner: params.senderIsOwner,
+                thinkLevel: params.thinkLevel,
+                extraSystemPrompt: params.extraSystemPrompt,
+                modelSelectionLocked,
+                allowGatewaySubagentBinding: true,
+                ...(params.contextEngine
+                  ? {
+                      contextEngine: params.contextEngine,
+                      contextEngineRuntimeContext: buildCliCompactionRuntimeContext({
+                        sessionKey: params.sessionKey,
+                        messageChannel: params.messageChannel,
+                        agentAccountId: params.agentAccountId,
+                        authProfileId,
+                        workspaceDir: params.workspaceDir,
+                        cwd: params.cwd,
+                        agentDir: params.agentDir,
+                        cfg: params.cfg,
+                        skillsSnapshot: params.skillsSnapshot,
+                        senderIsOwner: params.senderIsOwner,
+                        provider: params.provider,
+                        model: params.model,
+                        harnessRuntime: nativeHarnessId,
+                        modelSelectionLocked,
+                        thinkLevel: params.thinkLevel,
+                        extraSystemPrompt: params.extraSystemPrompt,
+                        currentTokenCount: params.currentTokenCount,
+                        contextTokenBudget: params.contextTokenBudget,
+                        trigger: "cli_native_budget",
+                      }),
+                    }
+                  : {}),
+                ...(nativeHarnessId ? { agentHarnessId: nativeHarnessId } : {}),
+                ...(abortSignal ? { abortSignal } : {}),
+              },
+              { preparedModelRuntime },
+            ),
+          resolveCompactionTimeoutMs(params.cfg),
+        );
       });
-      return await compactWithSafetyTimeout(
-        (abortSignal) =>
-          cliCompactionDeps.maybeCompactAgentHarnessSession({
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            sessionFile: params.sessionFile,
-            workspaceDir: params.workspaceDir,
-            cwd: params.cwd,
-            agentDir: params.agentDir,
-            config: params.cfg,
-            skillsSnapshot: params.skillsSnapshot,
-            provider: params.provider,
-            model: params.model,
-            authProfileId,
-            contextTokenBudget: params.contextTokenBudget,
-            currentTokenCount: params.currentTokenCount,
-            trigger: "budget",
-            force: true,
-            messageChannel: params.messageChannel,
-            agentAccountId: params.agentAccountId,
-            senderIsOwner: params.senderIsOwner,
-            thinkLevel: params.thinkLevel,
-            extraSystemPrompt: params.extraSystemPrompt,
-            modelSelectionLocked,
-            allowGatewaySubagentBinding: true,
-            ...(params.contextEngine
-              ? {
-                  contextEngine: params.contextEngine,
-                  contextEngineRuntimeContext: buildCliCompactionRuntimeContext({
-                    sessionKey: params.sessionKey,
-                    messageChannel: params.messageChannel,
-                    agentAccountId: params.agentAccountId,
-                    authProfileId,
-                    workspaceDir: params.workspaceDir,
-                    cwd: params.cwd,
-                    agentDir: params.agentDir,
-                    cfg: params.cfg,
-                    skillsSnapshot: params.skillsSnapshot,
-                    senderIsOwner: params.senderIsOwner,
-                    provider: params.provider,
-                    model: params.model,
-                    harnessRuntime: nativeHarnessId,
-                    modelSelectionLocked,
-                    thinkLevel: params.thinkLevel,
-                    extraSystemPrompt: params.extraSystemPrompt,
-                    currentTokenCount: params.currentTokenCount,
-                    contextTokenBudget: params.contextTokenBudget,
-                    trigger: "cli_native_budget",
-                  }),
-                }
-              : {}),
-            ...(nativeHarnessId ? { agentHarnessId: nativeHarnessId } : {}),
-            ...(abortSignal ? { abortSignal } : {}),
-          }),
-        resolveCompactionTimeoutMs(params.cfg),
-      );
-    });
+    } finally {
+      preparedRuntimeLease.release();
+    }
   } catch (error) {
     log.warn(
       `CLI native harness compaction failed for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,
@@ -576,8 +585,9 @@ export async function runCliTurnCompactionLifecycle(params: {
   senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
+  pluginGeneration?: PreparedModelRuntimePluginGeneration;
 }): Promise<SessionEntry | undefined> {
-  const contextTokenBudget = resolvePositiveInteger(params.sessionEntry?.contextTokens);
+  const contextTokenBudget = normalizeSessionTokenCount(params.sessionEntry?.contextTokens);
   if (!params.storePath || !contextTokenBudget) {
     return params.sessionEntry;
   }
@@ -681,6 +691,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       senderIsOwner: params.senderIsOwner,
       thinkLevel: params.thinkLevel,
       extraSystemPrompt: params.extraSystemPrompt,
+      pluginGeneration: params.pluginGeneration,
     });
     if (nativeOutcome.compacted) {
       compactionKind = "native-harness";

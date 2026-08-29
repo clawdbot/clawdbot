@@ -7,8 +7,10 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
   renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsPage,
+  renderSettingsPageHeader,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsStatus,
@@ -26,7 +28,6 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   buildCloudWorkerDeletePatch,
   buildCloudWorkerUpsertPatch,
-  CLOUD_WORKER_MACHINE_CLASSES,
   cloudWorkerProfileStatus,
   createCloudWorkerDraft,
   readCloudWorkerProfiles,
@@ -41,9 +42,7 @@ type EditorState = { kind: "add" } | { kind: "edit"; profileId: string } | null;
 
 function formControlValue(event: Event): string {
   const target = event.currentTarget;
-  return target instanceof HTMLInputElement ||
-    target instanceof HTMLSelectElement ||
-    target instanceof HTMLTextAreaElement
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
     ? target.value
     : "";
 }
@@ -64,10 +63,10 @@ class CloudWorkersPage extends OpenClawLightDomElement {
 
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
-    invalidateRequests: () => this.resetCatalog(),
+    invalidateRequests: () => this.resetGatewayState(),
     onSnapshot: (change) => {
       if (change.initial) {
-        this.resetCatalog();
+        this.resetGatewayState();
       }
     },
     ensureInitialData: () => void this.loadCatalog(),
@@ -85,7 +84,8 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
-  private resetCatalog() {
+  private resetGatewayState() {
+    this.busyProfileId = null;
     this.advertisedProfileIds = new Set();
     this.catalogLoaded = false;
     this.catalogLoading = false;
@@ -160,6 +160,10 @@ class CloudWorkersPage extends OpenClawLightDomElement {
 
   private openEdit(profile: ConfiguredCloudWorkerProfile) {
     if (!this.canManage()) {
+      return;
+    }
+    if (profile.providerId !== "crabbox") {
+      this.context.navigate("advanced", { search: "?section=cloudWorkers" });
       return;
     }
     this.editor = { kind: "edit", profileId: profile.id };
@@ -241,22 +245,35 @@ class CloudWorkersPage extends OpenClawLightDomElement {
   }
 
   private async deleteProfile(profile: ConfiguredCloudWorkerProfile) {
-    const scope = this.gateway.capture();
+    const gateway = this.context.gateway;
+    const client = gateway.snapshot.client;
+    const gatewayUrl = gateway.connection.gatewayUrl;
     const runtimeConfig = this.context.runtimeConfig;
     if (
-      !scope ||
       !this.canManage() ||
       !(await showConfirmDialog({
         title: t("cloudWorkersPage.deleteTitle"),
         message: t("cloudWorkersPage.deleteConfirm", { profile: profile.id }),
         confirmLabel: t("common.delete"),
         danger: true,
-      })) ||
-      !this.gateway.isCurrent(scope)
+      }))
     ) {
       return;
     }
+    const scope = this.gateway.capture();
+    if (
+      !scope ||
+      scope.client !== client ||
+      this.context.gateway !== gateway ||
+      gateway.connection.gatewayUrl !== gatewayUrl ||
+      this.context.runtimeConfig !== runtimeConfig ||
+      !this.canManage()
+    ) {
+      this.formError = t("cloudWorkersPage.errors.deleteFailed");
+      return;
+    }
     this.busyProfileId = profile.id;
+    this.formError = null;
     this.notice = null;
     const isCurrent = () =>
       this.gateway.isCurrent(scope) && this.context.runtimeConfig === runtimeConfig;
@@ -355,8 +372,8 @@ class CloudWorkersPage extends OpenClawLightDomElement {
       return nothing;
     }
     const busy = this.busyProfileId !== null;
+    const canSave = this.canManage();
     const editing = this.editor.kind === "edit";
-    const classMode = this.draft.customClass ? "custom" : this.draft.machineClass;
     return renderSettingsSection(
       {
         title: editing ? t("cloudWorkersPage.editProfile") : t("cloudWorkersPage.addProfile"),
@@ -395,41 +412,15 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         renderSettingsRow({
           title: t("cloudWorkersPage.fields.machineClass"),
           description: t("cloudWorkersPage.fields.machineClassHelp"),
-          stacked: this.draft.customClass,
-          control: html`
-            <select
-              class="settings-select"
-              aria-label=${t("cloudWorkersPage.fields.machineClass")}
-              .value=${classMode}
-              ?disabled=${busy}
-              @change=${(event: Event) => {
-                const value = formControlValue(event);
-                this.patchDraft(
-                  value === "custom"
-                    ? { customClass: true, machineClass: "" }
-                    : { customClass: false, machineClass: value },
-                );
-              }}
-            >
-              ${CLOUD_WORKER_MACHINE_CLASSES.map(
-                (value) => html`<option value=${value}>${value}</option>`,
-              )}
-              <option value="custom">${t("cloudWorkersPage.customClass")}</option>
-            </select>
-            ${this.draft.customClass
-              ? html`<input
-                  class="settings-input mono"
-                  aria-label=${t("cloudWorkersPage.fields.customClass")}
-                  placeholder=${t("cloudWorkersPage.fields.customClassPlaceholder")}
-                  autocomplete="off"
-                  spellcheck="false"
-                  .value=${this.draft.machineClass}
-                  ?disabled=${busy}
-                  @input=${(event: Event) =>
-                    this.patchDraft({ machineClass: formControlValue(event) })}
-                />`
-              : nothing}
-          `,
+          control: html`<input
+            class="settings-input mono"
+            aria-label=${t("cloudWorkersPage.fields.machineClass")}
+            autocomplete="off"
+            spellcheck="false"
+            .value=${this.draft.machineClass}
+            ?disabled=${busy}
+            @input=${(event: Event) => this.patchDraft({ machineClass: formControlValue(event) })}
+          />`,
         }),
         renderSettingsRow({
           title: t("cloudWorkersPage.fields.ttl"),
@@ -510,7 +501,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
             <button
               class="btn primary"
               type="button"
-              ?disabled=${busy}
+              ?disabled=${!canSave}
               @click=${() => void this.saveProfile(this.draft)}
             >
               ${busy ? t("common.saving") : t("common.save")}
@@ -535,41 +526,39 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     const rows = profiles.length
       ? profiles.map((profile) => this.renderProfile(profile))
       : renderSettingsEmpty(t("cloudWorkersPage.empty"));
-    const body = renderSettingsPage(
-      html`
-        ${!this.hasManageAccess()
-          ? html`<div class="callout warning" role="note">
-              ${t("cloudWorkersPage.adminRequired")}
-            </div>`
-          : nothing}
-        ${this.catalogError
-          ? html`<div class="callout warning" role="status">
-              ${t("cloudWorkersPage.catalogFailed", { error: this.catalogError })}
-            </div>`
-          : nothing}
-        ${this.notice
-          ? html`<div class="callout warning" role="status">${this.notice}</div>`
-          : nothing}
-        ${renderSettingsSection(
-          {
-            title: t("cloudWorkersPage.sectionTitle"),
-            description: t("cloudWorkersPage.sectionDescription"),
-            actions: addAction,
-            count: profiles.length,
-          },
-          rows,
-        )}
-        ${this.renderEditor()}
-      `,
-      {
-        intro: html`${t("cloudWorkersPage.intro")}
-        ${renderDocsLink(CLOUD_WORKERS_DOCS_URL, t("cloudWorkersPage.documentation"))}`,
-      },
-    );
+    const body = renderSettingsPage(html`
+      ${!this.hasManageAccess()
+        ? html`<div class="callout warning" role="note">
+            ${t("cloudWorkersPage.adminRequired")}
+          </div>`
+        : nothing}
+      ${this.catalogError
+        ? html`<div class="callout warning" role="status">
+            ${t("cloudWorkersPage.catalogFailed", { error: this.catalogError })}
+          </div>`
+        : nothing}
+      ${this.formError && !this.editor
+        ? html`<div class="callout warning" role="alert">${this.formError}</div>`
+        : nothing}
+      ${this.notice
+        ? html`<div class="callout warning" role="status">${this.notice}</div>`
+        : nothing}
+      ${renderSettingsSection(
+        {
+          title: t("cloudWorkersPage.sectionTitle"),
+          description: t("cloudWorkersPage.sectionDescription"),
+          actions: addAction,
+          count: profiles.length,
+        },
+        rows,
+      )}
+      ${this.renderEditor()}
+    `);
     return html`
-      <section class="content-header">
-        <div><div class="page-title">${titleForRoute("cloud-workers")}</div></div>
-      </section>
+      ${renderSettingsPageHeader({
+        title: titleForRoute("cloud-workers"),
+        subtitle: html`${t("cloudWorkersPage.intro")} ${renderLearnMoreLink(CLOUD_WORKERS_DOCS_URL)}`,
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

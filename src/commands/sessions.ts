@@ -12,6 +12,7 @@ import {
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import {
   prepareCliProviderClassifier,
@@ -19,8 +20,10 @@ import {
 } from "../agents/model-selection.js";
 import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveFreshSessionTotalTokens, resolveSessionTotalTokens } from "../config/sessions.js";
+import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -178,11 +181,6 @@ const formatTokensCell = (
   return colorByPct(padded, pct, rich);
 };
 
-async function lookupContextTokensForDisplay(model: string): Promise<number | undefined> {
-  const { lookupContextTokens } = await contextLookupRuntimeLoader.load();
-  return lookupContextTokens(model, { allowAsyncLoad: false });
-}
-
 const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
   const label = kind.padEnd(KIND_PAD);
   if (!rich) {
@@ -322,8 +320,10 @@ export async function sessionsCommand(
   const aggregateAgents = opts.allAgents === true;
   const cfg = getRuntimeConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
+  const { lookupContextTokens, resolveContextTokensForModel } =
+    await contextLookupRuntimeLoader.load();
   const configContextTokens =
-    (await lookupContextTokensForDisplay(displayDefaults.model)) ?? DEFAULT_CONTEXT_TOKENS;
+    lookupContextTokens(displayDefaults.model, { allowAsyncLoad: false }) ?? DEFAULT_CONTEXT_TOKENS;
   const targets = resolveSessionStoreTargetsOrExit({
     cfg,
     opts: {
@@ -342,18 +342,16 @@ export async function sessionsCommand(
   if (opts.active !== undefined) {
     const parsed = parseStrictPositiveInteger(opts.active);
     if (parsed === undefined) {
-      runtime.error("--active must be a positive number of minutes, for example --active 30.");
-      runtime.exit(1);
-      return;
+      const message = "--active must be a positive number of minutes, for example --active 30.";
+      throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
     }
     activeMinutes = parsed;
   }
 
   const limit = parseSessionsLimit(opts.limit);
   if (limit === null) {
-    runtime.error('--limit must be a positive integer or "all", for example --limit 25.');
-    runtime.exit(1);
-    return;
+    const message = '--limit must be a positive integer or "all", for example --limit 25.';
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
 
   const classifyCliProvider = prepareCliProviderClassifier(cfg);
@@ -388,7 +386,7 @@ export async function sessionsCommand(
     // ACP rows need stored-key metadata before model/runtime resolution so
     // bridge sessions and true ACP runtime sessions display differently.
     const modelRef = applyAcpModelOverlayIfNeeded(
-      resolveSessionDisplayModelRef(cfg, row, classifyCliProvider),
+      resolveSessionDisplayModelRef(cfg, row, classifyCliProvider, agentId),
       acpSessionKey,
       acpRuntime,
     );
@@ -402,10 +400,37 @@ export async function sessionsCommand(
       acpRuntime,
       acpBackend: acpMeta?.backend,
     });
+    const hasPersistedContextTokens =
+      typeof entry.contextTokens === "number" && entry.contextTokens > 0;
+    // CLI-backed rows can store a canonical display provider that does not own
+    // the runtime's context policy, so retain their model-only offline fallback.
+    const usesCliContextFallback =
+      !hasPersistedContextTokens && classifyCliProvider(agentRuntime.id);
+    const resolvedContextTokens = usesCliContextFallback
+      ? lookupContextTokens(modelRef.model, { allowAsyncLoad: false })
+      : resolveContextTokensForModel({
+          cfg,
+          provider: modelRef.provider,
+          model: modelRef.model,
+          allowAsyncLoad: false,
+        });
+    const contextTokens = resolveProjectedSessionContextTokens({
+      entry,
+      provider: modelRef.provider,
+      model: modelRef.model,
+      agentHarnessId: agentRuntime.id,
+      resolvedContextTokens,
+      authoredContextTokens: resolveAuthoredModelContextTokens({
+        cfg,
+        provider: modelRef.provider,
+        model: modelRef.model,
+      }),
+    });
     return Object.assign({}, row, {
       agentId,
       acpRuntime,
       agentRuntime,
+      contextTokens,
       displayModelRef: modelRef,
       kind: classifySessionKind(row.key, entry),
       runtimePolicySessionKey: resolveDisplayRuntimePolicySessionKey({
@@ -444,26 +469,18 @@ export async function sessionsCommand(
       limitApplied: limit ?? null,
       hasMore,
       activeMinutes: activeMinutes ?? null,
-      sessions: await Promise.all(
-        rows.map(async (row) => {
-          const r = toJsonSessionRow(row);
-          const modelRef = row.displayModelRef;
-          return {
-            ...r,
-            totalTokens: resolveSessionTotalTokens(r) ?? null,
-            totalTokensFresh: resolveFreshSessionTotalTokens(r) !== undefined,
-            // Prefer row-level context tokens, then config/model lookup, so JSON
-            // mirrors the terminal percentage calculation.
-            contextTokens:
-              r.contextTokens ??
-              (await lookupContextTokensForDisplay(modelRef.model)) ??
-              configContextTokens ??
-              null,
-            modelProvider: modelRef.provider,
-            model: modelRef.model,
-          };
-        }),
-      ),
+      sessions: rows.map((row) => {
+        const r = toJsonSessionRow(row);
+        const modelRef = row.displayModelRef;
+        return {
+          ...r,
+          totalTokens: resolveSessionTotalTokens(r) ?? null,
+          totalTokensFresh: resolveFreshSessionTotalTokens(r) !== undefined,
+          contextTokens: r.contextTokens ?? configContextTokens ?? null,
+          modelProvider: modelRef.provider,
+          model: modelRef.model,
+        };
+      }),
     });
     return;
   }
@@ -508,8 +525,7 @@ export async function sessionsCommand(
 
   for (const row of rows) {
     const model = row.displayModelRef.model;
-    const contextTokens =
-      row.contextTokens ?? (await lookupContextTokensForDisplay(model)) ?? configContextTokens;
+    const contextTokens = row.contextTokens ?? configContextTokens;
     const total = resolveSessionTotalTokens(row);
     const freshTotal = resolveFreshSessionTotalTokens(row);
 

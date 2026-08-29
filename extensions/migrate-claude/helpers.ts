@@ -15,7 +15,7 @@ export function resolveHomePath(input: string): string {
   if (!trimmed) {
     return trimmed;
   }
-  return path.resolve(trimmed.replace(/^~(?=$|[\\/])/u, os.homedir()));
+  return path.resolve(trimmed.replace(/^~(?=$|[\\/])/u, () => os.homedir()));
 }
 
 export async function exists(filePath: string): Promise<boolean> {

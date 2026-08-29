@@ -4,6 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -72,6 +73,8 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
       return actual.abortEmbeddedAgentRun(sessionId);
     },
     isEmbeddedAgentRunInProgress: (...args: unknown[]) => isEmbeddedAgentRunInProgressMock(...args),
+    resolveEmbeddedAgentRunProgressState: (...args: unknown[]) =>
+      isEmbeddedAgentRunInProgressMock(...args) ? "running" : undefined,
   };
 });
 
@@ -79,6 +82,10 @@ vi.mock("../../auto-reply/reply/queue/cleanup.js", () => ({
   clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
 }));
 
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 import { sessionCompactHandlers } from "./sessions-compact.js";
 import { sessionDeleteHandlers } from "./sessions-delete.js";
@@ -245,6 +252,7 @@ describe("sessions.abort agent scope", () => {
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();
     loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      agentIdBySessionKey: new Map(),
       durableTargets: [],
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -281,6 +289,76 @@ describe("sessions.abort agent scope", () => {
       abortedRunId: null,
       status: "no-active-run",
     });
+  });
+
+  it("aborts the exact embedded owner without entering chat.abort", async () => {
+    const sessionKey = "agent:main:telegram:direct:user";
+    const abort = vi.fn();
+    const handle: EmbeddedAgentQueueHandle = {
+      runId: "run-embedded",
+      abort,
+      isAborted: () => false,
+      isCompacting: () => false,
+      isStreaming: () => true,
+      queueMessage: async () => undefined,
+    };
+    setActiveEmbeddedRun("session-embedded", handle, sessionKey);
+    loadSessionEntryMock.mockImplementationOnce(() => ({
+      canonicalKey: sessionKey,
+      entry: { sessionId: "session-embedded" },
+    }));
+    try {
+      const respond = await callSessions(
+        "sessions.abort",
+        { key: sessionKey, runId: "run-embedded" },
+        {
+          context: createContext({
+            extra: { getSessionEventSubscriberConnIds: () => new Set() },
+          }),
+        },
+      );
+
+      expect(chatAbortMock).not.toHaveBeenCalled();
+      expect(abort).toHaveBeenCalledOnce();
+      expect(respond).toHaveBeenCalledWith(true, {
+        ok: true,
+        abortedRunId: "run-embedded",
+        status: "aborted",
+      });
+    } finally {
+      clearActiveEmbeddedRun("session-embedded", handle, sessionKey);
+    }
+  });
+
+  it("rejects an embedded run ID owned by another session", async () => {
+    const ownerKey = "agent:main:telegram:direct:owner";
+    const requestedKey = "agent:main:telegram:direct:other";
+    const abort = vi.fn();
+    const handle: EmbeddedAgentQueueHandle = {
+      runId: "run-embedded",
+      abort,
+      isAborted: () => false,
+      isCompacting: () => false,
+      isStreaming: () => true,
+      queueMessage: async () => undefined,
+    };
+    setActiveEmbeddedRun("session-owner", handle, ownerKey);
+    loadSessionEntryMock.mockImplementationOnce(() => ({
+      canonicalKey: requestedKey,
+      entry: { sessionId: "session-other" },
+    }));
+    try {
+      const respond = await callSessions(
+        "sessions.abort",
+        { key: requestedKey, runId: "run-embedded" },
+        { context: createContext() },
+      );
+
+      expect(abort).not.toHaveBeenCalled();
+      expectRespondErrorMessage(respond, "runId does not match session");
+    } finally {
+      clearActiveEmbeddedRun("session-owner", handle, ownerKey);
+    }
   });
 
   it("marks listed sessions active when the embedded or channel reply run registry owns the session id", async () => {

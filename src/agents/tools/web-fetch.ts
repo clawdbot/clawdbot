@@ -13,17 +13,16 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import {
-  mergeSsrFPolicies,
-  SsrFBlockedError,
-  type LookupFn,
-  type SsrFPolicy,
-} from "../../infra/net/ssrf.js";
+import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug, logWarn } from "../../logger.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
-import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
+import {
+  truncateSanitizedExternalContent,
+  wrapExternalContent,
+  wrapWebContent,
+} from "../../security/external-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
@@ -71,6 +70,12 @@ const WEB_FETCH_PROGRESS_TEXT = "Fetching page content...";
 const DEFAULT_ERROR_MAX_CHARS = 4_000;
 const DEFAULT_ERROR_MAX_BYTES = 64_000;
 const WEB_FETCH_SPILL_MAX_CHARS = 2_000_000;
+// Titles and warnings are display metadata: 256 chars each is ample. Their
+// shared wrapped allowance leaves at least half of maxChars for page content.
+const WEB_FETCH_FIELD_MAX_CHARS = 256;
+const WEB_FETCH_METADATA_MAX_CHARS = 512;
+// Keep URLs whole for tool chaining, matching the fetch-provider URL bound.
+const WEB_FETCH_RESULT_URL_MAX_CHARS = 2_048;
 const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
@@ -413,19 +418,12 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
     };
   }
   const maxInner = Math.max(0, maxChars - wrapperOverhead);
-  let truncated = truncateWebFetchText(value, maxInner);
-  let wrappedText = includeWarning
+  // Charge sanitizer expansion before wrapping; clipping a later marker can
+  // increase output size, so a second raw-length adjustment is not sufficient.
+  const truncated = truncateSanitizedExternalContent(value, maxInner);
+  const wrappedText = includeWarning
     ? wrapWebContent(truncated.text, "web_fetch")
     : wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning: false });
-
-  if (wrappedText.length > maxChars) {
-    const excess = wrappedText.length - maxChars;
-    const adjustedMaxInner = Math.max(0, maxInner - excess);
-    truncated = truncateWebFetchText(value, adjustedMaxInner);
-    wrappedText = includeWarning
-      ? wrapWebContent(truncated.text, "web_fetch")
-      : wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning: false });
-  }
 
   return {
     text: wrappedText,
@@ -494,13 +492,6 @@ async function spillWebFetchContent(
       ...(isSpillTruncated ? { truncated: true } : {}),
     },
   };
-}
-
-function wrapWebFetchField(value: string | undefined): string | undefined {
-  if (!value) {
-    return value;
-  }
-  return wrapExternalContent(value, { source: "web_fetch", includeWarning: false });
 }
 
 function normalizeContentType(value: string | null | undefined): string | undefined {
@@ -592,8 +583,8 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   };
 }
 
-async function normalizeProviderWebFetchPayload(params: {
-  providerId: string;
+async function buildWebFetchPayload(params: {
+  providerId?: string;
   payload: unknown;
   requestedUrl: string;
   extractMode: ExtractMode;
@@ -601,11 +592,45 @@ async function normalizeProviderWebFetchPayload(params: {
   tookMs: number;
 }): Promise<Record<string, unknown>> {
   const payload = isRecord(params.payload) ? params.payload : {};
+  let metadataTruncated = false;
+  const boundProtocolField = (value: string, limit: number): string => {
+    const bounded = truncateWebFetchText(value, limit);
+    metadataTruncated ||= bounded.truncated;
+    return bounded.text;
+  };
+  let remainingMetadataChars = Math.min(
+    WEB_FETCH_METADATA_MAX_CHARS,
+    Math.floor(params.maxChars / 2),
+  );
+  const wrapMetadata = (value: unknown): string | undefined => {
+    if (typeof value !== "string" || !value) {
+      return undefined;
+    }
+    const maxInner = Math.max(0, remainingMetadataChars - WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD);
+    const bounded = truncateSanitizedExternalContent(
+      value,
+      Math.min(WEB_FETCH_FIELD_MAX_CHARS, maxInner),
+    );
+    metadataTruncated ||= bounded.truncated;
+    if (!bounded.text) {
+      return undefined;
+    }
+    const wrapped = wrapExternalContent(bounded.text, {
+      source: "web_fetch",
+      includeWarning: false,
+    });
+    remainingMetadataChars -= wrapped.length;
+    return wrapped;
+  };
+  // Preserve the incomplete-response warning before spending the allowance on a title.
+  const warning = wrapMetadata(payload.warning);
+  const title = wrapMetadata(payload.title);
+  const bodyMaxChars = params.maxChars - (title?.length ?? 0) - (warning?.length ?? 0);
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const wrapped = await spillWebFetchContent(
     rawText,
-    wrapWebFetchContent(rawText, params.maxChars),
-    params.maxChars,
+    wrapWebFetchContent(rawText, bodyMaxChars),
+    bodyMaxChars,
     payload.truncated === true,
   );
   const providerRawLength =
@@ -613,43 +638,53 @@ async function normalizeProviderWebFetchPayload(params: {
       ? Math.max(0, Math.floor(payload.rawLength))
       : wrapped.rawLength;
   const url = params.requestedUrl;
-  const finalUrl = normalizeProviderFinalUrl(payload.finalUrl) ?? url;
+  const resolvedFinalUrl = normalizeProviderFinalUrl(payload.finalUrl) ?? url;
+  const oversizedFinalUrl =
+    resolvedFinalUrl !== url && resolvedFinalUrl.length > WEB_FETCH_RESULT_URL_MAX_CHARS;
+  // As with invalid provider URLs, retain the requested URL rather than invent
+  // a different destination by clipping a redirect's path or query.
+  const finalUrl = oversizedFinalUrl ? url : resolvedFinalUrl;
+  metadataTruncated ||= oversizedFinalUrl;
   const status =
     typeof payload.status === "number" && Number.isFinite(payload.status)
       ? Math.max(0, Math.floor(payload.status))
       : 200;
   const contentType =
     typeof payload.contentType === "string" ? normalizeContentType(payload.contentType) : undefined;
-  const title = typeof payload.title === "string" ? wrapWebFetchField(payload.title) : undefined;
-  const warning =
-    typeof payload.warning === "string" ? wrapWebFetchField(payload.warning) : undefined;
   const extractor =
     typeof payload.extractor === "string" && payload.extractor.trim()
       ? payload.extractor
-      : params.providerId;
+      : (params.providerId ?? "raw");
+  // These protocol fields are not prose and stay unwrapped, but provider or
+  // response-controlled strings must not bypass the display-content budget.
+  const boundedContentType = contentType ? boundProtocolField(contentType, 256) : undefined;
+  const boundedExtractor = boundProtocolField(extractor, 128);
+  const fetchedAt = boundProtocolField(
+    typeof payload.fetchedAt === "string" && payload.fetchedAt
+      ? payload.fetchedAt
+      : new Date().toISOString(),
+    64,
+  );
 
   return {
     url,
     finalUrl,
-    ...(contentType ? { contentType } : {}),
+    ...(boundedContentType ? { contentType: boundedContentType } : {}),
     status,
     ...(title ? { title } : {}),
     extractMode: params.extractMode,
-    extractor,
+    extractor: boundedExtractor,
     externalContent: {
       untrusted: true,
       source: "web_fetch",
       wrapped: true,
-      provider: params.providerId,
+      ...(params.providerId ? { provider: params.providerId } : {}),
     },
-    truncated: wrapped.truncated,
+    truncated: wrapped.truncated || metadataTruncated,
     length: wrapped.length,
     rawLength: providerRawLength,
     ...(wrapped.spill ? { spill: wrapped.spill } : {}),
-    fetchedAt:
-      typeof payload.fetchedAt === "string" && payload.fetchedAt
-        ? payload.fetchedAt
-        : new Date().toISOString(),
+    fetchedAt,
     tookMs:
       typeof payload.tookMs === "number" && Number.isFinite(payload.tookMs)
         ? Math.max(0, Math.floor(payload.tookMs))
@@ -675,7 +710,7 @@ async function maybeFetchProviderWebFetchPayload(
     extractMode: params.extractMode,
     maxChars: params.maxChars,
   });
-  const payload = await normalizeProviderWebFetchPayload({
+  const payload = await buildWebFetchPayload({
     providerId: providerFallback.provider.id,
     payload: rawPayload,
     requestedUrl: params.url,
@@ -688,10 +723,7 @@ async function maybeFetchProviderWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
-  const ssrfPolicy = mergeSsrFPolicies(params.ssrfPolicy);
-  const dangerouslyAllowPrivateNetwork = ssrfPolicy?.dangerouslyAllowPrivateNetwork === true;
-  const allowRfc2544BenchmarkRange = ssrfPolicy?.allowRfc2544BenchmarkRange === true;
-  const allowIpv6UniqueLocalRange = ssrfPolicy?.allowIpv6UniqueLocalRange === true;
+  const ssrfPolicy = params.ssrfPolicy;
   const useTrustedEnvProxy = params.useTrustedEnvProxy;
   let parsedUrl: URL;
   try {
@@ -708,12 +740,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   const cacheDiscriminators = [
     `user-agent:${sha256Hex(params.userAgent)}`,
     params.providerCacheKey ? `provider:${params.providerCacheKey}` : "",
-    dangerouslyAllowPrivateNetwork ? "allow-private-network" : "",
-    allowRfc2544BenchmarkRange ? "allow-rfc2544" : "",
-    allowIpv6UniqueLocalRange ? "allow-ipv6-ula" : "",
-    ssrfPolicy?.allowedHostnames?.length
-      ? `allowed-hostnames:${sha256Hex(ssrfPolicy.allowedHostnames.join("\n"))}`
-      : "",
+    ssrfPolicy ? `ssrf-policy:${sha256Hex(JSON.stringify(ssrfPolicy))}` : "",
     useTrustedEnvProxy ? "trusted-env-proxy" : "",
     headersCacheKey ? `headers:${headersCacheKey}` : "",
   ].filter(Boolean);
@@ -723,7 +750,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       ...cacheDiscriminators,
     ].join(":"),
   );
-  const cached = readCache(FETCH_CACHE, cacheKey);
+  const cached = readCache(FETCH_CACHE, cacheKey, params.cacheTtlMs);
   if (cached) {
     return { ...cached.value, cached: true };
   }
@@ -826,7 +853,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       if (params.extractMode === "text") {
         text = markdownToText(body);
       }
-    } else if (normalizedContentType === "text/html") {
+    } else if (["text/html", "application/xhtml+xml"].includes(normalizedContentType)) {
       if (params.readabilityEnabled) {
         const readable = await extractReadableContent({
           html: body,
@@ -893,37 +920,23 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       }
     }
 
-    const wrapped = await spillWebFetchContent(
-      text,
-      wrapWebFetchContent(text, params.maxChars),
-      params.maxChars,
-      bodyResult.truncated,
-    );
-    throwIfFetchAborted(params.signal);
-    const wrappedTitle = title ? wrapWebFetchField(title) : undefined;
-    const wrappedWarning = wrapWebFetchField(responseTruncatedWarning);
-    const payload = {
-      url: params.url, // Keep raw for tool chaining
-      finalUrl, // Keep raw
-      status: res.status,
-      contentType: normalizedContentType, // Protocol metadata, don't wrap
-      ...(wrappedTitle ? { title: wrappedTitle } : {}),
-      extractMode: params.extractMode,
-      extractor,
-      externalContent: {
-        untrusted: true,
-        source: "web_fetch",
-        wrapped: true,
+    const payload = await buildWebFetchPayload({
+      payload: {
+        finalUrl,
+        status: res.status,
+        contentType: normalizedContentType,
+        title,
+        extractor,
+        text,
+        warning: responseTruncatedWarning,
+        truncated: bodyResult.truncated,
       },
-      truncated: wrapped.truncated,
-      length: wrapped.length,
-      rawLength: wrapped.rawLength, // Actual content length, not wrapped
-      ...(wrapped.spill ? { spill: wrapped.spill } : {}),
-      fetchedAt: new Date().toISOString(),
+      requestedUrl: params.url,
+      extractMode: params.extractMode,
+      maxChars: params.maxChars,
       tookMs: Date.now() - start,
-      text: wrapped.text,
-      ...(wrappedWarning ? { warning: wrappedWarning } : {}),
-    };
+    });
+    throwIfFetchAborted(params.signal);
     writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
   } finally {
@@ -944,6 +957,7 @@ export function createWebFetchTool(options?: {
   runtimeWebFetch?: RuntimeWebFetchMetadata;
   lateBindRuntimeConfig?: boolean;
   lookupFn?: LookupFn;
+  hostnameAllowlistRef?: { value?: string[] };
 }): AnyAgentTool | null {
   const fetch = resolveFetchConfig(options?.config);
   if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
@@ -1010,6 +1024,7 @@ export function createWebFetchTool(options?: {
         readToolStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readPositiveIntegerParam(params, "maxChars");
       const maxCharsCap = resolveFetchMaxCharsCap(executionFetch);
+      const hostnameAllowlist = options?.hostnameAllowlistRef?.value;
       // The progress line is emitted only if the fetch is still pending after
       // the threshold; fast cache/network hits clear the timer before it fires.
       const clearProgressTimer = scheduleToolProgress(
@@ -1042,7 +1057,9 @@ export function createWebFetchTool(options?: {
           readabilityEnabled,
           config,
           useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(executionFetch),
-          ssrfPolicy: executionFetch?.ssrfPolicy,
+          ssrfPolicy: hostnameAllowlist
+            ? { ...executionFetch?.ssrfPolicy, hostnameAllowlist }
+            : executionFetch?.ssrfPolicy,
           ...(providerCacheKey ? { providerCacheKey } : {}),
           lookupFn: options?.lookupFn,
           signal,

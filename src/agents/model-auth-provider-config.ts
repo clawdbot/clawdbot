@@ -2,12 +2,13 @@
  * Provider-entry configuration and stored-profile binding for model auth.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
+import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   hashRuntimeConfigValue,
-} from "../config/config.js";
-import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+} from "../config/runtime-snapshot.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
@@ -79,7 +80,23 @@ export function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): ModelProviderConfig | undefined {
-  return resolveMergedModelProviderConfig(cfg, provider);
+  return resolveMergedModelProviderEntry(cfg, provider)?.providerConfig;
+}
+
+function resolveProviderConfigSecretInput(cfg: OpenClawConfig | undefined, provider: string) {
+  const entry = resolveMergedModelProviderEntry(cfg, provider);
+  const providerConfig = entry?.providerConfig;
+  return {
+    providerConfig,
+    ref: entry
+      ? resolveConfigSecretRef({
+          config: cfg,
+          path: `models.providers.${entry.providerKey}.apiKey`,
+          value: providerConfig?.apiKey,
+          defaults: cfg?.secrets?.defaults,
+        })
+      : null,
+  };
 }
 
 /** Reads a literal or env-secret marker for a custom provider entry. */
@@ -87,14 +104,9 @@ export function getCustomProviderApiKey(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): string | undefined {
-  const entry = resolveProviderConfig(cfg, provider);
-  const literal = normalizeOptionalSecretInput(entry?.apiKey);
-  if (literal) {
-    return literal;
-  }
-  const ref = coerceSecretRef(entry?.apiKey);
+  const { providerConfig, ref } = resolveProviderConfigSecretInput(cfg, provider);
   if (!ref) {
-    return undefined;
+    return normalizeOptionalSecretInput(providerConfig?.apiKey);
   }
   if (ref.source === "env") {
     const envId = ref.id.trim();
@@ -115,8 +127,10 @@ export function resolveUsableCustomProviderApiKey(params: {
   env?: NodeJS.ProcessEnv;
   secretSentinels?: boolean;
 }): ResolvedCustomProviderApiKey | null {
-  const customProviderConfig = resolveProviderConfig(params.cfg, params.provider);
-  const apiKeyRef = coerceSecretRef(customProviderConfig?.apiKey);
+  const { providerConfig: customProviderConfig, ref: apiKeyRef } = resolveProviderConfigSecretInput(
+    params.cfg,
+    params.provider,
+  );
   if (apiKeyRef) {
     if (apiKeyRef.source !== "env") {
       return null;
@@ -151,7 +165,7 @@ export function resolveUsableCustomProviderApiKey(params: {
     };
   }
 
-  const customKey = getCustomProviderApiKey(params.cfg, params.provider);
+  const customKey = normalizeOptionalSecretInput(customProviderConfig?.apiKey);
   if (!customKey) {
     return null;
   }
@@ -304,7 +318,7 @@ type ProviderEntryApiKeyProfileReference =
       credentialType: AuthProfileCredential["type"];
       reason: "credential-class" | "provider-binding";
     }
-  | { kind: "marker" };
+  | { kind: "marker"; evidence: "environment" | "synthetic" };
 
 export type ProviderEntryApiKeyBindingResolution =
   | { kind: "none" }
@@ -392,8 +406,8 @@ export function resolveProviderEntryApiKeyProfileReference(params: {
   provider: string;
   store: AuthProfileStore;
 }): ProviderEntryApiKeyProfileReference {
-  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
-  if (coerceSecretRef(providerConfig?.apiKey)) {
+  const { providerConfig, ref } = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  if (ref) {
     return { kind: "none" };
   }
   const perEntryRawKey = normalizeOptionalSecretInput(providerConfig?.apiKey);
@@ -401,7 +415,10 @@ export function resolveProviderEntryApiKeyProfileReference(params: {
     return { kind: "none" };
   }
   if (isNonSecretApiKeyMarker(perEntryRawKey)) {
-    return { kind: "marker" };
+    return {
+      kind: "marker",
+      evidence: isKnownEnvApiKeyMarker(perEntryRawKey) ? "environment" : "synthetic",
+    };
   }
   const credential = params.store.profiles[perEntryRawKey];
   if (!credential) {
@@ -599,8 +616,9 @@ export function hasSecretRefProviderApiKey(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): boolean {
-  const apiKey = resolveProviderConfig(cfg, provider)?.apiKey;
-  if (coerceSecretRef(apiKey)) {
+  const { providerConfig, ref } = resolveProviderConfigSecretInput(cfg, provider);
+  const apiKey = providerConfig?.apiKey;
+  if (ref) {
     return true;
   }
   return (
@@ -666,9 +684,8 @@ export function resolveLiteralProviderConfigApiKeyAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
 }): ResolvedProviderAuth | undefined {
-  const apiKey = normalizeOptionalSecretInput(
-    resolveProviderConfig(params.cfg, params.provider)?.apiKey,
-  );
+  const { providerConfig, ref } = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  const apiKey = ref ? undefined : normalizeOptionalSecretInput(providerConfig?.apiKey);
   if (!apiKey || isNonSecretApiKeyMarker(apiKey)) {
     return undefined;
   }

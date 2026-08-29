@@ -7,7 +7,6 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import type { UsageRouteData } from "./usage-page.ts";
 
 function currentLocalDate(): string {
@@ -40,24 +39,41 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       query,
       result: null,
       costSummary: null,
-      providerUsageSummary: null,
+      providerUsage: { state: "pending" },
       loadedAtMs: null,
       error: null,
     };
   }
 
   try {
+    // Usage RPC assembly is not needed by the default chat startup graph.
+    const { providerUsageFromSnapshotResult, requestUsageSnapshot } =
+      await import("./request-usage-snapshot.ts");
     const snapshot = await requestUsageSnapshot(gatewaySnapshot.client, {
       ...query,
       agentId: query.agentId ?? undefined,
     });
+    if (snapshot.ok) {
+      return {
+        gateway,
+        gatewaySnapshot,
+        query,
+        result: snapshot.value.result,
+        costSummary: snapshot.value.costSummary,
+        providerUsage: snapshot.value.providerUsage,
+        loadedAtMs: Date.now(),
+        error: null,
+      };
+    }
     return {
       gateway,
       gatewaySnapshot,
       query,
-      ...snapshot,
-      loadedAtMs: Date.now(),
-      error: null,
+      result: null,
+      costSummary: null,
+      providerUsage: providerUsageFromSnapshotResult(snapshot),
+      loadedAtMs: null,
+      error: errorMessage(snapshot.error.cause),
     };
   } catch (error) {
     return {
@@ -66,7 +82,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       query,
       result: null,
       costSummary: null,
-      providerUsageSummary: null,
+      providerUsage: { state: "pending" },
       loadedAtMs: null,
       error: errorMessage(error),
     };

@@ -1,13 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
-import { buildControlUiSessionPath } from "../../../packages/session-url-contract/src/index.js";
 import {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
+import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
@@ -22,7 +21,7 @@ import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveAgentIdentity } from "../identity.js";
 import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
-import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
+import { resolveSpawnedWorkspaceInheritance, type SpawnedToolContext } from "../spawned-context.js";
 import {
   countActiveRunsForSession,
   registerSubagentRun,
@@ -42,7 +41,13 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+        "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+    }),
+  ),
+  category: Type.Optional(
+    Type.String({
+      description:
+        "Sidebar category for a visible session. Omit or pass an empty string to leave it ungrouped.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -56,48 +61,25 @@ export type VisibleSessionsSpawnDeps = {
   countActiveRuns?: typeof countActiveRunsForSession;
 };
 
-type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps & {
-  agentSessionKey?: string;
-  completionOwnerKey?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  currentMessagingTarget?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  sandboxed?: boolean;
-  config?: OpenClawConfig;
-  requesterAgentIdOverride?: string;
-  inheritedToolAllowlist?: string[];
-  inheritedToolDenylist?: string[];
-};
+type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps &
+  SpawnedToolContext & {
+    agentSessionKey?: string;
+    requesterTurnRunId?: string;
+    completionOwnerKey?: string;
+    agentChannel?: string;
+    agentAccountId?: string;
+    agentTo?: string;
+    agentThreadId?: string | number;
+    currentMessagingTarget?: string;
+    currentChannelId?: string;
+    currentThreadTs?: string;
+    sandboxed?: boolean;
+    config?: OpenClawConfig;
+    requesterAgentIdOverride?: string;
+  };
 
 function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
-}
-
-function resolveVisibleSessionUrl(
-  cfg: OpenClawConfig,
-  childSessionKey: string,
-  targetAgentId: string,
-): string | undefined {
-  if (cfg.gateway?.controlUi?.enabled === false) {
-    return undefined;
-  }
-  const publicOrigin = resolveGatewayPublicOrigin(cfg);
-  const path = buildControlUiSessionPath({
-    namespace: "chat",
-    sessionKey: childSessionKey,
-    fallbackAgentId: targetAgentId,
-    basePath: cfg.gateway?.controlUi?.basePath,
-  });
-  if (!publicOrigin || !path) {
-    return undefined;
-  }
-  const url = new URL(publicOrigin);
-  url.pathname = path;
-  return url.toString();
 }
 
 async function deleteVisibleSession(
@@ -126,11 +108,14 @@ export async function maybeSpawnVisibleSession(params: {
   sandbox: "inherit" | "require";
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
+  const promptedAt = Date.now();
   const worktree = params.raw.worktree === true;
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
+  const category = readToolStringParam(params.raw, "category");
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
+      ["category", category],
       ["worktree", worktree],
       ["worktreeName", worktreeName],
       ["worktreeBaseRef", worktreeBaseRef],
@@ -140,7 +125,8 @@ export async function maybeSpawnVisibleSession(params: {
       .map(([name]) => name);
     if (providedVisibleOnlyParams.length > 0) {
       throw new ToolInputError(
-        `Parameters require visible=true: ${providedVisibleOnlyParams.join(", ")}`,
+        `Parameters require visible=true: ${providedVisibleOnlyParams.join(", ")}. ` +
+          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, thinking, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
       );
     }
     return undefined;
@@ -214,7 +200,7 @@ export async function maybeSpawnVisibleSession(params: {
   if (params.requestedAgentId && !isValidAgentId(params.requestedAgentId)) {
     return {
       status: "error",
-      error: `Invalid agentId "${params.requestedAgentId}". Use agents_list.`,
+      error: `Invalid agentId "${params.requestedAgentId}". Agent IDs must match [a-z0-9][a-z0-9_-]{0,63}.`,
     };
   }
   const requesterAgentId = resolveSessionAgentId({
@@ -227,7 +213,7 @@ export async function maybeSpawnVisibleSession(params: {
     cfg.agents?.defaults?.subagents?.requireAgentId ??
     false;
   if (requireAgentId && !params.requestedAgentId) {
-    return { status: "forbidden", error: "sessions_spawn requires agentId. Use agents_list." };
+    return { status: "forbidden", error: "sessions_spawn requires agentId; use an allowed agent." };
   }
   const targetAgentId = params.requestedAgentId
     ? normalizeAgentId(params.requestedAgentId)
@@ -335,12 +321,16 @@ export async function maybeSpawnVisibleSession(params: {
       response = await createGatewayCall("sessions.create", {
         agentId: targetAgentId,
         ...(params.label ? { label: params.label } : {}),
+        ...(category ? { category } : {}),
         model: resolvedModel,
         task: params.task,
         parentSessionKey: requesterKey,
         // Declared spawn lineage: without it the child persists as a depth-0 root
         // and could spawn past maxSpawnDepth.
         spawnDepth: callerDepth + 1,
+        ...(params.options?.sessionPermissionPolicy
+          ? { permissionMode: params.options.sessionPermissionPolicy.mode }
+          : {}),
         ...(params.raw.context === "fork" ? { fork: true } : {}),
         ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
         ...(worktree ? { worktree: true } : {}),
@@ -394,6 +384,7 @@ export async function maybeSpawnVisibleSession(params: {
     try {
       (params.options?.registerRun ?? registerSubagentRun)({
         runId,
+        requesterTurnRunId: params.options?.requesterTurnRunId,
         childSessionKey,
         controllerSessionKey: ownership.controllerSessionKey,
         requesterSessionKey: ownership.completionRequesterSessionKey,
@@ -450,14 +441,17 @@ export async function maybeSpawnVisibleSession(params: {
       };
     }
     recordSessionParticipantBestEffort({
-      actor: { type: "agent", id: requesterAgentId },
+      promptedAt,
+      identity: { type: "agent", id: requesterAgentId },
       agentId: targetAgentId,
       sessionKey: childSessionKey,
-      source: "agent",
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
     });
     const ownerLabel = normalizeOptionalString(resolveAgentIdentity(cfg, requesterAgentId)?.name);
-    const sessionUrl = resolveVisibleSessionUrl(cfg, childSessionKey, targetAgentId);
+    const sessionUrl = resolveControlUiSessionUrl(cfg, {
+      sessionKey: childSessionKey,
+      fallbackAgentId: targetAgentId,
+    });
     return {
       status: "accepted",
       childSessionKey,

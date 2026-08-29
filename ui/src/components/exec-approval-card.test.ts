@@ -31,8 +31,8 @@ function renderCard(request: ExecApprovalRequest, variant: "inline" | "modal" = 
     renderExecApprovalCard({
       approval: request,
       busy: false,
+      canGrant: true,
       error: null,
-      nowMs: 1_000,
       variant,
       onDecision: vi.fn(),
     }),

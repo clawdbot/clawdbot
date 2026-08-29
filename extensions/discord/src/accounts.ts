@@ -9,14 +9,14 @@ import {
   normalizeChannelDmPolicy,
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveConfiguredFromCredentialStatuses } from "openclaw/plugin-sdk/channel-status";
+import type {
+  DiscordAccountConfig,
+  DiscordActionConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  resolveConfiguredFromCredentialStatuses,
-  type DiscordAccountConfig,
-  type DiscordActionConfig,
-  type OpenClawConfig,
-} from "./runtime-api.js";
 import { selectDiscordRuntimeConfig } from "./runtime-config.js";
 import { resolveDiscordToken, type DiscordCredentialStatus } from "./token.js";
 

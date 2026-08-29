@@ -58,7 +58,9 @@ export default {
       const coordinator = globalThis[Symbol.for("openclaw.voice-call.runtimeCoordinator")];
       const slot = coordinator?.slot;
       const runtime =
-        slot?.state === "running" && slot.owner === coordinator.current ? slot.runtime : undefined;
+        slot?.state === "running" && slot.owner === coordinator.current?.generation
+          ? slot.runtime
+          : undefined;
       const callId = typeof params?.callId === "string" ? params.callId : "";
       const call = runtime?.manager?.getCall?.(callId);
       const issue = runtime?.manager?.streamSessionIssuer;

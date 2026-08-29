@@ -8,6 +8,7 @@ import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 import { tryResolveLegacyCompatibilityAgentId } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { createMergePatch } from "./merge-patch.js";
+import { setConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 
 vi.unmock("../agents/agent-scope-config.js");
@@ -52,6 +53,38 @@ const writeCases: WriteCase[] = [
     source: { gateway: { port: 18789 } },
     next: { gateway: { port: 18789, auth: { mode: "token" } } },
     expected: { gateway: { port: 18789, auth: { mode: "token" } } },
+  },
+  {
+    name: "omits the unauthored parent after removing an injected roster",
+    current: { gateway: { port: 18789 }, ...roster({ main: {} }) },
+    authored: { gateway: { port: 18789 } },
+    next: { gateway: { port: 19001 }, ...roster({ main: {} }) },
+    expected: { gateway: { port: 19001 } },
+  },
+  {
+    name: "retains an explicitly authored empty agents section",
+    current: { gateway: { port: 18789 }, ...roster({ main: {} }) },
+    authored: { gateway: { port: 18789 }, agents: {} },
+    next: { gateway: { port: 19001 }, ...roster({ main: {} }) },
+    expected: { gateway: { port: 19001 }, agents: {} },
+  },
+  {
+    name: "retains newly authored defaults after removing an injected roster",
+    current: { gateway: { port: 18789 }, ...roster({ main: {} }) },
+    authored: { gateway: { port: 18789 } },
+    next: { agents: { entries: { main: {} }, defaults: {} }, gateway: { port: 18789 } },
+    options: { explicitSetPaths: [["agents", "defaults"]] },
+    expected: { agents: { defaults: {} }, gateway: { port: 18789 } },
+  },
+  {
+    name: "restores an untouched authored roster without aliasing its nested values",
+    current: roster({ main: runtimeSecretEntry }),
+    authored: roster({ main: authoredSecretEntry }),
+    next: { ...roster({ main: runtimeSecretEntry }), gateway: { port: 19001 } },
+    expected: { ...roster({ main: authoredSecretEntry }), gateway: { port: 19001 } },
+    verify: (persisted) => {
+      expect(persisted.agents?.entries?.main?.sandbox?.ssh?.identityData).not.toBe(identityRef);
+    },
   },
   {
     name: "persists the complete injected roster when a pre-roster config adds an agent",
@@ -666,6 +699,28 @@ describe("config io write prepare", () => {
     const persisted = resolveWriteCase(testCase);
     expect(persisted).toEqual(testCase.expected);
     testCase.verify?.(persisted);
+  });
+
+  it("uses recorded facts instead of placeholder-shaped roster bytes", () => {
+    const literalId = "${AGENT_ID}";
+    const sourceConfigBeforeMigrations = listRoster([{ id: literalId, ...main }]);
+    const resolveRename = () =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: roster({ [literalId]: main }),
+        sourceConfig: roster({ [literalId]: main }),
+        sourceConfigBeforeMigrations,
+        rootAuthoredConfig: listRoster([{ id: literalId, ...main }]),
+        nextConfig: roster({ renamed: main }),
+        explicitSetPaths: [["agents", "list", "0", "id"]],
+        explicitSetValueSource: listRoster([{ id: "renamed", ...main }]),
+        allowedAgentRosterRemovals: [literalId],
+      });
+
+    setConfigResolutionFacts(sourceConfigBeforeMigrations, new Set(["agents.list[0].id"]));
+    expect(resolveRename).toThrow("cannot safely resolve an env-backed renamed agent id");
+
+    setConfigResolutionFacts(sourceConfigBeforeMigrations, new Set());
+    expect(resolveRename()).toEqual(roster({ renamed: main }));
   });
 
   it("ignores prototype-chain keys when building merge patches", () => {

@@ -6,7 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveGatewayPort, resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackAddress, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
@@ -172,7 +172,6 @@ async function tryRunGatewayRunFastPath(
     { addGatewayRunCommand },
     { VERSION },
     { emitCliBanner },
-    { resolveCliStartupPolicy },
     { ensureCliExecutionBootstrap },
     { defaultRuntime },
   ] = await startupTrace.measure("gateway-run-imports", () =>
@@ -181,13 +180,12 @@ async function tryRunGatewayRunFastPath(
       import("./gateway-cli/run-command.js"),
       import("../version.js"),
       import("./banner.js"),
-      import("./command-startup-policy.js"),
       import("./command-execution-startup.js"),
       import("../runtime.js"),
     ]),
   );
   const commandPath = resolveGatewayCatalogCommandPath(argv) ?? ["gateway"];
-  const startupPolicy = resolveCliStartupPolicy({
+  const startupPolicy = resolveCliStartupPolicyForArgv({
     argv,
     commandPath,
     jsonOutputMode: hasJsonOutputFlag(argv),
@@ -444,9 +442,9 @@ async function resolveConfiguredTuiLaunchTarget(
     }
     return { kind: "onboarding" };
   }
-  const { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } =
+  const { listAgentIds, resolveAgentEffectiveModelPrimary } =
     await import("../agents/agent-scope.js");
-  if (!resolveAgentEffectiveModelPrimary(config, resolveDefaultAgentId(config))) {
+  if (!listAgentIds(config).some((agentId) => resolveAgentEffectiveModelPrimary(config, agentId))) {
     return { kind: "onboarding" };
   }
   return { kind: "tui", local: true };
@@ -512,11 +510,15 @@ async function resolveReachableGateway(
     }
     const probeOptions: {
       url: string;
+      config?: OpenClawConfig;
       token?: string;
       password?: string;
       tlsFingerprint?: string;
       preauthHandshakeTimeoutMs?: number;
     } = { url: target.url };
+    if (config.gateway?.remote?.edgeAuth) {
+      probeOptions.config = config;
+    }
     if (auth.token) {
       probeOptions.token = auth.token;
     }
@@ -629,12 +631,10 @@ async function resolveLocalGatewayProbeTargets(
   config: OpenClawConfig,
 ): Promise<{ targets: GatewayProbeTarget[]; auth: GatewayProbeAuth }> {
   const [
-    { resolveGatewayPort },
     { resolveControlUiLinks },
     { resolveGatewayClientBootstrap },
     { readActiveGatewayLockPort },
   ] = await Promise.all([
-    import("../config/paths.js"),
     import("../gateway/control-ui-links.js"),
     import("../gateway/client-bootstrap.js"),
     import("../infra/gateway-lock.js"),
@@ -851,11 +851,15 @@ async function ensureCliEnvProxyDispatcher(): Promise<void> {
   }
 }
 
-function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (
+function isDebugProxyCaptureEnvEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
     isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_ENABLED) ||
     isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_REQUIRE)
-  ) {
+  );
+}
+
+function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (isDebugProxyCaptureEnvEnabled(env)) {
     return true;
   }
   return CLI_PROXY_ENV_KEYS.some((key) => {
@@ -1032,20 +1036,25 @@ async function bootstrapCliProxyCaptureAndDispatcher(
   startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
   options: { ensureDispatcher?: boolean } = {},
 ): Promise<void> {
-  const [
-    { initializeDebugProxyCapture, finalizeDebugProxyCapture },
-    { maybeWarnAboutDebugProxyCoverage },
-  ] = await startupTrace.measure("proxy-imports", () =>
-    Promise.all([import("../proxy-capture/runtime.js"), import("../proxy-capture/coverage.js")]),
-  );
-  initializeDebugProxyCapture("cli");
-  process.once("exit", () => {
-    finalizeDebugProxyCapture();
-  });
+  // Capture init, exit finalize, and coverage warnings all no-op unless the
+  // debug-proxy env requests capture; importing their sqlite-store graph anyway
+  // costs ~100 MB RSS on metadata-only commands such as `plugins list --json`.
+  if (isDebugProxyCaptureEnvEnabled()) {
+    const [
+      { initializeDebugProxyCapture, finalizeDebugProxyCapture },
+      { maybeWarnAboutDebugProxyCoverage },
+    ] = await startupTrace.measure("proxy-imports", () =>
+      Promise.all([import("../proxy-capture/runtime.js"), import("../proxy-capture/coverage.js")]),
+    );
+    initializeDebugProxyCapture("cli");
+    process.once("exit", () => {
+      finalizeDebugProxyCapture();
+    });
+    maybeWarnAboutDebugProxyCoverage(undefined, (message) => console.warn(message));
+  }
   if (options.ensureDispatcher !== false) {
     await startupTrace.measure("proxy-dispatcher", () => ensureCliEnvProxyDispatcher());
   }
-  maybeWarnAboutDebugProxyCoverage(undefined, (message) => console.warn(message));
 }
 
 export async function runCli(
@@ -1497,21 +1506,23 @@ async function runCliWithPreparedOutputMode(
       return;
     }
 
-    const { tryRouteCli } = await startupTrace.measure("route-import", () => import("./route.js"));
-    const routed = await startupTrace.measure(
-      "route",
-      () =>
-        options.builtInMachineOutput
-          ? tryRouteCli(normalizedArgv, { machineOutput: true })
-          : tryRouteCli(normalizedArgv),
-      { timeline: false },
-    );
-    if (routed) {
-      return;
+    if (!isHelpOrVersionInvocation) {
+      const route = await startupTrace.measure("route-import", () => import("./route.js"));
+      const routed = await startupTrace.measure(
+        "route",
+        () =>
+          options.builtInMachineOutput
+            ? route.tryRouteCli(normalizedArgv, { machineOutput: true })
+            : route.tryRouteCli(normalizedArgv),
+        { timeline: false },
+      );
+      if (routed) {
+        return;
+      }
     }
 
     let parseArgv = normalizeGeneratedHelpCommandArgv(normalizedArgv);
-    const suppressStartupProgress = hasJsonOutputFlag(parseArgv);
+    const suppressStartupProgress = options.builtInMachineOutput || hasJsonOutputFlag(parseArgv);
     const { createCliProgress } = await loadProgressModule();
     const startupProgress = createCliProgress({
       label: "Loading OpenClaw CLI…",
@@ -1613,9 +1624,9 @@ async function runCliWithPreparedOutputMode(
       });
       if (!shouldSkipPluginRegistration) {
         const config = await startupTrace.measure("register-plugin-commands", async () => {
-          const [{ registerPluginCliCommandsFromValidatedConfig }, { resolveCliStartupPolicy }] =
-            await Promise.all([import("../plugins/cli.js"), import("./command-startup-policy.js")]);
-          const startupPolicy = resolveCliStartupPolicy({
+          const { registerPluginCliCommandsFromValidatedConfig } =
+            await import("../plugins/cli.js");
+          const startupPolicy = resolveCliStartupPolicyForArgv({
             argv: parseArgv,
             commandPath: invocation.commandPath,
             jsonOutputMode: suppressStartupProgress,

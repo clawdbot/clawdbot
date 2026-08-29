@@ -1,27 +1,38 @@
 ---
-summary: "Security considerations and threat model for running an AI gateway with shell access"
+summary: "Trust model, safe defaults, and hardening guidance for running OpenClaw"
 read_when:
   - Adding features that widen access or automation
+  - Reviewing OpenClaw security posture or hardening a deployment
 title: "Security"
 ---
 
-<Warning>
-  **Personal assistant trust model.** This guidance assumes one trusted
-  operator boundary per gateway (single-user, personal-assistant model).
-  OpenClaw is not a hostile multi-tenant security boundary for multiple
-  adversarial users sharing one agent or gateway. For mixed-trust or
-  adversarial-user operation, split trust boundaries: separate gateway +
-  credentials, ideally separate OS users or hosts.
-</Warning>
+OpenClaw ships with conservative defaults. On a regular host install the Gateway binds to loopback; most chat channels answer an unknown DM sender with a pairing code instead of processing the message; and group access is allowlisted, usually behind a mention gate. The exceptions are deliberate and documented: container images default to an exposed bind (pair that with auth - see the [exposure runbook](/gateway/security/exposure-runbook)), and a few workspace channels such as ClickClack trust workspace membership by default - each channel page states its exact defaults. Run on those defaults and you are in good shape, and one command tells you if you have drifted:
 
-## Scope: personal assistant security model
+```bash
+openclaw security audit
+```
 
-- Supported: one user/trust boundary per gateway (prefer one OS user/host/VPS per boundary).
+The rest of this page is the deep end: the trust model, what the audit checks, and how to harden further as you expose more surface.
+
+<Note>
+  **One trust boundary per gateway.** This guidance assumes one trusted
+  boundary per gateway: a single operator, or a team whose members trust
+  each other. Group chats and [multi-user](/concepts/multi-user) operation
+  are supported deployments inside that boundary. OpenClaw is not a hostile
+  multi-tenant security boundary for mutually adversarial users sharing one
+  agent or gateway. For mixed-trust or adversarial-user operation, split
+  trust boundaries: separate gateway + credentials, ideally separate OS
+  users or hosts.
+</Note>
+
+## Scope: one trust boundary per gateway
+
+- Supported: one trust boundary per gateway - a single operator or a mutually trusting team (prefer one OS user/host/VPS per boundary).
 - Not supported: one shared gateway/agent used by mutually untrusted or adversarial users.
 - Adversarial-user isolation needs separate gateways (and ideally separate OS users/hosts).
-- If several untrusted users can message one tool-enabled agent, they share that agent's delegated tool authority.
+- Everyone who can message a tool-enabled agent shares that agent's delegated tool authority. That is fine for teammates who already trust each other; it is why adversarial users cannot share an agent.
 - If someone can modify Gateway host state/config (`~/.openclaw`, including `openclaw.json`), treat them as a trusted operator.
-- Inside one Gateway, authenticated operator access is a trusted control-plane role, not a per-user tenant role.
+- Inside one Gateway, authenticated operator access is a trusted control-plane role, not a per-user tenant role. [Named operator roles](/gateway/operator-scopes#named-operator-roles) bound what each teammate's connections can do; they are collaboration guardrails, not tenant isolation.
 - `sessionKey` (session IDs, labels) is a routing selector, not an authorization token.
 
 Hosting multiple users or organizations? Run one isolated Gateway cell per tenant instead of sharing a Gateway. See [Multi-tenant hosting](/gateway/multi-tenant-hosting).
@@ -46,7 +57,7 @@ openclaw security audit --json
 - **Inbound access** - DM/group policies, allowlists: can strangers trigger the bot?
 - **Tool blast radius** - elevated tools + open rooms: could prompt injection become shell/file/network actions?
 - **Exec filesystem drift** - mutating filesystem tools denied while `exec`/`process` stay available without sandbox constraints.
-- **Exec approval drift** - `security="full"`, `autoAllowSkills`, interpreter allowlists without `strictInlineEval`. `security="full"` alone is a broad posture warning, not proof of a bug - it is the chosen default for trusted personal-assistant setups; tighten it only when your threat model needs approval or allowlist guardrails.
+- **Exec approval drift** - `security="full"`, `autoAllowSkills`, interpreter allowlists without `strictInlineEval`. `security="full"` alone is a broad posture warning, not proof of a bug - it is the chosen default for trusted-operator setups; tighten it only when your threat model needs approval or allowlist guardrails.
 - **Network exposure** - Gateway bind/auth, Tailscale Serve/Funnel, weak/short auth tokens.
 - **Browser control exposure** - remote nodes, relay ports, remote CDP endpoints.
 - **Local disk hygiene** - permissions, symlinks, config includes, synced-folder paths.
@@ -110,7 +121,7 @@ Quick model for triaging risk reports:
 | `gateway.auth` (token/password/trusted-proxy/device auth) | Authenticates callers to gateway APIs             | "Needs per-message signatures on every frame to be secure"                    |
 | `sessionKey`                                              | Routing key for context/session selection         | "Session key is a user auth boundary"                                         |
 | Prompt/content guardrails                                 | Reduce model abuse risk                           | "Prompt injection alone proves auth bypass"                                   |
-| `canvas.eval` / browser evaluate                          | Intentional operator capability when enabled      | "Any JS eval primitive is automatically a vuln in this trust model"           |
+| Browser evaluate                                          | Intentional operator capability when enabled      | "Any JS eval primitive is automatically a vuln in this trust model"           |
 | Local TUI `!` shell                                       | Explicit operator-triggered local execution       | "Local shell convenience command is remote injection"                         |
 | Node pairing and node commands                            | Operator-level remote execution on paired devices | "Remote device control should be treated as untrusted user access by default" |
 | `gateway.nodes.pairing.autoApproveCidrs`                  | Opt-in trusted-network node enrollment policy     | "A disabled-by-default allowlist is an automatic pairing vulnerability"       |
@@ -173,7 +184,7 @@ openclaw pairing approve <channel> <code>
 
 Details + files on disk: [Pairing](/channels/pairing)
 
-Treat `dmPolicy="open"` and `groupPolicy="open"` as last-resort settings; prefer pairing + allowlists unless you fully trust every member of the room.
+Prefer pairing + allowlists for DMs. For groups, decide by membership, not by channel type: a private room whose members you trust - your team, family, or friends - is a normal deployment for `groupPolicy: "open"` (any member can trigger the bot). Keep sender allowlists or mention gating on rooms where strangers can join or post, and treat `dmPolicy="open"` as a deliberate opt-in.
 
 ### Allowlists (two layers)
 
@@ -256,9 +267,9 @@ What helps in practice:
 
 **Model choice matters.** Prompt-injection resistance is not uniform across model tiers - smaller/cheaper models are more susceptible to tool misuse and instruction hijacking under adversarial prompts.
 
-<Warning>
+<Note>
 For tool-enabled agents or agents that read untrusted content, prompt-injection risk with older/smaller models is often too high. Do not run those workloads on weak model tiers.
-</Warning>
+</Note>
 
 - Use the latest-generation, best-tier model for any bot that can run tools or touch files/networks.
 - Do not use older/weaker/smaller tiers for tool-enabled agents or untrusted inboxes.
@@ -369,9 +380,9 @@ Agent workspace access inside the sandbox (`agents.defaults.sandbox.workspaceAcc
 
 Extra `sandbox.docker.binds` are validated against normalized, canonicalized source paths. A blocked-path denylist covers `/etc`, `/private/etc`, `/proc`, `/sys`, `/dev`, `/root`, `/boot`, and directories that commonly contain or alias the Docker socket (`/run`, `/var/run`, and `docker.sock` under them), plus HOME credential subpaths (`.aws`, `.cargo`, `.config`, `.docker`, `.gnupg`, `.netrc`, `.npm`, `.ssh`). Parent-symlink tricks and canonical home aliases are resolved through existing ancestors and re-checked, so they still fail closed if they resolve into a blocked root.
 
-<Warning>
+<Note>
 `tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and do not enable it for strangers. Further restrict per agent via `agents.entries.*.tools.elevated`. See [Elevated mode](/tools/elevated).
-</Warning>
+</Note>
 
 ### Sub-agent delegation guardrail
 
@@ -542,7 +553,7 @@ Private/internal destinations stay blocked unless you explicitly opt in.
 
 ### Bind, port, firewall
 
-The Gateway multiplexes WebSocket + HTTP on one port (default `18789`; config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`). That HTTP surface includes the Control UI (SPA assets, default base path `/`) and the canvas host (`/__openclaw__/canvas` and `/__openclaw__/a2ui` - arbitrary HTML/JS; treat as untrusted content when loaded in a normal browser; do not expose it to untrusted networks/users or share an origin with privileged web surfaces).
+The Gateway multiplexes WebSocket + HTTP on one port (default `18789`; config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`). That HTTP surface includes the Control UI (SPA assets, default base path `/`), hosted widget documents (`/__openclaw__/canvas`), and A2UI renderer assets (`/__openclaw__/a2ui`). Widget documents contain agent-authored HTML/JS; treat them as untrusted content when loaded in a normal browser, do not expose them to untrusted networks or users, and do not share their origin with privileged web surfaces.
 
 `gateway.bind` controls where the Gateway listens:
 
@@ -638,7 +649,7 @@ Rotation checklist (token/password): generate/set a new secret (`gateway.auth.to
 
 ### Tailscale Serve identity headers
 
-When `gateway.auth.allowTailscale` is `true` (default for Serve), OpenClaw accepts the Tailscale Serve identity header `tailscale-user-login` for Control UI/WebSocket authentication. It verifies identity by resolving the `x-forwarded-for` address through the local Tailscale daemon (`tailscale whois`) and matching it to the header. This only triggers on OpenClaw's dedicated managed-Tailscale listener and requires `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`; headers on the ordinary Gateway listener do not establish Serve provenance. For this async check, failed attempts for the same `{scope, ip}` are serialized before the limiter records the failure, so concurrent bad retries from one Serve client can lock out the second attempt immediately.
+When `gateway.auth.allowTailscale` is `true` (default for Serve), OpenClaw accepts the Tailscale Serve identity header `tailscale-user-login` for Control UI/WebSocket authentication. It verifies identity by resolving the `x-forwarded-for` address through the local Tailscale daemon (`tailscale whois`) and matching it to the header. This only triggers on OpenClaw's dedicated managed-Tailscale listener and requires `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`; headers on the ordinary Gateway listener do not establish Serve provenance or tokenless auth. For this async check, failed attempts for the same `{scope, ip}` are serialized before the limiter records the failure, so concurrent bad retries from one Serve client can lock out the second attempt immediately.
 
 HTTP API endpoints (`/v1/*`, `/tools/invoke`, `/api/channels/*`) do not use Tailscale identity-header auth - they follow the gateway's configured HTTP auth mode.
 
@@ -646,7 +657,7 @@ Gateway HTTP bearer auth is effectively all-or-nothing operator access. Credenti
 
 Tokenless Serve auth assumes the gateway host itself is trusted - it is not protection against hostile same-host processes. If untrusted local code may run on the gateway host, disable `allowTailscale` and require explicit shared-secret auth (`token` or `password`).
 
-Do not forward these headers from your own reverse proxy. If you terminate TLS or proxy in front of the gateway, disable `allowTailscale` and use shared-secret auth or [Trusted Proxy Auth](/gateway/trusted-proxy-auth) instead.
+An externally managed Tailscale Serve or Funnel route may forward these headers to the ordinary listener only through an explicitly configured `gateway.trustedProxies` source with a valid non-loopback forwarded client address. OpenClaw treats that request as generic proxy ingress: the configured gateway auth applies, `allowTailscale` grants nothing, and no WhoIs lookup runs. Gateway-protected routes reject external Funnel ingress when auth mode is `none`; aggregate health, readiness, and startup probes keep their bounded unauthenticated responses. See [Tailscale](/gateway/tailscale#externally-managed-serve-and-funnel), [Health and readiness](/gateway/health), and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
 
 See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
@@ -862,7 +873,7 @@ For phone-number-based channels, consider running the assistant on a separate nu
 
 1. Rotate Gateway auth (`gateway.auth.token` / `OPENCLAW_GATEWAY_PASSWORD`) and restart.
 2. Rotate remote client secrets (`gateway.remote.token` / `.password`) on any machine that can call the Gateway.
-3. Rotate provider/API credentials (WhatsApp creds, Slack/Discord tokens, model/API keys in `auth-profiles.json`, and encrypted secrets payload values when used).
+3. Rotate provider/API credentials (WhatsApp creds, Slack/Discord tokens, model/API keys in SQLite auth stores, and encrypted secrets payload values when used).
 
 ### Audit
 

@@ -82,6 +82,7 @@ type QaRunnerCredentialHost = {
 };
 
 type QaRunnerTransportFlowPreparationInput = {
+  signal?: AbortSignal;
   config: Record<string, unknown>;
   scenarioId: string;
   scenarioTitle: string;
@@ -407,7 +408,13 @@ type QaRuntimeSurface = {
       preferredLiveModel?: string;
     },
   ) => string;
-  startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
+  createQaLiveLaneGateway: () => {
+    start: (...args: unknown[]) => Promise<unknown>;
+    stop: () => Promise<{
+      process: "never-spawned" | "confirmed-stopped" | "unconfirmed";
+      errors: unknown[];
+    }>;
+  };
   runLiveTransportQaSuiteCommand: (params: LiveTransportQaSuiteCommandOptions) => Promise<unknown>;
 };
 

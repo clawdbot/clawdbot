@@ -124,6 +124,11 @@ describe("failed Responses loopback SSE", () => {
             responseModel: "gpt-5.6-luna",
             stopReason: "error",
             errorMessage: "server_error: provider failed after consuming tokens",
+            // The structured error.code must survive normalization -> the thrown
+            // ResponsesStreamFailure -> projectProviderError into errorCode, so the
+            // failover classifier receives a structured descriptor and consults the
+            // provider hook instead of misreading the folded message as timeout (#117609).
+            errorCode: "server_error",
             usage: {
               input: 13,
               output: 4,

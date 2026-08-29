@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { formatSlackError } from "../../errors.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "../../limits.js";
@@ -25,7 +26,10 @@ import {
 } from "../../progress-blocks.js";
 import { applyAppendOnlyStreamUpdate } from "../../stream-mode.js";
 import { appendSlackStream, stopSlackStream } from "../../streaming.js";
-import { resolveExplicitSlackProgressTitle } from "./dispatch-helpers.js";
+import {
+  resolveExplicitSlackProgressTitle,
+  resolveSlackProgressStyle,
+} from "./dispatch-helpers.js";
 import {
   createSlackDraftProgressCardRuntime,
   formatSlackProgressDraftLine,
@@ -88,7 +92,7 @@ export function createSlackProgressRuntime(runtimeParams: {
         warn: logVerbose,
       })
     : undefined;
-  let hasStreamedMessage = false;
+  let hasStreamedAnswer = false;
   const isProgressMode = slackStreaming.mode === "progress";
   const useNativeProgressStreaming = useStreaming && slackStreaming.mode === "progress";
   const progressDraftActive = Boolean(draftStream) || useNativeProgressStreaming;
@@ -127,7 +131,11 @@ export function createSlackProgressRuntime(runtimeParams: {
   };
   const progressWorkCounter = createChannelProgressWorkCounter();
   const progressSeed = `${account.accountId}:${message.channel}`;
-  const useDraftProgressCard = Boolean(draftStream) && isProgressMode;
+  const slackProgressStyle = resolveSlackProgressStyle(account.config);
+  // THIS BEHAVIOR IS INTENTIONAL AND MUST NOT BE CASUALLY ADJUSTED.
+  // DO NOT CHANGE THIS WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
+  const useDraftProgressCard =
+    Boolean(draftStream) && isProgressMode && slackProgressStyle === "card";
   const explicitProgressTitle = resolveExplicitSlackProgressTitle(account.config);
   const progressDraftMaxLineChars = resolveChannelProgressDraftMaxLineChars(account.config);
   const progressCard = createSlackDraftProgressCardRuntime({
@@ -353,7 +361,6 @@ export function createSlackProgressRuntime(runtimeParams: {
             }
           : previewText,
       );
-      hasStreamedMessage = true;
       if (options?.flush) {
         await draftStream.flush();
       }
@@ -458,6 +465,9 @@ export function createSlackProgressRuntime(runtimeParams: {
 
   const pushPlanProgress = async (steps?: AgentPlanStep[], explanation?: string) => {
     if (isProgressMode) {
+      if (slackProgressStyle === "compact") {
+        return false;
+      }
       return await progressDraft.pushPlanProgress(steps, { explanation });
     }
     if (previewToolProgressSuppressed || !draftStream) {
@@ -473,7 +483,6 @@ export function createSlackProgressRuntime(runtimeParams: {
     });
     if (text) {
       draftStream.update(text);
-      hasStreamedMessage = true;
     }
     return false;
   };
@@ -502,7 +511,7 @@ export function createSlackProgressRuntime(runtimeParams: {
   };
 
   const updateDraftFromPartial = (text?: string) => {
-    const trimmed = text?.trimEnd();
+    const trimmed = text && sanitizeAssistantVisibleText(text).trimEnd();
     if (!trimmed) {
       return false;
     }
@@ -521,7 +530,7 @@ export function createSlackProgressRuntime(runtimeParams: {
         return false;
       }
       draftStream?.update(next.rendered);
-      hasStreamedMessage = true;
+      hasStreamedAnswer = true;
       return false;
     }
 
@@ -532,7 +541,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     previewToolProgressSuppressed = true;
     progressDraft.suppress();
     draftStream?.update(trimmed);
-    hasStreamedMessage = true;
+    hasStreamedAnswer = true;
     return false;
   };
   const pushReasoningProgress = async (payload?: {
@@ -567,7 +576,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     });
   };
   const resetDraftDeliveryState = () => {
-    hasStreamedMessage = false;
+    hasStreamedAnswer = false;
     appendRenderedText = "";
     appendSourceText = "";
   };
@@ -613,7 +622,7 @@ export function createSlackProgressRuntime(runtimeParams: {
             await beginNewProgressTurn();
             return;
           }
-          if (hasStreamedMessage) {
+          if (hasStreamedAnswer) {
             draftStream?.forceNewMessage();
           }
           resetDraftDeliveryState();

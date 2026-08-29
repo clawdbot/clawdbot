@@ -12,6 +12,7 @@ on:
       - scripts/check-docs-mdx.mts
       - scripts/lib/mintlify-accordion.mjs
       - scripts/lib/tsx-cli-shim.mjs
+      - scripts/lib/local-check-runtime.mts
       - .github/workflows/docs-sync-publish.yml
   workflow_dispatch:
 
@@ -19,8 +20,12 @@ permissions:
   contents: read
 
 concurrency:
+  # cancel-in-progress starved the mirror: every main push cancelled the in-flight
+  # sync and cancelled runs leave no successor, so under sustained merge velocity
+  # openclaw/docs never advanced. Queue instead — GitHub keeps only the newest
+  # pending run per group, and skip_stale_source keeps completed runs idempotent.
   group: docs-sync-publish-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  cancel-in-progress: false
 
 jobs:
   sync-publish-repo:
@@ -34,13 +39,13 @@ jobs:
 
       - name: Checkout source repo
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Checkout ClawHub docs source
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openclaw/clawhub
           ref: main
@@ -51,7 +56,7 @@ jobs:
 
       - name: Setup Node
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.x"
 
@@ -88,7 +93,7 @@ jobs:
       - name: Install docs MDX checker dependency
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         working-directory: publish
-        run: npm install --no-save --package-lock=false @mdx-js/mdx@3.1.1 tsx@4.23.1
+        run: npm install --no-save --package-lock=false @mdx-js/mdx@3.1.1 tsx@4.23.12
 
       - name: Check publish docs MDX
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
@@ -122,7 +127,7 @@ jobs:
             exit 0
           fi
 
-          if git fetch origin main:refs/remotes/origin/main; then
+          if timeout --signal=TERM --kill-after=10s 120s git fetch origin main:refs/remotes/origin/main; then
             skip_stale_source
           fi
 
@@ -131,7 +136,7 @@ jobs:
           git add docs .openclaw-sync
           git commit -m "chore(sync): mirror docs from $GITHUB_REPOSITORY@$GITHUB_SHA"
           for attempt in 1 2 3 4 5; do
-            if git fetch origin main:refs/remotes/origin/main; then
+            if timeout --signal=TERM --kill-after=10s 120s git fetch origin main:refs/remotes/origin/main; then
               skip_stale_source
               if git rebase -X theirs origin/main && git push origin HEAD:main; then
                 exit 0

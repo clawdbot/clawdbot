@@ -811,6 +811,7 @@ describe("tasks commands", () => {
           message: expect.stringContaining("Task not found: missing"),
         },
       });
+      expect(jsonLookupRuntime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
     });
   });
 

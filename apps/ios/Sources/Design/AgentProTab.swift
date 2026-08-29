@@ -5,7 +5,7 @@ import SwiftUI
 struct AgentProTab: View {
     @Environment(NodeAppModel.self) var appModel
     @Environment(\.scenePhase) var scenePhase
-    let directRoute: AgentRoute?
+    let directRoute: AgentRoute
     let headerSidebarAction: OpenClawSidebarHeaderAction?
     let headerTitle: String
     let openSettings: (() -> Void)?
@@ -14,7 +14,6 @@ struct AgentProTab: View {
     @State var overviewLoading: Bool = false
     @State var overviewRefreshGate = AgentOverviewRefreshGate()
     @State var agentRosterFilter: AgentRosterFilter = .all
-    @State var agentSearchPresented = false
     @State var agentSearchText = ""
     @State var skillFilter: String = ""
     @State var skillStatusFilter: SkillStatusFilter = .all
@@ -115,8 +114,6 @@ struct AgentProTab: View {
 
     enum AgentLayout {
         static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
-        static let filterHeight: CGFloat = 34
-        static let metricTileHeight: CGFloat = 94
     }
 
     enum AgentRosterState: Equatable {
@@ -155,7 +152,7 @@ struct AgentProTab: View {
     }
 
     init(
-        directRoute: AgentRoute? = nil,
+        directRoute: AgentRoute,
         headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         headerTitle: String = "Agents",
         openSettings: (() -> Void)? = nil)
@@ -167,65 +164,33 @@ struct AgentProTab: View {
     }
 
     var body: some View {
-        Group {
-            if let directRoute {
-                self.directDestination(for: directRoute)
-            } else {
-                self.overviewNavigation
+        self.directDestination(for: self.directRoute)
+            .task(id: self.overviewTaskID) {
+                await self.refreshOverview(force: false)
             }
-        }
-        .task(id: self.overviewTaskID) {
-            await self.refreshOverview(force: false)
-        }
-        .sheet(item: self.$skillEditorSelection) { selection in
-            if let skill = self.skillByKey(selection.id) {
-                self.skillEditorSheet(skill)
-            } else {
-                self.missingSkillEditorSheet
-            }
-        }
-        .sheet(item: self.$automationEditorSelection) { selection in
-            AgentAutomationDetailScreen(
-                initialJob: selection.initialJob,
-                sourceGatewayID: selection.sourceGatewayID,
-                pendingRunRegistry: self.pendingCronRuns,
-                onRunQueued: { runID, processInstanceID in
-                    self.reservePendingCronRun(
-                        jobID: selection.initialJob.id,
-                        runID: runID,
-                        processInstanceID: processInstanceID,
-                        sourceGatewayID: selection.sourceGatewayID)
-                },
-                onChanged: {
-                    Task { await self.refreshOverview(force: true) }
-                })
-        }
-    }
-
-    private var overviewNavigation: some View {
-        NavigationStack {
-            ZStack {
-                OpenClawProBackground()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        self.rosterHeader
-                        self.agentFilters
-                        self.agentsSection
-                        self.operationsSection
-                        self.dreamingSection
-                        self.cronSection
-                    }
-                    .padding(.vertical, 18)
-                }
-                .refreshable {
-                    await self.refreshOverview(force: true)
+            .sheet(item: self.$skillEditorSelection) { selection in
+                if let skill = self.skillByKey(selection.id) {
+                    self.skillEditorSheet(skill)
+                } else {
+                    self.missingSkillEditorSheet
                 }
             }
-            .navigationBarHidden(true)
-            .navigationDestination(for: AgentRoute.self) { route in
-                self.destination(for: route)
+            .sheet(item: self.$automationEditorSelection) { selection in
+                AgentAutomationDetailScreen(
+                    initialJob: selection.initialJob,
+                    sourceGatewayID: selection.sourceGatewayID,
+                    pendingRunRegistry: self.pendingCronRuns,
+                    onRunQueued: { runID, processInstanceID in
+                        self.reservePendingCronRun(
+                            jobID: selection.initialJob.id,
+                            runID: runID,
+                            processInstanceID: processInstanceID,
+                            sourceGatewayID: selection.sourceGatewayID)
+                    },
+                    onChanged: {
+                        Task { await self.refreshOverview(force: true) }
+                    })
             }
-        }
     }
 
     private func directDestination(for route: AgentRoute) -> some View {

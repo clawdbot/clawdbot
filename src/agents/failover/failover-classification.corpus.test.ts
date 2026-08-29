@@ -14,7 +14,6 @@ vi.mock("../../logging/node-require.js", () => ({
 import { resolveReplyFailoverFacts } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import {
   classifyFailoverSignal,
-  classifyProviderSpecificError,
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
@@ -55,6 +54,18 @@ describe("golden failover classification corpus", () => {
 });
 
 describe("cross-layer drift (documents current behavior, see refactor-02)", () => {
+  it.each([
+    ["Ollama setup pull", "Failed to download gemma4:e2b: pull stream ended before success"],
+    ["OpenRouter music", "OpenRouter music generation stream ended before completion"],
+    ["MiniMax TTS", "MiniMax music generation stream ended without completion"],
+    ["local SSE reader", "SSE stream ended before next event"],
+    ["OpenCode Go", "opencode-go stream ended without a terminal event"],
+    ["Ollama", "Ollama API stream ended without a final response"],
+  ])("does not classify non-assistant %s lifecycle wording", (_source, message) => {
+    expect(isTimeoutErrorMessage(message)).toBe(false);
+    expect(classifyFailoverSignal({ message })).toBeNull();
+  });
+
   it("ignores an embedded 429 substring outside a status context", () => {
     const message = "request id req-4291 failed";
 
@@ -194,13 +205,10 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     {
       message: "ThrottlingException: Rate exceeded",
       rateLimit: true,
-      // FIXED(refactor-02): was rate_limit, now null
-      providerSpecific: null,
     },
     {
       message: "throttling disabled for this account",
       rateLimit: true,
-      providerSpecific: null,
     },
   ])("records generic throttling normalization for $message", (row) => {
     // FIXED(refactor-02): generic matching owns throttling; provider-specific duplicates are gone.
@@ -210,8 +218,5 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
       kind: "reason",
       reason: "rate_limit",
     });
-    expect(classifyProviderSpecificError(row.message, { includePluginHooks: false })).toBe(
-      row.providerSpecific,
-    );
   });
 });

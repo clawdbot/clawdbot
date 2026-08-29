@@ -3,8 +3,6 @@ package ai.openclaw.app.node
 import ai.openclaw.app.protocol.OpenClawCalendarCommand
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
-import ai.openclaw.app.protocol.OpenClawCanvasA2UICommand
-import ai.openclaw.app.protocol.OpenClawCanvasCommand
 import ai.openclaw.app.protocol.OpenClawCapability
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
@@ -81,7 +79,6 @@ object InvokeCommandRegistry {
   /** Capabilities mirror gateway protocol ids and are filtered by device state. */
   val capabilityManifest: List<NodeCapabilitySpec> =
     listOf(
-      NodeCapabilitySpec(name = OpenClawCapability.Canvas.rawValue),
       NodeCapabilitySpec(name = OpenClawCapability.Device.rawValue),
       NodeCapabilitySpec(name = OpenClawCapability.Notifications.rawValue),
       NodeCapabilitySpec(name = OpenClawCapability.System.rawValue),
@@ -125,38 +122,6 @@ object InvokeCommandRegistry {
   /** Complete Android node command catalog before runtime availability filtering. */
   val all: List<InvokeCommandSpec> =
     listOf(
-      InvokeCommandSpec(
-        name = OpenClawCanvasCommand.Present.rawValue,
-        requiresForeground = true,
-      ),
-      InvokeCommandSpec(
-        name = OpenClawCanvasCommand.Hide.rawValue,
-        requiresForeground = true,
-      ),
-      InvokeCommandSpec(
-        name = OpenClawCanvasCommand.Navigate.rawValue,
-        requiresForeground = true,
-      ),
-      InvokeCommandSpec(
-        name = OpenClawCanvasCommand.Eval.rawValue,
-        requiresForeground = true,
-      ),
-      InvokeCommandSpec(
-        name = OpenClawCanvasCommand.Snapshot.rawValue,
-        requiresForeground = true,
-      ),
-      InvokeCommandSpec(
-        name = OpenClawCanvasA2UICommand.Push.rawValue,
-        requiresForeground = true,
-      ),
-      InvokeCommandSpec(
-        name = OpenClawCanvasA2UICommand.PushJSONL.rawValue,
-        requiresForeground = true,
-      ),
-      InvokeCommandSpec(
-        name = OpenClawCanvasA2UICommand.Reset.rawValue,
-        requiresForeground = true,
-      ),
       InvokeCommandSpec(
         name = OpenClawSystemCommand.Notify.rawValue,
       ),

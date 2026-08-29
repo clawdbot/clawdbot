@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   isProviderAuthProfileConfigured,
   resolveProviderAuthProfileApiKey,
 } from "openclaw/plugin-sdk/provider-auth";
 import type {
+  OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
@@ -15,6 +16,7 @@ import type {
 import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  toOpenAICompatibleRealtimeAudioFormat,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -82,6 +84,7 @@ export type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
+  logger: Pick<import("openclaw/plugin-sdk/plugin-entry").PluginLogger, "warn">;
 };
 
 export const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";
@@ -190,13 +193,13 @@ type RealtimeGaSessionPolicy = {
   output_modalities: string[];
   audio: {
     input: {
-      format: OpenAIRealtimeAudioFormatConfig;
+      format: OpenAICompatibleRealtimeAudioFormat;
       turn_detection: RealtimeTurnDetectionConfig;
       noise_reduction: { type: "near_field" } | null;
       transcription: { model: string; language?: string };
     };
     output: {
-      format: OpenAIRealtimeAudioFormatConfig;
+      format: OpenAICompatibleRealtimeAudioFormat;
       voice: OpenAIRealtimeVoice;
     };
   };
@@ -226,15 +229,6 @@ export type RealtimeAzureDeploymentSessionUpdate = {
   };
 };
 
-type OpenAIRealtimeAudioFormatConfig =
-  | {
-      type: "audio/pcm";
-      rate: 24000;
-    }
-  | {
-      type: "audio/pcmu";
-    };
-
 export function normalizeProviderConfig(
   config: RealtimeVoiceProviderConfig,
 ): OpenAIRealtimeVoiceProviderConfig {
@@ -248,22 +242,18 @@ export function normalizeProviderConfig(
     voice: normalizeOpenAIRealtimeVoice(raw?.speakerVoice ?? raw?.voice),
     temperature: asFiniteNumber(raw?.temperature),
     vadThreshold: asUnitInterval(raw?.vadThreshold),
-    silenceDurationMs: asNonNegativeInteger(raw?.silenceDurationMs),
-    prefixPaddingMs: asNonNegativeInteger(raw?.prefixPaddingMs),
+    silenceDurationMs: asSafeIntegerInRange(raw?.silenceDurationMs, { min: 0 }),
+    prefixPaddingMs: asSafeIntegerInRange(raw?.prefixPaddingMs, { min: 0 }),
     interruptResponseOnInputAudio:
       typeof raw?.interruptResponseOnInputAudio === "boolean"
         ? raw.interruptResponseOnInputAudio
         : undefined,
-    minBargeInAudioEndMs: asNonNegativeInteger(raw?.minBargeInAudioEndMs),
+    minBargeInAudioEndMs: asSafeIntegerInRange(raw?.minBargeInAudioEndMs, { min: 0 }),
     reasoningEffort: normalizeOptionalString(raw?.reasoningEffort),
     azureEndpoint: normalizeOptionalString(raw?.azureEndpoint),
     azureDeployment: normalizeOptionalString(raw?.azureDeployment),
     azureApiVersion: normalizeOptionalString(raw?.azureApiVersion),
   };
-}
-
-function asNonNegativeInteger(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function asUnitInterval(value: unknown): number | undefined {
@@ -437,14 +427,6 @@ export function normalizeOpenAIRealtimeTools(
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function resolveOpenAIRealtimeAudioFormat(
-  audioFormat: RealtimeVoiceAudioFormat = REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
-): OpenAIRealtimeAudioFormatConfig {
-  return audioFormat.encoding === "pcm16"
-    ? { type: "audio/pcm", rate: 24000 }
-    : { type: "audio/pcmu" };
-}
-
 export function buildOpenAIRealtimeTurnDetectionConfig(params: {
   autoRespondToAudio?: boolean;
   createResponse?: boolean;
@@ -484,7 +466,9 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
   vadThreshold?: number;
   voice: OpenAIRealtimeVoice;
 }): RealtimeGaSessionPolicy {
-  const format = resolveOpenAIRealtimeAudioFormat(params.audioFormat);
+  const format = toOpenAICompatibleRealtimeAudioFormat(
+    params.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+  );
   return {
     type: "realtime",
     model: params.model,

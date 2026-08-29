@@ -116,6 +116,7 @@ sync the current checkout on every run, and stop it before handoff.
   proportional to the touched contract. Untrusted repository tooling never runs
   locally. Remote proof requires a remote-environment or isolation reason.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
+- Standing up a local container Gateway for UI proof goes through `scripts/docker/setup.sh` (see `docs/install/docker.md`). It seeds `gateway.controlUi.allowedOrigins` for the published host port; a hand-rolled `docker run` skips that and the dashboard dead-ends on "Browser origin not allowed" with the Gateway logging `code=4008 reason=connect failed`. Never reuse the Compose defaults for a proof: they bind-mount the operator's real `~/.openclaw` and claim port 18789.
 - Use standard Git commands when committing; stage only your files.
 - If dependencies are missing on the selected host, run `pnpm install`, retry
   once, then report the first actionable error.
@@ -310,9 +311,11 @@ package with `run_release_soak=true` or explicit focused groups.
 Stable-publish uses `release_profile=stable`.
 
 ```bash
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
 node scripts/full-release-validation-at-sha.mjs \
   --sha <code-sha> \
-  --target-ref release/YYYY.M.PATCH
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
 
 That helper is for regular releases. Extended-stable dispatches Full Release
@@ -321,11 +324,15 @@ Validation directly from and against `extended-stable/YYYY.M.33` with
 replaced by a `release-ci/*` run. Use `$release-openclaw-ci` for its failure
 classification and run-identity rules.
 
-The helper pins the Tooling SHA on trusted `main`, passes the resolved Code SHA
-as `expected_sha`, and records the canonical release branch as context. It
-infers `beta` for alpha/beta package versions and `stable` for
-stable/correction versions. Pass `-f release_profile=full` only for the broad
-advisory provider/media sweep. Do not make `full` faster by silently dropping
+The helper verifies and pins the recorded Tooling SHA on trusted `main`, passes
+the resolved Code SHA as `expected_sha`, and records the canonical release
+branch as context. Reuse that SHA for the release; never refresh it from moving
+`main`. Regular release branches accept only their final package version or a
+matching beta prerelease. Tideclaw alpha validation uses its matching alpha
+branch and exact alpha tag. The helper infers `beta` for beta candidates and
+exact alpha tags, and `stable` for stable/correction versions. Pass
+`-f release_profile=full` only for the broad advisory provider/media sweep. Do
+not make `full` faster by silently dropping
 suites; use the bounded phase that matches the release decision.
 
 Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
@@ -334,16 +341,35 @@ lanes are intentionally reserved for the separate `Plugin Prerelease` child so
 PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
 all-plugin runtime time on release-only product coverage.
 
-Use one operator, one transition-only watcher, and at most one investigator for
-the current failed surface. Parent timeout or cancellation leaves adopted exact
-children running; cancel an exact child only by explicit operator action or the
-workflow's identity-mismatch/fail-fast path.
+Use one operator, one foreground owner, and at most one investigator for the
+current failed surface. Do not start `release-ci-summary --watch` while the
+SHA-pinned helper is already watching the same parent. Parent timeout or
+cancellation leaves adopted exact children running; cancel an exact child only
+by explicit operator action or by `fail_fast=true` after Release Decision binds
+the failure to that exact active run.
 
-The child-dispatch jobs record child run ids, and `Verify full validation`
-re-queries them during that parent attempt. A later narrow green run is useful
-recovery evidence but is not publish authorization by itself and there is no
-standalone finalizer. The release owner must reassess the recorded evidence and
-current publish gate.
+The child-dispatch jobs record run ID, run attempt, and URL, then finish. The
+parent seals those tuples, original dispatch titles, gate coverage, reuse
+policy, and original parent attempt in one immutable
+`full-release-execution-plan-<run-id>` artifact and exact run-ID cache entry.
+Collector retries restore the cached bytes, validate them, and re-upload the
+artifact for their attempt before adopting its children; they never reconstruct
+the plan or redispatch tests.
+`Release Decision` polls those exact identities and can report
+`blocked_diagnostics_running` before unrelated children finish.
+For reused evidence, it also repeats the canonical target, policy, changed-path,
+selected-run, root-run, and exact-child validation before it can pass.
+`Diagnostic Drain` continues every selected child to terminal with
+`fail_fast=false` unless the collector itself is cancelled or loses API
+access. `orchestration_error` permits collector recovery against the same
+exact children, never test redispatch. Diagnose `blocked_diagnostics_running`
+immediately, but wait for a terminal drain before retrying the failed surface.
+The final `Verify full validation` job consumes and validates the immutable
+execution plan plus the exact Decision and Drain artifacts instead of
+reclassifying child results. A
+later narrow green run is useful recovery evidence but is not publish
+authorization by itself and there is no standalone finalizer. The release owner
+must reassess the recorded evidence and current publish gate.
 
 Once the Code SHA is green, generate and commit only `CHANGELOG.md`. The new
 **Release SHA** is eligible for product-evidence reuse only when GitHub proves
@@ -360,10 +386,12 @@ editing. Only a confirmed product failure changes the Code SHA. Use one
 diagnosis, one fix when needed, and one narrow retry with
 `-f rerun_group=<group>`, then reassess.
 Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
-`release-checks`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`,
-`qa-parity`, `qa-live`, and `npm-telegram`. Use the narrowest group that covers
-the failed box. Do not automatically dispatch `all` after a narrow retry. For a
-single failed live/E2E shard, use
+`install-smoke`, `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`,
+`npm-telegram`, and `performance`. The old `release-checks` aggregate retry
+handle is invalid because it silently selected every release-check lane. `qa`
+is a direct-child manual aggregate, not an umbrella/controller retry API. Use
+the narrowest concrete group that covers the failed box. Do not automatically
+dispatch `all` after a narrow retry. For a single failed live/E2E shard, use
 `-f rerun_group=live-e2e -f live_suite_filter=<suite_id>` so the Blacksmith
 workflow only spends setup and queue time on that suite.
 
@@ -420,11 +448,16 @@ gh workflow run openclaw-release-checks.yml \
   -f provider=openai \
   -f mode=both \
   -f release_profile=stable \
-  -f rerun_group=all
+  -f rerun_group=<concrete-group>
 ```
 
-Release-check rerun groups are `all`, `install-smoke`, `cross-os`, `live-e2e`,
-`package`, `qa`, `qa-parity`, and `qa-live`.
+Concrete release-check rerun groups are `install-smoke`, `cross-os`,
+`live-e2e`, `package`, `qa-parity`, and `qa-live`. Direct manual dispatch may
+use `qa` to aggregate parity and live QA, but controllers must select one of
+those two concrete groups. Reserve `all` for an intentional whole-child
+validation, never automatic recovery. Non-empty live or cross-OS filters must
+match their owning group; mismatches fail before scheduling and never widen to
+an unfiltered run.
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
 ref once as `release-package-under-test` and passes that artifact into cross-OS
 release checks, release-path Docker live/E2E checks, and Package Acceptance.

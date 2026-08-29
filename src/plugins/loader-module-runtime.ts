@@ -4,11 +4,7 @@ import { attachPluginApiFacades } from "./api-facades.js";
 import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import { withProfile } from "./plugin-load-profile.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
-} from "./plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRegistrationContext } from "./runtime.js";
@@ -106,7 +102,6 @@ export function createPluginModuleLoader(options: {
   loaderFilename?: string;
   installNativeSdkResolver?: boolean;
 }) {
-  const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
   const createLoaderForModule = (modulePath: string) => {
     if (options.installNativeSdkResolver !== false && options.tryNative !== false) {
       installOpenClawPluginSdkNativeResolver({
@@ -125,7 +120,6 @@ export function createPluginModuleLoader(options: {
       options.devSourceRoot,
     );
     return getCachedPluginModuleLoader({
-      cache: moduleLoaders,
       modulePath,
       importerUrl: import.meta.url,
       loaderFilename: options.loaderFilename ?? modulePath,
@@ -223,6 +217,14 @@ export function createLazyPluginRuntime(params: {
   };
   return new Proxy({} as PluginRuntime, {
     get(_target, prop, receiver) {
+      // Instance-bound surfaces are complete runtime objects. Keep them direct so
+      // the first Gateway call does not materialize the broad plugin runtime graph.
+      if (prop === "gateway" || prop === "nodes" || prop === "subagent") {
+        const value = params.runtimeOptions?.[prop];
+        if (value !== undefined) {
+          return value;
+        }
+      }
       return Reflect.get(resolveRuntime(), prop, receiver);
     },
     set(_target, prop, value, receiver) {

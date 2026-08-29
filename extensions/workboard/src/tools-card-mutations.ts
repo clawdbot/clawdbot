@@ -1,7 +1,7 @@
 import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
-import { Type } from "typebox";
+import { Type, type TProperties } from "typebox";
 import type { WorkboardMutationScope } from "./store-inputs.js";
 import type { WorkboardStore } from "./store.js";
 
@@ -21,6 +21,10 @@ export function claimTokenField(description = "Claim token returned by workboard
   return Type.Optional(Type.String({ description }));
 }
 
+export function strictObject<const Properties extends TProperties>(properties: Properties) {
+  return Type.Object(properties, { additionalProperties: false });
+}
+
 export function createWorkboardMoveTool(params: {
   store: WorkboardStore;
   readScopedCardToolParams: (rawParams: unknown) => Promise<ScopedMoveParams>;
@@ -31,17 +35,14 @@ export function createWorkboardMoveTool(params: {
     label: "Workboard Move",
     description:
       "Move a Workboard card to another status. Claimed cards require matching claim scope.",
-    parameters: Type.Object(
-      {
-        id: cardIdField(),
-        status: Type.Union(
-          WORKBOARD_STATUSES.map((status) => Type.Literal(status)),
-          { description: "Target Workboard status." },
-        ),
-        [ClaimTokenFieldName]: claimTokenField("Claim token for claimed cards."),
-      },
-      { additionalProperties: false },
-    ),
+    parameters: strictObject({
+      id: cardIdField(),
+      status: Type.Union(
+        WORKBOARD_STATUSES.map((status) => Type.Literal(status)),
+        { description: "Target Workboard status." },
+      ),
+      [ClaimTokenFieldName]: claimTokenField("Claim token for claimed cards."),
+    }),
     execute: async (_toolCallId, rawParams) => {
       const { record, id, scope } = await params.readScopedCardToolParams(rawParams);
       return params.redactedCardResult(

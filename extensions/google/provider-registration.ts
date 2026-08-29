@@ -101,6 +101,9 @@ export function buildGoogleProvider(): ProviderPlugin {
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        if (ctx.providerIds && !ctx.providerIds.includes("google")) {
+          return null;
+        }
         const auth = ctx.resolveProviderApiKey("google");
         if (!auth.apiKey) {
           return null;

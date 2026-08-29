@@ -25,6 +25,14 @@ MLX_TTS_HELPER_BUILD_ROOT="$MLX_TTS_HELPER_ROOT/.build"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
+SIGNING_VARIANT="${OPENCLAW_MAC_SIGNING_VARIANT:-standard}"
+case "$SIGNING_VARIANT" in
+  standard | elevation-host) ;;
+  *)
+    echo "ERROR: Unknown OPENCLAW_MAC_SIGNING_VARIANT value: $SIGNING_VARIANT (use standard|elevation-host)" >&2
+    exit 1
+    ;;
+esac
 # OPENCLAW_SKIP_MLX_TTS=1 packages the app without the local MLX voice helper.
 # The helper pulls in the full mlx-swift Metal shader stack, which some beta
 # Xcode toolchains cannot compile (flaky `metal` diagnostics), needlessly
@@ -886,8 +894,12 @@ fi
 rm -rf "$APP_ROOT/Contents/Resources/ProviderIcons"
 cp -R "$PROVIDER_ICONS_SRC" "$APP_ROOT/Contents/Resources/ProviderIcons"
 
-echo "🖥  Staging embedded CUA driver"
-"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"
+if [[ "$SIGNING_VARIANT" == "elevation-host" ]]; then
+  echo "🖥  Omitting embedded CUA driver from elevation-host package"
+else
+  echo "🖥  Staging embedded CUA driver"
+  "$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"
+fi
 
 echo "📦 Copying CLI installer"
 INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"

@@ -1,3 +1,4 @@
+import { randomRelayBase64Url } from "./relay-auth-v2-crypto.js";
 import { ACCESS_MODE_ALL, parsePairingString } from "./relay-core.js";
 
 const NATIVE_HOST_NAME = "ai.openclaw.browser_bootstrap";
@@ -52,15 +53,6 @@ function nativeResponse(value, nonce) {
     return { kind: "failure", code: value.code };
   }
   return { kind: "malformed" };
-}
-
-function randomNonce() {
-  const hex = crypto.randomUUID().replaceAll("-", "");
-  let binary = "";
-  for (let offset = 0; offset < hex.length; offset += 2) {
-    binary += String.fromCharCode(Number.parseInt(hex.slice(offset, offset + 2), 16));
-  }
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
 }
 
 function isHostMissing(error) {
@@ -148,7 +140,7 @@ export function createNativeBootstrapController({ chromeApi = chrome, getPairing
       if (state.state === "manual_required") {
         return { status: "manual_required", code: state.failureCode };
       }
-      const nonce = randomNonce();
+      const nonce = randomRelayBase64Url(crypto, 16);
       let response;
       try {
         response = await sendNativeBootstrap(chromeApi, {

@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
@@ -14,11 +15,19 @@ import {
 } from "../../vite.config.ts";
 
 const childProcessMocks = vi.hoisted(() => ({ execFileSync: vi.fn() }));
+const fsMocks = vi.hoisted(() => ({ existsSync: vi.fn(), readFileSync: vi.fn() }));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   childProcessMocks.execFileSync.mockImplementation(actual.execFileSync);
   return { ...actual, execFileSync: childProcessMocks.execFileSync };
+});
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  fsMocks.existsSync.mockImplementation(actual.existsSync);
+  fsMocks.readFileSync.mockImplementation(actual.readFileSync);
+  return { ...actual, existsSync: fsMocks.existsSync, readFileSync: fsMocks.readFileSync };
 });
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -35,7 +44,10 @@ function findStringAlias(key: string) {
 
 describe("Control UI Vite config", () => {
   it("emits Brotli and gzip variants only for bundled compressible assets", () => {
-    const source = "console.log('precompressed');\n".repeat(200);
+    const source = Array.from(
+      { length: 200 },
+      (_, index) => `console.log("startup-${index % 97}", ${index % 31});\n`,
+    ).join("");
     const variants = createControlUiPrecompressedAssetVariants("assets/app-AbCd1234.js", source);
 
     expect(variants.map((variant) => variant.fileName)).toEqual([
@@ -44,6 +56,9 @@ describe("Control UI Vite config", () => {
     ]);
     expect(brotliDecompressSync(variants[0]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
     expect(gunzipSync(variants[1]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
+    expect(createHash("sha256").update(variants[1]!.source).digest("hex")).toBe(
+      "32dab2f3598992a8a8b595f5da60f10907fc181c2abfa27380d562d9b539b85d",
+    );
     expect(createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
     expect(createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
     expect(createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual([]);
@@ -373,6 +388,18 @@ describe("Control UI Vite config", () => {
       find: "@openclaw/normalization-core/phone-presentation",
       replacement: path.join(repoRoot, "packages/normalization-core/src/phone-presentation.ts"),
     });
+    const resultAliasIndex = aliases.findIndex(
+      (alias) => alias.find === "@openclaw/normalization-core/result",
+    );
+    const rootAliasIndex = aliases.findIndex(
+      (alias) => alias.find === "@openclaw/normalization-core",
+    );
+    expect(aliases[resultAliasIndex]).toEqual({
+      find: "@openclaw/normalization-core/result",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/result.ts"),
+    });
+    expect(resultAliasIndex).toBeGreaterThanOrEqual(0);
+    expect(rootAliasIndex).toBeGreaterThan(resultAliasIndex);
   });
 
   it("uses Node package resolution for external packages inherited by worktrees", () => {
@@ -461,5 +488,43 @@ describe("Control UI Vite config", () => {
     expect(catalog.common.health).toBe("Santé");
     expect(catalog.activity.title).toBeTypeOf("string");
     expect(addWatchFile).toHaveBeenCalledWith(path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl"));
+  });
+
+  it("bootstraps only an absent locale memory from the English catalog", async () => {
+    const loadHook = controlUiLocaleModulesPlugin().load;
+    const load = typeof loadHook === "function" ? loadHook : loadHook?.handler;
+    if (!load) {
+      throw new Error("Expected locale module loader");
+    }
+    const id = "\0virtual:openclaw-control-ui-locale/fr";
+    const addWatchFile = vi.fn();
+
+    await fsMocks.existsSync.withImplementation(
+      () => false,
+      async () => {
+        const result = await load.call({ addWatchFile } as never, id, {} as never);
+        if (typeof result !== "string") {
+          throw new Error("Expected locale module loader to return generated source");
+        }
+        const catalog = JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""));
+        expect(catalog.common.health).toBe("Health");
+        expect(addWatchFile).not.toHaveBeenCalled();
+      },
+    );
+
+    await fsMocks.readFileSync.withImplementation(
+      () => "",
+      async () => {
+        expect(() => load.call({ addWatchFile } as never, id, {} as never)).toThrow(
+          "Control UI fr translation memory is missing or empty",
+        );
+      },
+    );
+    await fsMocks.readFileSync.withImplementation(
+      () => "{",
+      async () => {
+        expect(() => load.call({ addWatchFile } as never, id, {} as never)).toThrow(SyntaxError);
+      },
+    );
   });
 });

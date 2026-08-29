@@ -2,11 +2,11 @@ import { randomBytes } from "node:crypto";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { ProviderRouteOverridePresence } from "../../../plugin-sdk/provider-model-types.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
-import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import { log } from "../logger.js";
 import type { EmbeddedRunReplayState } from "../replay-state.js";
@@ -26,6 +26,7 @@ import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {
   resolveEmptyResponseRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
+  resolveSettledToolBatchEvidence,
   resolveSettledToolTerminalContinuationInstruction,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
@@ -38,7 +39,7 @@ import {
   TRUNCATED_REPLY_NOTICE_TEXT,
   YIELD_DIAGNOSTIC_TEXT,
 } from "./incomplete-turn-resolution.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
+import type { RunEmbeddedAgentInternalParams as TerminalRunParams } from "./internal-params.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
@@ -78,11 +79,6 @@ export function createTerminalToolPresentationTracker() {
     read: () => value,
   };
 }
-
-type TerminalRunParams = RunEmbeddedAgentParams & {
-  authProfileStateMode?: "read-write" | "read-only";
-  onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
-};
 
 type TerminalResolution =
   | { action: "retry" }
@@ -190,6 +186,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   agentMeta: EmbeddedAgentMeta;
   attemptToolSummary: EmbeddedAgentRunResult["meta"]["toolSummary"];
   failureSignal?: EmbeddedRunFailureSignal;
+  terminalToolFailure?: EmbeddedAgentRunResult["meta"]["terminalToolFailure"];
   maxReasoningOnlyRetryAttempts: number;
   maxEmptyResponseRetryAttempts: number;
   attemptCompactionCount: number;
@@ -249,6 +246,11 @@ export async function resolveEmbeddedRunTerminal(input: {
         ? [silentToolResultReplyPayload]
         : input.payloadsWithToolMedia;
   const payloadCount = payloadsForTerminalPath?.length ?? 0;
+  const intentionalTerminalCompletion =
+    !terminalAborted &&
+    !terminalTimedOut &&
+    payloadCount === 0 &&
+    resolveSettledToolBatchEvidence(attempt).intentionalTermination;
   // A failed isolated finalization is terminal for this user turn. Do not let
   // its settled side effects cascade into any ordinary retry family.
   const settledTurnFinalizationAttempted = input.settledTurnFinalizationOutcome !== "not-attempted";
@@ -348,6 +350,8 @@ export async function resolveEmbeddedRunTerminal(input: {
           externalAbort: externalAbort || signalOwnedInterruption,
           timedOut: terminalTimedOut,
           hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
+          hasIntentionalTerminalCompletion: intentionalTerminalCompletion,
+          terminalAuthFailure: input,
           attempt,
         });
   const incompleteTurnFallbackSafe = Boolean(
@@ -464,6 +468,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     payloadCount,
     payloadsForTerminalPath,
     emptyAssistantReplyIsSilent,
+    intentionalTerminalCompletion,
   });
 }
 
@@ -487,11 +492,15 @@ async function surfaceIncompleteTurn(
   });
   input.setTerminalLifecycleMeta({ replayInvalid, livenessState });
   if (input.authProfileId) {
-    await input.maybeMarkAuthProfileFailure({
-      profileId: input.authProfileId,
-      reason: input.assistantProfileFailureReason,
-      modelId: input.modelId,
-    });
+    try {
+      await input.maybeMarkAuthProfileFailure({
+        profileId: input.authProfileId,
+        reason: input.assistantProfileFailureReason,
+        modelId: input.modelId,
+      });
+    } catch (error) {
+      log.warn(`terminal auth bookkeeping failed; preserving result: ${String(error)}`);
+    }
   }
   return {
     action: "complete",
@@ -516,12 +525,16 @@ async function surfaceIncompleteTurn(
         livenessState,
         error: {
           kind: "incomplete_turn",
-          message: "Agent couldn't generate a response.",
+          message:
+            input.attempt.terminal.kind === "failed"
+              ? formatErrorMessage(input.attempt.terminal.error)
+              : "Agent couldn't generate a response.",
           fallbackSafe: input.incompleteTurnFallbackSafe,
           terminalPresentation: input.terminalToolPresentation !== undefined,
         },
         toolSummary: input.attemptToolSummary,
         ...(input.failureSignal ? { failureSignal: input.failureSignal } : {}),
+        ...(input.terminalToolFailure ? { terminalToolFailure: input.terminalToolFailure } : {}),
         agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
       },
       ...copyAttemptDeliveryState(input.attempt),
@@ -534,6 +547,7 @@ function completeEmbeddedRun(
     payloadCount: number;
     payloadsForTerminalPath: EmbeddedAgentRunResult["payloads"];
     emptyAssistantReplyIsSilent: boolean;
+    intentionalTerminalCompletion: boolean;
   },
 ): TerminalResolution {
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
@@ -567,6 +581,7 @@ function completeEmbeddedRun(
     pluginHarnessOwnsAuthBootstrap: input.pluginHarnessOwnsAuthBootstrap,
     onSuccessfulAuthBinding: input.runParams.onSuccessfulAuthBinding,
   });
+  input.runParams.onSuccessfulAuthProfile?.(input.authProfileId);
   const replayInvalid = input.resolveReplayInvalid(null);
   const yieldHasContinuation =
     input.attempt.yieldDetected && hasYieldContinuationEvidence(input.attempt);
@@ -640,6 +655,9 @@ function completeEmbeddedRun(
         ...(input.emptyAssistantReplyIsSilent
           ? { terminalReplyKind: "silent-empty" as const }
           : {}),
+        ...(input.intentionalTerminalCompletion
+          ? { intentionalTerminalCompletion: "tool-batch" as const }
+          : {}),
         stopReason,
         pendingToolCalls: input.attempt.clientToolCalls?.map((call) => ({
           id: randomBytes(5).toString("hex").slice(0, 9),
@@ -677,6 +695,7 @@ function completeEmbeddedRun(
         },
         toolSummary: input.attemptToolSummary,
         ...(input.failureSignal ? { failureSignal: input.failureSignal } : {}),
+        ...(input.terminalToolFailure ? { terminalToolFailure: input.terminalToolFailure } : {}),
         completion: {
           ...(stopReason ? { stopReason } : {}),
           ...(stopReason ? { finishReason: stopReason } : {}),

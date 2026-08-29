@@ -52,6 +52,11 @@ export function createDiscordQaScenarioEnvironment(params: {
       discordScenarioContext: {
         configureScenario: async (implementation: DiscordQaScenarioImplementation) => {
           const run = implementation.buildRun(params.runtimeEnv.sutApplicationId);
+          if (run.kind === "transcripts-voice-authorization" && !params.runtimeEnv.voiceChannelId) {
+            throw new Error(
+              "Discord transcript authorization requires an explicit QA voiceChannelId in the leased credential or OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID. Reserve a dedicated empty QA voice channel before running; automatic room discovery is not allowed and the harness does not verify room occupancy.",
+            );
+          }
           const voiceChannel =
             run.kind === "voice-autojoin" || run.kind === "transcripts-voice-authorization"
               ? await discordQaScenarioSupport.testing.resolveDiscordQaVoiceChannel({

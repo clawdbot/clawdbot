@@ -3,6 +3,7 @@ import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../../agents/prepared-model-runtime-generation-scope.js";
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import {
@@ -280,6 +281,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.skipProviderRuntimeHints === true,
     execution.silentExpected === true,
     execution.allowEmptyAssistantReplyAsSilent === true,
+    execution.terminalReplyExpectation ?? "",
     execution.suppressNextUserMessagePersistence === true,
     execution.suppressTranscriptOnlyAssistantPersistence === true,
     execution.blockReplyBreak,
@@ -411,6 +413,7 @@ type FollowupRuntimeMetadata = Pick<
   | "queueAbortSignal"
   | "deliveryCorrelations"
   | "turnAdoptionLifecycle"
+  | "queuedFollowupReplyDisposition"
 >;
 
 function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
@@ -522,7 +525,11 @@ function resolveAggregateOwner(items: readonly FollowupRun[]): FollowupRun | und
 }
 
 function requiresIndividualCollectDrain(item: FollowupRun): boolean {
-  return item.disableCollectBatching === true || hasRuntimeOnlyFollowupMetadata(item);
+  return (
+    item.disableCollectBatching === true ||
+    item.run.skillWorkshopProposalRevision !== undefined ||
+    hasRuntimeOnlyFollowupMetadata(item)
+  );
 }
 
 type AggregateCancellation = {
@@ -662,6 +669,7 @@ function collectRuntimeMetadata(
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
+    queuedFollowupReplyDisposition: items.at(-1)?.queuedFollowupReplyDisposition,
   };
 }
 
@@ -1026,6 +1034,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingChatType: source.originatingChatType,
     abortSignal: source.abortSignal,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
+    queuedFollowupReplyDisposition: source.queuedFollowupReplyDisposition,
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
@@ -1091,6 +1100,7 @@ async function runSyntheticOverflowSummary(params: {
     channelAdmissionEvidence: runtimeMetadata.channelAdmissionEvidence,
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,
+    queuedFollowupReplyDisposition: runtimeMetadata.queuedFollowupReplyDisposition,
     ...(params.onAdmitted
       ? {
           turnAdoptionLifecycle: {
@@ -1275,9 +1285,7 @@ export function scheduleFollowupDrain(
   // Cache callback only when a drain actually starts. Avoid keeping stale
   // callbacks around from finalize calls where no queue work is pending.
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
-  // Queue drains outlive their enqueue request across debounce and retries.
-  // Give the detached chain its own root so inherited request admission cannot go stale.
-  void runWithGatewayIndependentRootWorkContinuation(async () => {
+  const drainQueuedFollowups = async (): Promise<void> => {
     let retryDeferred = false;
     let waitingForSteer = false;
     try {
@@ -1540,7 +1548,15 @@ export function scheduleFollowupDrain(
         scheduleFollowupDrain(key, effectiveRunFollowup);
       }
     }
-  }).catch((err: unknown) => {
+  };
+  // Queue drains outlive their enqueue request across debounce and retries.
+  // Give the detached chain its own root so inherited request admission cannot go stale.
+  // Queued turns re-admit on the generation current at drain time: the detached
+  // drain runs outside any ambient prepared-generation scope, so a parked turn
+  // never inherits the predecessor run's replaced generation.
+  void runWithGatewayIndependentRootWorkContinuation(() =>
+    runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
+  ).catch((err: unknown) => {
     queue.draining = false;
     defaultRuntime.error?.(`followup queue drain admission failed for ${key}: ${String(err)}`);
   });

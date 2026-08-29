@@ -7,7 +7,6 @@ import chalk from "chalk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isVerbose } from "../globals.js";
 import { stringifyNonErrorCause } from "../infra/errors.js";
-import { shouldLogSubsystemToConsole } from "../logging/console.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -96,9 +95,17 @@ function logWsInfoLine(params: {
   wsLog.info(tokens.join(" "));
 }
 
-/** Returns true when gateway WebSocket logging is enabled for the current console. */
-export function shouldLogWs(): boolean {
-  return shouldLogSubsystemToConsole("gateway/ws");
+/** Returns true when a frame can produce console output or required timing state. */
+function shouldLogWs(direction: "in" | "out", kind: string): boolean {
+  if (isVerbose()) {
+    return wsLog.isEnabled("info");
+  }
+  if (kind === "parse-error") {
+    return wsLog.isEnabled("warn");
+  }
+  const recordsTiming = direction === "in" && kind === "req";
+  const readsTiming = direction === "out" && kind === "res";
+  return (recordsTiming || readsTiming) && wsLog.isEnabled("info");
 }
 
 /** Compacts long ids while keeping enough entropy for log correlation. */
@@ -292,10 +299,15 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
   return extra;
 }
 
-export function logWs(direction: "in" | "out", kind: string, meta?: Record<string, unknown>) {
-  if (!shouldLogSubsystemToConsole("gateway/ws")) {
+export function logWs(
+  direction: "in" | "out",
+  kind: string,
+  metaInput?: Record<string, unknown> | (() => Record<string, unknown>),
+) {
+  if (!shouldLogWs(direction, kind)) {
     return;
   }
+  const meta = typeof metaInput === "function" ? metaInput() : metaInput;
   const style = getGatewayWsLogStyle();
   if (!isVerbose()) {
     logWsOptimized(direction, kind, meta);

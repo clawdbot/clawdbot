@@ -9,6 +9,7 @@ export function registerDaemonCli(program: Command) {
   const daemon = program
     .command("daemon")
     .description("Manage the Gateway service (launchd/systemd/schtasks)")
+    .option("--json", "Output JSON", false)
     .addHelpText(
       "after",
       () =>

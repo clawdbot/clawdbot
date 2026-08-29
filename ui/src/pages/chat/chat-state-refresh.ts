@@ -1,5 +1,4 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   loadChatMetadata,
   peekChatMetadata,
@@ -8,16 +7,19 @@ import {
 } from "../../lib/chat/chat-metadata-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
-import { loadChatHistory } from "./chat-history.ts";
+import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
-import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
+import {
+  flushChatQueueAfterIdleSessionReconciliation,
+  refreshCurrentChatSessionList,
+} from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { loadModels } from "./models.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -26,6 +28,7 @@ import { scheduleChatScroll } from "./scroll.ts";
 
 type ChatRefreshOptions = {
   deferBranches?: boolean;
+  historyLoad?: Promise<ChatHistoryResult | undefined>;
   scheduleScroll?: boolean;
   awaitHistory?: boolean;
   startup?: boolean;
@@ -95,8 +98,7 @@ function seedChatModelCatalogFromStore(host: ChatPageHost, client: GatewayBrowse
   if (!Array.isArray(cached?.models)) {
     return;
   }
-  // A warm snapshot turns mount-time loading into refreshing; the in-flight
-  // request still owns the authoritative apply.
+  // A warm snapshot stays interactive; the in-flight request owns the authoritative apply.
   host.chatModelCatalog = cached.models;
   host.chatModelCatalogError = null;
 }
@@ -127,8 +129,8 @@ export async function refreshChatMetadata(
   const client = host.client;
   const agentId = resolveChatAgentId(host);
   const request = { host, client, agentId, version: requestVersion };
-  host.chatModelsLoading = true;
   seedChatModelCatalogFromStore(host, client);
+  host.chatModelsLoading = host.chatModelCatalog.length === 0;
   try {
     const result = await loadChatMetadata(client, agentId);
     if (!ownsChatMetadataRequest(request)) {
@@ -183,22 +185,27 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
     host.connected &&
     host.connectionEpoch === connectionEpoch &&
     resolveChatAgentId(host) === agentId;
-  host.chatModelsLoading = true;
+  host.chatModelsLoading = host.chatModelCatalog.length === 0;
   host.chatModelCatalogError = null;
   host.requestUpdate?.();
   try {
-    const models = await loadModels(client, {
+    const { models } = await loadModelCatalog(client, {
       agentId,
+      refreshIfDue: true,
       rejectOnFailure: true,
     });
     if (ownsRequest()) {
       host.chatModelCatalog = models;
       host.chatModelCatalogError = null;
+      // Full model discovery can complete after the session projection used at mount time.
+      // Refresh through the normal session owner so thinking/context metadata converges without
+      // letting the UI guess which provider- or runtime-specific levels are valid.
+      await refreshCurrentChatSessionList(host).catch(() => undefined);
     }
   } catch (error) {
     if (ownsRequest()) {
-      // Keep the startup/prepared snapshot usable while making the failed
-      // discovery and its retry path visible in the open picker.
+      // Keep the startup/prepared snapshot usable while recording the failed
+      // discovery. Reopening the picker starts another uncached load.
       host.chatModelCatalogError = formatUiError(error);
     }
   } finally {
@@ -220,10 +227,12 @@ async function refreshChat(
   const refreshedAgentId = resolveAgentIdForSession(host);
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
-  const historyLoad = loadChatHistory(host, {
-    deferBranches: opts?.deferBranches === true,
-    startup: opts?.startup === true,
-  });
+  const historyLoad =
+    opts?.historyLoad ??
+    loadChatHistory(host, {
+      deferBranches: opts?.deferBranches === true,
+      startup: opts?.startup === true,
+    });
   const historyRefresh = historyLoad.finally(() => {
     if (opts?.scheduleScroll !== false) {
       scheduleChatScroll(host);
@@ -234,21 +243,28 @@ async function refreshChat(
     if (!history?.sessionInfo) {
       return;
     }
-    if (areUiSessionKeysEquivalent(history.sessionInfo.key, refreshedSessionKey)) {
-      host.selectedChatSessionArchived = history.sessionInfo.archived === true;
-    }
-    const reconciled = host.sessions.reconcile(history.sessionInfo, history.defaults, {
-      resultAgentId: host.sessionsResultAgentId ?? refreshedAgentId,
+    host.sessions.reconcile(history.sessionInfo, history.defaults, {
+      resultAgentId: host.sessions.state.agentId ?? refreshedAgentId,
       selectedGlobalAgentId: refreshedAgentId,
+      sourceCanonicalListRevision: history.sourceCanonicalListRevision,
       // The routed chat remains visible after archive even though the active
       // roster excludes it. Keep its descriptor in shared session state until
       // navigation changes; otherwise the pane briefly falls back to the raw
       // key while the sidebar lineage reload catches up.
       archivedFilter: history.sessionInfo.archived === true ? "all" : host.sessionsArchivedFilter,
     });
-    const sessionsResult = reconciled ? host.sessions.state.result : host.sessionsResult;
-    if (reconciled) {
-      host.sessionsResult = sessionsResult;
+    host.sessionsResult = host.sessions.state.result;
+    host.sessionsResultAgentId = host.sessions.state.agentId;
+    const sessionsResult = host.sessions.state.result;
+    const sessionInfo = sessionsResult?.sessions.find(
+      (row) =>
+        areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
+        areUiSessionKeysEquivalent(row.key, refreshedSessionKey),
+    );
+    const rosterRow = sessionInfo ?? history.sessionInfo;
+    if (areUiSessionKeysEquivalent(rosterRow.key, refreshedSessionKey)) {
+      host.selectedChatSessionArchived = rosterRow.archived === true;
+      host.selectedChatSessionIncognito = rosterRow.incognito === true;
     }
     const snapshotRunId = history.inFlightRun?.runId?.trim();
     const activeRunIds = history.sessionInfo.activeRunIds;
@@ -263,11 +279,6 @@ async function refreshChat(
       // timestamp may still describe its prior terminal state during remount.
       return;
     }
-    const sessionInfo = sessionsResult?.sessions.find(
-      (row: GatewaySessionRow) =>
-        areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
-        row.key === refreshedSessionKey,
-    );
     if (!sessionInfo) {
       return;
     }
@@ -322,8 +333,8 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
     ? ++host.chatMetadataRequestVersion
     : null;
   if (ownsStartupMetadata && host.client) {
-    host.chatModelsLoading = true;
     seedChatModelCatalogFromStore(host, host.client);
+    host.chatModelsLoading = host.chatModelCatalog.length === 0;
   }
 
   const refresh = refreshChat(host, {

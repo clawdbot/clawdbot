@@ -45,25 +45,37 @@ describe("extended-stable Full Release Validation workflow", () => {
     const childDispatches = [
       {
         job: "normal_ci",
-        step: "Dispatch and monitor CI",
+        step: "Dispatch CI",
         workflow: "ci.yml",
         target: '-f target_ref="$TARGET_SHA"',
       },
       {
-        job: "plugin_prerelease",
-        step: "Dispatch and monitor plugin prerelease",
+        job: "plugin_prerelease_independent",
+        step: "Dispatch plugin prerelease independent phase",
         workflow: "plugin-prerelease.yml",
         target: '-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA"',
       },
       {
-        job: "release_checks",
-        step: "Dispatch and monitor release checks",
+        job: "plugin_prerelease_candidate",
+        step: "Dispatch plugin prerelease candidate phase",
+        workflow: "plugin-prerelease.yml",
+        target: '-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA"',
+      },
+      {
+        job: "release_checks_independent",
+        step: "Dispatch release checks independent phase",
+        workflow: "openclaw-release-checks.yml",
+        target: '-f expected_sha="$TARGET_SHA"',
+      },
+      {
+        job: "release_checks_candidate",
+        step: "Dispatch release checks candidate phase",
         workflow: "openclaw-release-checks.yml",
         target: '-f expected_sha="$TARGET_SHA"',
       },
       {
         job: "performance",
-        step: "Dispatch and monitor OpenClaw Performance",
+        step: "Dispatch OpenClaw Performance",
         workflow: "openclaw-performance.yml",
         target: '-f target_ref="$TARGET_SHA"',
       },
@@ -74,12 +86,15 @@ describe("extended-stable Full Release Validation workflow", () => {
       expect(run).toContain(child.workflow);
       expect(run).toContain('--ref "$CHILD_WORKFLOW_REF"');
       expect(run).toContain(child.target);
+      if (child.job.includes("plugin_prerelease") || child.job.includes("release_checks")) {
+        expect(run).toContain('-f phase="$PHASE"');
+      }
     }
 
     expect(fullValidation).toContain("PARENT_WORKFLOW_SHA: ${{ github.sha }}");
-    expect(fullValidation).toContain('if [[ "$head_sha" != "$PARENT_WORKFLOW_SHA" ]]');
+    expect(fullValidation).toContain('if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]');
     expect(fullValidation).toContain(
-      "child run used workflow SHA ${head_sha}, expected parent workflow SHA ${PARENT_WORKFLOW_SHA}",
+      "child run used workflow SHA ${child_head_sha}, expected parent workflow SHA ${PARENT_WORKFLOW_SHA}",
     );
   });
 

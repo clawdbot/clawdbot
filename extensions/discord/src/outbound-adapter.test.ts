@@ -4,6 +4,8 @@ import {
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDiscordComponentMessage } from "./components.builders.js";
+import type { DiscordComponentMessageSpec } from "./components.types.js";
 import {
   createDiscordOutboundHoisted,
   expectDiscordThreadBotSend,
@@ -11,6 +13,7 @@ import {
   mockDiscordBoundThreadManager,
   resetDiscordOutboundMocks,
 } from "./outbound-adapter.test-harness.js";
+import { createDiscordSendReceipt } from "./send.receipt.js";
 
 const outboundWarnSpy = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
@@ -304,16 +307,44 @@ describe("discordOutbound", () => {
   });
 
   it("routes poll sends to thread target when threadId is provided", async () => {
-    const result = await discordOutbound.sendPoll?.({
-      cfg: {},
-      to: "channel:parent-1",
-      poll: {
-        question: "Best snack?",
-        options: ["banana", "apple"],
+    const onPlatformSendDispatch = vi.fn(async () => undefined);
+    const markInboundEventDelivered = vi.fn();
+    const end = discordInboundEventDelivery.begin(
+      "agent:main:discord:channel:parent-1",
+      {
+        outboundTo: "thread-1",
+        outboundAccountId: "default",
+        markInboundEventDelivered,
       },
-      accountId: "default",
-      threadId: "thread-1",
+      { inboundEventKind: "room_event" },
+    );
+    hoisted.sendPollDiscordMock.mockResolvedValueOnce({
+      messageId: "poll-1",
+      channelId: "thread-1",
+      receipt: createDiscordSendReceipt({
+        platformMessageIds: ["poll-1"],
+        channelId: "thread-1",
+        kind: "poll",
+        threadId: "thread-1",
+      }),
     });
+    let result;
+    try {
+      result = await discordOutbound.sendPoll?.({
+        cfg: {},
+        to: "channel:parent-1",
+        poll: { question: "Best snack?", options: ["banana", "apple"] },
+        content: "Vote now",
+        accountId: "default",
+        threadId: "thread-1",
+        silent: true,
+        sessionKey: "agent:main:discord:channel:parent-1",
+        inboundEventKind: "room_event",
+        onPlatformSendDispatch,
+      });
+    } finally {
+      end();
+    }
 
     const call = mockCall(hoisted.sendPollDiscordMock, "sendPollDiscord");
     expect(call[0]).toBe("channel:thread-1");
@@ -321,14 +352,42 @@ describe("discordOutbound", () => {
       question: "Best snack?",
       options: ["banana", "apple"],
     });
-    expect(mockObjectArg(hoisted.sendPollDiscordMock, "sendPollDiscord", 0, 2).accountId).toBe(
-      "default",
-    );
+    expect(mockObjectArg(hoisted.sendPollDiscordMock, "sendPollDiscord", 0, 2)).toMatchObject({
+      accountId: "default",
+      content: "Vote now",
+      threadId: "thread-1",
+      silent: true,
+      onPlatformSendDispatch,
+    });
     expect(result).toEqual({
       channel: "discord",
       messageId: "poll-1",
-      channelId: "ch-1",
+      channelId: "thread-1",
+      receipt: expect.objectContaining({
+        primaryPlatformMessageId: "poll-1",
+        threadId: "thread-1",
+      }),
     });
+    expect(markInboundEventDelivered).toHaveBeenCalledOnce();
+  });
+
+  it("enforces account poll policy before provider dispatch", async () => {
+    await expect(
+      discordOutbound.sendPoll?.({
+        cfg: {
+          channels: {
+            discord: {
+              actions: { polls: true },
+              accounts: { work: { actions: { polls: false } } },
+            },
+          },
+        },
+        to: "channel:parent-1",
+        poll: { question: "Best snack?", options: ["banana", "apple"] },
+        accountId: "work",
+      }),
+    ).rejects.toThrow("Discord polls are disabled");
+    expect(hoisted.sendPollDiscordMock).not.toHaveBeenCalled();
   });
 
   it("routes audioAsVoice payloads through the Discord voice send helper", async () => {
@@ -494,71 +553,64 @@ describe("discordOutbound", () => {
       },
       expectedText: "spoken answer",
     },
-  ])("falls back to $name when audioAsVoice delivery fails", async ({ payload, expectedText }) => {
-    const voiceError = new Error("ffmpeg unavailable");
-    hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(voiceError);
+  ])(
+    "delivers fallback $name before reporting an audioAsVoice failure",
+    async ({ payload, expectedText }) => {
+      const voiceError = new Error("ffmpeg unavailable");
+      hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(voiceError);
 
-    const result = await discordOutbound.sendPayload?.({
-      cfg: {},
-      to: "channel:123456",
-      text: "",
-      payload,
-      accountId: "default",
-      replyToId: "reply-1",
-      replyToMode: "first",
-    });
+      await expect(
+        discordOutbound.sendPayload?.({
+          cfg: {},
+          to: "channel:123456",
+          text: "",
+          payload,
+          accountId: "default",
+          replyToId: "reply-1",
+          replyToMode: "first",
+        }),
+      ).rejects.toBe(voiceError);
 
-    expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledOnce();
-    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledOnce();
-    const messageCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0);
-    expect(messageCall[0]).toBe("channel:123456");
-    expect(messageCall[1]).toBe(expectedText);
-    expect(mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2).reply).toEqual(
-      { messageId: "reply-1", scope: "first" },
-    );
-    expect(result).toEqual({
-      channel: "discord",
-      messageId: "msg-1",
-      target: { kind: "channel", id: "ch-1" },
-    });
-    expect(outboundWarnSpy).toHaveBeenCalledWith(
-      "discord voice send failed; continuing without voice",
-      { error: voiceError },
-    );
-  });
+      expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledOnce();
+      expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledOnce();
+      const messageCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0);
+      expect(messageCall[0]).toBe("channel:123456");
+      expect(messageCall[1]).toBe(expectedText);
+      expect(
+        mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2).reply,
+      ).toEqual({ messageId: "reply-1", scope: "first" });
+      expect(outboundWarnSpy).toHaveBeenCalledWith(
+        "discord voice send failed; continuing without voice",
+        { error: voiceError },
+      );
+    },
+  );
 
   it("does not duplicate already-delivered TTS supplement text when audioAsVoice delivery fails", async () => {
     const voiceError = new Error("ffmpeg unavailable");
     hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(voiceError);
 
-    const result = await discordOutbound.sendPayload?.({
-      cfg: {},
-      to: "channel:123456",
-      text: "",
-      payload: {
-        mediaUrls: ["https://example.com/voice.ogg"],
-        audioAsVoice: true,
-        ttsSupplement: {
-          spokenText: "spoken answer",
-          visibleTextAlreadyDelivered: true,
+    await expect(
+      discordOutbound.sendPayload?.({
+        cfg: {},
+        to: "channel:123456",
+        text: "",
+        payload: {
+          mediaUrls: ["https://example.com/voice.ogg"],
+          audioAsVoice: true,
+          ttsSupplement: {
+            spokenText: "spoken answer",
+            visibleTextAlreadyDelivered: true,
+          },
         },
-      },
-      accountId: "default",
-      replyToId: "reply-1",
-      replyToMode: "first",
-    });
+        accountId: "default",
+        replyToId: "reply-1",
+        replyToMode: "first",
+      }),
+    ).rejects.toBe(voiceError);
 
     expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledOnce();
     expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      channel: "discord",
-      messageId: "",
-      target: { kind: "channel", id: "channel:123456" },
-      receipt: {
-        platformMessageIds: [],
-        parts: [],
-      },
-    });
     expect(outboundWarnSpy).toHaveBeenCalledWith(
       "discord voice send failed; continuing without voice",
       { error: voiceError },
@@ -714,7 +766,7 @@ describe("discordOutbound", () => {
     expect(mediaOptions.reply).toEqual(testCase.expectedReplies[1]);
   });
 
-  it("preserves the media delivery identity for captioned videos in regular channels", async () => {
+  it("preserves both delivery receipts and the media identity for captioned videos", async () => {
     const mediaReceipt = {
       primaryPlatformMessageId: "video-1",
       platformMessageIds: ["video-1"],
@@ -746,11 +798,18 @@ describe("discordOutbound", () => {
       accountId: "default",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       channel: "discord",
       messageId: "video-1",
       target: { kind: "channel", id: "channel-1" },
-      receipt: mediaReceipt,
+      receipt: {
+        primaryPlatformMessageId: "caption-1",
+        platformMessageIds: ["caption-1", "video-1"],
+        parts: [
+          { platformMessageId: "caption-1", kind: "text", index: 0 },
+          { platformMessageId: "video-1", kind: "media", index: 1 },
+        ],
+      },
     });
   });
 
@@ -994,6 +1053,42 @@ describe("discordOutbound", () => {
     });
   });
 
+  it.each(["title", "text", "context"] as const)(
+    "delivers complete authored %s through native presentation components",
+    async (kind) => {
+      const text = `${"x".repeat(1996)} \n  TAIL_NOT_DELIVERED`;
+      const presentation = adaptMessagePresentationForChannel({
+        capabilities: discordOutbound.presentationCapabilities,
+        presentation:
+          kind === "title" ? { title: text, blocks: [] } : { blocks: [{ type: kind, text }] },
+      });
+      const payload = await discordOutbound.renderPresentation?.({
+        payload: { presentation },
+        presentation,
+        ctx: { cfg: {}, to: "channel:123456", text: "", payload: { presentation } },
+      });
+      if (!payload) {
+        throw new Error("expected native Discord presentation");
+      }
+      await discordOutbound.sendPayload?.({ cfg: {}, to: "channel:123456", text: "", payload });
+      const spec = mockObjectArg(
+        hoisted.sendDiscordComponentMessageMock,
+        "component send",
+        0,
+        1,
+      ) as DiscordComponentMessageSpec;
+      const components = buildDiscordComponentMessage({ spec }).components;
+      const wire = JSON.stringify(components.map((component) => component.serialize()));
+      expect(wire).toContain("TAIL_NOT_DELIVERED");
+      expect(
+        (spec.blocks ?? [])
+          .flatMap((block) => (block.type === "text" ? [block.text.replace(/^-# /u, "")] : []))
+          .join(""),
+      ).toBe(text);
+      expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves disabled presentation buttons through channel adaptation", async () => {
     const adaptedPresentation = adaptMessagePresentationForChannel({
       capabilities: discordOutbound.presentationCapabilities,
@@ -1042,6 +1137,45 @@ describe("discordOutbound", () => {
       url: "https://example.com/docs",
       disabled: true,
     });
+  });
+
+  it("encodes question buttons from Gateway option order", async () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const payload = await discordOutbound.renderPresentation?.({
+      payload: {
+        channelData: { askUser: { questionId, optionValues: ["Staging", "Production"] } },
+      },
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Production",
+                action: { type: "question", questionId, optionValue: "Production" },
+              },
+              {
+                label: "Other…",
+                action: { type: "question", questionId, intent: "custom-input" },
+              },
+              {
+                label: "Staging",
+                action: { type: "question", questionId, optionValue: "Staging" },
+              },
+            ],
+          },
+        ],
+      },
+      ctx: { cfg: {}, to: "channel:123456" },
+    } as never);
+
+    const discordData = payload?.channelData?.discord as
+      | { presentationComponents?: { blocks?: Array<{ buttons?: unknown[] }> } }
+      | undefined;
+    expect(discordData?.presentationComponents?.blocks?.[0]?.buttons).toMatchObject([
+      { internalCustomId: `ocq:id=${questionId};i=1` },
+      { internalCustomId: `ocq:id=${questionId};i=0` },
+    ]);
   });
 
   it("falls back to chunked text when a table exceeds the Discord component envelope", async () => {

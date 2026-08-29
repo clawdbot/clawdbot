@@ -1,14 +1,21 @@
 // Implements agent deletion with gateway delegation and local cleanup fallback.
+import type { AgentsDeleteResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
   findOverlappingWorkspaceAgentIds,
   formatSharedAuthStoreOwnerDeleteError,
+  isInheritedAuthStoreOwner,
   isSharedAuthStoreOwner,
 } from "../agents/agent-delete-safety.js";
+import {
+  isPathOwnedByAnotherRegisteredAgent,
+  normalizeAgentDirRegistryPath,
+} from "../agents/agent-dir-registry.js";
 import {
   beginAgentDeletion,
   claimCompletedAgentDeletion,
 } from "../agents/agent-lifecycle-registry.js";
 import {
+  listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   tryResolveSoleAgentId,
@@ -18,7 +25,6 @@ import {
   resolveSharedAuthStorePath,
 } from "../agents/auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
-import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
 import {
   prepareLegacyWorkspaceStateReset,
   removeLegacyWorkspaceStateForReset,
@@ -36,21 +42,28 @@ import {
   purgeAgentSessionStoreEntries,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions.js";
+import { withLocalAgentCronJobsRemoved } from "../cron/local-service.js";
 import {
   callGateway,
   isGatewayCredentialsRequiredError,
   isGatewayTransportError,
 } from "../gateway/call.js";
+import { withAgentExecApprovalsRemoved } from "../infra/exec-approvals.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
-import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
+import {
+  listOpenClawRegisteredAgentDatabases,
+  unregisterOpenClawAgentDatabases,
+} from "../state/openclaw-agent-db-registry.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { createQuietRuntime } from "./agents.command-shared.js";
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
+import { moveToTrashResult } from "./cleanup-utils.js";
 import { requireValidConfigFileSnapshot } from "./config-validation.js";
-import { moveToTrash } from "./onboard-helpers.js";
 
 type AgentsDeleteOptions = {
   id: string;
@@ -58,14 +71,12 @@ type AgentsDeleteOptions = {
   json?: boolean;
 };
 
-type AgentsDeleteGatewayResult = {
-  ok: true;
-  agentId: string;
-  removedBindings: number;
-  removed?: Array<{ path: string; method: "trash" | "missing" }>;
-  failed?: Array<{ path: string; reason: string }>;
-  purgeFailed?: true;
-};
+type AgentDeleteRemovedPath = NonNullable<AgentsDeleteResult["removed"]>[number];
+type AgentDeleteFailedPath = NonNullable<AgentsDeleteResult["failed"]>[number];
+type AgentDeleteGatewayAttempt =
+  | { kind: "deleted"; result: AgentsDeleteResult }
+  | { kind: "fallback-unreachable" }
+  | { kind: "fallback-credentials-required" };
 
 function failAgentsDelete(opts: AgentsDeleteOptions, runtime: RuntimeEnv, message: string): void {
   if (opts.json) {
@@ -94,9 +105,9 @@ function logSessionPurgeWarning(runtime: RuntimeEnv, agentId: string, purgeFaile
 async function maybeDeleteAgentThroughGateway(params: {
   agentId: string;
   deleteFiles: boolean;
-}): Promise<AgentsDeleteGatewayResult | null> {
+}): Promise<AgentDeleteGatewayAttempt> {
   try {
-    return await callGateway<AgentsDeleteGatewayResult>({
+    const result = await callGateway<AgentsDeleteResult>({
       method: "agents.delete",
       params: {
         agentId: params.agentId,
@@ -106,9 +117,13 @@ async function maybeDeleteAgentThroughGateway(params: {
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       requiredMethods: ["agents.delete"],
     });
+    return { kind: "deleted", result };
   } catch (error) {
-    if (isGatewayTransportError(error) || isGatewayCredentialsRequiredError(error)) {
-      return null;
+    if (isGatewayTransportError(error) && error.kind === "closed" && error.code === undefined) {
+      return { kind: "fallback-unreachable" };
+    }
+    if (isGatewayCredentialsRequiredError(error)) {
+      return { kind: "fallback-credentials-required" };
     }
     throw error;
   }
@@ -184,11 +199,7 @@ export async function agentsDeleteCommand(
     );
     return;
   }
-  const explicitInheritedAuthAgentId = cfg.agents?.defaults?.authInheritance?.agentId?.trim();
-  const inheritedAuthAgentId =
-    explicitInheritedAuthAgentId ||
-    (sharedAuthOwnership.location === "legacy-main" ? resolveLegacyInheritedAuthAgentId(cfg) : "");
-  if (inheritedAuthAgentId && agentId === normalizeAgentId(inheritedAuthAgentId)) {
+  if (isInheritedAuthStoreOwner(cfg, agentId)) {
     failAgentsDelete(
       opts,
       runtime,
@@ -233,14 +244,15 @@ export async function agentsDeleteCommand(
     ? pruneAgentConfig(cfg, agentId)
     : { config: cfg, removedBindings: 0, removedAllow: 0, clearedOwnerRefs: [] };
 
-  const gatewayResult = await maybeDeleteAgentThroughGateway({
+  const gatewayAttempt = await maybeDeleteAgentThroughGateway({
     agentId,
     deleteFiles: true,
   });
-  if (gatewayResult) {
-    const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
-    const workspaceRetained = workspaceSharedWith.length > 0;
+  if (gatewayAttempt.kind === "deleted") {
+    const gatewayResult = gatewayAttempt.result;
     if (opts.json) {
+      const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
+      const workspaceRetained = workspaceSharedWith.length > 0;
       writeRuntimeJson(runtime, {
         agentId,
         workspace: workspaceDir,
@@ -270,23 +282,35 @@ export async function agentsDeleteCommand(
     return;
   }
 
+  const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
+  const workspaceRetained = workspaceSharedWith.length > 0;
+
   const deleteFiles = existingJournal?.deleteFiles ?? true;
   const deletion = beginAgentDeletion(
     existingJournal ?? { agentId, agentDir, workspaceDir, sessionsDir, deleteFiles },
   );
   try {
-    if (configured) {
-      await replaceConfigFile({
-        nextConfig: result.config,
-        ...(baseHash !== undefined ? { baseHash } : {}),
-        writeOptions: {
-          allowedAgentRosterRemovals: [agentId],
-          ...(opts.json ? { skipOutputLogs: true } : {}),
-        },
+    const commitRoster = async () =>
+      await withAgentExecApprovalsRemoved(agentId, async () => {
+        if (configured) {
+          await replaceConfigFile({
+            nextConfig: result.config,
+            ...(baseHash !== undefined ? { baseHash } : {}),
+            writeOptions: {
+              allowedAgentRosterRemovals: [agentId],
+              ...(opts.json ? { skipOutputLogs: true } : {}),
+            },
+          });
+          if (!opts.json) {
+            logConfigUpdated(runtime);
+          }
+        }
       });
-      if (!opts.json) {
-        logConfigUpdated(runtime);
-      }
+    if (gatewayAttempt.kind === "fallback-unreachable") {
+      await withLocalAgentCronJobsRemoved(agentId, () => cfg, commitRoster);
+    } else {
+      // Credential resolution fails before transport, so a live scheduler may still own the store.
+      await commitRoster();
     }
     deletion.commit();
   } catch (error) {
@@ -301,10 +325,18 @@ export async function agentsDeleteCommand(
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   // Only trash the workspace if no other agent can depend on that path (#70890).
-  const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
-  const workspaceRetained = workspaceSharedWith.length > 0;
   let workspaceCleanupError: Error | undefined;
-  let workspaceRemoved = workspaceRetained || !deleteFiles;
+  const removed: AgentDeleteRemovedPath[] = [];
+  const failed: AgentDeleteFailedPath[] = [];
+  const removePath = async (pathname: string) => {
+    const outcome = await moveToTrashResult(pathname, quietRuntime);
+    if ("removed" in outcome) {
+      removed.push(outcome.removed);
+    } else {
+      failed.push(outcome.failed);
+    }
+    return outcome;
+  };
   if (deleteFiles && workspaceRetained) {
     quietRuntime.log(
       `Skipped workspace removal (shared with other agents: ${workspaceSharedWith.join(", ")}): ${workspaceDir}`,
@@ -312,8 +344,8 @@ export async function agentsDeleteCommand(
   } else if (deleteFiles) {
     const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
     const statePlan = prepareWorkspaceStateDeletion(workspaceDir);
-    workspaceRemoved = await moveToTrash(workspaceDir, quietRuntime);
-    if (workspaceRemoved) {
+    const workspaceResult = await removePath(workspaceDir);
+    if ("removed" in workspaceResult) {
       try {
         const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan);
         for (const warning of legacyCleanup.warnings) {
@@ -325,12 +357,38 @@ export async function agentsDeleteCommand(
       }
     }
   }
-  const agentDirRemoved = !deleteFiles || (await moveToTrash(agentDir, quietRuntime));
-  const sessionsDirRemoved = !deleteFiles || (await moveToTrash(sessionsDir, quietRuntime));
+  if (deleteFiles) {
+    // Directory ownership is process-local; prepare every survivor before filtering journal paths,
+    // or a deleted agent's database nested beneath a survivor's agentDir could be trashed.
+    for (const survivingAgentId of listAgentIds(result.config)) {
+      resolveAgentDir(result.config, survivingAgentId);
+    }
+    const canonicalAgentDir = normalizeAgentDirRegistryPath(agentDir);
+    const survivingDatabasePaths = new Set(
+      listOpenClawRegisteredAgentDatabases()
+        .filter((entry) => normalizeAgentId(entry.agentId) !== agentId)
+        .flatMap((entry) => resolveSqliteDatabaseFilePaths(entry.path))
+        .map((pathname) => normalizeAgentDirRegistryPath(pathname)),
+    );
+    const databasePaths = deletion.entry.databasePaths.filter((pathname) => {
+      const canonicalPath = normalizeAgentDirRegistryPath(pathname);
+      return (
+        !isPathInside(canonicalAgentDir, canonicalPath) &&
+        !survivingDatabasePaths.has(canonicalPath) &&
+        !isPathOwnedByAnotherRegisteredAgent({ agentId, pathname }) &&
+        findOverlappingWorkspaceAgentIds(result.config, agentId, canonicalPath).length === 0
+      );
+    });
+    await removePath(agentDir);
+    await removePath(sessionsDir);
+    for (const databasePath of databasePaths) {
+      await removePath(databasePath);
+    }
+  }
   if (workspaceCleanupError) {
     throw workspaceCleanupError;
   }
-  if (workspaceRemoved && agentDirRemoved && sessionsDirRemoved) {
+  if (failed.length === 0) {
     if (deleteFiles) {
       // Keep registry ownership until every cleanup target is terminal. A crash before journal
       // completion leaves this idempotent deregistration reachable on the next delete attempt.
@@ -351,11 +409,21 @@ export async function agentsDeleteCommand(
       removedBindings: result.removedBindings,
       removedAllow: result.removedAllow,
       clearedOwnerRefs: result.clearedOwnerRefs.length > 0 ? result.clearedOwnerRefs : undefined,
+      removed,
+      failed,
       ...(purgeFailed ? { purgeFailed: true } : {}),
+      ...(gatewayAttempt.kind === "fallback-credentials-required"
+        ? { cronCleanupSkipped: true }
+        : {}),
     });
   } else {
     runtime.log(`Deleted agent: ${agentId}`);
     logClearedOwnerRefs(runtime, result.clearedOwnerRefs);
     logSessionPurgeWarning(runtime, agentId, purgeFailed);
+  }
+  if (gatewayAttempt.kind === "fallback-credentials-required") {
+    runtime.error(
+      `Warning: cron cleanup was skipped for deleted agent "${agentId}" because the Gateway could not be authenticated; scheduled jobs may remain.`,
+    );
   }
 }

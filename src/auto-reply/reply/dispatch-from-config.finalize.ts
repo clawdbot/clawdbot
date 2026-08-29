@@ -358,12 +358,17 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   counts.final += routedFinalCount;
   const agentRunTerminalOutcome = state.getAgentRunTerminalOutcome();
   state.commitInboundDedupeIfClaimed();
-  const dispatchOutcome = queueCapRejected ? "skipped" : "completed";
+  const messageInjectionAborted = state.replyOperationRunState.messageInjectionAborted === true;
+  const dispatchOutcome = queueCapRejected || messageInjectionAborted ? "skipped" : "completed";
   const dispatchReason = queueCapRejected
     ? "queue-cap"
-    : channelTransformSuppressed
-      ? "channel_transform"
-      : state.bindingState.pluginFallbackReason;
+    : messageInjectionAborted
+      ? "reply_operation_aborted"
+      : replyAdmission?.status === "accepted" && replyAdmission.mode === "steer"
+        ? "active_run_injected"
+        : channelTransformSuppressed
+          ? "channel_transform"
+          : state.bindingState.pluginFallbackReason;
   state.recordAgentDispatchCompleted(
     dispatchOutcome,
     dispatchReason ? { reason: dispatchReason } : undefined,

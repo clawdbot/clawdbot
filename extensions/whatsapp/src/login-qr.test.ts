@@ -182,6 +182,7 @@ describe("login-qr", () => {
   });
 
   it("restarts login once on status 515 and completes", async () => {
+    const beforeCredentialPersistence = vi.fn(async () => {});
     waitForWaConnectionMock
       // Baileys v7 wraps the error: { error: BoomError(515) }
       .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
@@ -193,6 +194,7 @@ describe("login-qr", () => {
     const start = await startWebLoginWithQr({
       timeoutMs: 5000,
       accountId: rotatingAccountId,
+      beforeCredentialPersistence,
     });
     expect(start.qrDataUrl).toBe(encodedQr("qr-data"));
 
@@ -205,6 +207,12 @@ describe("login-qr", () => {
     await flushTasks();
 
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
+    expect(createWaSocketMock).toHaveBeenNthCalledWith(
+      2,
+      false,
+      false,
+      expect.objectContaining({ beforeCredentialPersistence: expect.any(Function) }),
+    );
     const result = await resultPromise;
 
     expect(result.connected).toBe(true);
@@ -231,6 +239,7 @@ describe("login-qr", () => {
 
   it("clears auth and returns a replacement QR when WhatsApp is logged out", async () => {
     const accountId = "logged-out-replacement-qr";
+    const beforeCredentialPersistence = vi.fn(async () => {});
     queueQrSocket("qr-data");
     queueQrSocket("qr-after-logout");
     waitForWaConnectionMock
@@ -239,7 +248,11 @@ describe("login-qr", () => {
       })
       .mockImplementation(waitForever);
 
-    const start = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
+    const start = await startWebLoginWithQr({
+      timeoutMs: 5000,
+      accountId,
+      beforeCredentialPersistence,
+    });
     expect(start.qrDataUrl).toBe(encodedQr("qr-data"));
 
     const result = await waitForWebLogin({
@@ -254,6 +267,9 @@ describe("login-qr", () => {
       qrDataUrl: encodedQr("qr-after-logout"),
     });
     expect(logoutWebMock).toHaveBeenCalledOnce();
+    expect(logoutWebMock).toHaveBeenCalledWith(
+      expect.objectContaining({ beforeCredentialPersistence: expect.any(Function) }),
+    );
   });
 
   it("keeps the linked shortcut when existing auth has an active listener", async () => {
@@ -273,6 +289,7 @@ describe("login-qr", () => {
 
   it("clears saved auth for an explicit fresh QR relink", async () => {
     const accountId = "force-fresh-qr";
+    const beforeCredentialPersistence = vi.fn(async () => {});
     getActiveWebListenerMock.mockReturnValue({} as never);
     waitForWaConnectionMock.mockImplementation(waitForever);
     readWebAuthExistsForDecisionMock.mockResolvedValueOnce({
@@ -284,6 +301,7 @@ describe("login-qr", () => {
       timeoutMs: 5000,
       accountId,
       force: true,
+      beforeCredentialPersistence,
     });
 
     expectScanQrResult(result);
@@ -291,6 +309,125 @@ describe("login-qr", () => {
       authDir: expect.stringContaining(accountId),
       isLegacyAuthDir: false,
       runtime: expect.anything(),
+      beforeCredentialPersistence,
+    });
+    expect(createWaSocketMock).toHaveBeenCalledWith(
+      false,
+      false,
+      expect.objectContaining({ beforeCredentialPersistence: expect.any(Function) }),
+    );
+  });
+
+  it("transfers credential writes to the exact active login instance", async () => {
+    let hostActive = true;
+    const beforeCredentialPersistence = vi.fn(async () => {
+      if (!hostActive) {
+        throw new Error("plugin tool host authority is no longer active");
+      }
+    });
+    waitForWaConnectionMock.mockImplementation(waitForever);
+
+    const start = await startWebLoginWithQr({
+      timeoutMs: 5000,
+      accountId: "active-operation-authority",
+      beforeCredentialPersistence,
+    });
+    expectScanQrResult(start);
+    const operationGuard = createWaSocketMock.mock.calls[0]?.[2]?.beforeCredentialPersistence;
+    expect(operationGuard).toEqual(expect.any(Function));
+    expect(operationGuard).not.toBe(beforeCredentialPersistence);
+
+    hostActive = false;
+    await expect(operationGuard?.()).resolves.toBeUndefined();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 3 * 60_000 + 1);
+    await expect(
+      waitForWebLogin({ timeoutMs: 1000, accountId: "active-operation-authority" }),
+    ).resolves.toEqual({
+      connected: false,
+      message: "The login QR expired. Ask me to generate a new one.",
+    });
+    await expect(operationGuard?.()).rejects.toThrow("WhatsApp login is no longer active");
+  });
+
+  it("revalidates authority after auth inspection and before forced credential cleanup", async () => {
+    const accountId = "revoked-force-fresh-qr";
+    let resolveAuthState: ((value: { outcome: "stable"; exists: true }) => void) | undefined;
+    const authState = new Promise<{ outcome: "stable"; exists: true }>((resolve) => {
+      resolveAuthState = resolve;
+    });
+    let active = true;
+    const beforeCredentialPersistence = vi.fn(async () => {
+      if (!active) {
+        throw new Error("plugin tool host authority is no longer active");
+      }
+    });
+    readWebAuthExistsForDecisionMock.mockReturnValueOnce(authState);
+    logoutWebMock.mockImplementationOnce(async (options) => {
+      await options.beforeCredentialPersistence?.();
+      return true;
+    });
+
+    const resultPromise = startWebLoginWithQr({
+      timeoutMs: 5000,
+      accountId,
+      force: true,
+      beforeCredentialPersistence,
+    });
+    await vi.waitFor(() => expect(readWebAuthExistsForDecisionMock).toHaveBeenCalledOnce());
+    active = false;
+    resolveAuthState?.({ outcome: "stable", exists: true });
+
+    await expect(resultPromise).resolves.toEqual({
+      message:
+        "WhatsApp login failed: formatted:Error: plugin tool host authority is no longer active",
+    });
+    expect(beforeCredentialPersistence).toHaveBeenCalledOnce();
+    expect(createWaSocketMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects ownership transfer when bootstrap authority closes during socket creation", async () => {
+    let releaseSocket: (() => void) | undefined;
+    const socketReleased = new Promise<void>((resolve) => {
+      releaseSocket = resolve;
+    });
+    let socketStarted: (() => void) | undefined;
+    const socketStarting = new Promise<void>((resolve) => {
+      socketStarted = resolve;
+    });
+    createWaSocketMock.mockImplementationOnce(async (_printQr, _verbose, options) => {
+      await options?.beforeCredentialPersistence?.();
+      socketStarted?.();
+      await socketReleased;
+      return { ws: { close: vi.fn() } } as never;
+    });
+    let active = true;
+    const beforeCredentialPersistence = vi.fn(async () => {
+      if (!active) {
+        throw new Error("plugin tool host authority is no longer active");
+      }
+    });
+
+    const resultPromise = startWebLoginWithQr({
+      timeoutMs: 5000,
+      accountId: "revoked-before-transfer",
+      beforeCredentialPersistence,
+    });
+    await socketStarting;
+    active = false;
+    releaseSocket?.();
+
+    await expect(resultPromise).resolves.toEqual({
+      message:
+        "Failed to start WhatsApp login: Error: plugin tool host authority is no longer active",
+    });
+    expect(beforeCredentialPersistence).toHaveBeenCalledTimes(2);
+    await expect(
+      waitForWebLogin({ timeoutMs: 1000, accountId: "revoked-before-transfer" }),
+    ).resolves.toEqual({
+      connected: false,
+      message: "No active WhatsApp login in progress.",
     });
   });
 
@@ -309,11 +446,14 @@ describe("login-qr", () => {
     const result = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
 
     expectScanQrResult(result, "qr-after-restart-logout");
-    expect(logoutWebMock).toHaveBeenCalledWith({
-      authDir: expect.stringContaining(accountId),
-      isLegacyAuthDir: false,
-      runtime: expect.anything(),
-    });
+    expect(logoutWebMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authDir: expect.stringContaining(accountId),
+        isLegacyAuthDir: false,
+        runtime: expect.anything(),
+        beforeCredentialPersistence: expect.any(Function),
+      }),
+    );
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
   });
 

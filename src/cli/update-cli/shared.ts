@@ -30,6 +30,7 @@ import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
 
 export type UpdateCommandOptions = {
+  acceptCapabilities?: boolean;
   json?: boolean;
   restart?: boolean;
   dryRun?: boolean;
@@ -37,7 +38,6 @@ export type UpdateCommandOptions = {
   tag?: string;
   timeout?: string;
   yes?: boolean;
-  acknowledgeClawHubRisk?: boolean;
 };
 
 export type UpdateStatusOptions = {
@@ -46,15 +46,18 @@ export type UpdateStatusOptions = {
 };
 
 export type UpdateFinalizeOptions = {
+  acceptCapabilities?: boolean;
   json?: boolean;
   channel?: string;
   timeout?: string;
   yes?: boolean;
   restart?: boolean;
-  acknowledgeClawHubRisk?: boolean;
+  /** Internal external-supervisor handshake; public repair always leaves this false. */
+  deferCompletionCache?: boolean;
 };
 
 export type UpdateWizardOptions = {
+  acceptCapabilities?: boolean;
   timeout?: string;
 };
 
@@ -414,10 +417,13 @@ const COMPLETION_CACHE_MANUAL_REFRESH_HINT =
   "Shell tab-completion may be stale; refresh manually with: openclaw completion --write-state";
 
 /** Best-effort refresh of shell completion state after a successful update. */
-export async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
+export async function tryWriteCompletionCache(
+  root: string,
+  jsonMode: boolean,
+): Promise<"completed" | "failed" | "skipped"> {
   const binPath = path.join(root, "openclaw.mjs");
   if (!(await pathExists(binPath))) {
-    return;
+    return "skipped";
   }
 
   const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
@@ -443,18 +449,22 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
         ),
       );
     }
-    return;
+    return "failed";
   }
 
-  if (result.status !== 0 && !jsonMode) {
-    const stderr = (result.stderr ?? "").trim();
-    const detail = stderr ? ` (${stderr})` : "";
-    defaultRuntime.log(
-      theme.warn(
-        `Completion cache update failed${detail}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
-      ),
-    );
+  if (result.status !== 0) {
+    if (!jsonMode) {
+      const stderr = (result.stderr ?? "").trim();
+      const detail = stderr ? ` (${stderr})` : "";
+      defaultRuntime.log(
+        theme.warn(
+          `Completion cache update failed${detail}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
+        ),
+      );
+    }
+    return "failed";
   }
+  return "completed";
 }
 
 /** Adapter used by global-install detection helpers to execute bounded subprocess probes. */

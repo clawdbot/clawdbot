@@ -1,10 +1,9 @@
 // Chat-item projection, expansion, reply hydration, and guarded row rendering.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { html, nothing, type TemplateResult } from "lit";
-import { guard } from "lit/directives/guard.js";
+import { nothing, type TemplateResult } from "lit";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
-import { i18n } from "../../../i18n/index.ts";
-import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { i18n, t } from "../../../i18n/index.ts";
+import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
+import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import {
@@ -13,11 +12,14 @@ import {
   parseAgentSessionKey,
   resolveUiGlobalAliasAgentId,
 } from "../../../lib/sessions/session-key.ts";
+import { agentRunFrameActiveStatusParts } from "../chat-agent-run-grouping.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
+  agentRunFrameGroups,
   assistantMessageExpansionSignature,
   buildCachedChatItems,
+  coalesceAgentRunFrames,
   coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
@@ -30,10 +32,11 @@ import {
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
+import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
-import { resolveMessageReplyText } from "./chat-message-markdown.ts";
+import { resolveMessageDisplayMarkdown, resolveMessageReplyText } from "./chat-message-markdown.ts";
 import {
   getChatMediaRenderVersion,
   renderActivityGroup,
@@ -49,13 +52,16 @@ import {
   closeTranscriptSearch,
   getTranscriptState,
   type ChatThreadProps,
-  type ChatThreadState,
 } from "./chat-thread-interactions.ts";
-import type {
-  ChatTranscriptSession,
-  TranscriptAnnouncement,
-  TranscriptRow,
-} from "./chat-transcript-controller.ts";
+import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
+import type { ChatTranscriptSession } from "./chat-transcript-controller.ts";
+import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import {
+  guardChatRenderItems,
+  trackTranscriptRenderDependencies,
+} from "./chat-transcript-render-guard.ts";
+import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
@@ -67,21 +73,21 @@ type ChatTranscriptProjection = {
   renderRows: (overlay?: unknown) => TemplateResult;
 };
 
-type ChatRenderItem = ReturnType<typeof coalesceActivityRuns>[number];
-const CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS = 500;
+type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 
 type LoadedReplySource = {
-  rowKey: string;
-  preview: MessageReplyTarget & { sourceMessageId: string };
+  message: unknown;
+  messageId: string;
+  senderLabel: string;
 };
 
 function projectResolvedReplyPreview(
   message: unknown,
   replyToId: string,
   props: Pick<ChatThreadProps, "assistantName" | "userAvatar" | "userId" | "userName">,
-): LoadedReplySource["preview"] | undefined {
+): (MessageReplyTarget & { sourceMessageId: string }) | undefined {
   const normalized = normalizeMessage(message);
-  const text = resolveMessageReplyText(message);
+  const text = resolveMessageDisplayMarkdown(message, normalized);
   if (!text) {
     return undefined;
   }
@@ -102,76 +108,6 @@ function projectResolvedReplyPreview(
     senderLabel: resolveMessageGroupSenderLabel(group, props),
     text,
   };
-}
-
-function latestTranscriptAnnouncement(
-  items: readonly ChatRenderItem[],
-): TranscriptAnnouncement | null {
-  for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
-    const item = items[itemIndex];
-    if (!item || item.kind !== "group" || item.role.toLowerCase() !== "assistant") {
-      continue;
-    }
-    for (let messageIndex = item.messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
-      const message = item.messages[messageIndex]?.message;
-      const text = extractTextCached(message)?.trim();
-      if (text) {
-        return {
-          key: item.key,
-          text: truncateUtf16Safe(text, CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS),
-        };
-      }
-    }
-  }
-  return null;
-}
-
-function chatRenderItemGuardDependencies(item: ChatRenderItem): readonly unknown[] {
-  if (item.kind === "stream-run") {
-    return [item.key, ...item.parts];
-  }
-  if (item.kind === "work-group") {
-    return [item.key, item.durationMs, ...item.groups];
-  }
-  if (item.kind === "activity-run") {
-    return [item.key, ...item.groups];
-  }
-  return [item];
-}
-
-function trackTranscriptRenderDependencies(
-  state: ChatThreadState,
-  dependencies: unknown[],
-): unknown[] {
-  const previous = state.transcriptRenderDependencies;
-  const nextLength = dependencies.length - 1;
-  let changed = previous.length !== nextLength;
-  for (let index = 0; !changed && index < nextLength; index += 1) {
-    changed = !Object.is(previous[index], dependencies[index + 1]);
-  }
-  if (changed) {
-    // The first dependency is chatItems. Keep the shared context stable when
-    // only the live row changes, but invalidate every row for presentation changes.
-    state.transcriptRenderDependencies = dependencies.slice(1);
-    state.transcriptRenderContext = {};
-  }
-  return dependencies;
-}
-
-function guardChatRenderItems(
-  state: ChatThreadState,
-  // Live run status is not derivable from a row's own item identity: ownership
-  // is decided by sibling rows, and the usage counter ticks on run patches that
-  // touch nothing else. Rows showing status must re-render on both, or the
-  // memoized copy stacks a second claw row or freezes the token count.
-  liveStatus: (item: ChatRenderItem) => string,
-  render: (item: ChatRenderItem) => unknown,
-) {
-  return (item: ChatRenderItem) =>
-    guard(
-      [...chatRenderItemGuardDependencies(item), state.transcriptRenderContext, liveStatus(item)],
-      () => render(item),
-    );
 }
 
 export function projectChatTranscript(
@@ -204,10 +140,24 @@ export function projectChatTranscript(
   };
   const locale = i18n.getLocale();
   const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
+  const archiveActor = activeSession?.archivedBy;
+  const archiveNotice =
+    activeSession?.archived && activeSession.archivedAt !== undefined && archiveActor?.id
+      ? ({
+          kind: "notice",
+          key: `archive:${activeSession.sessionId ?? activeSession.key}:${activeSession.archivedAt}`,
+          label: t("sessionsView.archivedBy", {
+            name: archiveActor.label ?? archiveActor.id,
+          }),
+          text: "",
+          timestamp: activeSession.archivedAt,
+        } satisfies Extract<ChatItem, { kind: "notice" }>)
+      : undefined;
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    runId: props.runId === undefined ? (activeSession?.activeRunIds?.[0] ?? null) : props.runId,
+    archiveNotice,
+    runId: props.runId ?? null,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
@@ -225,6 +175,7 @@ export function projectChatTranscript(
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
   });
+  const latestBrowserTabs = latestBrowserTabCards(props.messages, props.toolMessages);
   syncToolCardExpansionState(
     props.sessionKey,
     chatItems,
@@ -237,8 +188,12 @@ export function projectChatTranscript(
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
-  const toggleToolCardExpanded = (toolCardId: string) => {
-    setExpansionState(expandedToolCards, toolCardId, !expandedToolCards.get(toolCardId));
+  const toggleToolCardExpanded = (toolCardId: string, expanded?: boolean) => {
+    setExpansionState(
+      expandedToolCards,
+      toolCardId,
+      !(expanded ?? expandedToolCards.get(toolCardId) ?? false),
+    );
     requestUpdate();
   };
   const toggleAssistantMessageExpanded = (messageId: string) => {
@@ -254,7 +209,6 @@ export function projectChatTranscript(
       sessionKey: props.sessionKey,
       ...(props.fullMessageAgentId ? { agentId: props.fullMessageAgentId } : {}),
       messageId,
-      kind: "assistant_message",
     }).then(
       (result) => {
         const pending = expandedAssistantMessages.get(messageId);
@@ -284,7 +238,9 @@ export function projectChatTranscript(
     );
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
-  const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
+  const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
+  const isEmpty =
+    chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation && !hasTypingActors;
   transcript.setContentReady(!props.loading);
   // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
   // as the always-visible identity marker. The canonical session kind decides;
@@ -307,7 +263,7 @@ export function projectChatTranscript(
   const isDirectThread =
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
     !props.userId;
-  const showLoadingSkeleton = props.loading && chatItems.length === 0;
+  const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
   const activeContinuationByGroupKey = new Map<
@@ -316,14 +272,26 @@ export function projectChatTranscript(
   >();
   const turnRecapByGroupKey = new Map<string, TurnRecap>();
   const loadedReplySources = new Map<string, LoadedReplySource>();
-  const resolvedReplyPreviews = new Map<string, LoadedReplySource["preview"] | undefined>();
+  const messageRowKeysById = new Map<string, string>();
+  const resolvedReplyPreviews = new Map<
+    string,
+    (MessageReplyTarget & { sourceMessageId: string }) | undefined
+  >();
   const resolveReplyPreview = (replyToId: string) => {
-    const loaded = loadedReplySources.get(replyToId)?.preview;
-    if (loaded) {
-      return loaded;
-    }
     if (resolvedReplyPreviews.has(replyToId)) {
       return resolvedReplyPreviews.get(replyToId);
+    }
+    const loaded = loadedReplySources.get(replyToId);
+    const loadedText = loaded ? resolveMessageReplyText(loaded.message) : undefined;
+    if (loaded && loadedText) {
+      const preview = {
+        messageId: loaded.messageId,
+        sourceMessageId: replyToId,
+        senderLabel: loaded.senderLabel,
+        text: loadedText,
+      };
+      resolvedReplyPreviews.set(replyToId, preview);
+      return preview;
     }
     const message = props.replyMessageAccess?.read(replyToId);
     const preview = message ? projectResolvedReplyPreview(message, replyToId, props) : undefined;
@@ -338,22 +306,27 @@ export function projectChatTranscript(
     runActive: props.runActive,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onRequestUpdate: requestUpdate,
-    basePath: props.basePath,
+    resourceBasePath: props.resourceBasePath,
     localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+    connectionEpoch: props.connectionEpoch,
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
-    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
     onRequestOpenImage: props.onRequestOpenImage,
     onOpenImage: props.onOpenImage,
+    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
     canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+    fetchLinkFavicon: props.fetchLinkFavicon,
     showAssistantAvatar: false,
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
     assistant: assistantIdentity,
   } satisfies StreamGroupOptions;
+  // Latest ownership crosses rows: the former owner must rerender when a
+  // newer answer arrives even if its own message object stays stable.
+  let latestAssistantItemKey: string | null = null;
   const renderGroupOptions = (item: MessageGroup) => {
     const lastMessage = item.messages.at(-1)?.message;
     const rewindEntryId =
@@ -362,6 +335,7 @@ export function projectChatTranscript(
         : null;
     return {
       ...sharedMessageRenderOptions,
+      latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
       autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
@@ -389,6 +363,10 @@ export function projectChatTranscript(
       userId: props.userId ?? null,
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
+      onRetryQueuedMessage: props.onRetryQueuedMessage,
+      queuedMessageAction: props.queuedMessageAction,
+      queueControls: props.queueControls,
+      personActivity: props.personActivity,
       showAvatarGutter: !isDirectThread,
       contextWindow: threadContextWindow,
       onReply: props.onSetReply
@@ -411,6 +389,7 @@ export function projectChatTranscript(
       rewindDisabled: Boolean(props.runActive || props.runWorking),
       activeContinuation: activeContinuationByGroupKey.get(item.key),
       turnRecap: turnRecapByGroupKey.get(item.key),
+      latestAssistant: item.key === latestAssistantItemKey,
     } satisfies Parameters<typeof renderMessageGroup>[1];
   };
   const renderGroupItem = (item: MessageGroup) => {
@@ -420,6 +399,17 @@ export function projectChatTranscript(
   // memoizing across usage patches.
   const workingUsageKey = `usage:${props.runOutputTokens ?? ""}`;
   const liveStatusSignature = (item: ChatRenderItem): string => {
+    if (item.kind === "agent-run-frame") {
+      const hasWorkingIndicator = item.parts.some(
+        (part) =>
+          part.kind === "stream-run" &&
+          part.parts.some((streamPart) => streamPart.kind === "reading-indicator"),
+      );
+      const recap = turnRecapByGroupKey.get(item.key);
+      return `${hasWorkingIndicator ? workingUsageKey : ""}|${
+        recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : ""
+      }|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
+    }
     if (item.kind === "stream-run") {
       return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
     }
@@ -435,7 +425,9 @@ export function projectChatTranscript(
       ? `${continuation.parts.map((part) => part.key).join(" ")}${workingUsageKey}`
       : "";
     const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
-    return `${continuationKey}|${recapKey}`;
+    return `${continuationKey}|${recapKey}|${
+      item.key === latestAssistantItemKey ? "latest-assistant" : ""
+    }`;
   };
   const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
     if (item.kind === "divider") {
@@ -448,23 +440,24 @@ export function projectChatTranscript(
       return renderStreamGroup(item.parts, {
         ...streamGroupOptions,
         questionPrompts,
-        startupPhase: props.startupStatus?.phase,
+        startupLabel: props.startupLabel,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
       });
     }
     if (item.kind === "work-group") {
       const workExpanded = expandedToolCards.get(item.key) ?? false;
-      return html`
-        ${renderWorkGroupSummary(item, {
-          expanded: workExpanded,
-          onToggle: () => {
-            setExpansionState(expandedToolCards, item.key, !workExpanded);
-            requestUpdate();
-          },
-        })}
-        ${workExpanded ? item.groups.map((group) => renderGroupItem(group)) : nothing}
-      `;
+      return renderWorkGroupSummary(item, {
+        expanded: workExpanded,
+        browserTabPreviews: renderBrowserTabPreviews(item.groups, {
+          sessionKey: props.sessionKey,
+          latestBrowserTabs,
+        }),
+        onToggle: () => {
+          setExpansionState(expandedToolCards, item.key, !workExpanded);
+          requestUpdate();
+        },
+      });
     }
     if (item.kind === "activity-run") {
       const firstGroup = item.groups[0];
@@ -476,6 +469,25 @@ export function projectChatTranscript(
       }
       return renderActivityGroup(item.groups, renderGroupOptions(firstGroup));
     }
+    if (item.kind === "agent-run-frame") {
+      return renderAgentRunFrame(item, {
+        questionPrompts,
+        streamOptions: {
+          ...streamGroupOptions,
+          questionPrompts,
+          startupLabel: props.startupLabel,
+          waitingApproval: props.waitingApproval,
+          runOutputTokens: props.runOutputTokens,
+        },
+        renderGroupOptions,
+        isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
+        onToggleWork: (key, expanded) => {
+          setExpansionState(expandedToolCards, key, !expanded);
+          requestUpdate();
+        },
+        turnRecap: turnRecapByGroupKey.get(item.key),
+      });
+    }
     if (item.kind === "group") {
       return renderGroupItem(item);
     }
@@ -486,7 +498,7 @@ export function projectChatTranscript(
     }
     return nothing;
   });
-  const collapsedItems = coalesceActivityRuns(
+  const semanticItems = coalesceActivityRuns(
     collapseCompletedTurnWork(coalesceStreamRuns(chatItems), {
       sessionKey: props.sessionKey,
       runWorking: Boolean(props.runWorking),
@@ -494,6 +506,7 @@ export function projectChatTranscript(
     }),
     { searchActive: searchFiltering },
   );
+  const collapsedItems = coalesceAgentRunFrames(semanticItems, { searchActive: searchFiltering });
   // Watch/settle on actual indicator visibility (not runWorking): queued
   // sends show the claw before the run starts, and the recap must never
   // stack under a visible working row.
@@ -507,73 +520,111 @@ export function projectChatTranscript(
     props.runOutputTokens ?? null,
   );
   const transcriptItems = collapsedItems.filter((item, index) => {
-    if (item.kind !== "stream-run") {
-      return true;
-    }
     const previous = collapsedItems[index - 1];
-    const isActiveStatusRun = item.parts.every((part) => part.kind === "reading-indicator");
+    const activeStatusParts =
+      item.kind === "stream-run" && item.parts.every((part) => part.kind === "reading-indicator")
+        ? item.parts
+        : item.kind === "agent-run-frame"
+          ? agentRunFrameActiveStatusParts(item)
+          : undefined;
+    const activeStatusRunId =
+      item.kind === "stream-run" || item.kind === "agent-run-frame" ? item.runId : undefined;
     if (
       previous?.kind !== "group" ||
-      !isActiveStatusRun ||
-      !assistantGroupCanOwnActiveRunStatus(previous)
+      !activeStatusParts ||
+      !assistantGroupCanOwnActiveRunStatus(previous) ||
+      (previous.runId !== undefined &&
+        activeStatusRunId !== undefined &&
+        previous.runId !== activeStatusRunId)
     ) {
       return true;
     }
     // A reply and its still-running state are one turn-level presentation.
     // Keeping the status in the reply avoids a second claw/assistant row.
     activeContinuationByGroupKey.set(previous.key, {
-      parts: item.parts,
+      parts: activeStatusParts,
       options: {
         ...streamGroupOptions,
-        startupPhase: props.startupStatus?.phase,
+        startupLabel: props.startupLabel,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
       },
     });
     return false;
   });
+  // Default disclosure belongs only to a settled assistant at the transcript
+  // tail; any newer visible row returns the prior answer to hover/tap behavior.
+  const lastTranscriptItem = transcriptItems.at(-1);
+  latestAssistantItemKey =
+    props.runActive || props.runWorking || searchFiltering
+      ? null
+      : lastTranscriptItem?.kind === "agent-run-frame" &&
+          lastTranscriptItem.outcome.kind === "completed" &&
+          lastTranscriptItem.outcome.actionOwner !== null
+        ? lastTranscriptItem.key
+        : lastTranscriptItem?.kind === "group" &&
+            !lastTranscriptItem.isStreaming &&
+            assistantGroupCanOwnActiveRunStatus(lastTranscriptItem)
+          ? lastTranscriptItem.key
+          : null;
   for (const item of transcriptItems) {
-    if (item.kind !== "group") {
+    const groups =
+      item.kind === "agent-run-frame"
+        ? agentRunFrameGroups(item)
+        : item.kind === "group"
+          ? [item]
+          : [];
+    const firstGroup = groups.find((group) => group.role === "assistant") ?? groups[0];
+    if (!firstGroup) {
       continue;
     }
-    const senderLabel = resolveMessageGroupSenderLabel(item, {
+    const senderLabel = resolveMessageGroupSenderLabel(firstGroup, {
       assistantName: props.assistantName,
       userId: props.userId,
       userName: props.userName,
       userAvatar: props.userAvatar,
     });
-    for (const source of item.messages) {
-      const sourceMessageId = persistedMessageEntryId(source.message);
-      const text = resolveMessageReplyText(source.message);
-      if (sourceMessageId && text) {
-        loadedReplySources.set(sourceMessageId, {
-          rowKey: item.key,
-          preview: {
+    for (const group of groups) {
+      for (const source of group.messages) {
+        const sourceMessageId = persistedMessageEntryId(source.message);
+        if (sourceMessageId && extractTextCached(source.message)?.trim()) {
+          messageRowKeysById.set(sourceMessageId, item.key);
+          loadedReplySources.set(sourceMessageId, {
+            message: source.message,
             messageId: source.key,
-            sourceMessageId,
             senderLabel,
-            text,
-          },
-        });
+          });
+        }
       }
     }
   }
-  transcript.syncMessageRows(
-    new Map([...loadedReplySources].map(([messageId, source]) => [messageId, source.rowKey])),
-  );
+  transcript.syncMessageRows(messageRowKeysById);
   let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null) {
     const lastItem = transcriptItems.at(-1);
     if (lastItem?.kind === "group" && assistantGroupCanOwnActiveRunStatus(lastItem)) {
       turnRecapByGroupKey.set(lastItem.key, turnRecap);
       turnRecapOwnerKey = lastItem.key;
+    } else if (
+      lastItem?.kind === "agent-run-frame" &&
+      lastItem.outcome.kind === "completed" &&
+      lastItem.outcome.actionOwner
+    ) {
+      turnRecapByGroupKey.set(lastItem.key, turnRecap);
+      turnRecapOwnerKey = lastItem.key;
     }
   }
-  const transcriptRows: TranscriptRow<ChatRenderItem>[] = transcriptItems.map((item) => ({
-    kind: "item",
-    key: item.key,
-    item,
-  }));
+  // New row keys measure expanded work immediately; existing keys keep their
+  // cached height until ResizeObserver reports the changed layout.
+  const transcriptRows: TranscriptRow<ChatRenderItem>[] = [];
+  for (const item of transcriptItems) {
+    transcriptRows.push({ kind: "item", key: item.key, item });
+    if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
+      for (const group of item.groups) {
+        transcriptRows.push({ kind: "item", key: `${item.key}:${group.key}`, item: group });
+      }
+    }
+  }
   const realtimeConversation = renderRealtimeTalkConversation(props);
   if (realtimeConversation !== nothing) {
     transcriptRows.push({
@@ -600,6 +651,10 @@ export function projectChatTranscript(
       content: backgroundTasks,
     });
   }
+  const typingIndicator = renderChatTypingIndicator(props.typingActors);
+  if (typingIndicator) {
+    transcriptRows.push({ kind: "content", key: "presence:typing", content: typingIndicator });
+  }
   trackTranscriptRenderDependencies(state, [
     chatItems,
     locale,
@@ -612,6 +667,7 @@ export function projectChatTranscript(
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
     getToolTitlesVersion(),
+    JSON.stringify([...latestBrowserTabs]),
     props.sessionKey,
     props.boardProvider,
     props.boardProvider?.canPinWidgets,
@@ -623,7 +679,7 @@ export function projectChatTranscript(
     props.showToolCalls,
     Boolean(props.runActive),
     Boolean(props.runWorking),
-    props.startupStatus?.phase,
+    props.startupLabel,
     Boolean(props.waitingApproval),
     props.questionPrompts,
     Boolean(props.autoExpandToolCalls),
@@ -632,21 +688,34 @@ export function projectChatTranscript(
     props.userId,
     props.userName,
     props.userAvatar,
-    props.basePath,
+    props.resourceBasePath,
     (props.localMediaPreviewRoots ?? []).join("\u0000"),
     props.assistantAttachmentAuthToken,
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
+    Boolean(props.fetchLinkFavicon),
     threadContextWindow,
     Boolean(props.onSetReply),
+    Boolean(props.onRetryQueuedMessage),
+    props.queuedMessageAction?.id,
+    props.queuedMessageAction?.label,
+    props.queuedMessageAction?.onAction,
+    props.queue.length ? props.queue : undefined,
+    props.queueControls?.offline,
+    props.queueControls?.editingId,
+    props.queueControls?.editingText,
+    Boolean(props.queueControls?.onQueueSteer),
     props.replyMessageAccess?.revision ?? 0,
     props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
+    props.runStatus?.phase ?? "",
+    props.runStatus?.occurredAt ?? 0,
   ]);
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
-    if (loadedReplySources.has(replyToId)) {
+    const loaded = loadedReplySources.get(replyToId);
+    if (loaded && resolveMessageReplyText(loaded.message)) {
       transcript.revealMessage(replyToId);
       return;
     }

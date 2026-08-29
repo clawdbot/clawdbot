@@ -1,30 +1,31 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
-import type { GatewaySessionRow } from "../../api/types.ts";
-import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
+import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
+import type { GatewaySessionRow, SessionVisibility } from "../../api/types.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
+import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  personActivityRouting,
+  type PersonActivityRouting,
+} from "../../components/person-activity-link.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
-import {
-  listAssignableSessionOwners,
-  listSessionOwners,
-} from "../../components/session-owner-chip.ts";
+import { listAssignableSessionOwners } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
-import {
-  hasSessionPresenceViewers,
-  projectPresencePayload,
-} from "../../components/viewer-facepile.ts";
-import { workspaceIconRouteUrl } from "../../components/workspace-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { hasSessionPresenceViewers, projectPresencePayload } from "../../lib/presence-users.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
   canArchiveSessionRow,
   canDeleteSessionRows,
   resolveUiConfiguredMainKey,
+  resolveUiSessionNavigationParentKey,
 } from "../../lib/sessions/session-key.ts";
-import { isActiveTask } from "../../lib/tasks/data.ts";
 import { renderBoardViewSwitch } from "./board-session-surface.ts";
 import { displayedChatSessionBranches } from "./chat-history.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
@@ -38,6 +39,7 @@ import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
   HeaderMenuQuickAction,
+  HeaderMenuStatusAction,
 } from "./components/chat-header-session-menu.ts";
 import {
   canRevealSessionWorkspace,
@@ -45,13 +47,21 @@ import {
   resolveChatPaneParentSession,
   resolveChatPaneWorkspace,
 } from "./components/chat-pane-header.ts";
-import { renderChatSessionSharing } from "./components/chat-session-sharing.ts";
+import {
+  canManageChatSessionSharing,
+  renderChatSessionSharing,
+} from "./components/chat-session-sharing.ts";
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import type { SidebarLayout } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
+  private personActivityRouting(): PersonActivityRouting {
+    return personActivityRouting(this.context);
+  }
+
   private resolveWorkspaceIcon(sessionKey: string | undefined) {
     if (!sessionKey) {
       return null;
@@ -63,10 +73,31 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       password: gateway.connection.password,
     });
     return {
-      routeUrl: workspaceIconRouteUrl(this.context.basePath, sessionKey),
+      routeUrl: buildControlUiResourcePath(
+        "workspaceIcon",
+        this.context.resourceBasePath,
+        sessionKey,
+      ),
       authTokens,
       authReady: Boolean(gateway.snapshot.hello || authTokens.length),
     };
+  }
+
+  private compactHeaderStatusActions(): HeaderMenuStatusAction[] {
+    if (!this.narrow || !this.context.overlays.snapshot.controlUiRefreshRequired) {
+      return [];
+    }
+    return [
+      {
+        id: "refresh",
+        label: `${t("chat.sidebar.serverUpdatedTitle")} · ${t(
+          "chat.sidebar.serverUpdatedRefresh",
+        )}`,
+        icon: icons.refresh,
+        tone: "info",
+        onActivate: () => globalThis.location.reload(),
+      },
+    ];
   }
 
   protected renderPaneHeader(
@@ -76,6 +107,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     catalog: boolean,
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
+    sidebarLayout?: SidebarLayout,
   ) {
     const board = this.resolveBoardView();
     const canChangeBoardDock = board.hasBoard && board.provider.canMutate;
@@ -116,18 +148,21 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       this.context.gateway.snapshot,
       Boolean(this.state?.chatRunId),
     ).branchSwitch;
-    const branchSwitchDisabledReason = !branchSwitchAccess.allowed
-      ? branchSwitchAccess.reason
-      : branchSwitchWorking
-        ? t("chat.sessionHeader.branchSwitchUnavailable")
-        : null;
+    const branchSwitchDisabledReason =
+      this.state && this.isCurrentSessionArchived(this.state)
+        ? t("chat.archivedSessionDisabled")
+        : !branchSwitchAccess.allowed
+          ? branchSwitchAccess.reason
+          : branchSwitchWorking
+            ? t("chat.sessionHeader.branchSwitchUnavailable")
+            : null;
     const sharingSnapshot = this.context.gateway.snapshot;
     // Sharing was introduced behind this advertised method. Keep the control
     // hidden for older Gateways that omit method metadata.
     const sharingMethodsSupported =
       isGatewayMethodAdvertised(sharingSnapshot, "session.visibility.set") === true;
     const sharingReadAccess = readSessionMethodAccess(sharingSnapshot, {
-      method: "session.members.list",
+      method: "session.members.listEvidence",
       requiredScope: "operator.read",
     });
     const sharingVisibilityAccess = readSessionMethodAccess(sharingSnapshot, {
@@ -146,6 +181,30 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       sharingReadAccess.allowed || sharingVisibilityAccess.allowed
         ? undefined
         : sharingReadAccess.reason;
+    const sharing =
+      sharingMethodsSupported && row
+        ? {
+            session: row,
+            state: this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key)),
+            allowedVisibilities: sharingSnapshot.hello?.policy?.allowedSessionVisibilities,
+            membersAvailable: sharingReadAccess.allowed,
+            openDisabledReason: sharingOpenDisabledReason,
+            visibilityDisabledReason: sharingVisibilityAccess.allowed
+              ? undefined
+              : sharingVisibilityAccess.reason,
+            memberAddDisabledReason: sharingMemberAddAccess.allowed
+              ? undefined
+              : sharingMemberAddAccess.reason,
+            memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
+              ? undefined
+              : sharingMemberRemoveAccess.reason,
+            onOpen: () => void this.loadSessionSharing(row),
+            onVisibilityChange: (visibility: SessionVisibility) =>
+              void this.setSessionVisibility(row, visibility),
+            onMemberChange: (identityId: string, member: boolean) =>
+              void this.setSessionMember(row, identityId, member),
+          }
+        : null;
     const renameAccess = row
       ? readSessionMethodAccess(this.context.gateway.snapshot, {
           method: "sessions.patch",
@@ -197,13 +256,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
     const openDesktopPanel = sessionWorkspace.onToggleDesktop ?? (() => undefined);
     const discussion = this.resolveSessionDiscussionAction();
-    const sidePanelOpen = this.state?.sidebarLayout.open === true;
-    const toggleSidePanel = () => {
-      const state = this.state;
-      if (state) {
-        this.setChatSidePanelOpen(!sidePanelOpen);
-      }
-    };
+    const sidePanelOpen = (sidebarLayout ?? this.state?.sidebarLayout)?.open === true;
+    const toggleSidePanel = () => this.setChatSidePanelOpen(!sidePanelOpen, sidebarLayout);
     const sidePanelAction = html`<openclaw-tooltip
       .content=${t(sidePanelOpen ? "chat.sidePanel.minimize" : "chat.sidePanel.label")}
     >
@@ -282,7 +336,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         ),
         icon: icons.listChecks,
         active: !backgroundTasks.collapsed,
-        badge: backgroundTasks.tasks?.filter(isActiveTask).length ?? 0,
+        badge: backgroundTasks.activeCount,
         onActivate: backgroundTasks.onToggleCollapsed,
       });
     }
@@ -340,19 +394,19 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const selfId = sharingSnapshot.selfUser?.id;
     const instanceId = sharingSnapshot.client?.instanceId;
     const result = this.state?.sessionsResult;
-    const showOwnerChip =
-      (result?.creators ?? listSessionOwners(result?.sessions ?? [])).length >= 2 ||
-      (row?.participantCount ?? 0) > 0;
-    const renderedOwnerId = showOwnerChip
-      ? (row?.owner?.actor ?? row?.createdActor)?.id
-      : undefined;
+    const knownGroups = collectKnownSessionGroups(
+      this.context.sessions?.state?.groups ?? [],
+      this.context.sessions?.state?.result?.sessions ?? [],
+    );
+    const showOwnerChip = (result?.owners?.length ?? 0) >= 2 || (row?.participantCount ?? 0) > 0;
+    const personActivity = this.personActivityRouting();
+    const renderedOwnerId = showOwnerChip ? row?.owner?.actor.id : undefined;
     const presence = projectPresencePayload(this.presencePayload, selfId, instanceId);
     const ownerViewing = presence.users.some(
       (user) => user.id === renderedOwnerId && user.watchedSessions.includes(key),
     );
     const ownerOptions = listAssignableSessionOwners({
-      sessions: result?.sessions ?? (row ? [row] : []),
-      facet: result?.creators,
+      facet: result?.owners,
       agents: this.context.agents.state.agentsList?.agents,
       self: sharingSnapshot.selfUser ?? null,
     });
@@ -370,8 +424,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       session: row,
       showOwnerChip,
       ownerViewing,
+      personActivity,
       catalog,
-      editing: this.headerEditing && this.headerRenameSessionKey === row?.key,
+      editing: this.headerEditing && this.headerRenameSession?.key === row?.key,
       renameValue: this.headerRenameValue,
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
@@ -401,6 +456,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .sessionKey=${key}
               .excludeUserId=${renderedOwnerId}
               .maxVisible=${4}
+              .personActivity=${personActivity}
               variant="session"
             ></openclaw-viewer-facepile>`
           : nothing,
@@ -409,7 +465,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         face: board.face,
         dock: board.dock,
         canChangeDock: canChangeBoardDock,
+        fullscreenControl: board.hasBoard ? this.boardFullscreen.renderButton() : undefined,
         onSelectMode: (mode) => {
+          if (mode === "chat") {
+            void this.boardFullscreen.exit();
+          }
           if (!canChangeBoardDock) {
             const face = mode === "chat" ? "chat" : "dashboard";
             this.syncChatSidebarForDock(face === "dashboard" ? board.dock : "hidden");
@@ -434,39 +494,28 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         },
         onDockSideChange: (dock) => this.handleBoardDockChange(dock),
       }),
-      sharingControl: sharingMethodsSupported
-        ? renderChatSessionSharing({
-            session: row,
-            state: row
-              ? this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key))
-              : undefined,
-            allowedVisibilities: sharingSnapshot.hello?.policy?.allowedSessionVisibilities,
-            membersAvailable: sharingReadAccess.allowed,
-            openDisabledReason: sharingOpenDisabledReason,
-            visibilityDisabledReason: sharingVisibilityAccess.allowed
-              ? undefined
-              : sharingVisibilityAccess.reason,
-            memberAddDisabledReason: sharingMemberAddAccess.allowed
-              ? undefined
-              : sharingMemberAddAccess.reason,
-            memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
-              ? undefined
-              : sharingMemberRemoveAccess.reason,
-            onOpen: () => row && void this.loadSessionSharing(row),
-            onVisibilityChange: (visibility) =>
-              row && void this.setSessionVisibility(row, visibility),
-            onMemberChange: (identityId, member) =>
-              row && void this.setSessionMember(row, identityId, member),
-          })
-        : nothing,
+      sharingControl:
+        sharing && (!this.narrow || !canManageChatSessionSharing(sharing.session))
+          ? renderChatSessionSharing(sharing)
+          : nothing,
       sessionMenuAction:
         row && this.state
           ? html`<openclaw-chat-header-session-menu
-              .sessionLabel=${normalizeOptionalString(row.label) ??
-              normalizeOptionalString(this.paneTitle) ??
-              row.key}
-              .worktreePath=${row.execNode ? null : workspace.root}
-              .archived=${row.archived === true}
+              .session=${{
+                label:
+                  normalizeOptionalString(row.label) ??
+                  normalizeOptionalString(this.paneTitle) ??
+                  row.key,
+                sessionId: row.sessionId ?? null,
+                isChild: Boolean(resolveUiSessionNavigationParentKey(row)),
+                pinned: row.pinned === true,
+                unread: row.unread === true,
+                archived: row.archived === true,
+                category: normalizeOptionalString(row.category) ?? null,
+                icon: normalizeOptionalString(row.icon) ?? null,
+                categoryClearReturnsToGroups: false,
+              }}
+              .worktreePath=${row.execNode || !isNativeLocalGateway() ? null : workspace.root}
               .onboarding=${this.onboarding}
               .preferencesBrowserOnly=${this.context.runtimeConfig?.state.connected &&
               this.context.runtimeConfig.canPatch === false}
@@ -474,9 +523,12 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .settings=${this.state.settings}
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
+              .statusActions=${this.compactHeaderStatusActions()}
+              .sharing=${sharing}
+              .groups=${knownGroups}
               .ownerOptions=${ownerOptions}
               .selfOwner=${selfOwner}
-              .currentOwnerId=${(row.owner?.actor ?? row.createdActor)?.id ?? null}
+              .currentOwnerId=${row.owner?.actor.id ?? null}
               .actionDisabledReasons=${actionDisabledReasons}
               .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
               .forkFromLastCompleted=${row.hasActiveRun === true}
@@ -485,6 +537,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .onOpen=${() => {
                 void this.loadHeaderMenuData(row, agentWorkspace, workspaceGit);
               }}
+              .onOpenCommandPalette=${() =>
+                window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT))}
               .onSettingsChange=${this.state.applySettings}
               .onAction=${(action: HeaderMenuAction) => this.handleHeaderSessionAction(action, row)}
             ></openclaw-chat-header-session-menu>`

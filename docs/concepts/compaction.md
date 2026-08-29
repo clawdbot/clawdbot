@@ -16,6 +16,8 @@ Every model has a context window: the maximum number of tokens it can process. W
 
 OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries when it picks a compaction split point. If the point lands inside a tool block, OpenClaw moves the boundary so the pair stays together and the current unsummarized tail is preserved.
 
+The built-in summarizer accounts for Chinese, Japanese, and Korean (CJK) characters in both message text and tool arguments when estimating chunk sizes. These budgets are approximate; a tool call and its results stay together even when that group exceeds a chunk target.
+
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
 <Note>
@@ -34,7 +36,11 @@ existing recovery outcome.
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
 
-Set `agents.defaults.compaction.enabled: false` to disable the embedded runtime's proactive threshold compaction. OpenClaw's preflight and overflow-recovery compaction paths remain available, as does manual `/compact`.
+Normal replies check session usage before the next turn. Successful direct commands using the built-in OpenClaw runtime, including `openclaw agent --local`, run the same usage-based maintenance after recording the completed turn and protecting any pending reply. The following command then uses the compacted context. This works in safeguard mode even when memory flush is disabled; native runtimes retain their own compaction ownership.
+
+If direct-command post-turn compaction fails, OpenClaw logs a warning and returns the completed reply while the run and session are still current. Cancellation, restart, or a replaced session still stops that result from being returned.
+
+Set `agents.defaults.compaction.enabled: false` to disable the embedded runtime's proactive threshold compaction and direct-command post-turn maintenance. OpenClaw's preflight and overflow-recovery compaction paths remain available, as does manual `/compact`.
 
 You will see:
 
@@ -43,7 +49,7 @@ You will see:
 - `/status` showing `🧹 Compactions: <count>`.
 
 <Info>
-Before compacting, OpenClaw automatically reminds the agent to save important notes to [memory](/concepts/memory) files. This prevents context loss.
+Before compacting, OpenClaw automatically reminds the agent to save important notes to [memory](/concepts/memory) files. This helps preserve durable context.
 </Info>
 
 <AccordionGroup>
@@ -171,6 +177,8 @@ Before compaction, OpenClaw can run a **silent memory flush** turn to store dura
 }
 ```
 
+Memory flush is optional maintenance: a failure, including exhausted retries, does not reset the session or discard conversation history. If compaction is unnecessary or succeeds, OpenClaw continues the reply; with `notifyUser` enabled, exhausted flush retries also produce a degraded notice. If required compaction fails, OpenClaw reports that failure and keeps the conversation intact instead of starting over automatically.
+
 The memory-flush model override is exact and does not inherit the active session fallback chain. See [Memory](/concepts/memory) for details and config.
 
 ## Pluggable compaction providers
@@ -226,4 +234,5 @@ For advanced configuration (reserve tokens, identifier preservation, custom cont
 - [Session](/concepts/session): session management and lifecycle.
 - [Session pruning](/concepts/session-pruning): trimming tool results.
 - [Context](/concepts/context): how context is built for agent turns.
-- [Hooks](/automation/hooks): compaction lifecycle hooks (`before_compaction`, `after_compaction`).
+- [Hooks](/automation/hooks#event-types): internal compaction events (`session:compact:before`, `session:compact:after`).
+- [Plugin hooks](/plugins/hooks#hook-catalog): typed compaction hooks (`before_compaction`, `after_compaction`).

@@ -126,7 +126,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     };
     const taskWithCurrentLifecycle = async () => {
       let params = options.getParams();
-      params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
       params.replyOperation?.markGlobalLaneWaitEnded();
       throwIfAborted();
       let lifecycleGeneration = options.getLifecycleGeneration();
@@ -181,11 +180,14 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             // Queue-stage rotation may rebind, but placement admitted into a retired runtime must fail.
             claimAgentRunContext(params.runId, {
               ...existingContext,
+              agentId: params.agentId ?? existingContext?.agentId,
               sessionKey: params.sessionKey ?? existingContext?.sessionKey,
               sessionId: params.sessionId ?? existingContext?.sessionId,
               lifecycleGeneration,
               lastActiveAt: Date.now(),
             });
+            // Queue dequeue can still block on writer or placement admission.
+            params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
           },
         ),
       );
@@ -203,10 +205,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
     const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
-    const taskWithLaneAdmission = () => {
-      options.getParams().onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
-      return task();
-    };
     const params = options.getParams();
     // Session admission, deferred maintenance, and global admission share one queue owner.
     releaseQueuedRunContext = retainQueuedAgentRunContext(
@@ -224,14 +222,10 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     let queuedRun: Promise<T>;
     try {
       if (params.enqueue) {
-        queuedRun = params.enqueue(taskWithLaneAdmission, withRunLaneWait(sessionOpts));
+        queuedRun = params.enqueue(task, withRunLaneWait(sessionOpts));
       } else {
         noteLaneWaitIfBusy(options.sessionLane);
-        queuedRun = enqueueCommandInLane(
-          options.sessionLane,
-          taskWithLaneAdmission,
-          withRunLaneWait(sessionOpts),
-        );
+        queuedRun = enqueueCommandInLane(options.sessionLane, task, withRunLaneWait(sessionOpts));
       }
     } catch (error) {
       releaseQueuedContext("abandoned");

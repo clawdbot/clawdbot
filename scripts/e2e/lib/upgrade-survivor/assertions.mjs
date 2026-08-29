@@ -1,9 +1,11 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 // Assertions for upgrade-survivor E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
+import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
 const SCENARIOS = new Set([
@@ -16,10 +18,12 @@ const SCENARIOS = new Set([
   "plugin-deps-cleanup",
   "configured-plugin-installs",
   "stale-source-plugin-shadow",
+  "prerelease-plugin-registry",
   "tilde-log-path",
   "meeting-transcripts-sqlite",
   "versioned-runtime-deps",
   "cron-scheduled-authority",
+  "sqlite-volume",
   "auth-profile-v2026-7-2-beta-5",
 ]);
 
@@ -33,6 +37,18 @@ const PERSONA_FILES = new Map([
 const LEGACY_SESSION_MAIN_ID = "upgrade-main-session";
 const LEGACY_SESSION_DIRECT_ID = "upgrade-direct-session";
 const LEGACY_SESSION_GROUP_ID = "upgrade-group-session";
+const PLUGIN_DECLARED_SURFACE_GROUPS = [
+  "channels",
+  "providers",
+  "tools",
+  "contracts",
+  "hooks",
+  "mcpServers",
+  "cliCommands",
+  "cliBackends",
+  "skills",
+  "dangerousConfigFlags",
+];
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -389,14 +405,16 @@ function seedState() {
 function assertConfigSurvived() {
   const config = getConfig();
   const coverage = getCoverage();
-  if (getScenario() === "meeting-transcripts-sqlite") {
+  const scenario = getScenario();
+  if (scenario === "meeting-transcripts-sqlite") {
     // This focused migration fixture proves state import/export across one published
     // baseline; the broad base scenario owns unrelated agent/channel config parity.
     return;
   }
 
   if (acceptsIntent(coverage, "update")) {
-    assert(config.update?.channel === "stable", "update.channel was not preserved");
+    const expectedChannel = scenario === "prerelease-plugin-registry" ? "beta" : "stable";
+    assert(config.update?.channel === expectedChannel, "update.channel was not preserved");
   }
   if (acceptsIntent(coverage, "gateway")) {
     assert(config.gateway?.auth?.mode === "token", "gateway auth mode was not preserved");
@@ -427,12 +445,12 @@ function assertConfigSurvived() {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("discord"), "discord plugin allow entry missing");
     assert(pluginAllow.includes("telegram"), "telegram plugin allow entry missing");
-    if (getScenario() === "configured-plugin-installs") {
+    if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
       assert(pluginAllow.includes("matrix"), "matrix plugin allow entry missing");
     } else {
       assert(pluginAllow.includes("whatsapp"), "whatsapp plugin allow entry missing");
     }
-    if (getScenario() === "codex-allowlist-survival") {
+    if (scenario === "codex-allowlist-survival") {
       assert(pluginAllow.includes("codex"), "Codex plugin allow entry missing");
     }
     if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
@@ -464,8 +482,14 @@ function assertConfigSurvived() {
   if (acceptsIntent(coverage, "discord-channel")) {
     const discord = config.channels?.discord;
     assert(discord?.enabled === true, "discord enabled flag changed");
-    const discordAllowFrom = discord.allowFrom ?? discord.dm?.allowFrom;
-    const discordDmPolicy = discord.dmPolicy ?? discord.dm?.policy;
+    const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
+    const discordAllowFrom =
+      stage === "baseline" ? (discord.allowFrom ?? discord.dm?.allowFrom) : discord.allowFrom;
+    const discordDmPolicy =
+      stage === "baseline" ? (discord.dmPolicy ?? discord.dm?.policy) : discord.dmPolicy;
+    if (stage !== "baseline") {
+      assert(!Object.hasOwn(discord, "dm"), "legacy Discord DM config survived update");
+    }
     assert(discordDmPolicy === "allowlist", "discord DM policy changed");
     assert(
       Array.isArray(discordAllowFrom) && discordAllowFrom.includes("111111111111111111"),
@@ -490,7 +514,7 @@ function assertConfigSurvived() {
 
   if (
     acceptsIntent(coverage, "whatsapp-channel") &&
-    getScenario() !== "configured-plugin-installs"
+    !acceptsIntent(coverage, "configured-plugin-installs")
   ) {
     const whatsapp = config.channels?.whatsapp;
     assert(whatsapp?.enabled === true, "whatsapp enabled flag changed");
@@ -505,7 +529,7 @@ function assertConfigSurvived() {
     }
   }
 
-  if (getScenario() === "channel-post-core-restore") {
+  if (scenario === "channel-post-core-restore") {
     const whatsapp = config.channels?.whatsapp;
     assert(whatsapp?.enabled === true, "post-core channel restore dropped WhatsApp");
     assert(
@@ -563,6 +587,9 @@ function assertStateSurvived() {
   }
   if (scenario === "cron-scheduled-authority") {
     assertCronScheduledAuthorityMigrated(stateDir, stage);
+  }
+  if (scenario === "sqlite-volume") {
+    assertUpgradeVolumeMigrated(stateDir, stage);
   }
   if (scenario === "auth-profile-v2026-7-2-beta-5") {
     assertAuthProfileMigrationSurvived(stateDir, stage);
@@ -992,7 +1019,7 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
       String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
       `configured external ${pluginId} plugin npm spec changed`,
     );
-    return;
+    return packageJson;
   }
   assert(
     record.clawhubPackage === packageName,
@@ -1003,6 +1030,79 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
     isPathInside(extensionsRoot, installPath),
     `configured external ${pluginId} ClawHub install path outside managed extensions root: ${installPath}`,
   );
+  return packageJson;
+}
+
+function pluginInstallIntegrity(record) {
+  return record.integrity ?? record.npmIntegrity ?? record.clawpackSha256 ?? record.gitCommit;
+}
+
+function acceptedSurfaceHash(surface) {
+  const canonical = Object.fromEntries(
+    PLUGIN_DECLARED_SURFACE_GROUPS.map((group) => [group, surface[group].toSorted()]),
+  );
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
+function assertCompanionPluginConsent(record, pluginId, integrity) {
+  assert(
+    record.acceptedSurface && typeof record.acceptedSurface === "object",
+    `${pluginId} plugin accepted surface missing`,
+  );
+  for (const group of PLUGIN_DECLARED_SURFACE_GROUPS) {
+    assert(
+      Array.isArray(record.acceptedSurface[group]),
+      `${pluginId} plugin accepted surface ${group} missing`,
+    );
+  }
+  assert(
+    record.acceptedSurfaceHash === acceptedSurfaceHash(record.acceptedSurface),
+    `${pluginId} plugin consent hash changed`,
+  );
+  assert(
+    record.acceptedSurfaceIntegrity === integrity,
+    `${pluginId} plugin consent integrity changed`,
+  );
+  assert(
+    typeof record.acceptedSurfaceAt === "string" &&
+      Number.isFinite(Date.parse(record.acceptedSurfaceAt)),
+    `${pluginId} plugin consent timestamp missing`,
+  );
+}
+
+function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
+  assert(expectedVersion, "assert-companion-installs requires <expected-version>");
+  assert(
+    capabilityConsentSupported === "0" || capabilityConsentSupported === "1",
+    "assert-companion-installs requires candidate capability-consent support",
+  );
+  const records = readInstalledPluginIndex().installRecords ?? {};
+  for (const [pluginId, packageName, source] of [
+    ["discord", "@openclaw/discord", "npm"],
+    ["whatsapp", "@openclaw/whatsapp", "clawhub"],
+    ["codex", "@openclaw/codex", "npm"],
+  ]) {
+    const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
+    const record = records[pluginId];
+    assert(record.source === source, `${pluginId} plugin source changed: ${record.source}`);
+    const installedVersion = source === "clawhub" ? record.version : record.resolvedVersion;
+    assert(
+      installedVersion === expectedVersion,
+      `${pluginId} plugin version changed: ${String(installedVersion)}`,
+    );
+    assert(
+      packageJson.version === expectedVersion,
+      `${pluginId} installed package version changed: ${String(packageJson.version)}`,
+    );
+    const integrity = pluginInstallIntegrity(record);
+    assert(
+      typeof integrity === "string" && integrity.length > 0,
+      `${pluginId} plugin integrity missing`,
+    );
+    if (capabilityConsentSupported === "1") {
+      assertCompanionPluginConsent(record, pluginId, integrity);
+    }
+  }
 }
 
 function assertConfiguredPluginInstalls() {
@@ -1212,11 +1312,17 @@ if (command === "list-scenarios") {
   process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
 } else if (command === "seed") {
   seedState();
+} else if (command === "seed-volume") {
+  assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
+  const stateDir = requireEnv("OPENCLAW_STATE_DIR");
+  seedUpgradeVolume(stateDir);
 } else if (command === "assert-config") {
   assertConfigSurvived();
 } else if (command === "assert-state") {
   assertStateSurvived();
   assertConfiguredPluginInstalls();
+} else if (command === "assert-companion-installs") {
+  assertCompanionPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-status-json") {
   assertStatusJson(process.argv.slice(3));
 } else if (command === "assert-update-run-self-upgrade") {

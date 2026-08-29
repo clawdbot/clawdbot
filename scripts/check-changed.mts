@@ -102,11 +102,11 @@ const DEPRECATION_HYGIENE_PATH_RE =
   /^(?:package\.json$|src\/|extensions\/|packages\/|scripts\/(?:check-deprecated-api-usage\.mts$|plugin-boundary-report\.ts$|lib\/plugin-sdk))/u;
 const WRAPPER_SHADOWING_PATH_RE =
   /^(?:package\.json$|src\/|scripts\/(?:check-(?:export-name-collisions|wrapper-shadowing)\.mts$|lib\/ts-guard-utils\.mts$))/u;
-const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
-  /^(?:pnpm-lock\.yaml$|apps\/(?:android\/app\/build\.gradle\.kts$|ios\/project\.yml$|linux\/src-tauri\/(?:build\.rs$|src\/canvas\.rs$)|shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/)|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mts$)/u;
+const EXTENSION_TEST_CORE_IMPORT_PATH_RE =
+  /^(?:extensions\/|test\/helpers\/|scripts\/(?:check-no-extension-test-core-imports|check-file-utils)\.ts$|scripts\/check-changed\.m[jt]s$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
-  /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/control-ui-i18n-[^/]+\.ts)$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
-const RATCHET_BASE_OWNER_PATH = "scripts/lib/ratchet-base.mts";
+  /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/(?:control-ui-i18n-[^/]+\.ts|control-ui-i18n-config\.json))$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
+const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
 const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
@@ -114,10 +114,10 @@ const TARGETED_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
-const LINTABLE_UI_STYLE_PATH_RE = /^ui\/src\/.+\.(?:css|ts)$/u;
+const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|ts)|public\/themes\/[^/]+\.css)$/u;
 const MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE = /^(?:docs\/|README\.md$|.*\.mdx?$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/src\/.+\.css$/u;
+  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/(?:src\/.+|public\/themes\/[^/]+)\.css$/u;
 const EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
 const SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
@@ -340,12 +340,6 @@ export function shouldRunWrapperShadowingCheck(paths: string[]) {
   );
 }
 
-export function shouldRunCanvasA2uiNativeResourceCheck(paths: string[]) {
-  return paths.some((changedPath) =>
-    CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
-}
-
 export function shouldRunAppcastOwnerTest(paths: string[]) {
   return paths.some((changedPath) => normalizeChangedPath(changedPath) === "appcast.xml");
 }
@@ -540,24 +534,10 @@ export function createChangedCheckPlan(
 
   add("conflict markers", ["check:no-conflict-markers"]);
   if (
-    result.paths.some((filePath) =>
-      /^(?:src\/|packages\/|extensions\/|config\/env-var-count-budget\.txt$|scripts\/check-env-var-count\.mts$)/u.test(
-        filePath,
-      ),
-    )
-  ) {
-    add("environment variable count ratchet", [
-      "check:env-var-count",
-      ...(options.staged ? ["--staged"] : []),
-      "--base",
-      options.staged ? "HEAD" : (options.base ?? "origin/main"),
-    ]);
-  }
-  if (
     result.paths.some(
       (filePath) =>
-        filePath === RATCHET_BASE_OWNER_PATH ||
-        /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mts$)/u.test(
+        filePath === SHRINK_RATCHET_OWNER_PATH ||
+        /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/(?:env-var-count-budget|max-lines-baseline)\.txt$|scripts\/check-(?:env-var-count|max-lines-ratchet)\.mts$)/u.test(
           filePath,
         ),
     )
@@ -572,7 +552,7 @@ export function createChangedCheckPlan(
   if (
     result.paths.some(
       (filePath) =>
-        filePath === RATCHET_BASE_OWNER_PATH ||
+        filePath === SHRINK_RATCHET_OWNER_PATH ||
         /^(?:src\/|ui\/src\/|packages\/|extensions\/|config\/assertion-safety-baseline\.txt$|scripts\/check-assertion-safety-ratchet\.mts$|scripts\/lib\/type-assertion-guard-scope\.mjs$|scripts\/oxlint-boundary-guards\.mjs$)/u.test(
           filePath,
         ),
@@ -589,6 +569,12 @@ export function createChangedCheckPlan(
   add("doctor deprecation registry", ["check:doctor-deprecation-registry"]);
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
+  if (
+    result.lanes.all ||
+    result.paths.some((changedPath) => EXTENSION_TEST_CORE_IMPORT_PATH_RE.test(changedPath))
+  ) {
+    add("extension test core imports", ["lint:plugins:no-extension-test-core-imports"]);
+  }
   add("duplicate scan target coverage", ["dup:check:coverage"]);
   add("coercion helper declaration guard", ["check:coercion-helpers"]);
   add("dependency pin guard", ["deps:pins:check"]);
@@ -657,14 +643,6 @@ export function createChangedCheckPlan(
   if (result.lanes.all || shouldRunWrapperShadowingCheck(result.paths)) {
     add("wrapper shadowing", ["check:wrapper-shadowing"]);
   }
-  if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
-    addCommand(
-      "Canvas A2UI native resource generation",
-      "node",
-      ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      baseEnv,
-    );
-  }
   if (shouldRunAppcastOwnerTest(result.paths)) {
     add(
       "appcast owner tests",
@@ -697,6 +675,12 @@ export function createChangedCheckPlan(
   const lanes = result.lanes;
   const runAll = lanes.all;
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
+
+  // Typechecking alone accepts extension imports; the graph guard also covers
+  // shared test/tooling dependencies that core tests can pull into their graph.
+  if (runAll || lanes.core || lanes.coreTests || lanes.ui || lanes.tooling) {
+    add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
+  }
 
   if (runAll || lanes.scripts || result.paths.includes("scripts/check-script-erasability.mjs")) {
     add("script TypeScript erasability", ["check:script-erasability"]);
@@ -801,6 +785,7 @@ export function createChangedCheckPlan(
     lanes.liveDockerTooling &&
     result.paths.some((changedPath) => getChangedPathFacts(changedPath).surface === "source")
   ) {
+    add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
     addTypecheck("typecheck core tests", ["tsgo:core:test"]);
     addLint("lint core", ["lint:core"]);
   }

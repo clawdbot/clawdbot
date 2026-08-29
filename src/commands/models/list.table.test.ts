@@ -25,6 +25,33 @@ describe("printModelTable", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
+  it("writes populated plain model rows directly to stdout", () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    };
+    const rows: ModelRow[] = [
+      {
+        key: "anthropic/claude-sonnet-4-6",
+        name: "Claude Sonnet",
+        input: "text",
+        contextWindow: 200_000,
+        local: false,
+        available: true,
+        tags: [],
+        missing: false,
+      },
+    ];
+
+    printModelTable(rows, runtime, { plain: true });
+
+    expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith("anthropic/claude-sonnet-4-6");
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
   it("prints effective and native context values when a runtime cap differs", () => {
     const runtime = { log: vi.fn(), error: vi.fn() };
     const rows: ModelRow[] = [

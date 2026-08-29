@@ -37,6 +37,15 @@ function tolerantArray<T>(schema: z.ZodType<T>) {
     .catch(undefined);
 }
 
+function omitUndefinedFields<T extends Record<string, unknown>>(value: T): T {
+  for (const key of Object.keys(value)) {
+    if (value[key] === undefined) {
+      delete value[key];
+    }
+  }
+  return value;
+}
+
 const workboardExecutionSchema = z
   .object({
     id: trimmedRequiredStringSchema,
@@ -77,17 +86,7 @@ const workboardEventSchema = z
     sessionKey: optionalStringSchema,
     runId: optionalStringSchema,
   })
-  .transform(
-    (value): WorkboardEvent => ({
-      id: value.id,
-      kind: value.kind,
-      at: value.at,
-      ...(value.fromStatus ? { fromStatus: value.fromStatus } : {}),
-      ...(value.toStatus ? { toStatus: value.toStatus } : {}),
-      ...(value.sessionKey !== undefined ? { sessionKey: value.sessionKey } : {}),
-      ...(value.runId !== undefined ? { runId: value.runId } : {}),
-    }),
-  );
+  .transform(omitUndefinedFields);
 
 const attemptSchema = z
   .object({
@@ -102,18 +101,7 @@ const attemptSchema = z
     runId: optionalStringSchema,
     error: optionalStringSchema,
   })
-  .transform((value) => ({
-    id: value.id,
-    status: value.status,
-    startedAt: value.startedAt,
-    ...(value.endedAt !== undefined ? { endedAt: value.endedAt } : {}),
-    ...(value.engine ? { engine: value.engine } : {}),
-    ...(value.mode ? { mode: value.mode } : {}),
-    ...(value.model !== undefined ? { model: value.model } : {}),
-    ...(value.sessionKey !== undefined ? { sessionKey: value.sessionKey } : {}),
-    ...(value.runId !== undefined ? { runId: value.runId } : {}),
-    ...(value.error !== undefined ? { error: value.error } : {}),
-  }));
+  .transform(omitUndefinedFields);
 const commentSchema = z
   .object({
     id: z.string(),
@@ -121,12 +109,7 @@ const commentSchema = z
     createdAt: z.number(),
     updatedAt: optionalNumberSchema,
   })
-  .transform((value) => ({
-    id: value.id,
-    body: value.body,
-    createdAt: value.createdAt,
-    ...(value.updatedAt !== undefined ? { updatedAt: value.updatedAt } : {}),
-  }));
+  .transform(omitUndefinedFields);
 const linkSchema = z
   .object({
     id: z.string(),
@@ -136,14 +119,7 @@ const linkSchema = z
     title: optionalStringSchema,
     url: optionalStringSchema,
   })
-  .transform((value) => ({
-    id: value.id,
-    type: value.type,
-    createdAt: value.createdAt,
-    ...(value.targetCardId !== undefined ? { targetCardId: value.targetCardId } : {}),
-    ...(value.title !== undefined ? { title: value.title } : {}),
-    ...(value.url !== undefined ? { url: value.url } : {}),
-  }));
+  .transform(omitUndefinedFields);
 const proofSchema = z
   .object({
     id: z.string(),
@@ -154,15 +130,7 @@ const proofSchema = z
     url: optionalStringSchema,
     note: optionalStringSchema,
   })
-  .transform((value) => ({
-    id: value.id,
-    status: value.status,
-    createdAt: value.createdAt,
-    ...(value.label !== undefined ? { label: value.label } : {}),
-    ...(value.command !== undefined ? { command: value.command } : {}),
-    ...(value.url !== undefined ? { url: value.url } : {}),
-    ...(value.note !== undefined ? { note: value.note } : {}),
-  }));
+  .transform(omitUndefinedFields);
 const artifactSchema = z
   .object({
     id: z.string(),
@@ -172,14 +140,7 @@ const artifactSchema = z
     path: optionalStringSchema,
     mimeType: optionalStringSchema,
   })
-  .transform((value) => ({
-    id: value.id,
-    createdAt: value.createdAt,
-    ...(value.label !== undefined ? { label: value.label } : {}),
-    ...(value.url !== undefined ? { url: value.url } : {}),
-    ...(value.path !== undefined ? { path: value.path } : {}),
-    ...(value.mimeType !== undefined ? { mimeType: value.mimeType } : {}),
-  }));
+  .transform(omitUndefinedFields);
 const attachmentSchema = z
   .object({
     id: z.string(),
@@ -190,15 +151,7 @@ const attachmentSchema = z
     mimeType: optionalStringSchema,
     note: optionalStringSchema,
   })
-  .transform((value) => ({
-    id: value.id,
-    cardId: value.cardId,
-    fileName: value.fileName,
-    byteSize: value.byteSize,
-    createdAt: value.createdAt,
-    ...(value.mimeType !== undefined ? { mimeType: value.mimeType } : {}),
-    ...(value.note !== undefined ? { note: value.note } : {}),
-  }));
+  .transform(omitUndefinedFields);
 const workerLogSchema = z
   .object({
     id: z.string(),
@@ -208,25 +161,14 @@ const workerLogSchema = z
     sessionKey: optionalStringSchema,
     runId: optionalStringSchema,
   })
-  .transform((value) => ({
-    id: value.id,
-    level: value.level,
-    message: value.message,
-    createdAt: value.createdAt,
-    ...(value.sessionKey !== undefined ? { sessionKey: value.sessionKey } : {}),
-    ...(value.runId !== undefined ? { runId: value.runId } : {}),
-  }));
+  .transform(omitUndefinedFields);
 const workerProtocolSchema = z
   .object({
     state: z.enum(["idle", "running", "completed", "blocked", "violated"]),
     updatedAt: z.number().catch(() => Date.now()),
     detail: optionalStringSchema,
   })
-  .transform((value) => ({
-    state: value.state,
-    updatedAt: value.updatedAt,
-    ...(value.detail !== undefined ? { detail: value.detail } : {}),
-  }))
+  .transform(omitUndefinedFields)
   .optional()
   .catch(undefined);
 const claimSchema = z
@@ -237,13 +179,7 @@ const claimSchema = z
     lastHeartbeatAt: z.number(),
     expiresAt: optionalNumberSchema,
   })
-  .transform((value) => ({
-    ownerId: value.ownerId,
-    token: value.token,
-    claimedAt: value.claimedAt,
-    lastHeartbeatAt: value.lastHeartbeatAt,
-    ...(value.expiresAt !== undefined ? { expiresAt: value.expiresAt } : {}),
-  }))
+  .transform(omitUndefinedFields)
   .optional()
   .catch(undefined);
 const diagnosticSchema = z
@@ -285,15 +221,7 @@ const notificationSchema = z
     sessionKey: optionalStringSchema,
     runId: optionalStringSchema,
   })
-  .transform((value) => ({
-    id: value.id,
-    kind: value.kind,
-    message: value.message,
-    createdAt: value.createdAt,
-    ...(value.sequence !== undefined ? { sequence: value.sequence } : {}),
-    ...(value.sessionKey !== undefined ? { sessionKey: value.sessionKey } : {}),
-    ...(value.runId !== undefined ? { runId: value.runId } : {}),
-  }));
+  .transform(omitUndefinedFields);
 const staleSchema = z
   .object({
     detectedAt: optionalNumberSchema,

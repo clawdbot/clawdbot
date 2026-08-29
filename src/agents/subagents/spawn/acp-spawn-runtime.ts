@@ -118,7 +118,7 @@ export function resolveAcpSpawnRuntimeOptions(params: {
     };
   }
 
-  let thinking = thinkingPlan.thinkingOverride;
+  let thinking = thinkingPlan.thinkingOverride ?? targetAgentConfig?.thinkingDefault;
   if (!thinking && model) {
     const { provider, model: modelId } = splitModelRef(model);
     if (provider && modelId) {
@@ -147,6 +147,7 @@ export async function initializeAcpSpawnRuntime(params: {
   sessionKey: string;
   targetAgentId: string;
   runtimeMode: AcpRuntimeSessionMode;
+  backendId?: string;
   resumeSessionId?: string;
   runtimeOptions?: AcpSpawnRuntimeOptions;
   modelExplicit?: boolean;
@@ -181,7 +182,7 @@ export async function initializeAcpSpawnRuntime(params: {
     runtimeOptions: params.runtimeOptions,
     modelExplicit: params.modelExplicit,
     cwd: params.cwd,
-    backendId: params.cfg.acp?.backend,
+    backendId: params.backendId,
   });
 
   return {

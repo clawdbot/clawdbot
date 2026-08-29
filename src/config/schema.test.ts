@@ -637,7 +637,10 @@ describe("config schema", () => {
       const progress = streamingProperties?.progress as Record<string, unknown> | undefined;
       return progress?.properties as Record<string, unknown> | undefined;
     };
+    expect(progressPropsFor("slack")).toHaveProperty("style");
     expect(progressPropsFor("slack")).toHaveProperty("nativeTaskCards");
+    expect(progressPropsFor("discord")).not.toHaveProperty("style");
+    expect(progressPropsFor("telegram")).not.toHaveProperty("style");
     expect(progressPropsFor("discord")).not.toHaveProperty("nativeTaskCards");
     expect(progressPropsFor("telegram")).not.toHaveProperty("nativeTaskCards");
     expect(progressPropsFor("discord")).toHaveProperty("commentary");
@@ -651,6 +654,9 @@ describe("config schema", () => {
     expect(res.uiHints["channels.slack.streaming.progress.nativeTaskCards"]?.label).toBe(
       "Slack Native Progress Task Cards",
     );
+    expect(res.uiHints["channels.slack.streaming.progress.style"]?.label).toBe(
+      "Slack Progress Style",
+    );
     expect(res.uiHints["channels.discord.streaming.progress.nativeTaskCards"]).toBeUndefined();
     expect(res.uiHints["channels.telegram.streaming.progress.nativeTaskCards"]).toBeUndefined();
     expect(res.uiHints["channels.discord.streaming.progress.toolProgress"]?.label).toBe(
@@ -663,6 +669,31 @@ describe("config schema", () => {
       "Mattermost Progress Label",
     );
   });
+
+  it.each(["bundled", "extended"])(
+    "keeps core channel settings discoverable with %s metadata",
+    (metadata) => {
+      const schema = metadata === "bundled" ? baseSchema : buildConfigSchemaCore(mergedSchemaInput);
+      const channels = lookupConfigSchema(schema, "channels");
+      expect(channels?.children.map((child) => child.key)).toEqual(
+        expect.arrayContaining(["defaults", "modelByChannel", "matrix"]),
+      );
+      expect(channels?.children.map((child) => child.key)).not.toContain("*");
+      expect(lookupConfigSchema(schema, "channels.unknownChannel")).toBeNull();
+      expect(lookupConfigSchema(schema, "channels.defaults.groupPolicy")?.schema).toMatchObject({
+        enum: ["open", "disabled", "allowlist"],
+      });
+      expect(
+        lookupConfigSchema(schema, "channels.defaults.botLoopProtection.maxEventsPerWindow")
+          ?.schema,
+      ).toMatchObject({ type: "integer" });
+      expect(
+        lookupConfigSchema(schema, "channels.modelByChannel.matrix.room")?.schema,
+      ).toMatchObject({
+        type: "string",
+      });
+    },
+  );
 
   it("omits a single oversized plugin schema from the full schema response", () => {
     const res = buildConfigSchemaCore({

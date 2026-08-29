@@ -10,7 +10,7 @@ const draftStream = vi.hoisted(() => ({
   seal: vi.fn(async () => {}),
   stop: vi.fn(async () => {}),
   retarget: vi.fn(async () => {}),
-  cleanupRetargeted: vi.fn(async () => {}),
+  cleanupPendingMessages: vi.fn(async () => {}),
   forceNewMessage: vi.fn(),
 }));
 

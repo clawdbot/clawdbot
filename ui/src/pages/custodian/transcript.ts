@@ -5,6 +5,13 @@ import type {
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { WizardStep } from "../../api/types.ts";
+import {
+  beginPanelRefresh,
+  completePanelRefresh,
+  createPanelRefreshStatus,
+  failPanelRefresh,
+  type PanelRefreshStatus,
+} from "../../components/panel-refresh-status.ts";
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
@@ -24,6 +31,15 @@ export type CustodianMessage = {
   question: CustodianStructuredQuestion | null;
   step: WizardStep | null;
 };
+
+export function createCustodianAssistantMessage(
+  id: number,
+  text: string,
+  question: CustodianStructuredQuestion | null,
+  step: WizardStep | null,
+): CustodianMessage {
+  return { id, role: "assistant", text, at: Date.now(), question, step };
+}
 
 export function hasUnresolvedCustodianQuestion(
   messages: readonly CustodianMessage[],
@@ -57,16 +73,6 @@ export function retireCustodianQuestions(
   return answered;
 }
 
-export function createCustodianSessionId(): string {
-  if (typeof crypto.randomUUID === "function") {
-    return `control-ui-onboarding-${crypto.randomUUID()}`;
-  }
-  const suffix = [...crypto.getRandomValues(new Uint32Array(4))]
-    .map((value) => value.toString(16).padStart(8, "0"))
-    .join("");
-  return `control-ui-onboarding-${suffix}`;
-}
-
 export function custodianErrorMessage(error: unknown): string {
   return formatUiError(error, t("custodian.requestFailed"));
 }
@@ -83,21 +89,92 @@ function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
   };
 }
 
-export async function readCustodianTranscript(
+type CustodianTranscriptResult =
+  | { ok: true; turns: SystemAgentChatHistoryResult["turns"] }
+  | { ok: false; error: string };
+
+async function readCustodianTranscript(
   client: GatewayBrowserClient,
-): Promise<SystemAgentChatHistoryResult["turns"] | null> {
+): Promise<CustodianTranscriptResult> {
   try {
-    return (
-      await client.request<SystemAgentChatHistoryResult>(
-        "openclaw.chat.history",
-        {},
-        {
-          timeoutMs: CUSTODIAN_TRANSCRIPT_TIMEOUT_MS,
-        },
-      )
-    ).turns;
-  } catch {
-    return null;
+    const result = await client.request<SystemAgentChatHistoryResult>(
+      "openclaw.chat.history",
+      {},
+      { timeoutMs: CUSTODIAN_TRANSCRIPT_TIMEOUT_MS },
+    );
+    return { ok: true, turns: result.turns };
+  } catch (error) {
+    return { ok: false, error: custodianErrorMessage(error) };
+  }
+}
+
+export class CustodianTranscriptLoader {
+  status: PanelRefreshStatus = createPanelRefreshStatus();
+  private generation = 0;
+  private inFlight: {
+    client: GatewayBrowserClient;
+    epoch: number;
+    promise: Promise<CustodianTranscriptResult>;
+  } | null = null;
+
+  constructor(private readonly onStatusChange: () => void) {}
+
+  get refreshing(): boolean {
+    return this.inFlight !== null;
+  }
+
+  invalidate(): void {
+    this.generation += 1;
+    this.inFlight = null;
+  }
+
+  reset(): void {
+    this.invalidate();
+    this.status = createPanelRefreshStatus();
+  }
+
+  async read(
+    client: GatewayBrowserClient,
+    epoch: number,
+    isCurrent: () => boolean,
+  ): Promise<CustodianTranscriptResult | null> {
+    const current = this.inFlight;
+    if (current && current.client === client && current.epoch === epoch) {
+      await current.promise;
+      return null;
+    }
+    const generation = ++this.generation;
+    this.status = beginPanelRefresh(this.status, { clearError: false });
+    const promise = readCustodianTranscript(client);
+    this.inFlight = { client, epoch, promise };
+    this.onStatusChange();
+    try {
+      const result = await promise;
+      if (!isCurrent() || generation !== this.generation) {
+        return null;
+      }
+      this.status = result.ok
+        ? completePanelRefresh()
+        : failPanelRefresh(this.status, result.error);
+      return result;
+    } finally {
+      if (this.inFlight?.promise === promise) {
+        this.inFlight = null;
+        this.onStatusChange();
+      }
+    }
+  }
+
+  async loadMessages(
+    client: GatewayBrowserClient,
+    epoch: number,
+    firstMessageId: number,
+    isCurrent: () => boolean,
+  ): Promise<{ messages: CustodianMessage[]; nextMessageId: number } | null> {
+    const result = await this.read(client, epoch, isCurrent);
+    return result?.ok && isCurrent()
+      ? createCustodianTranscriptMessages(result.turns, firstMessageId)
+      : null;
   }
 }
 
@@ -109,7 +186,7 @@ export async function readCustodianTranscript(
  */
 const SERVER_SENSITIVE_MASK = "<redacted secret>";
 
-export function createCustodianTranscriptMessages(
+function createCustodianTranscriptMessages(
   turns: readonly SystemAgentChatHistoryTurn[],
   firstMessageId: number,
 ): { messages: CustodianMessage[]; nextMessageId: number } {

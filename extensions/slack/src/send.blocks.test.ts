@@ -275,6 +275,19 @@ describe("sendMessageSlack chunking", () => {
     expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["m1"]);
   });
 
+  it("rejects a successful Slack post that returns no message timestamp", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockResolvedValueOnce({ ok: true, channel: "C123" });
+
+    await expect(
+      sendMessageSlack("channel:C123", "hello", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+      }),
+    ).rejects.toThrow("Slack chat.postMessage returned no message timestamp");
+  });
+
   it("preserves the first canonical response thread across chunked sends", async () => {
     clearSlackThreadParticipationCache();
     const client = createSlackSendTestClient();
@@ -416,6 +429,19 @@ describe("sendMessageSlack blocks", () => {
     expect(
       delivered.some((result) => result.receipt.parts[0]?.kind === "card" && !result.meta),
     ).toBe(true);
+    expect(
+      aggregateResult.receipt.parts.map(({ platformMessageId, kind, index }) => ({
+        platformMessageId,
+        kind,
+        index,
+      })),
+    ).toEqual(
+      delivered.map((result, index) => ({
+        platformMessageId: result.messageId,
+        kind: result.receipt.parts[0]?.kind,
+        index,
+      })),
+    );
     const questionDelivery = delivered.find((delivery) => delivery.meta);
     expect(questionDelivery?.messageId).not.toBe(aggregateResult.messageId);
     expect(JSON.stringify(aggregateResult.meta)).toBe(

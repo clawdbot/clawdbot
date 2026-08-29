@@ -162,7 +162,8 @@ export async function reloadCodexRegistryAfterActivation(params: {
   >;
   workspaceDir: string;
   deps: ActivateSetupInferenceDeps;
-}): Promise<boolean> {
+  requireValidConfig?: boolean;
+}): Promise<OpenClawConfig | null> {
   let snapshot: Awaited<ReturnType<typeof import("../config/config.js").readConfigFileSnapshot>>;
   try {
     snapshot = await params.readSnapshot();
@@ -170,7 +171,13 @@ export async function reloadCodexRegistryAfterActivation(params: {
     setupInferenceLog.warn(
       "Could not read config while reloading the plugin registry after Codex activation.",
     );
-    return false;
+    return null;
+  }
+  if (params.requireValidConfig && (!snapshot.exists || !snapshot.valid)) {
+    setupInferenceLog.warn(
+      "Could not reload the plugin registry after Codex activation because the committed config is unavailable.",
+    );
+    return null;
   }
   const runtimeConfig =
     snapshot.exists && snapshot.valid
@@ -205,12 +212,12 @@ export async function reloadCodexRegistryAfterActivation(params: {
       activationSourceConfig: sourceConfig,
       workspaceDir: params.workspaceDir,
     });
-    return true;
+    return runtimeConfig;
   } catch {
     setupInferenceLog.warn(
       "Could not reload the active plugin registry after Codex inference activation.",
     );
-    return false;
+    return null;
   }
 }
 
@@ -588,10 +595,9 @@ export async function runSetupInferenceTest(params: {
         reasoningLevel: "off",
         verboseLevel: "off",
         disableTrajectory: true,
-        // The 32-token probe cap is sized for the "reply OK" verification
-        // prompt only. Custom completions pass no explicit cap: the stream
-        // layer then applies the resolved model's own required maxTokens
-        // budget, which both bounds output and never exceeds provider limits.
+        // Keep the "reply OK" probe bounded while leaving room for reasoning.
+        // Custom completions pass no explicit cap: the stream layer applies the
+        // resolved model's own maxTokens budget without exceeding its limits.
         ...(params.prompt === undefined
           ? resolveSetupInferenceProbeStreamParams(plan.agentHarnessRuntimeOverride)
           : {}),

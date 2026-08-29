@@ -26,6 +26,8 @@ export type PreparedModelRuntimePluginGeneration = Readonly<{
   configuredCatalogEntries: readonly ModelCatalogEntry[];
   pluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
+  /** Immutable artifact choice for every registry reuse in this generation. */
+  preferBuiltPluginArtifacts?: boolean;
 }>;
 
 export type PreparedModelRuntimeSnapshot = Readonly<{
@@ -72,6 +74,7 @@ export type PreparedReplyDispatchRuntime = Readonly<{
   config: OpenClawConfig;
   modelCatalog: ModelCatalogSnapshot;
   inboundPluginRegistry: PluginRegistry;
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
 }>;
 
 export type PreparedModelRuntimeStores = {
@@ -84,8 +87,6 @@ export type PreparedModelRuntimeInput = {
   agentDir: string;
   inheritedAuthDir?: string;
   workspaceDir?: string;
-  /** Admission-owned fact; plugin root changes require the normal reload/restart lifecycle. */
-  workspacePluginRootPresent?: boolean;
   preserveWorkspaceDirOnRefresh?: boolean;
   readOnly?: boolean;
   /** Load the exact runtime plugin generation for an isolated executable probe. */
@@ -114,6 +115,10 @@ export type PreparedModelRuntimeRefreshOptions = {
   catalogMode?: PreparedModelRuntimeCatalogMode;
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
   allowGatewaySubagentBinding?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  isPublicationCurrent?: () => boolean;
+  /** Restricts replacement to configured owners whose normalized agent id is present. */
+  agentIds?: ReadonlySet<string>;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{
@@ -150,6 +155,8 @@ export type PreparedModelRuntimeOwner = {
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
+  /** Explicit generation admitted for the current publication, when known. */
+  pendingPluginGeneration?: PreparedModelRuntimePluginGeneration;
   pending?: Promise<PreparedModelRuntimeSnapshot>;
   buildCompletion?: Promise<void>;
   leaseCount?: number;

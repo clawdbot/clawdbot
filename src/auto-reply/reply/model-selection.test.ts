@@ -70,7 +70,8 @@ vi.mock("../../channels/plugins/session-conversation.js", () => ({
     sessionKey?.replace(/:thread:[^:]+$/, "").replace(/:topic:[^:]+$/, "") ?? null,
 }));
 
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => ({ plugins: [] }),
 }));
 
@@ -378,6 +379,68 @@ describe("createModelSelectionState catalog loading", () => {
     });
 
     await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("medium");
+    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("carries prepared runtime thinking policy into ordinary configured turns", async () => {
+    vi.mocked(loadModelCatalogLocal).mockClear();
+    catalogRuntimeMocks.loadModelCatalogSnapshot.mockClear();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-mythos-5": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [
+              makeConfiguredModel({
+                id: "claude-mythos-5",
+                name: "Claude Mythos 5",
+                reasoning: false,
+              }),
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-mythos-5",
+      provider: "anthropic",
+      model: "claude-mythos-5",
+      hasModelDirective: false,
+      preparedModelCatalog: {
+        entries: [
+          {
+            provider: "anthropic",
+            id: "claude-mythos-5",
+            name: "Claude Mythos 5",
+            reasoning: false,
+            configuredReasoning: false,
+            thinkingPolicyProvider: "claude-cli",
+          },
+        ],
+        routeVariants: [],
+        authoritative: true,
+      },
+    });
+
+    await expect(state.resolveThinkingCatalog()).resolves.toEqual([
+      expect.objectContaining({
+        provider: "anthropic",
+        id: "claude-mythos-5",
+        thinkingPolicyProvider: "claude-cli",
+      }),
+    ]);
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
     expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
   });

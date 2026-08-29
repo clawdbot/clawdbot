@@ -14,22 +14,11 @@ const SESSION_LINK_RULE = describeSessionLinkRule(SESSION_LINK_BASE);
 
 const VALID_CONFIG: OpenClawConfig = {
   agents: { entries: { main: { default: true } } },
+  tools: { sessions: { visibility: "all" } },
 };
 
 const mocks = vi.hoisted(() => ({
   gatewayCall: vi.fn(),
-  createAgentToAgentPolicy: vi.fn(() => ({})),
-  createSessionVisibilityGuard: vi.fn(async () => ({
-    check: () => ({ allowed: true }),
-  })),
-  resolveEffectiveSessionToolsVisibility: vi.fn(() => "all"),
-  resolveSandboxedSessionToolContext: vi.fn(() => ({
-    mainKey: "main",
-    alias: "main",
-    requesterInternalKey: undefined as string | undefined,
-    mainSessionKey: undefined as string | undefined,
-    restrictToSpawned: false,
-  })),
   getSessionStateVersions: vi.fn(
     (_refs: Array<{ sessionKey: string; agentId: string }>) =>
       ({}) as Record<string, Record<string, number>>,
@@ -44,17 +33,6 @@ vi.mock("../../sessions/session-state-events.js", () => ({
   getSessionStateVersions: (refs: Array<{ sessionKey: string; agentId: string }>) =>
     mocks.getSessionStateVersions(refs),
 }));
-
-vi.mock("./sessions-helpers.js", async (importActual) => {
-  const actual = await importActual<typeof import("./sessions-helpers.js")>();
-  return {
-    ...actual,
-    createAgentToAgentPolicy: () => mocks.createAgentToAgentPolicy(),
-    createSessionVisibilityGuard: async () => await mocks.createSessionVisibilityGuard(),
-    resolveEffectiveSessionToolsVisibility: () => mocks.resolveEffectiveSessionToolsVisibility(),
-    resolveSandboxedSessionToolContext: () => mocks.resolveSandboxedSessionToolContext(),
-  };
-});
 
 type SessionsListDetails = {
   sessions?: Array<{
@@ -95,18 +73,6 @@ function mockSessionPages(pages: Array<Array<Record<string, unknown>>>) {
 describe("sessions-list-tool", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.createAgentToAgentPolicy.mockReturnValue({});
-    mocks.createSessionVisibilityGuard.mockResolvedValue({
-      check: () => ({ allowed: true }),
-    });
-    mocks.resolveEffectiveSessionToolsVisibility.mockReturnValue("all");
-    mocks.resolveSandboxedSessionToolContext.mockReturnValue({
-      mainKey: "main",
-      alias: "main",
-      requesterInternalKey: undefined,
-      mainSessionKey: undefined,
-      restrictToSpawned: false,
-    });
     mocks.getSessionStateVersions.mockReturnValue({});
   });
 
@@ -182,15 +148,47 @@ describe("sessions-list-tool", () => {
     });
   });
 
-  it("lists unspawned same-agent sessions from the canonical main session under tree visibility", async () => {
-    mocks.resolveEffectiveSessionToolsVisibility.mockReturnValue("tree");
-    mocks.resolveSandboxedSessionToolContext.mockReturnValue({
-      mainKey: "main",
-      alias: "main",
-      requesterInternalKey: "agent:main:main",
-      mainSessionKey: "agent:main:main",
-      restrictToSpawned: false,
+  it("limits session kind arguments to the documented classification values", () => {
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
+
+    expect(
+      Value.Check(tool.parameters, { kinds: ["main", "group", "cron", "hook", "node", "other"] }),
+    ).toBe(true);
+    expect(Value.Check(tool.parameters, { kinds: ["unknown"] })).toBe(false);
+    expect(Value.Check(tool.parameters, { kinds: ["   "] })).toBe(false);
+  });
+
+  it.each([
+    { name: "unknown-only", kinds: ["unknown"], expected: [] },
+    { name: "whitespace-only", kinds: ["   "], expected: [] },
+    { name: "unknown scalar", kinds: "unknown", expected: [] },
+    { name: "whitespace scalar", kinds: "   ", expected: [] },
+    { name: "known scalar", kinds: "MAIN", expected: ["agent:main:main"] },
+    { name: "mixed known and unknown", kinds: ["unknown", "MAIN"], expected: ["agent:main:main"] },
+    {
+      name: "empty",
+      kinds: [],
+      expected: ["agent:main:main", "agent:main:slack:channel:team-room"],
+    },
+  ])("never broadens an explicit $name session kind filter", async ({ kinds, expected }) => {
+    mocks.gatewayCall.mockResolvedValue({
+      sessions: [
+        sessionRow("agent:main:main", "main"),
+        sessionRow("agent:main:slack:channel:team-room", "channel"),
+        sessionRow("agent:other:main", "main", "other"),
+      ],
     });
+
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute("filter-kinds", {
+      kinds,
+    });
+
+    expect(getSessionsListDetails(result).sessions?.map((session) => session.key)).toEqual(
+      expected,
+    );
+  });
+
+  it("lists unspawned same-agent sessions from the canonical main session under tree visibility", async () => {
     mocks.gatewayCall.mockResolvedValue({
       sessions: [
         sessionRow("agent:main:main", "main"),
@@ -210,14 +208,6 @@ describe("sessions-list-tool", () => {
   });
 
   it("keeps a sandboxed main session clamped to spawned rows", async () => {
-    mocks.resolveEffectiveSessionToolsVisibility.mockReturnValue("tree");
-    mocks.resolveSandboxedSessionToolContext.mockReturnValue({
-      mainKey: "main",
-      alias: "main",
-      requesterInternalKey: "agent:main:main",
-      mainSessionKey: undefined,
-      restrictToSpawned: true,
-    });
     mocks.gatewayCall.mockImplementation(async (request: unknown) => {
       expect(request).toEqual(
         expect.objectContaining({
@@ -334,21 +324,27 @@ describe("sessions-list-tool", () => {
     mocks.gatewayCall.mockResolvedValue({
       path: "(multiple)",
       sessions: [
-        { key: "agent:main:dashboard:visible", kind: "direct", classification: "dashboard" },
+        {
+          key: "agent:main:dashboard:visible",
+          kind: "direct",
+          classification: "dashboard",
+          category: "Projects",
+        },
         {
           key: "agent:main:dashboard:incognito-private",
           kind: "direct",
           classification: "dashboard",
           incognito: true,
+          category: "Secret",
         },
       ],
     });
 
     const result = await createSessionsListTool({ config: VALID_CONFIG }).execute("blind", {});
 
-    expect(getSessionsListDetails(result).sessions?.map((session) => session.key)).toEqual([
-      "agent:main:dashboard:visible",
-    ]);
+    expect(
+      getSessionsListDetails(result).sessions?.map(({ key, category }) => ({ key, category })),
+    ).toEqual([{ key: "agent:main:dashboard:visible", category: "Projects" }]);
   });
 
   it("declares a complete focused row contract", async () => {
@@ -363,6 +359,7 @@ describe("sessions-list-tool", () => {
           classification: "subagent",
           channel: "discord",
           label: "worker",
+          category: "P1 issues",
           displayName: "Worker",
           derivedTitle: "Investigate queue",
           lastMessagePreview: "Use `[[reply_to_current]]` literally.",
@@ -399,7 +396,7 @@ describe("sessions-list-tool", () => {
       linkedDetails.sessionLinkRule,
     );
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ count: number; sessions: Array<{ agentId: string; archived: boolean; channel: string; key: string; kind: "main" | "group" | "cron" | "hook" | "node" | "other"; pinned: boolean; abortedLastRun?: boolean; childSessions?: Array<string>; contextTokens?: number; derivedTitle?: string; displayName?: string; label?: string; lastMessagePreview?: string; messages?: Array<unknown>; model?: string; parentSessionKey?: string; sessionId?: string; stateVersion?: number; status?: "running" | "done" | "failed" | "killed" | "timeout"; totalTokens?: number; updatedAt?: number }>; sessionLinkRule?: string; visibility?: { mode: "self" | "tree" | "agent"; restricted: true; warning: string } }',
+      '{ count: number; sessions: Array<{ agentId: string; archived: boolean; channel: string; key: string; kind: "main" | "group" | "cron" | "hook" | "node" | "other"; pinned: boolean; abortedLastRun?: boolean; category?: string; childSessions?: Array<string>; contextTokens?: number; derivedTitle?: string; displayName?: string; label?: string; lastMessagePreview?: string; messages?: Array<unknown>; model?: string; parentSessionKey?: string; sessionId?: string; stateVersion?: number; status?: "running" | "done" | "failed" | "killed" | "timeout"; totalTokens?: number; updatedAt?: number }>; sessionLinkRule?: string; visibility?: { mode: "self" | "tree" | "agent"; restricted: true; warning: string } }',
     );
     expect(result.details).toEqual({
       count: 1,
@@ -413,6 +410,7 @@ describe("sessions-list-tool", () => {
           archived: false,
           pinned: true,
           label: "worker",
+          category: "P1 issues",
           displayName: "Worker",
           derivedTitle: "Investigate queue",
           lastMessagePreview: "Use `[[reply_to_current]]` literally.",
@@ -428,6 +426,29 @@ describe("sessions-list-tool", () => {
         },
       ],
     });
+  });
+
+  it("preserves the context window already projected by the Gateway", async () => {
+    mocks.gatewayCall.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [
+        {
+          key: "agent:main:main",
+          agentId: "main",
+          kind: "direct",
+          classification: "main",
+          model: "gpt-5.6-sol",
+          contextTokens: 1_000_000,
+        },
+      ],
+    });
+
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute(
+      "gateway-context-window",
+      {},
+    );
+
+    expect(getSessionsListDetails(result).sessions?.[0]?.contextTokens).toBe(1_000_000);
   });
 
   it("keeps channel discovery but omits delivery routing metadata", async () => {
@@ -635,13 +656,6 @@ describe("sessions-list-tool", () => {
   });
 
   it("keeps a bare row's gateway owner during transcript hydration", async () => {
-    mocks.resolveSandboxedSessionToolContext.mockReturnValue({
-      mainKey: "main",
-      alias: "global",
-      requesterInternalKey: "global",
-      mainSessionKey: undefined,
-      restrictToSpawned: false,
-    });
     mocks.gatewayCall
       .mockResolvedValueOnce({
         path: "/tmp/shared-sessions.sqlite",
@@ -680,13 +694,6 @@ describe("sessions-list-tool", () => {
   });
 
   it("does not attribute an ownerless fixed-store bare row to the requester", async () => {
-    mocks.resolveSandboxedSessionToolContext.mockReturnValue({
-      mainKey: "main",
-      alias: "global",
-      requesterInternalKey: "agent:research:main",
-      mainSessionKey: "global",
-      restrictToSpawned: false,
-    });
     mocks.gatewayCall.mockResolvedValue({
       path: "/tmp/ownerless-shared.sqlite",
       sessions: [

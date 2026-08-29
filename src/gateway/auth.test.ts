@@ -527,6 +527,25 @@ describe("gateway auth", () => {
     expect(res).toEqual({ ok: false, reason: "proxy_attribution_required" });
   });
 
+  it("keeps externally managed Tailscale ingress on ordinary trusted-proxy auth semantics", async () => {
+    const tailscaleWhois = vi.fn(createTailscaleWhois());
+    const authorize = (connectAuth: { token: string } | null) =>
+      authorizeWsControlUiGatewayConnect({
+        auth: { mode: "token", token: "secret", allowTailscale: true },
+        connectAuth,
+        tailscaleWhois,
+        req: createTailscaleForwardedReq(false),
+        trustedProxies: ["127.0.0.1"],
+      });
+
+    await expect(authorize({ token: "secret" })).resolves.toMatchObject({
+      ok: true,
+      method: "token",
+    });
+    await expect(authorize(null)).resolves.toEqual({ ok: false, reason: "token_missing" });
+    expect(tailscaleWhois).not.toHaveBeenCalled();
+  });
+
   it("keeps managed Serve shared-secret auth independent of WhoIs availability", async () => {
     const limiter = createAuthRateLimiter({
       maxAttempts: 1,
@@ -747,6 +766,33 @@ describe("gateway auth", () => {
         req,
       }),
     ).resolves.toMatchObject({ ok: true, method: "password" });
+  });
+
+  it("uses password auth for tailnet peers on managed Funnel", async () => {
+    const req = createTailscaleForwardedReq(false);
+    markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "funnel" });
+
+    await expect(
+      authorizeWsControlUiGatewayConnect({
+        auth: { mode: "password", password: "secret", allowTailscale: false },
+        connectAuth: { password: "secret" },
+        req,
+      }),
+    ).resolves.toMatchObject({ ok: true, method: "password" });
+  });
+
+  it("requires the Funnel password when Tailscale header auth is explicitly enabled", async () => {
+    const req = createTailscaleForwardedReq(false);
+    markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "funnel" });
+
+    await expect(
+      authorizeWsControlUiGatewayConnect({
+        auth: { mode: "password", password: "secret", allowTailscale: true },
+        connectAuth: null,
+        tailscaleWhois: createTailscaleWhois(),
+        req,
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: "password_missing" });
   });
 
   it("allows an origin-less same-origin image through the profile avatar surface", async () => {
@@ -1150,6 +1196,7 @@ describe("gateway auth", () => {
         mode: "password",
         password: { source: "exec", provider: "op", id: "pw" } as never,
       },
+      env: {},
     });
     expect(() =>
       assertGatewayAuthConfigured(auth, {
@@ -1181,7 +1228,7 @@ describe("gateway auth", () => {
   });
 
   it("throws generic error when password mode has no password at all", () => {
-    const auth = resolveGatewayAuth({ authConfig: { mode: "password" } });
+    const auth = resolveGatewayAuth({ authConfig: { mode: "password" }, env: {} });
     expect(() => assertGatewayAuthConfigured(auth, { mode: "password" })).toThrow(
       "gateway auth mode is password, but no password was configured",
     );

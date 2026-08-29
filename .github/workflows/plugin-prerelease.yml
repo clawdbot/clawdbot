@@ -20,6 +20,15 @@ on:
         required: false
         default: false
         type: boolean
+      phase:
+        description: Plugin prerelease phase to run
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - independent
+          - candidate
       node_test_exclude_patterns_json:
         description: Full Release Validation-only exact plugin test paths omitted for a frozen target
         required: false
@@ -40,7 +49,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: plugin-prerelease-${{ inputs.target_ref }}
+  group: plugin-prerelease-${{ inputs.target_ref }}-${{ github.sha }}-${{ inputs.phase }}
   cancel-in-progress: ${{ inputs.target_ref == 'main' }}
 
 env:
@@ -61,9 +70,57 @@ jobs:
       node_test_exclude_patterns_json: ${{ steps.node_test_exclusions.outputs.patterns_json }}
       run_plugin_prerelease_extensions: ${{ steps.manifest.outputs.run_plugin_prerelease_extensions }}
       plugin_prerelease_extension_matrix: ${{ steps.manifest.outputs.plugin_prerelease_extension_matrix }}
+      run_plugin_prerelease_inspector: ${{ steps.manifest.outputs.run_plugin_prerelease_inspector }}
       run_plugin_prerelease_docker: ${{ steps.manifest.outputs.run_plugin_prerelease_docker }}
       plugin_prerelease_docker_lanes: ${{ steps.manifest.outputs.plugin_prerelease_docker_lanes }}
     steps:
+      - name: Validate phase inputs
+        env:
+          CANDIDATE_ARTIFACT_JSON: ${{ inputs.candidate_artifact_json }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
+          PHASE: ${{ inputs.phase }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$PHASE" in
+            all|independent) exit 0 ;;
+            candidate) ;;
+            *)
+              echo "phase must be one of: all, independent, candidate" >&2
+              exit 1
+              ;;
+          esac
+          if [[ "$FULL_RELEASE_VALIDATION" != "true" ]]; then
+            echo "phase=candidate requires full_release_validation=true." >&2
+            exit 1
+          fi
+          if ! jq -e \
+            --arg sha "$EXPECTED_SHA" \
+            'def digits: tostring | test("^[1-9][0-9]*$");
+             def hex40: type == "string" and test("^[a-f0-9]{40}$");
+             def hex64: type == "string" and test("^[a-f0-9]{64}$");
+             (.packageArtifactName | type == "string" and length > 0) and
+             (.packageArtifactId | digits) and
+             (.packageArtifactDigest | hex64) and
+             (.packageArtifactRunId | digits) and
+             (.packageArtifactRunAttempt | digits) and
+             (.packageFileName | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]*\\.tgz$")) and
+             (.packageSourceSha | hex40) and
+             ($sha == "" or .packageSourceSha == $sha) and
+             (.packageSha256 | hex64) and
+             (.packageVersion | type == "string" and length > 0) and
+             (.imageArtifactName | type == "string" and length > 0) and
+             (.imageArtifactId | digits) and
+             (.imageArtifactDigest | hex64) and
+             (.imageArtifactRunId | digits) and
+             (.imageArtifactRunAttempt | digits) and
+             (.imageArchiveSha256 | hex64)' \
+            <<< "$CANDIDATE_ARTIFACT_JSON" >/dev/null; then
+            echo "phase=candidate requires the complete immutable package and Docker image artifact tuple." >&2
+            exit 1
+          fi
+
       - name: Validate frozen-target Node exclusions
         id: node_test_exclusions
         env:
@@ -126,7 +183,7 @@ jobs:
           EOF
 
       - name: Checkout target
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.target_ref }}
           fetch-depth: 1
@@ -135,13 +192,14 @@ jobs:
           submodules: false
 
       - name: Setup manifest TypeScript runtime
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.x"
 
       - name: Setup manifest pnpm
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: restore
           node-version: "24.x"
 
       - name: Install manifest dependencies
@@ -152,10 +210,12 @@ jobs:
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
+          PHASE: ${{ inputs.phase }}
         run: |
           node --import tsx --input-type=module <<'EOF'
-          import { appendFileSync, existsSync } from "node:fs";
+          import { appendFileSync, existsSync, globSync } from "node:fs";
           import { execFileSync } from "node:child_process";
+          import path from "node:path";
 
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
@@ -164,6 +224,7 @@ jobs:
           }).trim();
           const expectedSha = (process.env.EXPECTED_SHA ?? "").trim();
           const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";
+          const phase = process.env.PHASE ?? "all";
           if (expectedSha && expectedSha !== checkoutRevision) {
             console.error(
               `target_ref resolved to ${checkoutRevision}, expected ${expectedSha}`,
@@ -209,14 +270,27 @@ jobs:
           }
 
           try {
-            const { createExtensionTestShards, DEFAULT_EXTENSION_TEST_SHARD_COUNT } = await import(
-              targetPlanPath("extension-test-plan")
-            );
-            extensionShards = createExtensionTestShards({
+            const {
+              createExtensionTestShards,
+              DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+              splitExtensionTestJobTargets,
+            } = await import(targetPlanPath("extension-test-plan"));
+            const allExtensionShards = createExtensionTestShards({
+              shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+            });
+            const telegramPlanGroup = allExtensionShards
+              .find((shard) => shard.extensionIds.includes("telegram"))
+              ?.planGroups.find((group) => group.extensionIds.includes("telegram"));
+            const genericExtensionIds = allExtensionShards
+              .flatMap((shard) => shard.extensionIds)
+              .filter((extensionId) => extensionId !== "telegram");
+            const batchShards = createExtensionTestShards({
+              extensionIds: genericExtensionIds,
               shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
             }).map((shard) => ({
               check_name: shard.checkName,
               extensions_csv: shard.extensionIds.join(","),
+              vitest_config: "",
               vitest_max_workers: shard.extensionIds.some((extensionId) =>
                 extensionId.startsWith("memory-"),
               )
@@ -224,12 +298,48 @@ jobs:
                 : 1,
               runner: shard.extensionIds.some((extensionId) => extensionId.startsWith("memory-"))
                 ? "blacksmith-16vcpu-ubuntu-2404"
-                : [0, 1, 2, 3].includes(shard.index)
-                  ? "blacksmith-8vcpu-ubuntu-2404"
-                  : "blacksmith-4vcpu-ubuntu-2404",
+                  : [0, 1, 2, 3].includes(shard.index)
+                    ? "blacksmith-8vcpu-ubuntu-2404"
+                    : "blacksmith-4vcpu-ubuntu-2404",
               shard_index: shard.index + 1,
               task: "extensions-batch",
             }));
+            const telegramVitestConfig = telegramPlanGroup
+              ? (await import(`./${telegramPlanGroup.config}`)).default
+              : null;
+            const telegramTestConfig = telegramVitestConfig?.test ?? {};
+            const telegramTestDir = telegramTestConfig.dir ?? process.cwd();
+            const telegramTestExclude = (telegramTestConfig.exclude ?? []).map((pattern) =>
+              path.isAbsolute(pattern)
+                ? path.relative(telegramTestDir, pattern).replaceAll("\\", "/")
+                : pattern,
+            );
+            const telegramTestFiles = globSync(telegramTestConfig.include ?? [], {
+              cwd: telegramTestDir,
+              exclude: telegramTestExclude,
+            })
+              .map((file) =>
+                path
+                  .relative(process.cwd(), path.resolve(telegramTestDir, file))
+                  .replaceAll("\\", "/"),
+              )
+              .sort();
+            const telegramJobTargets = telegramPlanGroup
+              ? splitExtensionTestJobTargets(telegramPlanGroup.config, telegramTestFiles)
+              : [];
+            const telegramShards = telegramPlanGroup
+              ? telegramJobTargets.map((includePatterns, index) => ({
+                  check_name: `checks-node-extensions-telegram-shard-${index + 1}`,
+                  extensions_csv: "telegram",
+                  includePatterns,
+                  vitest_config: telegramPlanGroup.config,
+                  vitest_max_workers: 1,
+                  runner: "blacksmith-8vcpu-ubuntu-2404",
+                  shard_index: DEFAULT_EXTENSION_TEST_SHARD_COUNT + index + 1,
+                  task: "extension-file-shard",
+                }))
+              : [];
+            extensionShards = [...batchShards, ...telegramShards];
           } catch (error) {
             const errorCode =
               error && typeof error === "object" && "code" in error ? error.code : "";
@@ -287,11 +397,14 @@ jobs:
             task: check.check,
           }));
           const dockerLanes = pluginPrereleasePlan.dockerLanes;
-          const runStatic = staticChecks.length > 0;
-          const runNode = nodeShards.length > 0;
-          const runExtensions = extensionShards.length > 0;
-          const runDocker = fullReleaseValidation && dockerLanes.length > 0;
-          const runSuite = runStatic || runNode || runExtensions || runDocker;
+          const runIndependent = phase !== "candidate";
+          const runCandidate = phase !== "independent";
+          const runStatic = runIndependent && staticChecks.length > 0;
+          const runNode = runIndependent && nodeShards.length > 0;
+          const runExtensions = runIndependent && extensionShards.length > 0;
+          const runInspector = runIndependent && (runStatic || runNode || runExtensions);
+          const runDocker = runCandidate && fullReleaseValidation && dockerLanes.length > 0;
+          const runSuite = runStatic || runNode || runExtensions || runInspector || runDocker;
 
           const manifest = {
             checkout_revision: checkoutRevision,
@@ -302,6 +415,7 @@ jobs:
             plugin_prerelease_node_matrix: createMatrix(nodeShards),
             run_plugin_prerelease_extensions: runExtensions,
             plugin_prerelease_extension_matrix: createMatrix(extensionShards),
+            run_plugin_prerelease_inspector: runInspector,
             run_plugin_prerelease_docker: runDocker,
             plugin_prerelease_docker_lanes: dockerLanes.join(" "),
           };
@@ -328,7 +442,7 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
@@ -339,6 +453,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Run plugin prerelease static shard
@@ -364,7 +479,7 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_node_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
@@ -374,7 +489,7 @@ jobs:
 
       - name: Checkout trusted npm security inventory
         if: inputs.full_release_validation
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: .plugin-prerelease-trusted
@@ -401,6 +516,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -470,10 +586,11 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
@@ -484,6 +601,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Run extension shard
@@ -492,20 +610,52 @@ jobs:
           OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
           OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
-        run: pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" -- --retry=1 --exclude extensions/codex/src/app-server/run-attempt.test.ts
+          OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          OPENCLAW_EXTENSION_TASK: ${{ matrix.task }}
+          OPENCLAW_EXTENSION_VITEST_CONFIG: ${{ matrix.vitest_config }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$OPENCLAW_EXTENSION_TASK" in
+            extensions-batch)
+              pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" -- --retry=1 --exclude extensions/codex/src/app-server/run-attempt.test.ts
+              ;;
+            extension-file-shard)
+              include_file="${RUNNER_TEMP}/telegram-test-include-${GITHUB_JOB}.json"
+              trap 'rm -f -- "$include_file"' EXIT
+              INCLUDE_FILE="$include_file" node --input-type=module <<'EOF'
+              import { writeFileSync } from "node:fs";
+
+              const patterns = JSON.parse(process.env.OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON);
+              if (!Array.isArray(patterns) || patterns.length === 0) {
+                throw new Error("Invalid Telegram extension file shard");
+              }
+              writeFileSync(process.env.INCLUDE_FILE, JSON.stringify(patterns), "utf8");
+          EOF
+              OPENCLAW_TEST_PROJECTS_PARALLEL=2 \
+                OPENCLAW_VITEST_INCLUDE_FILE="$include_file" \
+                pnpm test -- "$OPENCLAW_EXTENSION_VITEST_CONFIG"
+              trap - EXIT
+              rm -f -- "$include_file"
+              ;;
+            *)
+              echo "Unknown extension test task: $OPENCLAW_EXTENSION_TASK" >&2
+              exit 1
+              ;;
+          esac
 
   plugin-prerelease-inspector:
     permissions:
       contents: read
     name: plugin-prerelease-inspector
     needs: [preflight]
-    if: needs.preflight.outputs.run_plugin_prerelease_suite == 'true'
+    if: needs.preflight.outputs.run_plugin_prerelease_inspector == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
@@ -516,11 +666,12 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Run plugin inspector advisory sweep
         env:
-          OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.10"
+          OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.21"
           OPENCLAW_PLUGIN_INSPECTOR_ROOT: .artifacts/plugin-inspector
         shell: bash
         run: |

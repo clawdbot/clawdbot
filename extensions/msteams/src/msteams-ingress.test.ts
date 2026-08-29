@@ -2,15 +2,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
+import { createMSTeamsReplayContext } from "./replay-context.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
+import type { MSTeamsApp } from "./sdk.js";
 
 type IngressQueue = NonNullable<Parameters<typeof createMSTeamsIngress>[0]["queue"]>;
 type IngressPayload = Parameters<IngressQueue["enqueue"]>[1];
@@ -21,6 +23,8 @@ function activity(params?: {
   type?: string;
   name?: string;
   conversationId?: string;
+  conversationType?: string;
+  replyToId?: string;
   text?: string;
 }): MSTeamsTurnContext["activity"] {
   return {
@@ -32,11 +36,33 @@ function activity(params?: {
     recipient: { id: "bot-1", name: "Bot" },
     conversation: {
       id: params?.conversationId ?? "conversation-1",
-      conversationType: "personal",
+      conversationType: params?.conversationType ?? "personal",
     },
+    ...(params?.replyToId ? { replyToId: params.replyToId } : {}),
     channelId: "msteams",
     serviceUrl: "https://smba.trafficmanager.net/emea/",
   };
+}
+
+function createOutboundCapture() {
+  const outbound: Array<{ activity: Record<string, unknown>; conversationId: string }> = [];
+  const app = {
+    api: {
+      serviceUrl: "https://smba.trafficmanager.net/emea/",
+      teams: { getById: vi.fn(async () => ({})) },
+      conversations: {
+        activities: (conversationId: string) => ({
+          create: async (sentActivity: Record<string, unknown>) => {
+            outbound.push({ activity: sentActivity, conversationId });
+            return { id: `outbound-${outbound.length}` };
+          },
+          update: vi.fn(async () => ({})),
+          delete: vi.fn(async () => ({})),
+        }),
+      },
+    },
+  } as unknown as MSTeamsApp;
+  return { app, outbound };
 }
 
 function runtime() {
@@ -142,27 +168,108 @@ describe("Microsoft Teams durable ingress", () => {
     });
   });
 
-  it("recovers an uncompleted append with a fresh drain and dispatches exactly once", async () => {
-    await withQueue(async (queue) => {
-      const incoming = activity({ id: "activity-restart" });
-      const interrupted = makeIngress(queue, vi.fn());
-      await interrupted.accept(incoming);
-      await interrupted.stop();
+  it.each([
+    {
+      conversationId: "19:group-restart@thread.v2",
+      conversationType: "groupChat",
+      expectedConversationId: "19:group-restart@thread.v2",
+      recovery: "restart",
+    },
+    {
+      conversationId: "19:channel-restart@thread.tacv2;messageid=thread-root",
+      conversationType: "channel",
+      expectedConversationId: "19:channel-restart@thread.tacv2;messageid=thread-root",
+      recovery: "restart",
+    },
+    {
+      conversationId: "19:group-retry@thread.v2",
+      conversationType: "groupChat",
+      expectedConversationId: "19:group-retry@thread.v2",
+      recovery: "retry",
+    },
+    {
+      conversationId: "19:channel-retry@thread.tacv2;messageid=thread-root",
+      conversationType: "channel",
+      expectedConversationId: "19:channel-retry@thread.tacv2;messageid=thread-root",
+      recovery: "retry",
+    },
+  ])(
+    "preserves the inbound quote across $recovery for $conversationType replies",
+    async (testCase) => {
+      await withQueue(async (queue) => {
+        const activityId = `activity-${testCase.recovery}-${testCase.conversationType}`;
+        const incoming = activity({
+          id: activityId,
+          conversationId: testCase.conversationId,
+          conversationType: testCase.conversationType,
+          replyToId: testCase.conversationType === "channel" ? "thread-root" : undefined,
+        });
+        const { app, outbound } = createOutboundCapture();
+        let attempts = 0;
+        let deliveryError: Error | undefined;
+        const dispatch: IngressDispatch = async (delivered, lifecycle, liveContext) => {
+          attempts += 1;
+          if (testCase.recovery === "retry" && attempts === 1) {
+            expect(liveContext).toBeDefined();
+            throw new Error("temporary dispatch outage");
+          }
+          expect(liveContext).toBeUndefined();
+          const replayContext = createMSTeamsReplayContext(delivered, app, {
+            cloud: "Public",
+          });
+          try {
+            await replayContext.sendActivity({ type: "message", text: "Recovered reply" });
+          } catch (error) {
+            deliveryError = error instanceof Error ? error : new Error(String(error));
+            throw deliveryError;
+          }
+          await lifecycle.onAdopted();
+        };
+        let recovered: ReturnType<typeof makeIngress>;
+        if (testCase.recovery === "restart") {
+          const interrupted = makeIngress(queue, vi.fn());
+          await interrupted.accept(incoming, { activity: incoming } as MSTeamsTurnContext);
+          await interrupted.stop();
+          recovered = makeIngress(queue, dispatch);
+          recovered.start();
+        } else {
+          recovered = makeIngress(queue, dispatch);
+          recovered.start();
+          await recovered.accept(incoming, { activity: incoming } as MSTeamsTurnContext);
+        }
 
-      const recoveredDispatch = vi.fn(async (_activity, lifecycle) => {
-        await lifecycle.onAdopted();
+        try {
+          await vi.waitFor(
+            async () => {
+              if (deliveryError) {
+                throw deliveryError;
+              }
+              const verdict = await queue.enqueue(activityId, {} as IngressPayload);
+              expect(verdict.kind).toBe("completed");
+            },
+            { timeout: 5_000 },
+          );
+          expect(attempts).toBe(testCase.recovery === "retry" ? 2 : 1);
+          expect(outbound).toEqual([
+            {
+              conversationId: testCase.expectedConversationId,
+              activity: expect.objectContaining({
+                text: `<quoted messageId="${activityId}"/> Recovered reply`,
+                entities: [
+                  {
+                    type: "quotedReply",
+                    quotedReply: { messageId: activityId },
+                  },
+                ],
+              }),
+            },
+          ]);
+        } finally {
+          await recovered.stop();
+        }
       });
-      const recovered = makeIngress(queue, recoveredDispatch);
-      recovered.start();
-      try {
-        await waitForVerdict(queue, "activity-restart", "completed");
-        expect(recoveredDispatch).toHaveBeenCalledTimes(1);
-        expect(recoveredDispatch).toHaveBeenCalledWith(incoming, expect.any(Object), undefined);
-      } finally {
-        await recovered.stop();
-      }
-    });
-  });
+    },
+  );
 
   it("keeps a completion tombstone and rejects a post-completion duplicate", async () => {
     await withQueue(async (queue) => {

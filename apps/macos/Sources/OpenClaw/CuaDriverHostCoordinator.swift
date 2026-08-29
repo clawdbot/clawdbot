@@ -200,6 +200,7 @@ final class CuaDriverHostCoordinator {
 
     static let shared = CuaDriverHostCoordinator(
         observeNotifications: true,
+        enablementAllowed: { AppLaunchRuntimePlan.current.allowsCuaComputerControl },
         beforeDaemonStop: {
             await MacNodeModeCoordinator.shared.prepareForCuaDaemonStop()
         })
@@ -229,6 +230,7 @@ final class CuaDriverHostCoordinator {
     private let readinessProbe: ReadinessProbe
     private let restartSleep: @Sendable (Duration) async -> Void
     private let permissionSnapshot: @MainActor () async -> [Capability: CapabilityAuthorizationStatus]
+    private let enablementAllowed: @MainActor () -> Bool
     private let beforeDaemonStop: @MainActor () async -> Void
 
     private var desiredEnabled = false
@@ -261,6 +263,7 @@ final class CuaDriverHostCoordinator {
         permissionSnapshot: @escaping @MainActor () async -> [Capability: CapabilityAuthorizationStatus] = {
             await PermissionManager.authorizationStatus([.accessibility, .screenRecording])
         },
+        enablementAllowed: @escaping @MainActor () -> Bool = { true },
         beforeDaemonStop: @escaping @MainActor () async -> Void = {})
     {
         self.notificationCenter = notificationCenter
@@ -271,6 +274,7 @@ final class CuaDriverHostCoordinator {
         self.readinessProbe = readinessProbe
         self.restartSleep = restartSleep
         self.permissionSnapshot = permissionSnapshot
+        self.enablementAllowed = enablementAllowed
         self.beforeDaemonStop = beforeDaemonStop
 
         guard observeNotifications else { return }
@@ -297,12 +301,13 @@ final class CuaDriverHostCoordinator {
     }
 
     func setEnabled(_ enabled: Bool) async {
+        let effectiveEnabled = enabled && self.enablementAllowed()
         let wasEnabled = self.desiredEnabled
-        self.desiredEnabled = enabled
-        if enabled, !wasEnabled {
+        self.desiredEnabled = effectiveEnabled
+        if effectiveEnabled, !wasEnabled {
             self.restartAttempt = 0
         }
-        if !enabled {
+        if !effectiveEnabled {
             self.restartTask?.cancel()
             self.restartTask = nil
             self.restartAttempt = 0
@@ -394,6 +399,10 @@ final class CuaDriverHostCoordinator {
 
         let deadline = ContinuousClock.now + .seconds(10)
         while ContinuousClock.now < deadline {
+            let ready = await self.readinessProbe(socketDirectory.socketPath)
+            let permissions = ready ? await self.permissionSnapshot() : nil
+            // Either probe can suspend while disable or process exit retires this child.
+            // Revalidate before committing the snapshot or publishing availability.
             guard self.desiredEnabled,
                   let child = self.runningChild,
                   child.generation == generation,
@@ -402,8 +411,8 @@ final class CuaDriverHostCoordinator {
                 await self.ensureStopped()
                 return
             }
-            if await self.readinessProbe(socketDirectory.socketPath) {
-                self.lastPermissionSnapshot = await self.permissionSnapshot()
+            if let permissions {
+                self.lastPermissionSnapshot = permissions
                 self.setReadyEndpoint(CuaDriverWorkerEndpoint(
                     socketPath: socketDirectory.socketPath,
                     binaryPath: executableURL.path))

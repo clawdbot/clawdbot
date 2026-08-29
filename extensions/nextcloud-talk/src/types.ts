@@ -3,7 +3,14 @@ import type {
   ChannelDeliveryStreamingConfig,
   MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { DmConfig, DmPolicy, GroupPolicy, SecretInput } from "../runtime-api.js";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  DmConfig,
+  DmPolicy,
+  GroupPolicy,
+  OpenClawConfig,
+  SecretInput,
+} from "../runtime-api.js";
 
 export type NextcloudTalkRoomConfig = {
   requireMention?: boolean;
@@ -29,6 +36,8 @@ export type NextcloudTalkAccountConfig = {
   name?: string;
   /** If false, do not start this Nextcloud Talk account. Default: true. */
   enabled?: boolean;
+  /** Reply-threading mode for this account. */
+  replyToMode?: ReplyToMode;
   /** Base URL of the Nextcloud instance (e.g., "https://cloud.example.com"). */
   baseUrl?: string;
   /** Bot shared secret from occ talk:bot:install output. */
@@ -88,6 +97,7 @@ export type CoreConfig = {
   channels?: {
     "nextcloud-talk"?: NextcloudTalkConfig;
   };
+  gateway?: OpenClawConfig["gateway"];
   [key: string]: unknown;
 };
 
@@ -179,6 +189,8 @@ export type NextcloudTalkWebhookServerOptions = {
   };
   readBody?: (req: import("node:http").IncomingMessage, maxBodyBytes: number) => Promise<string>;
   isBackendAllowed?: (backend: string) => boolean;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
   onWebhook: (rawBody: string) => Promise<"accepted" | "ignored">;
   onError?: (error: Error) => void;
   abortSignal?: AbortSignal;

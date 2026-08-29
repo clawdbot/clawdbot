@@ -122,6 +122,7 @@ export function listTaskRecordPage(params: {
   sessionKey?: string;
   sessionAgentId?: string;
   cfg?: OpenClawConfig;
+  filter?: (task: Readonly<TaskRecord>) => boolean;
 }): { tasks: TaskRecord[]; hasMore: boolean } {
   ensureTaskRegistryReady();
   const statuses = params.statuses ? new Set(params.statuses) : null;
@@ -134,7 +135,8 @@ export function listTaskRecordPage(params: {
       (task) =>
         (!statuses || statuses.has(task.status)) &&
         taskMatchesAgent(task, agentId, params.cfg) &&
-        taskMatchesRelatedSession(task, sessionKey, params.sessionAgentId, params.cfg),
+        taskMatchesRelatedSession(task, sessionKey, params.sessionAgentId, params.cfg) &&
+        (!params.filter || params.filter(task)),
     )
     .toSorted((left, right) => {
       const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
@@ -150,9 +152,10 @@ export function listTaskRecordPage(params: {
   };
 }
 
-export function listTaskRecords(): TaskRecord[] {
+export function listTaskRecords(filter?: (task: Readonly<TaskRecord>) => boolean): TaskRecord[] {
   ensureTaskRegistryReady();
-  return [...tasks.values()]
+  const records = [...tasks.values()];
+  return (filter ? records.filter(filter) : records)
     .map((task, insertionIndex) => Object.assign({}, cloneTaskRecord(task), { insertionIndex }))
     .toSorted(compareTasksNewestFirst)
     .map(({ insertionIndex: _, ...task }) => task);

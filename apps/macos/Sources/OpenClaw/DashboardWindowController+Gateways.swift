@@ -148,4 +148,14 @@ extension DashboardWindowController {
         alert.addButton(withTitle: "Cancel")
         return alert
     }
+
+    static func makeGatewaySetupAlert(title: String, message: String) -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "Change Gateway")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .warning
+        return alert
+    }
 }

@@ -9,10 +9,10 @@ import { describe, expect, it } from "vitest";
 import {
   checkKnipUnusedFileScanResult,
   checkUnusedFiles,
-  KNIP_MAX_BUFFER_BYTES,
   parseKnipCompactUnusedFiles,
-  runKnipUnusedFiles,
 } from "../../scripts/check-deadcode-unused-files.mts";
+import { KNIP_MAX_BUFFER_BYTES, runKnip } from "../../scripts/deadcode-knip-runner.mts";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
   isProcessAlive,
   waitForChildClose,
@@ -20,6 +20,18 @@ import {
   waitForFile,
   waitForPidFile,
 } from "../helpers/process-wait.js";
+
+const KNIP_UNUSED_FILE_ARGS = [
+  "--config",
+  "config/knip.config.ts",
+  "--production",
+  "--no-progress",
+  "--reporter",
+  "compact",
+  "--files",
+  "--no-config-hints",
+];
+const KNIP_UNUSED_FILE_SCAN_NAME = "production unused-file scan";
 
 class FakeKnipProcess extends EventEmitter {
   readonly stderr = new EventEmitter();
@@ -34,6 +46,21 @@ function finishFakeProcess(
 ): void {
   child.emit("exit", status, signal);
   child.emit("close", status, signal);
+}
+
+function waitForPidFileSync(filePath: string, timeoutMs: number): number {
+  const deadlineAt = Date.now() + timeoutMs;
+  const waitSignal = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < deadlineAt) {
+    if (existsSync(filePath)) {
+      const pid = Number.parseInt(readFileSync(filePath, "utf8"), 10);
+      if (Number.isInteger(pid) && pid > 0) {
+        return pid;
+      }
+    }
+    Atomics.wait(waitSignal, 0, 0, 5);
+  }
+  throw new Error(`timeout waiting for pid in ${filePath}`);
 }
 
 describe("check-deadcode-unused-files", () => {
@@ -134,7 +161,7 @@ Delete the files or model their real entrypoints in Knip.`,
     writeFileSync(pnpmExecPath, "console.log('pnpm');\n", "utf8");
 
     try {
-      const resultPromise = runKnipUnusedFiles({
+      const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
         nodeExecPath: "/test-node",
         npmExecPath: pnpmExecPath,
         spawnCommand(command: string, args: string[], options: unknown) {
@@ -159,7 +186,7 @@ Delete the files or model their real entrypoints in Knip.`,
           "--config.minimum-release-age=0",
           "dlx",
           "--package",
-          "knip@6.8.0",
+          "knip@6.32.2",
           "knip",
           "--config",
           "config/knip.config.ts",
@@ -192,7 +219,7 @@ Delete the files or model their real entrypoints in Knip.`,
   it("falls back to bare pnpm when no managed pnpm runner is available", async () => {
     const calls: unknown[] = [];
 
-    const resultPromise = runKnipUnusedFiles({
+    const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
       env: { PATH: "" },
       npmExecPath: "",
       platform: "linux",
@@ -214,7 +241,7 @@ Delete the files or model their real entrypoints in Knip.`,
         "--config.minimum-release-age=0",
         "dlx",
         "--package",
-        "knip@6.8.0",
+        "knip@6.32.2",
         "knip",
         "--config",
         "config/knip.config.ts",
@@ -250,10 +277,11 @@ Delete the files or model their real entrypoints in Knip.`,
       return originalKill(pid, signal as NodeJS.Signals);
     }) as typeof process.kill;
     try {
-      const result = await runKnipUnusedFiles({
+      const result = await runKnip(KNIP_UNUSED_FILE_ARGS, {
         heartbeatMs: 1,
         killGraceMs: 50,
         maxBufferBytes: KNIP_MAX_BUFFER_BYTES,
+        scanName: KNIP_UNUSED_FILE_SCAN_NAME,
         spawnCommand: () => child,
         timeoutMs: 5,
         writeStatus: (message: string) => statuses.push(message),
@@ -295,20 +323,21 @@ Delete the files or model their real entrypoints in Knip.`,
           "setInterval(() => {}, 1000);",
         ].join("");
 
-        const resultPromise = runKnipUnusedFiles({
+        const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
           env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
           killGraceMs: 50,
           spawnCommand(_command: string, _args: string[], options: unknown) {
-            return spawn(process.execPath, ["-e", parentScript], {
+            const parent = spawn(process.execPath, ["-e", parentScript], {
               ...(options as Parameters<typeof spawn>[2]),
               env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
             });
+            childPid = waitForPidFileSync(childPidPath, 2_000);
+            return parent;
           },
           timeoutMs: 100,
           writeStatus: () => {},
         });
 
-        childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
 
         await expect(resultPromise).resolves.toMatchObject({
@@ -316,9 +345,7 @@ Delete the files or model their real entrypoints in Knip.`,
         });
         await waitForDead(childPid, 2_000);
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        killPidIfAlive(childPid || undefined);
         rmSync(root, { recursive: true, force: true });
       }
     },
@@ -330,7 +357,7 @@ Delete the files or model their real entrypoints in Knip.`,
       const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-knip-parent-signal-"));
       const childPidPath = path.join(root, "child.pid");
       const readyPath = path.join(root, "child.ready");
-      const scriptUrl = pathToFileURL(path.resolve("scripts/check-deadcode-unused-files.mts")).href;
+      const scriptUrl = pathToFileURL(path.resolve("scripts/deadcode-knip-runner.mts")).href;
       let childPid = 0;
       let runner: ReturnType<typeof spawn> | undefined;
 
@@ -350,8 +377,8 @@ Delete the files or model their real entrypoints in Knip.`,
         ].join("");
         const runnerScript = [
           "import { spawn } from 'node:child_process';",
-          `import { runKnipUnusedFiles } from ${JSON.stringify(scriptUrl)};`,
-          "await runKnipUnusedFiles({",
+          `import { runKnip } from ${JSON.stringify(scriptUrl)};`,
+          `await runKnip(${JSON.stringify(KNIP_UNUSED_FILE_ARGS)}, {`,
           "  spawnCommand(_command, _args, options) {",
           `    return spawn(process.execPath, ['-e', ${JSON.stringify(parentScript)}], options);`,
           "  },",
@@ -380,9 +407,7 @@ Delete the files or model their real entrypoints in Knip.`,
         if (runner?.pid && isProcessAlive(runner.pid)) {
           runner.kill("SIGKILL");
         }
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        killPidIfAlive(childPid || undefined);
         rmSync(root, { recursive: true, force: true });
       }
     },
@@ -390,7 +415,7 @@ Delete the files or model their real entrypoints in Knip.`,
 
   it("keeps output delivered after process exit but before stdio close", async () => {
     const child = new FakeKnipProcess();
-    const resultPromise = runKnipUnusedFiles({
+    const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
       spawnCommand: () => child,
       writeStatus: () => {},
     });
@@ -423,9 +448,10 @@ Delete the files or model their real entrypoints in Knip.`,
       return originalKill(pid, signal as NodeJS.Signals);
     }) as typeof process.kill;
     try {
-      const resultPromise = runKnipUnusedFiles({
+      const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
         killGraceMs: 50,
         maxBufferBytes: 4,
+        scanName: KNIP_UNUSED_FILE_SCAN_NAME,
         spawnCommand: () => child,
         timeoutMs: 1000,
         writeStatus: () => {},
@@ -445,7 +471,7 @@ Delete the files or model their real entrypoints in Knip.`,
   });
 
   it("reports spawn errors", async () => {
-    const resultPromise = runKnipUnusedFiles({
+    const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
       spawnCommand: () => {
         const child = new FakeKnipProcess();
         queueMicrotask(() =>

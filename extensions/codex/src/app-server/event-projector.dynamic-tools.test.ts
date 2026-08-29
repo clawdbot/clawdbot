@@ -1,3 +1,5 @@
+import { withDynamicToolTranscriptDetails } from "./dynamic-tool-response-state.js";
+import { recordCodexDynamicToolResult } from "./dynamic-tool-result-projection.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -18,6 +20,39 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector dynamic tool projection", () => {
+  it.each([
+    ["gateway", { ok: true, result: { path: "gateway.port", config: 19_801 } }],
+    ["dashboard", { ok: true, delivered: 0 }],
+    ["memory_search", { ok: true, results: [{ id: "memory-1" }] }],
+  ])("retains structured %s transcript details", async (tool, details) => {
+    const projector = await createProjector();
+    const call = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: `call-${tool}`,
+      namespace: null,
+      tool,
+      arguments: {},
+    };
+    const protocolResponse = {
+      success: true,
+      contentItems: [{ type: "inputText" as const, text: `${tool} done` }],
+    };
+
+    projector.recordDynamicToolCall({ callId: call.callId, tool, arguments: {} });
+    recordCodexDynamicToolResult(
+      projector,
+      call,
+      withDynamicToolTranscriptDetails({ ...protocolResponse }, details),
+      protocolResponse,
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    expect(toolResultMessage).toMatchObject({ role: "toolResult", toolName: tool, details });
+    expect(protocolResponse).not.toHaveProperty("details");
+  });
+
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
     const projector = await createProjector(undefined, {
       resolveDynamicToolResultContentSource: (toolName) =>
@@ -365,7 +400,7 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     });
   });
 
-  it("keeps a blocked dynamic mutation until the same action succeeds", async () => {
+  it("keeps the latest dynamic failure until the same tool succeeds", async () => {
     const observeToolTerminal = createCodexTestToolTerminalObserver();
     const projector = await createProjector({ ...(await createParams()), observeToolTerminal });
     const messageArgs = {
@@ -396,7 +431,6 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
       toolName: "message",
       error: "cross-context messaging denied",
       mutatingAction: true,
-      actionFingerprint: expect.stringContaining("tool=message|action=send|to=channel:123"),
     });
 
     projector.recordDynamicToolResult({
@@ -416,8 +450,8 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     });
 
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
-      toolName: "message",
-      mutatingAction: true,
+      toolName: "read",
+      mutatingAction: false,
     });
 
     projector.recordDynamicToolResult({
@@ -436,8 +470,8 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     });
 
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
-      toolName: "message",
-      mutatingAction: true,
+      toolName: "read",
+      mutatingAction: false,
     });
 
     projector.recordDynamicToolResult({
@@ -454,6 +488,23 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
       success: true,
       terminalType: "completed",
       contentItems: [{ type: "inputText", text: "sent" }],
+    });
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError?.toolName).toBe("read");
+
+    projector.recordDynamicToolResult({
+      callId: "call-read-retry",
+      tool: "read",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-read-retry",
+        toolName: "read",
+        arguments: { path: "/tmp/available" },
+        executionStarted: true,
+        outcome: "success",
+      }),
+      success: true,
+      terminalType: "completed",
+      contentItems: [{ type: "inputText", text: "ok" }],
     });
 
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();

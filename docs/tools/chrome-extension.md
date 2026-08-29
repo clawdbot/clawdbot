@@ -178,6 +178,13 @@ openclaw browser extension status
 openclaw browser extension status --json
 ```
 
+An `owned` registration is not necessarily launchable. Status reports a filesystem
+readiness snapshot of its registered runtime and native entry. It does not execute
+either target or verify that its code will run successfully. If an upgrade removes
+either target, rerun `openclaw browser extension install` to repair the owned
+registration. Ownership checks still refuse foreign or malformed manifests and
+launchers.
+
 Remove only OpenClaw-owned native-host manifests and launchers:
 
 ```bash
@@ -301,6 +308,9 @@ openclaw doctor
   development fallback after the command says native bootstrap is ready.
 - **Extension was loaded before native setup:** restart Chrome once to clear its
   cached native-host miss, then rerun the ordered install flow.
+- **Extension version mismatch:** reload the unpacked OpenClaw extension from
+  `chrome://extensions`, then rerun browser doctor. Fully restart Chrome if the
+  running and bundled versions still differ.
 - **Waiting for local OpenClaw:** run `extension status`; install or repair the
   owned native host.
 - **Automatic setup disabled:** enable it in Settings or click **Use local

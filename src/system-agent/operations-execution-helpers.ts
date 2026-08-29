@@ -1,5 +1,5 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
-import { tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope-config.js";
+import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -200,6 +200,7 @@ export function resolveTuiAgentId(params: {
 
 export type ExecuteOptions = {
   approved?: boolean;
+  operatorApprovalOnly?: boolean;
   deps?: SystemAgentCommandDeps;
   auditDetails?: Record<string, unknown>;
   /**
@@ -243,7 +244,7 @@ export async function applyPersistentOperation(params: {
 }): Promise<SystemAgentOperationResult> {
   const { auditOperation, runtime, opts } = params;
   if (!opts.approved) {
-    const message = formatSystemAgentPersistentPlan(params.operation);
+    const message = formatSystemAgentPersistentPlan(params.operation, opts.operatorApprovalOnly);
     runtime.log(message);
     return { applied: false, message };
   }
@@ -340,9 +341,7 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
     // Unknown or id-less entry: cannot prove it is off the default route.
     return true;
   }
-  const defaultAgentId =
-    config?.agents?.defaults?.systemAgent?.agentId?.trim() ??
-    (config ? tryResolveLegacyCompatibilityAgentId(config) : undefined);
+  const defaultAgentId = config ? tryResolveAmbientOwnerAgentId(config) : undefined;
   return !defaultAgentId || normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId);
 }
 
@@ -456,7 +455,7 @@ export async function executeSetup(
   }
   if (!opts.approved) {
     const message = [
-      formatSystemAgentPersistentPlan(operation),
+      formatSystemAgentPersistentPlan(operation, opts.operatorApprovalOnly),
       `Model choice: keep verified default ${defaultModel}.`,
     ].join("\n");
     runtime.log(message);

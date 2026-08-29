@@ -337,6 +337,26 @@ export function isSessionWorkAdmissionActive(
   );
 }
 
+export function isSessionWorkAdmissionTargetActive(params: {
+  scope: string;
+  sessionKey: string;
+  sessionId: string;
+}): boolean {
+  const identities = normalizeSessionIdentities(params.scope, [
+    params.sessionKey,
+    params.sessionId,
+  ]);
+  // Singleton leases intentionally own one identity. Multi-identity leases must
+  // cover the pair together; pooling owners would manufacture a false pair.
+  return identities.some((identity) =>
+    Array.from(ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []).some(
+      (admission) =>
+        admission.identities.size === 1 ||
+        identities.every((target) => admission.identities.has(target)),
+    ),
+  );
+}
+
 /** Whether another admitted turn currently owns any of these session identities. */
 export function isCompetingSessionWorkAdmissionActive(
   scope: string,
@@ -377,23 +397,22 @@ export function getSessionWorkAdmissionRelease(
   );
 }
 
-/** Active session identities for one store/lifecycle scope. */
-export function collectActiveSessionWorkAdmissionIdentities(scope: string): Set<string> {
-  const normalizedScope = scope.trim();
-  if (!normalizedScope) {
-    throw new Error("session lifecycle scope is required");
-  }
-  const identities = new Set<string>();
+/** Active session identities grouped by their authoritative store/lifecycle scope. */
+export function collectActiveSessionWorkAdmissions(): Map<string, Set<string>> {
+  const targets = new Map<string, Set<string>>();
   for (const [normalizedIdentity, admissions] of ACTIVE_SESSION_WORK_ADMISSIONS) {
     if (admissions.size === 0) {
       continue;
     }
     const decoded = decodeSessionIdentity(normalizedIdentity);
-    if (decoded?.scope === normalizedScope) {
-      identities.add(decoded.identity);
+    if (!decoded) {
+      continue;
     }
+    const identities = targets.get(decoded.scope) ?? new Set<string>();
+    identities.add(decoded.identity);
+    targets.set(decoded.scope, identities);
   }
-  return identities;
+  return targets;
 }
 
 /** Unique admitted turns; one lease can be indexed under several identities. */
@@ -516,7 +535,9 @@ export async function beginSessionWorkAdmission(params: {
           async () => {
             writerBarrierStarted = true;
             params.signal?.throwIfAborted();
-            await (params.revalidateAllowed ?? params.assertAllowed)();
+            // The lease is already registered. Revalidation must exclude that owner
+            // from competing-work checks while preserving every other active lease.
+            await lease.run(async () => await (params.revalidateAllowed ?? params.assertAllowed)());
           },
           // Writer-owned rollover callbacks can open replacement admissions.
           // Reenter that lane or the writer waits on work queued behind itself.
@@ -534,11 +555,10 @@ export async function beginSessionWorkAdmission(params: {
   });
 }
 
-export async function interruptSessionWorkAdmissions(params: {
+export function startSessionWorkAdmissionInterruption(params: {
   scope: string;
   identities: Iterable<string | undefined>;
-  timeoutMs?: number;
-}): Promise<boolean> {
+}): { released: Promise<void> } {
   const admissions = new Set<SessionWorkAdmission>();
   const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
   for (const identity of normalizeSessionIdentities(params.scope, params.identities)) {
@@ -555,7 +575,19 @@ export async function interruptSessionWorkAdmissions(params: {
     admission.interrupted = true;
     admission.interrupt?.();
   }
-  const released = Promise.all(Array.from(admissions, (admission) => admission.released));
+  return {
+    released: Promise.all(Array.from(admissions, (admission) => admission.released)).then(
+      () => undefined,
+    ),
+  };
+}
+
+export async function interruptSessionWorkAdmissions(params: {
+  scope: string;
+  identities: Iterable<string | undefined>;
+  timeoutMs?: number;
+}): Promise<boolean> {
+  const { released } = startSessionWorkAdmissionInterruption(params);
   if (params.timeoutMs === undefined) {
     await released;
     return true;

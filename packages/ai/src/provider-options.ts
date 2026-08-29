@@ -8,6 +8,62 @@ export type OpenAIResponsesCompactionRejection = {
   id?: string;
 };
 
+export type CodeModeToolSurfaceObservation = {
+  beforeToolIdentities: readonly string[];
+  afterToolIdentities: readonly string[];
+};
+
+const CODE_MODE_TOOL_SURFACE_OBSERVER = Symbol("openaiCodeModeToolSurfaceObserver");
+const CODE_MODE_TOOL_SURFACE_COLLECTOR = Symbol("openaiCodeModeToolSurfaceCollector");
+const STRICT_REASONING_TAG_TEXT = Symbol("openaiStrictReasoningTagText");
+type CodeModeToolSurfaceObserver = (observation: CodeModeToolSurfaceObservation) => void;
+
+function markStrictReasoningTagText(options: object): void {
+  Reflect.set(options, STRICT_REASONING_TAG_TEXT, true);
+}
+
+function isStrictReasoningTagText(options: object | undefined): boolean {
+  return options ? Reflect.get(options, STRICT_REASONING_TAG_TEXT) === true : false;
+}
+
+export const codeModeToolSurfaceObserver = {
+  set(
+    options: object,
+    observer: CodeModeToolSurfaceObserver,
+    collector?: CodeModeToolSurfaceObserver,
+  ): void {
+    Reflect.set(options, CODE_MODE_TOOL_SURFACE_OBSERVER, observer);
+    if (collector) {
+      Reflect.set(options, CODE_MODE_TOOL_SURFACE_COLLECTOR, collector);
+    }
+  },
+  get(options: object | undefined): CodeModeToolSurfaceObserver | undefined {
+    if (!options) {
+      return undefined;
+    }
+    const observer: unknown = Reflect.get(options, CODE_MODE_TOOL_SURFACE_OBSERVER);
+    return typeof observer === "function" ? (observation) => observer(observation) : undefined;
+  },
+  getCollector(options: object | undefined): CodeModeToolSurfaceObserver | undefined {
+    if (!options) {
+      return undefined;
+    }
+    const collector: unknown = Reflect.get(options, CODE_MODE_TOOL_SURFACE_COLLECTOR);
+    return typeof collector === "function" ? (observation) => collector(observation) : undefined;
+  },
+};
+
+/** Internal output policy for callers that must not recover ambiguous reasoning as visible text. */
+export const reasoningTagTextPolicy = {
+  markStrict: markStrictReasoningTagText,
+  isStrict: isStrictReasoningTagText,
+  copy(source: object | undefined, target: object): void {
+    if (isStrictReasoningTagText(source)) {
+      markStrictReasoningTagText(target);
+    }
+  },
+};
+
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type AnthropicThinkingDisplay = "summarized" | "omitted";

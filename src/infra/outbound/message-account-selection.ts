@@ -1,16 +1,18 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveChannelAccountEnabled } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveAccountEntry } from "../../routing/account-lookup.js";
+import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { isConfiguredChannel } from "./channel-selection.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
+import { listRuntimeVisibleChannelPlugins } from "./runtime-visible-channels.js";
 
 export type MessageBroadcastAccountPlan = {
   accountId: string;
@@ -112,6 +114,7 @@ export function validateExplicitMessageAccountSelection(params: {
     );
   }
   if (params.checkResolvedAccount !== false) {
+    assertSecretOwnerAvailable("account", `${plugin.id}:${accountId}`);
     const account = plugin.config.resolveAccount(params.cfg, accountId);
     if (!resolveChannelAccountEnabled({ plugin, account, cfg: params.cfg })) {
       throw new MessageActionDeniedError(
@@ -173,7 +176,7 @@ export function resolveMessageBroadcastAccountPlan(params: {
     return undefined;
   }
 
-  const candidatePlugins = listChannelPlugins().filter((plugin) =>
+  const candidatePlugins = listRuntimeVisibleChannelPlugins().filter((plugin) =>
     isPotentialConfiguredMessageChannel({ cfg: params.cfg, plugin }),
   );
   const secretChannels = candidatePlugins.flatMap((plugin) => {

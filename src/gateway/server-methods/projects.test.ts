@@ -14,6 +14,7 @@ import {
   registerClonedProjectRegistry,
   registerProjectRegistry,
 } from "../../projects/project-registry.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createProjectsHandlers } from "./projects.js";
@@ -416,6 +417,89 @@ test("projects.remove deletes an unreferenced Gateway-managed clone", async () =
       await invokeProjectMethod("projects.remove", { id: project.id, deleteCheckout: true }),
     ).toMatchObject({ ok: true, payload: { removed: true } });
     await expect(fs.stat(repo)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    await state.cleanup();
+  }
+});
+
+test("projects.remove preserves a cloned checkout while a duplicate registry row remains", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
+  try {
+    const originUrl = "https://github.com/acme/shared-managed.git";
+    const fingerprint = sha256HexPrefixCore(originUrl, 16);
+    const repo = await initializeRepository(
+      path.join(state.stateDir, "projects", fingerprint),
+      "shared-managed",
+      originUrl,
+    );
+    const project = await registerClonedProjectRegistry({
+      path: repo,
+      name: "Shared managed",
+      originUrl,
+    });
+    const now = Date.now();
+    openOpenClawStateDatabase()
+      .db.prepare(
+        `INSERT INTO projects
+          (id, display_name, repo_root, origin_url, source, created_at_ms, updated_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run("shared-managed-copy", "Shared managed copy", repo, null, "registered", now, now);
+
+    expect(
+      await invokeProjectMethod("projects.remove", { id: project.id, deleteCheckout: true }),
+    ).toMatchObject({ ok: true, payload: { removed: true } });
+    await expect(fs.stat(repo)).resolves.toBeDefined();
+
+    const listed = await invokeProjectMethod("projects.list", {}, {}, ["operator.write"]);
+    const survivor = (
+      listed?.payload as { projects?: Array<Record<string, unknown>> } | undefined
+    )?.projects?.find((candidate) => candidate.id === "shared-managed-copy");
+    expect(survivor).toMatchObject({
+      id: "shared-managed-copy",
+      repoRoot: repo,
+      originUrl,
+      source: "cloned",
+    });
+
+    expect(
+      await invokeProjectMethod("projects.remove", {
+        id: "shared-managed-copy",
+        deleteCheckout: true,
+      }),
+    ).toMatchObject({ ok: true, payload: { removed: true } });
+    await expect(fs.stat(repo)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    await state.cleanup();
+  }
+});
+
+test("projects.remove refuses to delete a cloned checkout configured as an agent workspace", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
+  try {
+    const originUrl = "https://github.com/acme/workspace-project.git";
+    const fingerprint = sha256HexPrefixCore(originUrl, 16);
+    const repo = await initializeRepository(
+      path.join(state.stateDir, "projects", fingerprint),
+      "workspace-project",
+      originUrl,
+    );
+    const project = await registerClonedProjectRegistry({
+      path: repo,
+      name: "Workspace project",
+      originUrl,
+    });
+    const cfg = {
+      agents: { list: [{ id: "main", default: true, workspace: repo }] },
+    } as OpenClawConfig;
+
+    expect(
+      await invokeProjectMethod("projects.remove", { id: project.id, deleteCheckout: true }, cfg),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("agent workspace") },
+    });
+    await expect(fs.stat(repo)).resolves.toBeDefined();
   } finally {
     await state.cleanup();
   }

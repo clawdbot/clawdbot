@@ -74,13 +74,13 @@ export async function preflightSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; sessionFile?: string },
 ): Promise<SessionTranscriptManualTrimPreflightResult> {
-  const events = await loadTranscriptEvents(scope).catch(() => []);
-  if (events.length === 0) {
+  const eventCount = readTranscriptStatsSync(scope).eventCount;
+  if (eventCount === 0) {
     return { compacted: false, reason: "no transcript" };
   }
 
   const maxLines = Math.max(1, Math.floor(params.maxLines));
-  return events.length > maxLines ? { compacted: true } : { compacted: false, kept: events.length };
+  return eventCount > maxLines ? { compacted: true } : { compacted: false, kept: eventCount };
 }
 
 export async function trimSessionTranscriptForManualCompact(

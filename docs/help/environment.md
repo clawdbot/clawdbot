@@ -166,6 +166,14 @@ Env var equivalents:
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000` (default `15000`)
 
+For Bash, the import uses an interactive login shell (`bash -lic`) so `PS1` is initialized
+before login startup files run. Bash reads `/etc/profile` and the first available user login
+profile (`~/.bash_profile`, `~/.bash_login`, or `~/.profile`); many login profiles also source
+`~/.bashrc`. Keep those files quiet and bounded because their output, long-running work, or
+failures can affect OpenClaw startup. Other shells use noninteractive login startup (`-l -c`).
+This interactive Bash mode is limited to explicit shell env imports; automatic executable PATH
+discovery during ordinary Gateway commands remains noninteractive.
+
 ## Exec shell snapshots
 
 On non-Windows Gateway hosts, bash and zsh `exec` commands use a startup snapshot by default.
@@ -206,6 +214,8 @@ You can reference env vars directly in config string values using `${VAR_NAME}` 
   },
 }
 ```
+
+A missing or empty variable remains visible as `${VAR_NAME}` and emits a warning. Consumers that require the value treat it as unavailable. Use `$${VAR_NAME}` when the literal `${VAR_NAME}` text is intended.
 
 See [Configuration: Env var substitution](/gateway/configuration-reference#env-var-substitution) for full details.
 

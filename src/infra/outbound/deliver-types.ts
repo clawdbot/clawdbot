@@ -115,6 +115,7 @@ export class OutboundDeliveryError extends Error {
   readonly payloadOutcomes: OutboundPayloadDeliveryOutcome[];
   readonly sentBeforeError: boolean;
   readonly stage: OutboundDeliveryFailureStage;
+  recoveryOwnedRetry?: true;
 
   constructor(
     message: string,
@@ -129,7 +130,11 @@ export class OutboundDeliveryError extends Error {
     this.name = "OutboundDeliveryError";
     this.results = [...(options.results ?? [])];
     this.payloadOutcomes = [...(options.payloadOutcomes ?? [])];
-    this.sentBeforeError = this.results.length > 0;
+    this.sentBeforeError =
+      this.results.length > 0 ||
+      this.payloadOutcomes.some(
+        (outcome) => outcome.status === "failed" && outcome.sentBeforeError,
+      );
     this.stage = options.stage ?? "unknown";
   }
 }

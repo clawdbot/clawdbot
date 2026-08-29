@@ -30,15 +30,23 @@ describe("resolvePluginSurface", () => {
     expect(resolvePluginSurface({})).toBe("plugin");
   });
 
-  it("renders only runtime slash command aliases", () => {
+  it("renders root CLI commands separately from runtime slash command aliases", () => {
     expect(
       resolvePluginSurface({
+        cliCommands: [
+          { name: " voicecall " },
+          { name: "browser" },
+          { name: "voicecall" },
+          { name: " " },
+        ],
         commandAliases: [
           { name: "voice", kind: "runtime-slash" },
+          { name: " voice ", kind: "runtime-slash" },
+          { name: " ", kind: "runtime-slash" },
           { name: "internal", kind: "activation-only" },
         ],
       }),
-    ).toBe("commands: `/voice`");
+    ).toBe("CLI commands: `openclaw browser`, `openclaw voicecall`; slash commands: `/voice`");
   });
 
   it("escapes dashboard plugin owner delimiters and literal escape markers", () => {

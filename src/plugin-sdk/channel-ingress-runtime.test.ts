@@ -2,8 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   fanInChannelIngressLifecycles,
+  meetsIdentifierAuthentication,
   resolveChannelMessageIngress,
   type ChannelIngressIdentityDescriptor,
+  type IdentifierAuthentication,
   type ResolveChannelMessageIngressParams,
 } from "./channel-ingress-runtime.js";
 
@@ -26,6 +28,17 @@ async function resolve(input: Partial<ResolveChannelMessageIngressParams> = {}) 
 }
 
 describe("plugin-sdk/channel-ingress-runtime", () => {
+  it("compares typed identifier claims through the public SDK", () => {
+    const minimum: IdentifierAuthentication = "asserted";
+    const subject = {
+      email: "verified",
+      displayName: "mutable",
+    } satisfies NonNullable<ResolveChannelMessageIngressParams["subject"]["authentication"]>;
+
+    expect(meetsIdentifierAuthentication(subject.email, minimum)).toBe(true);
+    expect(meetsIdentifierAuthentication(subject.displayName, minimum)).toBe(false);
+  });
+
   it("fans one logical turn lifecycle across every durable claim", async () => {
     const createLifecycle = () => ({
       abortSignal: new AbortController().signal,

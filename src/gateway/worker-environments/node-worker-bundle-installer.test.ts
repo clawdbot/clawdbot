@@ -17,7 +17,7 @@ const node: NodeWorkerSupervisorNodeProof = {
   clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
   clientMode: "node",
   protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-  workerHost: { enabled: true, capacity: "available" },
+  workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
   commands: [],
 };
 const artifact = {
@@ -37,7 +37,7 @@ function nodeProof(nodeId: string, bundlePrewarm?: 1): NodeWorkerSupervisorNodeP
     connId: `conn-${nodeId}`,
     workerHost: {
       enabled: true,
-      capacity: "available",
+      capacity: { total: 2, available: 2 },
       ...(bundlePrewarm === undefined ? {} : { bundlePrewarm: 1 }),
     },
   };
@@ -57,6 +57,7 @@ describe("Gateway node worker bundle installer", () => {
       }),
     }));
     const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => false,
       listCurrentNodes: async () => [node],
       isCurrent: (candidate) => candidate === node,
       invoke,
@@ -90,6 +91,7 @@ describe("Gateway node worker bundle installer", () => {
       generateToken: () => "B".repeat(43),
     });
     const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => false,
       listCurrentNodes: async () => [node],
       isCurrent: () => true,
       invoke: async () => ({
@@ -122,6 +124,7 @@ describe("Gateway node worker bundle installer", () => {
       payloadJSON: JSON.stringify((request.params as { build: typeof artifact }).build),
     }));
     const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => false,
       listCurrentNodes: async () => [advertising, legacy],
       isCurrent: () => true,
       invoke,

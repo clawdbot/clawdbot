@@ -263,16 +263,16 @@ export function parseAgentSessionKey(
   if (!raw) {
     return null;
   }
-  const parts = raw.split(":");
-  if (parts.length < 3 || !parts[1] || !parts[2]) {
+  if (!raw.startsWith("agent:")) {
     return null;
   }
-  if (parts[0] !== "agent") {
+  const agentIdEnd = raw.indexOf(":", "agent:".length);
+  if (agentIdEnd === -1) {
     return null;
   }
-  const agentId = normalizeOptionalString(parts[1]);
-  const rest = parts.slice(2).join(":");
-  if (!agentId || !rest) {
+  const agentId = normalizeOptionalString(raw.slice("agent:".length, agentIdEnd));
+  const rest = raw.slice(agentIdEnd + 1);
+  if (!agentId || !rest || rest.startsWith(":")) {
     return null;
   }
   return { agentId, rest };
@@ -355,6 +355,14 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   }
   const parsed = parseAgentSessionKey(raw);
   return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("acp:") === true;
+}
+
+/** Stored ACP bindings and stale ACP keys both belong to ACP dispatch, never local fallback. */
+export function resolveSessionDispatchKind(
+  sessionKey: string | undefined | null,
+  entry?: { acp?: unknown },
+): "agent" | "acp" {
+  return entry?.acp || isAcpSessionKey(sessionKey) ? "acp" : "agent";
 }
 
 export function parseThreadSessionSuffix(

@@ -72,6 +72,12 @@ type DiscordMessageProcessObserver = {
   onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
 };
 
+type DiscordProviderDeliveryInfo = {
+  kind: ReplyDispatchKind;
+  bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
+  onPlatformSendDispatch: () => Promise<void>;
+};
+
 export async function processDiscordMessage(
   ctx: DiscordMessagePreflightContext,
   observer?: DiscordMessageProcessObserver,
@@ -217,7 +223,7 @@ async function processDiscordMessageInner(
   let userFacingFinalDelivered = false;
   let userFacingFinalDeliveryFailed = false;
   let pendingToolWarningFinal:
-    | { payload: ReplyPayload; info: { kind: ReplyDispatchKind } }
+    | { payload: ReplyPayload; info: DiscordProviderDeliveryInfo }
     | undefined;
   const markFinalReplyDelivered = (isError = false) => {
     draftPreview.markFinalReplyDelivered(isError);
@@ -265,10 +271,7 @@ async function processDiscordMessageInner(
 
   const deliverDiscordPayload = async (
     payload: ReplyPayload,
-    info: {
-      kind: ReplyDispatchKind;
-      bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
-    },
+    info: DiscordProviderDeliveryInfo,
     options?: {
       allowFallbackOnlyToolWarning?: boolean;
       allowProgressBlock?: boolean;
@@ -326,6 +329,7 @@ async function processDiscordMessageInner(
         mediaLocalRoots,
         kind: "block",
         bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+        onPlatformSendDispatch: info.onPlatformSendDispatch,
       });
       if (result.visibleReplySent) {
         replyReference.markSent();
@@ -481,6 +485,7 @@ async function processDiscordMessageInner(
             allowedMentions,
             kind: info.kind,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+            onPlatformSendDispatch: info.onPlatformSendDispatch,
           });
           return deliveryResult.visibleReplySent;
         },
@@ -530,6 +535,7 @@ async function processDiscordMessageInner(
       mediaLocalRoots,
       kind: info.kind,
       bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+      onPlatformSendDispatch: info.onPlatformSendDispatch,
     });
     if (!result.visibleReplySent) {
       return result;
@@ -683,7 +689,16 @@ async function processDiscordMessageInner(
       return;
     }
     dispatchError = true;
-    if (await completeDiscordSessionConflict(err, deliverDiscordPayload, onDiscordDeliveryError)) {
+    const conflictCompleted = await completeDiscordSessionConflict(
+      err,
+      (payload, info) =>
+        deliverDiscordPayload(payload, {
+          ...info,
+          onPlatformSendDispatch: () => Promise.resolve(),
+        }),
+      onDiscordDeliveryError,
+    );
+    if (conflictCompleted) {
       // The visible terminal notice owns this event, so replay can commit.
       return;
     }

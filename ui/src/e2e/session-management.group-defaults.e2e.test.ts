@@ -13,6 +13,11 @@ suite.define(() => {
     const workspace = "/home/peter/openclaw";
     const initialGroupCwd = "/home/peter";
     const groupCwd = "/home/peter/client-work";
+    const gitRepository = {
+      branches: [{ kind: "local", name: "main" }],
+      defaultBranch: "main",
+      repositoryStatus: "git",
+    };
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -30,9 +35,13 @@ suite.define(() => {
         "sessions.create": { key: "agent:main:client-work", runStarted: true },
         "sessions.list": sessionsListResponse([]),
         "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
+          cases: [
+            {
+              match: { repoRoot: initialGroupCwd },
+              response: { branches: [], repositoryStatus: "not_git" },
+            },
+            { match: { repoRoot: groupCwd }, response: gitRepository },
+          ],
         },
       },
       sessionGroups: ["Client work"],
@@ -53,6 +62,22 @@ suite.define(() => {
         `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
       );
       await dialog.waitFor({ state: "visible" });
+      expect((await gateway.waitForRequest("worktrees.branches")).params).toMatchObject({
+        repoRoot: initialGroupCwd,
+        includeRepositoryStatus: true,
+      });
+      const environment = dialog.locator("[data-session-group-environment]");
+      await expect
+        .poll(() => environment.getAttribute("data-session-group-environment"))
+        .toBe("local");
+      await expect
+        .poll(() => dialog.locator("wa-dropdown.session-group-defaults__mode-dropdown").count())
+        .toBe(0);
+      await expect.poll(() => environment.getByRole("button").count()).toBe(0);
+      const localEnvironment = environment.locator(".session-group-defaults__resolved-mode");
+      await expect
+        .poll(async () => (await localEnvironment.boundingBox())?.height)
+        .toBeCloseTo(56, 1);
       const folderTrigger = dialog.locator("#session-group-defaults-folder-trigger");
       await expect.poll(() => folderTrigger.getAttribute("aria-label")).toContain("peter");
       await folderTrigger.click();
@@ -90,7 +115,34 @@ suite.define(() => {
       await page.setViewportSize({ height: 900, width: 1280 });
       await expect.poll(() => folderTrigger.textContent()).toContain("client-work");
       await expect.poll(() => dialog.locator('input[name="cwd"]').count()).toBe(0);
-      await dialog.locator('select[name="mode"]').selectOption("worktree");
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
+        .toMatchObject({ repoRoot: groupCwd, includeRepositoryStatus: true });
+      await expect
+        .poll(async () => ({
+          state: await environment.getAttribute("data-session-group-environment"),
+          text: await environment.textContent(),
+        }))
+        .toMatchObject({ state: "git" });
+      const modeDropdown = environment.locator("wa-dropdown.session-group-defaults__mode-dropdown");
+      const modeTrigger = modeDropdown.locator("#session-group-defaults-mode-trigger");
+      await expect.poll(() => modeTrigger.getAttribute("data-value")).toBe("local");
+      await expect.poll(() => modeTrigger.textContent()).toContain("Runs directly");
+      expect((await modeTrigger.boundingBox())?.height).toBeCloseTo(56, 1);
+      await modeTrigger.click();
+      const worktreeOption = modeDropdown.getByRole("menuitemradio", {
+        name: /Worktree.*isolated Git worktree/i,
+      });
+      await expect.poll(() => worktreeOption.locator('[slot="icon"]').count()).toBe(1);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => modeTrigger.getAttribute("aria-expanded")).toBe("false");
+      await expect
+        .poll(() => modeTrigger.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await expect.poll(() => dialog.isVisible()).toBe(true);
+      await modeTrigger.click();
+      await worktreeOption.click();
+      await expect.poll(() => modeTrigger.getAttribute("data-value")).toBe("worktree");
       await dialog.getByRole("button", { name: "Save" }).click();
       expect((await gateway.waitForRequest("sessions.groups.update")).params).toMatchObject({
         name: "Client work",
@@ -99,7 +151,7 @@ suite.define(() => {
       });
 
       await group.locator(".sidebar-recent-sessions__head").hover();
-      await group.getByRole("button", { name: "New session in Client work" }).click();
+      await group.getByRole("link", { name: "New session in Client work" }).click();
       await page.locator(".new-session-page__message").waitFor();
       await expect.poll(() => new URL(page.url()).searchParams.get("group")).toBe("Client work");
       await expect
@@ -123,6 +175,66 @@ suite.define(() => {
         category: "Client work",
         cwd: groupCwd,
         message: "prepare the client release",
+        worktree: true,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("blocks saving a worktree default until repository inspection succeeds", async () => {
+    const groupCwd = "/home/peter/client-work";
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([]),
+        "worktrees.branches": {
+          branches: [],
+          repositoryStatus: "unavailable",
+        },
+      },
+      sessionGroups: ["Client work"],
+      sessionGroupDefaults: { "Client work": { cwd: groupCwd, worktree: true } },
+      workspace: "/home/peter/openclaw",
+      workspaceGit: true,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const group = page.locator('[data-session-section="category:Client work"]');
+      await group.waitFor({ state: "visible", timeout: 10_000 });
+      await group.locator(".sidebar-recent-sessions__head").hover();
+      await group.getByRole("button", { name: "Group options for Client work" }).click();
+      await page.getByRole("menuitem", { name: "New session defaults…" }).click();
+      const dialog = page.locator(
+        `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
+      );
+      await dialog.waitFor({ state: "visible" });
+
+      const environment = dialog.locator("[data-session-group-environment]");
+      await expect.poll(() => environment.textContent()).toContain("Couldn't verify Git");
+      const save = dialog.getByRole("button", { name: "Save" });
+      await expect.poll(() => save.isDisabled()).toBe(true);
+      expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
+
+      await gateway.setMethodResponse("worktrees.branches", {
+        branches: [{ kind: "local", name: "main" }],
+        defaultBranch: "main",
+        repositoryStatus: "git",
+      });
+      await dialog.getByRole("button", { name: "Retry" }).click();
+      const modeTrigger = dialog.locator("#session-group-defaults-mode-trigger");
+      await expect.poll(() => modeTrigger.getAttribute("data-value")).toBe("worktree");
+      await expect.poll(() => save.isEnabled()).toBe(true);
+      await save.click();
+      expect((await gateway.waitForRequest("sessions.groups.update")).params).toMatchObject({
+        name: "Client work",
+        cwd: groupCwd,
         worktree: true,
       });
     } finally {
@@ -275,19 +387,25 @@ suite.define(() => {
       await page.locator(".new-session-page__message").fill("wait for fresh defaults");
       await expect.poll(() => start.isEnabled()).toBe(true);
 
+      // Pin each wait past earlier sessions.groups.list traffic (the route
+      // load already fetched the catalog) so a slow runner can't return a
+      // stale earlier request.
+      const groupListsBeforeInvalidation = (await gateway.getRequests("sessions.groups.list"))
+        .length;
       await gateway.deferNext("sessions.groups.list");
       await gateway.emitGatewayEvent("sessions.changed", { reason: "groups" });
-      await gateway.waitForRequest("sessions.groups.list");
+      await gateway.waitForRequest("sessions.groups.list", { after: groupListsBeforeInvalidation });
       await expect.poll(() => start.isDisabled()).toBe(true);
       await expect
         .poll(() => page.locator(".new-session-page__catalog-unavailable button").isDisabled())
         .toBe(true);
+      const groupListsBeforeReject = (await gateway.getRequests("sessions.groups.list")).length;
       await gateway.deferNext("sessions.groups.list");
       await gateway.rejectDeferred("sessions.groups.list", {
         code: "UNAVAILABLE",
         message: "catalog reload failed",
       });
-      await gateway.waitForRequest("sessions.groups.list");
+      await gateway.waitForRequest("sessions.groups.list", { after: groupListsBeforeReject });
       await expect
         .poll(() => page.locator(".new-session-page__catalog-unavailable").textContent())
         .toContain("This session target is unavailable.");
@@ -315,7 +433,14 @@ suite.define(() => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.update"],
-      methodResponses: { "sessions.list": sessionsListResponse([]) },
+      methodResponses: {
+        "sessions.list": sessionsListResponse([]),
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+      },
       sessionGroups: ["Client work"],
       sessionGroupDefaults: { "Client work": { cwd: groupCwd, worktree: true } },
       workspace: "/home/peter/openclaw",
@@ -333,7 +458,11 @@ suite.define(() => {
         `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
       );
       await dialog.waitFor({ state: "visible" });
-      await dialog.locator('select[name="mode"]').selectOption("local");
+      const modeDropdown = dialog.locator("wa-dropdown.session-group-defaults__mode-dropdown");
+      const modeTrigger = modeDropdown.locator("#session-group-defaults-mode-trigger");
+      await modeTrigger.waitFor({ state: "visible" });
+      await modeTrigger.click();
+      await modeDropdown.getByRole("menuitemradio", { name: /Local.*Runs directly/i }).click();
       await dialog.getByRole("button", { name: "Save" }).click();
       await gateway.waitForRequest("sessions.groups.update");
       await gateway.rejectDeferred("sessions.groups.update", {
@@ -344,7 +473,7 @@ suite.define(() => {
       const alert = dialog.getByRole("alert");
       await alert.waitFor({ state: "visible" });
       await expect.poll(() => alert.textContent()).toContain("rejected group defaults");
-      await expect.poll(() => dialog.locator('select[name="mode"]').inputValue()).toBe("local");
+      await expect.poll(() => modeTrigger.getAttribute("data-value")).toBe("local");
 
       await dialog.getByRole("button", { name: "Save" }).click();
       await expect
@@ -353,7 +482,7 @@ suite.define(() => {
       await dialog.waitFor({ state: "detached" });
 
       await group.locator(".sidebar-recent-sessions__head").hover();
-      await group.getByRole("button", { name: "New session in Client work" }).click();
+      await group.getByRole("link", { name: "New session in Client work" }).click();
       await page.locator("#new-session-detail-trigger").waitFor();
       await expect
         .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
@@ -373,7 +502,14 @@ suite.define(() => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.defaults"],
-      methodResponses: { "sessions.list": sessionsListResponse([]) },
+      methodResponses: {
+        "sessions.list": sessionsListResponse([]),
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+      },
       sessionGroups: ["Client work"],
       sessionGroupDefaults: { "Client work": { cwd: groupCwd, worktree: true } },
       workspace: "/home/peter/openclaw",
@@ -405,9 +541,12 @@ suite.define(() => {
       await expect.poll(() => defaultsAction.textContent()).toContain("Retry");
       await expect.poll(() => defaultsAction.isEnabled()).toBe(true);
 
+      // Pin past the load-time sessions.groups.list so the retry wait can't
+      // return it stale.
+      const groupListsBeforeRetry = (await gateway.getRequests("sessions.groups.list")).length;
       await gateway.deferNext("sessions.groups.list");
       await defaultsAction.click();
-      await gateway.waitForRequest("sessions.groups.list");
+      await gateway.waitForRequest("sessions.groups.list", { after: groupListsBeforeRetry });
       await gateway.resolveDeferred("sessions.groups.list", {
         groups: [{ name: "Client work", position: 0 }],
       });
@@ -431,7 +570,11 @@ suite.define(() => {
           dialog.locator("#session-group-defaults-folder-trigger").getAttribute("aria-label"),
         )
         .toContain("client-work");
-      await expect.poll(() => dialog.locator('select[name="mode"]').inputValue()).toBe("worktree");
+      await expect
+        .poll(() =>
+          dialog.locator("#session-group-defaults-mode-trigger").getAttribute("data-value"),
+        )
+        .toBe("worktree");
       expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
       await dialog.getByRole("button", { name: "Cancel" }).click();
     } finally {

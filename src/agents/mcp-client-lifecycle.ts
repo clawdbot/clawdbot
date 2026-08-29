@@ -1,11 +1,9 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import {
-  StreamableHTTPClientTransport,
-  StreamableHTTPError,
-} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 
 type LifecycleSession = {
@@ -24,7 +22,7 @@ export function isStatefulMcpHttpSessionExpired(
 ): boolean {
   return (
     session.transportType === "streamable-http" &&
-    session.transport instanceof StreamableHTTPClientTransport &&
+    session.transport instanceof OpenClawStreamableHTTPClientTransport &&
     session.transport.sessionId !== undefined &&
     error instanceof StreamableHTTPError &&
     error.code === 404
@@ -67,7 +65,7 @@ export async function connectMcpClient(params: {
           transportType:
             params.transport instanceof OpenClawStdioClientTransport
               ? "stdio"
-              : params.transport instanceof StreamableHTTPClientTransport
+              : params.transport instanceof OpenClawStreamableHTTPClientTransport
                 ? "streamable-http"
                 : "sse",
         },
@@ -112,33 +110,37 @@ export async function disposeMcpClient(
   session: LifecycleSession,
   timeoutMs = 5_000,
 ): Promise<void> {
-  session.detachStderr?.();
-  const closed = await settleWithin(
-    (async () => {
-      if (session.transportType === "streamable-http") {
-        await ignoreCloseFailure(() => session.transport.terminateSession?.());
-      }
-      await ignoreCloseFailure(() => session.transport.close());
-      await ignoreCloseFailure(() => session.client.close());
-    })(),
-    timeoutMs,
-  );
-  if (closed) {
-    return;
-  }
+  try {
+    const closed = await settleWithin(
+      (async () => {
+        if (session.transportType === "streamable-http") {
+          await ignoreCloseFailure(() => session.transport.terminateSession?.());
+        }
+        await ignoreCloseFailure(() => session.transport.close());
+        await ignoreCloseFailure(() => session.client.close());
+      })(),
+      timeoutMs,
+    );
+    if (closed) {
+      return;
+    }
 
-  // Closing an HTTP transport aborts a hung DELETE. Stdio owns a process
-  // group, so force it dead before disposal can report completion.
-  const { transport } = session;
-  const closeTransport =
-    session.transportType === "stdio" && transport instanceof OpenClawStdioClientTransport
-      ? () => transport.forceClose()
-      : () => transport.close();
-  await settleWithin(
-    Promise.all([
-      ignoreCloseFailure(closeTransport),
-      ignoreCloseFailure(() => session.client.close()),
-    ]),
-    timeoutMs,
-  );
+    // Closing an HTTP transport aborts a hung DELETE. Stdio owns a process
+    // group, so force it dead before disposal can report completion.
+    const { transport } = session;
+    const closeTransport =
+      session.transportType === "stdio" && transport instanceof OpenClawStdioClientTransport
+        ? () => transport.forceClose()
+        : () => transport.close();
+    await settleWithin(
+      Promise.all([
+        ignoreCloseFailure(closeTransport),
+        ignoreCloseFailure(() => session.client.close()),
+      ]),
+      timeoutMs,
+    );
+  } finally {
+    // Shutdown itself may emit the last diagnostic; detach only after it settles.
+    session.detachStderr?.();
+  }
 }

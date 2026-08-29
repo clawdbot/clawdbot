@@ -21,7 +21,7 @@ import {
   resolveWorkspaceBootstrapStatus,
 } from "../agents/workspace.js";
 import { pruneAgentConfig } from "../commands/agents.config.js";
-import { moveToTrash } from "../commands/onboard-helpers.js";
+import { moveToTrash } from "../commands/cleanup-utils.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";

@@ -59,6 +59,14 @@ if [[ -z "$BINDING_STORE_CONTRACT" ]]; then
     BINDING_STORE_CONTRACT="legacy-sidecar"
   fi
 fi
+if grep -q \
+  'continuesSourceReplyProgress' \
+  "$CANDIDATE_ROOT/extensions/codex/src/app-server/dynamic-tools.ts" 2>/dev/null; then
+  FOLLOWTHROUGH_PROGRESS_FINAL_MODE="explicit"
+else
+  # Frozen candidates continue after omitted finality; current candidates require false.
+  FOLLOWTHROUGH_PROGRESS_FINAL_MODE="legacy"
+fi
 run_log=""
 
 cleanup() {
@@ -197,6 +205,7 @@ if ! docker_e2e_run_with_harness \
   -e OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_TARBALL="$CODEX_PLUGIN_REGISTRY_TARBALL" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_VERSION="$CODEX_PLUGIN_REGISTRY_VERSION" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT="$BINDING_STORE_CONTRACT" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_FOLLOWTHROUGH_PROGRESS_FINAL_MODE="$FOLLOWTHROUGH_PROGRESS_FINAL_MODE" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT="$SESSION_STORE_CONTRACT" \
   -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES=$ASSERT_MAX_TEXT_FILE_BYTES" \
   -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_ERROR_TAIL_BYTES=$ASSERT_MAX_ERROR_TAIL_BYTES" \
@@ -334,7 +343,7 @@ if [ -n "$CODEX_PLUGIN_REGISTRY_TARBALL" ]; then
 fi
 
 echo "Installing Codex plugin: $CODEX_PLUGIN_SPEC"
-openclaw plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
+openclaw_e2e_fixture_plugin_command openclaw -- plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
 
 node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs configure "$MODEL_REF"
 
@@ -446,12 +455,25 @@ printf 'qa_beta=violet-%s\n' "$FOLLOWTHROUGH_SUFFIX" >"$FOLLOWTHROUGH_WORKSPACE/
 printf 'qa_gamma=silver-%s\n' "$FOLLOWTHROUGH_SUFFIX" >"$FOLLOWTHROUGH_WORKSPACE/FOLLOWTHROUGH_GAMMA.md"
 rm -f "$FOLLOWTHROUGH_ARTIFACT"
 
+case "${OPENCLAW_CODEX_NPM_PLUGIN_FOLLOWTHROUGH_PROGRESS_FINAL_MODE:?missing follow-through final mode}" in
+  explicit)
+    FOLLOWTHROUGH_PROGRESS_INSTRUCTION="with final=false"
+    ;;
+  legacy)
+    FOLLOWTHROUGH_PROGRESS_INSTRUCTION="without passing final"
+    ;;
+  *)
+    echo "invalid follow-through final mode: $OPENCLAW_CODEX_NPM_PLUGIN_FOLLOWTHROUGH_PROGRESS_FINAL_MODE" >&2
+    exit 1
+    ;;
+esac
+
 FOLLOWTHROUGH_PROMPT="$(cat <<PROMPT
 Live release follow-through check.
 
-First call message(action=send) without passing final and send exactly
-$FOLLOWTHROUGH_PROGRESS_MARKER to this conversation. The final field must be
-omitted, not false. Make this progress send your only tool call in this step,
+First call message(action=send) $FOLLOWTHROUGH_PROGRESS_INSTRUCTION and send exactly
+$FOLLOWTHROUGH_PROGRESS_MARKER to this conversation. Make this progress send
+your only tool call in this step,
 and wait for its result before calling any other tool.
 
 Only after that send succeeds, read FOLLOWTHROUGH_ALPHA.md,

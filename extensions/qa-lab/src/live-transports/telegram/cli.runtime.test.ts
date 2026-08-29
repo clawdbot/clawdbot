@@ -70,6 +70,7 @@ describe("Telegram live QA scenario gate", () => {
     writeFileSync(
       summaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts,
         scenarios: [{ name: "channel-canary", status }],
       }),
@@ -158,6 +159,7 @@ describe("Telegram live QA scenario gate", () => {
         writeFileSync(
           summaryPath,
           JSON.stringify({
+            run: { status: "completed" },
             counts: { total: 0, passed: 0, failed: 0, skipped: 0 },
             scenarios: [],
           }),

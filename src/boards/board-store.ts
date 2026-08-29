@@ -24,8 +24,19 @@ export type BoardWidgetHtmlDocument = {
   viewGeneration: string;
   grantState: "none" | "pending" | "granted" | "rejected";
   declared?: BoardWidgetDeclared;
+  resourceOrigins?: string[];
 };
 export type BoardWidgetHtmlViewMetadata = Omit<BoardWidgetHtmlDocument, "html">;
+export type BoardWidgetRegisteredDocument = {
+  pluginKind: string;
+  source: string;
+  title?: string;
+  revision: number;
+  sha256: string;
+  viewGeneration: string;
+  grantState: "none" | "pending" | "granted" | "rejected";
+  declared?: BoardWidgetDeclared;
+};
 export type BoardWidgetMcpAppDocument = {
   descriptor: BoardMcpAppDescriptor;
   revision: number;
@@ -34,7 +45,10 @@ export type BoardWidgetMcpAppDocument = {
   declaredTools: string[];
   interactive: boolean;
 };
-export type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDocument;
+export type BoardWidgetDocument =
+  | BoardWidgetHtmlDocument
+  | BoardWidgetRegisteredDocument
+  | BoardWidgetMcpAppDocument;
 export type BoardSnapshotWithHtmlViewMetadata = {
   snapshot: BoardSnapshot;
   htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
@@ -53,6 +67,7 @@ export interface BoardStore {
     instanceId?: string,
   ): BoardSnapshot;
   readWidgetHtml(sessionKey: string, name: string): BoardWidgetHtmlDocument | undefined;
+  readWidgetRegistered(sessionKey: string, name: string): BoardWidgetRegisteredDocument | undefined;
   readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppDocument | undefined;
   listSessionsWithBoards(): string[];
 }
@@ -192,6 +207,18 @@ function validatePluginContent(params: BoardWidgetMaterializedPutParams): void {
   }
 }
 
+function validateRegisteredContent(params: BoardWidgetMaterializedPutParams): void {
+  if (params.content.kind !== "registered") {
+    return;
+  }
+  if (Buffer.byteLength(params.content.source, "utf8") > BOARD_MAX_WIDGET_HTML_BYTES) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      `board registered widget source exceeds ${BOARD_MAX_WIDGET_HTML_BYTES} UTF-8 bytes`,
+    );
+  }
+}
+
 export function createBoardWidgetPutSnapshot(
   prior: BoardSnapshot,
   params: BoardWidgetMaterializedPutParams,
@@ -202,6 +229,7 @@ export function createBoardWidgetPutSnapshot(
   },
 ): BoardSnapshot {
   validatePluginContent(params);
+  validateRegisteredContent(params);
   if (
     params.content.kind === "html" &&
     Buffer.byteLength(params.content.html, "utf8") > BOARD_MAX_WIDGET_HTML_BYTES
@@ -216,6 +244,23 @@ export function createBoardWidgetPutSnapshot(
     layout.tabs.push({ tabId: "main", title: "Main", position: 0, chatDock: "right" });
   }
   const existing = layout.widgets.find((widget) => widget.name === params.name);
+  if (
+    existing &&
+    (existing.contentOwner !== params.content.kind ||
+      ((params.content.kind === "plugin" || params.content.kind === "registered") &&
+        (existing.pluginKind !== params.content.pluginKind ||
+          (params.content.kind === "registered" &&
+            existing.registeredContentKind !== params.content.contentKind))))
+  ) {
+    const incomingOwner =
+      params.content.kind === "plugin" || params.content.kind === "registered"
+        ? params.content.pluginKind
+        : params.content.kind;
+    throw new BoardValidationError(
+      "invalid_operation",
+      `board widget ${params.name} contains ${existing.pluginKind ?? existing.contentOwner} content; update it with the same content kind or remove it before replacing it with ${incomingOwner} content`,
+    );
+  }
   if (!existing && layout.widgets.length >= BOARD_MAX_WIDGETS) {
     throw new BoardValidationError(
       "invalid_operation",
@@ -234,7 +279,9 @@ export function createBoardWidgetPutSnapshot(
   const contentSha256 =
     params.content.kind === "html"
       ? createHash("sha256").update(params.content.html).digest("hex")
-      : undefined;
+      : params.content.kind === "registered"
+        ? createHash("sha256").update(params.content.source).digest("hex")
+        : undefined;
   // HTML grants are frozen to approved bytes. MCP App grants stay within the
   // source server. Either kind may narrow, but never widen, its declaration.
   const preservesGrant =
@@ -242,7 +289,9 @@ export function createBoardWidgetPutSnapshot(
     context.grantScopeMatches &&
     (params.content.kind !== "mcp-app" || params.content.interactive) &&
     existing?.grantState === "granted" &&
-    (params.content.kind === "html" ? contentSha256 === context.grantedSha256 : true) &&
+    (params.content.kind === "html" || params.content.kind === "registered"
+      ? contentSha256 === context.grantedSha256
+      : true) &&
     boardDeclarationIsSubset(declared, existing.declared);
   layout = insertBoardWidget(
     layout,
@@ -254,7 +303,11 @@ export function createBoardWidgetPutSnapshot(
         : existing?.title !== undefined
           ? { title: existing.title }
           : {}),
-      contentKind: params.content.kind,
+      contentKind: params.content.kind === "registered" ? "plugin" : params.content.kind,
+      contentOwner: params.content.kind,
+      ...(params.content.kind === "registered"
+        ? { registeredContentKind: params.content.contentKind }
+        : {}),
       ...(params.presentation !== undefined
         ? { presentation: params.presentation }
         : existing?.presentation !== undefined
@@ -265,10 +318,10 @@ export function createBoardWidgetPutSnapshot(
         : existing?.heightMode !== undefined
           ? { heightMode: existing.heightMode }
           : {}),
-      ...(params.content.kind === "plugin"
+      ...(params.content.kind === "plugin" || params.content.kind === "registered"
         ? {
             pluginKind: params.content.pluginKind,
-            ...(params.content.props !== undefined
+            ...(params.content.kind === "plugin" && params.content.props !== undefined
               ? { props: structuredClone(params.content.props) }
               : {}),
           }

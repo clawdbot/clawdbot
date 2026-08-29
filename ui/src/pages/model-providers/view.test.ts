@@ -30,6 +30,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     loading: false,
     refreshing: false,
     error: null,
+    providerUsageFailed: false,
     updatedAt: 1,
     costDays: 30,
     credentialAgentLabel: "Writer",
@@ -46,6 +47,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
     canMutate: true,
     mutationBlockedReason: null,
+    providerUsageStalled: false,
     probeAvailable: true,
     busy: {},
     messages: {},
@@ -118,6 +120,15 @@ function selectSegment(group: SegmentedGroup, value: string) {
 }
 
 describe("renderModelProviders", () => {
+  it("surfaces a provider-usage failure on the provider list", () => {
+    const container = document.createElement("div");
+    render(renderModelProviders(props({ providerUsageFailed: true })), container);
+
+    expect(container.textContent).toContain(
+      "Provider usage is unavailable; the last request failed. Refresh to retry.",
+    );
+  });
+
   beforeEach(async () => {
     await i18n.setLocale("en");
   });
@@ -197,15 +208,10 @@ describe("renderModelProviders", () => {
     expect(text(thinkingRow)).toContain("Default: Model policy");
     expect(text(fastRow)).toContain("Default: Model policy");
 
-    thinkingRow.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
-    fastRow.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
-    expect(onThinkingReset).toHaveBeenCalledOnce();
-    expect(onFastModeReset).toHaveBeenCalledOnce();
-
     selectSegment(thinkingRow.querySelector<SegmentedGroup>("wa-radio-group")!, "");
     selectSegment(fastRow.querySelector<SegmentedGroup>("wa-radio-group")!, "");
-    expect(onThinkingReset).toHaveBeenCalledTimes(2);
-    expect(onFastModeReset).toHaveBeenCalledTimes(2);
+    expect(onThinkingReset).toHaveBeenCalledOnce();
+    expect(onFastModeReset).toHaveBeenCalledOnce();
 
     render(
       renderModelProviders(
@@ -236,34 +242,6 @@ describe("renderModelProviders", () => {
     ).toBe(true);
     expect(text(inheritedThinking)).toContain("Using default: Model policy");
     expect(text(inheritedFast)).toContain("Using default: Model policy");
-    expect(
-      inheritedBehavior.querySelectorAll('button[aria-label="Reset to default"]'),
-    ).toHaveLength(0);
-  });
-
-  it("keeps invalid explicit model behavior values resettable", () => {
-    const onThinkingReset = vi.fn();
-    const onFastModeReset = vi.fn();
-    const container = mount(
-      props({
-        thinkingLevel: undefined,
-        thinkingOverridden: true,
-        fastMode: undefined,
-        fastModeOverridden: true,
-        onThinkingReset,
-        onFastModeReset,
-      }),
-    );
-    const behavior = container.querySelector("#settings-model-behavior")!;
-    const thinking = settingsRow(behavior, "Thinking");
-    const fast = settingsRow(behavior, "Fast mode");
-
-    expect(text(thinking)).toContain("Default: Model policy");
-    expect(text(fast)).toContain("Default: Model policy");
-    thinking.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
-    fast.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
-    expect(onThinkingReset).toHaveBeenCalledOnce();
-    expect(onFastModeReset).toHaveBeenCalledOnce();
   });
 
   it("restores controlled model behavior when a reset is rejected", () => {
@@ -543,7 +521,6 @@ describe("renderModelProviders", () => {
     const readiness = container.querySelector('[data-model-readiness="model-required"]');
     expect(text(readiness)).toContain("Connect a verified AI model");
     expect(text(readiness)).toContain("Model required");
-    expect(text(readiness)).toContain("Connect a verified AI model");
     expect(container.querySelector(".model-providers__defaults")).toBeNull();
     expect(text(container.querySelector('[data-provider-id="openai"]'))).toContain(
       "Credentials configured",

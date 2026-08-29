@@ -32,6 +32,7 @@ export type ExecuteNodeHostCommandParams = {
   agentId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
+  bypassHostApprovalFloors?: boolean;
   autoReview?: boolean;
   autoReviewer?: ExecAutoReviewer;
   signal?: AbortSignal;
@@ -43,6 +44,7 @@ export type ExecuteNodeHostCommandParams = {
   warnings: string[];
   /** Warnings that apply only when the command runs inline, never while approval is pending. */
   foregroundWarnings?: string[];
+  processContinuationAvailable?: boolean;
   notifySessionKey?: string;
   notifyOnExit?: boolean;
   trustedSafeBinDirs?: ReadonlySet<string>;

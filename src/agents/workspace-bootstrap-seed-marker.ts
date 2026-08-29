@@ -7,7 +7,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { resolveWorkspaceStateIdentity } from "./workspace-state-store.js";
+import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 
 type WorkspaceSetupStateDatabase = Pick<OpenClawStateKyselyDatabase, "workspace_setup_state">;
 

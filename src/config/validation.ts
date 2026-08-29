@@ -12,6 +12,8 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
+import { resolveSecretRefProviderSourceMismatch } from "../secrets/ref-contract.js";
+import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import {
@@ -28,6 +30,7 @@ import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
+import { resolveSecretInputRef } from "./types.secrets.js";
 import {
   bundledChannelIds,
   collectChannelDmPolicyDependencyWarnings,
@@ -35,7 +38,8 @@ import {
   hasChannelDmPolicyDependencyWarningCandidates,
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
-import { validateConfigObjectRaw } from "./validation-core.js";
+import { collectHeartbeatOwnerWarnings, validateConfigObjectRaw } from "./validation-core.js";
+import { withConfigIssuePath } from "./validation-issues.js";
 import {
   collectExplicitPluginReferences,
   resolveExplicitPluginReferencePath,
@@ -52,6 +56,8 @@ type ValidateConfigWithPluginsResult =
 type ValidateConfigWithPluginsParams = {
   env?: NodeJS.ProcessEnv;
   pluginValidation?: "full" | "skip" | "core-only";
+  /** Runtime preserves inactive-owner startup; strict mode checks all declared targets for explicit validation and writes. */
+  semanticValidation?: "runtime" | "strict";
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   loadPluginMetadataSnapshot?: (
     config: OpenClawConfig,
@@ -68,6 +74,43 @@ type RegistryInfo = {
   channelDmAllowFromModes?: Map<string, ChannelDmAllowFromMode>;
   channelSchemas?: Map<string, { schema?: Record<string, unknown>; pluginId?: string }>;
 };
+
+function collectSecretRefProviderSourceIssues(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  manifestRegistry: PluginManifestRegistry;
+}): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  for (const target of discoverConfigSecretTargets(params.config, {
+    env: params.env,
+    manifestRegistry: params.manifestRegistry,
+  })) {
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults: params.config.secrets?.defaults,
+    });
+    if (!ref) {
+      continue;
+    }
+    const configuredSource = resolveSecretRefProviderSourceMismatch(params.config, ref);
+    if (!configuredSource) {
+      continue;
+    }
+    const path = target.refPath ?? target.path;
+    const pathSegments = target.refPathSegments ?? target.pathSegments;
+    issues.push(
+      withConfigIssuePath(
+        {
+          path,
+          message: `Secret provider "${ref.provider}" has source "${configuredSource}" but ref requests "${ref.source}".`,
+        },
+        pathSegments,
+      ),
+    );
+  }
+  return issues;
+}
 
 export function validateConfigObjectWithPlugins(
   raw: unknown,
@@ -95,6 +138,7 @@ function validateConfigObjectWithPluginMode(
     applyDefaults,
     env: params?.env,
     pluginValidation: params?.pluginValidation ?? "full",
+    semanticValidation: params?.semanticValidation ?? "runtime",
     pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
     loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
     sourceRaw: params?.sourceRaw,
@@ -174,7 +218,7 @@ function validateConfigObjectWithPluginsBase(
     }
   }
   const config = opts.applyDefaults
-    ? materializeRuntimeConfig(parsedConfig, "snapshot", {
+    ? materializeRuntimeConfig(parsedConfig, {
         manifestRegistry:
           registryInfo?.registry ??
           (opts.pluginValidation === "core-only" ? { plugins: [] } : undefined),
@@ -186,6 +230,7 @@ function validateConfigObjectWithPluginsBase(
 
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
+  warnings.push(...collectHeartbeatOwnerWarnings(config));
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
   const explicitPluginReferences = collectExplicitPluginReferences(raw);
 
@@ -196,9 +241,7 @@ function validateConfigObjectWithPluginsBase(
       : formatRawChannelConfigIssueMessage(message);
   };
 
-  let compatConfig: OpenClawConfig | null | undefined;
   let compatPluginIds: ReadonlySet<string> | null = null;
-  let compatPluginIdsResolved = false;
   let registryDiagnosticsPushed = false;
 
   const pushRegistryDiagnostics = (registry: PluginManifestRegistry): void => {
@@ -241,22 +284,16 @@ function validateConfigObjectWithPluginsBase(
   const ensureLoadedRegistryInfo = (): RegistryInfo => registryInfo ?? loadValidationRegistry();
 
   const ensureCompatPluginIds = (): ReadonlySet<string> => {
-    if (compatPluginIdsResolved) {
-      return compatPluginIds ?? new Set<string>();
+    if (compatPluginIds) {
+      return compatPluginIds;
     }
-    compatPluginIdsResolved = true;
     const allow = config.plugins?.allow;
     if (!Array.isArray(allow) || allow.length === 0) {
       compatPluginIds = new Set<string>();
       return compatPluginIds;
     }
     const { registry } = registryInfo ?? loadValidationRegistry();
-    const overriddenBundledPluginIds = new Set(
-      registry.diagnostics
-        .filter((diag) => diag.message.includes("duplicate plugin id detected"))
-        .map((diag) => diag.pluginId)
-        .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== ""),
-    );
+    const overriddenBundledPluginIds = ensureOverriddenPluginIds();
     compatPluginIds = new Set(
       registry.plugins
         .filter(
@@ -270,17 +307,8 @@ function validateConfigObjectWithPluginsBase(
     return compatPluginIds;
   };
 
-  const ensureCompatConfig = (): OpenClawConfig => {
-    if (compatConfig !== undefined) {
-      return compatConfig ?? config;
-    }
-    compatConfig = config;
-    return config;
-  };
-
   const ensureRegistry = (): RegistryInfo => {
     const info = ensureLoadedRegistryInfo();
-    ensureCompatConfig();
     pushRegistryDiagnostics(info.registry);
     return info;
   };
@@ -304,7 +332,7 @@ function validateConfigObjectWithPluginsBase(
 
   const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
     const info = ensureRegistry();
-    info.normalizedPlugins ??= normalizePluginsConfig(ensureCompatConfig().plugins);
+    info.normalizedPlugins ??= normalizePluginsConfig(config.plugins);
     return info.normalizedPlugins;
   };
 
@@ -666,28 +694,35 @@ function validateConfigObjectWithPluginsBase(
   validateWebSearchProvider();
   validateConfiguredModelRefs();
 
-  if (!hasExplicitPluginsConfig) {
-    return issues.length > 0
-      ? { ok: false, issues, warnings }
-      : { ok: true, config: mutatedConfig, warnings };
+  if (hasExplicitPluginsConfig) {
+    const { registry } = ensureRegistry();
+    validateExplicitPluginConfig({
+      raw,
+      config,
+      env: opts.env,
+      applyDefaults: opts.applyDefaults,
+      registry,
+      knownIds: ensureKnownIds(),
+      normalizedPlugins: ensureNormalizedPlugins(),
+      ensureCompatPluginIds,
+      ensureOverriddenPluginIds,
+      replacePluginEntryConfig,
+      issues,
+      warnings,
+    });
   }
-
-  const { registry } = ensureRegistry();
-  validateExplicitPluginConfig({
-    raw,
-    config,
-    effectiveConfig: ensureCompatConfig(),
-    env: opts.env,
-    applyDefaults: opts.applyDefaults,
-    registry,
-    knownIds: ensureKnownIds(),
-    normalizedPlugins: ensureNormalizedPlugins(),
-    ensureCompatPluginIds,
-    ensureOverriddenPluginIds,
-    replacePluginEntryConfig,
-    issues,
-    warnings,
-  });
+  if (
+    opts.semanticValidation === "strict" &&
+    Object.keys(mutatedConfig.secrets?.providers ?? {}).length > 0
+  ) {
+    issues.push(
+      ...collectSecretRefProviderSourceIssues({
+        config: mutatedConfig,
+        env: opts.env,
+        manifestRegistry: ensureLoadedRegistryInfo().registry,
+      }),
+    );
+  }
 
   return issues.length > 0
     ? { ok: false, issues, warnings }

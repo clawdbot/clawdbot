@@ -144,6 +144,11 @@ async function classifyFileAttachment(params: {
   const { attachment, cache, cfg, limits, skipAttachmentIndexes } = params;
   const attachmentFilename =
     attachment.path ?? (attachment.url ? attachmentUrlDisplayName(attachment.url) : undefined);
+  // The staged copy is written under a generated name, so its basename cannot
+  // answer a question that names the attachment. Prefer the sender's own name
+  // for anything the model reads; classification below deliberately stays on the
+  // staged path, because a sender-controlled name must not steer format detection.
+  const displayFilename = attachment.fileName ?? attachmentFilename;
   if (skipAttachmentIndexes?.has(attachment.index)) {
     return { outcome: { kind: "claimed-elsewhere" } };
   }
@@ -163,7 +168,7 @@ async function classifyFileAttachment(params: {
     if (shouldLogVerbose()) {
       logVerbose(`media: file attachment skipped (url disabled) index=${attachment.index}`);
     }
-    return { outcome: { kind: "url-sources-disabled" }, filename: attachmentFilename };
+    return { outcome: { kind: "url-sources-disabled" }, filename: displayFilename };
   }
   let bufferResult: Awaited<ReturnType<typeof cache.getBuffer>>;
   try {
@@ -176,9 +181,9 @@ async function classifyFileAttachment(params: {
     if (shouldLogVerbose()) {
       logVerbose(`media: file attachment skipped (buffer): ${String(err)}`);
     }
-    return { outcome: { kind: "read-failure" }, filename: attachmentFilename };
+    return { outcome: { kind: "read-failure" }, filename: displayFilename };
   }
-  const filename = bufferResult?.fileName;
+  const filename = attachment.fileName ?? bufferResult?.fileName;
   const classification: AttachmentClassification = bufferResult.classification;
   // Marker mime prefers the sender-declared type; never the name-forced text mime,
   // which would mislabel binary bytes inside a text-named file as a text format.
@@ -611,15 +616,14 @@ export async function applyMediaUnderstanding(params: {
             // placement, suppress — a wrong path is worse than the plain marker (#122411).
             selfServePathsEnabled: params.selfServeLocalPaths === true,
           });
-    const mediaMarkers =
-      params.processingMode === "audio-only"
-        ? []
-        : renderMediaAttachmentMarkers({
-            attachments,
-            decisions,
-            outputs,
-            deliveredImageIndexes: params.deliveredImageIndexes,
-          });
+    // Only processed capabilities have decisions, so audio-only runs cannot
+    // add markers for image/video inputs still owned by the native harness.
+    const mediaMarkers = renderMediaAttachmentMarkers({
+      attachments,
+      decisions,
+      outputs,
+      deliveredImageIndexes: params.deliveredImageIndexes,
+    });
     const contextBlocks = applyAttachmentMarkerBudget([...fileContext.blocks, ...mediaMarkers]);
     if (contextBlocks.length > 0) {
       ctx.Body = appendFileBlocks(ctx.Body, contextBlocks);

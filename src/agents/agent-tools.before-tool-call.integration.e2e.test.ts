@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
@@ -33,6 +34,7 @@ import {
   authorizeClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
   checkClientVoiceToolConfirmationPolicy,
+  deactivateClientVoiceConfirmationSession,
   noteClientVoiceConfirmationUtterance,
 } from "../talk/client-voice-confirmation.js";
 import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
@@ -64,6 +66,7 @@ import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import { hashToolCall, recordToolCall } from "./tool-loop-detection.js";
+import { createToolSearchCatalogRef, registerHeadlessToolSearchCatalog } from "./tool-search.js";
 import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
@@ -146,9 +149,8 @@ function installVoiceRunBinding(runId: string): void {
   vi.spyOn(clientVoiceSession, "isClientVoiceSessionConfirmable").mockReturnValue(true);
 }
 
-function approveVoiceToolParams(runId: string, toolParams: unknown): void {
+function authorizeVoiceToolParams(runId: string, toolParams: unknown, now = Date.now()) {
   const voiceSessionId = `voice-${runId}`;
-  const now = Date.now();
   const challenge = checkClientVoiceToolConfirmationPolicy({
     agentId: "main",
     voiceSessionId,
@@ -177,6 +179,11 @@ function approveVoiceToolParams(runId: string, toolParams: unknown): void {
     confirmationId,
     now: now + 2,
   });
+  return { confirmationId, grant, voiceSessionId };
+}
+
+function approveVoiceToolParams(runId: string, toolParams: unknown): void {
+  const { grant } = authorizeVoiceToolParams(runId, toolParams);
   bindAuthorizedClientVoiceConfirmation({ grant, runId });
 }
 
@@ -194,6 +201,7 @@ describe("before_tool_call hook integration", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetClientVoiceConfirmationStateForTest();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -962,6 +970,40 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     );
 
     beforeToolCallHook.mockClear();
+    const blankCodeAliasResult = await def.execute(
+      "call-code-mode-exec-blank-code",
+      { code: "", command: "return 3;" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(blankCodeAliasResult.details).toMatchObject({
+      status: "blocked",
+      reason: "blocked before code-mode execution",
+    });
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: { code: "return 3;", command: "return 3;" },
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec-blank-code",
+      },
+      {
+        toolName: "exec",
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec-blank-code",
+      },
+    );
+
+    beforeToolCallHook.mockClear();
     const typescriptResult = await def.execute(
       "call-code-mode-exec-typescript",
       {
@@ -1276,6 +1318,188 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     });
   });
 
+  it("fails closed when a hook blanks one code-mode exec alias", async () => {
+    // A blank alias from the caller is treated as absent, but a hook that
+    // deliberately blanks `code` is a policy decision: mirror it so neither
+    // alias survives, rather than silently running the original command.
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => ({ params: { code: "" } }),
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const tool = markCodeModeControlTool(
+      asAgentTool({
+        name: CODE_MODE_EXEC_TOOL_NAME,
+        execute,
+        description: "exec",
+        parameters: {},
+      }),
+    );
+    const [def] = toToolDefinitions([tool], {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "session-main",
+      runId: "run-main",
+    });
+    if (!def) {
+      throw new Error("missing custom tool definition");
+    }
+    const extensionContext = {} as Parameters<typeof def.execute>[4];
+
+    await def.execute(
+      "call-code-mode-exec-blank-rewrite",
+      { code: "", command: "return 1;" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(execute).toHaveBeenCalledWith(
+      "call-code-mode-exec-blank-rewrite",
+      { code: "", command: "" },
+      undefined,
+      undefined,
+    );
+  });
+
+  it.each([
+    { stage: "trusted policy", alias: "code", replacement: "" },
+    { stage: "trusted policy", alias: "command", replacement: "" },
+    { stage: "trusted policy", alias: "code", replacement: null },
+    { stage: "trusted policy", alias: "command", replacement: null },
+    { stage: "hook", alias: "code", replacement: null },
+    { stage: "hook", alias: "command", replacement: null },
+    { stage: "hook after a trusted rewrite", alias: "code", replacement: "" },
+    { stage: "hook after a trusted rewrite", alias: "command", replacement: "" },
+    { stage: "hook after a trusted rewrite", alias: "code", replacement: null },
+    { stage: "hook after a trusted rewrite", alias: "command", replacement: null },
+    { stage: "trusted policy", alias: "code", replacement: null, otherReplacement: "return 4;" },
+    {
+      stage: "trusted policy",
+      alias: "command",
+      replacement: null,
+      otherReplacement: "return 4;",
+    },
+    { stage: "hook", alias: "code", replacement: null, otherReplacement: "return 4;" },
+    { stage: "hook", alias: "command", replacement: null, otherReplacement: "return 4;" },
+    { stage: "hook after a trusted rewrite", alias: "code", replacement: "return 3;" },
+    { stage: "hook after a trusted rewrite", alias: "command", replacement: "return 3;" },
+  ])(
+    "handles a $stage changing the $alias code-mode exec alias to $replacement",
+    async ({ stage, alias, replacement, otherReplacement }) => {
+      resetGlobalHookRunner();
+      const pairedReplacement =
+        otherReplacement === undefined
+          ? {}
+          : { [alias === "code" ? "command" : "code"]: otherReplacement };
+      const registry = createEmptyPluginRegistry();
+      registry.trustedToolPolicies =
+        stage === "hook"
+          ? []
+          : [
+              {
+                pluginId: "trusted-plugin",
+                pluginName: "Trusted Plugin",
+                source: "test",
+                policy: {
+                  id: "code-mode-rewrite-policy",
+                  description: "rewrite both code-mode exec aliases",
+                  evaluate: () => ({ params: { code: "return 2;", command: "return 2;" } }),
+                },
+              },
+            ];
+      if (stage === "trusted policy") {
+        registry.trustedToolPolicies.push({
+          pluginId: "trusted-plugin",
+          pluginName: "Trusted Plugin",
+          source: "test",
+          policy: {
+            id: "code-mode-invalidate-policy",
+            description: "invalidate one code-mode exec alias",
+            evaluate: (eventValue) => ({
+              params: {
+                ...eventValue.params,
+                [alias]: replacement,
+                ...pairedReplacement,
+              },
+            }),
+          },
+        });
+      } else {
+        addTestHook({
+          registry,
+          pluginId: "normal-plugin",
+          hookName: "before_tool_call",
+          handler: (async () => ({
+            params: {
+              [alias]: replacement,
+              ...pairedReplacement,
+            },
+          })) as PluginHookRegistration["handler"],
+        });
+      }
+      setActivePluginRegistry(registry);
+      initializeGlobalHookRunner(registry);
+      try {
+        const codeModeConfig: OpenClawConfig = { tools: { codeMode: true } };
+        const catalogRef = createToolSearchCatalogRef();
+        registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
+        const execTool = createCodeModeTools({
+          config: codeModeConfig,
+          runtimeConfig: codeModeConfig,
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sessionId: "session-main",
+          runId: "run-main",
+          abortSignal: new AbortController().signal,
+          catalogRef,
+          executeTool: async () => {
+            throw new Error("catalog tool execution should not be reached");
+          },
+        }).find((tool) => tool.name === CODE_MODE_EXEC_TOOL_NAME);
+        if (!execTool) {
+          throw new Error("missing code-mode exec tool");
+        }
+        const [def] = splitSdkTools({
+          tools: [execTool],
+          sandboxEnabled: false,
+          toolHookContext: {
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            sessionId: "session-main",
+            runId: "run-main",
+          },
+        }).customTools;
+        if (!def) {
+          throw new Error("missing custom tool definition");
+        }
+
+        const result = await def.execute(
+          `call-code-mode-${stage}-${alias}-${replacement === "return 3;" ? "rewrite" : "invalidate"}`,
+          { code: "return 1;", command: "return 1;" },
+          undefined,
+          undefined,
+          {} as Parameters<typeof def.execute>[4],
+        );
+
+        if (replacement === "return 3;") {
+          expect(result.details, JSON.stringify(result.details)).toMatchObject({
+            status: "completed",
+            value: 3,
+          });
+        } else {
+          expect(result.details).toEqual({
+            status: "error",
+            tool: "exec",
+            error: "code or command must be a non-empty string.",
+          });
+        }
+      } finally {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        resetGlobalHookRunner();
+      }
+    },
+  );
+
   it("renormalizes trusted policy rewrites before code-mode exec hooks observe params", async () => {
     resetGlobalHookRunner();
     const normalHook = vi.fn(async () => undefined);
@@ -1307,6 +1531,9 @@ describe("before_tool_call hook deduplication (#15502)", () => {
                   language: "typescript",
                 },
               };
+            }
+            if (eventValue.toolCallId === "call-code-mode-trusted-blank") {
+              return { params: { code: "", command: "return 4;" } };
             }
             return undefined;
           },
@@ -1356,6 +1583,13 @@ describe("before_tool_call hook deduplication (#15502)", () => {
       await def.execute(
         "call-code-mode-trusted-language",
         { code: "return 3;", command: "return 3;", language: "javascript" },
+        undefined,
+        undefined,
+        extensionContext,
+      );
+      await def.execute(
+        "call-code-mode-trusted-blank",
+        { code: "return 4;", command: "return 4;" },
         undefined,
         undefined,
         extensionContext,
@@ -1471,6 +1705,23 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         undefined,
         undefined,
       );
+      expect(normalHook).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({ params: { code: "", command: "" } }),
+        expect.anything(),
+      );
+      expect(trustedObserver).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({ params: { code: "", command: "" } }),
+        expect.anything(),
+      );
+      expect(execute).toHaveBeenNthCalledWith(
+        3,
+        "call-code-mode-trusted-blank",
+        { code: "", command: "" },
+        undefined,
+        undefined,
+      );
       expect(
         consumeAdjustedParamsForToolCall("call-code-mode-trusted-command", "run-main"),
       ).toEqual({ command: "return 2;", code: "return 2;" });
@@ -1480,6 +1731,10 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         code: "const value: number = 3;",
         command: "const value: number = 3;",
         language: "typescript",
+      });
+      expect(consumeAdjustedParamsForToolCall("call-code-mode-trusted-blank", "run-main")).toEqual({
+        code: "",
+        command: "",
       });
     } finally {
       setActivePluginRegistry(createEmptyPluginRegistry());
@@ -1764,6 +2019,100 @@ describe("before_tool_call adapter and client tool integration", () => {
 
       expect(hook.didObserveAbort()).toBe(true);
       expect(execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(
+    (["wrapped", "adapter", "client-hosted"] as const).flatMap((pathKind) =>
+      (["supersession", "refusal", "close", "expiry"] as const).map(
+        (invalidator) => [pathKind, invalidator] as const,
+      ),
+    ),
+  )(
+    "blocks invalidated voice grants through the %s path after %s",
+    async (pathKind, invalidator) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(100);
+      const runId = `run-voice-invalidated-${pathKind}-${invalidator}`;
+      const toolParams = { action: "send", to: "target-a", message: "cancelled body" };
+      installVoiceRunBinding(runId);
+      const { grant, voiceSessionId } = authorizeVoiceToolParams(runId, toolParams, 100);
+      vi.setSystemTime(103);
+
+      if (invalidator === "supersession") {
+        checkClientVoiceToolConfirmationPolicy({
+          agentId: "main",
+          voiceSessionId,
+          runId,
+          toolName: "message",
+          toolParams: { ...toolParams, message: "successor body" },
+          isConfirmable: () => true,
+          now: 103,
+        });
+      } else if (invalidator === "refusal") {
+        noteClientVoiceConfirmationUtterance({
+          agentId: "main",
+          voiceSessionId,
+          text: "no",
+          timestamp: 103,
+        });
+      } else if (invalidator === "close") {
+        deactivateClientVoiceConfirmationSession("main", voiceSessionId);
+      } else {
+        vi.advanceTimersByTime(120_001);
+      }
+
+      expect(bindAuthorizedClientVoiceConfirmation({ grant, runId })).toBe(false);
+
+      const dispatch = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+      const hookContext = { runId, agentId: "main", sessionKey: "agent:main:voice" };
+      const definition =
+        pathKind === "client-hosted"
+          ? expectDefined(
+              toClientToolDefinitions(
+                [
+                  {
+                    type: "function",
+                    function: {
+                      name: "message",
+                      description: "client-hosted message tool",
+                      parameters: { type: "object", properties: {} },
+                    },
+                  },
+                ],
+                dispatch,
+                hookContext,
+              )[0],
+              "client-hosted invalidated voice tool definition",
+            )
+          : expectDefined(
+              toToolDefinitions(
+                [
+                  pathKind === "wrapped"
+                    ? wrapToolWithBeforeToolCallHook(
+                        asAgentTool({ name: "message", execute: dispatch }),
+                        hookContext,
+                      )
+                    : asAgentTool({ name: "message", execute: dispatch }),
+                ],
+                hookContext,
+              )[0],
+              `${pathKind} invalidated voice tool definition`,
+            );
+
+      const result = await definition.execute(
+        `call-voice-invalidated-${pathKind}-${invalidator}`,
+        toolParams,
+        undefined,
+        undefined,
+        {} as ExtensionContext,
+      );
+
+      expect(result.details).toMatchObject({
+        status: "blocked",
+        deniedReason: "client-voice-confirmation",
+      });
+      expect(dispatch).not.toHaveBeenCalled();
     },
   );
 

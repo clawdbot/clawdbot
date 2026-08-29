@@ -7,27 +7,8 @@ export type SessionCreatedActor = {
   label?: string;
 };
 
-export type SessionParticipantSource = "profile" | "channel" | "agent";
-
-export type SessionParticipant = SessionCreatedActor & {
-  /** Identity namespace recorded at the participant producer; absent means unknown legacy data. */
-  source?: SessionParticipantSource;
-};
-
-export function mergeSessionParticipantSource(
-  current: unknown,
-  incoming: unknown,
-): SessionParticipantSource | null {
-  // Canonical profile participation must survive later channel-id collisions.
-  if (current === "profile" || incoming === "profile") {
-    return "profile";
-  }
-  const next = incoming === "channel" || incoming === "agent" ? incoming : null;
-  if (next) {
-    return next;
-  }
-  return current === "channel" || current === "agent" ? current : null;
-}
+export type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+export const MAX_SESSION_PARTICIPANTS = 32;
 
 export type SessionOwnerAssignment = {
   actor: SessionCreatedActor;
@@ -50,12 +31,44 @@ export function buildSessionCreationStamp(params: {
   via: SessionCreatedVia;
   actor?: SessionCreatedActor;
   now?: number;
-}): { createdVia: SessionCreatedVia; createdActor?: SessionCreatedActor; createdAt: number } {
+  sandbox?: "required";
+}): {
+  createdVia: SessionCreatedVia;
+  createdActor?: SessionCreatedActor;
+  createdAt: number;
+  sandbox?: "required";
+} {
   return {
     createdVia: params.via,
     ...(params.actor ? { createdActor: params.actor } : {}),
     createdAt: params.now ?? Date.now(),
+    ...(params.sandbox === "required" ? { sandbox: "required" as const } : {}),
   };
+}
+
+/** A required node keeps its original isolation identity across every write and rollover. */
+export function preserveCreationStamp<
+  T extends Partial<ReturnType<typeof buildSessionCreationStamp>>,
+>(entry: T, authoritative: Partial<ReturnType<typeof buildSessionCreationStamp>> | undefined): T {
+  return authoritative?.sandbox === "required"
+    ? {
+        ...entry,
+        createdVia: authoritative.createdVia,
+        createdActor: authoritative.createdActor,
+        createdAt: authoritative.createdAt,
+        sandbox: authoritative.sandbox,
+      }
+    : entry;
+}
+
+/** Delegation keeps a required parent's human isolation identity, regardless of current roles. */
+export function inheritSessionCreationPolicy(
+  source: { createdActor?: SessionCreatedActor; sandbox?: "required" } | undefined,
+  actor?: SessionCreatedActor,
+): { actor?: SessionCreatedActor; sandbox?: "required" } {
+  return source?.sandbox === "required"
+    ? { actor: source.createdActor, sandbox: "required" }
+    : { actor };
 }
 
 export type SessionEntryProvenance = {

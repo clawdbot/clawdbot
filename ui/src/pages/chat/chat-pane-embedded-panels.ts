@@ -1,13 +1,24 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { ProgressCard } from "../../../../packages/gateway-protocol/src/schema/progress-card.js";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import { desktopFocusPath } from "../../components/desktop/desktop-focus-window.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  renderPanelLoadingSkeleton,
+  type PanelLoadingSkeletonVariant,
+} from "../../components/panel-loading-skeleton.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../../lib/keyboard-shortcut-catalog.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
+import {
+  isSessionWorkspaceItemLoading,
+  resolveSessionDiffSidebarContent,
+} from "./components/chat-session-workspace.ts";
 import type {
   SidebarPanelDefinition,
   SidebarPanelTemplates,
@@ -18,7 +29,11 @@ import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 
 type SidebarPanelDefinitionParams = {
   state: ChatPageHost;
+  themeMode: "dark" | "light";
   agentId: string | null;
+  browserPresented: boolean;
+  desktopPresented: boolean;
+  desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
   hasBoard: boolean;
   chat: TemplateResult;
@@ -31,7 +46,6 @@ type SidebarPanelDefinitionParams = {
   startedAt: number | undefined;
   lastReadAt: number | undefined;
   pullRequests: ControlUiSessionPullRequest[];
-  progressCard: ProgressCard | null;
   companion: ChatSessionCompanionThread;
   onCompanionSubmit: (question: string) => void;
   onCompanionDraftChange: (draft: string) => void;
@@ -40,6 +54,7 @@ type SidebarPanelDefinitionParams = {
   pendingQuestion: string | null;
   onClearCompanion: () => void;
   discussion: SessionDiscussionPanelConfig | null;
+  discussionAvailable: boolean;
   discussionOpenUrl: string | null;
   discussionSourceGeneration: number;
 };
@@ -55,6 +70,18 @@ type SidebarPanelTextKey =
   | "tasks"
   | "terminal";
 
+const SIDEBAR_PANEL_LOADING_VARIANTS = {
+  browser: "browser",
+  chat: "chat",
+  companion: "chat",
+  desktop: "desktop",
+  detail: "review",
+  discussion: "discussion",
+  tasks: "tasks",
+  terminal: "terminal",
+  workspace: "files",
+} satisfies Record<SidebarSlotId, PanelLoadingSkeletonVariant>;
+
 /** One ordered declaration for every chat side-panel slot. */
 export function sidebarPanelDefinitions(
   params?: SidebarPanelDefinitionParams,
@@ -65,6 +92,7 @@ export function sidebarPanelDefinitions(
   const terminalAvailable = state?.terminalAvailable === true;
   const browserAvailable = state?.browserPanelAvailable === true;
   const desktopAvailable = params?.desktopAvailable === true;
+  const desktopFocusHref = state ? desktopFocusPath(state.basePath) : null;
   const definePanel = (
     slot: SidebarSlotId,
     textKey: SidebarPanelTextKey,
@@ -77,6 +105,7 @@ export function sidebarPanelDefinitions(
     icon,
     available: options?.available ?? hasPaneContext,
     content,
+    loading: renderPanelLoadingSkeleton(SIDEBAR_PANEL_LOADING_VARIANTS[slot], t("common.loading")),
     empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
     ...(options?.headerAction ? { headerAction: options.headerAction } : {}),
     ...(options?.shortcut ? { shortcut: options.shortcut } : {}),
@@ -88,7 +117,8 @@ export function sidebarPanelDefinitions(
           .client=${state.connected ? state.client : null}
           .available=${state.terminalAvailable}
           .agentId=${params?.agentId ?? null}
-          .themeMode=${document.documentElement.dataset.theme === "light" ? "light" : "dark"}
+          .sessionKey=${state.sessionKey}
+          .themeMode=${params?.themeMode ?? "dark"}
           .basePath=${state.basePath}
         ></openclaw-terminal-panel>`
       : null;
@@ -99,7 +129,8 @@ export function sidebarPanelDefinitions(
           data-chat-autotype-exempt
           .client=${state.connected ? state.client : null}
           .available=${state.browserPanelAvailable}
-          .basePath=${state.basePath}
+          .presented=${params?.browserPresented ?? false}
+          .resourceBasePath=${state.resourceBasePath}
           .authToken=${resolveAssistantAttachmentAuthToken(state)}
         ></openclaw-browser-panel>`
       : null;
@@ -112,7 +143,6 @@ export function sidebarPanelDefinitions(
         .activeRunId=${params.activeRunId}
         .startedAt=${params.startedAt}
         .lastReadAt=${params.lastReadAt}
-        .progressCard=${params.progressCard}
         .pullRequests=${params.pullRequests}
         .companion=${params.companion}
         .connected=${state?.connected === true}
@@ -128,6 +158,8 @@ export function sidebarPanelDefinitions(
           data-chat-autotype-exempt
           .client=${state.connected ? state.client : null}
           .available=${desktopAvailable}
+          .presented=${params?.desktopPresented ?? false}
+          .refreshOnPresentation=${params?.desktopRefreshOnPresentation ?? true}
         ></openclaw-desktop-panel>`
       : null;
   const discussion = params?.discussion
@@ -140,23 +172,35 @@ export function sidebarPanelDefinitions(
         .onStateChange=${params.discussion.onStateChange}
       ></openclaw-session-discussion>`
     : null;
+  const attachmentContent = state?.attachmentSidebarContent ?? null;
+  const detailLoading = state ? isSessionWorkspaceItemLoading(state) : false;
   const detailContent =
     state?.sidebarContent ??
-    (state && params?.detailOpen ? resolveSessionDiffSidebarContent(state) : null);
+    (state && params?.detailOpen && !detailLoading
+      ? resolveSessionDiffSidebarContent(state)
+      : null);
+  const workspaceContent =
+    attachmentContent && params
+      ? params.renderDetail(attachmentContent)
+      : (params?.workspace ?? null);
   return [
     definePanel(
       "detail",
       "review",
       icons.diff,
-      detailContent && params ? params.renderDetail(detailContent) : null,
+      detailLoading
+        ? renderPanelLoadingSkeleton("review", t("common.loading"))
+        : detailContent && params
+          ? params.renderDetail(detailContent)
+          : null,
     ),
     definePanel("terminal", "terminal", icons.terminal, terminal, {
       available: terminalAvailable,
-      shortcut: "Ctrl+`",
+      shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.terminalPanel),
     }),
     definePanel("browser", "browser", icons.globe, browser, { available: browserAvailable }),
-    definePanel("workspace", "files", icons.fileText, params?.workspace ?? null, {
-      shortcut: "⇧⌘B",
+    definePanel("workspace", "files", icons.fileText, workspaceContent, {
+      shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
     }),
     definePanel(
       "companion",
@@ -195,9 +239,24 @@ export function sidebarPanelDefinitions(
         : undefined,
     ),
     definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null),
-    definePanel("desktop", "desktop", icons.monitor, desktop, { available: desktopAvailable }),
+    definePanel("desktop", "desktop", icons.monitor, desktop, {
+      available: desktopAvailable,
+      ...(desktopFocusHref
+        ? {
+            headerAction: html`<a
+              class="rail-header__action"
+              href=${desktopFocusHref}
+              target="_blank"
+              rel="noopener"
+              aria-label=${t("desktop.openWindow")}
+              title=${t("desktop.openWindow")}
+              >${icons.externalLink}</a
+            >`,
+          }
+        : {}),
+    }),
     definePanel("discussion", "discussion", icons.messageSquare, discussion, {
-      available: discussion !== null,
+      available: discussion !== null && params?.discussionAvailable === true,
       ...(params?.discussionOpenUrl
         ? {
             headerAction: html`<a

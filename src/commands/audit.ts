@@ -11,7 +11,7 @@ import type {
   AuditListResult,
   AuditRunInspectParams,
   AuditRunInspectResult,
-  DecisionReceiptV1,
+  DecisionReceiptDisplayV1,
   ExecutionIdentityContextV1,
   PrincipalRefV1,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -23,6 +23,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { parsePositiveAuditCursor } from "../audit/audit-cursor.js";
+import { isExpectedCliError } from "../cli/failure-output.js";
 import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -200,6 +201,9 @@ function validateAuditFilterCombination(options: AuditListCommandOptions): void 
 }
 
 function formatAuditGatewayError(error: unknown): Error {
+  if (isExpectedCliError(error)) {
+    return error;
+  }
   const message = formatErrorMessage(error);
   const operatorMessage =
     message === "invalid audit.activity.list range or cursor"
@@ -266,7 +270,7 @@ function unsupportedRunInspection(
         },
       ],
     },
-    decisions: [],
+    decisionDisplays: [],
     coverage: { state: "unsupported", missingEvidence },
   };
 }
@@ -364,36 +368,68 @@ function contextIdentityLines(context: ExecutionIdentityContextV1): string[] {
   ];
 }
 
+function contextLineageLines(context: ExecutionIdentityContextV1): string[] {
+  const lineage = context.lineage;
+  if (!lineage) {
+    return [fieldLine("Parent", "absent")];
+  }
+  return [
+    fieldLine(
+      "Parent context",
+      lineage.parentContextId ? "present" : "unknown",
+      lineage.parentContextId,
+    ),
+    fieldLine(
+      "Parent execution",
+      lineage.parentExecutionId ? "present" : "unknown",
+      lineage.parentExecutionId,
+    ),
+    fieldLine("Parent run", lineage.parentRunId ? "present" : "unknown", lineage.parentRunId),
+    fieldLine(
+      "Parent agent",
+      lineage.parentAgentPrincipal ? "present" : "unknown",
+      lineage.parentAgentPrincipal ? principalText(lineage.parentAgentPrincipal) : undefined,
+    ),
+    fieldLine("Delegation", lineage.delegationRef ? "present" : "unknown", lineage.delegationRef),
+    fieldLine("Depth", "present", String(lineage.depth)),
+  ];
+}
+
 function unavailableIdentityLines(state: "unknown" | "unsupported"): string[] {
   return IDENTITY_FIELD_LABELS.map((label) => fieldLine(label, state));
 }
 
-function decisionLines(receipt: DecisionReceiptV1): string[] {
+function decisionLines(receipt: DecisionReceiptDisplayV1): string[] {
   const evidence =
-    receipt.action.family === "run" && receipt.action.operation === "admission"
-      ? "admission provenance only; no enforcement decision"
-      : receipt.enforcement.coverageState === "unknown" ||
-          receipt.enforcement.coverageState === "unsupported"
-        ? "evidence unavailable or corrupt; do not infer authorization"
-        : receipt.source.owner === "operator_approvals"
-          ? "authoritative owner-native SQLite record; retained 30 days"
-          : receipt.enforcement.coverageState === "enforced"
-            ? "validated immutable decision fact; retained 30 days"
-            : "attribution record only; no enforcement decision";
+    receipt.provenance.state === "unverified"
+      ? "producer display contract unverified; receipt prose omitted"
+      : receipt.provenance.producer === "run-admission"
+        ? "admission provenance only; no enforcement decision"
+        : receipt.enforcement.coverageState === "unknown" ||
+            receipt.enforcement.coverageState === "unsupported"
+          ? "evidence unavailable or corrupt; do not infer authorization"
+          : receipt.provenance.producer === "operator-approval"
+            ? "authoritative owner-native SQLite record; retained 30 days"
+            : receipt.enforcement.coverageState === "enforced"
+              ? "validated immutable decision fact; retained 30 days"
+              : "attribution record only; no enforcement decision";
+  const producer =
+    receipt.provenance.state === "verified" ? receipt.provenance.producer : "unverified";
   return [
     `  ${safe(receipt.action.family)}.${safe(receipt.action.operation)}: ${safe(receipt.decision.outcome)}`,
     `    Coverage: ${safe(receipt.enforcement.coverageState)}`,
     `    Reason: ${safe(receipt.decision.reasonCode)}`,
-    `    Source: ${safe(receipt.source.owner)} at ${safe(receipt.source.decisionBoundary)}`,
+    `    Display producer: ${safe(producer)}`,
     `    Evidence: ${evidence}`,
-    `    Policy refs: ${receipt.enforcement.policyRefs.length > 0 ? receipt.enforcement.policyRefs.map(safe).join(", ") : "none"}`,
-    `    Grant refs: ${receipt.enforcement.grantRefs.length > 0 ? receipt.enforcement.grantRefs.map(safe).join(", ") : "none"}`,
+    `    Policy refs: ${receipt.enforcement.policyCount}`,
+    `    Grant refs: ${receipt.enforcement.grantCount}`,
     `    Context used: ${receipt.enforcement.contextFieldsUsed.length > 0 ? receipt.enforcement.contextFieldsUsed.map(safe).join(", ") : "none"}`,
     ...(receipt.action.summary ? [`    Summary: ${safe(receipt.action.summary)}`] : []),
   ];
 }
 
 function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
+  const decisionDisplays = result.decisionDisplays;
   const selectorText = result.run.executionId
     ? `Execution ${safe(result.run.executionId)}${result.run.runId ? ` (run ${safe(result.run.runId)})` : ""}`
     : `Run ${safe(result.run.runId)}`;
@@ -413,15 +449,7 @@ function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
       ...identityLines.slice(8),
       "",
       "Lineage",
-      result.identity.context.lineage
-        ? fieldLine(
-            "Parent",
-            "present",
-            result.identity.context.lineage.parentRunId ??
-              result.identity.context.lineage.parentContextId ??
-              `depth ${String(result.identity.context.lineage.depth)}`,
-          )
-        : fieldLine("Parent", "absent"),
+      ...contextLineageLines(result.identity.context),
     );
   } else if (result.identity.state === "ambiguous") {
     lines.push(
@@ -450,10 +478,10 @@ function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
     );
   }
   lines.push("", "Decisions");
-  if (result.decisions.length === 0) {
+  if (decisionDisplays.length === 0) {
     lines.push("  none [absent]");
   } else {
-    for (const receipt of result.decisions) {
+    for (const receipt of decisionDisplays) {
       lines.push(...decisionLines(receipt));
     }
   }
@@ -465,7 +493,7 @@ function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
   );
   const remediation = [
     ...(result.identity.state === "present" ? [] : result.identity.remediation),
-    ...result.decisions.flatMap((decision) => decision.remediation),
+    ...decisionDisplays.flatMap((decision) => decision.remediation),
   ];
   lines.push("", "Next steps");
   lines.push(

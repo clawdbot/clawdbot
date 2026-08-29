@@ -138,30 +138,6 @@ describe("cron service timer regressions", () => {
     timeoutSpy.mockRestore();
   });
 
-  it("re-arms timer without hot-looping when a run is already in progress", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const store = timerRegressionFixtures.makeStorePath();
-    const now = Date.parse("2026-02-06T10:05:00.000Z");
-    const state = createRunningCronServiceState({
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => now,
-      jobs: [createDueIsolatedJob({ id: "due", nowMs: now, nextRunAtMs: now - 1 })],
-    });
-
-    await onTimer(state);
-
-    expect(timeoutSpy).toHaveBeenCalled();
-    if (state.timer == null) {
-      throw new Error("Expected cron timer to be re-armed");
-    }
-    const delays = timeoutSpy.mock.calls
-      .map(([, delay]) => delay)
-      .filter((d): d is number => typeof d === "number");
-    expect(delays).toContain(60_000);
-    timeoutSpy.mockRestore();
-  });
-
   it("#24355: one-shot job retries then succeeds", async () => {
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
 
@@ -189,7 +165,7 @@ describe("cron service timer regressions", () => {
           status: "error",
           error: params.firstError ?? "429 rate limit exceeded",
         })
-        .mockResolvedValueOnce({ status: "ok", summary: "done" });
+        .mockResolvedValueOnce({ status: "ok", summary: "done", delivered: true });
       const state = createCronServiceState({
         cronEnabled: true,
         storePath: store.storePath,
@@ -1283,58 +1259,114 @@ describe("cron service timer regressions", () => {
   });
 
   it.each([
-    { label: "retries after idle grace", staysPreempted: false, expectedCalls: 2 },
-    { label: "requeues at the wait budget", staysPreempted: true, expectedCalls: 3 },
-  ])("$label for a preempted wake-now heartbeat", async ({ staysPreempted, expectedCalls }) => {
-    vi.useFakeTimers();
-    try {
-      let heartbeatAttempt = 0;
-      const runHeartbeatOnce = vi.fn<() => Promise<HeartbeatRunResult>>(async () =>
-        staysPreempted || ++heartbeatAttempt === 1
-          ? { status: "skipped", reason: HEARTBEAT_SKIP_PREEMPTED }
-          : { status: "ran", durationMs: 1 },
-      );
-      const requestHeartbeat = vi.fn();
-      const mainJob: CronJob = {
-        id: "main-preempted",
-        name: "main preempted",
-        enabled: true,
-        createdAtMs: Date.now(),
-        updatedAtMs: Date.now(),
-        schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "now",
-        payload: { kind: "systemEvent", text: "tick" },
-        state: {},
-      };
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: "/tmp/openclaw-cron-preempted-test/jobs.json",
-        log: noopLogger,
-        nowMs: () => Date.now(),
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat,
-        runHeartbeatOnce,
-        wakeNowHeartbeatBusyMaxWaitMs: 2 * HEARTBEAT_IDLE_RETRY_GRACE_MS,
-        wakeNowHeartbeatBusyRetryDelayMs: 1,
-        runIsolatedAgentJob: createDefaultIsolatedRunner(),
-      });
+    {
+      label: "retries preemption after idle grace",
+      staysSkipped: false,
+      explicitDeadline: false,
+      expectedCalls: 2,
+    },
+    {
+      label: "requeues preemption at the wait budget",
+      staysSkipped: true,
+      explicitDeadline: false,
+      expectedCalls: 3,
+    },
+    {
+      label: "retries busy work at its explicit deadline",
+      staysSkipped: false,
+      explicitDeadline: true,
+      expectedCalls: 2,
+    },
+    {
+      label: "requeues busy work without extending the wait budget",
+      staysSkipped: true,
+      explicitDeadline: true,
+      expectedCalls: 3,
+    },
+    {
+      label: "hands off a deadline beyond the remaining wait budget",
+      staysSkipped: true,
+      explicitDeadline: true,
+      maxWaitMs: 90_000,
+      expectedCalls: 2,
+    },
+    {
+      label: "hands off a deadline beyond the entire wait budget",
+      staysSkipped: true,
+      explicitDeadline: true,
+      maxWaitMs: 30_000,
+      expectedCalls: 1,
+    },
+  ])(
+    "$label for a wake-now heartbeat",
+    async ({ staysSkipped, explicitDeadline, maxWaitMs, expectedCalls }) => {
+      vi.useFakeTimers();
+      try {
+        let heartbeatAttempt = 0;
+        const runHeartbeatOnce = vi.fn<() => Promise<HeartbeatRunResult>>(async () =>
+          staysSkipped || ++heartbeatAttempt === 1
+            ? {
+                status: "skipped",
+                reason: explicitDeadline
+                  ? HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT
+                  : HEARTBEAT_SKIP_PREEMPTED,
+                ...(explicitDeadline
+                  ? { retryAtMs: Date.now() + HEARTBEAT_IDLE_RETRY_GRACE_MS }
+                  : {}),
+              }
+            : { status: "ran", durationMs: 1 },
+        );
+        const requestHeartbeat = vi.fn();
+        const mainJob: CronJob = {
+          id: "main-preempted",
+          name: "main preempted",
+          enabled: true,
+          createdAtMs: Date.now(),
+          updatedAtMs: Date.now(),
+          schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: "tick" },
+          state: {},
+        };
+        const state = createCronServiceState({
+          cronEnabled: true,
+          storePath: "/tmp/openclaw-cron-preempted-test/jobs.json",
+          log: noopLogger,
+          nowMs: () => Date.now(),
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat,
+          runHeartbeatOnce,
+          wakeNowHeartbeatBusyMaxWaitMs: maxWaitMs ?? 2 * HEARTBEAT_IDLE_RETRY_GRACE_MS,
+          wakeNowHeartbeatBusyRetryDelayMs: 1,
+          runIsolatedAgentJob: createDefaultIsolatedRunner(),
+        });
 
-      const resultPromise = executeJobCore(state, mainJob);
-      await vi.advanceTimersByTimeAsync(HEARTBEAT_IDLE_RETRY_GRACE_MS - 1);
-      expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+        const resultPromise = executeJobCore(state, mainJob);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(HEARTBEAT_IDLE_RETRY_GRACE_MS - 2);
+        expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
 
-      await vi.advanceTimersByTimeAsync(1);
-      if (staysPreempted) {
-        await vi.advanceTimersByTimeAsync(HEARTBEAT_IDLE_RETRY_GRACE_MS);
+        await vi.advanceTimersByTimeAsync(1);
+        if (staysSkipped) {
+          await vi.advanceTimersByTimeAsync(HEARTBEAT_IDLE_RETRY_GRACE_MS);
+        }
+        await expect(resultPromise).resolves.toMatchObject({ status: "ok" });
+        expect(runHeartbeatOnce).toHaveBeenCalledTimes(expectedCalls);
+        expect(requestHeartbeat).toHaveBeenCalledTimes(staysSkipped ? 1 : 0);
+        if (staysSkipped && explicitDeadline) {
+          const finalSkip = await runHeartbeatOnce.mock.results.at(-1)?.value;
+          expect(requestHeartbeat).toHaveBeenCalledWith(
+            expect.objectContaining({ reason: `cron:${mainJob.id}`, intent: "immediate" }),
+            finalSkip,
+          );
+        }
+      } finally {
+        vi.useRealTimers();
       }
-      await expect(resultPromise).resolves.toMatchObject({ status: "ok" });
-      expect(runHeartbeatOnce).toHaveBeenCalledTimes(expectedCalls);
-      expect(requestHeartbeat).toHaveBeenCalledTimes(staysPreempted ? 1 : 0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
   it("keeps user cancellation disabled for main-session cron wrappers", async () => {
     vi.useFakeTimers();
@@ -1426,6 +1458,7 @@ describe("cron service timer regressions", () => {
           agentId: "main",
           reason: "cron:main-session-cancel-boundary",
         }),
+        { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT },
       );
       expect(requestHeartbeat.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
     } finally {
@@ -1601,6 +1634,7 @@ describe("cron service timer regressions", () => {
         expect.objectContaining({
           reason: "cron:main-session-generation-visible",
         }),
+        { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT },
       );
       expect(isCronJobActive(cronJob.id)).toBe(false);
     } finally {
@@ -1698,7 +1732,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("does not persist retired scheduled outcomes after restart generation advance", async () => {
+  it("recovers completed scheduled outcomes after restart generation advance", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-05-13T12:45:00.000Z");
     const cronJob = createDueIsolatedJob({
@@ -1733,8 +1767,8 @@ describe("cron service timer regressions", () => {
 
     const persisted = await loadCronStore(store.storePath);
     const persistedJob = persisted.jobs.find((job) => job.id === cronJob.id);
-    expect(persistedJob?.state.lastStatus).not.toBe("ok");
-    expect(persistedJob?.state.runningAtMs).toBe(scheduledAt);
+    expect(persistedJob?.state.lastStatus).toBe("ok");
+    expect(persistedJob?.state.runningAtMs).toBeUndefined();
   });
 
   it("releases due-job reservations instead of admitting workers after scheduler stop wins", async () => {
@@ -1901,7 +1935,7 @@ describe("cron service timer regressions", () => {
     expect(startedAtEvents).toEqual([dueAt, dueAt + 50]);
   });
 
-  it("keeps queued scheduled reservations out of stuck-marker cleanup", async () => {
+  it("keeps capacity-blocked scheduled work unreserved until a slot opens", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:01.250Z");
     const first = createDueIsolatedJob({
@@ -1941,12 +1975,11 @@ describe("cron service timer regressions", () => {
 
     const timerRun = onTimer(state);
     await firstStarted.promise;
-    await vi.waitFor(() => {
-      expect(state.store?.jobs.find((job) => job.id === second.id)?.state.queuedAtMs).toBe(dueAt);
-    });
+    expect(state.store?.jobs.find((job) => job.id === second.id)?.state.queuedAtMs).toBeUndefined();
+    expect(state.queuedRunReservationsByJobId.has(second.id)).toBe(false);
     now += 2 * 60 * 60 * 1000 + 1;
     recomputeNextRunsForMaintenance(state);
-    expect(state.store?.jobs.find((job) => job.id === second.id)?.state.queuedAtMs).toBe(dueAt);
+    expect(state.store?.jobs.find((job) => job.id === second.id)?.state.queuedAtMs).toBeUndefined();
 
     releaseFirst.resolve({ status: "ok", summary: "first" });
     await secondStarted.promise;
@@ -2486,7 +2519,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("does not persist stale startup catch-up outcomes after the old service stops", async () => {
+  it("recovers stopped catch-up outcomes without overwriting replacement reservations", async () => {
     resetTaskRegistryForTests();
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-05-10T08:58:45.000Z");
@@ -2549,8 +2582,8 @@ describe("cron service timer regressions", () => {
     const persistedReplacementClaimedJob = persisted.jobs.find(
       (entry) => entry.id === replacementClaimedJob.id,
     );
-    expect(persistedJob?.state.runningAtMs).toBe(scheduledAt);
-    expect(persistedJob?.state.lastStatus).toBeUndefined();
+    expect(persistedJob?.state.runningAtMs).toBeUndefined();
+    expect(persistedJob?.state.lastStatus).toBe("ok");
     expect(persistedUnstartedJob?.state.runningAtMs).toBeUndefined();
     expect(persistedUnstartedJob?.state.lastStatus).toBeUndefined();
     expect(persistedReplacementClaimedJob?.state.queuedAtMs).toBe(replacementReservationMs);
@@ -2689,10 +2722,12 @@ describe("cron service timer regressions", () => {
 
       finishFirstScheduled.resolve();
       await timerRun;
+      await vi.waitFor(() => {
+        expect(secondScheduledStarted).toHaveBeenCalledWith(secondScheduledJob.id);
+      });
 
       const second = requireJob(state, secondScheduledJob.id);
       expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledTimes(1);
-      expect(secondScheduledStarted).toHaveBeenCalledWith(secondScheduledJob.id);
       expect(second.state.runningAtMs).toBeUndefined();
     } finally {
       vi.useRealTimers();
@@ -2925,13 +2960,16 @@ describe("cron service timer regressions", () => {
   it("auto-disables a recurring job on its tenth consecutive run failure", () => {
     const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
     const deferredNotifications: Array<() => void> = [];
+    const enqueueSystemEvent = vi.fn();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: "/tmp/cron-consecutive-failure-threshold.json",
       log: noopLogger,
       nowMs: () => startedAt,
-      enqueueSystemEvent: vi.fn(),
+      enqueueSystemEvent,
       requestHeartbeat: vi.fn(),
+      sendCronFailureAlert,
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
     const job = createIsolatedRegressionJob({
@@ -2942,6 +2980,7 @@ describe("cron service timer regressions", () => {
       payload: { kind: "agentTurn", message: "fail" },
       state: { consecutiveErrors: 8 },
     });
+    job.failureAlert = { after: 10, cooldownMs: 0 };
 
     applyJobResult(
       state,
@@ -2973,6 +3012,9 @@ describe("cron service timer regressions", () => {
       consecutiveErrors: 10,
     });
     expect(deferredNotifications).toHaveLength(1);
+    deferredNotifications[0]?.();
+    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(sendCronFailureAlert).not.toHaveBeenCalled();
   });
 
   it("resets the auto-disable streak after a successful recurring run", () => {
@@ -3023,7 +3065,7 @@ describe("cron service timer regressions", () => {
   it.each([
     { name: "stale schedule", opts: { scheduleOwnership: "stale" as const } },
     { name: "forced run", opts: { scheduleMode: "preserve" as const } },
-  ])("does not auto-disable after a $name failure", ({ opts }) => {
+  ])("does not auto-disable but still alerts after a $name failure", ({ opts }) => {
     const startedAt = Date.parse("2026-08-01T14:00:00.000Z");
     const deferredNotifications: Array<() => void> = [];
     const state = createCronServiceState({
@@ -3054,7 +3096,7 @@ describe("cron service timer regressions", () => {
     expect(job.enabled).toBe(true);
     expect(job.state.consecutiveErrors).toBe(10);
     expect(job.state.autoDisabled).toBeUndefined();
-    expect(deferredNotifications).toHaveLength(0);
+    expect(deferredNotifications).toHaveLength(1);
   });
 
   it("keeps state updates when cron next-run computation throws after a successful run (#30905)", () => {

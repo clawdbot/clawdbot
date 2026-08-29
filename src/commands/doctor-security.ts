@@ -10,6 +10,7 @@ import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-sou
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
+import { countObsoleteGeneratedExecApprovals } from "../infra/exec-approvals-generated-migration.js";
 import {
   loadExecApprovalsReadOnly,
   resolveExecApprovalsDisplayPath,
@@ -195,7 +196,23 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): SecurityAuditFi
 
 function collectDurableExecApprovalWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   void cfg;
-  return [];
+  const count = countObsoleteGeneratedExecApprovals(loadExecApprovalsReadOnly());
+  if (count === 0) {
+    return [];
+  }
+  return [
+    {
+      checkId: "doctor.exec_approvals_require_cwd_renewal",
+      severity: "warn",
+      title: "Exec approvals need renewal",
+      detail: `${count} older generated ${count === 1 ? "approval is" : "approvals are"} inactive because they are not tied to a working directory.`,
+      remediation: [
+        `Run ${formatCliCommand("openclaw doctor --fix")} to remove the inactive entries.`,
+        'Then rerun affected workflows and choose "Always allow here" when prompted.',
+        "Manual allowlist rules are unchanged.",
+      ].join("\n"),
+    },
+  ];
 }
 
 function collectExecFilesystemPolicyWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {

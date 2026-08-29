@@ -1,7 +1,11 @@
 // Public chat transcript renderer and DOM shell.
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
-import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
+import {
+  handleMarkdownCodeBlockClick,
+  initializeMarkdownCodeBlocks,
+} from "../../../components/markdown-code-blocks.ts";
 import {
   markdownFileLinkFromEvent,
   markdownFileLinkFromKeyboardEvent,
@@ -11,71 +15,58 @@ import {
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
 } from "../../../components/markdown-session-links.ts";
+import {
+  enhanceMarkdownTables,
+  handleMarkdownTableInteraction,
+  releaseMarkdownTables,
+} from "../../../components/markdown-tables.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { t } from "../../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
+import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import {
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import {
-  type ChatTranscriptSession,
   ChatTranscriptController,
+  type ChatTranscriptSession,
 } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
 
-function renderLoadingSkeleton() {
-  return html`
-    <div class="chat-loading-skeleton" aria-label=${t("chat.thread.loading")}>
-      <div class="chat-line assistant">
-        <div class="chat-msg">
-          <div class="chat-bubble">
-            <div
-              class="skeleton skeleton-line skeleton-line--long"
-              style="margin-bottom: 8px"
-            ></div>
-            <div
-              class="skeleton skeleton-line skeleton-line--medium"
-              style="margin-bottom: 8px"
-            ></div>
-            <div class="skeleton skeleton-line skeleton-line--short"></div>
-          </div>
-        </div>
-      </div>
-      <div class="chat-line user" style="margin-top: 12px">
-        <div class="chat-msg">
-          <div class="chat-bubble">
-            <div class="skeleton skeleton-line skeleton-line--medium"></div>
-          </div>
-        </div>
-      </div>
-      <div class="chat-line assistant" style="margin-top: 12px">
-        <div class="chat-msg">
-          <div class="chat-bubble">
-            <div
-              class="skeleton skeleton-line skeleton-line--long"
-              style="margin-bottom: 8px"
-            ></div>
-            <div class="skeleton skeleton-line skeleton-line--short"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
+const markdownTableOwnerRefs = new WeakMap<
+  ChatTranscriptSession,
+  (element: Element | undefined) => void
+>();
+
+function markdownTableOwnerRef(
+  transcript: ChatTranscriptSession,
+): (element: Element | undefined) => void {
+  const current = markdownTableOwnerRefs.get(transcript);
+  if (current) {
+    return current;
+  }
+  let owner: HTMLElement | null = null;
+  const callback = (element: Element | undefined) => {
+    const next = element instanceof HTMLElement ? element : null;
+    if (owner && owner !== next) {
+      releaseMarkdownTables(owner);
+    }
+    owner = next;
+    if (owner) {
+      enhanceMarkdownTables(owner);
+    }
+  };
+  markdownTableOwnerRefs.set(transcript, callback);
+  return callback;
 }
 
 function renderHistorySentinel(loading: boolean) {
   return html`
     <div class="chat-history-sentinel">
-      ${loading
-        ? html`
-            <div class="chat-history-loading" role="status">
-              <span class="session-run-spinner" aria-hidden="true"></span>
-              <span>${t("common.loading")}</span>
-            </div>
-          `
-        : nothing}
+      ${loading ? renderPanelLoadingSkeleton("chat", t("common.loading"), true) : nothing}
     </div>
   `;
 }
@@ -99,8 +90,11 @@ function renderTranscriptShell(
   const transcriptContents =
     projection.showLoadingSkeleton || projection.isEmpty
       ? html`
-          <div class="chat-thread-inner">
-            ${historySentinel} ${projection.showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
+          <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
+            ${historySentinel}
+            ${projection.showLoadingSkeleton
+              ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
+              : nothing}
             ${projection.isEmpty && !projection.searchOpen ? renderWelcomeState(props) : nothing}
             ${projection.isEmpty && projection.searchOpen
               ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
@@ -111,10 +105,17 @@ function renderTranscriptShell(
   return html`
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"
+      ${ref((element) => {
+        if (element instanceof HTMLElement) {
+          initializeMarkdownCodeBlocks(element);
+          hydrateLinkFavicons(element, props.fetchLinkFavicon);
+        }
+      })}
       role="log"
       aria-live="off"
       aria-relevant="additions"
       tabindex="0"
+      ${ref(markdownTableOwnerRef(transcript))}
       @focusin=${(event: FocusEvent) => transcript.handleFocusIn(event)}
       @focusout=${(event: FocusEvent) => transcript.handleFocusOut(event)}
       @scroll=${props.onChatScroll}
@@ -146,7 +147,8 @@ function renderTranscriptShell(
       @touchend=${props.onHistoryIntent}
       @touchcancel=${props.onHistoryIntent}
       @click=${(event: MouseEvent) => {
-        handleMarkdownCodeBlockCopy(event);
+        handleMarkdownCodeBlockClick(event);
+        handleMarkdownTableInteraction(event);
         const target = markdownFileLinkFromEvent(event);
         if (target) {
           props.onOpenWorkspaceFile?.(target);

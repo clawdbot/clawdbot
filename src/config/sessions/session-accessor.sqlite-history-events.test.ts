@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -32,135 +33,63 @@ function enforceSqliteVariableLimit(database: OpenClawAgentDatabase): void {
   });
 }
 
-function insertSyntheticMessages(
+function insertSyntheticHistory(
   database: OpenClawAgentDatabase,
   sessionId: string,
-  additionalCount: number,
+  count: number,
+  boundaries = false,
 ): void {
-  const lastSeq = additionalCount + 1;
-  database.db
-    .prepare(
-      `WITH RECURSIVE synthetic(seq) AS (
-         SELECT 2
-         UNION ALL
-         SELECT seq + 1 FROM synthetic WHERE seq < ?
-       )
-       INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-       SELECT ?, seq,
-         printf('{"type":"message","id":"synthetic-message-%d","parentId":null,"timestamp":"2026-08-15T00:00:00.000Z","message":{"role":"user","content":"synthetic"}}', seq),
-         seq
-       FROM synthetic`,
-    )
-    .run(lastSeq, sessionId);
-  database.db
-    .prepare(
-      `WITH RECURSIVE synthetic(seq) AS (
-         SELECT 2
-         UNION ALL
-         SELECT seq + 1 FROM synthetic WHERE seq < ?
-       )
-       INSERT INTO transcript_event_identities
-         (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
-       SELECT ?, printf('synthetic-message-%d', seq), seq, 'message', NULL, NULL, seq
-       FROM synthetic`,
-    )
-    .run(lastSeq, sessionId);
-  database.db
-    .prepare(
-      `WITH RECURSIVE synthetic(seq) AS (
-         SELECT 2
-         UNION ALL
-         SELECT seq + 1 FROM synthetic WHERE seq < ?
-       )
-       INSERT INTO session_transcript_active_events
-         (session_id, active_position, event_seq, message_position)
-       SELECT ?, seq - 1, seq, seq - 1
-       FROM synthetic`,
-    )
-    .run(lastSeq, sessionId);
-  database.db
-    .prepare(
-      `UPDATE session_transcript_index_state
-       SET indexed_seq = ?, leaf_event_id = ?, active_event_count = ?, active_message_count = ?
-       WHERE session_id = ?`,
-    )
-    .run(lastSeq, `synthetic-message-${String(lastSeq)}`, lastSeq, lastSeq, sessionId);
-}
-
-function insertSyntheticBoundaryPairs(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-  pairCount: number,
-): void {
-  const lastSeq = pairCount * 2 + 1;
-  database.db
-    .prepare(
-      `WITH RECURSIVE synthetic(pair_index) AS (
-         SELECT 1
-         UNION ALL
-         SELECT pair_index + 1 FROM synthetic WHERE pair_index < ?
-       )
-       INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-       SELECT ?, pair_index * 2,
-         printf('{"type":"compaction","id":"synthetic-boundary-%d","parentId":null,"timestamp":"2026-08-15T00:00:00.000Z","summary":"synthetic"}', pair_index * 2),
-         pair_index * 2
-       FROM synthetic
-       UNION ALL
-       SELECT ?, pair_index * 2 + 1,
-         printf('{"type":"message","id":"synthetic-message-%d","parentId":null,"timestamp":"2026-08-15T00:00:00.000Z","message":{"role":"user","content":"synthetic"}}', pair_index * 2 + 1),
-         pair_index * 2 + 1
-       FROM synthetic`,
-    )
-    .run(pairCount, sessionId, sessionId);
-  database.db
-    .prepare(
-      `WITH RECURSIVE synthetic(pair_index) AS (
-         SELECT 1
-         UNION ALL
-         SELECT pair_index + 1 FROM synthetic WHERE pair_index < ?
-       )
-       INSERT INTO transcript_event_identities
-         (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
-       SELECT ?, printf('synthetic-boundary-%d', pair_index * 2), pair_index * 2,
-         'compaction', NULL, NULL, pair_index * 2
-       FROM synthetic
-       UNION ALL
-       SELECT ?, printf('synthetic-message-%d', pair_index * 2 + 1), pair_index * 2 + 1,
-         'message', NULL, NULL, pair_index * 2 + 1
-       FROM synthetic`,
-    )
-    .run(pairCount, sessionId, sessionId);
-  database.db
-    .prepare(
-      `WITH RECURSIVE synthetic(pair_index) AS (
-         SELECT 1
-         UNION ALL
-         SELECT pair_index + 1 FROM synthetic WHERE pair_index < ?
-       )
-       INSERT INTO session_transcript_active_events
-         (session_id, active_position, event_seq, message_position)
-       SELECT ?, pair_index * 2 - 1, pair_index * 2, NULL
-       FROM synthetic
-       UNION ALL
-       SELECT ?, pair_index * 2, pair_index * 2 + 1, pair_index
-       FROM synthetic`,
-    )
-    .run(pairCount, sessionId, sessionId);
-  const activeEventCount = pairCount * 2 + 1;
-  const activeMessageCount = pairCount + 1;
-  database.db
-    .prepare(
-      `UPDATE session_transcript_index_state
-       SET indexed_seq = ?, leaf_event_id = ?, active_event_count = ?, active_message_count = ?
-       WHERE session_id = ?`,
-    )
-    .run(
-      lastSeq,
-      `synthetic-message-${String(lastSeq)}`,
-      activeEventCount,
-      activeMessageCount,
-      sessionId,
-    );
+  const lastSeq = count * (boundaries ? 2 : 1) + 1;
+  const insertEvent = database.db.prepare(
+    "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+  );
+  const insertIdentity = database.db.prepare(
+    `INSERT INTO transcript_event_identities
+       (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
+     VALUES (?, ?, ?, ?, NULL, NULL, ?)`,
+  );
+  const insertActive = database.db.prepare(
+    `INSERT INTO session_transcript_active_events
+       (session_id, active_position, event_seq, message_position)
+     VALUES (?, ?, ?, ?)`,
+  );
+  runSqliteImmediateTransactionSync(database.db, () => {
+    for (let seq = 2; seq <= lastSeq; seq += 1) {
+      const isBoundary = boundaries && seq % 2 === 0;
+      const id = `synthetic-${isBoundary ? "boundary" : "message"}-${String(seq)}`;
+      const type = isBoundary ? "compaction" : "message";
+      const event = {
+        type,
+        id,
+        parentId: null,
+        timestamp: "2026-08-15T00:00:00.000Z",
+        ...(isBoundary
+          ? { summary: "synthetic" }
+          : { message: { role: "user", content: "synthetic" } }),
+      };
+      insertEvent.run(sessionId, seq, JSON.stringify(event), seq);
+      insertIdentity.run(sessionId, id, seq, type, seq);
+      insertActive.run(
+        sessionId,
+        seq - 1,
+        seq,
+        isBoundary ? null : boundaries ? Math.floor(seq / 2) : seq - 1,
+      );
+    }
+    database.db
+      .prepare(
+        `UPDATE session_transcript_index_state
+         SET indexed_seq = ?, leaf_event_id = ?, active_event_count = ?, active_message_count = ?
+         WHERE session_id = ?`,
+      )
+      .run(
+        lastSeq,
+        `synthetic-message-${String(lastSeq)}`,
+        lastSeq,
+        boundaries ? count + 1 : lastSeq,
+        sessionId,
+      );
+  });
 }
 
 describe("SQLite transcript history events", () => {
@@ -306,7 +235,7 @@ describe("SQLite transcript history events", () => {
     });
     const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
     const bindingCount = REGRESSION_SQLITE_VARIABLE_LIMIT;
-    insertSyntheticMessages(database, scope.sessionId, bindingCount);
+    insertSyntheticHistory(database, scope.sessionId, bindingCount);
     enforceSqliteVariableLimit(database);
 
     const page = readRecentSessionTranscriptHistoryEvents(scope, {
@@ -332,7 +261,7 @@ describe("SQLite transcript history events", () => {
     });
     const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
     const bindingCount = REGRESSION_SQLITE_VARIABLE_LIMIT;
-    insertSyntheticBoundaryPairs(database, scope.sessionId, bindingCount);
+    insertSyntheticHistory(database, scope.sessionId, bindingCount, true);
     enforceSqliteVariableLimit(database);
 
     const events = readSessionTranscriptHistoryEvents(scope);
@@ -340,5 +269,16 @@ describe("SQLite transcript history events", () => {
     expect(events).toHaveLength(bindingCount * 2 + 1);
     expect(historyEventId(events[0])).toBe("seed");
     expect(historyEventId(events.at(-1))).toBe(`synthetic-message-${String(bindingCount * 2 + 1)}`);
+
+    const latestPage = readRecentSessionTranscriptHistoryEvents(scope, {
+      maxBytes: 1_000_000,
+      maxLines: 2,
+      maxMessages: 2,
+    });
+    expect(latestPage.totalMessages).toBe(bindingCount * 2 + 1);
+    expect(latestPage.events.map(historyEventId)).toEqual([
+      `synthetic-boundary-${String(bindingCount * 2)}`,
+      `synthetic-message-${String(bindingCount * 2 + 1)}`,
+    ]);
   });
 });

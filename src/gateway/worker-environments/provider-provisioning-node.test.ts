@@ -42,6 +42,7 @@ describe("node worker provider provisioning", () => {
     );
     const workerService = support.createService(
       support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
         provisionBeforeInstallation: true,
         requiresNodeEnrollment: true,
         provision,
@@ -75,10 +76,118 @@ describe("node worker provider provisioning", () => {
     );
   });
 
+  it("destroys a replayed node lease without installing or admitting its worker", async () => {
+    const leaseId = "cloud-lease-destroy-replay";
+    const deviceId = "cloud-device-destroy-replay";
+    const operationIds: string[] = [];
+    const ensureNodeWorkerBundle = vi.fn(async () => structuredClone(support.BOOTSTRAP_RECEIPT));
+    const generateWorkerCredential = vi.fn(() => support.CREDENTIAL);
+    const retireNodeEnrollment = vi.fn(async () => {});
+    const destroy = vi.fn(async () => {});
+    const transitions = vi.spyOn(support.testState.store, "transition");
+    const prepareNodeEnrollment = vi.fn(async (record) => {
+      const enrolled = support.testState.store.ensureNodeEnrollment(record.environmentId);
+      if (!enrolled.nodeSetupId) {
+        throw new Error("expected persisted cloud enrollment ownership");
+      }
+      return {
+        mode: "connect" as const,
+        setupCode: "setup-code",
+        setupId: enrolled.nodeSetupId,
+        openclawVersion: "2026.8.1",
+        packageSpecs: ["openclaw@2026.8.1"],
+        displayName: "Cloud worker destroy replay",
+        waitForDeviceId: async () => deviceId,
+      };
+    });
+    const workerService = support.createService(
+      support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
+        provisionBeforeInstallation: true,
+        requiresNodeEnrollment: true,
+        provision: async (_profile, operationId, options) => {
+          operationIds.push(operationId);
+          if (operationIds.length === 1) {
+            await options?.beginNodeEnrollment?.();
+            throw new Error("provider response was lost after node allocation");
+          }
+          return {
+            leaseId,
+            node: { deviceId },
+            sharedHost: false,
+            desktop: support.DESKTOP,
+          };
+        },
+        destroy,
+      }),
+      {
+        prepareNodeEnrollment,
+        retireNodeEnrollment,
+        ensureNodeWorkerBundle,
+        generateWorkerCredential,
+      },
+    );
+
+    await expect(
+      workerService.create("development", "request-node-destroy-replay"),
+    ).rejects.toMatchObject({ code: "provider_failure" });
+    const provisioning = support.testState.store.list()[0]!;
+    expect(provisioning).toMatchObject({
+      state: "provisioning",
+      leaseId: null,
+      nodeSetupId: expect.any(String),
+    });
+
+    await expect(workerService.destroy(provisioning.environmentId)).resolves.toMatchObject({
+      state: "destroyed",
+      leaseId,
+      nodeDeviceId: deviceId,
+      sharedHost: false,
+      desktop: support.DESKTOP,
+    });
+
+    expect(operationIds).toEqual([
+      provisioning.provisionOperationId,
+      provisioning.provisionOperationId,
+    ]);
+    expect(ensureNodeWorkerBundle).not.toHaveBeenCalled();
+    expect(support.testState.prepareInstallation).not.toHaveBeenCalled();
+    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+    expect(generateWorkerCredential).not.toHaveBeenCalled();
+    expect(support.testState.store.getCredential(provisioning.environmentId)).toBeUndefined();
+    expect(transitions).not.toHaveBeenCalledWith(expect.objectContaining({ to: "ready" }));
+    expect(destroy).toHaveBeenCalledExactlyOnceWith({ leaseId, profile: { region: "test" } });
+    expect(retireNodeEnrollment).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        state: "destroying",
+        leaseId,
+        nodeSetupId: provisioning.nodeSetupId,
+        nodeDeviceId: deviceId,
+        sharedHost: false,
+        desktop: support.DESKTOP,
+        bootstrapReceipt: null,
+        ownerEpoch: 0,
+      }),
+    );
+    expect(support.testState.store.get(provisioning.environmentId)).toMatchObject({
+      state: "destroyed",
+      bootstrapReceipt: null,
+      ownerEpoch: 0,
+    });
+    expect(
+      workerService.takeMintedCredential({
+        environmentId: provisioning.environmentId,
+        ownerEpoch: 0,
+        sessionId: null,
+      }),
+    ).toBeUndefined();
+  });
+
   it("keeps paired-device roles when a node lease has no cloud enrollment owner", async () => {
     const retireNodeEnrollment = vi.fn(async () => {});
     const workerService = support.createService(
       support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
         provisionBeforeInstallation: true,
         provision: async () => ({
           leaseId: "device-lease-1",
@@ -114,6 +223,7 @@ describe("node worker provider provisioning", () => {
     const placementGate = createWorkerSessionPlacementGate(placements);
     const workerService = support.createService(
       support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
         provisionBeforeInstallation: true,
         provision: async () => ({
           leaseId: "device-lease-1",

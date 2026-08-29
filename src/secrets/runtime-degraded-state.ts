@@ -182,12 +182,21 @@ function cloneResolutionErrorOwner(owner: SecretResolutionErrorOwner): SecretRes
 /** Publishes the degraded-owner snapshot at the same edge as runtime config activation. */
 export function setActiveDegradedSecretOwners(owners: readonly DegradedSecretOwner[]): void {
   activeDegradedOwners = owners.map(cloneOwner);
-  activeCredentialDegradedOwners.clear();
 }
 
-/** Publishes or clears one runtime-discovered channel credential owner. */
+/** Publishes one runtime-discovered channel credential owner. */
 export function setActiveCredentialDegradedOwner(owner: DegradedSecretOwner): void {
   activeCredentialDegradedOwners.set(ownerKey(owner.ownerKind, owner.ownerId), cloneOwner(owner));
+}
+
+/** Lists credential owners independently of the replaceable SecretRef snapshot. */
+export function listActiveCredentialDegradedOwners(): DegradedSecretOwner[] {
+  return Array.from(activeCredentialDegradedOwners.values(), cloneOwner);
+}
+
+/** Clears credential-owner state only when its owning secrets runtime is torn down. */
+export function clearActiveCredentialDegradedOwners(): void {
+  activeCredentialDegradedOwners.clear();
 }
 
 /** Clears one runtime-discovered channel credential owner before re-inspection. */
@@ -200,10 +209,7 @@ export function clearActiveCredentialDegradedOwner(
 
 /** Returns the active degraded-owner snapshot without exposing mutable registry state. */
 export function listActiveDegradedSecretOwners(): DegradedSecretOwner[] {
-  return [
-    ...activeDegradedOwners.map(cloneOwner),
-    ...Array.from(activeCredentialDegradedOwners.values(), cloneOwner),
-  ];
+  return [...activeDegradedOwners.map(cloneOwner), ...listActiveCredentialDegradedOwners()];
 }
 
 /** Associates a strict activation failure with the owners it prevented from refreshing. */
@@ -249,4 +255,12 @@ export function assertSecretOwnerAvailable(
   if (owner) {
     throw new SecretSurfaceUnavailableError(owner);
   }
+}
+
+/** Returns whether an owner is available without activating or resolving its secrets. */
+export function isSecretOwnerAvailable(
+  ownerKind: DegradedSecretOwner["ownerKind"],
+  ownerId: string,
+): boolean {
+  return findActiveDegradedSecretOwner(ownerKind, ownerId) === undefined;
 }

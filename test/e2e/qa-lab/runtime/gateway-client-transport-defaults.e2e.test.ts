@@ -270,7 +270,6 @@ describe("GatewayClient transport defaults", () => {
       );
     }
 
-    expect(closeEvents).toHaveLength(expectedDelays.length);
     expect(closeEvents).toEqual(expectedDelays.map(() => ({ code: 1012, reason: "retry" })));
   });
 

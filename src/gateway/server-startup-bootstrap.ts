@@ -14,6 +14,10 @@ import {
   setAppliedRuntimeConfigSnapshot,
 } from "../config/io.js";
 import { normalizeStateDirEnv } from "../config/paths.js";
+import {
+  copyConfigResolutionFacts,
+  copyConfigResolutionFactsExcept,
+} from "../config/resolution-facts.js";
 import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
@@ -31,8 +35,10 @@ import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { applyLoggingConfig } from "../logging/logger.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
@@ -92,7 +98,7 @@ export async function prepareGatewayServerBootstrap(input: {
   ] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
     import("../state/openclaw-agent-db.js"),
-    import("../state/openclaw-state-db.js"),
+    import("../state/openclaw-state-db-contract.js"),
   ]);
   const databaseSchemas = preflightOpenClawDatabaseSchemas({
     env: process.env,
@@ -184,6 +190,9 @@ export async function prepareGatewayServerBootstrap(input: {
           runtimePort: port,
         }),
       );
+  if (controlUiSeed.seededAllowedOrigins) {
+    copyConfigResolutionFacts(configSnapshot.config, controlUiSeed.config);
+  }
   const startupConfigSnapshot = controlUiSeed.seededAllowedOrigins
     ? {
         ...configSnapshot,
@@ -238,6 +247,19 @@ export async function prepareGatewayServerBootstrap(input: {
   );
   const cfgAtStart = authBootstrap.cfg;
   startupTrace.setConfig(cfgAtStart);
+  try {
+    const { cleanupRetiredManagedGitHubProfiles } =
+      await import("../agents/github-tool-profile-cleanup.js");
+    const cleanup = await cleanupRetiredManagedGitHubProfiles({
+      config: cfgAtStart,
+      env: process.env,
+    });
+    for (const warning of cleanup.warnings) {
+      log.warn(`managed GitHub profile cleanup: ${warning}`);
+    }
+  } catch (error) {
+    log.warn(`managed GitHub profile cleanup failed: ${formatErrorMessage(error)}`);
+  }
   if (authBootstrap.generatedToken) {
     log.warn(formatRuntimeGatewayAuthTokenWarning());
   }
@@ -250,7 +272,7 @@ export async function prepareGatewayServerBootstrap(input: {
     trustedProxyDeviceAutoApprove.scopes?.some((scope) => scope.trim() === ADMIN_SCOPE)
   ) {
     log.warn(
-      "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin to require manual approval until per-identity roles are available.",
+      "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin and grant admin per identity via gateway.auth.identityScopes instead.",
     );
   }
   const resolvedStartupAuthOverride = startupAuthOverride
@@ -342,19 +364,28 @@ export async function prepareGatewayServerBootstrap(input: {
         },
       };
     }
+    copyConfigResolutionFactsExcept(config, runtimeConfig, [
+      ...(reloadAuthOverride?.token !== undefined ? ["gateway.auth.token"] : []),
+      ...(reloadAuthOverride?.password !== undefined ? ["gateway.auth.password"] : []),
+    ]);
     return runtimeConfig;
   };
   const applyReloadableGatewayAuthRefs = (config: OpenClawConfig): OpenClawConfig => {
     if (!startupAuthSecretRefOverride?.token && !startupAuthSecretRefOverride?.password) {
       return config;
     }
-    return {
+    const next = {
       ...config,
       gateway: {
         ...config.gateway,
         auth: mergeGatewayAuthConfig(config.gateway?.auth, startupAuthSecretRefOverride),
       },
     };
+    copyConfigResolutionFactsExcept(config, next, [
+      ...(startupAuthSecretRefOverride.token !== undefined ? ["gateway.auth.token"] : []),
+      ...(startupAuthSecretRefOverride.password !== undefined ? ["gateway.auth.password"] : []),
+    ]);
+    return next;
   };
   const prepareReloadCandidate = (params: {
     runtimeConfig: OpenClawConfig;
@@ -381,13 +412,16 @@ export async function prepareGatewayServerBootstrap(input: {
           ambientEnvTriggers,
         });
     const applyCandidateOverrides = captureConfigOverrideApplier();
-    const reapplyCompareOverlays = (config: OpenClawConfig): OpenClawConfig =>
-      applyCandidateOverrides(
+    const reapplyCompareOverlays = (config: OpenClawConfig): OpenClawConfig => {
+      const applied = applyCandidateOverrides(
         mergeActivationSectionsIntoRuntimeConfig({
           runtimeConfig: config,
           activationConfig: pluginCandidate.compareConfig,
         }),
       );
+      copyConfigResolutionFacts(config, applied);
+      return applied;
+    };
     const reapplyRuntimeOverlays = (config: OpenClawConfig): OpenClawConfig =>
       applyFixedGatewayOverlays(applyReloadableGatewayAuthRefs(reapplyCompareOverlays(config)));
     return {
@@ -408,6 +442,7 @@ export async function prepareGatewayServerBootstrap(input: {
     startupLastGoodSnapshot = startupSnapshot;
   }
   setAppliedRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
+  applyLoggingConfig(cfgAtStart.logging);
   initializePublishedConfigRuntimeEnv(startupLastGoodSnapshot.sourceConfig, {
     ownedEnv: collectConfigRuntimeEnvOwnership(
       startupLastGoodSnapshot.sourceConfig,
@@ -424,6 +459,10 @@ export async function prepareGatewayServerBootstrap(input: {
       });
   const { prepareGatewayPluginBootstrap, runGatewayStartupMaintenance } =
     await loadStartupPluginsModule();
+  const pluginGatewayContext: {
+    current: import("./server-methods/types.js").GatewayRequestContext | undefined;
+  } = { current: undefined };
+  const resolvePluginGatewayContext = () => pluginGatewayContext.current;
   await startupTrace.measure("startup.maintenance", () =>
     runGatewayStartupMaintenance({
       cfgAtStart,
@@ -457,23 +496,29 @@ export async function prepareGatewayServerBootstrap(input: {
   // Plugin activation can return a new runtime config object. Publish that exact object before
   // prepared owners are created so request-time exact-owner lookups cannot see the pre-activation
   // snapshot and reject the Gateway's own model catalog.
+  copyConfigResolutionFacts(cfgAtStart, gatewayPluginConfigAtStart);
   publishGatewayPluginRuntimeConfigAtStartup({
     runtimeConfig: gatewayPluginConfigAtStart,
     sourceConfig: startupLastGoodSnapshot.sourceConfig,
   });
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
-  const currentPluginMetadataSnapshot = completePluginMetadataSnapshot({
-    snapshot: pluginMetadataSnapshot,
-    config: startupActivationSourceConfig,
-    env: process.env,
-    workspaceDir: defaultWorkspaceDir,
-  });
-  setCurrentPluginMetadataSnapshot(currentPluginMetadataSnapshot, {
-    config: startupActivationSourceConfig,
-    compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
-    env: process.env,
-    workspaceDir: pluginWorkspaceDir,
-  });
+  const existingPluginMetadataSnapshot = getGatewayPluginMetadataSnapshot();
+  const currentPluginMetadataSnapshot =
+    existingPluginMetadataSnapshot ??
+    completePluginMetadataSnapshot({
+      snapshot: pluginMetadataSnapshot,
+      config: startupActivationSourceConfig,
+      env: process.env,
+      workspaceDir: defaultWorkspaceDir,
+    });
+  if (!existingPluginMetadataSnapshot) {
+    setGatewayPluginMetadataSnapshot(currentPluginMetadataSnapshot, {
+      config: startupActivationSourceConfig,
+      compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
+      env: process.env,
+      workspaceDir: pluginWorkspaceDir,
+    });
+  }
   if (pluginLookUpTable) {
     const metrics = pluginLookUpTable.metrics;
     startupTrace.detail("plugins.lookup-table", [
@@ -512,13 +557,15 @@ export async function prepareGatewayServerBootstrap(input: {
     startupInternalWriteHash,
     startupLastGoodSnapshot,
     workerEnvironmentStartup,
+    pluginGatewayContext,
+    resolvePluginGatewayContext,
     pluginBootstrap,
     gatewayPluginConfigAtStart,
     defaultWorkspaceDir,
     pluginWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
-    pluginMetadataSnapshot,
+    pluginMetadataSnapshot: currentPluginMetadataSnapshot,
     pluginLookUpTable,
     baseMethods,
     ambientAutostartSuppressedChannelIds,

@@ -13,9 +13,18 @@ import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
+  listSessionParticipantsReadOnly,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
+import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
+import {
   buildPersistedUserTurnMessage,
   type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
 import { applyChatSendManagedMedia, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 
@@ -88,6 +97,157 @@ function createAttachments(
 }
 
 describe("prepareChatSendUserTurn", () => {
+  it.each(["profile", "synthetic", "profileless", "profileless-ui", "system"] as const)(
+    "records only accepted authenticated external input after retargeting: %s",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const profile = ensureProfileForEmail("accepted@example.test", { env: state.env });
+        const { controller } = createUserTurnInputController();
+        const clientInfo = createClientInfo(
+          kind === "profileless-ui"
+            ? { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT }
+            : {},
+        );
+        const prepared = prepareChatSendUserTurn({
+          request: {
+            clientInfo,
+            normalizedAttachments: [],
+            suppressCommandInterpretation: false,
+            systemInputProvenance:
+              kind === "system" ? { kind: "internal_system", sourceTool: "fixture" } : undefined,
+            systemProvenanceReceipt: undefined,
+          },
+          session: { agentId: "main", clientRunId: "accepted", sessionKey: "agent:main:original" },
+          admission: {
+            originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+          },
+          attachments: createAttachments(),
+          client: {
+            ...(!kind.startsWith("profileless")
+              ? {
+                  authenticatedUserProfile: {
+                    profileId: profile.id,
+                    displayName: profile.displayName,
+                    hasAvatar: false,
+                    updatedAt: profile.updatedAt,
+                  },
+                }
+              : {}),
+            internal: kind === "synthetic" ? { syntheticClient: true } : undefined,
+            connect: {
+              minProtocol: 1,
+              maxProtocol: 1,
+              client: clientInfo,
+              scopes: ["operator.write"],
+            },
+          },
+          logGateway: createSubsystemLogger("test/participant"),
+          userTurn: controller,
+        });
+        const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:retargeted" };
+        await upsertSessionEntryCore(scope, { sessionId: "retargeted", updatedAt: 2 });
+        const target = {
+          agentId: "main",
+          sessionKey: scope.sessionKey,
+          storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+        };
+        prepareChannelParticipantObservation(prepared.ctx);
+        recordAcceptedSessionParticipantInput({ ...prepared.ctx }, target);
+        recordAcceptedSessionParticipantInput(prepared.ctx, target);
+        await new Promise<void>((resolve) => {
+          queueMicrotask(resolve);
+        });
+        expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toEqual(
+          kind === "profile"
+            ? [
+                {
+                  identity: { type: "profile", id: profile.id },
+                  contributionCount: 1,
+                  firstPromptedAt: 1,
+                  lastPromptedAt: 1,
+                },
+              ]
+            : kind === "profileless"
+              ? [
+                  {
+                    identity: {
+                      type: "observation",
+                      pluginId: null,
+                      accountId: null,
+                      senderKind: "unknown",
+                      id: clientInfo.id,
+                    },
+                    contributionCount: 1,
+                    firstPromptedAt: 1,
+                    lastPromptedAt: 1,
+                  },
+                ]
+              : undefined,
+        );
+        expect(
+          listSessionParticipantsReadOnly({ ...scope, sessionKey: "agent:main:original" }).size,
+        ).toBe(0);
+      });
+    },
+  );
+
+  it("carries the authenticated guest's required sandbox into session creation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("chat-sandbox-creator@example.com");
+      const { controller } = createUserTurnInputController();
+      const prepared = prepareChatSendUserTurn({
+        request: {
+          clientInfo: createClientInfo(),
+          normalizedAttachments: [],
+          suppressCommandInterpretation: false,
+          systemInputProvenance: undefined,
+          systemProvenanceReceipt: undefined,
+        },
+        session: {
+          agentId: "main",
+          clientRunId: "run-1",
+          sessionKey: "agent:main:dashboard:guest-chat",
+          cfg: {
+            gateway: {
+              roles: {
+                default: "guest",
+                definitions: {
+                  guest: {
+                    sessions: { others: "view" },
+                    agents: "*",
+                    scopes: ["operator.write"],
+                    sandbox: "required",
+                  },
+                },
+              },
+            },
+          },
+        },
+        admission: {
+          originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+        },
+        attachments: createAttachments(),
+        client: {
+          authenticatedUserProfile: {
+            profileId: profile.id,
+            displayName: profile.displayName,
+            hasAvatar: false,
+            updatedAt: profile.updatedAt,
+          },
+          connect: { scopes: ["operator.write"] },
+        } as never,
+        logGateway: { warn: vi.fn() } as never,
+        userTurn: controller,
+      });
+
+      expect(prepared.ctx.SessionCreation).toEqual({
+        via: "operator",
+        actor: { type: "human", id: profile.id },
+        sandbox: "required",
+      });
+    });
+  });
+
   it("assembles command, provenance, sender, and origin facts", async () => {
     const { controller, readInput } = createUserTurnInputController();
     const prepared = prepareChatSendUserTurn({

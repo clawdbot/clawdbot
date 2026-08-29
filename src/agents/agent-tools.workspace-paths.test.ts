@@ -953,39 +953,41 @@ describe("FS tools with workspaceOnly=false", () => {
     expect(JSON.stringify(result.content)).toContain("test read content");
   });
 
-  it("returns optional not-found context for missing date-only daily memory reads", async () => {
-    const result = await runFsTool(
-      "read",
-      "test-call-missing-daily-memory",
-      {
-        path: "memory/2026-05-15.md",
-      },
-      undefined,
-    );
-    expect(result).toStrictEqual({
-      content: [
-        {
-          type: "text",
-          text: "No daily memory file exists yet at memory/2026-05-15.md.",
-        },
-      ],
-      details: {
-        kind: "not_found",
-        status: "not_found",
-        path: "memory/2026-05-15.md",
-        optional: true,
-      },
-    });
-  });
-
-  it("still throws for ordinary missing read paths", async () => {
+  it("makes only missing canonical daily-memory reads implicitly optional", async () => {
     const readTool = requireTool(toolsFor(undefined), "read");
-
-    await expect(
-      readTool.execute("test-call-missing-ordinary-file", {
-        path: "notes/missing.md",
-      }),
-    ).rejects.toThrow(/ENOENT|no such file|not found/i);
+    for (const filePath of [
+      "memory/2026-05-15.md",
+      "./memory/2026-05-16.md",
+      "././memory/2026-05-18.md",
+      ...(process.platform === "win32" ? ["memory\\2026-05-19.md"] : []),
+    ]) {
+      expect(
+        await readTool.execute("test-call-missing-daily-memory", { path: filePath }),
+      ).toStrictEqual({
+        content: [{ type: "text", text: `Optional file not found: ${filePath}.` }],
+        details: { kind: "not_found", status: "not_found", path: filePath, optional: true },
+      });
+    }
+    const existingPath = "memory/2026-05-17.md";
+    await fs.mkdir(path.join(workspaceDir, "memory"));
+    await fs.writeFile(path.join(workspaceDir, existingPath), "present daily memory");
+    expect(
+      getTextContent(
+        await readTool.execute("test-call-existing-daily-memory", { path: existingPath }),
+      ),
+    ).toBe("present daily memory");
+    for (const filePath of [
+      "notes/missing.md",
+      "memory/2026-05-15-session.md",
+      "../memory/2026-05-15.md",
+      " memory/2026-05-15.md",
+      "memory/2026-05-15.md ",
+      ...(process.platform === "win32" ? [] : ["memory\\2026-05-15.md"]),
+    ]) {
+      await expect(
+        readTool.execute("test-call-missing-ordinary-file", { path: filePath }),
+      ).rejects.toThrow(/ENOENT|no such file|not found/i);
+    }
   });
 
   it("should allow write outside workspace when workspaceOnly is unset", async () => {

@@ -13,11 +13,13 @@ import {
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
+import { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
   cleanupAgedMemoryReindexTempFiles,
   closeMemoryDatabase,
@@ -52,6 +54,7 @@ import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
 type MemorySyncProviderGenerationBase = {
+  database: DatabaseSync;
   providerKey: string;
   identities: MemoryIndexProviderIdentity[];
 };
@@ -151,6 +154,16 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   protected async runSync(params?: MemorySyncParams) {
+    try {
+      await this.runSyncPass(params);
+    } finally {
+      // Run after every sync path and after any shadow reindex scope has ended,
+      // so the cap is enforced once against the published live database.
+      this.pruneEmbeddingCacheIfNeeded?.();
+    }
+  }
+
+  private async runSyncPass(params?: MemorySyncParams) {
     // Guard: if an embedding provider is configured but currently unavailable,
     // abort sync to prevent silently degrading an existing semantic vector index
     // to fts-only and wiping existing semantic vectors.
@@ -515,131 +528,116 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       { reason: params.reason, force: params.force },
       true,
     );
-    const originalState = {
-      ftsAvailable: this.fts.available,
-      ftsError: this.fts.loadError,
-      lastMetaSerialized: this.lastMetaSerialized,
-      vectorAvailable: this.vector.available,
-      vectorLoadError: this.vector.loadError,
-      vectorDims: this.vector.dims,
-      vectorDegradedWriteWarningShown: this.vectorDegradedWriteWarningShown,
-      vectorReady: this.vectorReady,
-    };
-    const restoreOriginalState = () => {
-      this.db = originalDb;
-      this.fts.available = originalState.ftsAvailable;
-      this.fts.loadError = originalState.ftsError;
-      this.lastMetaSerialized = originalState.lastMetaSerialized;
-      this.vector.available = originalState.vectorAvailable;
-      this.vector.loadError = originalState.vectorLoadError;
-      this.vector.dims = originalState.vectorDims;
-      this.vectorDegradedWriteWarningShown = originalState.vectorDegradedWriteWarningShown;
-      this.vectorReady = originalState.vectorReady;
-    };
     try {
       cleanupAgedMemoryReindexTempFiles(dbPath);
       reindexLock = acquireMemoryReindexLock(dbPath);
       const originalRevision = readMemoryDatabaseRevision(originalDb);
       tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
-      this.db = tempDb;
-      this.lastMetaSerialized = null;
-      this.resetVectorState();
-      this.fts.available = false;
-      this.fts.loadError = undefined;
-      this.ensureSchema();
-      await this.seedEmbeddingCache(originalDb);
+      const shadow = new MemoryIndexDatabase(tempDb);
+      shadow.vector.enabled = this.vector.enabled;
+      shadow.vector.extensionPath = this.vector.extensionPath;
+      shadow.fts.enabled = this.fts.enabled;
+      // Only the awaited rebuild inherits the shadow. Concurrent searches and
+      // status keep the published handle and its vector/FTS/metadata state.
+      const rebuilt = await this.withReindexDatabase(shadow, async () => {
+        try {
+          this.ensureSchema();
+          await this.seedEmbeddingCache(originalDb);
 
-      const shouldSyncMemory = shouldRetryMemoryOnFailure;
-      const shouldSyncSessions = shouldRetrySessionsOnFailure;
+          const shouldSyncMemory = shouldRetryMemoryOnFailure;
+          const shouldSyncSessions = shouldRetrySessionsOnFailure;
 
-      if (this.shouldDeferSourceWideBatch()) {
-        await this.executeSourceWideSync({
-          shouldSyncMemory,
-          shouldSyncSessions,
-          needsFullReindex: true,
-          progress: params.progress,
-        });
-        if (shouldSyncMemory) {
-          this.clearMemoryRetryState();
-        }
-        if (shouldSyncSessions) {
-          this.clearSessionRetryState();
-        } else {
-          this.refreshSessionDirtyFlag();
-        }
-      } else {
-        if (shouldSyncMemory) {
-          await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-          this.clearMemoryRetryState();
-        }
+          if (this.shouldDeferSourceWideBatch()) {
+            await this.executeSourceWideSync({
+              shouldSyncMemory,
+              shouldSyncSessions,
+              needsFullReindex: true,
+              progress: params.progress,
+            });
+            if (shouldSyncMemory) {
+              this.clearMemoryRetryState();
+            }
+            if (shouldSyncSessions) {
+              this.clearSessionRetryState();
+            } else {
+              this.refreshSessionDirtyFlag();
+            }
+          } else {
+            if (shouldSyncMemory) {
+              await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
+              this.clearMemoryRetryState();
+            }
 
-        if (shouldSyncSessions) {
-          await this.syncArchiveFiles({ needsFullReindex: true, progress: params.progress });
-          this.clearSessionRetryState();
-        } else {
-          this.refreshSessionDirtyFlag();
-        }
-      }
-      if (!shouldSyncMemory) {
-        this.clearMemoryRetryState();
-      }
-      const vectorIndexComplete = this.vector.available === true;
-      const syncProvider = this.syncProviderGeneration
-        ? this.syncProviderGeneration.provider
-        : this.provider;
-      const nextMeta: MemoryIndexMeta = {
-        model: syncProvider?.model ?? "fts-only",
-        provider: syncProvider?.id ?? "none",
-        providerKey: this.syncProviderGeneration
-          ? this.syncProviderGeneration.providerKey
-          : this.providerKey!,
-        sources: resolveConfiguredSourcesForMeta(this.sources),
-        scopeHash: resolveConfiguredScopeHash({
-          workspaceDir: this.workspaceDir,
-          extraPaths: this.settings.extraPaths,
-          multimodal: {
-            enabled: this.settings.multimodal.enabled,
-            modalities: this.settings.multimodal.modalities,
-            maxFileBytes: this.settings.multimodal.maxFileBytes,
-          },
-        }),
-        chunkTokens: this.settings.chunking.tokens,
-        chunkOverlap: this.settings.chunking.overlap,
-        chunkingVersion: MEMORY_CHUNKING_VERSION,
-        ftsTokenizer: this.settings.store.fts.tokenizer,
-        provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
-      };
-      if (this.vector.available && this.vector.dims) {
-        nextMeta.vectorDims = this.vector.dims;
-      }
+            if (shouldSyncSessions) {
+              await this.syncArchiveFiles({ needsFullReindex: true, progress: params.progress });
+              this.clearSessionRetryState();
+            } else {
+              this.refreshSessionDirtyFlag();
+            }
+          }
+          if (!shouldSyncMemory) {
+            this.clearMemoryRetryState();
+          }
+          const syncProvider = this.syncProviderGeneration
+            ? this.syncProviderGeneration.provider
+            : this.provider;
+          const vectorIndexComplete = syncProvider === null || this.vector.available === true;
+          const nextMeta: MemoryIndexMeta = {
+            model: syncProvider?.model ?? "fts-only",
+            provider: syncProvider?.id ?? "none",
+            providerKey: this.syncProviderGeneration
+              ? this.syncProviderGeneration.providerKey
+              : this.providerKey!,
+            sources: resolveConfiguredSourcesForMeta(this.sources),
+            scopeHash: resolveConfiguredScopeHash({
+              workspaceDir: this.workspaceDir,
+              extraPaths: this.settings.extraPaths,
+              multimodal: {
+                enabled: this.settings.multimodal.enabled,
+                modalities: this.settings.multimodal.modalities,
+                maxFileBytes: this.settings.multimodal.maxFileBytes,
+              },
+            }),
+            chunkTokens: this.settings.chunking.tokens,
+            chunkOverlap: this.settings.chunking.overlap,
+            chunkingVersion: MEMORY_CHUNKING_VERSION,
+            ftsTokenizer: this.settings.store.fts.tokenizer,
+            provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
+          };
+          if (this.vector.available && this.vector.dims) {
+            nextMeta.vectorDims = this.vector.dims;
+          }
 
-      this.writeMeta(nextMeta);
-      this.pruneEmbeddingCacheIfNeeded?.();
-      const nextFtsState = {
-        available: this.fts.available,
-        loadError: this.fts.loadError,
-      };
+          this.writeMeta(nextMeta);
+          return { nextMeta, vectorIndexComplete };
+        } finally {
+          // Escaped continuations must fail closed, never write to the live DB.
+          shadow.closed = true;
+        }
+      });
 
       closeMemoryDatabase(tempDb);
       tempDbClosed = true;
-      await publishMemoryDatabaseTables({
-        targetDb: originalDb,
-        sourcePath: tempDbPath,
-        metaKey: MEMORY_INDEX_META_KEY,
-        expectedRevision: originalRevision,
-        vectorExtensionPath: this.vector.extensionPath,
-      });
+      await withMemoryWorkspaceLock(this.workspaceDir, () =>
+        publishMemoryDatabaseTables({
+          targetDb: originalDb,
+          sourcePath: tempDbPath,
+          metaKey: MEMORY_INDEX_META_KEY,
+          expectedRevision: originalRevision,
+          vectorExtensionPath: shadow.vector.extensionPath,
+        }),
+      );
 
-      this.db = originalDb;
-      if (vectorIndexComplete) {
+      if (rebuilt.vectorIndexComplete) {
         // Publish completeness only after the shadow tables committed. A crash
         // before this point leaves the rebuild marker conservative and retryable.
         markMemoryVectorIndexClean(originalDb);
       }
+      this.database.lastMetaSerialized = null;
       this.resetVectorState();
-      this.fts.available = nextFtsState.available;
-      this.fts.loadError = nextFtsState.loadError;
-      this.vector.dims = nextMeta.vectorDims;
+      this.fts.available = shadow.fts.available;
+      this.fts.loadError = shadow.fts.loadError;
+      this.vector.dims = rebuilt.nextMeta.vectorDims;
     } catch (err) {
       if (tempDb && !tempDbClosed) {
         try {
@@ -647,7 +645,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           tempDbClosed = true;
         } catch {}
       }
-      restoreOriginalState();
       this.restoreReindexRetryState(originalRetryState);
       this.markFailedFullReindexRetry({
         memory: shouldRetryMemoryOnFailure,

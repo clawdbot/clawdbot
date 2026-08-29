@@ -329,7 +329,8 @@ suite.define(() => {
     await page.locator(".board-session-surface").waitFor();
 
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
-    await preview.hover();
+    const previewBubble = page.locator(".chat-bubble", { has: preview });
+    const widgetActions = preview.locator("[data-widget-actions]");
     await expect.poll(() => preview.locator(".chat-tool-card__preview-header").count()).toBe(0);
     await expect
       .poll(() =>
@@ -356,14 +357,13 @@ suite.define(() => {
       )
       .toBe("0px");
     if (recordProof) {
+      await widgetActions.hover();
       await expect
-        .poll(() =>
-          preview
-            .locator("[data-widget-actions]")
-            .evaluate((element) => getComputedStyle(element).opacity),
-        )
+        .poll(() => widgetActions.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
-      await preview.screenshot({ path: path.join(workboardPinProofDir, "01-pin-hover.png") });
+      await previewBubble.screenshot({
+        path: path.join(workboardPinProofDir, "01-pin-hover.png"),
+      });
     }
     await preview.getByRole("button", { name: "Pin to dashboard" }).click();
     await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
@@ -377,7 +377,7 @@ suite.define(() => {
       .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
       .toBe(true);
     if (recordProof) {
-      await preview.screenshot({ path: path.join(workboardPinProofDir, "02-pinned.png") });
+      await previewBubble.screenshot({ path: path.join(workboardPinProofDir, "02-pinned.png") });
     }
     await gateway.setMethodResponse("board.get", resizablePinnedBoardSnapshot);
 
@@ -391,16 +391,16 @@ suite.define(() => {
     const divider = page.locator(".board-session-surface__divider");
     const dock = page.locator(".board-session-surface__chat");
     const dockHeight = () => dock.evaluate((element) => getComputedStyle(element).height);
-    await divider.focus();
-    await page.keyboard.press("End");
+    const dividerBounds = await divider.boundingBox();
+    expect(dividerBounds).not.toBeNull();
+    await page.mouse.move(
+      dividerBounds!.x + dividerBounds!.width / 2,
+      dividerBounds!.y + dividerBounds!.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(dividerBounds!.x, dividerBounds!.y - 80);
+    await page.mouse.up();
     await expect.poll(dockHeight).not.toBe("320px");
-    const clampedHeight = await dockHeight();
-    // End pins the bottom dock against its clamp, so step back off it: comparing
-    // a clamped height to itself after reload would pass if persistence broke and
-    // the dock merely fell back to its minimum.
-    await page.keyboard.press("ArrowUp");
-    await page.keyboard.press("ArrowUp");
-    await expect.poll(dockHeight).not.toBe(clampedHeight);
     const persistedHeight = await dockHeight();
     expect(persistedHeight).toMatch(/^\d+(?:\.\d+)?px$/u);
 
@@ -488,7 +488,11 @@ suite.define(() => {
     await toast.waitFor();
     expect(await toast.textContent()).toContain("Could not pin to dashboard. Try again.");
     expect(await pin.isEnabled()).toBe(true);
-    expect(await pin.getAttribute("title")).toBe("Could not pin to dashboard. Try again.");
+    await page.mouse.move(0, 0);
+    await pin.hover();
+    const hint = page.locator("wa-tooltip[open]");
+    await hint.locator('[part="body"]').waitFor({ state: "visible" });
+    expect(await hint.textContent()).toContain("Could not pin to dashboard. Try again.");
     expect(await page.getByText("internal path detail", { exact: false }).count()).toBe(0);
     if (recordProof) {
       await page.screenshot({ path: path.join(workboardPinFailureProofDir, "pin-failed.png") });

@@ -187,7 +187,9 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
       dangerouslyAllowPrivateNetwork: account.dangerouslyAllowPrivateNetwork ?? undefined,
     });
 
-    const uploadedUrl = mediaUrl ? await uploadImageFromUrl(mediaUrl) : undefined;
+    const uploadedUrl = mediaUrl
+      ? await uploadImageFromUrl(mediaUrl, account.mediaMaxBytes)
+      : undefined;
     return withHttpPokeAccountApi(account, async (api) => {
       const fromShip = normalizeShip(account.ship);
       const story = buildMediaStory(text, uploadedUrl);

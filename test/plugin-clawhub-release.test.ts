@@ -9,7 +9,7 @@ import {
   realpathSync,
   writeFileSync,
 } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -32,7 +32,8 @@ import {
 } from "../scripts/lib/plugin-npm-release.ts";
 import { runPluginClawHubReleaseCheck } from "../scripts/plugin-clawhub-release-check.ts";
 import { writePublishablePluginFixture } from "./helpers/publishable-plugin-fixture.js";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
+import { writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 
@@ -127,6 +128,20 @@ describe("resolveChangedClawHubPublishablePluginPackages", () => {
 });
 
 describe("collectClawHubPublishablePluginPackages", () => {
+  it("rejects duplicate ClawHub package names from different plugin directories", () => {
+    const repoDir = createTempPluginRepo();
+    writePublishablePluginFixture(repoDir, {
+      extensionId: "demo-shadow",
+      packageName: "@openclaw/demo-plugin",
+      version: "2026.4.1",
+      publishTo: "clawhub",
+    });
+
+    expect(() => collectClawHubPublishablePluginPackages(repoDir)).toThrow(
+      "package @openclaw/demo-plugin is declared by multiple plugin sources: demo-plugin (extensions/demo-plugin), demo-shadow (extensions/demo-shadow).",
+    );
+  });
+
   it("requires the ClawHub external plugin contract", () => {
     const repoDir = createTempPluginRepo({
       includeClawHubContract: false,
@@ -398,6 +413,26 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
       extraExtensionIds: ["demo-two"],
     });
     const { baseRef, headRef } = commitSharedReleaseToolingChange(repoDir);
+
+    const selected = resolveSelectedClawHubPublishablePluginPackages({
+      rootDir: repoDir,
+      plugins: collectClawHubPublishablePluginPackages(repoDir),
+      gitRange: { baseRef, headRef },
+    });
+
+    expect(selected.map((plugin) => plugin.extensionId)).toEqual(["demo-plugin", "demo-two"]);
+  });
+
+  it.each([
+    "packages/normalization-core/src/record-coerce.ts",
+    "packages/plugin-package-contract/src/schema.ts",
+    "scripts/lib/plugin-publication-candidates.ts",
+    "scripts/lib/plugin-publication-collector.ts",
+  ])("selects all publishable plugins when %s changes", (changedPath) => {
+    const repoDir = createTempPluginRepo({
+      extraExtensionIds: ["demo-two"],
+    });
+    const { baseRef, headRef } = commitSharedReleaseToolingChange(repoDir, changedPath);
 
     const selected = resolveSelectedClawHubPublishablePluginPackages({
       rootDir: repoDir,
@@ -1248,7 +1283,7 @@ describe("collectPluginClawHubReleasePlan", () => {
 });
 
 describe("buildOpenClawReleaseClawHubPlan", () => {
-  it("emits a dispatch plan that keeps ClawHub children on the release tag", async () => {
+  it("emits a dispatch plan that keeps release bytes separate from protected tooling", async () => {
     const repoDir = createTempPluginRepo({
       extraExtensionIds: ["demo-two", "demo-three"],
     });
@@ -1302,6 +1337,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
         releaseTag: "v2026.4.1-beta.1",
         releaseSha: "a".repeat(40),
         releasePublishBranch: "main",
+        releasePublishFullRef: "refs/heads/main",
         releasePublishRunAttempt: "2",
         releasePublishRunId: "12345",
         pluginPublishScope: "all-publishable",
@@ -1314,19 +1350,24 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       },
     );
 
-    expect(plan.clawHubWorkflowRef).toBe("v2026.4.1-beta.1");
+    expect(plan.clawHubWorkflowRef).toBe(`release-publish/${"d".repeat(12)}-12345`);
     expect(plan.bootstrapWorkflowSha).toBe("d".repeat(40));
     expect(plan.releasePublishBranch).toBe("main");
     expect(plan.normal).toEqual({
       workflow: "plugin-clawhub-release.yml",
-      ref: "v2026.4.1-beta.1",
+      ref: `release-publish/${"d".repeat(12)}-12345`,
       shouldDispatch: true,
       packages: ["@openclaw/demo-plugin"],
       inputs: {
         publish_scope: "selected",
+        ref: "a".repeat(40),
+        release_tag: "v2026.4.1-beta.1",
         plugins: "@openclaw/demo-plugin",
+        release_publish_full_ref: "refs/heads/main",
+        release_publish_run_attempt: "2",
         release_publish_run_id: "12345",
         release_publish_branch: "main",
+        release_publish_workflow_sha: "d".repeat(40),
       },
     });
     expect(plan.bootstrap).toEqual({
@@ -1354,7 +1395,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       missingTrustedPlugins: "@openclaw/demo-three",
     });
     expect(plan.verifier).toEqual({
-      clawHubWorkflowRef: "v2026.4.1-beta.1",
+      clawHubWorkflowRef: `release-publish/${"d".repeat(12)}-12345`,
     });
   });
 
@@ -1390,6 +1431,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
         releaseTag: "v2026.4.1-beta.1",
         releaseSha: "b".repeat(40),
         releasePublishBranch: "release/2026.4.1",
+        releasePublishFullRef: "refs/heads/release/2026.4.1",
         releasePublishRunAttempt: "3",
         releasePublishRunId: "12345",
         pluginPublishScope: "selected",
@@ -1487,6 +1529,8 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       "c".repeat(40),
       "--release-publish-branch",
       "main",
+      "--release-publish-full-ref",
+      "refs/heads/main",
       "--release-publish-run-id",
       "12345",
     ];
@@ -2152,11 +2196,18 @@ function createTempPluginRepo(
   return repoDir;
 }
 
-function commitSharedReleaseToolingChange(repoDir: string) {
+function commitSharedReleaseToolingChange(
+  repoDir: string,
+  changedPath = "scripts/plugin-clawhub-publish.sh",
+) {
   const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
 
-  mkdirSync(join(repoDir, "scripts"), { recursive: true });
-  writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
+  const absolutePath = join(repoDir, changedPath);
+  mkdirSync(dirname(absolutePath), { recursive: true });
+  writeFileSync(
+    absolutePath,
+    changedPath.endsWith(".sh") ? "#!/usr/bin/env bash\n" : "// shared release authority\n",
+  );
   git(repoDir, ["add", "."]);
   git(repoDir, [
     "-c",

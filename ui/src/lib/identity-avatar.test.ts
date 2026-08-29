@@ -1,12 +1,8 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  resolveAvatar,
-  resolveAvatarImageUrl,
-  resolveIdentityHue,
-  setAvatarGatewayOrigin,
-  settleAvatarImageUrl,
-} from "./identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "./identity-avatar-context.ts";
+import { resolveAvatarImageUrl, settleAvatarImageUrl } from "./identity-avatar-loader.ts";
+import { resolveAvatar, resolveIdentityHue } from "./identity-avatar.ts";
 
 afterEach(() => {
   setAvatarGatewayOrigin(null);
@@ -98,6 +94,29 @@ describe("resolveAvatar profile URL origin restriction", () => {
 });
 
 describe("resolveAvatar gateway origin trust", () => {
+  it.each([
+    ["https://gw.example.com", "", "/avatar/research", "/avatar/research"],
+    [
+      "https://gw.example.com",
+      "/control",
+      "/control/avatar/research?v=2#f",
+      "/control/avatar/research?v=2",
+    ],
+    ["https://ui.example.com", "/control", "/avatar/research", "/avatar/research"],
+  ])(
+    "resolves agent images for page %s and mount %s",
+    (pageOrigin, basePath, avatarUrl, expectedPath) => {
+      vi.stubGlobal("location", { origin: pageOrigin });
+      setAvatarGatewayOrigin("wss://gw.example.com/ws", null, basePath);
+      for (const identity of [undefined, { type: "agent" as const, id: "research" }]) {
+        expect(resolveAvatar({ id: "research", identity, profileAvatarUrl: avatarUrl })).toEqual({
+          kind: "profile",
+          url: `https://gw.example.com${expectedPath}`,
+        });
+      }
+    },
+  );
+
   it("applies an explicit base path for a same-origin gateway", () => {
     vi.stubGlobal("location", { origin: "https://gw.example.com" });
     setAvatarGatewayOrigin("wss://gw.example.com/ws", null, "/wilfred");
@@ -176,21 +195,65 @@ describe("resolveAvatar gateway origin trust", () => {
 });
 
 describe("resolveAvatar profile-id senders", () => {
-  it("derives the canonical avatar route from a UUID-shaped sender id", () => {
-    expect(resolveAvatar({ id: "c3e32452-0467-47e5-aafa-233cd5dae29f", name: "steipete" })).toEqual(
-      {
-        kind: "profile",
-        url: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar",
-      },
-    );
+  it("sender provenance keeps an unqualified UUID on initials", () => {
+    expect(resolveAvatar({ id: " c3e32452-0467-47e5-aafa-233cd5dae29f " })).toMatchObject({
+      kind: "initials",
+    });
   });
+
+  it.each([undefined, "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar"])(
+    "does not upgrade a typed remote participant from its id or display metadata: %s",
+    (profileAvatarUrl) => {
+      expect(
+        resolveAvatar({
+          id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+          name: "steipete",
+          profileAvatarUrl,
+          identity: {
+            type: "observation",
+            id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+            pluginId: "test",
+            accountId: null,
+            senderKind: "unknown",
+          },
+        }),
+      ).toMatchObject({ kind: "initials" });
+    },
+  );
 
   it("resolves the derived route against the gateway origin", () => {
     setAvatarGatewayOrigin("wss://gw.example.com/ws");
-    expect(resolveAvatar({ id: "c3e32452-0467-47e5-aafa-233cd5dae29f" })).toEqual({
+    expect(
+      resolveAvatar({
+        id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+        identity: { type: "profile", id: "c3e32452-0467-47e5-aafa-233cd5dae29f" },
+      }),
+    ).toEqual({
       kind: "profile",
       url: "https://gw.example.com/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar",
     });
+  });
+
+  it.each([undefined, "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar"])(
+    "does not turn a typed agent into a profile from a UUID or user image: %s",
+    (profileAvatarUrl) => {
+      const id = "c3e32452-0467-47e5-aafa-233cd5dae29f";
+      expect(
+        resolveAvatar({ id, identity: { type: "agent", id }, profileAvatarUrl }),
+      ).toMatchObject({
+        kind: "initials",
+      });
+    },
+  );
+
+  it("keeps a typed profile in the user image namespace", () => {
+    expect(
+      resolveAvatar({
+        id: "person",
+        identity: { type: "profile", id: "person" },
+        profileAvatarUrl: "/avatar/research",
+      }),
+    ).toEqual({ kind: "profile", url: "/api/users/person/avatar" });
   });
 
   it("keeps non-UUID sender ids on initials (no route probing)", () => {
@@ -209,24 +272,28 @@ describe("resolveAvatar profile-id senders", () => {
 });
 
 describe("authenticated profile avatar cache", () => {
-  it("shares one authenticated image fetch and blob across avatar surfaces", async () => {
+  it.each([
+    ["/api/users/profile-ada/avatar?v=7", "image/png"],
+    ["/avatar/research", "image/png"],
+    ["/avatar/research", "image/svg+xml"],
+  ])("shares one authenticated fetch for %s (%s)", async (avatarPath, mimeType) => {
     setAvatarGatewayOrigin("wss://gateway.example.test/ws", "Bearer profile-token");
     const fetchAvatar = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(new Uint8Array([1, 2, 3]), {
-        headers: { "content-type": "image/png" },
+        headers: { "content-type": mimeType },
       }),
     );
     const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:profile-ada");
 
-    const first = resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7");
-    const second = resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7");
+    const first = resolveAvatarImageUrl(avatarPath);
+    const second = resolveAvatarImageUrl(avatarPath);
 
     expect(first).toBe(second);
     await expect(first).resolves.toBe("blob:profile-ada");
     await expect(second).resolves.toBe("blob:profile-ada");
     expect(fetchAvatar).toHaveBeenCalledOnce();
     expect(fetchAvatar).toHaveBeenCalledWith(
-      "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
+      `https://gateway.example.test${avatarPath}`,
       expect.objectContaining({
         credentials: "include",
         headers: { Authorization: "Bearer profile-token" },
@@ -366,6 +433,10 @@ describe("authenticated profile avatar cache", () => {
       "https://gateway.example.test@evil.example/api/users/profile-ada/avatar?v=7",
       "//evil.example/api/users/profile-ada/avatar?v=7",
       "/api/secrets",
+      "https://evil.example/avatar/research",
+      "//evil.example/avatar/research",
+      "/avatar/research/extra",
+      "/avatar/%",
     ]) {
       expect(resolveAvatarImageUrl(avatarUrl)).toBeNull();
       expect(resolveAvatar({ id: "profile-ada", profileAvatarUrl: avatarUrl })).toMatchObject({

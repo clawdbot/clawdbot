@@ -9,11 +9,14 @@ import {
 } from "../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
 const hoisted = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
-  const loadPluginMetadataSnapshot = vi.fn(() => {
+  const loadPluginMetadataSnapshot = vi.fn((_params?: unknown) => {
     const manifestRegistry = loadManifestRegistry();
     return {
       manifestRegistry,
@@ -24,10 +27,14 @@ const hoisted = vi.hoisted(() => {
         )?.id ?? pluginId,
     };
   });
+  const resolvePluginMetadataSnapshot = vi.fn((params: unknown) =>
+    loadPluginMetadataSnapshot(params),
+  );
   return {
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
     loadPluginMetadataSnapshot,
+    resolvePluginMetadataSnapshot,
     loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
   };
 });
@@ -43,10 +50,11 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
 
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
-  resolvePluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: hoisted.resolvePluginMetadataSnapshot,
 }));
 
-let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSkillDirs;
+let resolvePluginSkillRoots: typeof import("./plugin-skills.js").resolvePluginSkillRoots;
+let resolvePluginSkillRootsFromMetadata: typeof import("./plugin-skills.js").resolvePluginSkillRootsFromMetadata;
 
 const tempDirs = createTrackedTempDirs();
 
@@ -100,6 +108,7 @@ function createSinglePluginRegistry(params: {
   format?: "openclaw" | "bundle";
   bundleFormat?: "agent" | "codex" | "claude" | "cursor";
   legacyPluginIds?: string[];
+  origin?: PluginOrigin;
 }): PluginManifestRegistry {
   return {
     diagnostics: [],
@@ -115,7 +124,7 @@ function createSinglePluginRegistry(params: {
         legacyPluginIds: params.legacyPluginIds,
         skills: params.skills,
         hooks: [],
-        origin: "workspace",
+        origin: params.origin ?? "workspace",
         rootDir: params.pluginRoot,
         source: params.pluginRoot,
         manifestPath: path.join(params.pluginRoot, "openclaw.plugin.json"),
@@ -179,16 +188,43 @@ function registerHealthyAcpBackend() {
 }
 
 afterEach(async () => {
+  clearPluginMetadataLifecycleCaches();
   hoisted.loadPluginManifestRegistryForInstalledIndex.mockReset();
   hoisted.loadPluginMetadataSnapshot.mockClear();
+  hoisted.resolvePluginMetadataSnapshot.mockClear();
   hoisted.loadPluginRegistrySnapshot.mockReset();
   acpRuntimeTesting.resetAcpRuntimeBackendsForTests();
   await tempDirs.cleanup();
 });
 
-describe("resolvePluginSkillDirs", () => {
+describe("resolvePluginSkillRoots", () => {
   beforeAll(async () => {
-    ({ resolvePluginSkillDirs } = await import("./plugin-skills.js"));
+    ({ resolvePluginSkillRoots, resolvePluginSkillRootsFromMetadata } =
+      await import("./plugin-skills.js"));
+  });
+
+  it("uses supplied lifecycle metadata without a cold load", async () => {
+    const { workspaceDir, acpxRoot, helperRoot } = await setupAcpxAndHelperRegistry();
+    registerHealthyAcpBackend();
+    const manifestRegistry = buildRegistry({ acpxRoot, helperRoot });
+
+    const roots = resolvePluginSkillRootsFromMetadata({
+      workspaceDir,
+      config: {
+        acp: { enabled: true },
+        plugins: { entries: { acpx: { enabled: true }, helper: { enabled: true } } },
+      } as OpenClawConfig,
+      metadataSnapshot: {
+        manifestRegistry,
+        normalizePluginId: (pluginId: string) => pluginId,
+      } as never,
+    });
+
+    expect(roots).toEqual([
+      { dir: path.resolve(acpxRoot, "skills"), rejectHardlinks: true },
+      { dir: path.resolve(helperRoot, "skills"), rejectHardlinks: true },
+    ]);
+    expect(hoisted.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   beforeEach(() => {
@@ -198,9 +234,69 @@ describe("resolvePluginSkillDirs", () => {
       plugins: [],
     });
     hoisted.loadPluginMetadataSnapshot.mockClear();
+    hoisted.resolvePluginMetadataSnapshot.mockClear();
     hoisted.loadPluginRegistrySnapshot.mockReset();
     hoisted.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
   });
+
+  it("keeps package skill targets stable across config changes while publishing live selection", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-workspace-");
+    const pluginRoot = await tempDirs.make("openclaw-plugin-");
+    const pluginSkillsDir = await tempDirs.make("managed-plugin-skills-");
+    const skillsRoot = path.join(pluginRoot, "skills");
+    const original = path.join(skillsRoot, "original");
+    const added = path.join(skillsRoot, "added");
+    await fs.mkdir(original, { recursive: true });
+    await fs.writeFile(path.join(original, "SKILL.md"), "# Original\n");
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createSinglePluginRegistry({ pluginRoot, skills: ["./skills"] }),
+    );
+    const config: OpenClawConfig = { plugins: { entries: { helper: { enabled: true } } } };
+    const resolve = (nextConfig = config) =>
+      resolvePluginSkillRoots({ workspaceDir, config: nextConfig, pluginSkillsDir });
+    resolve();
+    expect(fsSync.readlinkSync(path.join(pluginSkillsDir, "original"))).toBe(original);
+
+    await fs.mkdir(added);
+    await fs.writeFile(path.join(added, "SKILL.md"), "# Added\n");
+    resolve({ ...config });
+    await expectPathMissing(path.join(pluginSkillsDir, "added"));
+
+    withPluginCache(createPluginCache(), () => resolve({ ...config }));
+    expect(fsSync.readlinkSync(path.join(pluginSkillsDir, "added"))).toBe(added);
+    resolve({ ...config });
+    await expectPathMissing(path.join(pluginSkillsDir, "added"));
+
+    resolve({ plugins: { entries: { helper: { enabled: false } } } });
+    await expectPathMissing(path.join(pluginSkillsDir, "original"));
+  });
+
+  it.each([
+    { origin: "bundled" as const, rejectHardlinks: false },
+    { origin: "global" as const, rejectHardlinks: true },
+    { origin: "workspace" as const, rejectHardlinks: true },
+    { origin: "config" as const, rejectHardlinks: true },
+  ])(
+    "preserves authoritative $origin plugin hardlink policy on skill roots",
+    async ({ origin, rejectHardlinks }) => {
+      const workspaceDir = await tempDirs.make("openclaw-");
+      const pluginRoot = await tempDirs.make("openclaw-plugin-");
+      const skillDir = path.join(pluginRoot, "skills");
+      await fs.mkdir(skillDir, { recursive: true });
+      hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+        createSinglePluginRegistry({ pluginRoot, skills: ["./skills"], origin }),
+      );
+
+      expect(
+        resolvePluginSkillRoots({
+          workspaceDir,
+          config: {
+            plugins: { entries: { helper: { enabled: true } } },
+          } as OpenClawConfig,
+        }),
+      ).toEqual([{ dir: skillDir, rejectHardlinks }]);
+    },
+  );
 
   it.each([
     {
@@ -234,7 +330,7 @@ describe("resolvePluginSkillDirs", () => {
       registerHealthyAcpBackend();
     }
 
-    const dirs = resolvePluginSkillDirs({
+    const roots = resolvePluginSkillRoots({
       workspaceDir,
       config: {
         acp: { enabled: acpEnabled },
@@ -247,7 +343,51 @@ describe("resolvePluginSkillDirs", () => {
       } as OpenClawConfig,
     });
 
-    expect(dirs).toEqual(expectedDirs({ acpxRoot, helperRoot }));
+    expect(roots.map((root) => root.dir)).toEqual(expectedDirs({ acpxRoot, helperRoot }));
+  });
+
+  it("reuses current lifecycle metadata before falling back to a cold load", async () => {
+    const { workspaceDir, acpxRoot, helperRoot } = await setupAcpxAndHelperRegistry();
+    registerHealthyAcpBackend();
+    const manifestRegistry = buildRegistry({ acpxRoot, helperRoot });
+    hoisted.resolvePluginMetadataSnapshot.mockReturnValueOnce({
+      manifestRegistry,
+      plugins: manifestRegistry.plugins,
+      normalizePluginId: (pluginId: string) => pluginId,
+    });
+
+    const roots = resolvePluginSkillRoots({
+      workspaceDir,
+      config: {
+        acp: { enabled: true },
+        plugins: { entries: { acpx: { enabled: true }, helper: { enabled: true } } },
+      } as OpenClawConfig,
+    });
+
+    expect(roots.map((root) => root.dir)).toEqual([
+      path.resolve(acpxRoot, "skills"),
+      path.resolve(helperRoot, "skills"),
+    ]);
+    expect(hoisted.resolvePluginMetadataSnapshot).toHaveBeenCalledOnce();
+    expect(hoisted.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("preserves absent config when resolving current lifecycle metadata", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const manifestRegistry: PluginManifestRegistry = { diagnostics: [], plugins: [] };
+    const metadataSnapshot = {
+      manifestRegistry,
+      plugins: manifestRegistry.plugins,
+      normalizePluginId: (pluginId: string) => pluginId,
+    };
+    hoisted.resolvePluginMetadataSnapshot.mockImplementationOnce((params: unknown) =>
+      (params as { config?: OpenClawConfig }).config === undefined
+        ? metadataSnapshot
+        : hoisted.loadPluginMetadataSnapshot(params),
+    );
+
+    expect(resolvePluginSkillRoots({ workspaceDir })).toEqual([]);
+    expect(hoisted.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -282,22 +422,22 @@ describe("resolvePluginSkillDirs", () => {
         registerHealthyAcpBackend();
       }
 
-      const first = resolvePluginSkillDirs({ workspaceDir, config });
+      const first = resolvePluginSkillRoots({ workspaceDir, config });
 
       if (initiallyAvailable) {
         acpRuntimeTesting.resetAcpRuntimeBackendsForTests();
       } else {
         registerHealthyAcpBackend();
       }
-      const second = resolvePluginSkillDirs({ workspaceDir, config });
+      const second = resolvePluginSkillRoots({ workspaceDir, config });
 
       const dirsForState = (includeAcpx: boolean) => [
         ...(includeAcpx ? [path.resolve(acpxRoot, "skills")] : []),
         path.resolve(helperRoot, "skills"),
       ];
-      expect(first).toEqual(dirsForState(firstIncludesAcpx));
-      expect(second).toEqual(dirsForState(secondIncludesAcpx));
-      expect(resolvePluginSkillDirs({ workspaceDir, config })).toBe(second);
+      expect(first.map((root) => root.dir)).toEqual(dirsForState(firstIncludesAcpx));
+      expect(second.map((root) => root.dir)).toEqual(dirsForState(secondIncludesAcpx));
+      expect(resolvePluginSkillRoots({ workspaceDir, config })).toEqual(second);
     },
   );
 
@@ -314,7 +454,7 @@ describe("resolvePluginSkillDirs", () => {
       }),
     );
 
-    const dirs = resolvePluginSkillDirs({
+    const roots = resolvePluginSkillRoots({
       workspaceDir,
       config: {
         plugins: {
@@ -325,7 +465,7 @@ describe("resolvePluginSkillDirs", () => {
       } as OpenClawConfig,
     });
 
-    expect(dirs).toEqual([path.resolve(pluginRoot, "skills")]);
+    expect(roots).toEqual([{ dir: path.resolve(pluginRoot, "skills"), rejectHardlinks: true }]);
   });
 
   it("rejects plugin skill symlinks that resolve outside plugin root", async () => {
@@ -345,7 +485,7 @@ describe("resolvePluginSkillDirs", () => {
       }),
     );
 
-    const dirs = resolvePluginSkillDirs({
+    const roots = resolvePluginSkillRoots({
       workspaceDir,
       config: {
         plugins: {
@@ -356,7 +496,7 @@ describe("resolvePluginSkillDirs", () => {
       } as OpenClawConfig,
     });
 
-    expect(dirs).toStrictEqual([]);
+    expect(roots).toStrictEqual([]);
   });
 
   it("cleans up generated plugin skill links when the plugin registry is empty", async () => {
@@ -372,13 +512,13 @@ describe("resolvePluginSkillDirs", () => {
       plugins: [],
     });
 
-    const dirs = resolvePluginSkillDirs({
+    const roots = resolvePluginSkillRoots({
       workspaceDir,
       config: {} as OpenClawConfig,
       pluginSkillsDir,
     });
 
-    expect(dirs).toStrictEqual([]);
+    expect(roots).toStrictEqual([]);
     await expectPathMissing(path.join(pluginSkillsDir, "stale-skill"));
   });
 
@@ -389,13 +529,13 @@ describe("resolvePluginSkillDirs", () => {
     await fs.mkdir(staleSkill, { recursive: true });
     fsSync.symlinkSync(staleSkill, path.join(pluginSkillsDir, "stale-skill"), "dir");
 
-    const dirs = resolvePluginSkillDirs({
+    const roots = resolvePluginSkillRoots({
       workspaceDir: undefined,
       config: {} as OpenClawConfig,
       pluginSkillsDir,
     });
 
-    expect(dirs).toStrictEqual([]);
+    expect(roots).toStrictEqual([]);
     await expectPathMissing(path.join(pluginSkillsDir, "stale-skill"));
   });
 
@@ -413,7 +553,7 @@ describe("resolvePluginSkillDirs", () => {
       }),
     );
 
-    const dirs = resolvePluginSkillDirs({
+    const roots = resolvePluginSkillRoots({
       workspaceDir,
       config: {
         plugins: {
@@ -424,7 +564,7 @@ describe("resolvePluginSkillDirs", () => {
       } as OpenClawConfig,
     });
 
-    expect(dirs).toEqual([
+    expect(roots.map((root) => root.dir)).toEqual([
       path.resolve(pluginRoot, "skills"),
       path.resolve(pluginRoot, "commands"),
     ]);
@@ -453,7 +593,7 @@ describe("resolvePluginSkillDirs", () => {
       }),
     );
 
-    const dirs = resolvePluginSkillDirs({
+    const roots = resolvePluginSkillRoots({
       workspaceDir,
       pluginSkillsDir,
       config: {
@@ -461,7 +601,7 @@ describe("resolvePluginSkillDirs", () => {
       } as OpenClawConfig,
     });
 
-    expect(dirs).toEqual([validSkill]);
+    expect(roots).toEqual([{ dir: validSkill, rejectHardlinks: true }]);
     expect(fsSync.readlinkSync(path.join(pluginSkillsDir, "valid"))).toBe(validSkill);
     expect(fsSync.existsSync(path.join(pluginSkillsDir, "deep"))).toBe(false);
     expect(fsSync.existsSync(path.join(pluginSkillsDir, "skills"))).toBe(false);
@@ -480,7 +620,7 @@ describe("resolvePluginSkillDirs", () => {
       }),
     );
 
-    const dirs = resolvePluginSkillDirs({
+    const roots = resolvePluginSkillRoots({
       workspaceDir,
       config: {
         plugins: {
@@ -491,13 +631,13 @@ describe("resolvePluginSkillDirs", () => {
       } as OpenClawConfig,
     });
 
-    expect(dirs).toEqual([path.resolve(pluginRoot, "skills")]);
+    expect(roots).toEqual([{ dir: path.resolve(pluginRoot, "skills"), rejectHardlinks: true }]);
   });
 });
 
 describe("publishPluginSkills", () => {
   beforeAll(async () => {
-    ({ resolvePluginSkillDirs } = await import("./plugin-skills.js"));
+    ({ resolvePluginSkillRoots } = await import("./plugin-skills.js"));
   });
 
   function publishPluginSkills(skillDirs: string[], opts: { pluginSkillsDir: string }): void {
@@ -518,7 +658,7 @@ describe("publishPluginSkills", () => {
       diagnostics: [],
       plugins,
     });
-    resolvePluginSkillDirs({
+    resolvePluginSkillRoots({
       workspaceDir: opts.pluginSkillsDir,
       pluginSkillsDir: opts.pluginSkillsDir,
       config: {

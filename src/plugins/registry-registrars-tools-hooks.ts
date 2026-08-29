@@ -17,6 +17,10 @@ import {
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import {
+  resolveConversationAccessAllowed,
+  resolvePromptInjectionAllowed,
+} from "./hook-policy-decisions.js";
+import {
   resolveTypedHookTimeoutMs,
   type PluginRegistryState,
   type PluginTypedHookPolicy,
@@ -35,6 +39,7 @@ import {
   isConversationHookName,
   isPluginHookAgentTrigger,
   isPluginHookName,
+  isPluginHookReplyDispatchKind,
   isPromptInjectionHookName,
 } from "./types.js";
 import type {
@@ -49,15 +54,15 @@ import type {
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
 
-function normalizeEligibleTriggers(value: unknown) {
+function normalizeHookEligibility<T>(value: unknown, isEligible: (item: unknown) => item is T) {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const triggers = Array.from(value);
-  if (triggers.length === 0 || !triggers.every(isPluginHookAgentTrigger)) {
+  const entries = Array.from(value);
+  if (entries.length === 0 || !entries.every(isEligible)) {
     return undefined;
   }
-  return uniqueValues(triggers);
+  return uniqueValues(entries);
 }
 
 function canRegisterInstalledTrustedHook(record: PluginRecord): boolean {
@@ -394,7 +399,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(hookName)) {
+    if (!resolvePromptInjectionAllowed(policy) && isPromptInjectionHookName(hookName)) {
       pushDiagnostic({
         level: "warn",
         pluginId: record.id,
@@ -403,9 +408,11 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    if (isConversationHookName(hookName)) {
-      const explicitConversationAccess = policy?.allowConversationAccess;
-      if (record.origin !== "bundled" && explicitConversationAccess !== true) {
+    if (
+      isConversationHookName(hookName) &&
+      !resolveConversationAccessAllowed(record.origin, policy)
+    ) {
+      if (record.origin !== "bundled") {
         pushDiagnostic({
           level: "warn",
           pluginId: record.id,
@@ -416,20 +423,22 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         });
         return;
       }
-      if (record.origin === "bundled" && explicitConversationAccess === false) {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
-        });
-        return;
-      }
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
+      });
+      return;
     }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName, opts, policy });
     const eligibleTriggers =
       hookName === "before_agent_reply"
-        ? normalizeEligibleTriggers(opts?.eligibleTriggers)
+        ? normalizeHookEligibility(opts?.eligibleTriggers, isPluginHookAgentTrigger)
+        : undefined;
+    const eligibleDispatchKinds =
+      hookName === "reply_dispatch"
+        ? normalizeHookEligibility(opts?.eligibleDispatchKinds, isPluginHookReplyDispatchKind)
         : undefined;
     const matcher =
       hookName === "before_tool_call" || hookName === "after_tool_call"
@@ -453,6 +462,10 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(eligibleTriggers ? { eligibleTriggers } : {}),
+      ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
+      ...(hookName === "before_prompt_build" && opts?.requiresToolAuthority === true
+        ? { requiresToolAuthority: true }
+        : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };

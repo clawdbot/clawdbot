@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -27,17 +28,26 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../session-event-payload.js", () => ({
-  buildGatewaySessionEventFields: ({
-    sessionRow,
-    hasActiveRun,
-    activeRunIds,
-  }: {
-    sessionRow: { key: string; label: string };
-    hasActiveRun?: boolean;
-    activeRunIds?: string[];
-  }) => ({ key: sessionRow.key, label: sessionRow.label, hasActiveRun, activeRunIds }),
-}));
+vi.mock("../session-event-payload.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session-event-payload.js")>();
+  return {
+    ...actual,
+    buildGatewaySessionEventFields: ({
+      sessionRow,
+      hasActiveRun,
+      activeRunIds,
+    }: {
+      sessionRow: { key: string; label: string };
+      hasActiveRun?: boolean;
+      activeRunIds?: string[] | null;
+    }) => ({
+      key: sessionRow.key,
+      label: sessionRow.label,
+      ...(hasActiveRun === undefined ? {} : { hasActiveRun }),
+      ...(activeRunIds === undefined ? {} : { activeRunIds }),
+    }),
+  };
+});
 
 const { emitSessionsChanged, flushPendingSessionsChangedEvents, readSessionsMutationVersion } =
   await import("./session-change-event.js");
@@ -198,8 +208,95 @@ describe("sessions.changed coalescing", () => {
         hasActiveRun: true,
       }),
       expect.anything(),
-      expect.anything(),
+      expect.objectContaining({
+        agentId: "ops",
+        sessionKeys: ["global"],
+      }),
     );
+    const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+    expect(payload).not.toHaveProperty("agentId");
+    expect(payload).not.toHaveProperty("goal");
+  });
+
+  it("keeps a retired fixed-store owner private after the mutation commits", () => {
+    const config = {
+      session: { scope: "global", store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { research: {} },
+      },
+    } satisfies OpenClawConfig;
+    const context = createContext(new Set(["conn-1"]), config);
+
+    emitSessionsChanged(context, { reason: "update", sessionKey: "global" });
+
+    expect(mocks.loadRow).not.toHaveBeenCalled();
+    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ sessionKey: "global", reason: "update" }),
+      new Set(["conn-1"]),
+      {
+        agentId: "ops",
+        dropIfSlow: true,
+        sessionKeys: ["agent:ops:global"],
+      },
+    );
+    const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+    for (const field of [
+      "agentId",
+      "key",
+      "label",
+      "session",
+      "goal",
+      "status",
+      "hasActiveRun",
+      "activeRunIds",
+    ]) {
+      expect(payload, field).not.toHaveProperty(field);
+    }
+  });
+
+  it("tombstones exact run ids when lifecycle projection takes ownership", () => {
+    const sessionKey = "agent:main:projected";
+    const sessionId = `${sessionKey}-id`;
+    const chatAbortControllers = new Map([
+      [
+        "direct-run",
+        {
+          agentId: "main",
+          controller: new AbortController(),
+          expiresAtMs: 60_000,
+          sessionId,
+          sessionKey,
+          startedAtMs: 0,
+        } satisfies ChatAbortControllerEntry,
+      ],
+    ]);
+    const context = createContext(new Set(["conn-1"]), {}, chatAbortControllers);
+
+    emitSessionsChanged(context, { reason: "update", sessionKey });
+    expect(vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1]).toMatchObject({
+      hasActiveRun: true,
+      activeRunIds: ["direct-run"],
+    });
+
+    chatAbortControllers.clear();
+    registerAgentRunContext("hidden-worker-run", {
+      isControlUiVisible: false,
+      projectSessionActive: true,
+      sessionKey,
+    });
+    try {
+      emitSessionsChanged(context, { reason: "update", sessionKey });
+      flushPendingSessionsChangedEvents(context);
+
+      const payload = vi.mocked(context.broadcastToConnIds).mock.calls[1]?.[1];
+      expect(payload).toMatchObject({ hasActiveRun: true });
+      expect(payload).toHaveProperty("activeRunIds", null);
+    } finally {
+      clearAgentRunContext("hidden-worker-run");
+    }
   });
 
   it("advances the mutation fence without loading rows when nobody receives events", () => {

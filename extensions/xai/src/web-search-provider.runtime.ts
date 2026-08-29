@@ -25,7 +25,6 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiWebSearchPayload,
-  extractXaiWebSearchContent,
   requestXaiWebSearch,
   resolveXaiInlineCitations,
   resolveXaiWebSearchEndpoint,
@@ -137,7 +136,7 @@ function runXaiWebSearch(params: {
   const cacheKey = normalizeCacheKey(
     `grok:${params.endpoint}:${params.model}:${String(params.inlineCitations)}:${params.query}`,
   );
-  const cached = readCache(XAI_WEB_SEARCH_CACHE, cacheKey);
+  const cached = readCache(XAI_WEB_SEARCH_CACHE, cacheKey, params.cacheTtlMs);
   if (cached) {
     return Promise.resolve({ ...cached.value, cached: true });
   }
@@ -423,7 +422,6 @@ export async function executeXaiWebSearchProviderTool(
 
 export const testing = {
   buildXaiWebSearchPayload,
-  extractXaiWebSearchContent,
   resolveXaiToolSearchConfig,
   resolveXaiInlineCitations,
   resolveXaiWebSearchCredential,

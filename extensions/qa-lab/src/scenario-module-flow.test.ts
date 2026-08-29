@@ -51,4 +51,16 @@ describe("QA scenario module flow", () => {
       }),
     ).toThrow("moduleExport arguments require a non-empty string export name");
   });
+
+  it.each([
+    ["channel-access-control", "config.expectReply", "outboundCount"],
+    ["channel-restart-resume", "env.gateway.restartAfterStateMutation", "secondMarker"],
+  ] as const)("expands shared flow %s into portable steps", (shared, call, marker) => {
+    const flow = qaScenarioModuleFlow.sharedSchema.parse({ shared });
+    const resolved = qaScenarioModuleFlow.resolveFlow(flow, "Scenario title");
+
+    expect(qaScenarioModuleFlow.resolveKind(flow)).toBe("steps");
+    expect(JSON.stringify(resolved)).toContain(call);
+    expect(JSON.stringify(resolved)).toContain(marker);
+  });
 });

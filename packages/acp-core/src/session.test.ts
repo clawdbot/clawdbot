@@ -43,6 +43,29 @@ describe("acp session manager", () => {
     expect(store.getSessionByRunId("run-new")?.sessionId).toBe(session.sessionId);
   });
 
+  it.each(["clear", "cancel"] as const)(
+    "does not let stale %s ownership remove a replacement run",
+    (operation) => {
+      const session = store.createSession({
+        sessionKey: "acp:replacement",
+        cwd: "/tmp",
+      });
+      store.setActiveRun(session.sessionId, "run-old", new AbortController());
+      const replacementController = new AbortController();
+      store.setActiveRun(session.sessionId, "run-new", replacementController);
+
+      if (operation === "clear") {
+        store.clearActiveRun(session.sessionId, "run-old");
+      } else {
+        expect(store.cancelActiveRun(session.sessionId, "run-old")).toBe(false);
+      }
+
+      expect(session.activeRunId).toBe("run-new");
+      expect(replacementController.signal.aborted).toBe(false);
+      expect(store.getSessionByRunId("run-new")?.sessionId).toBe(session.sessionId);
+    },
+  );
+
   it("deletes sessions and aborts active runs on close", () => {
     const session = store.createSession({
       sessionId: "close-me",

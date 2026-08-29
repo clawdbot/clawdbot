@@ -185,10 +185,15 @@ describe("imessage targets", () => {
   it.each(["7d5297154d5f436d83dbbdf03fcc8fd", "7d5297154d5f436d83dbbdf03fcc8fdg"])(
     "keeps non-hex or wrong-length value %s on the handle path",
     (value) => {
-      expect(normalizeIMessageHandle(value)).not.toMatch(/^chat_identifier:/);
+      expect(normalizeIMessageHandle(value)).toBe(value);
       expect(parseIMessageTarget(value)).toEqual({ kind: "handle", to: value, service: "auto" });
     },
   );
+
+  it("normalizes tel URIs without treating arbitrary prefixed identifiers as phone numbers", () => {
+    expect(normalizeIMessageHandle("tel:+1 (555) 222-3333")).toBe("+15552223333");
+    expect(normalizeIMessageHandle("tel:C0AG22RN7L3")).toBe("tel:C0AG22RN7L3");
+  });
 
   it("accepts the all-digit edge of the 32-hex identifier contract", () => {
     const identifier = "1".repeat(32);

@@ -2,7 +2,12 @@
 import { randomUUID } from "node:crypto";
 import type { WizardStep as ProtocolWizardStep } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
-import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "./prompts.js";
+import {
+  DEVICE_CODE_PHISHING_WARNING,
+  WizardCancelledError,
+  type WizardProgress,
+  type WizardPrompter,
+} from "./prompts.js";
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
@@ -109,9 +114,12 @@ class WizardSessionPrompter implements WizardPrompter {
     const fallbackMessage = [
       params.message ?? "Enter this one-time code on the provider's sign-in page.",
       `Code: ${params.code}`,
-      ...(params.expiresInMinutes
-        ? [`Code expires in ${params.expiresInMinutes} minutes. Never share it.`]
-        : []),
+      ...(params.expiresInMinutes ? [`Code expires in ${params.expiresInMinutes} minutes.`] : []),
+      // Device-code phishing works by getting the victim to enter the attacker's
+      // code, so the warning has to cover received codes, not just shared ones.
+      // Unconditional: codes delivered over a chat channel are the risky case and
+      // carry no expiry hint. Matches the Codex CLI prompt.
+      DEVICE_CODE_PHISHING_WARNING,
     ].join("\n");
     await this.prompt({
       type: "note",
@@ -209,7 +217,8 @@ class WizardSessionPrompter implements WizardPrompter {
       initialValue: params.initialValue,
       executor: "client",
     });
-    return Boolean(res);
+    // Answers cross the wire as unknown values; truthy strings are not consent.
+    return res === true;
   }
 
   progress(label: string): WizardProgress {

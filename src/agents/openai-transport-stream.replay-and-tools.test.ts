@@ -1098,8 +1098,6 @@ describe("openai transport stream", () => {
     const functionCalls = params.input?.filter((item) => item.type === "function_call") ?? [];
     const functionOutputs =
       params.input?.filter((item) => item.type === "function_call_output") ?? [];
-    expect(functionCalls).toHaveLength(2);
-    expect(functionOutputs).toHaveLength(2);
     expect(functionCalls.map((item) => item.id)).toEqual([undefined, undefined]);
     expect(functionOutputs.map((item) => item.call_id)).toEqual(["call_first", "call_second"]);
   });
@@ -1401,11 +1399,9 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       undefined,
-    ) as { input?: Array<{ content?: Array<{ type?: string; text?: string }> }> };
+    ) as { instructions?: string };
 
-    expect(params.input?.[0]?.content).toEqual([
-      { type: "input_text", text: "Stable prefix\nDynamic suffix" },
-    ]);
+    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
   });
 
   it("defaults responses tool schemas to strict on native OpenAI routes", () => {

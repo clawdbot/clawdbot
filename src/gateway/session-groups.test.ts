@@ -6,6 +6,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -79,44 +80,18 @@ describe("session groups catalog", () => {
       env,
     );
     expect(listSessionGroups(env).map((group) => group.name)).toEqual(["Alpha", "Beta"]);
-    expect(listSidebarSectionOrder(env)).toEqual([
+    const expectedSectionOrder = [
       "work",
       "catalog:codex",
       "category:Beta",
       "category:Alpha",
       "groups",
-    ]);
+    ];
+    expect(listSidebarSectionOrder(env)).toEqual(expectedSectionOrder);
+    expect(readConfigMachineState("sidebar.sectionOrder", { env })).toEqual(expectedSectionOrder);
 
     putSessionGroups(["Beta", "Alpha"], undefined, env);
-    expect(listSidebarSectionOrder(env)).toEqual([
-      "work",
-      "catalog:codex",
-      "category:Beta",
-      "category:Alpha",
-      "groups",
-    ]);
-  });
-
-  it("lazily adds sidebar_sections to a pre-existing current-schema database", () => {
-    const databasePath = openOpenClawStateDatabase({ env }).path;
-    closeOpenClawStateDatabaseForTest();
-    const { DatabaseSync } = requireNodeSqlite();
-    const legacy = new DatabaseSync(databasePath);
-    legacy.exec("DROP TABLE sidebar_sections;");
-    legacy.close();
-
-    const reopened = openOpenClawStateDatabase({ env });
-    expect(
-      reopened.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("sidebar_sections"),
-    ).toBeUndefined();
-    expect(listSidebarSectionOrder(env)).toEqual([]);
-    expect(
-      reopened.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("sidebar_sections"),
-    ).toEqual({ name: "sidebar_sections" });
+    expect(listSidebarSectionOrder(env)).toEqual(expectedSectionOrder);
   });
 
   it("keeps catalog reads and reorders schema-read-only until defaults are used", async () => {

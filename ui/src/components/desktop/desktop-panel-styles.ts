@@ -1,6 +1,10 @@
 import { css } from "lit";
+import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
+import { dockPanelStyles } from "../dock-layout-controller.ts";
+import { desktopDocumentStyles } from "./desktop-document-styles.ts";
+import { desktopPanelLauncherStyles } from "./desktop-panel-launcher-styles.ts";
 
-export const desktopPanelStyles = css`
+const desktopPanelStyles = css`
   .bp--embedded {
     position: relative;
     width: 100%;
@@ -186,3 +190,11 @@ export const desktopPanelStyles = css`
     outline-offset: -2px;
   }
 `;
+
+export const desktopPanelElementStyles = [
+  dockPanelStyles,
+  desktopPanelLauncherStyles,
+  desktopPanelStyles,
+  desktopDocumentStyles,
+  scrollbarShadowStyles,
+];

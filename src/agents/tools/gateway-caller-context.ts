@@ -2,7 +2,18 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.js";
-import type { AdmittedRunContext, OperationalRunInstanceRef } from "../admitted-run-context.js";
+import type {
+  GatewayContextResolver,
+  GatewayRequestContext,
+} from "../../gateway/server-methods/types.js";
+import type { WorkerSessionTurnClaim } from "../../gateway/worker-environments/placement-record.js";
+import type { WorkerTurnExecutionIdentityCapability } from "../../gateway/worker-environments/placement-turn-claim-events.js";
+import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  getAdmittedRunDelegatedAuthority,
+  type AdmittedRunContext,
+  type OperationalRunInstanceRef,
+} from "../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import {
   attachInternalToolExecutionPreparer,
@@ -19,9 +30,19 @@ type GatewayToolCallerIdentity = {
   /** Opaque already-signed identity used only by isolated worker transports. */
   signedAgentRuntimeIdentityToken?: string;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
+  /** Synchronous host-owned fence for before-tool decision receipts. */
+  receiptAuthority?: () => boolean | void;
+  /** Exact Gateway-owned worker claim; never sourced from model or RPC arguments. */
+  workerTurnClaim?: WorkerSessionTurnClaim;
+  /** Closure-bound Gateway capability; revalidates both owners at child admission. */
+  workerTurnExecutionIdentityCapability?: WorkerTurnExecutionIdentityCapability;
+  /** Instance-bound routing only; delegated authority is revalidated separately. */
+  gatewayContextResolver?: GatewayContextResolver;
   /** Host-signed capability for the scheduled run's existing self-management surface. */
   cronSelfManagementJobId?: string;
   cronToolsAllowCapture?: "final-executable-surface";
+  /** Restrict-only policy enforced by exec on the captured creator surface. */
+  cronExecToolTarget?: { host: "gateway"; ask?: "always" };
   /** One-shot Gateway-owned proof for a freshly resolved configured-MCP cap. */
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   // Trusted run context, carried separately from model-authored tool arguments.
@@ -45,8 +66,35 @@ type GatewayToolCallerSource = {
 
 const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
 
+// Freeze the admitted instance: a later resolver result is a replacement,
+// which retires this caller's routing authority instead of transferring it.
+function bindGatewayToolContextResolver(
+  resolveGatewayContext: GatewayContextResolver | undefined,
+): GatewayContextResolver | undefined {
+  if (!resolveGatewayContext) {
+    return undefined;
+  }
+  let admittedContext: GatewayRequestContext | undefined;
+  try {
+    admittedContext = resolveGatewayContext();
+  } catch {
+    return () => undefined;
+  }
+  if (!admittedContext) {
+    return () => undefined;
+  }
+  return () => {
+    try {
+      return resolveGatewayContext() === admittedContext ? admittedContext : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+}
+
 type AdmittedGatewayToolCallerParams = {
   admittedRunContext: AdmittedRunContext;
+  receiptAuthority?: () => boolean | void;
   agentId?: string;
   sessionKey?: string;
   turnSourceChannel?: string;
@@ -55,6 +103,28 @@ type AdmittedGatewayToolCallerParams = {
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
 };
+
+function composeReceiptAuthority(
+  ...predicates: Array<(() => boolean | void) | undefined>
+): (() => boolean) | undefined {
+  const checks = predicates.filter(
+    (predicate, index): predicate is () => boolean | void =>
+      predicate !== undefined && predicates.indexOf(predicate) === index,
+  );
+  return checks.length === 0
+    ? undefined
+    : () => {
+        let active = true;
+        for (const check of checks) {
+          try {
+            active = check() !== false && active;
+          } catch {
+            active = false;
+          }
+        }
+        return active;
+      };
+}
 
 /** Builds host-owned Gateway authority from the exact admitted execution. */
 export function createAdmittedGatewayToolCallerIdentity(
@@ -65,11 +135,21 @@ export function createAdmittedGatewayToolCallerIdentity(
   if (!agentId || !sessionKey) {
     return undefined;
   }
+  const delegatedAuthority = getAdmittedRunDelegatedAuthority(params.admittedRunContext);
   return {
     agentId,
     sessionKey,
     operationalRunInstance: params.admittedRunContext.operationalRunInstance,
     executionIdentityToken: params.admittedRunContext.executionIdentityToken,
+    gatewayContextResolver: bindGatewayToolContextResolver(
+      getGatewayContextResolver(params.admittedRunContext),
+    ),
+    receiptAuthority: composeReceiptAuthority(
+      () =>
+        delegatedAuthority !== undefined &&
+        getAdmittedRunDelegatedAuthority(params.admittedRunContext) === delegatedAuthority,
+      params.receiptAuthority,
+    ),
     turnSourceChannel: params.turnSourceChannel,
     turnSourceLocal: params.turnSourceLocal,
     turnSourceTo: params.turnSourceTo,
@@ -80,6 +160,11 @@ export function createAdmittedGatewayToolCallerIdentity(
 
 export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | undefined {
   return gatewayToolCallerStorage.getStore();
+}
+
+/** Process-owned work must not retain the turn that authorized its launch. */
+export function withoutGatewayToolCallerIdentity<T>(run: () => T): T {
+  return gatewayToolCallerStorage.exit(run);
 }
 
 export async function withGatewayToolCallerIdentity<T>(
@@ -107,10 +192,22 @@ export async function withGatewayToolCallerIdentity<T>(
     identity.signedAgentRuntimeIdentityToken?.trim();
   const executionIdentityToken =
     inheritedOwner?.executionIdentityToken ?? identity.executionIdentityToken;
+  const receiptAuthority = composeReceiptAuthority(
+    inheritedOwner?.receiptAuthority,
+    identity.receiptAuthority,
+  );
+  const workerTurnClaim = inheritedOwner?.workerTurnClaim ?? identity.workerTurnClaim;
+  const workerTurnExecutionIdentityCapability =
+    inheritedOwner?.workerTurnExecutionIdentityCapability ??
+    identity.workerTurnExecutionIdentityCapability;
+  const gatewayContextResolver =
+    inheritedOwner?.gatewayContextResolver ??
+    bindGatewayToolContextResolver(identity.gatewayContextResolver);
   const cronSelfManagementJobId =
     identity.cronSelfManagementJobId?.trim() ?? inheritedOwner?.cronSelfManagementJobId;
   const cronToolsAllowCapture =
     identity.cronToolsAllowCapture ?? inheritedOwner?.cronToolsAllowCapture;
+  const cronExecToolTarget = identity.cronExecToolTarget ?? inheritedOwner?.cronExecToolTarget;
   const cronCreatorAuthorityGrant =
     identity.cronCreatorAuthorityGrant ?? inheritedOwner?.cronCreatorAuthorityGrant;
   const turnSourceChannel = inheritedOwner?.turnSourceChannel ?? identity.turnSourceChannel?.trim();
@@ -132,8 +229,13 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(signedAgentRuntimeIdentityToken ? { signedAgentRuntimeIdentityToken } : {}),
       ...(cronSelfManagementJobId ? { cronSelfManagementJobId } : {}),
       ...(cronToolsAllowCapture ? { cronToolsAllowCapture } : {}),
+      ...(cronExecToolTarget ? { cronExecToolTarget } : {}),
       ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
       ...(executionIdentityToken ? { executionIdentityToken } : {}),
+      ...(receiptAuthority ? { receiptAuthority } : {}),
+      ...(workerTurnClaim ? { workerTurnClaim } : {}),
+      ...(workerTurnExecutionIdentityCapability ? { workerTurnExecutionIdentityCapability } : {}),
+      ...(gatewayContextResolver ? { gatewayContextResolver } : {}),
       ...(turnSourceChannel ? { turnSourceChannel } : {}),
       ...(turnSourceLocal === true ? { turnSourceLocal: true } : {}),
       ...(turnSourceTo ? { turnSourceTo } : {}),

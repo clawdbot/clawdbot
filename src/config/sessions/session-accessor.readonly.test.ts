@@ -19,6 +19,10 @@ import {
   hasSessionEntriesByStatusReadOnly,
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
+  openSessionEntryReadView,
+  readSessionTranscriptTitleProbeBatch,
+  readSessionTranscriptWatermark,
+  readSessionTranscriptWatermarkBatch,
   readSessionIdentityEvidenceBatch,
   resolveTranscriptSessionKeyBySessionId,
   upsertSessionEntryCore,
@@ -62,6 +66,8 @@ describe("session accessor readonly listing", () => {
     closeOpenClawAgentDatabasesForTest();
 
     expect(listSessionEntriesReadOnly(listScope)).toEqual(writableEntries);
+    expect(openSessionEntryReadView(listScope).entries()).toEqual(writableEntries);
+    expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(listScope))).toBe(false);
   });
 
   it("returns an empty list without creating or registering a missing agent database", () => {
@@ -72,8 +78,32 @@ describe("session accessor readonly listing", () => {
     clearRegisteredAgentDatabases(env);
 
     expect(listSessionEntriesReadOnly({ agentId, env })).toEqual([]);
+    expect(openSessionEntryReadView({ agentId, env }).entries()).toEqual([]);
     expect(fs.existsSync(databasePath)).toBe(false);
     expect(countRegisteredAgentDatabases(env)).toBe(0);
+  });
+
+  it("surfaces missing canonical transcript tables through single and batched reads", async () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-missing-transcript-table-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const scope = {
+      agentId: "worker-1",
+      env,
+      sessionId: "session-1",
+      sessionKey: "agent:worker-1:main",
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    openOpenClawAgentDatabase({ agentId: scope.agentId, env }).db.exec(
+      "DROP TABLE transcript_events;",
+    );
+
+    for (const read of [
+      () => readSessionTranscriptWatermark(scope),
+      () => readSessionTranscriptWatermarkBatch([scope]),
+      () => readSessionTranscriptTitleProbeBatch([scope]),
+    ]) {
+      expect(read).toThrow(/no such table: transcript_events/);
+    }
   });
 
   it("probes lifecycle status without creating or registering a missing database", () => {
@@ -221,6 +251,32 @@ describe("session accessor readonly listing", () => {
       { status: "absent" },
       { status: "unknown", reason: "read-failed" },
       { status: "unknown", reason: "read-failed" },
+    ]);
+  });
+
+  it("does not prefer a main key when only a shared physical session identity is known", async () => {
+    const stateDir = autoTempDirs.make("openclaw-session-readonly-shared-identity-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "worker-1";
+    const sessionId = "shared-generation";
+    const mainKey = "agent:worker-1:main";
+    const otherKey = "agent:worker-1:other";
+    for (const sessionKey of [mainKey, otherKey]) {
+      await upsertSessionEntryCore({ agentId, env, sessionKey }, { sessionId, updatedAt: 1 });
+    }
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId, env });
+    const probe = { agentId, env, sessionId, storePath };
+
+    expect(
+      readSessionIdentityEvidenceBatch([
+        probe,
+        { ...probe, sessionKey: mainKey },
+        { ...probe, sessionKey: otherKey },
+      ]),
+    ).toEqual([
+      { status: "unknown", reason: "ambiguous" },
+      { status: "current", sessionKey: mainKey },
+      { status: "current", sessionKey: otherKey },
     ]);
   });
 

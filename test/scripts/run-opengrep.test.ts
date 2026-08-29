@@ -42,6 +42,37 @@ function installOpengrepStub(repo: string): { argsPath: string; binDir: string }
 }
 
 describe("run-opengrep.sh", () => {
+  it("fails before scanning with official installation advice when opengrep is missing", () => {
+    const repo = createTempDir("openclaw-run-opengrep-missing-");
+    copyRunOpengrepFiles(repo);
+    writeFile(path.join(repo, "security/opengrep/precise.yml"), "rules: []\n");
+
+    const binDir = path.join(repo, "bin");
+    fs.mkdirSync(binDir);
+    for (const command of ["bash", "dirname", "cat"]) {
+      const executable = execFileSync("bash", ["-c", 'command -v "$1"', "_", command], {
+        encoding: "utf8",
+      }).trim();
+      fs.symlinkSync(executable, path.join(binDir, command));
+    }
+
+    const result = spawnSync(
+      "bash",
+      ["scripts/run-opengrep.sh", "--changed", "--sarif", "--error"],
+      { cwd: repo, env: { ...process.env, PATH: binDir }, encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(127);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("'opengrep' not found on PATH");
+    expect(result.stderr).toMatch(
+      /curl -fsSL https:\/\/raw\.githubusercontent\.com\/opengrep\/opengrep\/\S+\/install\.sh \| bash -s -- -v \S+/,
+    );
+    expect(fs.existsSync(path.join(repo, ".opengrep-out"))).toBe(false);
+    expect(result.stderr).not.toContain("pipx");
+    expect(result.stderr).not.toContain("opengrep/tap/opengrep");
+  });
+
   it("validates the rulepack when only OpenGrep rulepack files changed", () => {
     const repo = createTempDir("openclaw-run-opengrep-");
     git(repo, "init", "-q");
@@ -103,7 +134,7 @@ describe("run-opengrep.sh", () => {
     );
     expect(sarif.version).toBe("2.1.0");
     expect(sarif.runs[0].tool.driver.name).toBe("Opengrep OSS");
-    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.25.0");
+    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.27.1");
     expect(sarif.runs[0].results).toEqual([]);
     expect(fs.existsSync(argsPath)).toBe(false);
   });

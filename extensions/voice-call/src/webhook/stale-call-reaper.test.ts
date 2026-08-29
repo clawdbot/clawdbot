@@ -54,7 +54,8 @@ describe("startStaleCallReaper", () => {
     stop?.();
   });
 
-  it("does not overlap stale-call reaps and retries after an unsuccessful attempt settles", async () => {
+  it("does not overlap reaps, logs typed failure, and retries after settlement", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     let resolveFirstEndCall!: (result: { success: false; error: string }) => void;
     const firstEndCall = new Promise<{ success: false; error: string }>((resolve) => {
       resolveFirstEndCall = resolve;
@@ -87,6 +88,7 @@ describe("startStaleCallReaper", () => {
     resolveFirstEndCall({ success: false, error: "network" });
     await firstEndCall;
     await Promise.resolve();
+    expect(warn).toHaveBeenCalledWith("[voice-call] Reaper failed to end call call-stale: network");
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(endCall).toHaveBeenCalledTimes(2);

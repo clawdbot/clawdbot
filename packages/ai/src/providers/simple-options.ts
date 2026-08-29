@@ -1,3 +1,5 @@
+import { reasoningTagTextPolicy } from "../provider-options.js";
+import { copyProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 // Simple provider option helpers normalize lightweight provider configuration.
 import type {
   Model,
@@ -19,7 +21,7 @@ export function buildBaseOptions(
 ): StreamOptions & FirstEventStreamOptions {
   void model;
   const firstEventOptions = options as FirstEventStreamOptions | undefined;
-  return {
+  const baseOptions = {
     temperature: options?.temperature,
     maxTokens: options?.maxTokens,
     stop: options?.stop,
@@ -39,6 +41,8 @@ export function buildBaseOptions(
     maxRetryDelayMs: options?.maxRetryDelayMs,
     metadata: options?.metadata,
   };
+  reasoningTagTextPolicy.copy(options, baseOptions);
+  return copyProviderAcceptanceObserver(options, baseOptions);
 }
 
 export function clampMaxTokensToModel(model: Model, requestedMaxTokens: number): number;

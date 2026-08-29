@@ -89,7 +89,9 @@ const EXTENSION_TEST_COST_MULTIPLIERS: Record<string, number> = {
   // overstates its real wall-clock cost during CI shard planning.
   "test/vitest/vitest.extensions.config.ts": 1.1,
 };
-const CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 40;
+// A 34-file changed shard starved real-time watches and the no-output watchdog.
+// Keep serial, non-isolated Codex processes small enough for prompt output (#125768, #125839).
+const CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 12;
 const MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 40;
 const TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT = 1;
 const TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT = 10;
@@ -159,37 +161,37 @@ function isSkippedTrackedTestFile(relativePath: string) {
 let trackedRepoTestFiles: string[] | null | undefined;
 // Large checkouts exceed Node's 1 MiB spawnSync default. Preserve the Git inventory path;
 // ENOBUFS would otherwise trigger expensive extension-directory walks.
-const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+export const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
-function loadTrackedRepoTestFiles() {
-  if (trackedRepoTestFiles !== undefined) {
-    return trackedRepoTestFiles;
-  }
-
+export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string[]) {
   // Query only the planner-owned tree: a full-repo inventory can overflow
   // spawnSync's buffer and either truncate the plan or force directory walks.
-  const result = spawnSync("git", ["ls-files", "--", ...TRACKED_EXTENSION_TEST_PATHSPECS], {
-    cwd: repoRoot,
+  const result = spawnSync("git", ["ls-files", "--", ...pathspecs], {
+    cwd,
     encoding: "utf8",
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (result.status !== 0 || result.error) {
-    trackedRepoTestFiles = null;
-    return trackedRepoTestFiles;
+    return null;
   }
-
-  // Tracked repository metadata is immutable during one planner invocation.
-  // Reuse one inventory so broad extension plans do not fork Git per plugin.
-  trackedRepoTestFiles = result.stdout
+  return result.stdout
     .split("\n")
     .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter(
-      (line) =>
-        line.length > 0 &&
-        !isSkippedTrackedTestFile(line) &&
-        (line.endsWith(".test.ts") || line.endsWith(".test.tsx")),
-    );
+    .filter(Boolean);
+}
+
+function loadTrackedRepoTestFiles() {
+  // Tracked repository metadata is immutable during one planner invocation.
+  // Reuse one inventory so broad extension plans do not fork Git per plugin.
+  if (trackedRepoTestFiles === undefined) {
+    trackedRepoTestFiles =
+      listTrackedTestPlanFiles(repoRoot, TRACKED_EXTENSION_TEST_PATHSPECS)?.filter(
+        (line) =>
+          !isSkippedTrackedTestFile(line) &&
+          (line.endsWith(".test.ts") || line.endsWith(".test.tsx")),
+      ) ?? null;
+  }
   return trackedRepoTestFiles;
 }
 
@@ -236,17 +238,6 @@ function listFilesystemTestFiles(rootPath: string) {
   }
 
   return files.toSorted((left, right) => left.localeCompare(right));
-}
-
-/** List tracked or filesystem-discovered test files for extension roots. */
-export function listTrackedTestFilesForRoots(roots: string[]) {
-  const files = [];
-  for (const root of roots) {
-    const rootPath = path.join(repoRoot, root);
-    const trackedFiles = listTrackedTestFiles(rootPath) ?? listFilesystemTestFiles(rootPath);
-    files.push(...trackedFiles);
-  }
-  return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
 }
 
 /** List working-tree test files for extension roots, including new untracked tests. */
@@ -415,7 +406,7 @@ export function resolveExtensionTestPlan(params: { cwd?: string; targetArg?: str
 
 type ResolvedExtensionTestPlan = ReturnType<typeof resolveExtensionTestPlan>;
 
-function mergeTestPlans(plans: ResolvedExtensionTestPlan[]): ExtensionBatchPlan {
+export function mergeExtensionTestPlans(plans: ResolvedExtensionTestPlan[]): ExtensionBatchPlan {
   const groupsByConfig = new Map<string, ExtensionTestPlanGroup>();
 
   const testPlans = plans.filter((plan) => plan.hasTests);
@@ -471,7 +462,9 @@ export function resolveExtensionBatchPlan(params: { cwd?: string; extensionIds?:
     resolveExtensionTestPlan({ cwd, targetArg: extensionId }),
   );
 
-  return mergeTestPlans(hasExplicitExtensionIds ? plans : plans.filter((plan) => plan.hasTests));
+  return mergeExtensionTestPlans(
+    hasExplicitExtensionIds ? plans : plans.filter((plan) => plan.hasTests),
+  );
 }
 
 type PendingExtensionTestShard = {
@@ -532,7 +525,7 @@ export function createExtensionTestShards(
       Object.assign(
         {},
         { index, checkName: `checks-node-extensions-shard-${index + 1}` },
-        mergeTestPlans(shard.plans),
+        mergeExtensionTestPlans(shard.plans),
       ),
     )
     .filter((shard) => shard.hasTests);

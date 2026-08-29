@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import type { SessionCatalogSession } from "openclaw/plugin-sdk/session-catalog";
 import {
   isRecord,
@@ -172,7 +173,7 @@ async function scanPiFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandi
             identity: `${String(stats.dev)}:${String(stats.ino)}:${String(stats.birthtimeMs)}`,
             mtimeMs: stats.mtimeMs,
             size: stats.size,
-            resumable: acpRoot ? pathIsWithin(acpRoot, file) : false,
+            resumable: acpRoot ? isPathStrictlyInside(acpRoot, file) : false,
           }
         : undefined;
     } catch {
@@ -214,16 +215,6 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
     }
     throw error;
   }
-}
-
-function pathIsWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative !== "" &&
-    relative !== ".." &&
-    !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative)
-  );
 }
 
 function parsePiJsonLines(content: string): Record<string, unknown>[] {

@@ -416,6 +416,38 @@ async function readPublishedManifest() {
   }
   return Buffer.concat(chunks).toString("utf8");
 }
+function preserveWindowsFileModes(entries, manifestRoot) {
+  if (process.platform !== "win32" || priorManifestDigests.length === 0) return;
+  const modes = new Map();
+  for (const digest of priorManifestDigests) {
+    if (!/^[a-f0-9]{64}$/.test(digest)) fail("invalid prior workspace manifest digest");
+    const raw = readManifestFile(path.join(manifestRoot, digest + ".json"));
+    if (crypto.createHash("sha256").update(raw).digest("hex") !== digest) {
+      fail("prior workspace manifest digest mismatch");
+    }
+    const prior = JSON.parse(raw);
+    if (
+      !prior ||
+      prior.version !== 1 ||
+      !Array.isArray(prior.entries) ||
+      prior.entries.length > MAX_WORKSPACE_INVENTORY_ENTRIES
+    ) {
+      fail("invalid prior workspace manifest");
+    }
+    for (const entry of prior.entries) {
+      if (entry.type === "file" && !modes.has(entry.path)) {
+        if (entry.mode !== 0o644 && entry.mode !== 0o755) {
+          fail("invalid prior workspace file mode");
+        }
+        modes.set(entry.path, entry.mode);
+      }
+    }
+  }
+  // Windows cannot persist POSIX execute bits; the authenticated prior manifest owns them.
+  for (const entry of entries) {
+    if (entry.type === "file" && modes.has(entry.path)) entry.mode = modes.get(entry.path);
+  }
+}
 async function main() {
   const workerRoot = path.join(process.env.HOME, ".openclaw-worker");
   const manifestRoot = path.join(workerRoot, "manifests");
@@ -444,6 +476,7 @@ async function main() {
   const entries = [...entriesByPath.values()];
   assertSerializedManifestBudget(requestedBaseCommit, entries);
   await hashFiles(entries);
+  preserveWindowsFileModes(entries, manifestRoot);
   const baseCommit = requestedBaseCommit;
   const manifest = serializeManifest(baseCommit, entries);
   const digest = publishManifest(manifestRoot, manifest);

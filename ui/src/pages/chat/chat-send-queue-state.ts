@@ -15,16 +15,13 @@ import {
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
+import { chatSendHoldReason, OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { recordChatSendTiming, schedulePendingSendPaintTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
 import { storedChatOutboxScopeKey, type StoredChatOutboxScope } from "./composer-persistence.ts";
 import { controlUiNowMs } from "./performance.ts";
-import { hasAbortableSessionRun, isChatBusy } from "./run-lifecycle.ts";
+import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR, surfaceChatDeliveryFailure } from "./steer-lifecycle.ts";
-
-const SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR =
-  "Skill Workshop revision request cancelled because the Gateway connection changed.";
 
 export function setChatError(
   host: { lastError?: string | null; chatError?: string | null },
@@ -42,21 +39,23 @@ export function enqueuePendingSendMessage(
   refreshSessions?: boolean,
   submittedAtMs = controlUiNowMs(),
   sendState?: ChatQueueItem["sendState"],
-  skillWorkshopRevision?: ChatQueueItem["skillWorkshopRevision"],
   replyToId?: string,
   resumedOrderKey?: number,
+  queueMode?: ChatQueueItem["queueMode"],
+  intent?: ChatQueueItem["intent"],
+  expectedLeafEntryId?: string | null,
 ): ChatQueueItem | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
   if (!trimmed && !hasAttachments) {
     return null;
   }
-  const sender = resolveCurrentUserIdentity(host.hello, host.client?.instanceId);
+  const sender = resolveCurrentUserIdentity(host.hello, host.client?.instanceId, host.selfUser);
   // A send that resumes an edited row inherits its place; the row itself is
   // retired by the write that admits this replacement, not here.
   const pending: ChatQueueItem = {
     id: generateUUID(),
-    text: trimmed,
+    text: intent ? text : trimmed,
     createdAt: Date.now(),
     ...(resumedOrderKey !== undefined ? { orderKey: resumedOrderKey } : {}),
     attachments: hasAttachments ? attachments : undefined,
@@ -64,19 +63,15 @@ export function enqueuePendingSendMessage(
     sendAttempts: 0,
     sendRunId: generateUUID(),
     sendState,
+    ...(queueMode ? { queueMode } : {}),
+    ...(intent
+      ? { intent, ...(host.currentSessionId ? { sessionId: host.currentSessionId } : {}) }
+      : {}),
+    ...(intent && expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
     sendSubmittedAtMs: submittedAtMs,
     sessionKey: host.sessionKey,
     agentId: scopedAgentIdForSession(host, host.sessionKey),
     ...(sender ? { sender } : {}),
-    ...(skillWorkshopRevision
-      ? {
-          skillWorkshopRevision: {
-            ...skillWorkshopRevision,
-            ...(host.client ? { connectionClient: host.client } : {}),
-            connectionEpoch: host.connectionEpoch,
-          },
-        }
-      : {}),
     ...(replyToId ? { replyToId } : {}),
   };
   keepVolatileQueuedMessage(host, host.sessionKey, pending, pending.agentId);
@@ -107,40 +102,6 @@ export function captureChatConnectionOwner(
     (!requireConnected || host.connected) &&
     host.client === client &&
     host.connectionEpoch === connectionEpoch;
-}
-
-export function isSkillWorkshopRevisionConnectionCurrent(
-  host: Pick<ChatHost, "client" | "connectionEpoch">,
-  item: ChatQueueItem,
-): boolean {
-  const revision = item.skillWorkshopRevision;
-  return Boolean(
-    revision &&
-    revision.connectionClient &&
-    host.client === revision.connectionClient &&
-    host.connectionEpoch === revision.connectionEpoch,
-  );
-}
-
-export function failSkillWorkshopRevisionConnectionChange(
-  host: ChatHost,
-  storageMode: QueuedChatStorageMode,
-  sessionKey: string,
-  item: ChatQueueItem,
-): "failed" {
-  deliveryStateWriter(
-    host,
-    storageMode,
-    sessionKey,
-    item.id,
-  )("failed", SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR);
-  surfaceChatDeliveryFailure(
-    host,
-    sessionKey,
-    item.agentId,
-    SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR,
-  );
-  return "failed";
 }
 
 export function updateQueuedSendItem(
@@ -184,15 +145,14 @@ export function finishChatDeliveryAdmission(
   if (!current) {
     return "failed";
   }
-  if (options?.routingSessionKey && !routeVisible(current.agentId)) {
-    const parked = setState(host.connected && host.client ? "waiting-idle" : "waiting-reconnect");
-    if (!parked) {
-      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-      return "failed";
-    }
-    return "pending";
-  }
-  if (routeVisible(current.agentId) && (isChatBusy(host) || hasAbortableSessionRun(host))) {
+  const sendsDuringActiveRun = Boolean(current.queueMode || options?.allowActiveRunSend);
+  if (
+    chatSendHoldReason(host, route) ||
+    (options?.routingSessionKey && !routeVisible(current.agentId)) ||
+    (!sendsDuringActiveRun &&
+      routeVisible(current.agentId) &&
+      (isChatBusy(host) || hasDirectSessionRun(host)))
+  ) {
     const parked = setState(host.connected && host.client ? "waiting-idle" : "waiting-reconnect");
     if (!parked) {
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);

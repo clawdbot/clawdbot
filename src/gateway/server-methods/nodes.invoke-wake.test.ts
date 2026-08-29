@@ -1558,6 +1558,81 @@ describe("node.invoke APNs wake path", () => {
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 
+  it("does not dispatch system.which when policy changes during final pairing validation", async () => {
+    let runtimeConfig: MockNodeConfig = {
+      gateway: { nodes: { commands: { allow: ["system.which"] } } },
+    };
+    mocks.getRuntimeConfig.mockImplementation(() => runtimeConfig);
+    mocks.resolveNodeCommandAllowlist.mockImplementation((cfg) => {
+      const allowlist = new Set(cfg.gateway?.nodes?.commands?.allow ?? []);
+      for (const denied of cfg.gateway?.nodes?.commands?.deny ?? []) {
+        allowlist.delete(denied);
+      }
+      return allowlist;
+    });
+    mocks.isNodeCommandAllowed.mockImplementation(({ command, allowlist }) =>
+      allowlist.has(command) ? { ok: true } : { ok: false, reason: "command not allowlisted" },
+    );
+
+    const dispatch = vi.fn();
+    let releasePairingValidation!: () => void;
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "mac-node-final-policy-reload",
+        connId: "mac-node-final-policy-connection",
+        commands: ["system.which"],
+        platform: "macOS 26.0.0",
+      })),
+      invoke: vi.fn(
+        async (params: {
+          nodeId: string;
+          command: string;
+          isDispatchAuthorized?: () => boolean;
+        }) => {
+          await new Promise<void>((resolve) => {
+            releasePairingValidation = resolve;
+          });
+          if (!params.isDispatchAuthorized?.()) {
+            return {
+              ok: false,
+              error: {
+                code: "APPROVAL_AUTHORITY_CLOSED",
+                message: "runtime authority closed before node dispatch",
+              },
+            };
+          }
+          dispatch();
+          return { ok: true, payload: { path: "/usr/bin/git" } };
+        },
+      ),
+    };
+
+    const invocation = invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "mac-node-final-policy-reload",
+        command: "system.which",
+        params: { bins: ["git"] },
+        idempotencyKey: "idem-final-policy-reload",
+      },
+    });
+    await vi.waitFor(() => expect(nodeRegistry.invoke).toHaveBeenCalledOnce());
+    runtimeConfig = { gateway: { nodes: { commands: { deny: ["system.which"] } } } };
+    releasePairingValidation();
+
+    expect(firstRespondCall(await invocation)).toMatchObject([
+      false,
+      undefined,
+      {
+        details: {
+          nodeError: { code: "APPROVAL_AUTHORITY_CLOSED" },
+          nodeCommandDispatched: false,
+        },
+      },
+    ]);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("does not retroactively grant a command enabled while waiting for reconnect", async () => {
     vi.useFakeTimers();
     mockDirectWakeConfig("mac-node-policy-grant");
@@ -1767,13 +1842,23 @@ describe("node.invoke APNs wake path", () => {
   it("rejects an invoke admitted after pairing removal without waking or dispatching", async () => {
     const nodeId = "ios-node-removed-before-invoke";
     mocks.captureNodePairingGeneration.mockResolvedValueOnce(null);
+    mocks.getRuntimeConfig.mockReturnValue({
+      gateway: { nodes: { commands: { deny: ["system.which"] } } },
+    });
     const nodeRegistry = createMissingNodeRegistry();
 
     const respond = await invokeNode({
       nodeRegistry,
-      requestParams: { nodeId, idempotencyKey: "idem-removed-before-invoke" },
+      requestParams: {
+        nodeId,
+        command: "system.which",
+        idempotencyKey: "idem-removed-before-invoke",
+      },
     });
 
+    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+    expect(mocks.resolveNodeCommandAllowlist).not.toHaveBeenCalled();
+    expect(mocks.isNodeCommandAllowed).not.toHaveBeenCalled();
     expect(mocks.loadApnsRegistration).not.toHaveBeenCalled();
     expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
@@ -1785,6 +1870,32 @@ describe("node.invoke APNs wake path", () => {
         details: { code: "PAIRING_CHANGED" },
       },
     ]);
+  });
+
+  it("fails closed before policy evaluation when system.which pairing lookup fails", async () => {
+    const nodeId = "mac-node-pairing-transport-failure";
+    mocks.captureNodePairingGeneration.mockRejectedValueOnce(
+      new Error("pairing transport unavailable"),
+    );
+    const nodeRegistry = createMissingNodeRegistry();
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId,
+        command: "system.which",
+        idempotencyKey: "idem-pairing-transport-failure",
+      },
+    });
+
+    expect(firstRespondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      { code: ErrorCodes.UNAVAILABLE, message: "Error: pairing transport unavailable" },
+    ]);
+    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+    expect(mocks.resolveNodeCommandAllowlist).not.toHaveBeenCalled();
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 
   it("forces one retry wake when the first wake still fails to reconnect", async () => {

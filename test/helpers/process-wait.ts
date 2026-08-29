@@ -1,14 +1,8 @@
 import type { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { isPidAlive } from "../../src/shared/pid-alive.js";
 
-export function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
+export { isPidAlive as isProcessAlive };
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => {
@@ -45,12 +39,15 @@ export async function waitForPidFile(filePath: string, timeoutMs: number): Promi
 export async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
   const deadlineAt = Date.now() + timeoutMs;
   while (Date.now() < deadlineAt) {
-    if (!isProcessAlive(pid)) {
+    if (!isPidAlive(pid)) {
       return;
     }
     await sleep(5);
   }
-  throw new Error(`process still alive: ${pid}`);
+  // A delayed worker wake can outlive both the deadline and the process.
+  if (isPidAlive(pid)) {
+    throw new Error(`process still alive: ${pid}`);
+  }
 }
 
 export function waitForChildClose(

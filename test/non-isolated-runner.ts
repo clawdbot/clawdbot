@@ -1,7 +1,12 @@
 // Non-isolated runner helps execute tests without Vitest isolation.
 import path from "node:path";
+import type {
+  EvaluatedModuleNode as ViteEvaluatedModuleNode,
+  EvaluatedModules as ViteEvaluatedModules,
+} from "vite/module-runner";
 import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
 import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
+import { loggingState } from "../src/logging/state.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
 import {
   type CustomElementTracking,
@@ -9,15 +14,13 @@ import {
   trackCustomElementRegistry,
 } from "./jsdom-custom-elements.ts";
 
-type EvaluatedModuleNode = {
-  promise?: unknown;
-  exports?: unknown;
-  evaluated?: boolean;
-  importers: Set<string>;
+type EvaluatedModuleNode = ViteEvaluatedModuleNode & {
+  mockedExports?: unknown;
 };
 
 type EvaluatedModules = {
   idToModuleMap: Map<string, EvaluatedModuleNode>;
+  invalidateModule: ViteEvaluatedModules["invalidateModule"];
 };
 
 type SerializableMocker = {
@@ -40,6 +43,17 @@ const DIAGNOSTIC_EVENT_LISTENER_PRESENCE = Symbol.for(
 const SESSION_SUSPENSION_TEST_API = Symbol.for("openclaw.sessionSuspensionTestApi");
 // Shared-worker scoped: the registry lives on the worker global, not in the module graph.
 const CUSTOM_ELEMENT_TRACKING = Symbol.for("openclaw.nonIsolatedCustomElementTracking");
+const nativeConsoleMethods = {
+  log: console.log,
+  info: console.info,
+  warn: console.warn,
+  error: console.error,
+  debug: console.debug,
+  trace: console.trace,
+};
+// loggingState is keyed off globalThis precisely so it survives module reloads,
+// so vi.resetModules() below cannot undo what a file latched into it.
+const baselineLoggingState = { ...loggingState };
 const nativeTimerGlobals = {
   setTimeout: globalThis.setTimeout,
   clearTimeout: globalThis.clearTimeout,
@@ -57,21 +71,23 @@ function getSharedTestHome(): string | undefined {
   return globalState[SHARED_TEST_SETUP]?.tempHome ?? process.env.OPENCLAW_TEST_HOME;
 }
 
-function resetEvaluatedModules(modules: EvaluatedModules, resetMocks: boolean) {
-  const skipPaths = [
-    /\/vitest\/dist\//,
-    /vitest-virtual-\w+\/dist/u,
-    /@vitest\/dist/u,
-    ...(resetMocks ? [] : [/^mock:/u]),
-  ];
+function resetEvaluatedModules(modules: EvaluatedModules) {
+  const skipPaths = [/\/vitest\/dist\//, /vitest-virtual-\w+\/dist/u, /@vitest\/dist/u];
 
   modules.idToModuleMap.forEach((node, modulePath) => {
     if (skipPaths.some((pattern) => pattern.test(modulePath))) {
       return;
     }
-    node.promise = undefined;
-    node.exports = undefined;
-    node.evaluated = false;
+    // Mock metadata owns factories and cached exports after the registry resets.
+    // Retire those nodes while preserving ordinary transformed-code metadata.
+    if (modulePath.startsWith("mock:") || (node.meta && "mockedModule" in node.meta)) {
+      modules.invalidateModule(node);
+      node.mockedExports = undefined;
+    } else {
+      node.promise = undefined;
+      node.exports = undefined;
+      node.evaluated = false;
+    }
     node.importers.clear();
   });
 }
@@ -134,6 +150,11 @@ function resetSharedDocumentBody(): void {
   for (const attribute of body.getAttributeNames()) {
     body.removeAttribute(attribute);
   }
+  // jsdom can retain detached shadow focus even after the fixture removes its DOM.
+  // Native body focus clears that state; blur cannot reach an already-detached target.
+  body.tabIndex = -1;
+  body.focus();
+  body.removeAttribute("tabindex");
 }
 
 function restoreRealTimers(): void {
@@ -144,6 +165,19 @@ function restoreRealTimers(): void {
 
 function restoreNativeTimerGlobals(): void {
   Object.assign(globalThis, nativeTimerGlobals);
+}
+
+// enableConsoleCapture() swaps every console method for a forwarder and latches
+// routing that production only unwinds at process exit (stdio MCP servers, `--json`
+// one-shot commands), so a shared worker carries both into the next file. That
+// forwarder writes to process.stderr once forceConsoleToStderr is latched, and the
+// next file's console spy then records nothing.
+function restoreConsoleRoutingState(): void {
+  Object.assign(console, nativeConsoleMethods);
+  // The EPIPE handlers really are attached to the worker's stdout/stderr; resetting
+  // this flag would let the next enableConsoleCapture() stack a second pair.
+  const { streamErrorHandlersInstalled } = loggingState;
+  Object.assign(loggingState, baselineLoggingState, { streamErrorHandlersInstalled });
 }
 
 function restoreMocksThenRealTimers(): void {
@@ -309,6 +343,14 @@ function resetOpenClawSessionSuspensionState(): void {
 
 const SERIALIZED_RESOLVE_MOCKS = Symbol.for("openclaw.serializedResolveMocks");
 
+type SerializedResolveMocksState = {
+  tail: Promise<void>;
+};
+
+type SerializedMocker = SerializableMocker & {
+  [SERIALIZED_RESOLVE_MOCKS]?: SerializedResolveMocksState;
+};
+
 // Vitest's BareModuleMocker.resolveMocks has no in-flight guard: pendingIds is
 // cleared only after all parallel resolveId RPCs settle, and every registration
 // re-invalidates the mock module node. In a shared isolate:false worker, stray
@@ -331,38 +373,58 @@ const SERIALIZED_RESOLVE_MOCKS = Symbol.for("openclaw.serializedResolveMocks");
 //   then import with mock state unresolved (observed: auth-provenance's
 //   doUnmock + Promise.all imports loading the real provider-auth warm worker
 //   and a 120s oauth refresh instead of the mocked provider hook).
-export function serializeMockerResolveMocks(
-  mocker: SerializableMocker & { [SERIALIZED_RESOLVE_MOCKS]?: boolean },
-): void {
-  if (!mocker.resolveMocks || mocker[SERIALIZED_RESOLVE_MOCKS]) {
+export function serializeMockerResolveMocks(mocker: SerializableMocker): void {
+  const serializedMocker = mocker as SerializedMocker;
+  if (!mocker.resolveMocks || serializedMocker[SERIALIZED_RESOLVE_MOCKS]) {
     return;
   }
-  mocker[SERIALIZED_RESOLVE_MOCKS] = true;
+  const state: SerializedResolveMocksState = { tail: Promise.resolve() };
+  serializedMocker[SERIALIZED_RESOLVE_MOCKS] = state;
   const original = mocker.resolveMocks.bind(mocker);
   const statics = mocker.constructor as { pendingIds?: unknown[] };
   const runPass = async (): Promise<void> => {
-    const queue = statics.pendingIds;
-    const processedCount = queue?.length ?? 0;
-    await original();
-    // Upstream snapshots the queue contents at pass start and reassigns the
-    // pendingIds static to [] at the end, so ids queued during the pass's RPC
-    // window land in the abandoned array. Requeue them so the next chained
-    // pass registers them instead of silently dropping the registration.
-    if (queue && queue !== statics.pendingIds && queue.length > processedCount) {
-      statics.pendingIds?.push(...queue.slice(processedCount));
+    while (true) {
+      const queue = statics.pendingIds;
+      const processedCount = queue?.length ?? 0;
+      await original();
+      // Upstream snapshots the queue contents at pass start and reassigns the
+      // pendingIds static to [] at the end, so ids queued during the pass's RPC
+      // window land in the abandoned array. Requeue and drain them before this
+      // caller proceeds so a later module fetch cannot invalidate mocks mid-import.
+      if (queue && queue !== statics.pendingIds && queue.length > processedCount) {
+        statics.pendingIds?.push(...queue.slice(processedCount));
+      }
+      if ((statics.pendingIds?.length ?? 0) === 0) {
+        return;
+      }
     }
   };
-  let tail: Promise<void> = Promise.resolve();
   mocker.resolveMocks = () => {
-    const pass = tail.then(runPass);
+    const pass = state.tail.then(runPass);
     // Keep the chain alive after a rejected pass; the rejection still reaches
     // the caller that owns that pass, matching upstream behavior.
-    tail = pass.then(
+    state.tail = pass.then(
       () => undefined,
       () => undefined,
     );
     return pass;
   };
+}
+
+export async function drainMockerResolveMocks(
+  mocker: SerializableMocker | undefined,
+): Promise<void> {
+  const state = (mocker as SerializedMocker | undefined)?.[SERIALIZED_RESOLVE_MOCKS];
+  if (!state) {
+    return;
+  }
+  while (true) {
+    const tail = state.tail;
+    await tail;
+    if (state.tail === tail) {
+      return;
+    }
+  }
 }
 
 export default class OpenClawNonIsolatedRunner extends TestRunner {
@@ -399,16 +461,20 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
   // the next file's vi.mock factories silently never applied. The worker loop
   // calls startTests per file, so this hook runs after every file regardless
   // of its collect/run outcome.
-  override onAfterRunFiles() {
-    super.onAfterRunFiles();
+  override async onAfterRunFiles() {
+    await super.onAfterRunFiles();
     if (this.config.isolate) {
       return;
     }
+
+    const internals = this as unknown as TestRunnerInternals;
+    await drainMockerResolveMocks(internals.moduleRunner?.mocker);
 
     // Mirror the missing cleanup from Vitest isolate mode so shared workers do
     // not carry file-scoped timers, stubs, spies, or stale module state
     // forward into the next file.
     restoreMocksThenRealTimers();
+    restoreConsoleRoutingState();
     vi.unstubAllGlobals();
     const testHome = getSharedTestHome();
     vi.unstubAllEnvs();
@@ -424,8 +490,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     dropTrackedRepoOwnedCustomElements();
     resetSharedDocumentBody();
     vi.resetModules();
-    const internals = this as unknown as TestRunnerInternals;
     internals.moduleRunner?.mocker?.reset?.();
-    resetEvaluatedModules(internals.workerState.evaluatedModules as EvaluatedModules, true);
+    resetEvaluatedModules(internals.workerState.evaluatedModules as EvaluatedModules);
   }
 }

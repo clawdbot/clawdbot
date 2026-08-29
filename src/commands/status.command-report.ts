@@ -14,6 +14,7 @@ export async function buildStatusCommandReportLines(params: {
   overviewRows: Array<{ Item: string; Value: string }>;
   showTaskMaintenanceHint: boolean;
   taskMaintenanceHint: string;
+  taskRegistryMigrationHint?: string | null;
   retainedLostTaskLine?: string | null;
   pluginCompatibilityLines: string[];
   pairingRecoveryLines: string[];
@@ -48,13 +49,16 @@ export async function buildStatusCommandReportLines(params: {
       {
         kind: "raw",
         body:
-          params.showTaskMaintenanceHint || params.retainedLostTaskLine
+          params.showTaskMaintenanceHint ||
+          params.taskRegistryMigrationHint ||
+          params.retainedLostTaskLine
             ? [
                 "",
                 // Raw section keeps maintenance hints directly below the overview table.
                 ...(params.showTaskMaintenanceHint
                   ? [params.muted(params.taskMaintenanceHint)]
                   : []),
+                ...(params.taskRegistryMigrationHint ? [params.taskRegistryMigrationHint] : []),
                 ...(params.retainedLostTaskLine ? [params.retainedLostTaskLine] : []),
               ]
             : [],

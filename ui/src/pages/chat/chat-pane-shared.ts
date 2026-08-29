@@ -1,13 +1,11 @@
 import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/index.js";
-import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
 import { clampText } from "../../lib/format.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
@@ -16,6 +14,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };
 export type PaneSessionHandoff = {
+  goalMode?: ChatGoalDraftMode;
   attachments: ChatAttachment[];
   composerFallbacks?: ChatPageHost["chatComposerFallbackByScope"];
   draft: string;
@@ -213,10 +212,12 @@ export function nativeHistoryMessageIdentity(message: unknown): string | null {
   if (!sourceIdentity) {
     return null;
   }
+  const { recordTimestampMs: _recordTimestampMs, ...projectionMetadata } = metadata ?? {};
+  const projection = metadata ? { ...record, __openclaw: projectionMetadata } : record;
   try {
-    // One transcript record can project to multiple visible siblings. Include
-    // the projection bytes so partial page overlap removes the matching sibling.
-    return `${sourceIdentity}:${JSON.stringify(message)}`;
+    // History alone adds recordTimestampMs; delivery metadata is not projection identity.
+    // Keep every other projection byte so siblings from one transcript row stay distinct.
+    return `${sourceIdentity}:${JSON.stringify(projection)}`;
   } catch {
     return sourceIdentity;
   }
@@ -231,13 +232,12 @@ export type ChatPaneConnectionScope = {
   sessions: ChatPageContext["sessions"];
 };
 export const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open], details.msg-meta[open]:not([data-preview])";
+  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 export const CHAT_AUTOTYPE_EXEMPT_SELECTOR =
   "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox'], [data-chat-autotype-exempt]";
 export const CHAT_SPACE_ACTIVATION_SELECTOR =
   "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='radio'], [role='switch']";
-export const CHAT_MODAL_SELECTOR = "dialog[open], [aria-modal='true']";
 
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
@@ -245,21 +245,6 @@ export const NEW_SESSION_LIST_LOADING_MESSAGE =
   "Session list is still refreshing. Try New Chat again in a moment.";
 export const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
-
-export function summarizeSessionPullRequests(
-  pullRequests: readonly ControlUiSessionPullRequest[],
-): SessionCatalogPullRequestSummary | undefined {
-  const current = pullRequests[0];
-  if (!current) {
-    return undefined;
-  }
-  return {
-    numbers: [...new Set(pullRequests.map((pullRequest) => pullRequest.number))]
-      .slice(0, 20)
-      .toSorted((left, right) => left - right),
-    state: current.state,
-  };
-}
 
 export function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boolean {
   return event

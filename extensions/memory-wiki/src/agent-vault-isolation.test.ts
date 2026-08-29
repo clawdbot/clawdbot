@@ -246,6 +246,7 @@ describe("agent-scoped memory-wiki tools", () => {
           corpus: "wiki",
         });
         expect(assertToolDetailsRecord(ownMemoryGet.details)).toMatchObject({
+          status: "ok",
           corpus: "wiki",
           path: agent.pagePath,
           text: expect.stringContaining(agent.sentinel),
@@ -258,8 +259,8 @@ describe("agent-scoped memory-wiki tools", () => {
         expect(assertToolDetailsRecord(foreignMemoryGet.details)).toMatchObject({
           path: foreignAgent.pagePath,
           text: "",
-          disabled: true,
-          error: "wiki corpus result not found",
+          status: "not_found",
+          corpora: [{ corpus: "wiki", outcome: "ok" }],
         });
       }
     } finally {

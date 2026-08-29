@@ -1,11 +1,8 @@
 package ai.openclaw.app.ui
 
-import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.i18n.nativeString
-import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawTheme
-import ai.openclaw.app.ui.design.agentAvatarSource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -116,49 +113,6 @@ internal fun SidebarSectionTitle(
 }
 
 @Composable
-internal fun SidebarAgentRow(
-  agent: GatewayAgentSummary,
-  selected: Boolean,
-  palette: SidebarPalette,
-  onClick: () -> Unit,
-) {
-  SidebarRowSurface(
-    selected = selected,
-    stateDescription = if (selected) nativeString("Selected") else null,
-    palette = palette,
-    onClick = onClick,
-  ) {
-    ClawAgentAvatar(source = agentAvatarSource(agent), size = 28.dp) {
-      Box(
-        modifier = Modifier.size(28.dp).clip(CircleShape).background(palette.elevated),
-        contentAlignment = Alignment.Center,
-      ) {
-        Text(
-          text = agent.emoji?.takeIf(String::isNotBlank) ?: sidebarAgentName(agent).take(1).uppercase(),
-          style = ClawTheme.type.caption,
-          color = palette.text,
-        )
-      }
-    }
-    Text(
-      text = sidebarAgentName(agent),
-      style = ClawTheme.type.body,
-      color = palette.text,
-      modifier = Modifier.weight(1f),
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-    )
-    if (selected) {
-      Text(
-        text = nativeString("Selected"),
-        style = ClawTheme.type.caption.copy(fontSize = 11.sp),
-        color = palette.muted,
-      )
-    }
-  }
-}
-
-@Composable
 internal fun SidebarActionRow(
   label: String,
   icon: ImageVector,
@@ -225,6 +179,7 @@ internal fun SidebarSessionRow(
 ) {
   val sessionStateDescription =
     when {
+      session.status == "queued" -> nativeString("Queued")
       session.hasActiveRun == true -> nativeString("Working")
       session.unread == true -> nativeString("Needs attention")
       selected -> nativeString("Selected")

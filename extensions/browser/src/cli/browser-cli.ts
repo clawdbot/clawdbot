@@ -167,10 +167,6 @@ function buildBrowserCommandGroups(params: {
   }));
 }
 
-function resolveBrowserParentOpts(cmd: Command): BrowserParentOpts {
-  return cmd.optsWithGlobals<BrowserParentOpts>();
-}
-
 function registerLazyBrowserCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -217,7 +213,7 @@ export function registerBrowserCli(
 
   addGatewayClientOptions(browser);
 
-  const parentOpts = resolveBrowserParentOpts;
+  const parentOpts = () => browser.opts<BrowserParentOpts>();
 
   registerLazyBrowserCommands(browser, parentOpts, argv, pluginRoot);
 }

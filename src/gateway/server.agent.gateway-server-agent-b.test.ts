@@ -26,6 +26,7 @@ import {
   connectWebchatClient,
   installGatewayTestHooks,
   onceMessage,
+  prepareGatewayReplyRuntimeForTest,
   rpcReq,
   startConnectedServerWithClient,
   startServerWithClient,
@@ -153,10 +154,11 @@ async function writeMainSessionEntry(params: {
   });
 }
 
-function sendAgentWsRequest(
+async function sendAgentWsRequest(
   socket: WebSocket,
   params: { reqId: string; message: string; idempotencyKey: string; sessionKey?: string },
 ) {
+  await prepareGatewayReplyRuntimeForTest();
   socket.send(
     JSON.stringify({
       type: "req",
@@ -180,7 +182,7 @@ async function sendAgentWsRequestAndWaitFinal(
     (o) => o.type === "res" && o.id === params.reqId && o.payload?.status !== "accepted",
     params.timeoutMs,
   );
-  sendAgentWsRequest(socket, params);
+  await sendAgentWsRequest(socket, params);
   return await finalP;
 }
 
@@ -473,7 +475,7 @@ describe("gateway server agent", () => {
       ws,
       (o) => o.type === "res" && o.id === "ag1" && o.payload?.status !== "accepted",
     );
-    sendAgentWsRequest(ws, {
+    await sendAgentWsRequest(ws, {
       reqId: "ag1",
       message: "hi",
       idempotencyKey: "idem-ag",
@@ -508,7 +510,7 @@ describe("gateway server agent", () => {
         message.type === "res" && message.id === runId && message.payload?.status !== "accepted",
     );
 
-    sendAgentWsRequest(ws, {
+    await sendAgentWsRequest(ws, {
       reqId: runId,
       message: "persist this agent turn before ACK",
       sessionKey: "main",
@@ -569,7 +571,7 @@ describe("gateway server agent", () => {
         message.type === "res" && message.id === runId && message.payload?.status !== "accepted",
     );
 
-    sendAgentWsRequest(ws, {
+    await sendAgentWsRequest(ws, {
       reqId: runId,
       message: "keep this aborted agent turn queryable",
       sessionKey: "main",
@@ -666,7 +668,7 @@ describe("gateway server agent", () => {
     });
 
     const secondP = onceMessage(ws, (o) => o.type === "res" && o.id === "ag2");
-    sendAgentWsRequest(ws, {
+    await sendAgentWsRequest(ws, {
       reqId: "ag2",
       message: "hi again",
       idempotencyKey: "same-agent",

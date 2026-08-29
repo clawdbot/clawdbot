@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentPlanStep } from "openclaw/plugin-sdk/channel-outbound";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { stripInvisibleUnicode } from "openclaw/plugin-sdk/web-content-extractor";
 import type { CodexAppServerClient } from "./client.js";
 import { isJsonObject } from "./protocol.js";
@@ -131,16 +132,11 @@ function serializePlan(plan: StoredPlan): string {
 }
 
 function truncateUtf8(value: string, maxBytes: number): string {
-  const bytes = Buffer.from(value);
-  if (bytes.byteLength <= maxBytes) {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) {
     return value;
   }
   const suffixBytes = Buffer.byteLength(RESTORED_PLAN_TRUNCATION_SUFFIX, "utf8");
-  let end = Math.max(0, maxBytes - suffixBytes);
-  while (end > 0 && (bytes[end] ?? 0) >> 6 === 0b10) {
-    end -= 1;
-  }
-  return `${bytes.subarray(0, end).toString("utf8")}${RESTORED_PLAN_TRUNCATION_SUFFIX}`;
+  return `${truncateUtf8Prefix(value, maxBytes - suffixBytes)}${RESTORED_PLAN_TRUNCATION_SUFFIX}`;
 }
 
 function readPlanSteps(value: unknown): AgentPlanStep[] {

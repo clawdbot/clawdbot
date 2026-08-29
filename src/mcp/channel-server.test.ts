@@ -46,28 +46,21 @@ async function connectMcpWithoutGateway(params?: { claudeChannelMode?: "auto" | 
 function attachReadyGateway(
   bridge: OpenClawChannelBridge,
   gatewayRequest: ReturnType<typeof vi.fn>,
+  supportsExactMessageLookup = true,
 ) {
-  (
-    bridge as unknown as {
-      gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
-      readySettled: boolean;
-      resolveReady: () => void;
-    }
-  ).gateway = {
+  const bridgeInternals = bridge as unknown as {
+    gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
+    readySettled: boolean;
+    resolveReady: () => void;
+    supportsExactMessageLookup: boolean;
+  };
+  bridgeInternals.supportsExactMessageLookup = supportsExactMessageLookup;
+  bridgeInternals.gateway = {
     request: gatewayRequest,
     stopAndWait: async () => {},
   };
-  (
-    bridge as unknown as {
-      readySettled: boolean;
-      resolveReady: () => void;
-    }
-  ).readySettled = true;
-  (
-    bridge as unknown as {
-      resolveReady: () => void;
-    }
-  ).resolveReady();
+  bridgeInternals.readySettled = true;
+  bridgeInternals.resolveReady();
 }
 
 async function flushMcpNotifications() {
@@ -201,6 +194,107 @@ describe("openclaw channel mcp server", () => {
             (entry) => (entry as { type?: unknown }).type === "image",
           ),
         ).toBe(true);
+      });
+
+      test("fetches canonical persisted media by message id without scanning recent history", async () => {
+        const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+        try {
+          const gatewayRequest = vi.fn(async (method: string, params: Record<string, unknown>) => {
+            if (method === "chat.message.get") {
+              expect(params).toEqual({
+                sessionKey: "agent:main:main",
+                messageId: "msg-canonical-media",
+              });
+              return {
+                ok: true,
+                message: {
+                  id: "msg-canonical-media",
+                  role: "user",
+                  content: "text-only transcript content",
+                  __openclaw: {
+                    media: [
+                      {
+                        url: "media://inbound/photo.png",
+                        contentType: "image/png",
+                        kind: "image",
+                        fileName: "photo.png",
+                        sizeBytes: 123,
+                      },
+                    ],
+                  },
+                },
+              };
+            }
+            throw new Error(`unexpected gateway method ${method}`);
+          });
+          attachReadyGateway(mcp.bridge, gatewayRequest);
+
+          const result = (await mcp.client.callTool({
+            name: "attachments_fetch",
+            arguments: {
+              session_key: "agent:main:main",
+              message_id: "msg-canonical-media",
+              limit: 1,
+            },
+          })) as {
+            structuredContent?: { attachments?: unknown[] };
+          };
+
+          expect(result.structuredContent?.attachments).toEqual([
+            {
+              type: "openclaw_media",
+              media: {
+                url: "media://inbound/photo.png",
+                contentType: "image/png",
+                kind: "image",
+                fileName: "photo.png",
+                sizeBytes: 123,
+                transcribed: false,
+              },
+            },
+          ]);
+          expect(gatewayRequest).toHaveBeenCalledTimes(1);
+        } finally {
+          await mcp.close();
+        }
+      });
+
+      test("falls back to recent history when an older Gateway lacks exact message lookup", async () => {
+        const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+        try {
+          const gatewayRequest = vi.fn(async (method: string, params: Record<string, unknown>) => {
+            if (method === "sessions.get") {
+              expect(params).toEqual({ key: "agent:main:main", limit: 1 });
+              return {
+                messages: [
+                  {
+                    id: "msg-legacy",
+                    role: "user",
+                    content: [{ type: "image", source: { type: "url", url: "media://photo" } }],
+                  },
+                ],
+              };
+            }
+            throw new Error(`unexpected gateway method ${method}`);
+          });
+          attachReadyGateway(mcp.bridge, gatewayRequest, false);
+
+          const result = (await mcp.client.callTool({
+            name: "attachments_fetch",
+            arguments: {
+              session_key: "agent:main:main",
+              message_id: "msg-legacy",
+              limit: 1,
+            },
+          })) as {
+            structuredContent?: { attachments?: unknown[] };
+          };
+
+          expect(result.structuredContent?.attachments).toHaveLength(1);
+          expect(gatewayRequest).toHaveBeenCalledTimes(1);
+        } finally {
+          await mcp.close();
+        }
       });
 
       test("clamps direct bridge session limits to the public MCP windows", async () => {
@@ -571,6 +665,105 @@ describe("openclaw channel mcp server", () => {
         expect(waited.structuredContent?.event?.text).toBe("inbound live message");
       } finally {
         await mcp.close();
+      }
+    });
+
+    test("reports cursor gaps and wakes filtered waits as queue eviction occurs", async () => {
+      const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+      try {
+        const handleSessionMessageEvent = (
+          mcp.bridge as unknown as {
+            handleSessionMessageEvent: (payload: Record<string, unknown>) => Promise<void>;
+          }
+        ).handleSessionMessageEvent.bind(mcp.bridge);
+        const pendingFilteredWait = mcp.client.callTool({
+          name: "events_wait",
+          arguments: {
+            after_cursor: 0,
+            session_key: "agent:main:filtered",
+            timeout_ms: 300_000,
+          },
+        });
+        await mcp.client.callTool({
+          name: "events_poll",
+          arguments: { after_cursor: 0, session_key: "agent:main:filtered" },
+        });
+        for (let index = 1; index <= 1_001; index += 1) {
+          await handleSessionMessageEvent({
+            sessionKey: "agent:main:main",
+            message: { role: "user", content: `event ${index}` },
+          });
+        }
+
+        const filteredWait = await Promise.race([
+          pendingFilteredWait,
+          new Promise<undefined>((resolve) => {
+            setImmediate(() => resolve(undefined));
+          }),
+        ]);
+        expect(filteredWait?.structuredContent).toEqual({
+          event: null,
+          gap: { requested_after_cursor: 0, oldest_available_cursor: 2 },
+        });
+
+        const polled = (await mcp.client.callTool({
+          name: "events_poll",
+          arguments: { after_cursor: 0, limit: 1 },
+        })) as {
+          structuredContent?: Record<string, unknown>;
+        };
+        expect(polled.structuredContent).toMatchObject({
+          gap: { requested_after_cursor: 0, oldest_available_cursor: 2 },
+          next_cursor: 2,
+        });
+
+        const filteredPoll = await mcp.client.callTool({
+          name: "events_poll",
+          arguments: { after_cursor: 0, session_key: "agent:main:filtered" },
+        });
+        expect(filteredPoll.structuredContent).toEqual({
+          events: [],
+          gap: { requested_after_cursor: 0, oldest_available_cursor: 2 },
+          next_cursor: 1,
+        });
+
+        const waited = (await mcp.client.callTool({
+          name: "events_wait",
+          arguments: { after_cursor: 0, timeout_ms: 250 },
+        })) as {
+          structuredContent?: Record<string, unknown>;
+        };
+        expect(waited.structuredContent).toMatchObject({
+          gap: { requested_after_cursor: 0, oldest_available_cursor: 2 },
+          event: { cursor: 2 },
+        });
+      } finally {
+        await mcp.close();
+      }
+    });
+
+    test("cancels an events_wait bridge waiter through the MCP request signal", async () => {
+      vi.useFakeTimers();
+      const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+      try {
+        const timerBaseline = vi.getTimerCount();
+        const controller = new AbortController();
+        const waiting = mcp.client.callTool(
+          {
+            name: "events_wait",
+            arguments: { after_cursor: 0, timeout_ms: 300_000 },
+          },
+          undefined,
+          { signal: controller.signal },
+        );
+        await vi.waitFor(() => expect(vi.getTimerCount()).toBeGreaterThan(timerBaseline));
+
+        controller.abort("client cancelled");
+        await expect(waiting).rejects.toThrow();
+        await vi.waitFor(() => expect(vi.getTimerCount()).toBe(timerBaseline));
+      } finally {
+        await mcp.close();
+        vi.useRealTimers();
       }
     });
   });

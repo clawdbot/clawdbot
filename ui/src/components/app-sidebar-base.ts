@@ -1,6 +1,5 @@
 import { consume } from "@lit/context";
 import { property } from "lit/decorators.js";
-import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
@@ -12,7 +11,6 @@ import {
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
-import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import { readSessionMethodAccess, type SessionMethodAccess } from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
@@ -30,6 +28,9 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) offline = false;
+  @property({ attribute: false }) restartPending = false;
+  @property({ attribute: false }) queuedOutboxCount = 0;
+  @property({ attribute: false }) lastError: string | null = null;
   @property({ attribute: false }) outboxAttentionCountForSession = (_sessionKey: string) => 0;
   @property({ attribute: false }) hasSessionDraft: (sessionKey: string) => boolean = () => false;
   @property({ attribute: false }) terminalAvailable = false;
@@ -49,20 +50,9 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) lobsterPetSounds = false;
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) devGitBranch: string | null = null;
-  @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
-  @property({ attribute: false }) updateSchedule: UpdateScheduleState | null = null;
-  @property({ attribute: false }) heldUpdateCampaignId: string | null = null;
-  @property({ attribute: false }) updateBusy = false;
-  @property({ attribute: false }) updateStatusBanner: ApplicationStatusBanner | null = null;
   @property({ attribute: false }) watchUpdateProgress:
     | ((listener: (progress: UpdateProgress) => void) => () => void)
     | undefined = undefined;
-  @property({ attribute: false }) canUpdate = false;
-  @property({ attribute: false }) canHoldUpdate = false;
-  @property({ attribute: false }) onUpdate: () => void = () => undefined;
-  @property({ attribute: false }) refreshRequired = false;
-  @property({ attribute: false }) onRefresh: () => void = () => undefined;
-  @property({ attribute: false }) onHoldUpdate: () => Promise<boolean> = async () => false;
   @property({ attribute: false }) onOpenApprovals?: () => void;
   @property({ attribute: false }) onRetryConnect?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (

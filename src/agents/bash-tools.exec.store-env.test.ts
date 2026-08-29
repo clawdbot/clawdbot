@@ -35,6 +35,7 @@ vi.mock("../secrets/egress-proxy/registry.js", () => ({
     return {
       HTTPS_PROXY: mocks.proxyUrl,
       HTTP_PROXY: mocks.proxyUrl,
+      NODE_USE_ENV_PROXY: "1",
       NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
       SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
       CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
@@ -126,6 +127,7 @@ type StoreEnvHost = "gateway" | "sandbox" | "node";
 const EGRESS_ENV = {
   HTTPS_PROXY: mocks.proxyUrl,
   HTTP_PROXY: mocks.proxyUrl,
+  NODE_USE_ENV_PROXY: "1",
   NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
   SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
   CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
@@ -303,7 +305,7 @@ describe("exec store environment", () => {
     }
   });
 
-  it("filters sandbox store env and surfaces credential-shaped drops", async () => {
+  it("keeps agent-readable store environment out of sandbox exec", async () => {
     await withTeamStoreEntries(
       [
         { name: "AWS_REGION", value: "us-west-2", kind: "env" },
@@ -335,12 +337,9 @@ describe("exec store environment", () => {
           yieldMs: 120_000,
         });
 
-        expect(buildExecSpec.mock.calls[0]?.[0]?.env).toMatchObject({ AWS_REGION: "us-west-2" });
+        expect(buildExecSpec.mock.calls[0]?.[0]?.env).not.toHaveProperty("AWS_REGION");
         expect(buildExecSpec.mock.calls[0]?.[0]?.env).not.toHaveProperty("FOO_TOKEN");
-        expect(result.content[0]).toMatchObject({
-          type: "text",
-          text: expect.stringContaining("FOO_TOKEN"),
-        });
+        expect(result.content[0]).not.toMatchObject({ text: expect.stringContaining("FOO_TOKEN") });
       },
     );
   });
@@ -423,8 +422,8 @@ describe("exec store environment", () => {
             callId: `call-egress-enabled-${host}`,
             config: { secrets: { egressProxy: { enabled: true } } },
           });
-          expect(env.AWS_REGION).toBe("us-west-2");
           if (host === "gateway") {
+            expect(env.AWS_REGION).toBe("us-west-2");
             expect(looksLikeSecretSentinel(env.SERVICE_API_KEY ?? "")).toBe(true);
             expect(resolveSecretSentinel(env.SERVICE_API_KEY ?? "")).toBe("enabled-secret");
             expect(env).toMatchObject(EGRESS_ENV);
@@ -441,6 +440,7 @@ describe("exec store environment", () => {
             return;
           }
 
+          expect(env).not.toHaveProperty("AWS_REGION");
           expect(env).not.toHaveProperty("SERVICE_API_KEY");
           expect(JSON.stringify(env)).not.toContain("oc-sent-v2.");
           for (const [key, value] of Object.entries(EGRESS_ENV)) {

@@ -30,6 +30,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
@@ -438,37 +439,26 @@ class GatewayBootstrapAuthTest {
   fun connect_ignoresStaleTlsProbeAfterDisconnect() =
     runBlocking {
       val fingerprint = "aa".repeat(32)
-      val probeStarted = CompletableDeferred<Unit>()
+      val probeJob = CompletableDeferred<Job>()
       val probeResult = CompletableDeferred<GatewayTlsProbeResult>()
       val (_, prefs, runtime) =
         gatewayFixture { _, _ ->
-          probeStarted.complete(Unit)
+          probeJob.complete(checkNotNull(currentCoroutineContext()[Job]))
           probeResult.await()
         }
       val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 18789)
       prefs.saveGatewayTlsFingerprint(endpoint.stableId, fingerprint)
-      val runtimeScope = readField<CoroutineScope>(runtime, "scope")
-      val existingJobs =
-        runtimeScope.coroutineContext[Job]
-          ?.children
-          ?.toSet()
-          .orEmpty()
 
       runtime.connect(
         endpoint,
         auth(token = "shared-token"),
       )
-      probeStarted.await()
-      val probeJob =
-        runtimeScope.coroutineContext[Job]
-          ?.children
-          ?.singleOrNull { it !in existingJobs }
-          ?: error("Expected one TLS probe job")
+      val tlsProbeJob = probeJob.await()
 
       runtime.disconnect()
       probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = fingerprint))
       // Join the owning coroutine so assertions run after its stale-attempt guard.
-      probeJob.join()
+      tlsProbeJob.join()
 
       assertNull(runtime.pendingGatewayTrust.value)
       assertNull(desiredBootstrapToken(runtime, "nodeSession"))

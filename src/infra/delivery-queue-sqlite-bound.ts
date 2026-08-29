@@ -11,6 +11,7 @@ import {
 } from "./kysely-sync.js";
 
 type QueueStatus = "pending" | "failed" | "completed";
+export type DeliveryQueueReadMode = "pending" | "unfinished" | "all";
 type DeliveryQueueTable = OpenClawStateKyselyDatabase["delivery_queue_entries"];
 const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const BOUNDED_DELIVERY_RECEIPTS_SQL = `
@@ -29,7 +30,7 @@ const BOUNDED_DELIVERY_RECEIPTS_SQL = `
     AND typeof(max_entries) = 'integer' AND max_entries BETWEEN 1 AND 9007199254740991`;
 
 export type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
-export const deliveryQueueRowColumns = [
+const deliveryQueueRowColumns = [
   "id",
   "entry_json",
   "enqueued_at",
@@ -105,7 +106,7 @@ export function pruneDeliveryQueueTombstoneAges(db: DatabaseSync, now: number): 
   pruneOrdinaryDeliveryReceipts(db, now);
 }
 
-/** CAS-compacts one exact pending row, or deletes it when no fence is authored. */
+/** CAS-compacts one exact row, or deletes it when no fence is authored. */
 export function terminalizeBoundDeliveryQueueEntry(
   db: DatabaseSync,
   queueName: string,
@@ -113,6 +114,7 @@ export function terminalizeBoundDeliveryQueueEntry(
   expectedJson: string,
   failedEntry: DeliveryQueueEntryState | undefined,
   now: number,
+  expectedStatus: "pending" | "failed" = "pending",
 ): boolean {
   if (!failedEntry) {
     return (
@@ -120,9 +122,9 @@ export function terminalizeBoundDeliveryQueueEntry(
       db
         .prepare(
           `DELETE FROM delivery_queue_entries
-          WHERE queue_name = ? AND id = ? AND status = 'pending' AND entry_json = ?`,
+          WHERE queue_name = ? AND id = ? AND status = ? AND entry_json = ?`,
         )
-        .run(queueName, id, expectedJson).changes === 1
+        .run(queueName, id, expectedStatus, expectedJson).changes === 1
     );
   }
   return (
@@ -133,7 +135,7 @@ export function terminalizeBoundDeliveryQueueEntry(
         session_key = NULL, channel = NULL, target = NULL, account_id = NULL,
         last_attempt_at = NULL, last_error = NULL, platform_send_started_at = NULL,
         recovery_state = ?, entry_json = ?, enqueued_at = ?, updated_at = ?, failed_at = ?
-      WHERE queue_name = ? AND id = ? AND status = 'pending' AND entry_json = ?`,
+      WHERE queue_name = ? AND id = ? AND status = ? AND entry_json = ?`,
       )
       .run(
         failedEntry.recoveryState ?? null,
@@ -143,6 +145,7 @@ export function terminalizeBoundDeliveryQueueEntry(
         now,
         queueName,
         id,
+        expectedStatus,
         expectedJson,
       ).changes === 1
   );
@@ -279,22 +282,39 @@ export function upsertBoundDeliveryQueueEntryInDatabase(
   return executeSqliteQuerySync(database.db, query).numAffectedRows === 1n;
 }
 
+/** Recovery and media custody share the same inventory of unfinished work. */
+export function deliveryQueueEntriesQuery(
+  database: OpenClawStateDatabase,
+  queueNames: readonly string[],
+  mode: DeliveryQueueReadMode,
+) {
+  const query = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db)
+    .selectFrom("delivery_queue_entries")
+    .select(deliveryQueueRowColumns)
+    .where("queue_name", "in", queueNames);
+  return mode === "all"
+    ? query
+    : query.where((eb) =>
+        mode === "pending"
+          ? eb("status", "=", "pending")
+          : eb.or([
+              eb("status", "=", "pending"),
+              eb.and([
+                eb("status", "=", "failed"),
+                eb("recovery_state", "=", "settlement_pending"),
+              ]),
+            ]),
+      );
+}
+
 /** Reads one row from the exact supplied handle for cross-owner invariant validation. */
 export function loadDeliveryQueueEntryInDatabase(
   database: OpenClawStateDatabase,
   queueName: string,
   id: string,
-  pendingOnly = false,
+  mode: DeliveryQueueReadMode = "all",
 ): DeliveryQueueEntryState | null {
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  let query = queueDb
-    .selectFrom("delivery_queue_entries")
-    .select(deliveryQueueRowColumns)
-    .where("queue_name", "=", queueName)
-    .where("id", "=", id);
-  if (pendingOnly) {
-    query = query.where("status", "=", "pending");
-  }
+  const query = deliveryQueueEntriesQuery(database, [queueName], mode).where("id", "=", id);
   const row = executeSqliteQueryTakeFirstSync(database.db, query) as
     | DeliveryQueueSqliteRow
     | undefined;

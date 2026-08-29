@@ -9,10 +9,13 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { areDiagnosticsEnabledForProcess } from "../../../infra/diagnostic-events.js";
 import { toErrorObject } from "../../../infra/errors.js";
+import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
+import { abortable } from "./abortable.js";
 import type { EmbeddedRunTrigger } from "./params.js";
 import { getLastToolActivityMs, onToolActivity } from "./tool-activity-heartbeat.js";
 
@@ -56,13 +59,8 @@ type IdleTimeoutProviderConfig = {
  *    classification keys on `URL.hostname` so resolution would have to happen
  *    here, and adding sync/async DNS to the watchdog hot path is disproportionate.
  */
-function isLocalProviderBaseUrl(baseUrl: string): boolean {
-  let host: string;
-  try {
-    host = new URL(baseUrl).hostname.toLowerCase();
-  } catch {
-    return false;
-  }
+function isLocalProviderHostname(hostname: string): boolean {
+  let host = hostname;
   if (host.startsWith("[") && host.endsWith("]")) {
     host = host.slice(1, -1);
   }
@@ -108,36 +106,19 @@ function isLocalProviderBaseUrl(baseUrl: string): boolean {
   );
 }
 
-function isExplicitLocalHostnameBaseUrl(baseUrl: string): boolean {
-  let host: string;
-  try {
-    host = new URL(baseUrl).hostname.toLowerCase();
-  } catch {
-    return false;
-  }
-
-  if (
-    host === "docker.orb.internal" ||
-    host === "host.docker.internal" ||
-    host === "host.orb.internal"
-  ) {
-    return true;
-  }
-  return false;
+function isExplicitLocalHostname(hostname: string): boolean {
+  return (
+    hostname === "docker.orb.internal" ||
+    hostname === "host.docker.internal" ||
+    hostname === "host.orb.internal"
+  );
 }
 
-function isBareProviderHostnameBaseUrl(baseUrl: string): boolean {
-  let host: string;
-  try {
-    host = new URL(baseUrl).hostname.toLowerCase();
-  } catch {
+function isBareProviderHostname(hostname: string): boolean {
+  if (hostname.includes(".") || hostname.includes(":")) {
     return false;
   }
-
-  if (host.includes(".") || host.includes(":")) {
-    return false;
-  }
-  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(host);
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(hostname);
 }
 
 function isSelfHostedProviderId(provider: string | undefined): boolean {
@@ -184,20 +165,6 @@ function hasConfiguredLocalProviderSignal(params: {
   );
 }
 
-function isOllamaCloudModel(model: { id?: string; provider?: string } | undefined): boolean {
-  const rawModelId = model?.id;
-  if (typeof rawModelId !== "string") {
-    return false;
-  }
-
-  const provider = model?.provider?.trim().toLowerCase();
-  if (provider && !provider.startsWith("ollama")) {
-    return false;
-  }
-
-  return isCloudModelRef(rawModelId);
-}
-
 type RuntimeModelLocality = {
   isLocalRuntimeModel: boolean;
   isExplicitLocalHostnameRuntimeModel: boolean;
@@ -213,19 +180,27 @@ function resolveRuntimeModelLocality(params?: {
   model?: { baseUrl?: string; id?: string; provider?: string };
 }): RuntimeModelLocality {
   const baseUrl = params?.model?.baseUrl;
-  if (typeof baseUrl !== "string" || baseUrl.length === 0) {
+  let hostname: string | undefined;
+  if (typeof baseUrl === "string" && baseUrl.length > 0) {
+    try {
+      hostname = new URL(baseUrl).hostname.toLowerCase();
+    } catch {
+      hostname = undefined;
+    }
+  }
+  if (!hostname) {
     return {
       isLocalRuntimeModel: false,
       isExplicitLocalHostnameRuntimeModel: false,
       isSelfHostedHostnameRuntimeModel: false,
     };
   }
-  const notCloudModel = !isOllamaCloudModel(params?.model);
+  const notCloudModel = !isCloudModelRef(params?.model?.id);
   return {
-    isLocalRuntimeModel: isLocalProviderBaseUrl(baseUrl) && notCloudModel,
-    isExplicitLocalHostnameRuntimeModel: isExplicitLocalHostnameBaseUrl(baseUrl) && notCloudModel,
+    isLocalRuntimeModel: isLocalProviderHostname(hostname) && notCloudModel,
+    isExplicitLocalHostnameRuntimeModel: isExplicitLocalHostname(hostname) && notCloudModel,
     isSelfHostedHostnameRuntimeModel:
-      isBareProviderHostnameBaseUrl(baseUrl) &&
+      isBareProviderHostname(hostname) &&
       (isSelfHostedProviderId(params?.model?.provider) ||
         hasConfiguredLocalProviderSignal({
           cfg: params?.cfg,
@@ -261,7 +236,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
     isSelfHostedHostnameRuntimeModel,
   } = resolveRuntimeModelLocality(params);
   const isSelfHostedRuntimeModel =
-    isSelfHostedProviderId(params?.model?.provider) && !isOllamaCloudModel(params?.model);
+    isSelfHostedProviderId(params?.model?.provider) && !isCloudModelRef(params?.model?.id);
   const timeoutBounds = [
     runTimeoutIsNoTimeout ? undefined : runTimeoutMs,
     hasExplicitRunTimeout ? undefined : agentTimeoutMs,
@@ -377,7 +352,7 @@ export function resolveLlmFirstEventTimeoutMs(params?: {
     isSelfHostedHostnameRuntimeModel,
   } = resolveRuntimeModelLocality(params);
   const isSelfHostedRuntimeModel =
-    isSelfHostedProviderId(params?.model?.provider) && !isOllamaCloudModel(params?.model);
+    isSelfHostedProviderId(params?.model?.provider) && !isCloudModelRef(params?.model?.id);
   const timeoutBounds = [
     // Unlimited run budget bounds total cost, not first-token liveness. Omit
     // the sentinel from bounds so provider-class defaults still apply.
@@ -451,6 +426,8 @@ export function streamWithIdleTimeout(
     const cleanupSourceSignal = () => {
       sourceSignal?.removeEventListener("abort", abortFromSourceSignal);
     };
+    const withSourceAbort = <T>(promise: Promise<T>) =>
+      sourceSignal ? abortable(sourceSignal, promise) : promise;
     const wrappedOptions = {
       ...options,
       signal: streamAbortController.signal,
@@ -527,10 +504,12 @@ export function streamWithIdleTimeout(
             rejectIdleTimeout = undefined;
             clearTimer();
           };
-          const unsubscribeLlmActivity = onLlmRequestActivity(
-            streamAbortController.signal,
-            armTimer,
-          );
+          const unsubscribeLlmActivity = onLlmRequestActivity(streamAbortController.signal, () => {
+            armTimer();
+            if (runId && areDiagnosticsEnabledForProcess()) {
+              markDiagnosticRunProgress({ runId, reason: "model_call:stream_progress" });
+            }
+          });
           const unsubscribeStreamToolActivity = runId ? onToolActivity(runId, armTimer) : undefined;
           const cleanupIterator = () => {
             stopWaiting();
@@ -549,7 +528,11 @@ export function streamWithIdleTimeout(
                   firstArmPending = true;
                   armTimer();
                 });
-                const result = await Promise.race([streamIterator.next(), timeoutPromise]);
+                // Providers may ignore their mirrored abort signal, so caller
+                // cancellation must also settle this exact iterator wait.
+                const result = await withSourceAbort(
+                  Promise.race([streamIterator.next(), timeoutPromise]),
+                );
 
                 if (result.done) {
                   cleanupIterator();
@@ -591,12 +574,13 @@ export function streamWithIdleTimeout(
 
       // Some providers return a pending Promise before the stream object exists;
       // protect that creation phase with the same idle watchdog.
-      return Promise.race([
-        Promise.resolve(maybeStream),
-        createTimeoutPromise((timer) => {
-          streamPromiseTimer = timer;
-        }),
-      ]).then(
+      const timeoutPromise = createTimeoutPromise((timer) => {
+        streamPromiseTimer = timer;
+      });
+      const streamPromise = withSourceAbort(
+        Promise.race([Promise.resolve(maybeStream), timeoutPromise]),
+      );
+      return streamPromise.then(
         (stream) => {
           clearStreamPromiseTimer();
           return wrapStream(stream);

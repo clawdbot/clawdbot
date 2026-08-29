@@ -15,6 +15,9 @@ type OxlintConfig = {
 };
 
 type OxlintTsconfig = {
+  compilerOptions?: {
+    allowJs?: boolean;
+  };
   include?: string[];
   exclude?: string[];
 };
@@ -141,8 +144,11 @@ describe("oxlint config", () => {
   it("has a discoverable scripts tsconfig for type-aware linting", () => {
     const tsconfig = readJson("scripts/tsconfig.json") as OxlintTsconfig;
 
+    expect(tsconfig.compilerOptions?.allowJs).toBe(true);
     expect(tsconfig.include).toContain("**/*.ts");
+    expect(tsconfig.include).toContain("**/*.mts");
     expect(tsconfig.exclude ?? []).not.toContain("**/*.ts");
+    expect(tsconfig.exclude ?? []).not.toContain("**/*.mts");
   });
 
   it("has a discoverable test tsconfig for type-aware linting", () => {

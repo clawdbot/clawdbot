@@ -29,10 +29,9 @@ enum BoundedCommand {
                         arguments: Arguments(arguments),
                         environment: subprocessEnvironment,
                         output: .string(limit: outputLimit))
+                    let output = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard result.terminationStatus.isSuccess,
-                          let output = result.standardOutput?
-                              .trimmingCharacters(in: .whitespacesAndNewlines),
-                              !output.isEmpty
+                          !output.isEmpty
                     else {
                         return nil
                     }

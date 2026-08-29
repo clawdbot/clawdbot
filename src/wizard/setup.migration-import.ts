@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,6 +16,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
+import { runWizardWithPromptNavigationScope } from "./navigation-prompter.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import { offerLiveModelVerification } from "./setup.inference-verification.js";
 import {
@@ -26,7 +28,7 @@ import {
   buildSetupMigrationPlanSourceSnapshot,
   buildSetupMigrationTargetSnapshot,
   inspectSetupMigrationFreshness,
-  preserveSetupMigrationSecurityAcknowledgement,
+  preserveSetupMigrationOnboardingConsents,
   prepareSetupMigrationAttemptBoundary,
   SetupMigrationTargetChangedError,
   withSetupMigrationTargetLock,
@@ -180,7 +182,7 @@ export async function listSetupMigrationOptions(params: {
   for (const detection of params.detections) {
     addOption({
       providerId: detection.providerId,
-      label: detection.label,
+      label: t("wizard.migration.importFrom", { source: detection.label }),
       ...(detection.source || detection.message
         ? { hint: detection.source ?? detection.message }
         : {}),
@@ -189,14 +191,14 @@ export async function listSetupMigrationOptions(params: {
   for (const provider of providers) {
     addOption({
       providerId: provider.id,
-      label: provider.label,
+      label: t("wizard.migration.importFrom", { source: provider.label }),
       hint: provider.description ?? t("wizard.migration.sourcePathHint"),
     });
   }
   for (const provider of resolveManifestSetupMigrationProviders(params.baseConfig)) {
     addOption({
       providerId: provider.providerId,
-      label: provider.label,
+      label: t("wizard.migration.importFrom", { source: provider.label }),
       hint: provider.description ?? t("wizard.migration.sourcePathHint"),
     });
   }
@@ -209,37 +211,64 @@ async function selectSetupMigrationProvider(params: {
   baseConfig: OpenClawConfig;
   detections: readonly SetupMigrationDetection[];
   prompter: WizardPrompter;
-}): Promise<string> {
+  allowBack: boolean;
+}): Promise<string | undefined> {
   const options = await listSetupMigrationOptions({
     baseConfig: params.baseConfig,
     detections: params.detections,
   });
   const requestedProviderId = params.opts.importFrom?.trim();
-  if (requestedProviderId && !options.some((option) => option.providerId === requestedProviderId)) {
-    throw new Error(
-      `Migration provider "${requestedProviderId}" is not installed or bundled. Install it before starting the transactional import.`,
-    );
+  if (requestedProviderId) {
+    return assertListedMigrationProvider(requestedProviderId, options);
   }
   if (options.length === 0) {
     throw new Error("No migration providers found.");
   }
-  const providerId =
-    requestedProviderId ||
-    (await params.prompter.select({
-      message: t("wizard.migration.source"),
-      options: options.map((option) => ({
-        value: option.providerId,
-        label: option.label,
-        ...(option.hint ? { hint: option.hint } : {}),
-      })),
-      initialValue: params.detections[0]?.providerId ?? options[0]?.providerId,
-    }));
-  if (!options.some((option) => option.providerId === providerId)) {
-    throw new Error(
-      `Migration provider "${providerId}" is not installed or bundled. Install it before starting the transactional import.`,
-    );
+  const prompt = {
+    message: t("wizard.migration.source"),
+    options: options.map((option) => ({
+      value: option.providerId,
+      label: option.label,
+      ...(option.hint ? { hint: option.hint } : {}),
+    })),
+    initialValue: params.detections[0]?.providerId ?? options[0]?.providerId,
+  };
+  if (!params.allowBack) {
+    params.prompter.disableBackNavigation?.();
+    return assertListedMigrationProvider(await params.prompter.select(prompt), options);
   }
-  return providerId;
+  const selection = await runWizardWithPromptNavigationScope(
+    params.prompter,
+    async (prompter) => await prompter.select(prompt),
+  );
+  if (selection.status === "back") {
+    return undefined;
+  }
+  return assertListedMigrationProvider(selection.value, options);
+}
+
+/**
+ * Rejects a provider id that is absent from the listed options, naming the ids that are present.
+ * `openclaw migrate` already answers an unknown provider this way; onboarding has to match, because
+ * a typed id is far likelier to be a typo here than a genuinely missing plugin. An undefined id
+ * means the operator dismissed the prompt, which is a cancellation rather than a bad choice.
+ */
+function assertListedMigrationProvider(
+  providerId: string | undefined,
+  options: readonly SetupMigrationOption[],
+): string | undefined {
+  if (providerId === undefined || options.some((option) => option.providerId === providerId)) {
+    return providerId;
+  }
+  const available = options.map((option) => option.providerId);
+  const suffix =
+    available.length > 0
+      ? ` Available providers: ${available.join(", ")}.`
+      : " No migration providers are installed.";
+  const listCommand = formatCliCommand("openclaw migrate list");
+  throw new Error(
+    `Unknown migration provider "${providerId}".${suffix} Run ${listCommand} to see the current list.`,
+  );
 }
 
 async function resolveSetupMigrationProvider(params: {
@@ -303,8 +332,9 @@ export async function runSetupMigrationImport(params: {
     config: OpenClawConfig,
     expectedConfig: OpenClawConfig,
   ) => Promise<OpenClawConfig>;
+  allowProviderBack?: boolean;
   continueOnboarding?: boolean;
-}): Promise<Awaited<ReturnType<typeof finalizeSetupMigrationPromotion>>> {
+}): Promise<{ kind: "back" } | Awaited<ReturnType<typeof finalizeSetupMigrationPromotion>>> {
   const [
     { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig },
     { createMigrationLogger, buildMigrationReportDir },
@@ -323,7 +353,12 @@ export async function runSetupMigrationImport(params: {
     baseConfig: params.baseConfig,
     detections: params.detections,
     prompter: params.prompter,
+    allowBack: params.allowProviderBack === true,
   });
+  if (!providerId) {
+    return { kind: "back" };
+  }
+  params.prompter.disableBackNavigation?.();
   const workspaceInput =
     params.opts.workspace ??
     (params.opts.nonInteractive
@@ -361,7 +396,7 @@ export async function runSetupMigrationImport(params: {
         formatMigrationResult,
       });
     }
-    const lockedBaseConfig = preserveSetupMigrationSecurityAcknowledgement(
+    const lockedBaseConfig = preserveSetupMigrationOnboardingConsents(
       await params.readConfigFile(),
       params.baseConfig,
     );

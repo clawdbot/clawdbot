@@ -245,8 +245,10 @@ async function expectListedSessionActiveRun(
   requestId: string,
   run: Record<string, unknown>,
   expected: boolean,
+  expectedStatus?: "queued" | "running",
+  sessionOptions?: SessionStoreEntryOptions,
 ) {
-  await writeMainSessionStore();
+  await writeMainSessionStore(sessionOptions);
 
   const { respond } = await invokeSessionsList({
     requestId,
@@ -258,7 +260,8 @@ async function expectListedSessionActiveRun(
   const payload = expectRespondPayload(respond);
   const session = findSession(payload, "agent:main:main");
   expect(session.hasActiveRun).toBe(expected);
-  expect(session.activeRunIds).toEqual(expected ? ["run-1"] : undefined);
+  expect(session.activeRunIds).toEqual(expected ? ["run-1"] : []);
+  expect(session.status).toBe(expectedStatus);
 }
 
 test("sessions.list keeps bulk rows lightweight and uses selected model fields", async () => {
@@ -718,7 +721,45 @@ test("sessions.changed mutations reach plugin subscribers without websocket clie
 });
 
 test("sessions.list marks sessions with active abortable runs", async () => {
-  await expectListedSessionActiveRun("req-sessions-list-active-run", {}, true);
+  await expectListedSessionActiveRun("req-sessions-list-active-run", {}, true, "running");
+});
+
+test("sessions.list marks admitted pre-execution work as queued", async () => {
+  await expectListedSessionActiveRun(
+    "req-sessions-list-queued-run",
+    { executionStarted: false },
+    true,
+    "queued",
+  );
+});
+
+test("sessions.list replaces a previous terminal status when execution starts", async () => {
+  await expectListedSessionActiveRun(
+    "req-sessions-list-restarted-run",
+    { executionStarted: true },
+    true,
+    "running",
+    { status: "failed" },
+  );
+});
+
+test("sessions.list distinguishes proven idle from unavailable run identities", async () => {
+  await writeMainSessionStore();
+
+  const idle = await invokeSessionsList({ requestId: "req-sessions-list-idle-exact-runs" });
+  const idleSession = findSession(expectRespondPayload(idle.respond), "agent:main:main");
+  expect(idleSession).toMatchObject({ hasActiveRun: false, activeRunIds: [] });
+
+  embeddedRunMock.activeIds.add("sess-main");
+  const unavailable = await invokeSessionsList({
+    requestId: "req-sessions-list-unavailable-runs",
+  });
+  const unavailableSession = findSession(
+    expectRespondPayload(unavailable.respond),
+    "agent:main:main",
+  );
+  expect(unavailableSession).toMatchObject({ hasActiveRun: true });
+  expect(unavailableSession).not.toHaveProperty("activeRunIds");
 });
 
 test("sessions.changed publishes visible active run ids", async () => {
@@ -734,6 +775,28 @@ test("sessions.changed publishes visible active run ids", async () => {
   expectChangedBroadcast(result.broadcastToConnIds, {
     sessionKey: "agent:main:main",
     reason: "patch",
+    status: "running",
+    hasActiveRun: true,
+    activeRunIds: ["run-1"],
+  });
+});
+
+test("sessions.changed publishes queued status before execution starts", async () => {
+  await writeMainSessionStore({ status: "failed" });
+  const result = await invokeSessionMutation({
+    method: "sessions.patch",
+    params: { key: "main", label: "Queued main" },
+    context: {
+      chatAbortControllers: new Map([
+        ["run-1", { sessionKey: "agent:main:main", executionStarted: false }],
+      ]),
+    },
+  });
+
+  expectChangedBroadcast(result.broadcastToConnIds, {
+    sessionKey: "agent:main:main",
+    reason: "patch",
+    status: "queued",
     hasActiveRun: true,
     activeRunIds: ["run-1"],
   });
@@ -865,7 +928,9 @@ test("sessions.changed mutation events include live usage metadata", async () =>
         modelOverride: "gpt-5.3-codex-spark",
         modelProvider: "openai",
         model: "gpt-5.3-codex-spark",
+        agentHarnessId: "openclaw",
         contextTokens: 123_456,
+        contextTokensSource: "runtime",
         totalTokens: 0,
         totalTokensFresh: false,
       }),
@@ -1051,23 +1116,67 @@ test("sessions.changed mutation events include session management metadata", asy
     key: "discord:group:dev",
     unread: true,
   });
-  expectChangedBroadcast(unread.broadcastToConnIds, {
+  const unreadPayload = expectChangedBroadcast(unread.broadcastToConnIds, {
     sessionKey: "agent:main:discord:group:dev",
     reason: "patch",
     unread: true,
     lastReadAt: 20,
+    markedUnreadAt: expect.any(Number),
     lastActivityAt: 5,
   });
+
+  const marker = expectDefined(
+    unreadPayload.markedUnreadAt as number | undefined,
+    "manual unread marker",
+  );
+  expect(marker).toEqual(expect.any(Number));
+
+  const staleRead = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: false,
+    expectedMarkedUnreadAt: null,
+  });
+  expectFields(staleRead.responsePayload, { ok: true, key: "agent:main:discord:group:dev" });
+  expect(staleRead.broadcastToConnIds).not.toHaveBeenCalled();
+  expect(requireRecord(staleRead.responsePayload.entry, "stale read entry").markedUnreadAt).toBe(
+    marker,
+  );
 
   const read = await invokeSessionsPatch({
     key: "discord:group:dev",
     unread: false,
+    expectedMarkedUnreadAt: marker,
   });
   expectChangedBroadcast(read.broadcastToConnIds, {
     sessionKey: "agent:main:discord:group:dev",
     reason: "patch",
     unread: false,
     lastReadAt: expect.any(Number),
+    markedUnreadAt: null,
+    lastActivityAt: 5,
+  });
+
+  const remarked = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: true,
+  });
+  expectChangedBroadcast(remarked.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    unread: true,
+    markedUnreadAt: expect.any(Number),
+  });
+
+  const legacyRead = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: false,
+  });
+  expectChangedBroadcast(legacyRead.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    unread: false,
+    lastReadAt: expect.any(Number),
+    markedUnreadAt: null,
     lastActivityAt: 5,
   });
 });
@@ -1338,7 +1447,11 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     subagentRole: "orchestrator",
     subagentControlScope: "children",
     createdVia: "spawn",
-    createdActor: { type: "agent", id: "agent:main:main" },
+    createdActor: {
+      type: "agent",
+      id: "agent:main:main",
+      identity: { type: "agent", id: "agent:main:main" },
+    },
     createdAt: 1_000,
     forkSource: {
       sessionKey: "agent:main:main",

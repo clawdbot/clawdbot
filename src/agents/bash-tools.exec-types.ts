@@ -21,12 +21,14 @@ import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
+import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.js";
 
 /** Runtime defaults passed into exec/process tool factories. */
 export type ExecToolDefaults = {
   hasCronTool?: boolean;
   host?: ExecTarget;
   mode?: ExecMode;
+  bypassHostApprovalFloors?: boolean;
   security?: ExecSecurity;
   ask?: ExecAsk;
   trigger?: string;
@@ -41,6 +43,8 @@ export type ExecToolDefaults = {
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   reviewer?: ExecReviewerConfig;
   config?: OpenClawConfig;
+  /** Host-prepared non-secret environment and store projection exclusions. */
+  preparedRunEnvironment?: PreparedGitHubToolEnvironment;
   autoReviewer?: ExecAutoReviewer;
   agentId?: string;
   backgroundMs?: number;
@@ -51,8 +55,12 @@ export type ExecToolDefaults = {
   approvalFollowupMode?: "agent" | "direct";
   approvalRunningNoticeMs?: number;
   sandbox?: BashSandboxConfig;
+  /** Immutable session policy that forbids execution outside its provisioned sandbox. */
+  sandboxRequired?: boolean;
   elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;
+  /** Final run-local availability of the process continuation tool. */
+  processToolAvailabilityRef?: { value?: boolean };
   scopeKey?: string;
   sessionKey?: string;
   /** Stable agent run that owns any approval created by this tool. */
@@ -124,8 +132,20 @@ export type ExecElevatedDefaults = {
   fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
 };
 
+/** One model-backed approval review recorded on an exec tool call. */
+export type ExecToolApprovalReview = {
+  id: string;
+  label: string;
+  status: "in_progress" | "approved" | "denied" | "timed_out" | "aborted";
+  riskLevel?: string;
+  rationale?: string;
+};
+
 /** Structured details returned by exec tool calls. */
-export type ExecToolDetails =
+export type ExecToolDetails = {
+  approvalReviews?: readonly ExecToolApprovalReview[];
+  approvalReviewOutcome?: "approved" | "denied" | "reviewing";
+} & (
   | {
       status: "running";
       sessionId: string;
@@ -139,7 +159,7 @@ export type ExecToolDetails =
       exitCode: number | null;
       exitSignal?: NodeJS.Signals | number | null;
       failureKind?: string;
-      reason?: "not-dispatched" | "outcome-unknown";
+      reason?: "not-dispatched" | "outcome-unknown" | "policy-denied";
       nodeInvokeFailure?: {
         failureCode?: string;
         message: string;
@@ -180,4 +200,5 @@ export type ExecToolDetails =
       cwd?: string;
       nodeId?: string;
       warningText?: string;
-    };
+    }
+);

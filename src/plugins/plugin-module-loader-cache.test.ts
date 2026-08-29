@@ -4,12 +4,50 @@ import os from "node:os";
 import path from "node:path";
 import { createRequireRecord, importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  createPluginCache,
+  getPluginCache,
+  resetPluginCache,
+  withPluginCache,
+} from "./plugin-cache.js";
 import type { PluginModuleLoaderFactory } from "./plugin-module-loader-cache.js";
+
+async function importPluginModuleLoader(scope: string) {
+  const actual = await importFreshModule<typeof import("./plugin-module-loader-cache.js")>(
+    import.meta.url,
+    scope,
+  );
+  type LoaderParams = Parameters<typeof actual.getCachedPluginModuleLoader>[0];
+  type Cache = ReturnType<typeof createPluginCache>["moduleLoaders"];
+  const owners = new WeakMap<Cache, ReturnType<typeof createPluginCache>>();
+  const inCache = (params: LoaderParams & { cache: Cache }, sourceOnly = false) => {
+    const { cache, ...options } = params;
+    let owner = owners.get(cache);
+    if (!owner) {
+      owner = createPluginCache();
+      owner.moduleLoaders = cache;
+      owners.set(cache, owner);
+    }
+    return withPluginCache(owner, () =>
+      sourceOnly
+        ? actual.getCachedPluginSourceModuleLoader(options)
+        : actual.getCachedPluginModuleLoader(options),
+    );
+  };
+  return {
+    ...actual,
+    getCachedPluginModuleLoader: (params: LoaderParams & { cache: Cache }) => inCache(params),
+    getCachedPluginSourceModuleLoader: (
+      params: Omit<LoaderParams, "tryNative"> & { cache: Cache },
+    ) => inCache(params, true),
+  };
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("jiti");
+  resetPluginCache();
 });
 
 async function loadCachedPluginModuleLoader(scope: string) {
@@ -20,9 +58,9 @@ async function loadCachedPluginModuleLoader(scope: string) {
     }),
   );
 
-  const pluginModuleLoaderCache = await importFreshModule<
-    typeof import("./plugin-module-loader-cache.js")
-  >(import.meta.url, `./plugin-module-loader-cache.js?scope=${scope}`);
+  const pluginModuleLoaderCache = await importPluginModuleLoader(
+    `./plugin-module-loader-cache.js?scope=${scope}`,
+  );
   const getCachedPluginModuleLoader: typeof pluginModuleLoaderCache.getCachedPluginModuleLoader = (
     params,
   ) =>
@@ -80,6 +118,41 @@ function expectStats(value: unknown, fields: Record<string, unknown>) {
 }
 
 describe("getCachedPluginModuleLoader", () => {
+  it("keeps deferred module construction and evaluation in the creating cache generation", async () => {
+    const { getCachedPluginModuleLoader } = await importFreshModule<
+      typeof import("./plugin-module-loader-cache.js")
+    >(import.meta.url, "./plugin-module-loader-cache.js?scope=retained-loader-generation");
+    const owner = createPluginCache();
+    const other = createPluginCache();
+    const observedOwner: boolean[] = [];
+    const createLoader = asPluginModuleLoaderFactory(() => {
+      observedOwner.push(getPluginCache() === owner);
+      return () => {
+        observedOwner.push(getPluginCache() === owner);
+        return { marker: "retained-generation" };
+      };
+    });
+    const modulePath = "/repo/extensions/retained-generation/index.ts";
+    const loader = withPluginCache(owner, () =>
+      getCachedPluginModuleLoader({
+        modulePath,
+        importerUrl: import.meta.url,
+        aliasMap: {},
+        tryNative: false,
+        createLoader,
+      }),
+    );
+
+    const loaded = withPluginCache(other, () => {
+      const value = loader(modulePath);
+      expect(getPluginCache()).toBe(other);
+      return value;
+    });
+
+    expect(loaded).toEqual({ marker: "retained-generation" });
+    expect(observedOwner).toEqual([true, true]);
+  });
+
   let filenameScopeCase: {
     cacheSize: number;
     firstAliasType: string;
@@ -190,14 +263,10 @@ describe("getCachedPluginModuleLoader", () => {
     expect(cache.size).toBe(2);
   });
 
-  it("creates bounded loader caches", async () => {
+  it("keeps loaders isolated between plugin cache generations", async () => {
     const { createJiti, getCachedPluginModuleLoader } =
       await loadCachedPluginModuleLoader("bounded-loader-cache");
-    const { createPluginModuleLoaderCache } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=bounded-loader-cache-factory");
-
-    const cache = createPluginModuleLoaderCache(1);
+    const cache = new Map();
     const first = getCachedPluginModuleLoader({
       cache,
       modulePath: "/repo/extensions/demo-a/index.ts",
@@ -205,7 +274,7 @@ describe("getCachedPluginModuleLoader", () => {
       loaderFilename: "/repo/extensions/demo-a/index.ts",
     });
     getCachedPluginModuleLoader({
-      cache,
+      cache: new Map(),
       modulePath: "/repo/extensions/demo-b/index.ts",
       importerUrl: "file:///repo/src/plugins/loader.ts",
       loaderFilename: "/repo/extensions/demo-b/index.ts",
@@ -218,7 +287,7 @@ describe("getCachedPluginModuleLoader", () => {
     });
 
     expect(cache.size).toBe(1);
-    expect(reloadedFirst).not.toBe(first);
+    expect(reloadedFirst).toBe(first);
     reloadedFirst("/repo/extensions/demo-a/index.ts");
     expect(createJiti).toHaveBeenCalledOnce();
   });
@@ -433,9 +502,10 @@ describe("getCachedPluginModuleLoader", () => {
         p.endsWith(".js") || p.endsWith(".mjs") || p.endsWith(".cjs"),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
-    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-require-fastpath");
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
+      await importPluginModuleLoader(
+        "./plugin-module-loader-cache.js?scope=native-require-fastpath",
+      );
 
     const cache = new Map();
     const loader = getCachedPluginModuleLoader({
@@ -475,9 +545,10 @@ describe("getCachedPluginModuleLoader", () => {
         p.endsWith(".js") || p.endsWith(".mjs") || p.endsWith(".cjs"),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
-    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-require-plugin-sdk-alias");
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
+      await importPluginModuleLoader(
+        "./plugin-module-loader-cache.js?scope=native-require-plugin-sdk-alias",
+      );
 
     const cache = new Map();
     const loader = getCachedPluginModuleLoader({
@@ -521,9 +592,8 @@ describe("getCachedPluginModuleLoader", () => {
       isJavaScriptModulePath: () => true,
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
-    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-export-cache");
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
+      await importPluginModuleLoader("./plugin-module-loader-cache.js?scope=native-export-cache");
 
     const cache = new Map();
     const loader = getCachedPluginModuleLoader({
@@ -567,9 +637,9 @@ describe("getCachedPluginModuleLoader", () => {
         ].join("\n"),
         "utf8",
       );
-      const { getCachedPluginModuleLoader } = await importFreshModule<
-        typeof import("./plugin-module-loader-cache.js")
-      >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-evaluation-error");
+      const { getCachedPluginModuleLoader } = await importPluginModuleLoader(
+        "./plugin-module-loader-cache.js?scope=native-evaluation-error",
+      );
       const loader = getCachedPluginModuleLoader({
         cache: new Map(),
         modulePath,
@@ -603,9 +673,10 @@ describe("getCachedPluginModuleLoader", () => {
       isJavaScriptModulePath: () => true,
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
-    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-missing-dependency");
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
+      await importPluginModuleLoader(
+        "./plugin-module-loader-cache.js?scope=native-missing-dependency",
+      );
 
     const cache = new Map();
     const loader = getCachedPluginModuleLoader({
@@ -636,9 +707,10 @@ describe("getCachedPluginModuleLoader", () => {
       isJavaScriptModulePath: () => true,
       tryNativeRequireJavaScriptModule: () => ({ ok: false }),
     }));
-    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-require-fallback");
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
+      await importPluginModuleLoader(
+        "./plugin-module-loader-cache.js?scope=native-require-fallback",
+      );
 
     const cache = new Map();
     const loader = getCachedPluginModuleLoader({
@@ -681,9 +753,9 @@ describe("getCachedPluginModuleLoader", () => {
       isJavaScriptModulePath: () => true,
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
-    const { getCachedPluginSourceModuleLoader } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=forced-source-native-fallback");
+    const { getCachedPluginSourceModuleLoader } = await importPluginModuleLoader(
+      "./plugin-module-loader-cache.js?scope=forced-source-native-fallback",
+    );
 
     const loader = getCachedPluginSourceModuleLoader({
       cache: new Map(),
@@ -711,9 +783,9 @@ describe("getCachedPluginModuleLoader", () => {
       isJavaScriptModulePath: () => true,
       tryNativeRequireJavaScriptModule: () => ({ ok: false }),
     }));
-    const { getCachedPluginModuleLoader } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=windows-jiti-paths");
+    const { getCachedPluginModuleLoader } = await importPluginModuleLoader(
+      "./plugin-module-loader-cache.js?scope=windows-jiti-paths",
+    );
 
     const cache = new Map();
     const loader = getCachedPluginModuleLoader({
@@ -747,9 +819,10 @@ describe("getCachedPluginModuleLoader", () => {
       isJavaScriptModulePath: () => true,
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
-    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-require-opt-out");
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
+      await importPluginModuleLoader(
+        "./plugin-module-loader-cache.js?scope=native-require-opt-out",
+      );
 
     const cache = new Map();
     const loader = getCachedPluginModuleLoader({
@@ -792,9 +865,8 @@ describe("getCachedPluginModuleLoader", () => {
       isJavaScriptModulePath: () => true,
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
-    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=source-export-cache");
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
+      await importPluginModuleLoader("./plugin-module-loader-cache.js?scope=source-export-cache");
 
     const cache = new Map();
     const loader = getCachedPluginModuleLoader({
@@ -831,9 +903,9 @@ describe("getCachedPluginModuleLoader", () => {
       isJavaScriptModulePath: () => true,
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
-    const { getCachedPluginModuleLoader } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=windows-jiti-no-native");
+    const { getCachedPluginModuleLoader } = await importPluginModuleLoader(
+      "./plugin-module-loader-cache.js?scope=windows-jiti-no-native",
+    );
 
     const cache = new Map();
     const loader = getCachedPluginModuleLoader({
@@ -854,5 +926,33 @@ describe("getCachedPluginModuleLoader", () => {
     expect(fromSourceTransformer).toHaveBeenCalledWith(
       "file:///C:/Users/alice/openclaw/extensions/feishu/api.ts",
     );
+  });
+});
+
+describe("plugin module cache generation cleanup", () => {
+  it.each([
+    { boundaryRoot: "/repo/dist/extensions/demo", dependencyRoot: "/repo/dist" },
+    { boundaryRoot: "/repo/dist/extensions", dependencyRoot: "/repo/dist" },
+    { boundaryRoot: "/repo/installed/demo", dependencyRoot: "/repo/installed/demo" },
+  ])("evicts native dependencies under $dependencyRoot for $boundaryRoot", async (params) => {
+    const clearNativeRequireJavaScriptModuleCache = vi.fn();
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
+      clearNativeRequireJavaScriptModuleCache,
+    }));
+    const { recordPluginModuleRoot } = await importPluginModuleLoader(
+      "./plugin-module-loader-cache.js?scope=lifecycle-disposal",
+    );
+    const modulePath = "/repo/dist/extensions/demo/api.js";
+    recordPluginModuleRoot(modulePath, params.boundaryRoot);
+    const previous = getPluginCache();
+
+    resetPluginCache();
+
+    expect(clearNativeRequireJavaScriptModuleCache).toHaveBeenCalledWith(modulePath, {
+      dependencyRoot: params.dependencyRoot,
+    });
+    expect(getPluginCache()).not.toBe(previous);
+    expect(getPluginCache().sources.size).toBe(0);
   });
 });

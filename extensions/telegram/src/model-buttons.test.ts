@@ -8,6 +8,7 @@ import {
   calculateTotalPages,
   getModelsPageSize,
   parseModelCallbackData,
+  resolveModelListCallback,
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
@@ -111,6 +112,45 @@ describe("resolveModelSelection", () => {
       matchingProviders: [],
     });
   });
+
+  it("resolves opaque callbacks only against their current authorized provider and model", () => {
+    const provider = "ollama";
+    const model = "xentriom/gemma-4-12B-agentic-fable5-composer2.5-v2:latest";
+    const callback = parseModelCallbackData(buildModelSelectionCallbackData({ provider, model }));
+    expect(callback?.type).toBe("select-ref");
+    if (callback?.type !== "select-ref") {
+      throw new Error("Expected an opaque model callback");
+    }
+
+    expect(
+      resolveModelSelection({
+        callback,
+        providers: [provider, "openai"],
+        byProvider: new Map([
+          [provider, new Set([model])],
+          ["openai", new Set([model])],
+        ]),
+      }),
+    ).toEqual({ kind: "resolved", provider, model });
+    expect(
+      resolveModelSelection({
+        callback,
+        providers: [provider],
+        byProvider: new Map([[provider, new Set(["replacement"])]]),
+      }),
+    ).toEqual({ kind: "ambiguous", model: callback.digest, matchingProviders: [] });
+    expect(
+      resolveModelSelection({
+        callback,
+        providers: [provider, provider],
+        byProvider: new Map([[provider, new Set([model])]]),
+      }),
+    ).toEqual({
+      kind: "ambiguous",
+      model: callback.digest,
+      matchingProviders: [provider, provider],
+    });
+  });
 });
 
 describe("buildModelSelectionCallbackData", () => {
@@ -124,9 +164,48 @@ describe("buildModelSelectionCallbackData", () => {
     );
   });
 
-  it("returns null when even compact callback exceeds Telegram limit", () => {
-    const tooLongModel = "x".repeat(80);
-    expect(buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel })).toBeNull();
+  it("keeps oversized provider-scoped models selectable within Telegram's callback limit", () => {
+    const provider = "ollama";
+    const model = "xentriom/gemma-4-12B-agentic-fable5-composer2.5-v2:latest";
+    expect(Buffer.byteLength(`mdl_sel_${provider}/${model}`, "utf8")).toBe(72);
+    expect(Buffer.byteLength(`mdl_sel/${model}`, "utf8")).toBe(65);
+
+    const callback = buildModelSelectionCallbackData({ provider, model });
+    expect(callback).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
+    expect(Buffer.byteLength(callback ?? "", "utf8")).toBeLessThanOrEqual(64);
+    expect(buildModelSelectionCallbackData({ provider, model })).toBe(callback);
+  });
+
+  it("preserves unambiguous provider ownership for non-legacy provider identifiers", () => {
+    for (const provider of ["~", "team/provider", "研究所", "x".repeat(80)]) {
+      const callback = buildModelSelectionCallbackData({ provider, model: "model" });
+      expect(callback, provider).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
+      expect(Buffer.byteLength(callback, "utf8"), provider).toBeLessThanOrEqual(64);
+    }
+  });
+});
+
+describe("opaque provider list callbacks", () => {
+  it("keeps arbitrary provider identifiers selectable without exceeding Telegram's limit", () => {
+    for (const provider of ["~", "team/provider", "研究所", "x".repeat(80)]) {
+      const callback = buildProviderKeyboard([{ id: provider, count: 1 }])[0]?.[0]?.callback_data;
+      expect(callback, provider).toMatch(/^mdl1~p:[A-Za-z0-9_-]{43}:1$/);
+      expect(Buffer.byteLength(callback ?? "", "utf8"), provider).toBeLessThanOrEqual(64);
+      const parsed = parseModelCallbackData(callback ?? "");
+      expect(parsed?.type).toBe("list-ref");
+      if (parsed?.type === "list-ref") {
+        expect(resolveModelListCallback({ callback: parsed, providers: [provider] })).toEqual({
+          provider,
+          page: 1,
+        });
+        expect(
+          resolveModelListCallback({ callback: parsed, providers: ["other"] }),
+        ).toBeUndefined();
+        expect(
+          resolveModelListCallback({ callback: parsed, providers: [provider, provider] }),
+        ).toBeUndefined();
+      }
+    }
   });
 });
 
@@ -330,37 +409,30 @@ describe("buildModelsKeyboard", () => {
     const cases = [
       {
         name: "first page",
-        params: { currentPage: 1, models: ["model1", "model2"] },
+        currentPage: 1,
         expectedPagination: ["1/3", "Next ▶"],
       },
       {
         name: "middle page",
-        params: {
-          currentPage: 2,
-          models: ["model1", "model2", "model3", "model4", "model5", "model6"],
-        },
+        currentPage: 2,
         expectedPagination: ["◀ Prev", "2/3", "Next ▶"],
       },
       {
         name: "last page",
-        params: {
-          currentPage: 3,
-          models: ["model1", "model2", "model3", "model4", "model5", "model6"],
-        },
+        currentPage: 3,
         expectedPagination: ["◀ Prev", "3/3"],
       },
     ] as const;
+    const models = Array.from({ length: 24 }, (_, index) => `model${index + 1}`);
     for (const testCase of cases) {
       const result = buildModelsKeyboard({
         provider: "anthropic",
-        models: [...testCase.params.models],
-        currentPage: testCase.params.currentPage,
+        models,
+        currentPage: testCase.currentPage,
         totalPages: 3,
-        pageSize: 2,
       });
-      // 2 model rows + pagination row + back button
-      expect(result, testCase.name).toHaveLength(4);
-      expect(result[2]?.map((button) => button.text)).toEqual(testCase.expectedPagination);
+      expect(result, testCase.name).toHaveLength(10);
+      expect(result[8]?.map((button) => button.text)).toEqual(testCase.expectedPagination);
     }
   });
 
@@ -447,13 +519,11 @@ describe("buildBrowseProvidersButton", () => {
   });
 });
 
-describe("getModelsPageSize", () => {
-  it("returns default page size", () => {
+describe("model picker pagination contracts", () => {
+  it("keeps the default page size available to public plugin consumers", () => {
     expect(getModelsPageSize()).toBe(8);
   });
-});
 
-describe("calculateTotalPages", () => {
   it("calculates pages correctly", () => {
     expect(calculateTotalPages(0)).toBe(0);
     expect(calculateTotalPages(1)).toBe(1);
@@ -463,9 +533,18 @@ describe("calculateTotalPages", () => {
     expect(calculateTotalPages(17)).toBe(3);
   });
 
-  it("uses custom page size", () => {
+  it("preserves custom page sizes for public plugin consumers", () => {
     expect(calculateTotalPages(10, 5)).toBe(2);
     expect(calculateTotalPages(11, 5)).toBe(3);
+    expect(
+      buildModelsKeyboard({
+        provider: "openai",
+        models: ["first", "second", "third"],
+        currentPage: 2,
+        totalPages: 2,
+        pageSize: 2,
+      })[0]?.[0]?.text,
+    ).toBe("third");
   });
 });
 
@@ -522,7 +601,7 @@ describe("large model lists (OpenRouter-scale)", () => {
     }
   });
 
-  it("skips models that would exceed callback_data limit", () => {
+  it("keeps models that exceed callback_data limits selectable", () => {
     const models = [
       "short-model",
       "this-is-an-extremely-long-model-name-that-definitely-exceeds-the-sixty-four-byte-limit",
@@ -535,10 +614,10 @@ describe("large model lists (OpenRouter-scale)", () => {
       totalPages: 1,
     });
 
-    // Should have 2 model buttons (skipping the long one) + back
     const modelButtons = result.filter((row) => !row[0]?.callback_data.startsWith("mdl_back"));
-    expect(modelButtons.length).toBe(2);
+    expect(modelButtons.length).toBe(3);
     expect(modelButtons[0]?.[0]?.text).toBe("short-model");
-    expect(modelButtons[1]?.[0]?.text).toBe("another-short");
+    expect(modelButtons[1]?.[0]?.callback_data).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
+    expect(modelButtons[2]?.[0]?.text).toBe("another-short");
   });
 });

@@ -22,6 +22,7 @@ import type { GatewayWsClient } from "../gateway/server/ws-types.js";
 import type { WorkerConnectionIdentity } from "../gateway/worker-environments/connection-identity.js";
 import { hashWorkerCredential } from "../gateway/worker-environments/credential.js";
 import { createWorkerInferenceStore } from "../gateway/worker-environments/inference-store.js";
+import { createWorkerChatProjection } from "../gateway/worker-environments/live-chat.test-support.js";
 import * as liveEvents from "../gateway/worker-environments/live-events.js";
 import { projectWorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
 import * as placements from "../gateway/worker-environments/placement-store.js";
@@ -165,6 +166,7 @@ export class ComposedGatewayHarness {
   readonly requests: Array<{ method: string; params: unknown }> = [];
   readonly admissions: WorkerConnectionIdentity[] = [];
   readonly liveDeltas: string[] = [];
+  readonly chat: ReturnType<typeof createWorkerChatProjection>;
   readonly abandonedServices: workerEnv.WorkerEnvironmentService[] = [];
   providerCalls = 0;
   replacementProviderCalls = 0;
@@ -244,6 +246,7 @@ export class ComposedGatewayHarness {
     this.httpServer = createServer();
     this.webSocketServer = new WebSocketServer({ server: this.httpServer });
     this.webSocketServer.on("connection", (socket) => this.accept(socket));
+    this.chat = createWorkerChatProjection(SESSION_KEY);
     this.unsubscribeLive = onAgentRuntimeEvent((event) => {
       if (typeof event.data.delta === "string") {
         this.liveDeltas.push(event.data.delta);
@@ -260,7 +263,8 @@ export class ComposedGatewayHarness {
   }
 
   async start(): Promise<void> {
-    const listening = once(this.httpServer, "listening");
+    // ws forwards bind errors first; wait there so failed binds reject setup.
+    const listening = once(this.webSocketServer, "listening");
     this.httpServer.listen(this.socketPath);
     await listening;
   }
@@ -355,6 +359,7 @@ export class ComposedGatewayHarness {
   }
 
   hardRestart(): void {
+    this.chat.state.clear();
     this.abandonedServices.push(this.serviceValue);
     this.liveEventsValue.clear();
     this.liveEventsValue = this.createLiveEvents(false);
@@ -455,6 +460,7 @@ export class ComposedGatewayHarness {
     this.liveEventsValue.clear();
     this.unsubscribeLive?.();
     this.unsubscribeLive = undefined;
+    this.chat.dispose();
     await new Promise<void>((resolve) => {
       this.webSocketServer.close(() => resolve());
     });
@@ -657,7 +663,7 @@ export class ComposedGatewayHarness {
           return result;
         },
       } as workerServer.WorkerConnectionService,
-      ingress: "loopback",
+      publicAdmission: { clientIp: "127.0.0.1", rateLimiter: undefined },
       send: (frame) => this.send(socket, frame),
       close: (code = 1000, reason = "") => socket.close(code, reason),
       isClosed: () => closed || socket.readyState === WebSocket.CLOSED,

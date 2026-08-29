@@ -34,6 +34,7 @@ import {
   parseBuzzTarget,
 } from "./target.js";
 import {
+  assertBuzzAccountAvailable,
   listBuzzAccountIds,
   resolveBuzzAccount,
   resolveDefaultBuzzAccountId,
@@ -69,6 +70,11 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
       chatTypes: ["group"],
       threads: true,
     },
+    threading: {
+      // Only automatic replies carry replyDelivery; explicit message-tool targets stay intact.
+      resolveReplyTransport: ({ replyDelivery }) =>
+        replyDelivery?.replyToMode === "off" ? { threadId: null, replyToId: null } : null,
+    },
     agentPrompt: {
       messageToolHints: () => [
         "- Buzz targets: use a configured room UUID, `buzz:<ROOM_UUID>`, or a unique current room name. Use the UUID when room names are ambiguous.",
@@ -91,6 +97,7 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
           extra: {
             baseUrl: account.relayUrl,
             publicKey: account.publicKey,
+            tokenStatus: account.tokenStatus,
           },
         }),
       resolveAllowFrom: ({ cfg, accountId }) =>
@@ -163,11 +170,15 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
           name: account.name,
           enabled: account.enabled,
           configured: account.configured,
-          baseUrl: account.relayUrl,
-          publicKey: account.publicKey,
+          extra: {
+            baseUrl: account.relayUrl,
+            publicKey: account.publicKey,
+            tokenStatus: account.tokenStatus,
+          },
         }),
       }),
       probeAccount: async ({ account, timeoutMs }) => {
+        assertBuzzAccountAvailable(account);
         const rooms = await discoverBuzzRooms({
           relayUrl: account.relayUrl,
           privateKey: account.privateKey,

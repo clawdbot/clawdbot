@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
-  drainPendingSessionDeliveries,
+  drainPendingSessionDelivery,
   recoverPendingSessionDeliveries,
 } from "./session-delivery-queue-recovery.js";
 import {
@@ -37,13 +37,12 @@ describe("session-delivery recovery persistence", () => {
           const recovery =
             mode === "startup"
               ? recoverPendingSessionDeliveries({ deliver, stateDir: tempDir, log })
-              : drainPendingSessionDeliveries({
-                  drainKey: "test-read-only-retry-persistence",
+              : drainPendingSessionDelivery({
+                  id,
                   logLabel: "test read-only retry persistence",
                   deliver,
                   stateDir: tempDir,
                   log,
-                  selectEntry: (entry) => ({ match: entry.id === id }),
                 });
 
           await expect(recovery).rejects.toThrow(/readonly/iu);

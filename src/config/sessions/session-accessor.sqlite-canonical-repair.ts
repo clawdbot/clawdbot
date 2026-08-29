@@ -8,8 +8,6 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { listSqliteSessionEntriesWithCanonicalOwnerEvidence } from "./session-accessor.sqlite-canonical-inventory.js";
-import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { readSessionGenerationIdsForKeys } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
@@ -26,7 +24,6 @@ import {
 import { bindSessionWindowEntryProjection } from "./session-accessor.sqlite-session-row.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { ensureTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import {
   deleteSessionTranscriptIndexInTransaction,
@@ -36,12 +33,6 @@ import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
 // Doctor-only cross-store transfer. Runtime readers never reconcile aliases.
-
-export function listSqliteSessionEntriesForCanonicalRepair(
-  scope: SessionEntryListScope = {},
-): Array<SessionEntrySummary & { rawEntryJson?: string }> {
-  return listSqliteSessionEntriesWithCanonicalOwnerEvidence(scope);
-}
 
 function resolveSqliteCanonicalRepairLookupKeys(
   canonicalKey: string,
@@ -478,7 +469,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
     if (!replaced) {
       continue;
     }
-    // Search and active-event tables are derived from transcript_events; force their canonical rebuild.
+    // Doctor repair runs outside gateway requests and must atomically finish copied projections.
     deleteSessionTranscriptIndexInTransaction(params.destination.db, sessionId);
     reconcileSessionTranscriptIndexInTransaction(params.destination.db, sessionId);
     publishSessionEntryCacheInvalidation(params.destination);
@@ -498,6 +489,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
     params.destination,
     params.preferredSessionKey ? [params.preferredSessionKey] : sourceKeys,
     params.canonicalKey,
+    { includeParticipants: false },
   );
 }
 

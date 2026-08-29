@@ -18,6 +18,7 @@ vi.mock("./llama-server-install.js", async (importOriginal) => ({
 import { selectLlamaServerAsset } from "./llama-server-install.js";
 import {
   ensureLlamaCppModel,
+  ensureManagedLlamaServerForChat,
   inspectLlamaServerRuntime,
   prepareManagedLlamaServer,
 } from "./managed-server.js";
@@ -38,21 +39,67 @@ afterEach(async () => {
 
 describe("managed llama-server", () => {
   it.each([
-    ["darwin", "arm64", "metal", "tar.gz"],
-    ["darwin", "x64", "cpu", "tar.gz"],
-    ["linux", "arm64", "cpu", "tar.gz"],
-    ["linux", "x64", "cpu", "tar.gz"],
-    ["win32", "arm64", "cpu", "zip"],
-    ["win32", "x64", "cpu", "zip"],
-  ] as const)("selects the pinned %s/%s asset", (platform, arch, backend, archive) => {
-    expect(selectLlamaServerAsset(platform, arch)).toMatchObject({
-      platform,
-      arch,
-      backend,
-      archive,
-      sha256: expect.stringMatching(/^[a-f\d]{64}$/u),
-    });
-  });
+    [
+      "darwin",
+      "arm64",
+      "metal",
+      "tar.gz",
+      "llama-b10534-bin-macos-arm64.tar.gz",
+      "51f193eef26b053554e288fb924b24d41d3d7b2bafa338c19e2817fa793d5e86",
+    ],
+    [
+      "darwin",
+      "x64",
+      "cpu",
+      "tar.gz",
+      "llama-b10534-bin-macos-x64.tar.gz",
+      "69b13035f4301354922a8cfacd1bcf2bb2de4ff0c2e19fedb44963378ff53dc5",
+    ],
+    [
+      "linux",
+      "arm64",
+      "cpu",
+      "tar.gz",
+      "llama-b10534-bin-ubuntu-arm64.tar.gz",
+      "66535de5cb9293c075a1951c51a3b2ae6f1899623e21177845f6d2a73b78c94e",
+    ],
+    [
+      "linux",
+      "x64",
+      "cpu",
+      "tar.gz",
+      "llama-b10534-bin-ubuntu-x64.tar.gz",
+      "cc6a12b026edcf1b211be2bb7366c5dadcad778fd8f13019d0694038053d5e4a",
+    ],
+    [
+      "win32",
+      "arm64",
+      "cpu",
+      "zip",
+      "llama-b10534-bin-win-cpu-arm64.zip",
+      "d33618b10fda35d34d85da60926c6c470f98f3f66ce6b52c3c1f583461416012",
+    ],
+    [
+      "win32",
+      "x64",
+      "cpu",
+      "zip",
+      "llama-b10534-bin-win-cpu-x64.zip",
+      "295ae03ad58d9276afa36f5f8d111d67fc1491c7aff3a3e6d13051a772f93c21",
+    ],
+  ] as const)(
+    "selects the pinned %s/%s asset",
+    (platform, arch, backend, archive, name, sha256) => {
+      expect(selectLlamaServerAsset(platform, arch)).toMatchObject({
+        platform,
+        arch,
+        backend,
+        archive,
+        name,
+        sha256,
+      });
+    },
+  );
 
   it("fails unsupported platforms with an actionable manual path", () => {
     expect(() => selectLlamaServerAsset("freebsd", "x64")).toThrow(
@@ -60,7 +107,7 @@ describe("managed llama-server", () => {
     );
   });
 
-  it("writes separate chat and embedding presets without unwired capabilities", async () => {
+  it("writes a 2048-token physical batch in the combined preset", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-preset-"));
     const presetPath = path.join(tempRoot, "models.ini");
     const asset = selectLlamaServerAsset("darwin", "arm64");
@@ -76,19 +123,111 @@ describe("managed llama-server", () => {
 
     try {
       await prepareManagedLlamaServer({
-        chatModelId: "chat-model",
-        chatModelPath: "/models/chat.gguf",
-        contextSize: 8192,
-        maxTokens: 2048,
+        chatModel: {
+          mode: "configure",
+          id: "chat-model",
+          path: "/models/chat.gguf",
+          contextSize: 8192,
+          maxTokens: 2048,
+        },
+        embeddingModelIsDefault: true,
         embeddingModelPath: "/models/embedding.gguf",
         port: 19_432,
       });
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toContain("[chat-model]\nmodel = /models/chat.gguf\nctx-size = 8192");
       expect(preset).toContain(
-        "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nembedding = true",
+        "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true",
       );
       expect(preset).not.toMatch(/mmproj|draft/iu);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves the llama.cpp physical batch default for a custom embedding model", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-embedding-only-"));
+    const presetPath = path.join(tempRoot, "models.ini");
+    const asset = selectLlamaServerAsset("darwin", "arm64");
+    installMocks.ensureLlamaServerInstalled.mockResolvedValue({
+      command: path.join(tempRoot, "llama-server"),
+      asset,
+    });
+    installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
+      installDir: tempRoot,
+      command: path.join(tempRoot, "llama-server"),
+      presetPath,
+    });
+
+    try {
+      await fs.writeFile(
+        presetPath,
+        "version = 1\n\n[stale-chat]\nmodel = /models/stale-chat.gguf\n\n" +
+          "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/old-embedding.gguf\nembedding = true\n",
+      );
+      await prepareManagedLlamaServer({
+        chatModel: { mode: "remove" },
+        embeddingModelPath: "/models/custom-embedding.gguf",
+        port: 19_432,
+      });
+      const preset = await fs.readFile(presetPath, "utf8");
+      expect(preset).toBe(
+        "version = 1\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\n",
+      );
+      expect(preset).not.toContain("jinja");
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a custom embedding model when chat prepares the shared restart preset", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-chat-preset-"));
+    const presetPath = path.join(tempRoot, "models.ini");
+    const chatModelPath = path.join(tempRoot, "chat.gguf");
+    const embeddingModelPath = path.join(tempRoot, "custom-embedding.gguf");
+    const asset = selectLlamaServerAsset("darwin", "arm64");
+    installMocks.ensureLlamaServerInstalled.mockResolvedValue({
+      command: path.join(tempRoot, "llama-server"),
+      asset,
+    });
+    installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
+      installDir: tempRoot,
+      command: path.join(tempRoot, "llama-server"),
+      presetPath,
+    });
+
+    try {
+      await Promise.all([
+        fs.writeFile(chatModelPath, "GGUF"),
+        fs.writeFile(embeddingModelPath, "GGUF"),
+      ]);
+      await Promise.all([
+        prepareManagedLlamaServer({
+          chatModel: { mode: "preserve" },
+          embeddingModelPath,
+          port: 19_434,
+        }),
+        ensureManagedLlamaServerForChat({
+          provider: {
+            baseUrl: "http://127.0.0.1:19434/v1",
+            localService: { command: path.join(tempRoot, "llama-server"), args: [] },
+            models: [],
+            params: { modelCacheDir: tempRoot },
+          },
+          model: {
+            id: "chat-model",
+            params: { modelPath: chatModelPath, contextSize: 8192 },
+            maxTokens: 2048,
+          },
+        }),
+      ]);
+
+      const preset = await fs.readFile(presetPath, "utf8");
+      expect(preset).toContain(`[chat-model]\nmodel = ${chatModelPath}\nctx-size = 8192`);
+      expect(preset).toContain(
+        `[embeddinggemma-300m-qat-q8_0]\nmodel = ${embeddingModelPath}\nembedding = true`,
+      );
+      expect(preset).not.toContain("ubatch-size");
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }

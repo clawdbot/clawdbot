@@ -14,16 +14,14 @@ type MessageReceiptInputResult = MessageReceiptSourceResult & {
   receipt?: MessageReceipt;
 };
 
-function resolveReceiptMessageId(result: MessageReceiptInputResult): string | undefined {
+const normalizeIdentity = (value: string | undefined): string | undefined =>
+  value?.trim() || undefined;
+
+export function resolveReceiptSourceId(result: MessageReceiptInputResult): string | undefined {
   return (
-    result.messageId ||
-    result.target?.id ||
-    result.chatId ||
-    result.channelId ||
-    result.roomId ||
-    result.conversationId ||
-    result.toJid ||
-    result.pollId
+    normalizeIdentity(result.messageId) ??
+    (result.receipt ? resolveMessageReceiptPrimaryId(result.receipt) : undefined) ??
+    normalizeIdentity(result.pollId)
   );
 }
 
@@ -42,14 +40,27 @@ export function createMessageReceiptFromOutboundResults(params: {
   replyToId?: string;
   sentAt?: number;
 }): MessageReceipt {
+  const requestedThreadId = normalizeIdentity(params.threadId);
+  const providerThreadIds = normalizeUniqueStringEntries(
+    params.results.flatMap(({ receipt }) =>
+      receipt?.parts.length
+        ? receipt.parts.flatMap(
+            (part) => normalizeIdentity(part.threadId) ?? normalizeIdentity(receipt.threadId) ?? [],
+          )
+        : (normalizeIdentity(receipt?.threadId) ?? []),
+    ),
+  );
+  const aggregateThreadId =
+    providerThreadIds.length > 1 ? undefined : (providerThreadIds[0] ?? requestedThreadId);
   const parts = params.results.flatMap((result, resultIndex) => {
     if (result.receipt) {
+      const receiptThreadId = normalizeIdentity(result.receipt.threadId) ?? requestedThreadId;
       if (result.receipt.parts.length === 0) {
         return result.receipt.platformMessageIds.map((platformMessageId, partIndex) => ({
           platformMessageId,
           kind: params.kind ?? "unknown",
           index: partIndex,
-          ...(params.threadId ? { threadId: params.threadId } : {}),
+          ...(receiptThreadId ? { threadId: receiptThreadId } : {}),
           ...(params.replyToId ? { replyToId: params.replyToId } : {}),
         }));
       }
@@ -59,13 +70,15 @@ export function createMessageReceiptFromOutboundResults(params: {
       return result.receipt.parts.map((part, partIndex) => ({
         ...part,
         index: part.index ?? partIndex,
-        ...(part.threadId || !params.threadId ? {} : { threadId: params.threadId }),
+        ...(normalizeIdentity(part.threadId) || !receiptThreadId
+          ? {}
+          : { threadId: receiptThreadId }),
         ...(part.replyToId || !params.replyToId || hasPartReplyMetadata
           ? {}
           : { replyToId: params.replyToId }),
       }));
     }
-    const platformMessageId = resolveReceiptMessageId(result);
+    const platformMessageId = resolveReceiptSourceId(result);
     if (!platformMessageId) {
       return [];
     }
@@ -74,7 +87,7 @@ export function createMessageReceiptFromOutboundResults(params: {
         platformMessageId,
         kind: params.kind ?? "unknown",
         index: resultIndex,
-        ...(params.threadId ? { threadId: params.threadId } : {}),
+        ...(requestedThreadId ? { threadId: requestedThreadId } : {}),
         ...(params.replyToId ? { replyToId: params.replyToId } : {}),
         raw: result,
       },
@@ -92,16 +105,14 @@ export function createMessageReceiptFromOutboundResults(params: {
       }
       continue;
     }
-    appendUnique(platformMessageIds, resolveReceiptMessageId(result));
+    appendUnique(platformMessageIds, resolveReceiptSourceId(result));
   }
   const firstNestedReceipt = params.results.find((result) => result.receipt)?.receipt;
   return {
     ...(platformMessageIds[0] ? { primaryPlatformMessageId: platformMessageIds[0] } : {}),
     platformMessageIds,
     parts,
-    ...((params.threadId ?? firstNestedReceipt?.threadId)
-      ? { threadId: params.threadId ?? firstNestedReceipt?.threadId }
-      : {}),
+    ...(aggregateThreadId ? { threadId: aggregateThreadId } : {}),
     ...((params.replyToId ?? firstNestedReceipt?.replyToId)
       ? { replyToId: params.replyToId ?? firstNestedReceipt?.replyToId }
       : {}),
@@ -117,9 +128,28 @@ export function listMessageReceiptPlatformIds(receipt: MessageReceipt): string[]
 
 /** Resolves the explicit primary platform id, falling back to the first unique receipt id. */
 export function resolveMessageReceiptPrimaryId(receipt: MessageReceipt): string | undefined {
-  const primary = receipt.primaryPlatformMessageId?.trim();
+  const primary = normalizeIdentity(receipt.primaryPlatformMessageId);
   if (primary) {
     return primary;
   }
-  return listMessageReceiptPlatformIds(receipt)[0];
+  return (
+    listMessageReceiptPlatformIds(receipt)[0] ??
+    receipt.parts.map((part) => normalizeIdentity(part.platformMessageId)).find(Boolean)
+  );
+}
+
+/** Resolves provider-owned thread placement without collapsing conflicting receipt parts. */
+export function resolveMessageReceiptThreadId(
+  receipt: MessageReceipt,
+  requestedThreadId?: string,
+): string | undefined {
+  const partThreadIds = normalizeUniqueStringEntries(
+    receipt.parts.flatMap((part) => normalizeIdentity(part.threadId) ?? []),
+  );
+  if (partThreadIds.length > 1) {
+    return undefined;
+  }
+  return (
+    partThreadIds[0] ?? normalizeIdentity(receipt.threadId) ?? normalizeIdentity(requestedThreadId)
+  );
 }

@@ -46,10 +46,20 @@ const sessionEntryKeepsBaselineClaimPrivate: "sessionDiffBaselineCapture" extend
   ? false
   : true = true;
 void sessionEntryKeepsBaselineClaimPrivate;
+const sessionEntryKeepsThinkingSelectionPrivate: "thinkingLevelSelection" extends keyof SessionEntry
+  ? false
+  : true = true;
+void sessionEntryKeepsThinkingSelectionPrivate;
+const sessionFallbackKeepsThinkingSelectionPrivate: "prevThinkingLevelSelection" extends keyof NonNullable<
+  SessionEntry["modelFallback"]
+>
+  ? false
+  : true = true;
+void sessionFallbackKeepsThinkingSelectionPrivate;
 
 describe("plugin session writer claim projection", () => {
-  it("excludes the durable writer claim from entries and patches", () => {
-    const entry: InternalSessionEntry = {
+  it("excludes private claims and retired thinking provenance from entries and patches", () => {
+    const entry = {
       activeWriterRunId: "run-writer",
       lifecycleRunId: "run-lifecycle",
       sessionDiffBaselineCapture: {
@@ -58,12 +68,26 @@ describe("plugin session writer claim projection", () => {
         status: "pending",
       },
       model: "gpt-5.6",
+      modelFallback: {
+        prevModel: "gpt-5.5",
+        prevProvider: "openai",
+        prevThinkingLevelSelection: { retired: true },
+        source: "agent-patch",
+        ts: 1,
+      },
       sessionId: "session-writer",
+      thinkingLevelSelection: { retired: true },
       updatedAt: 10,
-    };
+    } as unknown as InternalSessionEntry;
 
     expect(projectPluginSessionEntry(entry)).toEqual({
       model: "gpt-5.6",
+      modelFallback: {
+        prevModel: "gpt-5.5",
+        prevProvider: "openai",
+        source: "agent-patch",
+        ts: 1,
+      },
       sessionId: "session-writer",
       updatedAt: 10,
     });
@@ -77,8 +101,24 @@ describe("plugin session writer claim projection", () => {
           status: "pending",
         },
         model: "gpt-5.5",
-      }),
-    ).toEqual({ model: "gpt-5.5" });
+        modelFallback: {
+          prevModel: "gpt-5.4",
+          prevProvider: "openai",
+          prevThinkingLevelSelection: { retired: true },
+          source: "agent-patch",
+          ts: 2,
+        },
+        thinkingLevelSelection: { retired: true },
+      } as unknown as Partial<InternalSessionEntry>),
+    ).toEqual({
+      model: "gpt-5.5",
+      modelFallback: {
+        prevModel: "gpt-5.4",
+        prevProvider: "openai",
+        source: "agent-patch",
+        ts: 2,
+      },
+    });
   });
 
   it("preserves private generation fields when patches and upserts omit lifecycle revision", async () => {

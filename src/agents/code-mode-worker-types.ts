@@ -4,7 +4,6 @@ import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 type CodeModeBridgeMethod =
   | "search"
   | "describe"
-  | "call"
   | "callValue"
   | "nodes"
   | "yield"

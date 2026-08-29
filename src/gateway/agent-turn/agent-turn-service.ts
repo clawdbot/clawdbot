@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, type AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
@@ -9,7 +10,9 @@ import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import { discardPreparedInboundMedia, type OffloadedRef } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { createCronContinuationController } from "../server-methods/agent-cron-continuation.js";
 import { runAgentResetPhase } from "../server-methods/agent-reset-phase.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
@@ -39,10 +42,6 @@ type AgentTurnStartRequest = {
   onRunObserved?: (runId: string) => void;
 };
 
-function createAcceptanceRespond(io: AgentTurnIo): RespondFn {
-  return (ok, payload, error, meta) => io.emitAcceptance([ok, payload, error], meta);
-}
-
 function replayAgentTurnIfCached(params: {
   preflight: AgentRequestPreflight;
   context: GatewayRequestHandlerOptions["context"];
@@ -57,18 +56,11 @@ function replayAgentTurnIfCached(params: {
     return false;
   }
   if (cached.ok && isAcceptedAgentDedupePayload(cached.payload)) {
-    const cachedRunId =
-      typeof cached.payload.runId === "string" && cached.payload.runId.trim()
-        ? cached.payload.runId.trim()
-        : runId;
-    const cachedSessionKey =
-      typeof cached.payload.sessionKey === "string" && cached.payload.sessionKey.trim()
-        ? cached.payload.sessionKey.trim()
-        : undefined;
-    const cachedAgentId =
-      typeof cached.payload.agentId === "string" && cached.payload.agentId.trim()
-        ? cached.payload.agentId.trim()
-        : undefined;
+    const cachedRunId = normalizeOptionalString(cached.payload.runId) ?? runId;
+    const cachedSessionKey = normalizeOptionalString(cached.payload.sessionKey);
+    const cachedAgentId = normalizeOptionalString(cached.payload.agentId);
+    const cachedRuntime = asOptionalRecord(cached.payload.runtime);
+    const admissionPending = typeof cached.payload.reservationId === "string";
     params.io.emitAcceptance(
       [
         true,
@@ -77,6 +69,8 @@ function replayAgentTurnIfCached(params: {
           status: "in_flight" as const,
           ...(cachedSessionKey ? { sessionKey: cachedSessionKey } : {}),
           ...(cachedAgentId ? { agentId: cachedAgentId } : {}),
+          ...(cachedRuntime ? { runtime: cachedRuntime } : {}),
+          ...(admissionPending ? { admissionPending: true } : {}),
         },
         undefined,
       ],
@@ -88,20 +82,22 @@ function replayAgentTurnIfCached(params: {
   return true;
 }
 
-export function createAgentTurnService({
-  context,
-  isWebchatConnect,
-}: Pick<GatewayRequestHandlerOptions, "context" | "isWebchatConnect">) {
+export function createAgentTurnService(
+  { context, isWebchatConnect }: Pick<GatewayRequestHandlerOptions, "context" | "isWebchatConnect">,
+  assertContextCurrent?: () => void,
+) {
   const startTurn = async ({
     preflight,
     principal,
     io,
     onRunObserved,
   }: AgentTurnStartRequest): Promise<void> => {
+    const promptedAt = Date.now();
     if (replayAgentTurnIfCached({ preflight, context, io })) {
       return;
     }
-    const respond = createAcceptanceRespond(io);
+    const respond: RespondFn = (ok, payload, error, meta) =>
+      io.emitAcceptance([ok, payload, error], meta);
     const {
       request,
       cfg,
@@ -181,6 +177,7 @@ export function createAgentTurnService({
     let agentId = routing.agentId;
     let requestedSessionKey = routing.requestedSessionKey;
     let gatewayAdmissionTransferred = false;
+    let preparedOffloadedRefs: OffloadedRef[] = [];
     let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
     let releaseGatewayAdmission = () => {};
     const cronContinuation = createCronContinuationController({
@@ -212,6 +209,7 @@ export function createAgentTurnService({
       if (!content) {
         return;
       }
+      preparedOffloadedRefs = content.offloadedRefs;
       agentId = content.agentId;
       requestedSessionKey = content.requestedSessionKey;
       // Participation is authorized below against the canonical session the run
@@ -247,6 +245,7 @@ export function createAgentTurnService({
       let supersededSessionId: string | undefined;
       let skipAgentInitialSessionTouch = false;
       let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
+      let resolvedStorePath: string | undefined;
       let admittedSessionId = resolvedSessionId ?? runId;
       const admissionController = createAgentAdmissionController({
         cfg,
@@ -340,17 +339,24 @@ export function createAgentTurnService({
           failedSessionTranscriptMissing: resolveFailedSessionTranscriptMissingForEntry,
         } = preparedSession;
         cfgForAgent = cfgLocal;
+        resolvedStorePath = storePath;
         // Authorize the canonical session the run will actually target — covering
         // keyless requests whose default/effective session is resolved only here —
         // before any run side effects (admission, dispatch).
-        const sharingError = authorizeResolvedSessionMutation({
-          cfg: cfgLocal,
-          client: principal,
-          sessionKey: canonicalKey,
-          agentId: canonicalSessionAgentId,
-        });
-        if (sharingError) {
-          io.emitAcceptance([false, undefined, sharingError]);
+        const sessionAuthorizationError =
+          authorizeGatewaySessionCreation({
+            cfg: cfgLocal,
+            client: principal,
+            agentId: canonicalSessionAgentId,
+          }) ??
+          authorizeResolvedSessionMutation({
+            cfg: cfgLocal,
+            client: principal,
+            sessionKey: canonicalKey,
+            agentId: canonicalSessionAgentId,
+          });
+        if (sessionAuthorizationError) {
+          io.emitAcceptance([false, undefined, sessionAuthorizationError]);
           return;
         }
         effectiveBootstrapContextRunKind = preparedSession.effectiveBootstrapContextRunKind;
@@ -367,6 +373,7 @@ export function createAgentTurnService({
           // string and numeric threadIds (e.g., Matrix uses integers).
           threadId: recipientThreadId,
         });
+        const explicitSessionKey = normalizeOptionalString(request.sessionKey);
         const buildSessionPatch = (freshEntry: SessionEntry | undefined) =>
           buildAgentSessionPatch({
             freshEntry,
@@ -378,6 +385,7 @@ export function createAgentTurnService({
             normalizedSpawned,
             requestDeliveryHint,
             requestLabel: request.label,
+            ...(explicitSessionKey ? { explicitSessionKey } : {}),
             pluginOwnerId:
               freshEntry === undefined
                 ? normalizeOptionalString(principal?.internal?.pluginRuntimeOwnerId)
@@ -426,6 +434,12 @@ export function createAgentTurnService({
           sessionAgentId,
           mainSessionKey,
           creation: resolveAgentRunSessionCreation(principal),
+          ...(principal?.authenticatedUserProfile
+            ? { requestingOperatorProfileId: principal.authenticatedUserProfile.profileId }
+            : {}),
+          ...(principal?.internal?.operatorRoleActor
+            ? { operatorRoleActor: principal.internal.operatorRoleActor }
+            : {}),
           lifecycleGeneration,
           isRestartRecoveryResumeRun,
           runId,
@@ -506,6 +520,7 @@ export function createAgentTurnService({
       const { activeSessionAgentId } = delivery;
 
       const preparedDispatch = await prepareAgentRunDispatch({
+        promptedAt,
         request,
         cfg,
         cfgForAgent,
@@ -536,6 +551,9 @@ export function createAgentTurnService({
         effectiveTranscriptInputText,
         images,
         offloadedRefs,
+        onUserTurnMediaPersisted: () => {
+          preparedOffloadedRefs = [];
+        },
         requestedPromptPersistenceSuppression,
         runId,
         agentDedupeKeys,
@@ -557,10 +575,14 @@ export function createAgentTurnService({
         return;
       }
       resolvedSessionId = admittedSessionId;
+      // The prepared dispatch now owns either transcript-persisted media or its
+      // closed unpersisted ref set; admission must not retain a second owner.
+      preparedOffloadedRefs = [];
       gatewayAdmissionTransferred = true;
       // This captures ambient root admission synchronously, then settles the final
       // frame on the existing detached chain after the router returns its acceptance.
       startAgentRunExecution({
+        assertContextCurrent,
         prepared: preparedDispatch,
         mainRestartRecoveryOwnerLease,
         request,
@@ -570,6 +592,7 @@ export function createAgentTurnService({
         resolvedSessionKey,
         requestedSessionKey,
         resolvedSessionId,
+        storePath: resolvedStorePath,
         agentId,
         activeSessionAgentId,
         delivery,
@@ -622,6 +645,7 @@ export function createAgentTurnService({
           }
         }
       } finally {
+        await discardPreparedInboundMedia(preparedOffloadedRefs);
         clearUnacceptedAgentDedupe();
       }
     }
