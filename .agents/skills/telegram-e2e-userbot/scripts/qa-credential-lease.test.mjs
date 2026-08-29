@@ -100,6 +100,26 @@ test("rejects a partial explicit broker configuration instead of mixing sources"
   assert.equal(cliCalls, 0);
 });
 
+test("does not call the broker when Convex CLI access is rejected", async () => {
+  let brokerCalls = 0;
+  await assert.rejects(
+    acquireQaLease({
+      kind: "telegram-test-userbot",
+      env: {},
+      convexProjectDir: "/repo/qa/convex-credential-broker",
+      runConvexCliImpl: async () => {
+        throw new Error("Convex access denied.");
+      },
+      fetchImpl: async () => {
+        brokerCalls += 1;
+        return Response.json({ status: "ok" });
+      },
+    }),
+    /Could not load the QA broker through the installed Convex CLI/u,
+  );
+  assert.equal(brokerCalls, 0);
+});
+
 test("rejects remote cleartext broker URLs before fetch", async () => {
   let fetchCalls = 0;
   await assert.rejects(
