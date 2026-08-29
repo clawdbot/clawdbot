@@ -193,6 +193,7 @@ export function createCodexAttemptServerRequestController(
       const toolArgs = sanitizeCodexToolArguments(call.arguments);
       const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
       const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool, toolArgs);
+      const hideFromChannelProgress = toolBridge.hideFromChannelProgressForTool(call.tool) === true;
       if (shouldEmitDynamicToolProgress) {
         void emitCodexAppServerEvent(params, {
           stream: "tool",
@@ -204,6 +205,7 @@ export function createCodexAttemptServerRequestController(
             toolCallId: call.callId,
             ...(toolMeta ? { meta: toolMeta } : {}),
             ...(toolArgs ? { args: toolArgs } : {}),
+            ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
             ...(commandBearing ? { commandBearing: true } : {}),
           },
         });
@@ -311,6 +313,7 @@ export function createCodexAttemptServerRequestController(
               toolCallId: call.callId,
               ...(toolMeta ? { meta: toolMeta } : {}),
               ...(commandBearing ? { commandBearing: true } : {}),
+              ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
               isError: !protocolResponse.success,
               result: toTranscriptToolResult(progressResponse),
             },

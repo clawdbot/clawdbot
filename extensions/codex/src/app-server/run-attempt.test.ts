@@ -1837,6 +1837,69 @@ describe("runCodexAppServerAttempt", () => {
       .map((event) => event.data?.phase);
     expect(toolPhases).toEqual(["start", "result"]);
   });
+
+  it("preserves channel-progress visibility for Codex dynamic tool events", async () => {
+    const hiddenTool = {
+      ...createRuntimeDynamicTool("hidden_widget"),
+      hideFromChannelProgress: true,
+    };
+    const visibleTool = createRuntimeDynamicTool("visible_widget");
+    testing.setOpenClawCodingToolsFactoryForTests(() => [hiddenTool, visibleTool]);
+    const sessionFile = path.join(tempDir, "session-tool-visibility.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-tool-visibility");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    const onRunAgentEvent = vi.fn();
+    params.onAgentEvent = onRunAgentEvent;
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    for (const [tool, callId] of [
+      ["hidden_widget", "call-hidden"],
+      ["visible_widget", "call-visible"],
+    ] as const) {
+      await expect(
+        harness.handleServerRequest({
+          id: `request-${callId}`,
+          method: "item/tool/call",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId,
+            namespace: null,
+            tool,
+            arguments: {},
+          },
+        }),
+      ).resolves.toMatchObject({ success: true });
+    }
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    const toolEvents = onRunAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter(
+        (event) =>
+          event.stream === "tool" &&
+          (event.data?.name === "hidden_widget" || event.data?.name === "visible_widget"),
+      );
+    expect(toolEvents.map((event) => [event.data?.name, event.data?.phase])).toEqual([
+      ["hidden_widget", "start"],
+      ["hidden_widget", "result"],
+      ["visible_widget", "start"],
+      ["visible_widget", "result"],
+    ]);
+    for (const toolEvent of toolEvents.filter((event) => event.data?.name === "hidden_widget")) {
+      expect(toolEvent.data).toMatchObject({ hideFromChannelProgress: true });
+    }
+    for (const toolEvent of toolEvents.filter((event) => event.data?.name === "visible_widget")) {
+      expect(toolEvent.data).not.toHaveProperty("hideFromChannelProgress");
+    }
+  });
+
   it("keeps leading delivery hints out of the Codex current user request", async () => {
     for (const [index, deliveryHint] of MESSAGE_TOOL_DELIVERY_HINTS.entries()) {
       // Bindings are keyed by session identity, so the previous iteration's

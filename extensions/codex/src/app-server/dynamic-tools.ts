@@ -410,6 +410,7 @@ export type CodexDynamicToolBridge = {
   availableSpecs: CodexDynamicToolSpec[];
   specs: CodexDynamicToolSpec[];
   resultContentSourceForTool: (toolName: string) => AnyAgentTool["resultContentSource"];
+  hideFromChannelProgressForTool: (toolName: string) => AnyAgentTool["hideFromChannelProgress"];
   sideEffectOwnerKeyForTool: (toolName: string) => string | undefined;
   handleToolCall: (
     params: CodexDynamicToolCallParams,
@@ -606,6 +607,8 @@ export function createCodexDynamicToolBridge(params: {
       directToolNames,
     }),
     resultContentSourceForTool: (toolName) => toolMap.get(toolName)?.tool.resultContentSource,
+    hideFromChannelProgressForTool: (toolName) =>
+      toolMap.get(toolName)?.tool.hideFromChannelProgress,
     sideEffectOwnerKeyForTool: (toolName) => {
       const tool = toolMap.get(toolName)?.tool;
       return tool ? getPluginToolSideEffectOwnerKey(tool) : undefined;
