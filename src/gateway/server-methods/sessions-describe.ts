@@ -1,6 +1,7 @@
 import { validateSessionsDescribeParams } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { buildGatewaySessionRow } from "../session-utils.js";
+import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
 import { readSessionPlacementFields } from "./session-placement-read-projection.js";
 import { loadSessionEntriesForTarget, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -31,9 +32,9 @@ export const handleSessionsDescribe: GatewayRequestHandlers["sessions.describe"]
   if (!entry) {
     return respond(true, { session: null }, undefined);
   }
-  const modelCatalog = await context
-    .loadGatewayModelCatalog({ agentId: target.agentId })
-    .catch(() => undefined);
+  const modelCatalog = await readPreparedServerMethodModelCatalog(context, {
+    agentId: target.agentId,
+  });
   const row = buildGatewaySessionRow({
     cfg,
     storePath,

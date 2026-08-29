@@ -342,7 +342,7 @@ test("sessions.describe preserves model-derived reasoning metadata", async () =>
     { agentId: "main", sessionKey, storePath: resolveStorePath(undefined, { agentId: "main" }) },
     { sessionId: "session-model-reasoning-describe", updatedAt: 42 },
   );
-  const loadGatewayModelCatalog = vi.fn(async () => [
+  const readPreparedGatewayModelCatalog = vi.fn(async () => [
     {
       provider: "anthropic",
       id: "claude-opus-4-8",
@@ -350,18 +350,28 @@ test("sessions.describe preserves model-derived reasoning metadata", async () =>
       reasoning: true,
     },
   ]);
+  const loadGatewayModelCatalog = vi.fn(async () => {
+    throw new Error("sessions.describe must not activate model discovery");
+  });
 
   const described = await directSessionReq<{ session: { effectiveReasoningLevel?: string } }>(
     "sessions.describe",
     { key: sessionKey },
-    { context: { getRuntimeConfig: () => cfg, loadGatewayModelCatalog } },
+    {
+      context: {
+        getRuntimeConfig: () => cfg,
+        loadGatewayModelCatalog,
+        readPreparedGatewayModelCatalog,
+      },
+    },
   );
 
   expect(described).toMatchObject({
     ok: true,
     payload: { session: { effectiveReasoningLevel: "on" } },
   });
-  expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "main" });
+  expect(readPreparedGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "main" });
+  expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
 });
 
 test("a hidden-foreign role cannot discover sessions through search, batch previews, or exact resolve", async () => {
