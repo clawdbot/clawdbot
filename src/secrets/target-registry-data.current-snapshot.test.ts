@@ -109,8 +109,7 @@ describe("getSecretTargetRegistry metadata reuse", () => {
       vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
       metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: records } as never);
       const { getSecretTargetRegistry } = await import("./target-registry-data.js");
-      const { buildSecretRefCredentialMatrix } =
-        await import("./credential-matrix.test-support.js");
+      const { buildSecretRefCredentialMatrix } = await import("./credential-matrix.js");
 
       const runtimeIds = getSecretTargetRegistry({ config: {}, env: {} }).map((entry) => entry.id);
       expect(runtimeIds).toContain("channels.healthy.token");
