@@ -623,6 +623,10 @@ export async function writeMemoryWikiCompiledCache(
     await store.deletePublication(config, publicationId);
     throw error;
   }
+  if (resolveActiveVault(config) !== activeVault) {
+    await store.deletePublication(config, publicationId);
+    throw new Error("Memory Wiki cache owner retired before publication.");
+  }
   try {
     await commitPublication();
   } catch (error) {
@@ -645,13 +649,16 @@ export async function writeMemoryWikiCompiledCache(
     }
     throw new Error("Memory Wiki vault changed while its compiled cache was being published.");
   }
+  if (resolveActiveVault(config) !== activeVault) {
+    await store.deletePublication(config, publicationId);
+    throw new Error("Memory Wiki cache owner retired during publication.");
+  }
   if (parentPublicationId) {
     await store.deletePublication(config, parentPublicationId);
   }
-  // The publication is durable. A concurrent lifecycle refresh owns in-memory
-  // activation; retaining this row lets its next refresh reconcile safely.
   if (resolveActiveVault(config) !== activeVault) {
-    return;
+    await store.deletePublication(config, publicationId);
+    throw new Error("Memory Wiki cache owner retired while replacing its predecessor.");
   }
   activeVaults.set(resolveMemoryWikiCompiledCacheOwnerId(config), {
     ...activeVault,

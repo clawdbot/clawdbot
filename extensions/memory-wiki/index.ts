@@ -157,6 +157,7 @@ export default definePluginEntry({
         await compiledCacheStore.deleteOwnersExcept(activeOwnerIds);
       },
       async stop() {
+        deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
         await waitForMemoryWikiImportedSourceSyncs();
       },
     });
