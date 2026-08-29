@@ -9,10 +9,11 @@ title: "Claws"
 
 # `openclaw claws`
 
-A Claw is a versioned setup for one new OpenClaw agent. It can describe the
+A Claw is a versioned setup for one OpenClaw agent. It can describe the
 agent's portable identity, workspace files, skills, plugins, MCP servers, and
 cron jobs. Harness-specific agent settings may be carried in a conventional
-package profile. A Claw does not replace or modify an existing agent.
+package profile. By default, add creates a new agent; explicit adoption can
+transfer lifecycle ownership of an exact existing configuration.
 
 Claws are experimental. Their schema, command output, and lifecycle may change.
 Enable the command surface explicitly:
@@ -340,6 +341,93 @@ instructions, writes declared workspace assets, realizes workspace skills, and
 records package, MCP, and cron provenance. Existing files are not overwritten,
 and retries fail closed when owned content drifted.
 
+By default an existing workspace directory is a `workspace_collision` blocker.
+Pass `--adopt-existing-workspace` during both preview and apply to install into
+an existing directory instead:
+
+```bash
+openclaw claws add ./incident-triage.claw.json \
+  --workspace ~/agents/incident-triage \
+  --adopt-existing-workspace \
+  --dry-run --json
+```
+
+At plan time each declared file is compared against the existing content:
+identical files become `adopt` actions and are recorded as managed without
+being rewritten, missing files are written normally, and differing content is a
+`workspace_file_conflict` blocker — adoption never overwrites existing files.
+If the package defines first-run instructions, any existing package bootstrap
+file is also a conflict, even when its content matches; Claws cannot safely
+claim or later remove a bootstrap file it did not create.
+Apply re-verifies content digests and fails closed when an adoptable file
+changed after planning. Claws seeds any package bootstrap before publishing the
+agent, then reserves the agent configuration before recording workspace files so
+the workspace claim is checked in the authoritative config write. If file
+revalidation fails, Claws rolls back that reservation when the live config still
+matches the reviewed plan, so a failed adoption cannot leave a partially owned
+workspace routable. Adoption is disclosed as a distinct capability change in
+the plan, and a workspace already configured for another agent still blocks.
+
+Adoption transfers lifecycle ownership of matching declared files to Claws.
+After adoption, `claws update` may replace an unchanged adopted file with the
+content from the reviewed target package, and `claws remove` may delete an
+unchanged adopted file. Locally modified adopted files are retained and must be
+reconciled explicitly. Preview update and removal plans before applying them.
+
+### Adopt a configured agent
+
+Use configured-agent adoption to bring an agent that predates Claws under the
+same package lifecycle. Pass the same agent id, workspace, and explicit flag in
+both preview and apply:
+
+```bash
+openclaw claws add ./incident-triage.claw.json \
+  --agent-id incident-triage \
+  --workspace ~/agents/incident-triage \
+  --adopt-existing-agent \
+  --dry-run --json
+
+openclaw claws add ./incident-triage.claw.json \
+  --agent-id incident-triage \
+  --workspace ~/agents/incident-triage \
+  --adopt-existing-agent \
+  --yes \
+  --plan-integrity <SHA256_FROM_DRY_RUN>
+```
+
+`--adopt-existing-agent` also opts into adoption of that agent's configured
+workspace. The agent must exist without another Claw install record, its
+canonical workspace must equal the requested workspace, and no other agent may
+use an overlapping workspace. After preserving the existing `default` marker,
+the complete package-derived agent configuration must match exactly. Adoption
+never rewrites a differing agent entry; the plan reports only the differing
+field paths and blocks.
+
+Successful adoption transfers ownership of the matching agent configuration,
+declared workspace files, and other managed package resources. Status exposes
+`agentOrigin: "adopted"`. Update retains the adopted agent's recorded
+`default` marker and still treats any later full-configuration change as drift.
+
+Adoption owns nothing until the final configuration write lands. If that write
+loses to a concurrent config change, `claws add` rolls back the files it wrote
+during the attempt and releases the ownership record, leaving the agent and its
+workspace as the operator left them; rerun `claws add --dry-run` to preview
+again. Managed state that cannot be rolled back keeps the record so
+`claws remove` can release it, and the error names what remains.
+
+Removal deletes the managed agent configuration, derived bindings and allow
+references, unchanged managed workspace files, and eligible package, MCP, and
+cron resources. It never deletes an adopted agent's pre-existing agent
+directory or database, its durable database registration, session index,
+session transcripts, workspace directory, or undeclared workspace files. Those
+historical artifacts remain on disk, and discoverable, after the Claw install
+record is removed.
+
+Adopted-agent ownership uses a newer install-record format as a downgrade
+fence. Builds that predate configured-agent adoption reject that record before
+status, update, or removal can mutate it. Complete the lifecycle with a build
+that supports configured-agent adoption before downgrading.
+
 ## Inspect installed state
 
 ```bash
@@ -348,7 +436,8 @@ openclaw claws status incident-triage --json
 openclaw doctor
 ```
 
-`status` compares the installed agent and its recorded workspace, package, MCP,
+`status` reports whether the agent was created or adopted, then compares the
+installed agent and its recorded workspace, package, MCP,
 and cron provenance with current state. It also reports whether native
 first-run bootstrap remains pending. It reports incomplete installs, missing
 resources, and drift without changing local state. `openclaw doctor` adds
@@ -477,7 +566,7 @@ credentials, sessions, and unowned local state are excluded.
 | `claws dev [path]`                  | Build and preview locally without mutation.         |
 | `claws build [path] --out <tgz>`    | Build a deterministic package artifact.             |
 | `claws inspect <source>`            | Validate a package directory or grouped manifest.   |
-| `claws add <source>`                | Preview or create one new agent and workspace.      |
+| `claws add <source>`                | Preview or create one agent and its workspace.      |
 | `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
 | `claws update <claw-or-agent>`      | Preview or apply changes from the selected source.  |
 | `claws remove <claw-or-agent>`      | Preview or remove the agent and eligible resources. |

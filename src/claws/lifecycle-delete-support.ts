@@ -4,7 +4,8 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
-import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentEntry } from "../agents/agent-scope-config.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import {
   prepareLegacyWorkspaceStateReset,
@@ -31,8 +32,13 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import type { ClawRemovePlanAction } from "./lifecycle-remove-contract.js";
 import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
+import {
+  CLAW_ADOPTED_WORKSPACE_MARKER_PATH,
+  deleteAdoptedWorkspaceRow,
+} from "./workspace-origin.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
 type WorkspaceFileRow = {
@@ -91,9 +97,10 @@ export function readAllClawWorkspaceFiles(
       `SELECT schema_version, agent_id, workspace, target_path, source_path,
               content_digest, status, created_at_ms, updated_at_ms
          FROM claw_workspace_files
+        WHERE target_path <> ?
         ORDER BY agent_id, target_path`,
     )
-    .all() as WorkspaceFileRow[];
+    .all(CLAW_ADOPTED_WORKSPACE_MARKER_PATH) as WorkspaceFileRow[];
   return rows.map(rowToWorkspaceFile);
 }
 
@@ -121,6 +128,7 @@ export function synthesizeOrphanInstall(params: {
     agentId: params.agentId,
     workspace: params.workspace ?? "",
     agentConfigDigest: "sha256:missing",
+    agentOrigin: "created",
     agentOwnedPaths: [],
     status: "partial",
     addedAtMs: updatedAtMs,
@@ -129,7 +137,7 @@ export function synthesizeOrphanInstall(params: {
 }
 
 export function deletionEffects(config: OpenClawConfig, agentId: string, fallbackWorkspace = "") {
-  const agent = listAgentEntries(config).find((candidate) => candidate.id === agentId);
+  const agent = resolveAgentEntry(config, agentId);
   const pruned = pruneAgentConfig(config, agentId);
   const workspace = agent?.workspace ?? fallbackWorkspace;
   const agentDir = resolveAgentDir(config, agentId);
@@ -144,6 +152,78 @@ export function deletionEffects(config: OpenClawConfig, agentId: string, fallbac
     sessionsDir,
     workspaceSharedWith,
     workspaceRetained: workspaceSharedWith.length > 0,
+  };
+}
+
+export function planClawHistoricalAgentState(params: {
+  agentId: string;
+  agentDir?: string;
+  sessionsDir: string;
+  retain: boolean;
+  modified: boolean;
+}): ClawRemovePlanAction[] {
+  const blocked = params.retain ? false : params.modified;
+  const actions: ClawRemovePlanAction[] = params.agentDir
+    ? [
+        {
+          kind: "agentState",
+          id: params.agentId,
+          action: params.retain ? "retain" : "trash",
+          target: params.agentDir,
+          blocked,
+          ...(params.retain
+            ? { reason: "Agent state existed before this Claw adopted the agent." }
+            : {}),
+        },
+      ]
+    : [];
+  actions.push(
+    {
+      kind: "sessionIndex",
+      id: params.agentId,
+      action: params.retain ? "retain" : "delete",
+      target: `session store entries for agent:${params.agentId}`,
+      blocked,
+      ...(params.retain
+        ? { reason: "Session history existed before this Claw adopted the agent." }
+        : {}),
+    },
+    {
+      kind: "sessionTranscripts",
+      id: params.agentId,
+      action: params.retain ? "retain" : "trash",
+      target: params.sessionsDir,
+      blocked,
+      ...(params.retain
+        ? { reason: "Session transcripts existed before this Claw adopted the agent." }
+        : {}),
+    },
+  );
+  return actions;
+}
+
+/** Resolves the retain/trash plan for a workspace using the canonical reason priority. */
+export function planClawWorkspaceRemoval(params: {
+  sharedWith: string[];
+  adopted: boolean;
+  modified: boolean;
+  untracked: boolean;
+}): Pick<ClawRemovePlanAction, "action" | "details" | "reason"> {
+  const retained =
+    params.sharedWith.length > 0 || params.adopted || params.modified || params.untracked;
+  const reason = params.sharedWith.length
+    ? "Workspace overlaps another agent."
+    : params.adopted
+      ? "Workspace existed before this Claw adopted it."
+      : params.modified
+        ? "Workspace contains locally modified Claw-managed files."
+        : params.untracked
+          ? "Workspace contains files or directories not managed by this Claw."
+          : undefined;
+  return {
+    action: retained ? "retain" : "trash",
+    details: { retained, sharedWith: params.sharedWith },
+    ...(reason ? { reason } : {}),
   };
 }
 
@@ -249,6 +329,7 @@ export async function cleanupClawAgentFilesystem(params: {
   runtime: RuntimeEnv;
   trashPath?: ClawTrashPath;
   retainWorkspace?: boolean;
+  retainHistoricalAgentState?: boolean;
 }): Promise<string[]> {
   const errors: string[] = [];
   const trashPath = params.trashPath ?? moveToTrash;
@@ -277,11 +358,13 @@ export async function cleanupClawAgentFilesystem(params: {
       errors.push(`Could not trash workspace ${params.targets.workspaceDir}.`);
     }
   }
-  if (!(await trashPath(params.targets.agentDir, params.runtime))) {
-    errors.push(`Could not trash agent state ${params.targets.agentDir}.`);
-  }
-  if (!(await trashPath(params.targets.sessionsDir, params.runtime))) {
-    errors.push(`Could not trash session transcripts ${params.targets.sessionsDir}.`);
+  if (!params.retainHistoricalAgentState) {
+    if (!(await trashPath(params.targets.agentDir, params.runtime))) {
+      errors.push(`Could not trash agent state ${params.targets.agentDir}.`);
+    }
+    if (!(await trashPath(params.targets.sessionsDir, params.runtime))) {
+      errors.push(`Could not trash session transcripts ${params.targets.sessionsDir}.`);
+    }
   }
   return errors;
 }
@@ -461,8 +544,11 @@ export function releaseClawRemoveRows(
   files: RemovedWorkspaceFile[],
   complete: boolean,
   options: OpenClawStateDatabaseOptions,
+  retainHistoricalAgentState = false,
 ): void {
-  if (complete) {
+  // Adopted removal keeps the agent database and its sessions, so the durable discovery
+  // registration that finds them must survive too; only Claw-created agents lose it here.
+  if (complete && !retainHistoricalAgentState) {
     // Keep the install record as the retry owner until database discovery is released.
     unregisterOpenClawAgentDatabases({ agentId, env: options.env });
   }
@@ -487,6 +573,9 @@ export function releaseClawRemoveRows(
         .prepare("DELETE FROM claw_installs WHERE agent_id = ?")
         .run(agentId);
     }
+    // Drop the origin with the install it describes; a later agent reusing this id must not
+    // inherit an adopted-workspace claim from a Claw that no longer exists.
+    deleteAdoptedWorkspaceRow(db, agentId);
   }, options);
   if (complete) {
     deleteCachedClawInstallSchemaVersion(agentId, options);

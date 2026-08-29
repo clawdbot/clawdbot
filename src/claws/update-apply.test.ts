@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ClawCronUpdateError } from "./cron-update.js";
 import type { buildClawAddPlan } from "./lifecycle.js";
 import {
@@ -19,6 +20,7 @@ import { applyClawUpdatePlan } from "./update-apply.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawStateDatabaseForTest());
 
 const source: ClawSourceIdentity = {
   kind: "package",
@@ -46,6 +48,7 @@ const install: PersistedClawInstall = {
   agentId: "worker",
   workspace: "/tmp/workspace-worker",
   agentConfigDigest: "sha256:current-agent",
+  agentOrigin: "created",
   agentOwnedPaths: ['agents.entries["worker"]'],
   status: "complete",
   addedAtMs: 1,
@@ -81,6 +84,11 @@ const addPlan: ClawAddPlan = {
   diagnostics: [],
   readiness: { ready: true, requirements: [] },
 };
+function agentDigest(config: ClawAddPlan["agent"]["config"]): string {
+  return `sha256:${createHash("sha256").update(stableStringify(config)).digest("hex")}`;
+}
+const targetAgentDigest = agentDigest(addPlan.agent.config);
+const adoptedTargetAgentDigest = agentDigest({ ...addPlan.agent.config, default: true });
 
 function plan(actions: ClawUpdatePlan["actions"]): ClawUpdatePlan {
   return {
@@ -206,6 +214,36 @@ describe("applyClawUpdatePlan", () => {
     ).rejects.toMatchObject({ code: "update_changed" });
   });
 
+  it("rejects a materialized agent config that differs from the consented target", async () => {
+    const updatePlan = plan([
+      {
+        kind: "agent",
+        id: "worker",
+        action: "change",
+        target: 'agents.entries["worker"]',
+        blocked: false,
+        reason: "target changed",
+        desiredDigest: targetAgentDigest,
+      },
+    ]);
+    const changedAddPlan = structuredClone(addPlan);
+    changedAddPlan.agent.config.name = "Changed after consent";
+
+    await expect(
+      applyClawUpdatePlan(
+        updatePlan,
+        { targetManifest: manifest, targetSource: source },
+        {
+          config: {},
+          ...consent(updatePlan),
+          rebuildPlan: vi.fn(async () => updatePlan),
+          buildAddPlan: vi.fn(async () => changedAddPlan),
+          readInstall: vi.fn(() => install),
+        },
+      ),
+    ).rejects.toMatchObject({ code: "update_changed" });
+  });
+
   it("compare-writes the owned agent and advances root provenance", async () => {
     const currentAgent = { id: "worker", name: "Worker" };
     const currentDigest = `sha256:${createHash("sha256").update(stableStringify(currentAgent)).digest("hex")}`;
@@ -218,7 +256,7 @@ describe("applyClawUpdatePlan", () => {
         blocked: false,
         reason: "target changed",
         currentDigest,
-        desiredDigest: "sha256:target-agent",
+        desiredDigest: targetAgentDigest,
       },
     ]);
     let config: OpenClawConfig = { agents: { entries: { worker: { name: "Worker" } } } };
@@ -263,6 +301,7 @@ describe("applyClawUpdatePlan", () => {
         target: 'agents.entries["worker"]',
         blocked: false,
         reason: "restore agent",
+        desiredDigest: targetAgentDigest,
       },
     ]);
     const order: string[] = [];
@@ -415,6 +454,7 @@ describe("applyClawUpdatePlan", () => {
         target: 'agents.entries["worker"]',
         blocked: false,
         reason: "restore agent",
+        desiredDigest: targetAgentDigest,
       },
       {
         kind: "cronJob",
@@ -829,6 +869,7 @@ describe("applyClawUpdatePlan", () => {
         blocked: false,
         reason: "target changed",
         currentDigest,
+        desiredDigest: targetAgentDigest,
       },
     ]);
     let config: OpenClawConfig = { agents: { entries: { worker: { name: "Worker" } } } };
@@ -858,6 +899,75 @@ describe("applyClawUpdatePlan", () => {
     expect(commits).toBe(2);
   });
 
+  it("preserves an adopted agent default marker in config and provenance", async () => {
+    const liveAgent = {
+      id: "worker",
+      name: "Worker",
+      workspace: "/tmp/workspace-worker",
+      default: true,
+    };
+    const currentDigest = `sha256:${createHash("sha256")
+      .update(stableStringify(liveAgent))
+      .digest("hex")}`;
+    const adoptedInstall: PersistedClawInstall = {
+      ...install,
+      schemaVersion: "openclaw.clawInstallRecord.v3",
+      agentOrigin: "adopted",
+      agentConfigDigest: currentDigest,
+    };
+    const updatePlan = plan([
+      {
+        kind: "agent",
+        id: "worker",
+        action: "change",
+        target: 'agents.entries["worker"]',
+        blocked: false,
+        reason: "target changed",
+        currentDigest,
+        desiredDigest: adoptedTargetAgentDigest,
+      },
+    ]);
+    let config: OpenClawConfig = {
+      agents: {
+        entries: {
+          WORKER: { name: liveAgent.name, workspace: liveAgent.workspace, default: true },
+        },
+      },
+    };
+    const persistInstall = vi.fn((targetPlan: ClawAddPlan) => {
+      expect(targetPlan.agent.config.default).toBe(true);
+      return adoptedInstall;
+    });
+
+    await applyClawUpdatePlan(
+      updatePlan,
+      { targetManifest: manifest, targetSource: source },
+      {
+        config,
+        ...consent(updatePlan),
+        rebuildPlan: vi.fn(async () => updatePlan),
+        buildAddPlan: vi.fn(async () => addPlan),
+        readInstall: vi.fn(() => adoptedInstall),
+        persistInstall,
+        commitConfig: async (transform) => {
+          config = transform(config);
+        },
+        applyWorkspace: vi.fn(async () => ({ appliedPaths: [], rollback: async () => undefined })),
+        applyMcp: vi.fn(async () => ({ appliedNames: [], rollback: async () => undefined })),
+        applyCron: vi.fn(async () => ({ appliedIds: [], rollback: async () => undefined })),
+        applyPackage: vi.fn(async () => ({ appliedIds: [], rollback: async () => undefined })),
+      },
+    );
+
+    expect(config.agents?.entries?.worker).toEqual({
+      name: "Worker v2",
+      workspace: "/tmp/workspace-worker",
+      default: true,
+    });
+    expect(config.agents?.entries?.WORKER).toBeUndefined();
+    expect(persistInstall).toHaveBeenCalledOnce();
+  });
+
   it("does not recreate an agent removed after planning", async () => {
     const currentAgent = { id: "worker", name: "Worker" };
     const currentDigest = `sha256:${createHash("sha256").update(stableStringify(currentAgent)).digest("hex")}`;
@@ -870,6 +980,7 @@ describe("applyClawUpdatePlan", () => {
         blocked: false,
         reason: "target changed",
         currentDigest,
+        desiredDigest: targetAgentDigest,
       },
     ]);
     let config: OpenClawConfig = { agents: { entries: {} } };
@@ -930,5 +1041,6 @@ describe("applyClawUpdatePlan", () => {
     ).rejects.toMatchObject({ code: "update_blocked" });
   });
 });
+/* eslint-disable max-lines -- Existing update coverage is at the limit; this PR adds Windows DB cleanup. */
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";

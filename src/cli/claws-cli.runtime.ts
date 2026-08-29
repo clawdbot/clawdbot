@@ -1,15 +1,10 @@
-import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { stableStringify } from "@openclaw/normalization-core";
-import {
-  listAgentEntries,
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-} from "../agents/agent-scope-config.js";
 import {
   applyClawAddPlan,
   CLAW_ADD_RESULT_SCHEMA_VERSION,
   ClawAddMutationError,
 } from "../claws/add.js";
+import * as agentAdoptionApply from "../claws/agent-adoption-apply.js";
 import {
   findClawExtensionPackageCollisions,
   planClawExtensions,
@@ -50,12 +45,10 @@ import {
 // Runtime handlers for experimental local Claws commands.
 import { getRuntimeConfig } from "../config/config.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
-import { redactSensitiveArgv } from "../config/redact-argv.js";
 import {
   loadCronJobsStoreWithConfigJobsReadOnly,
   resolveCronJobsStorePath,
 } from "../cron/store.js";
-import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { authorizeLegacyV1Resume } from "./claws-cli-legacy-resume.js";
 import { formatClawDiagnostics, logClawExperimentalWarning } from "./claws-cli-output.js";
@@ -67,55 +60,15 @@ import type {
   ClawsRemoveOptions,
   ClawsStatusOptions,
 } from "./claws-cli.js";
+import { logClawAddPlanSummary } from "./claws-cli.plan-console.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
-function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
-  runtime.log(`Agent: ${plan.agent.finalId}`);
-  runtime.log(`Workspace: ${plan.agent.workspace}`);
-  runtime.log(`Actions: ${plan.summary.totalActions}`);
-  runtime.log(`Packages: ${plan.summary.packageActions}`);
-  for (const action of plan.actions.filter((candidate) => candidate.kind === "package")) {
-    const requirementState =
-      typeof action.details?.requirementState === "string"
-        ? action.details.requirementState
-        : "unresolved";
-    runtime.log(
-      `  Requirement ${action.target}: ${requirementState}${action.action === "install" ? " (installation requires this exact plan consent)" : ""}`,
-    );
-  }
-  runtime.log(`MCP servers: ${plan.summary.mcpServerActions}`);
-  for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
-    const server = action.details as Record<string, unknown> | undefined;
-    const target =
-      typeof server?.url === "string"
-        ? redactSensitiveUrlLikeString(server.url)
-        : typeof server?.command === "string"
-          ? redactSensitiveArgv([
-              server.command,
-              ...(Array.isArray(server.args)
-                ? server.args.filter((arg): arg is string => typeof arg === "string")
-                : []),
-            ]).join(" ")
-          : "invalid declaration";
-    runtime.log(`  MCP ${action.id}: ${target}`);
-  }
-  runtime.log(`Cron jobs: ${plan.summary.cronJobActions}`);
-  if (plan.capabilityChanges.length > 0) {
-    runtime.log(`Capability escalations (${plan.capabilityChanges.length}):`);
-    for (const change of plan.capabilityChanges) {
-      runtime.log(
-        redactSensitiveText(`  ! ${change.kind}:${change.id} ${JSON.stringify(change.effect)}`),
-      );
-    }
-    runtime.log("The plan integrity binds every capability line above.");
-  }
-  if (plan.summary.blockedActions > 0) {
-    runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
-  }
-}
-
-async function matchingResumeState(plan: ClawAddPlan, opts: ClawsAddOptions) {
+async function matchingResumeState(
+  plan: ClawAddPlan,
+  opts: ClawsAddOptions,
+  exactAdoptResumeCandidate: boolean,
+) {
   const readOnlyState = opts.dryRun
     ? await readClawResumeStateReadOnly(plan.agent.finalId)
     : undefined;
@@ -127,7 +80,8 @@ async function matchingResumeState(plan: ClawAddPlan, opts: ClawsAddOptions) {
     record.claw.kind !== plan.claw.kind ||
     record.claw.name !== plan.claw.name ||
     record.claw.version !== plan.claw.version ||
-    record.claw.integrity !== plan.claw.integrity
+    record.claw.integrity !== plan.claw.integrity ||
+    (record.agentOrigin === "adopted" && (!opts.adoptExistingAgent || !exactAdoptResumeCandidate))
   ) {
     return undefined;
   }
@@ -148,7 +102,7 @@ function failNonDryRun(opts: ClawsAddOptions, runtime: RuntimeEnv): boolean {
   const code = opts.yes ? "plan_integrity_required" : "consent_required";
   const message = opts.yes
     ? "Claw add consent must include --plan-integrity from the exact dry-run plan."
-    : "Claw add requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to create the new agent and workspace.";
+    : "Claw add requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to apply the reviewed Claw add plan.";
   if (opts.json) {
     writeRuntimeJson(runtime, {
       schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
@@ -287,7 +241,6 @@ export async function runClawsAddCommand(
     runtime.exit(1);
     return;
   }
-
   const config = getRuntimeConfig();
   const listedMcpServers = await listConfiguredMcpServers();
   if (!listedMcpServers.ok) {
@@ -295,16 +248,26 @@ export async function runClawsAddCommand(
     runtime.exit(1);
     return;
   }
-  const existingAgentIds = listAgentIds(config);
-  const existingWorkspacePaths = existingAgentIds.map((agentId) =>
-    resolveAgentWorkspaceDir(config, agentId),
-  );
+  const { configuredAgents, existingAgents } =
+    await agentAdoptionApply.readClawPlanningAgentRoster(config);
+  const finalAgentId = opts.agentId ?? result.manifest.agent.id;
+  const targetInstallRecord = opts.dryRun
+    ? (await readClawResumeStateReadOnly(finalAgentId))?.record
+    : readClawInstallRecord(finalAgentId);
+  const exactAdoptResumeCandidate = agentAdoptionApply.isExactAdoptedAgentResumeCandidate({
+    requested: opts.adoptExistingAgent === true,
+    record: targetInstallRecord,
+    liveAgent: configuredAgents.find((agent) => agent.id === finalAgentId),
+  });
   const cronStore = await loadCronJobsStoreWithConfigJobsReadOnly(resolveCronJobsStorePath());
   const basePlanContext = {
     ...(opts.agentId ? { agentId: opts.agentId } : {}),
     ...(opts.workspace ? { workspace: opts.workspace } : {}),
-    existingAgentIds,
-    existingWorkspacePaths,
+    ...(opts.adoptExistingWorkspace ? { adoptExistingWorkspace: true } : {}),
+    ...(opts.adoptExistingAgent ? { adoptExistingAgent: true } : {}),
+    existingAgents,
+    managedAgentIds:
+      targetInstallRecord && !exactAdoptResumeCandidate ? [targetInstallRecord.agentId] : [],
     existingMcpServers: listedMcpServers.mcpServers,
     existingCronJobIds: cronStore.store.jobs.map((job) => job.id),
     packagePreflight: preflightClawPackage,
@@ -331,8 +294,12 @@ export async function runClawsAddCommand(
       })
     : undefined;
   let resumableInstallRecord: PersistedClawInstall | undefined;
-  const resumeState = await matchingResumeState(legacyResumePlan ?? plan, opts);
-  if (result.legacyOpenClawProfile && !resumeState) {
+  const resumeState = await matchingResumeState(
+    legacyResumePlan ?? plan,
+    opts,
+    exactAdoptResumeCandidate,
+  );
+  if ((result.legacyOpenClawProfile || exactAdoptResumeCandidate) && !resumeState) {
     plan = {
       ...plan,
       blockers: [
@@ -370,27 +337,21 @@ export async function runClawsAddCommand(
     const expectedCommittedAgentConfigs = legacyResumePlan
       ? [legacyResumePlan.agent.config, plan.agent.config]
       : [plan.agent.config];
-    const committedAgent = listAgentEntries(config).find(
-      (agent) =>
-        agent.id === resumeRecord.agentId &&
-        expectedCommittedAgentConfigs.some(
-          (expected) => stableStringify(agent) === stableStringify(expected),
-        ),
+    const canResumeAgent = agentAdoptionApply.createdAgentMayBeAbsentDuringResume(
+      resumeRecord,
+      agentAdoptionApply.exactCommittedClawAgentExists({
+        config,
+        agentId: resumeRecord.agentId,
+        expected: expectedCommittedAgentConfigs,
+      }),
     );
-    const canResumeAgent =
-      resumeRecord.status === "config_committed" ||
-      (resumeRecord.status === "workspace_ready" && committedAgent !== undefined);
     const resumePlanContext = {
       ...basePlanContext,
       packagePreflight,
-      existingAgentIds: canResumeAgent
-        ? existingAgentIds.filter((agentId) => agentId !== resumeRecord.agentId)
-        : existingAgentIds,
-      existingWorkspacePaths: canResumeWorkspace
-        ? existingAgentIds
-            .filter((agentId) => agentId !== resumeRecord.agentId)
-            .map((agentId) => resolveAgentWorkspaceDir(config, agentId))
-        : existingWorkspacePaths,
+      existingAgents: canResumeAgent
+        ? existingAgents.filter((agent) => agent.id !== resumeRecord.agentId)
+        : existingAgents,
+      managedAgentIds: [],
       ...(canResumeWorkspace ? { resumableWorkspace: resumeRecord.workspace } : {}),
     };
     plan = await buildClawAddPlan({
@@ -543,7 +504,7 @@ export async function runClawsStatusCommand(
     runtime.log(`Installed Claws: ${status.summary.claws}`);
     for (const record of status.records) {
       runtime.log(
-        `${record.install.agentId}: ${record.install.claw.name}@${record.install.claw.version} (${record.install.status})`,
+        `${record.install.agentId}: ${record.install.claw.name}@${record.install.claw.version} (${record.install.status}; agent ${record.agentOrigin})`,
       );
       runtime.log(
         `  Agent: ${record.agentState}; bootstrap: ${record.bootstrapState}; files: ${record.workspaceFiles.length}; packages: ${record.packages.length}`,

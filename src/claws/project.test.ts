@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { lstat, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +12,19 @@ import { ClawProjectError, createClawProject, validateClawProject } from "./proj
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const GOLDEN_ARTIFACT_INTEGRITY =
   "sha256:10b8890c5e5b062c94ff79b1d424859c6a5572548535eec6e31ee0c6d7c08a3b";
+
+// `CLAW.md` and `claw.md` only coexist on a case-sensitive filesystem. On a case-insensitive
+// volume the second write replaces the manifest instead of adding a colliding source, so the
+// collision under test cannot be constructed and the case must be skipped, not asserted.
+const caseSensitiveFilesystem = (() => {
+  const probe = mkdtempSync(join(tmpdir(), "openclaw-claw-case-probe-"));
+  try {
+    writeFileSync(join(probe, "case-probe"), "");
+    return !existsSync(join(probe, "CASE-PROBE"));
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
 
 async function writeRichProject(root: string): Promise<void> {
   await mkdir(join(root, "workspace"), { recursive: true });
@@ -426,7 +441,7 @@ describe("Claw projects", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.runIf(process.platform !== "win32" && caseSensitiveFilesystem)(
     "rejects a workspace source that portably collides with CLAW.md",
     async () => {
       const project = tempDirs.make("openclaw-claw-manifest-case-collision-");
