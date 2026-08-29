@@ -114,7 +114,10 @@ function parseWindowsProcessStartTime(raw: Buffer | string): number | null {
       .trim() ??
     lines.find((line) => normalizeLowercaseStringOrEmpty(line) !== "creationdate") ??
     "";
-  const parsedIso = Date.parse(value);
+  const isoValue = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
+    ? `${value}Z`
+    : value;
+  const parsedIso = Date.parse(isoValue);
   if (Number.isFinite(parsedIso)) {
     return parsedIso;
   }
