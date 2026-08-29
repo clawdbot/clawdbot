@@ -10,7 +10,10 @@ import { readMediaBuffer } from "../../media/store.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
-import { WORKER_ATTACHMENT_DIRECTORY_PREFIX } from "./workspace-path-exclusions.js";
+import {
+  WORKER_ATTACHMENT_DIRECTORY_PATTERN,
+  WORKER_ATTACHMENT_DIRECTORY_PREFIX,
+} from "./workspace-path-exclusions.js";
 
 const MAX_TURN_ATTACHMENTS = 16;
 // Base64 expansion stays below the node workspace command's 128 KiB stdin cap.
@@ -30,7 +33,7 @@ function enter(candidate, expected) {
   if (identity(fs.statSync(".")) !== identity(before)) throw Error("attachment directory changed");
 }
 try {
-  if (!/^${WORKER_ATTACHMENT_DIRECTORY_PREFIX}[a-f0-9-]{36}$/.test(directory)) throw Error("invalid attachment directory");
+  if (/^${WORKER_ATTACHMENT_DIRECTORY_PATTERN}$/.exec(directory)?.[0] !== directory) throw Error("invalid attachment directory");
   enter(workspace);
   if (operation === "init") fs.mkdirSync(directory, {mode: 0o700});
   enter(directory, directoryIdentity);

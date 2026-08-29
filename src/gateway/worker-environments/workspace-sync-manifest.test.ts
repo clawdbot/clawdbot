@@ -659,8 +659,13 @@ process.kill = function(pid, signal) {
     const root = tempDirs.make("openclaw-manifest-derived-test-");
     const home = path.join(root, "home");
     const workspace = path.join(root, "workspace");
-    const files = [
+    const retainedFiles = [
       "keep.ts",
+      "openclaw-inbound-project/report.txt",
+      "nested/openclaw-inbound-12345678-1234-4234-8234-123456789ab-/report.txt",
+    ];
+    const files = [
+      ...retainedFiles,
       "__pycache__/fizzbuzz.cpython-314.pyc",
       "generated.pyc",
       "generated.pyo",
@@ -671,8 +676,8 @@ process.kill = function(pid, signal) {
       ".ruff_cache/state",
       "node_modules/pkg/index.js",
       ".DS_Store",
-      "openclaw-inbound-12345678-1234-1234-1234-123456789abc/report.pdf",
-      "nested/openclaw-inbound-12345678-1234-1234-1234-123456789abc/photo.png",
+      "openclaw-inbound-12345678-1234-4234-8234-123456789abc/report.pdf",
+      "nested/openclaw-inbound-12345678-1234-4234-8234-123456789abc/photo.png",
     ];
     await Promise.all([fs.mkdir(home), fs.mkdir(workspace)]);
     await Promise.all(
@@ -692,8 +697,10 @@ process.kill = function(pid, signal) {
       await fs.readFile(path.join(home, ".openclaw-worker", "manifests", `${digest}.json`), "utf8"),
     ) as { entries: Array<{ path: string }> };
     const manifestPaths = manifest.entries.map((entry) => entry.path);
-    expect(manifestPaths).toContain("keep.ts");
-    for (const excluded of files.slice(1)) {
+    for (const retained of retainedFiles) {
+      expect(manifestPaths).toContain(retained);
+    }
+    for (const excluded of files.slice(retainedFiles.length)) {
       expect(manifestPaths).not.toContain(excluded);
     }
   });

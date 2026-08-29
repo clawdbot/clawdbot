@@ -85,6 +85,10 @@ describe("current attachments in an active remote placement", () => {
         userTurnTranscriptRecorder: recorder,
       };
       const originalFiles = new Map<string, Buffer>();
+      const userFiles = [
+        "openclaw-inbound-project/report.txt",
+        "openclaw-inbound-12345678-1234-4234-8234-123456789ab-/report.txt",
+      ];
       let workerManifestPaths: string[] = [];
       let acceptedManifestPaths: string[] = [];
       const verifyFiles = async (prompt: string) => {
@@ -107,6 +111,10 @@ describe("current attachments in an active remote placement", () => {
         expect(await readFile(path.join(remote, "remote-edits.txt"), "utf8")).toBe("preserve me");
         await writeFile(path.join(remote, "remote-edits.txt"), "worker edit");
         await writeFile(path.join(remote, "report.txt"), "Read both attachments");
+        for (const file of userFiles) {
+          await mkdir(path.dirname(path.join(remote, file)));
+          await writeFile(path.join(remote, file), "user project output");
+        }
       };
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
@@ -222,11 +230,23 @@ describe("current attachments in an active remote placement", () => {
       );
       expect(tunnel.syncWorkspace).not.toHaveBeenCalled();
       expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
-      expect(workerManifestPaths).toEqual(["remote-edits.txt", "report.txt"]);
-      expect(acceptedManifestPaths).toEqual(["remote-edits.txt", "report.txt"]);
-      expect(await readdir(local)).toEqual(["remote-edits.txt", "report.txt"]);
+      const expectedFiles = ["remote-edits.txt", "report.txt", ...userFiles].toSorted();
+      const expectedPaths = [
+        ...expectedFiles,
+        ...userFiles.map((file) => path.dirname(file)),
+      ].toSorted();
+      expect(workerManifestPaths).toEqual(expectedPaths);
+      expect(acceptedManifestPaths).toEqual(expectedFiles);
+      expect(
+        (await readdir(local, { recursive: true }))
+          .map((entry) => entry.split(path.sep).join("/"))
+          .toSorted(),
+      ).toEqual(expectedPaths);
       expect(await readFile(path.join(local, "remote-edits.txt"), "utf8")).toBe("worker edit");
       expect(await readFile(path.join(local, "report.txt"), "utf8")).toBe("Read both attachments");
+      for (const file of userFiles) {
+        expect(await readFile(path.join(local, file), "utf8")).toBe("user project output");
+      }
       for (const [file, bytes] of originalFiles) {
         expect(await readFile(file)).toEqual(bytes);
       }
