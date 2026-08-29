@@ -1,12 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
@@ -111,77 +103,88 @@ async function runStep(options: {
 }) {
   const step = readCiCheckoutStep(options.job, options.step ?? "Checkout");
   const env = stepEnvironment(step, options.env ?? {});
-  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "ci linux git ")));
-  const workspace = path.join(root, "workspace");
-  mkdirSync(workspace);
-  const protectedFile = path.join(env.CHECKOUT_KIND === "clawhub" ? workspace : root, "protected");
-  writeFileSync(protectedFile, "not checkout-owned\n");
-  if (["android", "clawhub"].includes(env.CHECKOUT_KIND ?? "")) {
-    const checkout =
-      env.CHECKOUT_KIND === "clawhub" ? path.join(workspace, "clawhub-source") : workspace;
-    mkdirSync(checkout, { recursive: true });
-    writeFileSync(path.join(checkout, ".previous-checkout"), "stale\n");
-  }
-  if (options.poisonPython) {
-    env.PYTHONPATH = workspace;
-    const poison = `from pathlib import Path\nPath(${JSON.stringify(path.join(root, "python-injected"))}).write_text("injected")\nraise RuntimeError("candidate Python startup executed")\n`;
-    for (const name of ["sitecustomize.py", "subprocess.py"]) {
-      writeFileSync(path.join(workspace, name), poison);
-    }
-  }
-  const revisions = {
-    HEAD: candidate,
-    "refs/heads/main": moved,
-    "refs/pull/17/merge": merge,
-    "refs/remotes/origin/release-gate-merge^1": base,
-    "refs/remotes/origin/release-gate-merge^2": candidate,
-    ...options.revisions,
-  };
-  writeFileSync(
-    path.join(root, "fixture-options.json"),
-    JSON.stringify({
-      env,
-      revisions,
-      fetchResults: options.fetchResults,
-      checkoutResults: options.checkoutResults,
-      mergeSnapshots: options.mergeSnapshots,
-      consumers: options.prepare ?? false,
-      cancelDuringCleanup: options.cancelDuringCleanup,
-    }),
+  return withCiCheckoutFixture(
+    "linux:configured",
+    (root) => {
+      const workspace = path.join(root, "workspace");
+      const protectedFile = path.join(
+        env.CHECKOUT_KIND === "clawhub" ? workspace : root,
+        "protected",
+      );
+      writeFileSync(protectedFile, "not checkout-owned\n");
+      if (["android", "clawhub"].includes(env.CHECKOUT_KIND ?? "")) {
+        const checkout =
+          env.CHECKOUT_KIND === "clawhub" ? path.join(workspace, "clawhub-source") : workspace;
+        mkdirSync(checkout, { recursive: true });
+        writeFileSync(path.join(checkout, ".previous-checkout"), "stale\n");
+      }
+      if (options.poisonPython) {
+        env.PYTHONPATH = workspace;
+        const poison = `from pathlib import Path\nPath(${JSON.stringify(path.join(root, "python-injected"))}).write_text("injected")\nraise RuntimeError("candidate Python startup executed")\n`;
+        for (const name of ["sitecustomize.py", "subprocess.py"]) {
+          writeFileSync(path.join(workspace, name), poison);
+        }
+      }
+      const revisions = {
+        HEAD: candidate,
+        "refs/heads/main": moved,
+        "refs/pull/17/merge": merge,
+        "refs/remotes/origin/release-gate-merge^1": base,
+        "refs/remotes/origin/release-gate-merge^2": candidate,
+        ...options.revisions,
+      };
+      writeFileSync(
+        path.join(root, "fixture-options.json"),
+        JSON.stringify({
+          env,
+          revisions,
+          fetchResults: options.fetchResults,
+          checkoutResults: options.checkoutResults,
+          mergeSnapshots: options.mergeSnapshots,
+          consumers: options.prepare ?? false,
+          cancelDuringCleanup: options.cancelDuringCleanup,
+        }),
+      );
+      const readyFile = options.cancelDuringCleanup ? path.join(root, "ready-1.json") : undefined;
+      let run = accelerate(step.run, readyFile);
+      if (options.prepare) {
+        const prepare = readCiCheckoutStep("security-fast", "Prepare Git owner");
+        const prepareEnv = stepEnvironment(prepare, {});
+        writeFileSync(path.join(root, "prepare.sh"), accelerate(prepare.run, readyFile));
+        // Run the actual prepare body in its own shell: its exec must not replace the caller.
+        run = `CHECKOUT_KIND=${prepareEnv.CHECKOUT_KIND} bash --noprofile --norc -eo pipefail "$TMPDIR/prepare.sh"\n${run}`;
+      }
+      writeFileSync(path.join(root, "checkout.sh"), run);
+    },
+    (report, result, stderr, root) => {
+      const workspace = path.join(root, "workspace");
+      const protectedFile = path.join(
+        env.CHECKOUT_KIND === "clawhub" ? workspace : root,
+        "protected",
+      );
+      console.log(`${options.job}/${options.step ?? "Checkout"}: ${JSON.stringify(report)}`);
+      expect(result, stderr).toEqual({ code: 0, signal: null });
+      expect(report.error, stderr).toBeUndefined();
+      expectCiCheckoutCleanup(report);
+      expect(readFileSync(protectedFile, "utf8")).toBe("not checkout-owned\n");
+      expect(
+        existsSync(path.join(root, "python-injected")),
+        "candidate Python startup executed",
+      ).toBe(false);
+      const readOutput = (name: string) =>
+        existsSync(path.join(root, name)) ? readFileSync(path.join(root, name), "utf8") : "";
+      return {
+        ...report,
+        workspace,
+        githubOutput: readOutput("github-output"),
+        githubEnv: readOutput("github-env"),
+        fetches: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "fetch"),
+        checkouts: report.commands.filter(
+          ({ tool, args }) => tool === "git" && args[0] === "checkout",
+        ),
+      };
+    },
   );
-  const readyFile = options.cancelDuringCleanup ? path.join(root, "ready-1.json") : undefined;
-  let run = accelerate(step.run, readyFile);
-  if (options.prepare) {
-    const prepare = readCiCheckoutStep("security-fast", "Prepare Git owner");
-    const prepareEnv = stepEnvironment(prepare, {});
-    writeFileSync(path.join(root, "prepare.sh"), accelerate(prepare.run, readyFile));
-    // Run the actual prepare body in its own shell: its exec must not replace the caller.
-    run = `CHECKOUT_KIND=${prepareEnv.CHECKOUT_KIND} bash --noprofile --norc -eo pipefail "$TMPDIR/prepare.sh"\n${run}`;
-  }
-  writeFileSync(path.join(root, "checkout.sh"), run);
-  return withCiCheckoutFixture(root, "linux:configured", (report, result, stderr) => {
-    console.log(`${options.job}/${options.step ?? "Checkout"}: ${JSON.stringify(report)}`);
-    expect(result, stderr).toEqual({ code: 0, signal: null });
-    expect(report.error, stderr).toBeUndefined();
-    expectCiCheckoutCleanup(report);
-    expect(readFileSync(protectedFile, "utf8")).toBe("not checkout-owned\n");
-    expect(
-      existsSync(path.join(root, "python-injected")),
-      "candidate Python startup executed",
-    ).toBe(false);
-    const readOutput = (name: string) =>
-      existsSync(path.join(root, name)) ? readFileSync(path.join(root, name), "utf8") : "";
-    return {
-      ...report,
-      workspace,
-      githubOutput: readOutput("github-output"),
-      githubEnv: readOutput("github-env"),
-      fetches: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "fetch"),
-      checkouts: report.commands.filter(
-        ({ tool, args }) => tool === "git" && args[0] === "checkout",
-      ),
-    };
-  });
 }
 
 const resetProfiles = [
