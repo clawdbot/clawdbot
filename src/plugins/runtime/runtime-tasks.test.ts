@@ -216,6 +216,51 @@ describe("runtime tasks", () => {
     expect(task.status).toBe("cancelled");
   });
 
+  it("reconciles a terminal task whose native subagent run is still active", async () => {
+    const runtimeTasks = createRuntimeTasks({
+      managedTaskFlow: createRuntimeTaskFlow(),
+    });
+    const taskRuns = runtimeTasks.runs.bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const task = createTaskRecord({
+      runtime: "subagent",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:restart-split",
+      runId: "runtime-task-restart-split",
+      task: "Finish after restart",
+      status: "succeeded",
+      lastEventAt: 30,
+      terminalSummary: "Completed before restart.",
+    });
+    if (!task) {
+      throw new Error("expected terminal subagent task to be created");
+    }
+    runtimeTaskMocks.killSubagentRunAdminMock.mockResolvedValue({
+      found: true,
+      killed: true,
+    });
+
+    const result = await taskRuns.cancel({
+      taskId: task.taskId,
+      cfg: {} as never,
+    });
+
+    expect(runtimeTaskMocks.killSubagentRunAdminMock).toHaveBeenCalledWith({
+      cfg: {},
+      sessionKey: "agent:main:subagent:restart-split",
+    });
+    expect(result).toMatchObject({
+      found: true,
+      cancelled: false,
+      task: {
+        id: task.taskId,
+        status: "succeeded",
+      },
+    });
+  });
+
   it("routes runtime task cancellation through the detached task runtime seam", async () => {
     const runtimeTasks = createRuntimeTasks({
       managedTaskFlow: createRuntimeTaskFlow(),

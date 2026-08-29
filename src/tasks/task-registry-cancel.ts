@@ -57,13 +57,12 @@ export async function cancelTaskById(params: {
     task.runtime === "subagent" &&
     task.status === "cancelled" &&
     task.error === SUBAGENT_KILL_TASK_ERROR;
+  const childSessionKey = task.childSessionKey?.trim();
+  const canReconcileTerminalSubagentRun = task.runtime === "subagent" && Boolean(childSessionKey);
   if (
     !isProvisionalSubagentKill &&
-    (task.status === "succeeded" ||
-      task.status === "failed" ||
-      task.status === "timed_out" ||
-      task.status === "lost" ||
-      task.status === "cancelled")
+    isTerminalTaskStatus(task.status) &&
+    !canReconcileTerminalSubagentRun
   ) {
     return {
       found: true,
@@ -72,7 +71,6 @@ export async function cancelTaskById(params: {
       task: cloneTaskRecord(task),
     };
   }
-  const childSessionKey = task.childSessionKey?.trim();
   try {
     if (!hasAuthoritativeTaskBacking(task)) {
       return {
