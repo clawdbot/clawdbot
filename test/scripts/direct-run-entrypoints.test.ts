@@ -563,6 +563,7 @@ it("joins owned descendants and captures timeout output before deleting a reject
   );
   const failure = new Error("fixture callback rejected while the command was running");
   let root = "";
+  let fixturePresentAtCommandSettlement: boolean | undefined;
   let command: ReturnType<typeof runNodeScript> | undefined;
   await runQaGatewayFixture(
     async () => {
@@ -606,7 +607,10 @@ child.once("message", () => fs.writeFileSync(${JSON.stringify(pidPaths[1])}, Str
           ["--import", pathToFileURL(wrapperPidProbe).href, wrapperPath],
           env,
           fixtureRoot,
-        );
+        ).then((result) => {
+          fixturePresentAtCommandSettlement = existsSync(fixtureRoot);
+          return result;
+        });
         const implementationPid = await waitForPidFile(pidPaths[1]!, 5_000);
         expect(isProcessAlive(implementationPid)).toBe(true);
         throw failure;
@@ -619,6 +623,9 @@ child.once("message", () => fs.writeFileSync(${JSON.stringify(pidPaths[1])}, Str
         message: "Managed command timed out after 10000ms",
       });
       expect(result.status).toBeNull();
+      expect(fixturePresentAtCommandSettlement, "command teardown still owns its fixture").toBe(
+        true,
+      );
       expect(result.stdout).toContain("transformed");
       expect(result.stdout).toContain("descendant stdout");
       expect(result.stderr).toContain("descendant stderr");
