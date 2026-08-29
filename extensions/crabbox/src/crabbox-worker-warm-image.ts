@@ -11,6 +11,7 @@ import {
   buildCrabboxWarmupArgs,
   nonEmptyString,
   type parseCrabboxProfile,
+  type resolveCrabboxProvisionProfile,
 } from "./crabbox-worker-profile.js";
 
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
@@ -23,7 +24,7 @@ type WarmImageRecord = {
 };
 type LeaseContext = { binary: string; id: string; provider: string };
 type AllocationContext = LeaseContext & {
-  profile: CrabboxProfile;
+  profile: ReturnType<typeof resolveCrabboxProvisionProfile>["profile"];
   slug: string;
   timeoutMs: () => number;
 };
@@ -244,10 +245,13 @@ export function createCrabboxWarmImageManager(dependencies: {
       ]),
     );
 
-  const forkImage = async (context: AllocationContext): Promise<boolean> => {
+  const forkImage = async (
+    context: AllocationContext,
+    profile: CrabboxProfile & { class: string },
+  ): Promise<boolean> => {
     try {
       await collectExpiredImages(context);
-      const key = crabboxWarmImageKey(context.profile);
+      const key = crabboxWarmImageKey(profile);
       const record = openStore().lookup(key);
       if (!record?.checkpointId) {
         return false;
@@ -275,7 +279,7 @@ export function createCrabboxWarmImageManager(dependencies: {
             "--lease-id",
             context.id,
             "--class",
-            context.profile.class,
+            profile.class,
             "--slug",
             context.slug,
             "--json",
@@ -425,7 +429,7 @@ export function createCrabboxWarmImageManager(dependencies: {
     },
 
     async allocate(context: AllocationContext): Promise<void> {
-      if (context.profile.warmImage && (await forkImage(context))) {
+      if (context.profile.warmImage && (await forkImage(context, context.profile))) {
         return;
       }
       // Fork failure before create-intent permits cold warmup on the same fixed lease.

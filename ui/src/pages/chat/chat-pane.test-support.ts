@@ -55,6 +55,7 @@ export type TestChatPane = HTMLElement & {
   connectionGeneration: number;
   catalogLoadGeneration: number;
   continueCatalogSession: (key: CatalogSessionKey) => Promise<void>;
+  forkFromMessage: (entryId: string) => Promise<void>;
   createSession: () => Promise<boolean>;
   recoverSession: () => Promise<boolean>;
   restartRecoveryComposerBanner: () =>
@@ -220,6 +221,7 @@ export function createInitializationContext(): ApplicationContext {
     },
     placementStartup: {
       get: () => null,
+      hasPendingTurn: () => false,
       retry: () => undefined,
       subscribe: () => () => {},
     },
@@ -246,7 +248,7 @@ type SessionCapabilityFixtureOverrides = Omit<Partial<SessionCapability>, "patch
 export function createSessionCapabilityFixture(
   overrides: SessionCapabilityFixtureOverrides = {},
 ): SessionCapability {
-  return overrides as typeof overrides & SessionCapability;
+  return { deletionState: () => undefined, ...overrides } as typeof overrides & SessionCapability;
 }
 
 export function createSessionContext(

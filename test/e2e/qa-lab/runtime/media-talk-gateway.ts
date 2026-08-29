@@ -10,7 +10,10 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
+import {
+  createQaGatewayChild,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import { GatewayClient, type GatewayClientOptions } from "../../../../src/gateway/client.js";
 import type { DiagnosticStabilitySnapshot } from "../../../../src/logging/diagnostic-stability.js";
@@ -20,6 +23,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../../../src/utils/message-channel.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const FIXTURE_PLUGIN_ID = "qa-media-talk-runtime";
@@ -314,11 +318,12 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-webchat-tts-"));
   const fixture = await createFixturePlugin(fixtureRoot);
   const mock = await startQaMockOpenAiServer();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   let client: GatewayClient | undefined;
   const events: Array<{ event: string; payload?: unknown }> = [];
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -400,7 +405,7 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
     return `real Gateway pid=${gateway.pid ?? "unknown"}; WebChat history contained trusted audio; syntheses=1; scoped ticket served ${body.length} bytes`;
   } finally {
     client?.stop();
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
     await fs.rm(fixtureRoot, { force: true, recursive: true });
   }
@@ -482,10 +487,11 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-talk-"));
   const fixture = await createFixturePlugin(fixtureRoot);
   const mock = await startQaMockOpenAiServer({ finalOnlyMarkerPauseMs: 60_000 });
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   let client: GatewayClient | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -591,7 +597,7 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
     return `real Gateway pid=${gateway.pid ?? "unknown"}; persistent WebChat connection completed status, steer, follow-up, cancel RPCs; steeringQueueDepths=${steeringQueueDepths.join(",")}; finalState=${finalState.outcome}; finalQueueDepth=${finalState.queueDepth}`;
   } finally {
     client?.stop();
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
     await fs.rm(fixtureRoot, { force: true, recursive: true });
   }

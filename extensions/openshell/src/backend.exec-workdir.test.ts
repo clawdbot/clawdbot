@@ -748,8 +748,9 @@ describe("openshell backend exec workdir validation", () => {
   });
 
   it.each([
-    { label: "a host workspace", sharedHost: true, sharedRuntime: false },
-    { label: "a remote runtime", sharedHost: false, sharedRuntime: true },
+    { label: "a host workspace", host: "same", sharedRuntime: false },
+    { label: "a symlink-aliased host workspace", host: "alias", sharedRuntime: false },
+    { label: "a remote runtime", host: "different", sharedRuntime: true },
   ])("holds $label until command execution and publication finish", async (scenario) => {
     const workspaces = await Promise.all(
       ["first", "second"].map(async (label) =>
@@ -762,12 +763,21 @@ describe("openshell backend exec workdir validation", () => {
     tempWorkspaces.push(...workspaces);
     const firstWorkspace = expectDefined(workspaces[0], "first OpenShell workspace");
     const secondWorkspace = expectDefined(workspaces[1], "second OpenShell workspace");
+    const secondWorkspaceDir =
+      scenario.host === "same"
+        ? firstWorkspace.dir
+        : scenario.host === "alias"
+          ? path.join(secondWorkspace.dir, "alias")
+          : secondWorkspace.dir;
+    if (scenario.host === "alias") {
+      await fs.symlink(firstWorkspace.dir, secondWorkspaceDir, "junction");
+    }
     const first = await createOpenShellBackendFixture({
       workspaceDir: firstWorkspace.dir,
       scopeKey: "agent:workspace:first",
     });
     const second = await createOpenShellBackendFixture({
-      workspaceDir: (scenario.sharedHost ? firstWorkspace : secondWorkspace).dir,
+      workspaceDir: secondWorkspaceDir,
       scopeKey: scenario.sharedRuntime ? "agent:workspace:first" : "agent:workspace:second",
     });
 

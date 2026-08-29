@@ -4,11 +4,11 @@ import type {
   SessionParticipant,
   SessionParticipantIdentity,
 } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
-import { readPresenceEntries } from "../app/user-profile.ts";
+import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import {
   presenceViewerLabel,
-  projectPresenceEntries,
+  projectPresenceViewers,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -24,11 +24,6 @@ import {
   type PersonActivityRouting,
 } from "./person-activity-link.ts";
 import "./tooltip.ts";
-
-function normalized(value: string | null | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function renderViewerAvatar(view: IdentityAvatarView) {
   const fallback = html`<span
@@ -58,7 +53,7 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
     }
     const label = presenceViewerLabel(user);
     const view = resolveIdentityAvatarView({
-      identity: this.identity,
+      identity: this.identity ?? user.identity,
       id: user.id,
       name: user.name,
       username: user.email,
@@ -76,10 +71,10 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
 
 class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) presencePayload: unknown;
-  @property({ attribute: false }) selfUserId?: string;
+  @property({ attribute: false }) selfUser?: AuthenticatedUser | null;
   @property({ attribute: false }) selfInstanceId?: string;
   @property({ attribute: false }) sessionKey?: string;
-  @property({ attribute: false }) excludeUserId?: string;
+  @property({ attribute: false }) excludeIdentity?: SessionParticipantIdentity;
   @property({ attribute: false }) staticParticipants?: readonly SessionParticipant[];
   /** Prepared live presence for the collapsed Online section. */
   @property({ attribute: false }) staticUsers?: readonly PresenceViewer[];
@@ -93,21 +88,13 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) personActivity?: PersonActivityRouting;
 
   override render() {
-    const projection = projectPresenceEntries(
-      readPresenceEntries(this.presencePayload) ?? [],
-      this.selfUserId,
+    const viewers = projectPresenceViewers(
+      this.presencePayload,
+      this.selfUser,
       this.selfInstanceId,
+      this.sessionKey,
+      this.excludeIdentity,
     );
-    const sessionKey = this.sessionKey;
-    const excludeUserId = normalized(this.excludeUserId);
-    const viewers = sessionKey
-      ? projection.users.filter(
-          (user) =>
-            user.id !== projection.selfUserId &&
-            user.id !== excludeUserId &&
-            user.watchedSessions.includes(sessionKey),
-        )
-      : projection.users.filter((user) => user.id !== projection.selfUserId);
     const users = this.staticParticipants
       ? this.staticParticipants.map(({ identity, label, avatarUrl }) => ({
           identity,
@@ -116,9 +103,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
           avatarUrl,
           watchedSessions: [],
         }))
-      : (this.staticUsers ?? viewers).map((user) =>
-          Object.assign({}, user, { identity: { type: "profile" as const, id: user.id } }),
-        );
+      : (this.staticUsers ?? viewers);
     if (users.length === 0) {
       return nothing;
     }

@@ -311,7 +311,9 @@ push_prep_head_to_pr_branch() {
           git rebase "pr-$pr-latest"
           prep_head_sha=$(git rev-parse HEAD)
           local_prep_head_sha="$prep_head_sha"
+          refresh_main_snapshot || return 1
           run_prepare_push_retry_gates "$docs_only"
+          refresh_main_snapshot || return 1
         fi
 
         if ! push_output=$(push_prep_head_once "$pr_head" "$lease_sha" "$prep_head_sha" 2>&1); then

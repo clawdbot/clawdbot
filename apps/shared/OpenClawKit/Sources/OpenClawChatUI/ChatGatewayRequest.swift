@@ -412,7 +412,7 @@ public enum OpenClawChatGatewayRequests {
         return OpenClawChatGatewayRequest(
             method: "sessions.delete",
             params: params,
-            timeoutMs: self.mutationTimeoutMs)
+            timeoutMs: self.archiveMutationTimeoutMs)
     }
 
     public static func forkSession(

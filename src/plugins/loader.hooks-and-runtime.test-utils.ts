@@ -592,12 +592,19 @@ ${channelPluginSource({
       ids: ["setup-runtime-error-test", "setup-runtime-helper-test"],
     });
 
-    expect(registry.plugins.find((entry) => entry.id === "setup-runtime-error-test")?.status).toBe(
-      "error",
+    expect(registry.plugins.find((entry) => entry.id === "setup-runtime-error-test")).toMatchObject(
+      {
+        status: "error",
+        failurePhase: "load",
+        error: expect.stringContaining("broken setup runtime setter"),
+      },
     );
-    expect(
-      registry.plugins.find((entry) => entry.id === "setup-runtime-error-test")?.error,
-    ).toContain("broken setup runtime setter");
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        pluginId: "setup-runtime-error-test",
+        code: "channel-setup-failure",
+      }),
+    );
     expect(registry.plugins.find((entry) => entry.id === "setup-runtime-helper-test")?.status).toBe(
       "loaded",
     );
@@ -627,11 +634,18 @@ ${channelPluginSource({
     });
 
     expect(
-      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test")?.status,
-    ).toBe("error");
-    expect(
-      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test")?.error,
-    ).toContain("broken setup-runtime registrar");
+      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test"),
+    ).toMatchObject({
+      status: "error",
+      failurePhase: "register",
+      error: expect.stringContaining("broken setup-runtime registrar"),
+    });
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        pluginId: "setup-runtime-route-error-test",
+        code: "channel-setup-failure",
+      }),
+    );
     expect(registry.httpRoutes.some((route) => route.path === "/setup-runtime-route-error")).toBe(
       false,
     );
@@ -791,7 +805,7 @@ ${channelPluginSource({
     });
   });
 
-  it("records a diagnostic when registerChannel throws in the setup-entry path", () => {
+  it("rolls back setup registrations and records a diagnostic when registerChannel throws", () => {
     useNoBundledPlugins();
     const brokenDir = createSetupFailureFixture({
       id: "register-channel-throws-test",
@@ -805,6 +819,13 @@ ${channelPluginSource({
   });
   module.exports = {
     kind: "bundled-channel-setup-entry",
+    registerSetupRuntime(api) {
+      api.registerHttpRoute({
+        path: "/register-channel-throws-route",
+        auth: "gateway",
+        handler: async () => true,
+      });
+    },
     loadSetupPlugin: () => ({
       id: "register-channel-throws-test",
       meta: {
@@ -846,6 +867,9 @@ ${channelPluginSource({
       pluginId: "register-channel-throws-test",
       message: "failed to register setup channel",
     });
+    expect(
+      registry.httpRoutes.some((route) => route.path === "/register-channel-throws-route"),
+    ).toBe(false);
     // The healthy plugin loaded AFTER the broken one must still be present.
     const healthyChannel = registry.channels.find(
       (entry) => entry.plugin.id === "healthy-after-register-throw-chat",

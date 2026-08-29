@@ -347,6 +347,8 @@ export interface AssistantMessage {
   content: (TextContent | ThinkingContent | ToolCall)[];
   openclawDelivery?: {
     audioAsVoice?: true;
+    /** Exact media directives consumed by the managed-media transcript rewrite owner. */
+    mediaUrls?: string[];
     replyToCurrent?: true;
     replyToId?: string;
     /** Provider text phase is unresolved until the assistant turn reaches terminal state. */

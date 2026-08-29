@@ -152,6 +152,7 @@ describe("update cli option collisions", () => {
     { name: "repair", handler: updateFinalizeCommand },
     { name: "finalize", handler: updateFinalizeCommand },
     { name: "wizard", handler: updateWizardCommand },
+    { name: "status", handler: updateStatusCommand },
   ])("rejects parent --dry-run before running update $name", async ({ name, handler }) => {
     await runRegisteredCli({
       register: registerUpdateCli as (program: Command) => void,

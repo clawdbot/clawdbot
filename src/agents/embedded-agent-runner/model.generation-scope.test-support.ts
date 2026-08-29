@@ -107,6 +107,7 @@ export function createModelGenerationFixture(params: {
       return { authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
     });
   const preparedModelRuntime = {
+    catalogOwner: undefined,
     agentDir: "/tmp/openclaw-model-generation-agent",
     workspaceDir: GENERATION_WORKSPACE_DIR,
     activeProjectKeys: [],

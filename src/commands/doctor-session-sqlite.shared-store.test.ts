@@ -217,7 +217,13 @@ describe("Doctor canonical session SQLite targets", () => {
       configuredAgentDatabaseTargets,
       env: store.env,
     });
-    expect(migrated.warnings).toEqual([]);
+    expect(migrated).toEqual({
+      changes: [`Upgraded agent database schema in ${store.sqlitePath}: v17 -> v18.`],
+      warnings: [],
+    });
+    expect(
+      await migrateLegacyMediaPersistence({ configuredAgentDatabaseTargets, env: store.env }),
+    ).toEqual({ changes: [], warnings: [] });
     expectUpgradedSharedStore(store);
   });
 
@@ -234,6 +240,18 @@ describe("Doctor canonical session SQLite targets", () => {
         env: store.env,
       });
       try {
+        const migrated = await migrateLegacyMediaPersistence({
+          configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(store.cfg, {
+            env: store.env,
+          }),
+          env: store.env,
+        });
+        expect(migrated.changes).toEqual([]);
+        expect(migrated.warnings).toEqual([
+          expect.stringMatching(
+            /^Agent database maintenance deferred: .*stop that process and rerun openclaw doctor --fix/s,
+          ),
+        ]);
         await expect(repairHistoricalSharedStore(store, mode)).rejects.toThrow(
           /stop that process and rerun openclaw doctor --fix/,
         );
@@ -281,6 +299,18 @@ describe("Doctor canonical session SQLite targets", () => {
     expect(
       fs.readdirSync(path.dirname(store.sqlitePath)).some((file) => file.includes(".corrupt-")),
     ).toBe(false);
+    const migrated = await migrateLegacyMediaPersistence({
+      configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(store.cfg, {
+        env: store.env,
+      }),
+      env: store.env,
+    });
+    expect(migrated).toEqual({
+      changes: [],
+      warnings: [
+        `Skipped agent database migration for ${store.sqlitePath}: Error: Participant migration cannot rebuild unknown indexes, views, or triggers.`,
+      ],
+    });
     const preserved = openNodeSqliteDatabase(store.sqlitePath, { readOnly: true });
     try {
       expect(readStoredGoalState(preserved, store.scope.sessionKey)).toEqual(store.goalState);

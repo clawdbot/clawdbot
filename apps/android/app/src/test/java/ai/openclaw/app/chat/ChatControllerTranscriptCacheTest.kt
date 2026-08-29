@@ -240,7 +240,7 @@ class ChatControllerTranscriptCacheTest {
 
       val owner = ChatComposerOwner("gateway-a", "work", "agent:work:node-test")
       assertEquals("agent:work:node-test", controller.sessionKey.value)
-      assertTrue(controller.canSendForOwner(owner))
+      assertTrue(controller.isCurrentComposerOwner(owner))
     }
 
   @Test

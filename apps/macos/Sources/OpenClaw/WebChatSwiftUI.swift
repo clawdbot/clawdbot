@@ -1008,7 +1008,6 @@ private final class WebChatSessionKeyRelay {
 @MainActor
 final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     private let sessionKey: String
-    private let initialActiveAgentID: String?
     private let viewModel: OpenClawChatViewModel
     private let contentController: NSViewController
     private let sessionKeyRelay: WebChatSessionKeyRelay
@@ -1094,7 +1093,6 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     {
         self.sessionKey = sessionKey
         let initialActiveAgentID = WebChatRoute.normalizedAgentID(initialActiveAgentID)
-        self.initialActiveAgentID = initialActiveAgentID
         let voiceNoteRecorder = OpenClawVoiceNoteRecorder()
         voiceNoteRecorder.setCaptureAdmissionHandler {
             !AppStateStore.shared.talkEnabled
@@ -1139,39 +1137,42 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         }
         self.viewModel = vm
         let explicitAgentID = WebChatRoute.normalizedAgentID(explicitAgentID)
-        let chatConnection = (transport as? MacGatewayChatTransport)?.connection ?? .shared
-        let usesPrimaryAppRuntime = chatConnection === GatewayConnection.shared
-        Task { @MainActor [weak vm] in
-            let pushes = await chatConnection.subscribe()
-            for await push in pushes {
-                guard let vm else { return }
-                guard case .snapshot = push else { continue }
-                let route = await chatConnection.captureRoute()
-                let routingIdentity: OpenClawChatSessionRoutingIdentity? = if let route {
-                    try? await chatConnection.sessionRoutingIdentity(
-                        ifCurrentRoute: route)
-                } else {
-                    nil
-                }
-                if let routingIdentity {
-                    // An explicit navigation agent owns this window; gateway
-                    // default refreshes only supply the fallback route.
-                    let effectiveAgentID = Self.effectiveAgentID(
-                        explicitAgentID: explicitAgentID,
-                        cachedDefaultAgentID: routingIdentity.defaultAgentID)
-                    (transport as? MacGatewayChatTransport)?
-                        .updateDefaultGlobalAgentID(effectiveAgentID)
-                    // Keep request and cache ownership in lockstep before the
-                    // persistence await can admit a roster refresh.
-                    vm.syncDeliveryIdentity(
-                        activeAgentId: effectiveAgentID,
-                        sessionRoutingContract: routingIdentity.contract)
-                    if let store = transcriptCache as? OpenClawChatSQLiteTranscriptCache,
-                       !usesPrimaryAppRuntime || store.gatewayID == MacChatTranscriptCache.currentGatewayID(),
-                       let persistedIdentity = OpenClawChatSessionRoutingIdentity(
-                           contract: routingIdentity.contract)
-                    {
-                        await store.storeSessionRoutingIdentity(persistedIdentity)
+        let gatewayTransport = transport as? MacGatewayChatTransport
+        let usesPrimaryAppRuntime = gatewayTransport.map { $0.connection === GatewayConnection.shared } ?? false
+        // Custom transports have no Gateway owner; never attach them to the primary connection.
+        if let gatewayTransport {
+            let chatConnection = gatewayTransport.connection
+            Task { @MainActor [weak vm] in
+                let pushes = await chatConnection.subscribe()
+                for await push in pushes {
+                    guard let vm else { return }
+                    guard case .snapshot = push else { continue }
+                    let route = await chatConnection.captureRoute()
+                    let routingIdentity: OpenClawChatSessionRoutingIdentity? = if let route {
+                        try? await chatConnection.sessionRoutingIdentity(
+                            ifCurrentRoute: route)
+                    } else {
+                        nil
+                    }
+                    if let routingIdentity {
+                        // An explicit navigation agent owns this window; gateway
+                        // default refreshes only supply the fallback route.
+                        let effectiveAgentID = Self.effectiveAgentID(
+                            explicitAgentID: explicitAgentID,
+                            cachedDefaultAgentID: routingIdentity.defaultAgentID)
+                        gatewayTransport.updateDefaultGlobalAgentID(effectiveAgentID)
+                        // Keep request and cache ownership in lockstep before the
+                        // persistence await can admit a roster refresh.
+                        vm.syncDeliveryIdentity(
+                            activeAgentId: effectiveAgentID,
+                            sessionRoutingContract: routingIdentity.contract)
+                        if let store = transcriptCache as? OpenClawChatSQLiteTranscriptCache,
+                           !usesPrimaryAppRuntime || store.gatewayID == MacChatTranscriptCache.currentGatewayID(),
+                           let persistedIdentity = OpenClawChatSessionRoutingIdentity(
+                               contract: routingIdentity.contract)
+                        {
+                            await store.storeSessionRoutingIdentity(persistedIdentity)
+                        }
                     }
                 }
             }
@@ -1320,10 +1321,6 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
 
     var _testSceneBridgingOptions: NSHostingSceneBridgingOptions? {
         (self.contentController as? NSHostingController<MacChatSurface>)?.sceneBridgingOptions
-    }
-
-    var _testActiveAgentID: String? {
-        self.initialActiveAgentID
     }
 
     var _testDraft: String {

@@ -42,6 +42,9 @@ export function describeBrowserTool(opts: {
           "Use requests for the recent network log; filter matches URL/type, limit defaults to 50, and clear=true clears the collected log after reading.",
         ]
       : []),
+    ...(actions.has("errors")
+      ? ["Use errors for page errors; limit defaults to 50, clear=true clears after reading."]
+      : []),
     ...(actions.has("emulate")
       ? [
           "Use emulate with device, colorScheme, timezoneId, or locale; at least one setting is required.",

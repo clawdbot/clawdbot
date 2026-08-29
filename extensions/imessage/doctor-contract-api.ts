@@ -9,7 +9,6 @@ import {
   definePluginDoctorMigrationFromPlans,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { detectIMessageLegacyStateMigrations } from "./src/state-migrations.js";
 
 // Disabled `channels.imessage.catchup` blocks are retired. Enabled blocks stay
 // as a compatibility contract: older configs that opted into replay still get
@@ -111,6 +110,11 @@ export const stateMigrations = [
   definePluginDoctorMigrationFromPlans({
     id: "imessage-legacy-state",
     label: "iMessage legacy state",
-    resolvePlans: detectIMessageLegacyStateMigrations,
+    // Config repair enumerates this artifact too; load the detector only when
+    // detection or migration resolves plans.
+    resolvePlans: async (params) => {
+      const { detectIMessageLegacyStateMigrations } = await import("./src/state-migrations.js");
+      return detectIMessageLegacyStateMigrations(params);
+    },
   }),
 ];

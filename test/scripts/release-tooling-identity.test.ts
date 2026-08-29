@@ -206,6 +206,14 @@ describe("release tooling identity", () => {
           workflowSha: SHA,
         }),
       ).toMatchObject({ route: "main", sha: SHA });
+      expect(runGh).toHaveBeenCalledWith([
+        "api",
+        `repos/openclaw/openclaw/compare/${SHA}...main`,
+        "--method",
+        "GET",
+        "--jq",
+        "{status}",
+      ]);
     },
   );
 
@@ -308,6 +316,10 @@ describe("release tooling identity", () => {
   it.each([
     ["active", "in_progress", null, true],
     ["active", "completed", "success", false],
+    ["active-or-failure", "in_progress", null, true],
+    ["active-or-failure", "completed", "failure", true],
+    ["active-or-failure", "completed", "success", false],
+    ["active-or-failure", "completed", "cancelled", false],
     ["active-or-success", "in_progress", null, true],
     ["active-or-success", "completed", "success", true],
     ["active-or-success", "completed", "failure", false],

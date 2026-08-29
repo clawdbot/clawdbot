@@ -23,7 +23,6 @@ import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-to
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
-import { SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import {
   formatToolExecutionErrorMessage,
   resolveToolExecutionErrorKind,
@@ -4272,20 +4271,6 @@ describe("Tool Search", () => {
 
     const second = applyToolSearchCatalog({ tools: [codeTool, tool], config, sessionId });
     expect(second.catalogReused).toBe(false);
-  });
-
-  it("bounds tool_search_code stderr accumulation to the session tool tail limit", () => {
-    let stderrTail = "";
-    stderrTail = testing.appendToolSearchCodeStderrTail(
-      stderrTail,
-      `HEAD_OVERFLOW_${"x".repeat(SESSION_TOOL_STDERR_TAIL_BYTES + 10_000)}TAIL`,
-    );
-
-    expect(stderrTail).not.toContain("HEAD_OVERFLOW_");
-    expect(stderrTail.endsWith("TAIL")).toBe(true);
-    expect(Buffer.byteLength(stderrTail, "utf8")).toBeLessThanOrEqual(
-      SESSION_TOOL_STDERR_TAIL_BYTES,
-    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

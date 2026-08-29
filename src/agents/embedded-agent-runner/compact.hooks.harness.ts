@@ -1,6 +1,7 @@
 /**
  * Test harness mocks for embedded-agent compaction hook coverage.
  */
+import { join } from "node:path";
 import { vi, type Mock } from "vitest";
 import type { CompactResult } from "../../context-engine/types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
@@ -77,6 +78,12 @@ export const sessionCompactImpl = vi.fn(async () => ({
   tokensBefore: 120,
   details: { ok: true },
 }));
+export const getHistoryLimitFromSessionKeyMock = vi.fn<
+  typeof import("./history.js").getHistoryLimitFromSessionKey
+>(() => undefined);
+export const limitHistoryTurnsMock = vi.fn<typeof import("./history.js").limitHistoryTurns>(
+  (messages) => messages.slice(0, 2),
+);
 export const sessionManualCompactionMock = vi.fn();
 export const sessionAutomaticCompactionMock = vi.fn();
 export const attemptServerEndpointCompactionMock: Mock<(_params?: unknown) => Promise<unknown>> =
@@ -109,7 +116,8 @@ export const resolveSessionAgentIdsMock = vi.fn(() => ({
 export const resolveAgentConfigMock = vi.fn(
   (_config?: unknown, _agentId?: string): unknown => undefined,
 );
-export const resolveDefaultAgentDirMock = vi.fn(() => "/tmp/agents/main/agent");
+let fixtureWorkspaceDir: string;
+export const resolveDefaultAgentDirMock = vi.fn<() => string>();
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
 function createSelectedAgentHarnessMock(params: {
@@ -210,7 +218,8 @@ function createMockToolDefinitions(tools: unknown[] = []) {
 export const createOpenClawCodingToolsMock = vi.fn<typeof createOpenClawCodingTools>(() => []);
 export const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
 export const resolveEffectiveCompactionModeMock = vi.fn(() => "default");
-export const guardSessionManagerMock = vi.fn(() => ({
+export const guardSessionManagerMock = vi.fn((sessionManager: Record<string, unknown>) => ({
+  ...sessionManager,
   flushPendingToolResults: vi.fn(),
 }));
 export const applyAgentCompactionSettingsFromConfigMock = vi.fn();
@@ -404,19 +413,21 @@ export const buildAgentRuntimePlanMock = vi.fn((params: BuildAgentRuntimePlanPar
   createCompactHooksRuntimePlan(params),
 );
 
+const emptyPluginIndex: PluginMetadataSnapshot["index"] = {
+  version: 1,
+  hostContractVersion: "test",
+  compatRegistryVersion: "test",
+  migrationVersion: 1,
+  policyHash: "",
+  generatedAtMs: 1,
+  installRecords: {},
+  plugins: [],
+  diagnostics: [],
+};
 const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   policyHash: "",
-  index: {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "",
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  },
+  index: emptyPluginIndex,
+  registryIndex: emptyPluginIndex,
   registryDiagnostics: [],
   manifestRegistry: { plugins: [], diagnostics: [] },
   plugins: [],
@@ -575,7 +586,8 @@ export function resetCompactSessionStateMocks(): void {
   resolveSkillsPromptMock.mockReturnValue(undefined);
 }
 
-export function resetCompactHooksHarnessMocks(): void {
+export function resetCompactHooksHarnessMocks(workspaceDir: string): void {
+  fixtureWorkspaceDir = workspaceDir;
   runCliAgentMock.mockClear();
   resolveCliBackendConfigMock.mockReset();
   resolveCliBackendConfigMock.mockReturnValue(null);
@@ -589,7 +601,7 @@ export function resetCompactHooksHarnessMocks(): void {
 
   acquireAgentRunPreparedModelRuntimeMock.mockClear();
   resolveDefaultAgentDirMock.mockReset();
-  resolveDefaultAgentDirMock.mockReturnValue("/tmp/agents/main/agent");
+  resolveDefaultAgentDirMock.mockReturnValue(join(workspaceDir, "agents/main/agent"));
   getCurrentPluginMetadataSnapshotMock.mockReset();
   getCurrentPluginMetadataSnapshotMock.mockReturnValue(emptyPluginMetadataSnapshot);
 
@@ -649,9 +661,10 @@ export function resetCompactHooksHarnessMocks(): void {
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
   guardSessionManagerMock.mockReset();
-  guardSessionManagerMock.mockReturnValue({
+  guardSessionManagerMock.mockImplementation((sessionManager) => ({
+    ...sessionManager,
     flushPendingToolResults: vi.fn(),
-  });
+  }));
   applyAgentCompactionSettingsFromConfigMock.mockReset();
   createPreparedEmbeddedAgentSettingsManagerMock.mockReset();
   createPreparedEmbeddedAgentSettingsManagerMock.mockReturnValue({
@@ -666,7 +679,6 @@ export async function loadCompactHooksHarness(): Promise<{
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 }> {
-  resetCompactHooksHarnessMocks();
   vi.resetModules();
 
   vi.doMock("./server-endpoint-compaction.js", () => ({
@@ -987,8 +999,8 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./history.js", () => ({
-    getHistoryLimitFromSessionKey: vi.fn(() => undefined),
-    limitHistoryTurns: vi.fn((msgs: unknown[]) => msgs.slice(0, 2)),
+    getHistoryLimitFromSessionKey: getHistoryLimitFromSessionKeyMock,
+    limitHistoryTurns: limitHistoryTurnsMock,
   }));
 
   vi.doMock("../../skills/runtime/env-overrides.js", () => ({
@@ -1014,9 +1026,11 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../agent-scope.js", () => ({
     listAgentEntries: vi.fn(() => []),
     resolveAgentConfig: resolveAgentConfigMock,
-    resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agents/${agentId}/agent`),
+    resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) =>
+      join(fixtureWorkspaceDir, "agents", agentId, "agent"),
+    ),
     resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
-    resolveAgentWorkspaceDir: vi.fn(() => "/tmp"),
+    resolveAgentWorkspaceDir: vi.fn(() => fixtureWorkspaceDir),
     resolveDefaultAgentDir: resolveDefaultAgentDirMock,
     resolveDefaultAgentId: vi.fn(() => "main"),
     resolveAgentIdFromSessionKey: vi.fn(

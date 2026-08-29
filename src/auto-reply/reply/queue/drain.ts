@@ -252,6 +252,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     stableStringify(execution.toolBindings ?? null),
     execution.chatType ?? "",
     execution.agentAccountId ?? "",
+    execution.conversationRoutePeerId ?? "",
     execution.groupId ?? "",
     execution.groupChannel ?? "",
     execution.groupSpace ?? "",

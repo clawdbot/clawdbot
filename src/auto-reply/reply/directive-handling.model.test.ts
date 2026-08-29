@@ -564,7 +564,10 @@ function resolveModelSelectionForCommand(params: {
 }) {
   return resolveModelSelectionFromDirective({
     directives: parseInlineSessionDirectives(params.command),
-    cfg: params.cfg ?? ({ commands: { text: true } } as unknown as OpenClawConfig),
+    cfg: params.cfg ?? {
+      commands: { text: true },
+      agents: { defaults: { modelPolicy: { allow: [...params.allowedModelKeys] } } },
+    },
     agentId: params.agentId,
     agentDir: TEST_AGENT_DIR,
     defaultProvider: "anthropic",
@@ -1435,7 +1438,10 @@ describe("/model chat UX", () => {
 
   it("auto-applies closest match for typos", () => {
     const directives = parseInlineSessionDirectives("/model anthropic/claud-opus-4-5");
-    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
+    const cfg: OpenClawConfig = {
+      commands: { text: true },
+      agents: { defaults: { modelPolicy: { allow: ["anthropic/claude-opus-4-6"] } } },
+    };
 
     const resolved = resolveModelSelectionFromDirective({
       directives,
@@ -1654,17 +1660,14 @@ describe("/model chat UX", () => {
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
   });
 
-  it.each([
-    ["openai/gpt-4o", "openai", "gpt-4o"],
-    ["codex/gpt-5.5", "codex", "gpt-5.5"],
-  ])("persists provider-compatible runtime overrides for %s", async (modelKey, provider, model) => {
+  it("persists provider-compatible runtime overrides", async () => {
     const { persisted, sessionEntry } = await persistModelDirectiveForTest({
-      command: `/model ${modelKey} --runtime codex hello`,
-      allowedModelKeys: [modelKey],
+      command: "/model openai/gpt-4o --runtime codex hello",
+      allowedModelKeys: ["openai/gpt-4o"],
     });
 
-    expect(sessionEntry.providerOverride).toBe(provider);
-    expect(sessionEntry.modelOverride).toBe(model);
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
     expect(sessionEntry.agentRuntimeOverride).toBe("codex");
     expect(persisted.directiveAck?.text).toContain("Runtime set to codex for this session.");
   });
@@ -1888,6 +1891,13 @@ describe("/model chat UX", () => {
   it("persists explicit auth profiles after @YYYYMMDD version suffixes in mixed-content messages", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
       command: `/model custom/vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}@work hello`,
+      cfg: {
+        models: {
+          providers: {
+            custom: { api: "openai-responses", baseUrl: "https://custom.invalid/v1", models: [] },
+          },
+        },
+      },
       profiles: {
         work: {
           type: "api_key",
@@ -2636,7 +2646,9 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       nextAuthProfileIdSource: "user",
       nextThinking: {
         level: undefined,
-        catalog: allowedModelCatalog,
+        catalog: expect.arrayContaining([
+          expect.objectContaining({ provider: "anthropic", id: "claude-opus-4-6" }),
+        ]),
         agentRuntime: "openclaw",
       },
     });

@@ -68,6 +68,19 @@ export function resolveVitestRuntimeCliSelections(
     .map((consumer) => ({ configs: consumer.configs, cli: { args, dir: consumer.dir, env } }));
 }
 
+/**
+ * Test files under `configs` that need a built runtime. Callers use this to keep
+ * those files in one shard: the pretest build is charged per job, so spreading
+ * them across stripes makes every stripe pay for it.
+ */
+export function listVitestRuntimeConsumerFiles(configs: readonly string[]): string[] {
+  return runtimeConsumers
+    .filter((consumer) =>
+      consumer.configs.some((candidate) => includesRuntimeConfig(configs, candidate)),
+    )
+    .map((consumer) => consumer.file);
+}
+
 export function resolveVitestPretestBuildMode(
   selections: readonly TestSelection[],
 ): VitestPretestBuildMode | undefined {

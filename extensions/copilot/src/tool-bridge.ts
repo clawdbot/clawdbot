@@ -199,6 +199,7 @@ export async function createCopilotToolBridge(
     abortSignal: input.abortSignal,
     agentId: input.agentId,
     config: attemptParams.config,
+    codeModeOverride: attemptParams.codeModeOverride,
     disableTools: attemptParams.disableTools,
     executeTool: (toolParams) => executeCatalogTool(input, toolParams),
     forceMessageTool: shouldForceCopilotMessageTool(attemptParams),

@@ -1,3 +1,4 @@
+import type { ChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
@@ -38,6 +39,41 @@ export type PluginDoctorStateMigrationContext = {
     namespace: string,
     entries: readonly PluginDoctorRawStateEntry[],
   ) => { deleted: number; changed: number };
+  /** Owner-bound ingress queue access, one entry per manifest-declared channel;
+   *  the host fixes the channel identity and doctor state directory. Older test
+   *  hosts may omit it. */
+  channelIngressQueues?: readonly PluginDoctorChannelIngressQueueAccess[];
+};
+
+/** Read-only projection of a durable ingress queue. Detection runs before the host
+    holds exclusive state ownership, so it is never handed anything wider. */
+export type PluginDoctorChannelIngressQueueInspection<TPayload, TMetadata = unknown> = Pick<
+  ChannelIngressQueue<TPayload, TMetadata>,
+  "listPending" | "listClaims" | "listFailed"
+>;
+
+/** Doctor access to one host-bound channel's durable ingress queues. It mirrors
+ *  the runtime proxy's accessor, minus the state-dir override the host fixes. */
+export type PluginDoctorChannelIngressQueueAccess = {
+  channelId: string;
+  /** Inspection-only access, available in every phase including detection. */
+  openChannelIngressQueueForInspection: <TPayload, TMetadata = unknown>(options?: {
+    accountId?: string;
+  }) => PluginDoctorChannelIngressQueueInspection<TPayload, TMetadata>;
+  /** Account ids currently holding ingress rows, so migrations also sweep
+   *  accounts retired from config. Async because detection resolves it through the
+   *  non-creating read-only path. */
+  listChannelIngressQueueAccountIds: () => Promise<string[]>;
+  /** Present only while the host owns the exclusive Doctor maintenance lock. Every
+   *  call re-asserts that authority, so a handle retained past the repair section
+   *  fails instead of writing. */
+  openChannelIngressQueue?: <
+    TPayload,
+    TMetadata = unknown,
+    TCompletedMetadata = unknown,
+  >(options?: {
+    accountId?: string;
+  }) => ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>;
 };
 
 export type PluginDoctorStateMigration = {

@@ -37,6 +37,7 @@ type ChannelMessageActionDiscoveryParams = {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
   preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 };
 

@@ -58,6 +58,14 @@ to the Gateway host and follows OpenClaw exec policy. `gateway_process` uses the
 existing per-session OpenClaw process scope for background follow-up. Prefer
 Codex native shell for ordinary local work.
 
+Stopping an active Codex run interrupts its turn, then stops the native background
+terminals listed on that Codex thread before releasing the run. Other Codex
+threads and deliberately backgrounded `gateway_process` jobs are unaffected.
+If native terminal cleanup fails, the run reports an error instead of silently
+claiming cleanup succeeded. Inspect that thread's running terminals before
+starting more work. This uses Codex's terminal ownership; it does not guarantee
+cleanup of commands that deliberately detach from that ownership.
+
 With the default `tools.exec.host: "auto"` and no active OpenClaw sandbox,
 Codex also receives `node_exec` for commands on paired nodes. Native shell
 remains on the Codex app-server host and workspace

@@ -6,6 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { isDefaultInstallIdentity, resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
@@ -26,6 +27,7 @@ import {
   readEmbeddedGatewayToken,
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
+import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import { SERVICE_PROXY_ENV_KEYS } from "../daemon/service-env.js";
 import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import {
@@ -34,6 +36,7 @@ import {
 } from "../daemon/service-managed-env.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import {
+  assertServiceDefinitionWritable,
   hasGatewayServiceEnvironmentOverride,
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
@@ -604,14 +607,14 @@ export async function maybeRepairGatewayServiceConfig(
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;
-  const systemNodePath = systemNodeInfo?.supported ? systemNodeInfo.path : null;
+  const systemNodePath = systemNodeInfo?.status === "supported" ? systemNodeInfo.path : null;
   if (needsNodeRuntime && !systemNodePath && runtimeChoice !== "node") {
     const warning = renderSystemNodeWarning(systemNodeInfo);
     if (warning) {
       note(warning, "Gateway runtime");
     } else {
       note(
-        "System Node 22 LTS (22.22.3+) or Node 24.15+ not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
+        `System Node ${SUPPORTED_NODE_VERSIONS} not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.`,
         "Gateway runtime",
       );
     }
@@ -683,6 +686,9 @@ export async function maybeRepairGatewayServiceConfig(
     ),
   );
   note(consolidatedLines.join("\n"), "Gateway service config");
+  if (audit.issues.every((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed)) {
+    return cfg;
+  }
 
   const aggressiveIssues = audit.issues.filter((issue) => issue.level === "aggressive");
   const needsAggressive = aggressiveIssues.length > 0;
@@ -769,6 +775,24 @@ export async function maybeRepairGatewayServiceConfig(
         "Gateway service config",
       );
     }
+    return cfg;
+  }
+  try {
+    // Installed and planned environments can select different state files. Check
+    // both before token persistence; native publication still revalidates under locks.
+    for (const environment of [
+      mergeGatewayServiceEnv(serviceInstallEnv, command),
+      expectedRuntimePlan.environment,
+    ]) {
+      const capability = await service
+        .readDefinitionMutationCapability?.({ env: serviceInstallEnv, environment })
+        .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const);
+      if (capability) {
+        assertServiceDefinitionWritable(capability);
+      }
+    }
+  } catch (err) {
+    runtime.error(`Gateway service repair blocked: ${String(err)}`);
     return cfg;
   }
   const serviceEmbeddedToken = readEmbeddedGatewayToken(managedDefinition);

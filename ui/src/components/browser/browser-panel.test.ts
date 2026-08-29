@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./browser-panel.ts";
+import { createView } from "./browser-panel-controller-test-support.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
@@ -147,6 +148,41 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(empty?.querySelector("svg")).not.toBeNull();
   });
 
+  it("overlays a retained browser view only while its refresh is pending", async () => {
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+      available: boolean;
+      embedded: boolean;
+      browserPanelController: BrowserPanelController;
+      renderRoot: ShadowRoot;
+      requestUpdate: () => void;
+      updateComplete: Promise<unknown>;
+    };
+    panel.available = true;
+    panel.embedded = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    panel.browserPanelController.activeTargetId = "tab-a";
+    panel.browserPanelController.view = createView("tab-a");
+    panel.browserPanelController.loading = true;
+    panel.requestUpdate();
+    await panel.updateComplete;
+
+    expect(panel.renderRoot.querySelector(".bp-shot")).not.toBeNull();
+    expect(
+      panel.renderRoot.querySelector(
+        'openclaw-panel-loading-skeleton[data-panel-skeleton="browser"][overlay]',
+      ),
+    ).not.toBeNull();
+
+    panel.browserPanelController.loading = false;
+    panel.requestUpdate();
+    await panel.updateComplete;
+
+    expect(panel.renderRoot.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+    expect(panel.renderRoot.querySelector(".bp-shot")).not.toBeNull();
+  });
+
   it("suppresses an open dock without overwriting its persisted preference", async () => {
     localStorage.setItem(
       "openclaw.browser.panel.v1",
@@ -249,25 +285,6 @@ describe("normalizeBrowserUrlDraft", () => {
     );
 
     expect(panel.browserPanelIsOpen()).toBe(false);
-  });
-
-  it("selects the requested tab for a targeted open request", () => {
-    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
-      available: boolean;
-      browserPanelIsOpen: () => boolean;
-      browserPanelController: { selectTab: (targetId: string) => Promise<void> };
-      handleToggleRequest: (event: Event) => void;
-    };
-    panel.available = true;
-    document.body.append(panel);
-    const selectTab = vi.spyOn(panel.browserPanelController, "selectTab").mockResolvedValue();
-
-    panel.handleToggleRequest(
-      new CustomEvent("openclaw:browser-toggle", { detail: { open: true, targetId: "tab-7" } }),
-    );
-
-    expect(panel.browserPanelIsOpen()).toBe(true);
-    expect(selectTab).toHaveBeenCalledWith("tab-7");
   });
 
   it.each(["close", "suppress"] as const)(

@@ -13,10 +13,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
-  resolvePluginSessionOwnershipError,
-  type PluginSessionOwnershipAction,
-} from "../session-plugin-ownership.js";
-import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -26,10 +22,9 @@ import {
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
 import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 export {
   resolveSessionWorkerPlacementMutationError,
-  retireSessionWorkerPlacementBeforeMutation,
   SessionWorkerPlacementMutationError,
 } from "../worker-environments/session-placement-lifecycle.js";
 
@@ -111,26 +106,6 @@ export function requireSessionKey(key: unknown, respond: RespondFn): string | nu
     return null;
   }
   return normalized;
-}
-
-export function rejectPluginRuntimeSessionOwnershipMismatch(params: {
-  action: PluginSessionOwnershipAction;
-  client: GatewayClient | null;
-  key: string;
-  entry: SessionEntry | undefined;
-  respond: RespondFn;
-}): boolean {
-  const error = resolvePluginSessionOwnershipError({
-    action: params.action,
-    entry: params.entry,
-    key: params.key,
-    pluginOwnerId: params.client?.internal?.pluginRuntimeOwnerId,
-  });
-  if (!error) {
-    return false;
-  }
-  params.respond(false, undefined, error);
-  return true;
 }
 
 export function resolveGatewaySessionTargetFromKey(

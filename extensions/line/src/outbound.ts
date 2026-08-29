@@ -1,5 +1,8 @@
 import type { messagingApi } from "@line/bot-sdk";
-import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 // Line plugin module implements outbound behavior.
 import {
   createChannelMessageAdapterFromOutbound,
@@ -15,7 +18,10 @@ import {
   type OutboundDeliveryResult,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  formatErrorMessage,
+  PlatformMessageNotDispatchedError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
@@ -38,11 +44,8 @@ import {
   renderLinePresentation,
 } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
-import {
-  getLinePushHttpStatus,
-  isRetryableLinePushError,
-  LINE_RETRY_KEY_TTL_MS,
-} from "./send-retry.js";
+import { createLineSendReceipt } from "./send-receipt.js";
+import { LINE_RETRY_KEY_TTL_MS, resolveLineNonDispatchRetryable } from "./send-retry.js";
 import type { LineChannelData, LineSendResult, ResolvedLineAccount } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
@@ -134,7 +137,23 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const recordResult = async (
       resultPromise: Promise<LineSendResult>,
     ): Promise<LineSendResult> => {
-      const result = await resultPromise;
+      let result: LineSendResult;
+      try {
+        result = await resultPromise;
+      } catch (error) {
+        const retryable = isChannelPartialDeliveryError(error)
+          ? undefined
+          : resolveLineNonDispatchRetryable(error);
+        // Nothing has been accepted yet for this payload, so a LINE client error
+        // proves the whole delivery was rejected rather than left ambiguous.
+        // Once a send has landed the failure is partial and keeps its own shape.
+        throw lastResult === null && retryable !== undefined
+          ? new PlatformMessageNotDispatchedError(
+              error instanceof Error ? error.message : "LINE rejected the message",
+              { cause: error, retryable },
+            )
+          : error;
+      }
       lastResult = result;
       try {
         await onDeliveryResult?.(createEmptyChannelResult("line", { ...result }));
@@ -448,16 +467,21 @@ async function reconcileLineUnknownSend(
         },
       });
     } catch (error) {
-      const status = getLinePushHttpStatus(error);
-      if (results.length === 0 && status !== undefined && status >= 400 && status < 500) {
-        // LINE rejects this exact request deterministically, so the first push
-        // could not have been accepted on the interrupted attempt either.
+      // Reuses the send owner's classification rather than re-reading the status
+      // here: it is the one place that knows a 429 stays retryable, a 408 stays
+      // ambiguous, and a retry-key 409 is an accepted delivery, not a refusal.
+      const nonDispatchRetryable = resolveLineNonDispatchRetryable(error);
+      if (results.length === 0 && nonDispatchRetryable === false) {
+        // LINE refused this exact request outright, so the first push could not
+        // have been accepted on the interrupted attempt either.
         return { status: "not_sent" };
       }
       return {
         status: "unresolved",
         error: formatErrorMessage(error),
-        retryable: !(error instanceof LineDurableSendPlanError) && isRetryableLinePushError(error),
+        // An ambiguous failure stays retryable: the derived retry key makes a
+        // replay safe for 24 hours even if the interrupted attempt did land.
+        retryable: !(error instanceof LineDurableSendPlanError) && (nonDispatchRetryable ?? true),
       };
     }
   }

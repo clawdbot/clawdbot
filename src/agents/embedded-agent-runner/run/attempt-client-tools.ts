@@ -160,8 +160,8 @@ export function prepareEmbeddedAttemptClientTools(params: {
     : addClientToolsToToolSearchCatalog;
   const clientToolSearch = addClientToolsToCatalog({
     tools: clientToolDefs,
-    // Mirrors applyAgentToolSurfaceCatalog: code mode reads the base config,
-    // tool search reads the run's resolved tool-search runtime config.
+    // Activation was resolved for this attempt; only Tool Search still needs
+    // its runtime configuration to choose the catalog layout.
     config: params.codeModeControlsEnabledForRun
       ? params.attempt.config
       : params.toolSearchRuntimeConfig,

@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { renderCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatByteSize } from "../../../lib/format.ts";
@@ -448,7 +449,7 @@ export function renderSessionWorkspaceRail(
             ${sessionWorkspace.error}
           </div>`
         : sessionWorkspace.loading && !hasItems
-          ? html`<div class="chat-workspace-rail__state">${t("chat.workspaceFiles.loading")}</div>`
+          ? renderPanelLoadingSkeleton("files", t("chat.workspaceFiles.loading"))
           : html`
               <div class="chat-workspace-rail__scroll">
                 ${hasSessionItems

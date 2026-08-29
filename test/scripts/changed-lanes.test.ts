@@ -1822,22 +1822,22 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it("runs Plugin SDK export and surface checks for direct SDK changes", () => {
-    expect(
-      shouldRunPluginSdkSurfaceChecks([
-        "src/plugin-sdk/core.ts",
-        "scripts/plugin-sdk-surface-report.mts",
-        "scripts/sync-plugin-sdk-exports.mts",
-        "scripts/lib/plugin-sdk-entries.mts",
-        "scripts/lib/plugin-sdk-entrypoints.json",
-        "package.json",
-      ]),
-    ).toBe(true);
+  it.each([
+    "src/plugin-sdk/core.ts",
+    "scripts/plugin-sdk-surface-report.mts",
+    "scripts/sync-plugin-sdk-exports.mts",
+    "scripts/lib/plugin-sdk-entries.mts",
+    "scripts/lib/plugin-sdk-entrypoints.json",
+    "extensions/tsconfig.package-boundary.paths.json",
+    "extensions/xai/tsconfig.json",
+  ])("runs Plugin SDK export and surface checks for %s", (changedPath) => {
+    expect(shouldRunPluginSdkSurfaceChecks([changedPath])).toBe(true);
+    expect(shouldRunPluginSdkSurfaceChecks(["package.json"])).toBe(true);
     expect(shouldRunPluginSdkSurfaceChecks(["src/config/sessions/session-accessor.ts"])).toBe(
       false,
     );
 
-    const result = detectChangedLanes(["src/plugin-sdk/core.ts"]);
+    const result = detectChangedLanes([changedPath]);
     const plan = createChangedCheckPlan(result);
 
     expect(plan.commands).toContainEqual({

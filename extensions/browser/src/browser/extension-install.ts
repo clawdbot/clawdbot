@@ -136,16 +136,16 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-function launcherMatchesOrigins(params: {
+function parseOwnedLauncherTargets(params: {
   content: string;
   manifestPath: string;
   launcherPath: string;
   origins: string[];
-}): boolean {
+}): string[] | undefined {
   const quotedValue = String.raw`'(?:[^'\r\n]|'"'"')*'`;
   const command = [
-    quotedValue,
-    quotedValue,
+    `(${quotedValue})`,
+    `(${quotedValue})`,
     escapeRegExp(shellQuote("--manifest")),
     escapeRegExp(shellQuote(params.manifestPath)),
     escapeRegExp(shellQuote("--launcher")),
@@ -159,7 +159,11 @@ function launcherMatchesOrigins(params: {
     `^#!/bin/sh\\n${escapeRegExp(OWNED_LAUNCHER_MARKER)}\\nexport OPENCLAW_STATE_DIR=${quotedValue}\\n(?:export OPENCLAW_CONFIG_PATH=${quotedValue}\\n)?exec ${command} "\\$@"\\n$`,
     "u",
   );
-  return pattern.test(params.content);
+  // Decode only shellQuote's two target words after the entire ownership grammar matches.
+  return pattern
+    .exec(params.content)
+    ?.slice(1)
+    .map((value) => value.slice(1, -1).replaceAll(`'"'"'`, "'"));
 }
 
 async function assertPrivateNativeHostFile(
@@ -177,6 +181,15 @@ async function assertPrivateNativeHostFile(
   }
 }
 
+async function assertNativeHostTarget(target: string, accessMode: number): Promise<void> {
+  // Registered targets must not depend on Chrome's working directory.
+  if (!path.isAbsolute(target)) {
+    throw new Error("native host target must be an absolute path");
+  }
+  await assertOwnedPath(target, "file", { allowRootOwner: true });
+  await fs.access(target, accessMode);
+}
+
 async function resolveLauncherInstall(params: {
   manifestPath: string;
   pluginRoot: string;
@@ -186,8 +199,8 @@ async function resolveLauncherInstall(params: {
   const launcherPath = launcherPathForManifest(params.manifestPath, params.deps);
   const nodePath = await fs.realpath(params.deps.nodePath ?? process.execPath);
   const nativeHostPath = await resolveNativeHostPath(params.pluginRoot, params.deps.nativeHostPath);
-  await assertOwnedPath(nodePath, "file", { allowRootOwner: true });
-  await assertOwnedPath(nativeHostPath, "file", { allowRootOwner: true });
+  await assertNativeHostTarget(nodePath, fs.constants.X_OK);
+  await assertNativeHostTarget(nativeHostPath, fs.constants.R_OK);
   const command = [
     nodePath,
     nativeHostPath,
@@ -275,14 +288,24 @@ async function inspectRegistration(
       throw new Error("native host manifest does not contain exact allowed origins");
     }
     await assertPrivateNativeHostFile(expectedLauncher, true, deps.platform ?? process.platform);
-    const launcherMatches = launcherMatchesOrigins({
+    const launcherTargets = parseOwnedLauncherTargets({
       content: await fs.readFile(expectedLauncher, "utf8"),
       manifestPath,
       launcherPath: expectedLauncher,
       origins: stringOrigins,
     });
-    if (!launcherMatches) {
+    if (!launcherTargets) {
       throw new Error("native host launcher and manifest origins do not match");
+    }
+    // Removed package versions break readiness, not ownership or managed repair/removal.
+    let issue: string | undefined;
+    try {
+      for (const [index, target] of launcherTargets.entries()) {
+        await assertNativeHostTarget(target, index === 0 ? fs.constants.X_OK : fs.constants.R_OK);
+      }
+    } catch {
+      issue =
+        "registered native host runtime or entry is unavailable or unsafe; run openclaw browser extension install";
     }
     return {
       product: root.product,
@@ -290,6 +313,7 @@ async function inspectRegistration(
       manifestPath,
       extensionIds: ids.toSorted(),
       state: "owned",
+      issue,
     };
   } catch (error) {
     return {
@@ -516,20 +540,11 @@ export async function browserExtensionStatus(params: {
       : await Promise.all(
           chromeProductRoots(deps).map((root) => inspectRegistration(root, deps, predictedIds)),
         );
-  const missingRegistration = chromeProductRoots(deps).some((root) => {
+  const unavailableRegistration = registrations.some((registration) => {
     const productWasDiscovered =
-      discovery.discovered.some((entry) => entry.product === root.product) ||
-      discovery.storeDiscovered.some((entry) => entry.product === root.product);
-    if (!productWasDiscovered) {
-      return false;
-    }
-    const manifestPath = path.join(root.nativeManifestDir, `${BROWSER_NATIVE_HOST_NAME}.json`);
-    const registration = registrations.find((entry) => entry.manifestPath === manifestPath);
-    return (
-      registration?.state !== "owned" ||
-      JSON.stringify(registration.extensionIds) !==
-        JSON.stringify(expectedExtensionIds(predictedIds))
-    );
+      discovery.discovered.some((entry) => entry.product === registration.product) ||
+      discovery.storeDiscovered.some((entry) => entry.product === registration.product);
+    return productWasDiscovered && (registration.state !== "owned" || Boolean(registration.issue));
   });
   return {
     platform,
@@ -545,7 +560,7 @@ export async function browserExtensionStatus(params: {
       (installedCopy.present && !installedCopy.owned) ||
       (discovery.discovered.length === 0 && discovery.storeDiscovered.length === 0) ||
       discovery.identityMismatches.length > 0 ||
-      missingRegistration,
+      unavailableRegistration,
     issues: [
       ...(installedCopy.present && !installedCopy.owned
         ? [`Chrome extension copy is not OpenClaw-owned: ${installedPath}`]

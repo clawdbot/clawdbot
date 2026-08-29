@@ -1831,8 +1831,8 @@ struct GatewayNodeSessionTests {
         let error = try #require(params["error"] as? [String: Any])
         #expect(params["id"] as? String == "during-lifecycle")
         #expect(params["ok"] as? Bool == false)
-        #expect(error["code"] as? String == OpenClawNodeErrorCode.unavailable.rawValue)
-        #expect(error["message"] as? String == "UNAVAILABLE: node lifecycle transition in progress")
+        #expect(error["code"] as? String == OpenClawNodeErrorCode.notReady.rawValue)
+        #expect(error["message"] as? String == "Node lifecycle transition in progress")
         #expect(await invocations.values() == [])
 
         await invalidationGate.release()

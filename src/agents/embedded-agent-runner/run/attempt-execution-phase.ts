@@ -111,6 +111,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
       cacheTrace,
       capabilityToolNames,
+      compactionReplayEnabled: sessionRuntime.transport.compactionReplayEnabled,
       effectiveWorkspace: input.setup.effectiveWorkspace,
       isOpenAIResponsesApi,
       isRawModelRun: input.isRawModelRun,

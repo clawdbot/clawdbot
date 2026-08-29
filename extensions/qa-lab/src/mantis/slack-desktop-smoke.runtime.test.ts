@@ -87,7 +87,6 @@ function mockMantisCliRuntime(runMantisSlackDesktopSmokeCommand = vi.fn()) {
     runMantisDesktopBrowserSmokeCommand: vi.fn(),
     runMantisDiscordSmokeCommand: vi.fn(),
     runMantisSlackDesktopSmokeCommand,
-    runMantisTelegramDesktopBuilderCommand: vi.fn(),
     runMantisVisualDriverCommand: vi.fn(),
     runMantisVisualTaskCommand: vi.fn(),
   }));

@@ -264,11 +264,15 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     });
   });
 
-  it("emits verbose summaries for transcript-recorded dynamic tool calls", async () => {
+  it.each([
+    ["non-channel", undefined, 1],
+    ["channel", "telegram", 0],
+  ] as const)("handles transcript tool summaries for %s runs", async (_, messageChannel, calls) => {
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
+      ...(messageChannel ? { messageChannel } : {}),
       verboseLevel: "on",
       onAgentEvent,
       onToolResult,
@@ -279,15 +283,28 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
       tool: "browser",
       arguments: { action: "open", url: "http://127.0.0.1:3000" },
     });
+    projector.recordDynamicToolResult({
+      callId: "call-browser-1",
+      tool: "browser",
+      success: true,
+      contentItems: [{ type: "inputText", text: "opened" }],
+    });
 
     const toolEvents = onAgentEvent.mock.calls.filter(([event]) => {
       const record = requireRecord(event, "agent event");
       return record.stream === "tool";
     });
     expect(toolEvents).toHaveLength(0);
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-    const payload = mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string };
-    expect(payload.text).toContain("Browser");
+    expect(onToolResult).toHaveBeenCalledTimes(calls);
+    if (calls > 0) {
+      const payload = mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string };
+      expect(payload.text).toContain("Browser");
+    }
+    const messages = projector.buildResult(buildEmptyToolTelemetry()).messagesSnapshot;
+    expect(requireRecord(messages[2], "tool result")).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-browser-1",
+    });
   });
 
   it("does not replay transcript summaries when only tool output is enabled", async () => {

@@ -720,4 +720,32 @@ describe("handleCompactCommand", () => {
     expect(result?.reply?.text).toContain("Compaction finished (resulting context unknown) •");
     expect(result?.reply?.text).not.toContain("undefined");
   });
+
+  it("forwards the routed account id from the command context", async () => {
+    // Group session keys carry no account identity, so manual /compact has to
+    // pass it explicitly or it resolves the root history limit while prompt
+    // preparation already used the account limit.
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({ ok: true, compacted: false });
+    const params = {
+      ...buildCompactParams("/compact", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig),
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      contextTokens: 200_000,
+      sessionEntry: { sessionId: "session", updatedAt: Date.now() },
+    } as unknown as HandleCommandsParams;
+    params.ctx.AccountId = "work";
+    params.ctx.ConversationRoutePeerId = "peer";
+    params.ctx.ChatType = "direct";
+
+    await handleCompactCommand(params, true);
+
+    expect(requireCompactEmbeddedAgentSessionCall().agentAccountId).toBe("work");
+    expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
+      conversationRoutePeerId: "peer",
+      chatType: "direct",
+    });
+  });
 });

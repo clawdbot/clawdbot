@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -9,6 +10,7 @@ import {
   sidebarPanelDefinitions,
   sidebarPanelTemplates,
 } from "./chat-pane-embedded-panels.ts";
+import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion, sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -76,6 +78,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     );
     const chat = renderChat({
       ...chatProps,
+      browserTabPreviewsActive: this.active && this.presented,
       historyState: catalog ? undefined : state,
       header: board.face === "dashboard" ? nothing : header,
     });
@@ -99,9 +102,14 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
       browserPresented,
+      browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
+      preferredBrowserTab: [
+        ...latestBrowserTabCards(chatProps.messages, chatProps.toolMessages).values(),
+      ].at(-1),
       desktopPresented,
       desktopRefreshOnPresentation,
       desktopAvailable,
+      desktopSource: resolveChatPaneDesktopTarget(selectedSession),
       hasBoard: board.hasBoard,
       chat,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),

@@ -8,6 +8,7 @@ import type {
   SessionBranch,
   SessionsListResult,
 } from "../../api/types.ts";
+import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-store.ts";
 import { accumulatedStreamText, advanceAccumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import {
@@ -53,6 +54,7 @@ import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
+  setChatSessionProjection,
 } from "./history-merge.ts";
 import {
   controlUiNowMs,
@@ -65,6 +67,7 @@ import {
   setChatRunError,
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
+import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
   cacheChatSessionSnapshot,
@@ -835,6 +838,7 @@ export function disposeSelectedSessionMessageSubscription(state: ChatState): voi
   }
   state.chatSessionMessageSubscriptionRequestedKey = null;
   state.chatSessionMessageSubscription = null;
+  state.chatSessionApprovalQueue = [];
   const sessions = state.sessions;
   if (!sessions?.unsubscribeMessages) {
     return;
@@ -876,9 +880,6 @@ export async function syncSelectedSessionMessageSubscription(
   if (!nextKey) {
     return;
   }
-  await retryPendingSessionMessageSubscriptionReleases(state);
-  const paneRequests = getChatHistoryPaneRequests(state);
-  const generation = ++paneRequests.subscriptionGeneration;
   const previousRequestedKey = normalizeSubscriptionKey(
     state.chatSessionMessageSubscriptionRequestedKey,
   );
@@ -890,6 +891,13 @@ export async function syncSelectedSessionMessageSubscription(
     nextSubscriptionAgentId !== null &&
     previousSelectedKey === nextKey &&
     (previousSubscription?.agentId ?? null) !== nextSubscriptionAgentId;
+  if (selectedAgentChanged) {
+    state.chatSessionApprovalQueue = [];
+    state.requestUpdate?.();
+  }
+  const paneRequests = getChatHistoryPaneRequests(state);
+  const generation = ++paneRequests.subscriptionGeneration;
+  await retryPendingSessionMessageSubscriptionReleases(state);
   const selectedKeyChanged = previousSelectedKey !== null && previousSelectedKey !== nextKey;
   const shouldUnsubscribePrevious =
     previousSubscription !== null &&
@@ -948,6 +956,9 @@ export async function syncSelectedSessionMessageSubscription(
       shouldSubscribe && isCurrent()
         ? state.sessions.subscribeMessages(nextKey, {
             agentId: nextSubscriptionAgentId ?? undefined,
+            ...(hasOperatorApprovalsAccess(state.hello?.auth ?? null)
+              ? { includeApprovals: true }
+              : {}),
           })
         : Promise.resolve(null);
     // Gateway subscriptions are independent canonical-key entries. Overlap the old
@@ -1011,6 +1022,15 @@ export async function syncSelectedSessionMessageSubscription(
     }
     state.chatSessionMessageSubscriptionRequestedKey = nextKey;
     state.chatSessionMessageSubscription = subscribed;
+    if (subscribed.includeApprovals) {
+      state.chatSessionApprovalQueue = projectSessionApprovalReplay(
+        subscribed.approvalReplay,
+        subscribed.key,
+        subscribed.agentId ?? undefined,
+      );
+    } else {
+      state.chatSessionApprovalQueue = [];
+    }
     clearRecoveredError();
   } catch (err) {
     if (isCurrent()) {
@@ -1872,21 +1892,27 @@ async function loadChatHistoryUncached(
       for (const payload of response.messages) {
         applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
       }
+      const historyProjection = getChatSessionProjection(state, state.chatMessages);
       if (Object.hasOwn(response.sessionInfo, "activeLeafEntryId")) {
         state.chatDisplayedLeafEntryId = response.sessionInfo.activeLeafEntryId?.trim() || null;
       }
       state.currentSessionId = response.sessionInfo.sessionId?.trim() || previousSessionId;
+      // An accepted delta advances the same transcript generation, not a branch replacement.
+      // Carry ownership across its leaf advance; reseeding loses attributed pending sends and runs.
+      setChatSessionProjection(state, {
+        ...historyProjection,
+        scope: { ...historyProjection.scope, ...readChatSessionProjectionScope(state) },
+      });
       state.chatThinkingLevel = response.sessionInfo.thinkingLevel ?? null;
       state.chatQueueModeOverride = response.sessionInfo.queueMode;
       state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
-      const currentRunProjections = readChatRunProjections(state, sessionKey, requestAgentId);
       applyHistoryRunSnapshot({
         state,
         run: response.inFlightRun,
         sessionInfo: response.sessionInfo,
         previousRunProjections,
         runProjectionsBeforeApply,
-        currentRunProjections,
+        currentRunProjections: historyProjection.runs,
         resetStream: !state.chatRunId || state.chatRunId === previousRunId,
         activeStreamBeforeReset: activeStreamBeforeApply,
       });

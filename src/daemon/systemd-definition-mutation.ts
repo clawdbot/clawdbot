@@ -12,6 +12,7 @@ import { canonicalPathFromExistingAncestor, findExistingAncestor } from "../infr
 import {
   assertServiceDefinitionWritable,
   type GatewayServiceEnv,
+  type ServiceDefinitionMutationArtifact,
   type ServiceDefinitionMutationCapability,
 } from "./service-types.js";
 import {
@@ -91,7 +92,7 @@ async function inspect(env: GatewayServiceEnv, environment: GatewayServiceEnv, t
     shared,
     sourcePath,
   });
-  let inspected = "the selected service";
+  let artifact: ServiceDefinitionMutationArtifact | undefined;
   try {
     const command = await readSystemdServiceExecStart(env, {
       requireEffective: true,
@@ -118,7 +119,15 @@ async function inspect(env: GatewayServiceEnv, environment: GatewayServiceEnv, t
     for (const file of artifacts) {
       const directory = parents.has(file) && !definitions.has(file);
       const required = definitions.has(file) || definitionParents.has(file);
-      inspected = directory && !required ? ((await findExistingAncestor(file)) ?? file) : file;
+      artifact = !directory
+        ? "service-file"
+        : file === path.dirname(unit)
+          ? "service-directory"
+          : file === path.dirname(generated)
+            ? "state-directory"
+            : "definition-directory";
+      const inspected =
+        directory && !required ? ((await findExistingAncestor(file)) ?? file) : file;
       const stat = await fs.lstat(inspected).catch((error: unknown) => {
         if (required || !hasErrnoCode(error, "ENOENT")) {
           throw error;
@@ -130,34 +139,28 @@ async function inspect(env: GatewayServiceEnv, environment: GatewayServiceEnv, t
       }
       // systemd retains lexical directory aliases; fingerprint both alias and target.
       if (!directory && stat.isSymbolicLink()) {
-        return result({
-          kind: "unknown",
-          detail: `Refusing to rewrite symlinked managed systemd file: ${file}`,
-        });
+        return result({ kind: "unknown", reason: "symlink", artifact });
       }
       const actual = directory && stat.isSymbolicLink() ? await fs.stat(inspected) : stat;
       if (!shared.has(file) && actual.uid !== process.geteuid?.()) {
-        return result({
-          kind: "sealed",
-          detail: `Service artifact ${inspected} belongs to another account.`,
-        });
+        return result({ kind: "sealed", reason: "foreign-owner", artifact });
       }
-      if ((directory && !actual.isDirectory()) || actual.mode & 0o022) {
-        throw new Error("unsafe service publication artifact");
+      if (directory && !actual.isDirectory()) {
+        return result({ kind: "unknown", reason: "invalid-artifact", artifact });
+      }
+      if (actual.mode & 0o022) {
+        return result({ kind: "unknown", reason: "unsafe-permissions", artifact });
       }
       if (directory) {
         await fs.access(inspected, constants.W_OK | constants.X_OK);
         fingerprint.set(file, `${inspected}:${identity(stat)}:${identity(actual)}`);
         continue;
       }
-      const artifact = await readStableFile(file, stat, !shared.has(file));
-      if ("sealed" in artifact) {
-        return result({
-          kind: "sealed",
-          detail: `Service artifact ${file} cannot be replaced on its mount.`,
-        });
+      const snapshot = await readStableFile(file, stat, !shared.has(file));
+      if ("sealed" in snapshot) {
+        return result({ kind: "sealed", reason: "sealed-mount", artifact });
       }
-      const { contents } = artifact;
+      const { contents } = snapshot;
       fingerprint.set(file, identity(stat, contents));
       if (targets.has(file)) {
         snapshots.set(file, { contents, mode: stat.mode & 0o777 });
@@ -165,10 +168,7 @@ async function inspect(env: GatewayServiceEnv, environment: GatewayServiceEnv, t
     }
     return result({ kind: "writable" });
   } catch {
-    return result({
-      kind: "unknown",
-      detail: `Cannot safely rewrite managed systemd artifact ${inspected}.`,
-    });
+    return result({ kind: "unknown", reason: "inspection-failed", artifact });
   }
 }
 
@@ -187,13 +187,11 @@ export async function readSystemdDefinitionMutationCapability(
         deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - Date.now()),
       );
     } catch (error) {
-      return {
-        kind:
-          isSystemSystemdOwnershipError(error) && error.ownership.status !== "unverifiable"
-            ? "sealed"
-            : "unknown",
-        detail: `System service ${name} requires its privileged deployment owner.`,
-      };
+      const owned =
+        isSystemSystemdOwnershipError(error) && error.ownership.status !== "unverifiable";
+      return owned
+        ? { kind: "sealed", reason: "system-owned" }
+        : { kind: "unknown", reason: "system-ownership-unverified" };
     }
   }
   return (await inspect(env, options?.environment ?? env, options?.timeoutMs)).capability;

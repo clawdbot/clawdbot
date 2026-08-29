@@ -2,6 +2,7 @@ export type BrowserTabSnapshot = {
   id?: number;
   url?: string;
   pendingUrl?: string;
+  status?: string;
   title?: string;
   active?: boolean;
   incognito?: boolean;

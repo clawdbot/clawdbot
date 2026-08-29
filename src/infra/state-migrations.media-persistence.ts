@@ -293,23 +293,14 @@ function scanTrajectoryRows(params: {
   return changedRows;
 }
 
-type MediaSourceVersion = {
-  dataVersion: number;
-  trajectoryBytes: number;
-  trajectoryRows: number;
-  transcriptBytes: number;
-  transcriptCreatedAt: number;
-  transcriptRows: number;
-};
-
-function readMediaSourceVersion(database: DatabaseSync): MediaSourceVersion {
+function readMediaSourceVersion(database: DatabaseSync) {
   const dataVersionRow = database.prepare("PRAGMA data_version").get();
   const counts = database
     .prepare(
       `SELECT
         (SELECT COUNT(*) FROM transcript_events) AS transcript_rows,
         (SELECT COALESCE(SUM(LENGTH(event_json)), 0) FROM transcript_events) AS transcript_bytes,
-        (SELECT COALESCE(SUM(created_at), 0) FROM transcript_events) AS transcript_created_at,
+        (SELECT CAST(COALESCE(SUM(created_at), 0) AS TEXT) FROM transcript_events) AS transcript_created_at,
         (SELECT COUNT(*) FROM trajectory_runtime_events) AS trajectory_rows,
         (SELECT COALESCE(SUM(LENGTH(event_json)), 0) FROM trajectory_runtime_events) AS trajectory_bytes`,
     )
@@ -322,10 +313,14 @@ function readMediaSourceVersion(database: DatabaseSync): MediaSourceVersion {
     trajectoryBytes: count("trajectory_bytes"),
     trajectoryRows: count("trajectory_rows"),
     transcriptBytes: count("transcript_bytes"),
-    transcriptCreatedAt: count("transcript_created_at"),
+    transcriptCreatedAt: String(
+      (isRecord(counts) ? counts.transcript_created_at : undefined) ?? "0",
+    ),
     transcriptRows: count("transcript_rows"),
   };
 }
+
+type MediaSourceVersion = ReturnType<typeof readMediaSourceVersion>;
 
 function mediaSourceDriftMessage(
   pathname: string,
@@ -365,7 +360,7 @@ function migrateAgentDatabase(params: {
   agentId: string;
   beforeTransaction?: () => void;
   pathname: string;
-}): { rewrittenSessions: number; rewrittenTrajectoryRows: number; versionAdvanced: boolean } {
+}) {
   const database = openNodeSqliteDatabase(params.pathname);
   try {
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
@@ -409,30 +404,21 @@ function migrateAgentDatabase(params: {
       });
       userVersion = readSqliteUserVersion(database);
     }
+    const schemaMode = userVersion < OPENCLAW_AGENT_SCHEMA_VERSION ? "legacy" : "current";
     const schemaSql =
-      userVersion < OPENCLAW_AGENT_SCHEMA_VERSION
+      schemaMode === "legacy"
         ? withLegacySessionParticipantsSchema(OPENCLAW_AGENT_SCHEMA_SQL)
         : OPENCLAW_AGENT_SCHEMA_SQL;
     // Remove after 2026-10-12: drop the v15-to-v16 media cutover once schema 16 is the support floor.
     if (userVersion === PREVIOUS_MEDIA_SCHEMA_VERSION) {
       repairCanonicalSqliteIndexes(database, params.pathname, schemaSql, {
         validateAfterRepair: () =>
-          assertOpenClawAgentSchemaContains(
-            database,
-            params.pathname,
-            schemaSql,
-            userVersion < OPENCLAW_AGENT_SCHEMA_VERSION ? "legacy" : "current",
-          ),
+          assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode),
       });
     }
-    assertOpenClawAgentSchemaContains(
-      database,
-      params.pathname,
-      schemaSql,
-      userVersion < OPENCLAW_AGENT_SCHEMA_VERSION ? "legacy" : "current",
-    );
-    const versionAdvanced = userVersion === PREVIOUS_MEDIA_SCHEMA_VERSION;
-    if (!versionAdvanced) {
+    assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode);
+    const mediaSchemaUpgrade = userVersion === PREVIOUS_MEDIA_SCHEMA_VERSION;
+    if (!mediaSchemaUpgrade) {
       const detected = runSqliteDeferredTransactionSync(
         database,
         () => ({
@@ -446,7 +432,7 @@ function migrateAgentDatabase(params: {
         { databaseLabel: params.pathname, operationLabel: "media-persistence-detection" },
       );
       if (detected.rewrittenSessions === 0 && detected.rewrittenTrajectoryRows === 0) {
-        return { ...detected, versionAdvanced: initialVersion < OPENCLAW_AGENT_SCHEMA_VERSION };
+        return { ...detected, initialVersion, finalVersion: userVersion };
       }
     }
 
@@ -472,7 +458,7 @@ function migrateAgentDatabase(params: {
           pathname: params.pathname,
           rewrite: true,
         });
-        if (versionAdvanced) {
+        if (mediaSchemaUpgrade) {
           const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
           database.exec(`PRAGMA user_version = ${AGENT_MEDIA_SCHEMA_VERSION};`);
           executeSqliteQuerySync(
@@ -498,7 +484,8 @@ function migrateAgentDatabase(params: {
     ensureOpenClawAgentDatabaseSchema(database, { agentId: params.agentId, path: params.pathname });
     return {
       ...rewritten,
-      versionAdvanced: initialVersion < OPENCLAW_AGENT_SCHEMA_VERSION,
+      initialVersion,
+      finalVersion: readSqliteUserVersion(database),
     };
   } finally {
     clearNodeSqliteKyselyCacheForDatabase(database);
@@ -667,21 +654,23 @@ export async function migrateLegacyMediaPersistence(
               : undefined,
             pathname,
           });
-          if (entry.source !== "registry" || result.versionAdvanced) {
+          const schemaAdvanced = result.finalVersion > result.initialVersion;
+          if (entry.source !== "registry" || schemaAdvanced) {
             registerOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
           }
-          if (
-            result.versionAdvanced ||
-            result.rewrittenSessions > 0 ||
-            result.rewrittenTrajectoryRows > 0
-          ) {
+          if (schemaAdvanced) {
+            changes.push(
+              `Upgraded agent database schema in ${pathname}: v${result.initialVersion} -> v${result.finalVersion}.`,
+            );
+          }
+          if (result.rewrittenSessions > 0 || result.rewrittenTrajectoryRows > 0) {
             changes.push(
               `Migrated media persistence in ${pathname}: ${result.rewrittenSessions} transcript session(s), ${result.rewrittenTrajectoryRows} trajectory row(s), schema v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
             );
           }
         } catch (error) {
           databaseMigrationFailed = true;
-          warnings.push(`Skipped media persistence migration for ${pathname}: ${String(error)}`);
+          warnings.push(`Skipped agent database migration for ${pathname}: ${String(error)}`);
         }
       }
 

@@ -42,11 +42,7 @@ import {
 import { renderRunInspector } from "./run-inspector-view.ts";
 import { SessionActivityController } from "./session-activity-controller.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
-import {
-  resolveActivityIdentity,
-  sessionActivitySearch,
-  type SessionActivityFilters,
-} from "./session-activity.ts";
+import { sessionActivitySearch, type SessionActivityFilters } from "./session-activity.ts";
 import {
   parseActivityEvent,
   updateToolActivity,
@@ -596,20 +592,12 @@ class ActivityPage extends OpenClawLightDomElement {
       onScroll: (event) => this.streamFollow.handleScroll(event),
     });
     const mode = this.routeData?.mode ?? "live";
-    const sessionRows = this.sessionActivity.result?.sessions ?? [];
     const filters =
       this.routeData.mode === "sessions"
         ? this.routeData.filters
         : ({ personId: null, query: "", time: "7d" } satisfies SessionActivityFilters);
     const presenceViewers = projectPresencePayload(this.presencePayload).users;
     const selectedProfileId = this.sessionActivity.result?.involvingProfileId ?? filters.personId;
-    const currentIdentity = selectedProfileId
-      ? resolveActivityIdentity(
-          selectedProfileId,
-          this.presencePayload,
-          this.sessionActivity.result?.people,
-        )
-      : null;
     const body = html`
       ${mode === "run"
         ? nothing
@@ -637,8 +625,6 @@ class ActivityPage extends OpenClawLightDomElement {
               expandedAutomationDays: this.expandedAutomationDays,
               filters: { ...filters, personId: selectedProfileId },
               presenceViewers,
-              retainedIdentity: currentIdentity,
-              rows: sessionRows,
               result: this.sessionActivity.result,
               loading: this.sessionActivity.loading,
               error: this.sessionActivity.error,

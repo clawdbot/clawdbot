@@ -581,14 +581,16 @@ export function createApplicationOverlays(
         updateHoldInFlight = false;
       }
     },
-    async decideApproval(decision, approvalId) {
+    async decideApproval(decision, approvalId, projectedApproval) {
       const active = approvalId
-        ? promptState.execApprovalQueue.find((entry) => entry.id === approvalId)
+        ? (promptState.execApprovalQueue.find((entry) => entry.id === approvalId) ??
+          (projectedApproval?.id === approvalId ? projectedApproval : undefined))
         : promptState.execApprovalQueue[0];
       const client = gateway.snapshot.client;
       if (!active || promptState.execApprovalBusy || disposed) {
         return;
       }
+      const isProjectedApproval = active === projectedApproval;
       if (!client || gateway.snapshot.phase !== "connected") {
         promptState.execApprovalErrors.set(active.id, t("sessionsView.actionRequiresConnection"));
         publish();
@@ -638,7 +640,8 @@ export function createApplicationOverlays(
         }
         if (
           isCurrentOperation() &&
-          promptState.execApprovalQueue.some((entry) => entry.id === active.id)
+          (isProjectedApproval ||
+            promptState.execApprovalQueue.some((entry) => entry.id === active.id))
         ) {
           promptState.execApprovalErrors.set(active.id, `Approval failed: ${formatUiError(error)}`);
         }

@@ -209,7 +209,7 @@ describe("readGatewayServiceState", () => {
         if (capabilityFails) {
           throw new Error("capability unavailable");
         }
-        return { kind: "sealed", detail: "deployment owned" };
+        return { kind: "sealed", reason: "foreign-owner" };
       });
       const service = createService({
         hasInstalledDefinition,
@@ -241,8 +241,8 @@ describe("readGatewayServiceState", () => {
         });
         expect(state.definitionMutationCapability).toEqual(
           capabilityFails
-            ? { kind: "unknown", detail: "Cannot inspect service definition." }
-            : { kind: "sealed", detail: "deployment owned" },
+            ? { kind: "unknown", reason: "inspection-failed" }
+            : { kind: "sealed", reason: "foreign-owner" },
         );
       } else {
         expect(readDefinitionMutationCapability).not.toHaveBeenCalled();
@@ -315,13 +315,13 @@ describe("readGatewayServiceState", () => {
     });
   });
 
-  it("preserves runtime probe failures as an explicit unknown state", async () => {
+  it("normalizes localized runtime probe failures at the service boundary", async () => {
     const readCommand = vi.fn(async () => null);
     const service = createService({
       isLoaded: vi.fn(async () => true),
       readCommand,
       readRuntime: vi.fn(async () => {
-        throw new Error("systemctl show timed out");
+        throw new Error("錯誤: 系統找不到指定的檔案。");
       }),
     });
 
@@ -331,8 +331,27 @@ describe("readGatewayServiceState", () => {
     expect(state.running).toBe(false);
     expect(state.runtime).toEqual({
       status: "unknown",
-      detail: "Error: systemctl show timed out",
+      detail: "service runtime inspection failed",
+      inspectionFailure: {
+        code: "service-runtime-inspection-failed",
+        detail: "錯誤: 系統找不到指定的檔案。",
+      },
     });
+  });
+
+  it("bounds structured runtime inspection diagnostics", async () => {
+    const service = createService({
+      readRuntime: vi.fn(async () => {
+        throw new Error("錯".repeat(600));
+      }),
+    });
+
+    const state = await readGatewayServiceState(service);
+
+    expect(state.runtime?.inspectionFailure).toMatchObject({
+      code: "service-runtime-inspection-failed",
+    });
+    expect(state.runtime?.inspectionFailure?.detail).toHaveLength(500);
   });
 
   it("preserves loaded-state probe failures as an explicit unknown state", async () => {

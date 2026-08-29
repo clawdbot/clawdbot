@@ -261,6 +261,20 @@ async function collectPluginDoctorStateMigrationPlans(params: {
           env: params.env,
           config,
           repairAuthority: params.repairAuthority,
+          // Detection runs before exclusive state ownership, so it is handed
+          // inspection-only ingress access and no mutation gate. Untrusted owners get
+          // no ingress lane at all: Doctor must not widen the runtime's durable-store
+          // trust gate.
+          // `?? true` keeps older or hand-built hosts working; a real registry record
+          // always carries the decision explicitly.
+          ...((entry.trustedForDurableStores ?? true)
+            ? {
+                channelIngress: {
+                  channelIds: entry.channelIds ?? [],
+                  stateDir: params.stateDir,
+                },
+              }
+            : {}),
         }),
       });
     } catch (err) {
@@ -270,6 +284,8 @@ async function collectPluginDoctorStateMigrationPlans(params: {
     if (detected?.preview.length) {
       plans.push({
         pluginId: entry.pluginId,
+        channelIds: entry.channelIds,
+        trustedForDurableStores: entry.trustedForDurableStores,
         migration: entry.migration,
         preview: detected.preview,
       });
@@ -954,7 +970,27 @@ async function migratePluginDoctorStatePlans(params: {
     return { changes, warnings };
   }
 
+  // Mutable ingress access lives and dies with this call. Handles a migration keeps
+  // past its own return re-check this gate and fail rather than writing outside the
+  // section that owns the state.
+  let ingressMutationActive = false;
+  const assertIngressMutationCurrent = () => {
+    if (!ingressMutationActive) {
+      throw new Error("Plugin Doctor ingress queue access has expired.");
+    }
+    params.repairAuthority?.assertCurrent();
+  };
+
   const migrate = async () => {
+    ingressMutationActive = true;
+    try {
+      return await migrateWithIngressAuthority();
+    } finally {
+      ingressMutationActive = false;
+    }
+  };
+
+  const migrateWithIngressAuthority = async () => {
     for (const plan of params.plans) {
       try {
         params.repairAuthority?.assertCurrent();
@@ -968,6 +1004,15 @@ async function migratePluginDoctorStatePlans(params: {
             env: params.env,
             config: params.config,
             repairAuthority: params.repairAuthority,
+            ...((plan.trustedForDurableStores ?? true)
+              ? {
+                  channelIngress: {
+                    channelIds: plan.channelIds ?? [],
+                    stateDir: params.stateDir,
+                    mutation: { assertCurrent: assertIngressMutationCurrent },
+                  },
+                }
+              : {}),
           }),
         });
         params.repairAuthority?.assertCurrent();

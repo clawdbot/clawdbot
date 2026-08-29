@@ -18,7 +18,7 @@ const mockState = vi.hoisted(() => ({
     team_id: "team-1",
   })),
   resolveCommandText: vi.fn((_trigger: string, text: string) => text),
-  buildModelsProviderData: vi.fn(async () => ({ providers: [], modelNames: new Map() })),
+  buildPreparedModelsProviderData: vi.fn(async () => ({ providers: [], modelNames: new Map() })),
   resolveMattermostModelPickerEntry: vi.fn((): { kind: string } | null => ({ kind: "summary" })),
   authorizeMattermostCommandInvocation: vi.fn(() => ({
     ok: true,
@@ -54,7 +54,7 @@ const mockState = vi.hoisted(() => ({
 
 vi.mock("./runtime-api.js", () => {
   return {
-    buildModelsProviderData: mockState.buildModelsProviderData,
+    buildPreparedModelsProviderData: mockState.buildPreparedModelsProviderData,
     createChannelMessageReplyPipeline: vi.fn(() => ({
       onModelSelected: vi.fn(),
       typingCallbacks: {},
@@ -216,7 +216,7 @@ describe("slash-http cfg threading", () => {
     mockState.readRequestBodyWithLimit.mockClear();
     mockState.parseSlashCommandPayload.mockClear();
     mockState.resolveCommandText.mockClear();
-    mockState.buildModelsProviderData.mockClear();
+    mockState.buildPreparedModelsProviderData.mockClear();
     mockState.resolveMattermostModelPickerEntry.mockClear();
     mockState.authorizeMattermostCommandInvocation.mockClear();
     mockState.createMattermostClient.mockClear();
