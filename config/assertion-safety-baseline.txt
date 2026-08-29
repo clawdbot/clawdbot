@@ -771,7 +771,6 @@ extensions/memory-core/src/memory/search-deadline.ts	1
 extensions/memory-core/src/migration/doctor-host-event-sources.ts	1
 extensions/memory-core/src/migration/doctor-memory-sidecar-import.ts	8
 extensions/memory-core/src/migration/doctor-memory-sidecar.ts	2
-extensions/memory-core/src/migration/doctor-vector-index-provider-diagnostic.ts	1
 extensions/memory-core/src/migration/doctor-workspaces.ts	1
 extensions/memory-core/src/session-backfill-gateway.ts	2
 extensions/memory-core/src/session-backfill-lifecycle.ts	2

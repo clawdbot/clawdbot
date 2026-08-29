@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
@@ -17,11 +16,10 @@ type VectorProviderFinding = ProviderFailure & {
   configPrefix: string;
 };
 
-export type InspectConfiguredProvider = (params: {
+type InspectConfiguredProvider = (params: {
   config: OpenClawConfig;
   agentId: string;
   env: NodeJS.ProcessEnv;
-  agentDatabasePath: string;
 }) => Promise<ProviderFailure | null>;
 
 function listConfiguredAgentIds(config: OpenClawConfig): string[] {
@@ -34,10 +32,7 @@ function listConfiguredAgentIds(config: OpenClawConfig): string[] {
   return ids.size > 0 ? [...ids] : ["main"];
 }
 
-async function readExistingVectorModel(
-  databasePath: string,
-  inspectionMode: "best-effort" | "readiness",
-): Promise<string | null> {
+async function readExistingVectorModel(databasePath: string): Promise<string | null> {
   if (!fs.existsSync(databasePath)) {
     return null;
   }
@@ -48,9 +43,8 @@ async function readExistingVectorModel(
   let failure: unknown;
   let model: string | null = null;
   try {
-    prepared =
-      inspectionMode === "readiness" ? prepareSqliteReadOnlyLocationSync(databasePath) : undefined;
-    db = openNodeSqliteDatabase(prepared?.location ?? databasePath, { readOnly: true });
+    prepared = prepareSqliteReadOnlyLocationSync(databasePath);
+    db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
     const table = db
       .prepare(
         "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'memory_index_meta'",
@@ -59,7 +53,7 @@ async function readExistingVectorModel(
     if (table) {
       const row = db
         .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
-        .get(MEMORY_INDEX_META_KEY) as { value?: unknown } | undefined;
+        .get(MEMORY_INDEX_META_KEY);
       const parsed = typeof row?.value === "string" ? JSON.parse(row.value) : null;
       const configuredModel =
         parsed && typeof parsed === "object" && typeof parsed.model === "string"
@@ -79,12 +73,12 @@ async function readExistingVectorModel(
       failure ??= new Error("Temporary SQLite inspection snapshot cleanup did not complete.");
     }
   }
-  if (failure && inspectionMode === "readiness") {
+  if (failure) {
     throw failure instanceof Error
       ? failure
       : new Error("Memory index inspection failed.", { cause: failure });
   }
-  return failure ? null : model;
+  return model;
 }
 
 function resolveConfigPrefix(config: OpenClawConfig, agentId: string): string {
@@ -97,13 +91,6 @@ function resolveConfigPrefix(config: OpenClawConfig, agentId: string): string {
   return "memory.search";
 }
 
-function hasConfiguredMemorySecretRef(config: OpenClawConfig, agentId: string): boolean {
-  const agent =
-    config.agents?.entries?.[agentId] ?? config.agents?.list?.find((entry) => entry.id === agentId);
-  const apiKey = agent?.memory?.search?.remote?.apiKey ?? config.memory?.search?.remote?.apiKey;
-  return apiKey !== null && typeof apiKey === "object";
-}
-
 export async function collectVectorProviderFindings(
   params: {
     config: OpenClawConfig;
@@ -111,15 +98,10 @@ export async function collectVectorProviderFindings(
     stateDir: string;
   },
   inspectProvider: InspectConfiguredProvider,
-  options?: {
-    indexInspectionMode?: "best-effort" | "readiness";
-    inspectConfiguredMemorySecretRefs?: boolean;
-  },
 ): Promise<VectorProviderFinding[]> {
   const findings: VectorProviderFinding[] = [];
   for (const agentId of listConfiguredAgentIds(params.config)) {
-    // Memory indexes always live in the canonical per-agent state DB; a custom
-    // agentDir affects provider credential lookup, not index storage.
+    // A custom agentDir does not move the canonical per-agent memory index.
     const agentDatabasePath = path.join(
       params.stateDir,
       "agents",
@@ -127,26 +109,14 @@ export async function collectVectorProviderFindings(
       "agent",
       "openclaw-agent.sqlite",
     );
-    const model = await readExistingVectorModel(
-      agentDatabasePath,
-      options?.indexInspectionMode ?? "best-effort",
-    );
+    const model = await readExistingVectorModel(agentDatabasePath);
     if (!model) {
-      continue;
-    }
-    // Status owns SecretRef resolution diagnostics. Doctor must not treat an
-    // unresolved ref object as an API key and report a false provider failure.
-    if (
-      options?.inspectConfiguredMemorySecretRefs !== true &&
-      hasConfiguredMemorySecretRef(params.config, agentId)
-    ) {
       continue;
     }
     const failure = await inspectProvider({
       config: params.config,
       agentId,
       env: params.env,
-      agentDatabasePath,
     });
     if (failure) {
       findings.push({
@@ -158,32 +128,4 @@ export async function collectVectorProviderFindings(
     }
   }
   return findings;
-}
-
-function formatFinding(finding: VectorProviderFinding): string {
-  return (
-    `Memory index for agent ${finding.agentId} uses vector model ${finding.model}, but embedding provider ` +
-    `"${finding.provider}" cannot initialize (${finding.reason}). Set ${finding.configPrefix}.remote.apiKey ` +
-    `(for example, to a SecretRef) or choose a working ${finding.configPrefix}.provider. ` +
-    "Memory sync will abort rather than overwrite this semantic index with FTS-only data."
-  );
-}
-
-export function createVectorIndexProviderDiagnostic(
-  inspectProvider: InspectConfiguredProvider,
-): PluginDoctorStateMigration {
-  return {
-    id: "memory-core-vector-index-provider-diagnostic",
-    label: "Memory Core vector index provider readiness",
-    async detectLegacyState(params) {
-      const findings = await collectVectorProviderFindings(params, inspectProvider);
-      return findings.length > 0
-        ? { preview: findings.map((finding) => `- ${formatFinding(finding)}`) }
-        : null;
-    },
-    async migrateLegacyState(params) {
-      const findings = await collectVectorProviderFindings(params, inspectProvider);
-      return { changes: [], warnings: findings.map(formatFinding) };
-    },
-  };
 }
