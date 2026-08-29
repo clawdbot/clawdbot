@@ -96,7 +96,7 @@ export function createWorkerSessionTools(client: WorkerSessionRpcClient): AnyAge
       label: "Session Send",
       name: "sessions_send",
       description:
-        'Send a message to an authorized parent, child, or sibling cloud session. Cross-tree and stale-incarnation targets are denied by the Gateway. Status "no_reply" is terminal; do not wait for another result.',
+        'Send a message to an authorized parent, child, or sibling session on this Gateway, whether it runs on the Gateway, a paired device, or a cloud worker. Cross-tree and stale-incarnation targets are denied by the Gateway. Status "no_reply" is terminal; do not wait for another result.',
       parameters: Type.Object({
         sessionKey: Type.String({ minLength: 1, maxLength: 1_024 }),
         message: Type.String({ minLength: 1, maxLength: WORKER_SESSION_TOOL_MAX_TEXT_LENGTH }),
