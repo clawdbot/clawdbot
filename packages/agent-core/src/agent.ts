@@ -167,6 +167,7 @@ class PendingMessageQueue {
   // Drained messages stay owned here until message_end commits them.
   // A failed run restores them ahead of messages accepted later.
   private inFlight: AgentMessage[] = [];
+  private cancelled = new WeakSet<AgentMessage>();
   public mode: QueueMode;
 
   constructor(mode: QueueMode) {
@@ -189,6 +190,7 @@ class PendingMessageQueue {
   }
 
   commit(message: AgentMessage): void {
+    this.cancelled.delete(message);
     const index = this.inFlight.indexOf(message);
     if (index >= 0) {
       this.inFlight.splice(index, 1);
@@ -200,9 +202,32 @@ class PendingMessageQueue {
     this.inFlight = [];
   }
 
+  cancelFirst(predicate: (message: AgentMessage) => boolean): AgentMessage | undefined {
+    const pendingIndex = this.messages.findIndex(predicate);
+    if (pendingIndex >= 0) {
+      return this.messages.splice(pendingIndex, 1)[0];
+    }
+    const inFlightIndex = this.inFlight.findIndex(predicate);
+    if (inFlightIndex < 0) {
+      return undefined;
+    }
+    const message = this.inFlight.splice(inFlightIndex, 1)[0];
+    if (message) {
+      // The loop may already hold this object after draining; retain a cancellation
+      // fact until its next injection checkpoint so it cannot outlive queue ownership.
+      this.cancelled.add(message);
+    }
+    return message;
+  }
+
+  consumeCancellation(message: AgentMessage): boolean {
+    return this.cancelled.delete(message);
+  }
+
   clear(): void {
     this.messages = [];
     this.inFlight = [];
+    this.cancelled = new WeakSet<AgentMessage>();
   }
 }
 
@@ -343,6 +368,11 @@ export class Agent {
    */
   steer(message: AgentMessage): void {
     this.steeringQueue.enqueue(message);
+  }
+
+  /** Cancel the first matching steering message, including one already drained for injection. */
+  cancelSteeringMessage(predicate: (message: AgentMessage) => boolean): AgentMessage | undefined {
+    return this.steeringQueue.cancelFirst(predicate);
   }
 
   /** Queue a message to run only after the agent would otherwise stop. */
@@ -552,6 +582,9 @@ export class Agent {
       getApiKey: this.getApiKey,
       getSteeringMessages,
       getFollowUpMessages: async () => this.followUpQueue.drain(),
+      consumeQueuedMessageCancellation: (message) =>
+        this.steeringQueue.consumeCancellation(message) ||
+        this.followUpQueue.consumeCancellation(message),
     };
   }
 

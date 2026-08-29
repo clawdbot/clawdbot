@@ -151,11 +151,11 @@ function parseReceiptItems(itemsStr: string): Array<{ name: string; value: strin
  */
 function parseCardArgs(argsStrInput: string): {
   type: string;
-  args: string[];
+  args: Array<string | undefined>;
   flags: Record<string, string>;
 } {
   let argsStr = argsStrInput;
-  const result: { type: string; args: string[]; flags: Record<string, string> } = {
+  const result: { type: string; args: Array<string | undefined>; flags: Record<string, string> } = {
     type: "",
     args: [],
     flags: {},
@@ -168,11 +168,13 @@ function parseCardArgs(argsStrInput: string): {
     argsStr = argsStr.slice(typeMatch[0].length).trim();
   }
 
-  // Extract quoted arguments
+  // Extract quoted arguments. A blank one keeps its position but reads as
+  // omitted, so the defaults below apply: LINE rejects the whole message when a
+  // Flex text or a template's altText is blank.
   const quotedRegex = /"([^"]*?)"/g;
   let match;
   while ((match = quotedRegex.exec(argsStr)) !== null) {
-    result.args.push(expectDefined(match[1], "quoted card argument capture"));
+    result.args.push(expectDefined(match[1], "quoted card argument capture") || undefined);
   }
 
   // Extract flags (--key value or --key "value")
@@ -215,7 +217,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
           case "info": {
             const [title = "Info", body = "", footer] = args;
             const bubble = createInfoCard(title, body, footer);
-            return buildLineFlexReply(`${title}: ${body}`, bubble);
+            return buildLineFlexReply(body ? `${title}: ${body}` : title, bubble);
           }
 
           case "image": {
@@ -237,7 +239,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const bubble = createActionCard(title, body, actions, {
               imageUrl: flags.url || flags.image,
             });
-            return buildLineFlexReply(`${title}: ${body}`, bubble);
+            return buildLineFlexReply(body ? `${title}: ${body}` : title, bubble);
           }
 
           case "list": {

@@ -48,6 +48,7 @@ import {
 } from "./chat-pane-state.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
+import { chatSendHoldReason } from "./chat-send-support.ts";
 import { refreshChatCommands, refreshPageChat } from "./chat-state-refresh.ts";
 import {
   resolveChatAgentId,
@@ -172,6 +173,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       agentModel: agentDefaultModel,
     });
     const placementStartup = this.context.placementStartup.get(state.sessionKey);
+    const sendHoldReason = chatSendHoldReason(state, state.sessionKey, placementStartup !== null);
     const placementStartupPending =
       placementStartup !== null && placementStartup.phase !== "failed";
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
@@ -218,7 +220,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       isGatewayMethodAdvertised(gatewaySnapshot, "session.typing") === true &&
       hasSessionPresenceViewers(
         this.presencePayload,
-        gatewaySnapshot.selfUser?.id,
+        gatewaySnapshot.selfUser?.identity?.id,
         gatewaySnapshot.client?.instanceId,
         state.sessionKey,
       );
@@ -392,8 +394,9 @@ export class ChatPane extends ChatPaneLayoutRender {
           !selectedSessionArchived &&
           !restartRecoveryTombstoned &&
           (!sessionParticipationBlocked || suggestionViewer) &&
-          !placementStartupPending,
-      disabledReason: catalogDisabledReason ?? disabledReason,
+          !sendHoldReason,
+      disabledReason:
+        catalogDisabledReason ?? disabledReason ?? (placementStartup ? null : sendHoldReason),
       disabledReasonTone:
         sessionParticipationBlocked && !suggestionViewer && !catalogDisabledReason
           ? "info"
@@ -645,7 +648,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       onOpenImage: state.handleOpenImage,
       assistantName: state.assistantName,
       assistantAvatar: state.assistantAvatar,
-      userId: selfUser?.id ?? null,
+      userId: selfUser?.identity?.type === "profile" ? selfUser.identity.id : null,
       userName: selfUser?.name ?? state.userName,
       userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
       personActivity: personActivityRouting(this.context),

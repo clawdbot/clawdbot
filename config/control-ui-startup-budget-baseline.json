@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 346461,
-  "reason": "standing-grant scope line + grants ledger (#131602); recorded at the CI e2e-lane build (346461 B) — checks-ui and local builds of the same tree measure ~600 B less, beyond the 64 B variance allowance",
+  "startupJsGzipBytes": 345371,
+  "reason": "Queued-send transcript bubbles (#131909), rebuilt on main a79e6517be8: measured 345371 B. Replace the conflicting 348449 B main baseline with this fresh measurement; retain the 512 B growth allowance, 64 B build variance, and 350 KiB ceiling.",
   "updatedAt": "2026-08-28"
 }

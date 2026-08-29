@@ -750,7 +750,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       ...cacheDiscriminators,
     ].join(":"),
   );
-  const cached = readCache(FETCH_CACHE, cacheKey);
+  const cached = readCache(FETCH_CACHE, cacheKey, params.cacheTtlMs);
   if (cached) {
     return { ...cached.value, cached: true };
   }

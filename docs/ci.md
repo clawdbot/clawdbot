@@ -101,6 +101,36 @@ and reserves native-memory headroom. If the default budget cannot fit the build,
 it stops before build steps or cache restoration; `OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB`
 remains the explicit operator override for attempting a different budget.
 
+## Watching pull request CI
+
+From a source checkout with an authenticated `gh` CLI, wait for one exact
+pull-request head:
+
+```bash
+node scripts/watch-pr-ci.mjs <pr-number> <full-head-sha>
+```
+
+The default `rollup` mode waits for the attached CI workflow to succeed and
+for the remaining rollup checks to finish without failures. Supersession stays
+within workflow identity; `Auto response` is excluded from the wait.
+
+GitHub can retain queued rerun placeholders while omitting the successful
+same-name job from the rollup. The watcher reconciles a placeholder only after
+verifying the successful exact-head attempt, its complete same-name job group,
+and direct job evidence that every queued alias has no runner or executed
+steps. Each poll permits at most 32 direct alias lookups, and evidence requests
+share the remaining watcher timeout. Groups exceeding that lookup budget remain
+pending with a warning. Before applying that proof, the watcher refreshes the
+PR head, state, and check rollup, then rechecks the attached run. Proof applies
+only to checks that still have the verified name and queued state. Active
+retries, unrelated checks, and ambiguous or incomplete evidence still block
+completion. This is an observation of CI state, not atomic merge authorization.
+
+`--completion ci-run` waits only for the attached CI workflow. Callers must
+separately verify required checks; CI success does not override another
+required check. The native `scripts/pr` merge flow uses this mode and then
+performs its own required-check verification before merging.
+
 ## PR context and evidence
 
 External contributor PRs run a PR context and evidence gate from
@@ -116,6 +146,14 @@ redacted log, or artifact link. The body provides intent and useful validation;
 reviewers inspect the code, tests, and CI to assess correctness.
 
 When the check fails, update the PR body instead of pushing another code commit.
+
+## Checkout ownership
+
+The shared Linux Node checkout (`linux_node_checkout_step`) and shared Windows/macOS/iOS checkout (`platform_checkout_step`) use one process owner for every Git command within those anchors. Linux allows five whole-checkout attempts, clearing the workspace before each attempt, with 120-second candidate and trusted workflow-harness fetch deadlines and an increasing five-second backoff. Windows, macOS, and iOS retain 90-second fetch deadlines, three candidate fetch attempts on timeout only, five-second backoff, and one harness fetch attempt. Candidate and harness revisions remain separately pinned; Linux also fetches the optional ratchet base at depth one.
+
+Timeout, cancellation, and leader exit drain the owned POSIX process group or Windows Job Object before workspace deletion, another Git command, or step completion. Cleanup has a ten-second allowance. If ownership inspection or cleanup fails, checkout exits with code 125 without retrying. The bootstrap uses the runner's Python standard library because repository helpers are unavailable before checkout. A fetch timeout alone does not explain why transport stalled.
+
+Separate bootstrap and checkout flows in preflight, security, skills-python, ClawHub, and Android still use GNU timeout and are outside these shared anchors' ownership guarantees.
 
 ## Scope and routing
 
@@ -154,7 +192,7 @@ The slowest Node test families are split or balanced so each job stays small wit
 - The build-artifact job also persists content-fingerprinted `build-all` step outputs. CI's self-built plugin SDK declarations hash the complete repository-owned TypeScript/JSON source graph, exclude installed and generated directories, and restore both flat declarations and package bridges after `tsdown` clears `dist`. Documentation, workflow, plugin, and other changes outside that graph can reuse the declaration snapshot; source changes rebuild it before the export gate runs. The built Doctor plugin-index proof reuses that exact `dist/` output instead of invoking the E2E harness's fallback TypeScript build a second time.
 - Full declaration builds split `tsdown` into AI, workspace-package, and unified groups. Each group caches declarations only, then still rebuilds runtime JavaScript before restoring those declarations. Core or plugin changes therefore invalidate only the large unified graph, while workspace-package changes conservatively invalidate every dependent declaration group. Public full builds generally use an immutable Actions cache; coarse restore keys seed partial changes, per-group content fingerprints reject stale data, and GitHub's cache quota evicts old generations. The weekly Node 22 lane instead publishes a 14-day artifact after successful `main` runs and restores only artifacts whose immutable producer identity resolves to that workflow on `main`, avoiding quota churn without allowing PR code to write a shared cache. Private-QA declarations are never persisted in Actions caches because cache namespaces are not confidentiality boundaries.
 - `check-additional-*` stripes the supplemental boundary guard list (`scripts/run-additional-boundary-checks.mts`) into one prompt-heavy shard (`check-additional-boundaries-a`, which includes the Codex prompt snapshot drift check) and one combined shard for the remaining stripes (`check-additional-boundaries-bcd`), each running independent guards concurrently and printing per-check timings. Package-boundary compile/canary work stays together, and runtime topology architecture runs separately from the gateway watch coverage embedded in `build-artifacts`.
-- On the 32-vCPU self-hosted build runner, Gateway watch, channel tests, and the core support-boundary shard start together inside `build-artifacts` after `dist/` and `dist-runtime/` are already built. GitHub-hosted fallback runs keep Gateway watch serial so low-core contention cannot consume its readiness deadline. Both paths then run the two built TUI PTY artifact canaries alone; the pull request fallback plus manual and release full matrices own the dedicated full serial shard.
+- On the 32-vCPU self-hosted build runner, Gateway watch, channel tests, and the core support-boundary shard start together inside `build-artifacts` after `dist/` and `dist-runtime/` are already built. GitHub-hosted fallback runs keep Gateway watch serial so low-core contention cannot consume its readiness deadline. Full Node builds then verify Discord component attachment filenames through a serial public Gateway message action, checking the built revision and retaining the named-test JSON result; frozen targets that predate the case explicitly report unavailable proof. Both paths then run the two built TUI PTY artifact canaries alone; the pull request fallback plus manual and release full matrices own the dedicated full serial shard.
 
 Once admitted, canonical Linux CI permits up to 28 concurrent Node test jobs with
 the all-Blacksmith planner and 96 with the `github` or `hybrid` planner profile. The smaller
@@ -316,7 +354,7 @@ Hybrid is the normal degraded-capacity mode. If Blacksmith is down: rerun the fa
 gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body github
 ```
 
-Hosted paths use the same setup exercised by manual dispatches and fork pull requests. Fork PRs are forced into the logical `github` planner profile even when repository variables are unavailable, so core lint and test types retain their hosted stripes instead of falling back to the oversized all-in-one jobs. Frozen targets opt into this event-aware profile through `hosted-runner-profile-contract-v1`; targets without the marker retain their historical workload shape. Blacksmith-only Docker and sticky-disk steps are skipped, dependency setup uses the ordinary Actions pnpm-store cache, and low-memory Android builds use separate Gradle processes. Hybrid attempt-1 Node and plateau lanes deliberately keep this backend-neutral Actions-cache profile when they run on Blacksmith because preflight remains hosted. The exact workspace dependency cache intentionally stays off when preflight is hosted: GitHub can roll the runner image and Node patch between preflight and fanout in one workflow, while the safe exact key then misses; the ordinary store archive is only slightly smaller and pnpm's measured relink is already single-digit seconds. The Node toolchain itself is also cached through that API: Blacksmith's image tracks an older runner-images snapshot whose toolcache Node patches (measured 2026-08-16: 20.20.0, 22.22.0, 24.13.0) sit just under this repo's `engines` floor, so every job otherwise re-downloads Node from nodejs.org. Restores are prefix-keyed and saves carry the resolved patch, because an exact-key hit suppresses the post-job save and would pin the first payload forever once the floor advanced past it. A restored payload below the floor is rejected, pruned, and replaced. Vitest transform and Node compile caches still use the upstream Actions cache API, which Blacksmith proxies; their Linux-only `runner.os != 'Windows'` conditions do not exclude Blacksmith labels, and the planner still elects one semantic transform-cache writer. Core oxlint splits into five deterministic hosted stripes, with extension/scripts lint and optional UI and format checks in the existing `check-lint` row. The 14 serial core test-type graphs likewise split into five `check-test-types-core-*` stripes (two overlapped graphs per stripe), leaving the extensions/root/scripts type tail in the `check-test-types` row; targets without stripe support keep the whole lane in that row.
+Hosted paths use the same setup exercised by manual dispatches and fork pull requests. Fork PRs are forced into the logical `github` planner profile even when repository variables are unavailable, so core lint and test types retain their hosted stripes instead of falling back to the oversized all-in-one jobs. Frozen targets opt into this event-aware profile through `hosted-runner-profile-contract-v1`; targets without the marker retain their historical workload shape. Blacksmith-only Docker and sticky-disk steps are skipped, dependency setup uses the ordinary Actions pnpm-store cache, and low-memory Android builds use separate Gradle processes. Hybrid attempt-1 Node and plateau lanes deliberately keep this backend-neutral Actions-cache profile when they run on Blacksmith because preflight remains hosted. The exact workspace dependency cache intentionally stays off when preflight is hosted: GitHub can roll the runner image and Node patch between preflight and fanout in one workflow, while the safe exact key then misses; the ordinary store archive is only slightly smaller and pnpm's measured relink is already single-digit seconds. The Node toolchain itself is also cached through that API: Blacksmith's image tracks an older runner-images snapshot whose toolcache Node patches (measured 2026-08-16: 20.20.0, 22.22.0, 24.13.0) sit just under this repo's `engines` floor, so every job otherwise re-downloads Node from nodejs.org. Restores are prefix-keyed and saves carry the resolved patch, because an exact-key hit suppresses the post-job save and would pin the first payload forever once the floor advanced past it. A restored payload below the floor is rejected, pruned, and replaced. Vitest transform and Node compile caches still use the upstream Actions cache API, which Blacksmith proxies; their Linux-only `runner.os != 'Windows'` conditions do not exclude Blacksmith labels, and the planner still elects one semantic transform-cache writer. Core oxlint splits into five deterministic hosted stripes, with extension/scripts lint and optional UI and format checks in the existing `check-lint` row. The 15 serial core test-type graphs, with UI pages and E2E tests in separate graphs to preserve the 720-root cap, likewise split into five `check-test-types-core-*` stripes (two overlapped graphs per stripe), leaving the extensions/root/scripts type tail in the `check-test-types` row; targets without stripe support keep the whole lane in that row.
 
 The compact Node planner keeps separate Blacksmith and standard 4-core hosted timing ownership. The `github` profile targets 90/95 seconds of serial group work for the hosted large/small source runner classes and applies a 1.6x median scaling fallback only to unmeasured groups. Hybrid keeps the expanded topology and hosted-derived splitting for groups above the unchanged 150-second ceiling, so hosted retries do not inherit an indivisible hosted wall pole. Its attempt-1 packing applies the existing 0.87 scale to Blacksmith estimates, using committed measurements before the cold-start hints. Refits can change the number and composition of compact jobs without changing runner policy. Direct sampled hints cover the doctor and cron-service outliers, while a 140-second floor and singleton bin protect the observed `agentic-gateway-core-3` tail. During rebalance, native hybrid groups use scaled Blacksmith stripe hints; only synthesized hosted stripes retain their divided parent weight. Failed and timeout-and-retry samples are excluded from refreshes. Whole-config groups with registered file listers (agent support, gateway methods, runtime config, isolated unit fast) split into file-weighted hosted stripes. The hosted agent-chat split also carries direct successful-run hints for its two longest files so they cannot land in the same stripe. The subprocess-heavy tooling family uses seven balanced stripes projecting to roughly 115 hosted seconds per stripe.
 
@@ -785,6 +823,17 @@ profile=all|agent-runtime-boundary|config-boundary|core-auth-secrets|channel-run
 ```
 
 The narrow profiles are teaching/iteration hooks for running one quality shard in isolation.
+
+On pull requests, the network runtime shard starts with a fast diff scan. Sensitive
+socket imports/calls and proxy-policy tokens, edits to its queries/config/fixtures, and
+changes to the Codex transport select full CodeQL analysis in the same PR job.
+Absent or null patches for monitored non-test sources also select full analysis;
+metadata fetch or parse failures stop shard selection rather than silently skipping it.
+Known ordinary diffs keep the fast path. The full path runs semantic query tests before
+analysis, including coverage of the configured `packages/net-policy/src` directory
+and preservation of exact owner/function allowances and test-path exclusions.
+Full analysis fails the job on any SARIF finding or missing SARIF output; a
+sensitive diff is a routing signal, not a finding.
 
 | Category                                                | Surface                                                                                                                                                           |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |

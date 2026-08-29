@@ -520,9 +520,9 @@ Group/channel tool restrictions are applied in addition to global/agent tool pol
 
 When `channels.whatsapp.groups`, `channels.telegram.groups`, or `channels.imessage.groups` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior.
 
-<Warning>
+<Note>
 Common confusion: DM pairing approval is not the same as group authorization. For channels that support DM pairing, the pairing store unlocks DMs only. Group commands still require explicit group sender authorization from config allowlists such as `groupAllowFrom` or the documented config fallback for that channel.
-</Warning>
+</Note>
 
 Common intents (copy/paste):
 

@@ -259,6 +259,15 @@ export type MessageContentItem =
       };
     }
   | {
+      type: "attachment_error";
+      attachment: {
+        code: "file-not-found" | "unsupported-format" | "delivery-failed";
+        kind: Exclude<MediaKind, "sticker" | "unknown">;
+        label: string;
+        mimeType?: string;
+      };
+    }
+  | {
       type: "canvas";
       preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
       rawText?: string | null;

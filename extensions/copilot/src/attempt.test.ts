@@ -598,6 +598,9 @@ describe("runCopilotAttempt", () => {
           ...(activeError ? { lastToolError: activeError } : {}),
           executionStarted: true,
           sideEffectEvidence: observation.toolName === "message",
+          effectReceipt: {
+            state: observation.toolName === "message" ? "uncertain" : "read_completed",
+          } as const,
         };
       });
     const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
@@ -675,6 +678,9 @@ describe("runCopilotAttempt", () => {
           ...(activeError ? { lastToolError: activeError } : {}),
           executionStarted: true,
           sideEffectEvidence: true,
+          effectReceipt: {
+            state: observation.outcome === "success" ? "mutation_committed" : "uncertain",
+          } as const,
         };
       });
     const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {

@@ -524,11 +524,20 @@ describe("gateway server hooks", () => {
         sessionKey: "hook:wake:direct",
       });
       expect(direct.status).toBe(200);
+      await expect(direct.json()).resolves.toMatchObject({ eventOutcome: "queued" });
+      const directDuplicate = await postHook(port, "/hooks/wake", {
+        text: "Direct wake",
+        sessionKey: "hook:wake:direct",
+      });
+      await expect(directDuplicate.json()).resolves.toMatchObject({ eventOutcome: "coalesced" });
       expect(await waitForSystemEventTexts("agent:main:hook:wake:direct")).toEqual(["Direct wake"]);
       drainSystemEvents("agent:main:hook:wake:direct");
 
       const mapped = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
       expect(mapped.status).toBe(200);
+      await expect(mapped.json()).resolves.toMatchObject({ eventOutcome: "queued" });
+      const mappedDuplicate = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
+      await expect(mappedDuplicate.json()).resolves.toMatchObject({ eventOutcome: "coalesced" });
       await waitForSystemEventTexts("agent:hooks:hook:wake:fixed");
       const mappedEvents = peekSystemEventEntries("agent:hooks:hook:wake:fixed");
       expect(mappedEvents).toHaveLength(1);

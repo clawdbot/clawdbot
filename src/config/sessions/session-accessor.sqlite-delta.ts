@@ -275,7 +275,7 @@ function readRawDeltaInTransaction(
       .select([
         "seq",
         /* kysely-allow-raw: SQLite byte length avoids fetching or parsing excluded JSON. */
-        sql<number>`LENGTH(CAST(event_json AS BLOB)) + 1`.as("serialized_bytes"),
+        sql<number>`OCTET_LENGTH(event_json) + 1`.as("serialized_bytes"),
       ])
       .where("session_id", "=", scope.sessionId)
       .where("seq", ">", cursor.lastSeq)

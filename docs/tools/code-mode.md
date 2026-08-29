@@ -15,6 +15,12 @@ enabled, the model no longer sees every enabled tool schema; instead, it sees
 the JSON-only guest bridge. The model writes a small JavaScript or TypeScript
 program that searches, describes, and calls the hidden tool catalog.
 
+<Note>
+OpenClaw Code Mode is off by default. To try it, open **Settings → Agents &
+Tools → Labs** and turn on **Code Mode**. The Labs switch writes the `"auto"`
+tier, which engages only for models marked as preferred Code Mode performers.
+</Note>
+
 This page documents OpenClaw code mode, not Codex Code Mode. The two features
 share a name and the same control-tool names (`exec`, `wait`), but they are
 separate implementations:
@@ -93,8 +99,11 @@ the QuickJS-WASI guest.
 
 ### Enable code mode
 
-To engage code mode only for models whose catalog marks them as preferred
-code-mode performers, use the `"auto"` tier:
+The recommended path is **Settings → Agents & Tools → Labs → Code Mode**. The
+switch takes effect for future agent runs without restarting the Gateway and
+selects the `"auto"` tier.
+
+To enable the same tier without the Control UI, set it in config:
 
 ```json5
 {

@@ -125,13 +125,28 @@ do not restrict the [SSH backend's Gateway host](/gateway/sandboxing#ssh-backend
 
 ## Shared test state and process helpers
 
-On POSIX hosts, the Vitest wrapper gives each invocation an owned temporary
-namespace through `TMPDIR`, `TMP`, and `TEMP`. Fallback SQLite state stays available
-across shared-worker files and module resets, then the wrapper removes the namespace
-after its child process group has stopped, including failed test runs. Explicit state
-and artifact paths outside that namespace are unchanged. Windows and raw invocations
-outside the wrapper are unchanged; interrupted wrappers or unverified process-group
-teardown can retain their temporary files. The wrapper never sweeps old PID directories.
+Plugin SDK declaration preparation and `scripts/run-tsgo.mjs` require child work
+to finish before reporting success. On POSIX, each verifies its own managed
+process group: leftover children are terminated and the command fails instead of
+allowing artifact stamps or downstream checks to proceed. Windows retains normal
+joined-launcher completion because strict group verification is unsupported there.
+This does not detect descendants that deliberately leave the managed groups.
+
+On POSIX hosts, `run-vitest` (including project shards), plugin batches, `test-live`
+(including live shards), `run-vitest-profile`, and the TUI PTY watcher give each
+Vitest invocation an owned temporary namespace through `TMPDIR`, `TMP`, and `TEMP`.
+The namespace contains isolated homes, their JIT caches, SDK/shared-home allocation
+roots, and fallback SQLite state; its lifetime spans shared-worker files and module
+resets. The parent removes
+only that namespace after its child process group has stopped and output pipes
+have closed, including passing and failing runs, child crashes, caught `SIGINT`/`SIGTERM`
+signals, and watchdog termination where supported. Explicit state, profile output,
+and mirror artifacts outside the namespace remain untouched. Failed or unverified
+group joins retain the namespace and report the exact path for manual recovery.
+Windows and raw external invocations retain their existing behavior. Forced parent
+or supervisor death (such as `SIGKILL`) can prevent cleanup; descendants that
+intentionally escape the owned group can recreate removed paths. The wrappers do
+not sweep old directories or infer ownership from names, ages, or PIDs.
 
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.

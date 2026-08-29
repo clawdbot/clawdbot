@@ -68,6 +68,28 @@ npm install -g openclaw@<version> --allow-scripts=openclaw
 OpenClaw lifecycle scripts for that install. Node remains the recommended
 runtime for the Gateway itself.
 
+## Run native tests safely
+
+Run the full macOS app test suite in a disposable macOS VM or CI worker with
+no operator credentials, config, or running Gateway. AppKit tests can show
+windows, and WebKit starts helper processes. A temporary `HOME`, `TMPDIR`, or
+named app profile alone is not a sandbox: fixed preferences domains and
+Keychain access can still reach macOS services outside those directories.
+
+On an operator desktop, run only an audited subset inside an OS sandbox that
+blocks operator files, preferences and Keychain services, unwanted network
+access, and desktop/helper processes. A Swift test filter is not itself an
+isolation boundary. If that boundary cannot be established, use the disposable
+macOS environment instead.
+
+Tests should own their resources: unique defaults suites with cleanup,
+nonpersistent WebKit data stores, ephemeral loopback fixture endpoints, and
+temporary files rooted in `FileManager.temporaryDirectory`. Unix-domain socket
+fixtures require a short test-owned `TMPDIR`; an overlong path fails rather than
+silently writing outside that directory. The cooperative `TestIsolation` helper
+serializes and restores participating tests' environment
+and defaults mutations; it does not isolate the process from the host.
+
 ## Troubleshooting
 
 ### Build fails: toolchain or SDK mismatch

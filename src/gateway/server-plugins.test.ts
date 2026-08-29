@@ -194,19 +194,21 @@ function createLookUpTableForTest(params: {
   pluginIds?: readonly string[];
   workerProviderIds?: readonly string[];
 }): PluginLookUpTable {
+  const index: PluginLookUpTable["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "test",
+    generatedAtMs: 1,
+    installRecords: params.installRecords ?? {},
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash: "test",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 1,
-      installRecords: params.installRecords ?? {},
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: params.manifestRegistry ?? { plugins: [], diagnostics: [] },
     plugins: [],

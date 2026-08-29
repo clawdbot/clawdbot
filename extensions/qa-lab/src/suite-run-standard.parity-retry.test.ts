@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => ({
     wallClockMs: params.wallClockMs,
     bootStateLines: [],
   })),
-  startQaGatewayChild: vi.fn(async () => ({
+  startQaGatewayChild: vi.fn(async (_params: unknown) => ({
     baseUrl: "http://127.0.0.1:18789",
     token: "qa-test-token",
     cfg: {},
@@ -53,7 +53,10 @@ vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
   disposeRegisteredAgentHarnesses: vi.fn(async () => {}),
 }));
 vi.mock("./gateway-child.js", () => ({
-  startQaGatewayChild: mocks.startQaGatewayChild,
+  createQaGatewayChild: () => ({
+    start: (params: unknown) => mocks.startQaGatewayChild(params),
+    stop: async () => ({ process: "confirmed-stopped", errors: [] }),
+  }),
 }));
 vi.mock("./providers/server-runtime.js", () => ({
   startQaProviderServer: vi.fn(async () => undefined),

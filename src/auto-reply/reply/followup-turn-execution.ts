@@ -194,9 +194,6 @@ export async function executeFollowupTurn(params: {
     disableTools: turn.queued.disableTools,
     commentaryPayloadsEnabled,
     runId: turn.runId,
-    onAgentRunStart: (runId, executionIdentityToken) => {
-      sourceOpts?.onAgentRunStart?.(runId, executionIdentityToken);
-    },
     onBlockReply: undefined,
     onPartialReply: undefined,
     onAssistantMessageStart: undefined,

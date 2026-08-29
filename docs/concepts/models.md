@@ -200,7 +200,7 @@ Without a scope flag, `agents.defaults.modelSelectionScope` can opt into `"sessi
 ```text
 /model
 /model list
-/model 3
+/model Opus
 /model openai/gpt-5.4
 /model openai/gpt-5.4 -s
 /model openai/gpt-5.4 -a
@@ -210,7 +210,11 @@ Without a scope flag, `agents.defaults.modelSelectionScope` can opt into `"sessi
 /model status
 ```
 
-- `/model` and `/model list` show a compact numbered picker. `/model <#>` selects from it. Discord pickers follow the direct command behavior, including `modelSelectionScope`. Telegram callback pickers always stay session-only. `/models add` is deprecated and returns a message instead of registering models from chat.
+- In text chat, `/model` shows the current selection. `/model list` (or `/models`) browses providers; `/models <provider>` lists model refs.
+- Select with `/model <provider/model>` or `/model <alias>` (for example, `/model Opus` with the alias configured above). Numeric selections such as `/model 3` are not supported.
+- On Discord, native `/model` and `/models` without arguments open an interactive picker. Choose a provider and model, then press **Submit**. Discord pickers follow the direct command behavior, including `modelSelectionScope`.
+- On Telegram, `/model` offers a **Browse providers** button; `/model list` and `/models` open the provider menu directly. Tap a provider, then a model. Telegram callback selections always stay session-only.
+- `/models add` is deprecated and returns a message instead of registering models from chat.
 - **Current session:** `/model <model> -s` (or `--session`) changes only this session, regardless of `modelSelectionScope`. Neither configured default changes.
 - **Agent default:** Owner/admin `/model <model> -a` (or `--agent`) selects the model for this session and requests an update for `agents.entries.<agent>.model`. It creates an explicit primary for that configured agent when needed and never falls through to the shared global default.
 - **Global default:** Owner/admin `/model <model> -g` (or `--global`) changes this session and requests an update for the shared `agents.defaults.model` fallback. It does not overwrite other agents' explicit primaries or other sessions' model pins. New and existing unpinned sessions, and cron jobs that inherit this default, can use the changed model on their next run.

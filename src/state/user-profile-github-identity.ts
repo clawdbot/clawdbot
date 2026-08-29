@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/users.js";
+import {
+  GIT_COAUTHOR_PREFERENCE_KEY,
+  isGitCoauthorCreditEnabled,
+} from "../../packages/gateway-protocol/src/schema/users.js";
 import type { UserProfileGitHubIdentity } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
@@ -128,7 +131,7 @@ export function selectUserProfileGitHubIdentities(
   );
 }
 
-/** Resolves bounded participants only when verified identity and public credit opt-in agree. */
+/** Resolves bounded participants for verified identities that have not opted out of public credit. */
 export function resolveUserProfileGitHubAttribution(
   profileIds: readonly string[],
   options: OpenClawStateDatabaseOptions = {},
@@ -155,7 +158,9 @@ export function resolveUserProfileGitHubAttribution(
   return new Map(
     [...canonicalBySource].map(([sourceId, canonicalId]) => [
       sourceId,
-      preferences.get(canonicalId) === true ? (identities.get(canonicalId) ?? null) : null,
+      isGitCoauthorCreditEnabled(preferences.get(canonicalId))
+        ? (identities.get(canonicalId) ?? null)
+        : null,
     ]),
   );
 }

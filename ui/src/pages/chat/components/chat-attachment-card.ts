@@ -20,10 +20,21 @@ export type AttachmentCardHeaderOptions = {
   mimeType?: string;
   sizeBytes?: number;
   downloadHref?: string;
+  expandLabel?: string;
   onExpand?: () => void;
   visualMode?: AttachmentFileVisualMode;
   voiceNote?: boolean;
 };
+
+export function renderCompactAttachmentCard(options: AttachmentCardHeaderOptions): TemplateResult {
+  return html`<div
+    class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
+    ?data-openable=${Boolean(options.onExpand)}
+    @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, options.onExpand)}
+  >
+    ${renderAttachmentCardHeader({ ...options, visualMode: "large-placeholder" })}
+  </div>`;
+}
 
 const attachmentCardInteractiveSelector =
   "a, button, input, select, textarea, audio, video, iframe, [contenteditable='true'], [tabindex], [role='button']";
@@ -85,6 +96,8 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
   const metadata = [typeLabel, formattedSize].filter(Boolean).join(" · ");
   const downloadTitle = t("chat.mediaPlayer.download", { filename: options.label });
   const hasOpenAction = options.onExpand !== undefined;
+  const expandLabel =
+    options.expandLabel ?? t("chat.attachments.expand", { filename: options.label });
   const downloadClass = `chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost ${
     hasOpenAction ? "chat-assistant-attachment-card__download--secondary" : ""
   }`;
@@ -141,8 +154,8 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
               class="chat-assistant-attachment-card__action ${compactPreview
                 ? "chat-assistant-attachment-card__expand--icon"
                 : "chat-assistant-attachment-card__action--labeled"} chat-assistant-attachment-card__expand"
-              aria-label=${t("chat.attachments.expand", { filename: options.label })}
-              title=${t("chat.attachments.expand", { filename: options.label })}
+              aria-label=${expandLabel}
+              title=${expandLabel}
               @click=${options.onExpand}
             >
               ${compactPreview

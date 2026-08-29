@@ -42,6 +42,9 @@ overrides:
 
 packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
 
+patchedDependencies:
+  '@vitest/runner@4.1.11': 55258cdf55f944f5e9bfbc52251b3696225ca2993e2d9f56b90b88f764193d93
+
 importers:
 
   .:
@@ -425,8 +428,8 @@ importers:
         specifier: 1.6.0
         version: 1.6.0
       acpx:
-        specifier: 0.13.1
-        version: 0.13.1
+        specifier: 0.13.2
+        version: 0.13.2
       smol-toml:
         specifier: 1.8.0
         version: 1.8.0
@@ -1647,8 +1650,8 @@ importers:
         specifier: 1.30.0
         version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
       '@openclaw/crabline':
-        specifier: 0.1.17
-        version: 0.1.17
+        specifier: 0.1.19
+        version: 0.1.19
       playwright-core:
         specifier: 1.62.1
         version: 1.62.1
@@ -1982,6 +1985,19 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/vllm:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/visitor-access:
+    dependencies:
+      typebox:
+        specifier: 1.3.16
+        version: 1.3.16
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -4293,8 +4309,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/crabline@0.1.17':
-    resolution: {integrity: sha512-tMjpIhzJvCulDA6mYL8nOA6XExWXZoBOrD4XgL3gsNdEDAWY4FCaHYyNCXwKPU2QSs78FU0xZ3NIQRr9ErHRpQ==}
+  '@openclaw/crabline@0.1.19':
+    resolution: {integrity: sha512-qDAwSTffMSJxHgaHQwNockE/90ae4YERSuizJgfzT9kwmkyzMi1R0dlTuMla5IRWNVvL2RYbj9q/tMsQG+zOeQ==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -5952,8 +5968,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.13.1:
-    resolution: {integrity: sha512-9zhvUrAR4XxSIgaLCiiWmrwmEWh+m6jxu2KUFC8BMOiK4sFsnrRL7H6VF54ZLTTpt0IHrZQju2V7+8wiMf9DXQ==}
+  acpx@0.13.2:
+    resolution: {integrity: sha512-4hOLEo2kE/nCrPr50StbzU3G1WvzHkmKE/r3vxFAIr6GRI3VSmSRH62XCtnDpVcQNpBM8fVPAeTj39ewVhJwdQ==}
     engines: {node: '>=22.13.0'}
     hasBin: true
 
@@ -11634,7 +11650,7 @@ snapshots:
   '@openai/codex@0.150.1-win32-x64':
     optional: true
 
-  '@openclaw/crabline@0.1.17':
+  '@openclaw/crabline@0.1.19':
     dependencies:
       '@types/node': 22.20.1
       commander: 15.0.0
@@ -11643,7 +11659,7 @@ snapshots:
       picocolors: 1.1.1
       proper-lockfile: 4.1.2
       re2js: 2.8.6
-      ws: 8.21.1
+      ws: 8.21.3
       yaml: 2.9.0
       zod: 4.4.3
     transitivePeerDependencies:
@@ -13055,7 +13071,7 @@ snapshots:
     dependencies:
       tinyrainbow: 3.1.0
 
-  '@vitest/runner@4.1.11':
+  '@vitest/runner@4.1.11(patch_hash=55258cdf55f944f5e9bfbc52251b3696225ca2993e2d9f56b90b88f764193d93)':
     dependencies:
       '@vitest/utils': 4.1.11
       pathe: 2.0.3
@@ -13191,7 +13207,7 @@ snapshots:
 
   acorn@8.18.0: {}
 
-  acpx@0.13.1:
+  acpx@0.13.2:
     dependencies:
       '@agentclientprotocol/sdk': 1.4.0(zod@4.4.3)
       commander: 15.0.0
@@ -16958,7 +16974,7 @@ snapshots:
       '@vitest/expect': 4.1.11
       '@vitest/mocker': 4.1.11(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
       '@vitest/pretty-format': 4.1.11
-      '@vitest/runner': 4.1.11
+      '@vitest/runner': 4.1.11(patch_hash=55258cdf55f944f5e9bfbc52251b3696225ca2993e2d9f56b90b88f764193d93)
       '@vitest/snapshot': 4.1.11
       '@vitest/spy': 4.1.11
       '@vitest/utils': 4.1.11

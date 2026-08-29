@@ -115,9 +115,10 @@ export function buildGatewaySessionRow(params: {
     entry,
     params.rowContext?.userProfileIdentityById,
     cfg,
-  ).filter(
-    (participant) => JSON.stringify(participant.identity) !== JSON.stringify(owner?.actor.identity),
   );
+  if (owner?.actor.identity) {
+    participants.delete(JSON.stringify(owner.actor.identity));
+  }
   const observerDigest =
     entry?.observerDigest &&
     // Strictly newer: a run end and restart can share a millisecond, and the
@@ -457,8 +458,8 @@ export function buildGatewaySessionRow(params: {
       hasSessionCreatorProfileProvenance(entry),
     ),
     owner,
-    participants: participants.length ? participants.slice(0, 4) : undefined,
-    participantCount: participants.length || undefined,
+    participants: participants.size ? [...participants.values()].slice(0, 4) : undefined,
+    participantCount: participants.size || undefined,
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,

@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
@@ -14,6 +15,7 @@ import {
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../../../../src/infra/node-commands.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   BASELINE_PROMPT,
@@ -81,6 +83,7 @@ describe("node worker launch wire", () => {
       const root = tempDirs.make("openclaw-node-worker-launch-wire-");
       const provider = await startMidturnProvider();
       const published = await createPublishedWireWorkspace(root);
+      const gatewayOwner = createQaGatewayChild();
       let gateway: WireGateway | undefined;
       let operator: GatewayClient | undefined;
       let workerNode: PairedNodeWorkerHost | undefined;
@@ -98,6 +101,7 @@ describe("node worker launch wire", () => {
 
       try {
         gateway = await startPairedNodeWorkerGateway({
+          owner: gatewayOwner,
           providerBaseUrl: provider.baseUrl,
           executionIdentity: true,
         });
@@ -528,7 +532,7 @@ describe("node worker launch wire", () => {
           workerNode?.stop() ?? Promise.resolve(),
           legacyWorkerNode?.stop() ?? Promise.resolve(),
           operator?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
-          gateway?.stop() ?? Promise.resolve(),
+          stopQaGatewayFixture(gatewayOwner),
           provider.stop(),
           closeWireServer(published.server),
         ]);

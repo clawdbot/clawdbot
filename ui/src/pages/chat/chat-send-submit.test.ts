@@ -11,7 +11,7 @@ import {
 } from "./attachment-payload-store.ts";
 import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { retryQueuedChatMessage } from "./chat-send-actions.ts";
+import { retryQueuedChatMessage, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 
@@ -28,6 +28,7 @@ afterEach(async () => {
   releaseChatAttachmentPayloads(attachmentsToRelease);
   attachmentsToRelease.length = 0;
   await Promise.resolve();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -294,6 +295,7 @@ describe("handleSendChat browser annotation context", () => {
       createChatSession,
     });
 
+    vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
     await handleSendChat(host);
 
     expect(createChatSession).toHaveBeenCalledOnce();
@@ -311,6 +313,7 @@ describe("handleSendChat browser annotation context", () => {
         chatRunId: "annotation-stop-run",
       });
 
+      vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
       await handleSendChat(host);
 
       expect(host.request).toHaveBeenCalledWith("chat.abort", {
@@ -394,6 +397,7 @@ describe("handleSendChat browser annotation context", () => {
       chatStream: "Waiting for approval...",
     });
 
+    vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
     await handleSendChat(host);
 
     const command = findChatSendPayload(host);
@@ -632,6 +636,128 @@ describe("handleSendChat immediate local commands", () => {
 });
 
 describe("handleSendChat session ownership", () => {
+  it.each(["later turn", ""])(
+    "retains %j and attachments until account recovery is ready",
+    async (message) => {
+      const attachment = createStagedAttachment("cold-att");
+      const host = makeChatHost({
+        chatMessage: message,
+        chatAttachments: [attachment],
+        requestHandlers: { "chat.send": { status: "started" } },
+        hasPendingInitialTurn: () => false,
+      });
+      const readiness = vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
+      await handleSendChat(host);
+      expect(host.chatMessage).toBe(message);
+      expect(host.chatAttachments).toEqual([attachment]);
+      expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
+      expect(host.chatQueue).toEqual([]);
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.chatError).toContain("connection");
+      readiness.mockReturnValue(true);
+      await handleSendChat(host);
+      expect(findChatSendPayload(host)).toMatchObject({
+        message,
+        attachments: [expect.objectContaining({ fileName: "brief.pdf" })],
+      });
+    },
+  );
+
+  it("holds an offline queue through cold recovery and an awaited history read", async () => {
+    const history = createDeferred<unknown>();
+    let pending = false;
+    const host = makeChatHost({
+      connected: false,
+      chatMessage: "offline later turn",
+      requestHandlers: {
+        "chat.history": () => history.promise,
+        "chat.send": { status: "started" },
+      },
+      hasPendingInitialTurn: () => pending,
+    });
+    const readiness = vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
+    await handleSendChat(host);
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue).toMatchObject([{ text: "offline later turn", sendAttempts: 0 }]);
+    const originalId = host.chatQueue[0]!.sendRunId;
+    host.connected = true;
+    readiness.mockReturnValue(true);
+    const drain = retryReconnectableQueuedChatSends(host);
+    await vi.waitFor(() =>
+      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything()),
+    );
+    readiness.mockReturnValue(false);
+    history.resolve({ messages: [], sessionInfo: { hasActiveRun: false, status: "done" } });
+    await drain;
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatQueue).toMatchObject([
+      { text: "offline later turn", sendAttempts: 0, sendRunId: originalId },
+    ]);
+    pending = true;
+    readiness.mockReturnValue(true);
+    await retryReconnectableQueuedChatSends(host);
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    pending = false;
+    await retryReconnectableQueuedChatSends(host);
+    expect(findChatSendPayload(host)).toMatchObject({
+      message: "offline later turn",
+      idempotencyKey: originalId,
+    });
+  });
+
+  it.each(["initial-turn", "recovery-scope"])(
+    "rechecks %s after settings settle without sending an admitted later turn",
+    async (hold) => {
+      const settingsPatch = createDeferred<boolean>();
+      let pending = false;
+      const attachment = createStagedAttachment("waiting-att");
+      const host = makeChatHost({
+        chatMessage: "later turn",
+        chatAttachments: [attachment],
+        requestHandlers: { "chat.send": { status: "started" } },
+        pendingSettingsPatches: { "agent:main": settingsPatch.promise },
+        hasPendingInitialTurn: () => pending,
+      });
+      const send = handleSendChat(host);
+      await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
+      if (hold === "initial-turn") {
+        pending = true;
+      } else {
+        vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
+      }
+      host.chatMessage = "newer draft";
+      settingsPatch.resolve(true);
+      await send;
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.chatQueue).toMatchObject([
+        { text: "later turn", sendAttempts: 0, sendState: "waiting-idle" },
+      ]);
+      expect(host.chatMessage).toBe("newer draft");
+      expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
+    },
+  );
+
+  it.each([true, false])(
+    "retains later text and attachments behind an initial turn (connected: %s)",
+    async (connected) => {
+      const attachment = createStagedAttachment("held-att");
+      const host = makeChatHost({
+        connected,
+        chatMessage: "keep this later draft",
+        chatAttachments: [attachment],
+        requestHandlers: { "chat.send": { status: "started" } },
+        hasPendingInitialTurn: () => true,
+      });
+      await handleSendChat(host);
+      expect(host.chatMessage).toBe("keep this later draft");
+      expect(host.chatAttachments).toEqual([attachment]);
+      expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
+      expect(host.chatQueue).toEqual([]);
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.chatError).toContain("initial message");
+    },
+  );
+
   it("keeps the composer intact when no visible session owns the send", async () => {
     const attachment = createStagedAttachment("unscoped-att");
     const request = vi.fn();

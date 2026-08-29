@@ -30,6 +30,148 @@ export function normalizeCronScheduledToolCallerOrigin(
     : { kind: "unknown" };
 }
 
+/**
+ * Restrict-only execution target for a job's exec grant, captured from a
+ * creator surface whose only exec capability was host-pinned. New pinned jobs
+ * persist this as part of a grant-coupled envelope; unmarked legacy jobs keep
+ * baseline exec behavior.
+ */
+export type CronToolsAllowExecTarget = {
+  version: 1;
+  host: "gateway";
+  /** Mandatory approval floor inherited from the captured creator surface. */
+  ask?: "always";
+};
+
+/** Persisted proof that this job was created with an exact exec restriction. */
+export type CronToolsAllowExecTargetRequirement =
+  | {
+      version: 1;
+      target: CronToolsAllowExecTarget;
+      grantIndex: number;
+      recoveryRequired?: never;
+    }
+  | {
+      version: 1;
+      target?: never;
+      recoveryRequired: true;
+    };
+
+/** Retains only recognized restrictions; future fields remain reader-safe. */
+export function normalizeCronToolsAllowExecTarget(
+  value: unknown,
+): CronToolsAllowExecTarget | undefined {
+  return isRecord(value) && value.version === 1 && value.host === "gateway"
+    ? {
+        version: 1,
+        host: "gateway",
+        ...(value.ask === "always" ? { ask: "always" } : {}),
+      }
+    : undefined;
+}
+
+/** Invalid requirement markers remain durable fail-closed recovery state. */
+export function normalizeCronToolsAllowExecTargetRequirement(
+  value: unknown,
+): CronToolsAllowExecTargetRequirement | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value) || value.version !== 1) {
+    return { version: 1, recoveryRequired: true };
+  }
+  if (value.recoveryRequired === true) {
+    return { version: 1, recoveryRequired: true };
+  }
+  const rawTarget = value.target;
+  const target =
+    isRecord(rawTarget) &&
+    rawTarget.version === 1 &&
+    rawTarget.host === "gateway" &&
+    (rawTarget.ask === undefined || rawTarget.ask === "always")
+      ? {
+          version: 1 as const,
+          host: "gateway" as const,
+          ...(rawTarget.ask === "always" ? { ask: "always" as const } : {}),
+        }
+      : undefined;
+  const grantIndex = value.grantIndex;
+  return target && typeof grantIndex === "number" && Number.isInteger(grantIndex) && grantIndex >= 0
+    ? { version: 1, target, grantIndex }
+    : { version: 1, recoveryRequired: true };
+}
+
+function resolveMatchingCronExecTarget(params: {
+  requirement?: unknown;
+  execTarget?: unknown;
+}): Extract<CronToolsAllowExecTargetRequirement, { target: CronToolsAllowExecTarget }> | undefined {
+  const requirement = normalizeCronToolsAllowExecTargetRequirement(params.requirement);
+  const execTarget = normalizeCronToolsAllowExecTarget(params.execTarget);
+  return requirement &&
+    "target" in requirement &&
+    requirement.target !== undefined &&
+    execTarget?.host === requirement.target.host &&
+    execTarget.ask === requirement.target.ask
+    ? requirement
+    : undefined;
+}
+
+/** Removes a pinned exec grant from the generic persisted cap; the private envelope owns it. */
+export function stripCronPinnedExecGrant(params: {
+  toolsAllow?: readonly string[];
+  requirement?: unknown;
+}): string[] | undefined {
+  if (!params.toolsAllow) {
+    return undefined;
+  }
+  return normalizeCronToolsAllowExecTargetRequirement(params.requirement)
+    ? params.toolsAllow.filter((tool) => tool !== "exec")
+    : [...params.toolsAllow];
+}
+
+/** Rehydrates canonical exec only after the persisted grant and restriction agree. */
+export function restoreCronPinnedExecGrant(params: {
+  toolsAllow?: readonly string[];
+  requirement?: unknown;
+  execTarget?: unknown;
+}): string[] | undefined {
+  if (!params.toolsAllow) {
+    return undefined;
+  }
+  const requirement = resolveMatchingCronExecTarget(params);
+  if (!requirement || params.toolsAllow.includes("exec")) {
+    return [...params.toolsAllow];
+  }
+  const restored = [...params.toolsAllow];
+  restored.splice(Math.min(requirement.grantIndex, restored.length), 0, "exec");
+  return restored;
+}
+
+/** Returns operator-visible recovery guidance when a required pin cannot be proven intact. */
+export function resolveCronToolsAllowExecTargetRecoveryError(params: {
+  jobId?: string;
+  requirement?: unknown;
+  execTarget?: unknown;
+}): string | undefined {
+  const requirement = normalizeCronToolsAllowExecTargetRequirement(params.requirement);
+  if (!requirement) {
+    return undefined;
+  }
+  if (resolveMatchingCronExecTarget(params)) {
+    return undefined;
+  }
+  const subject = params.jobId ? `Automation ${params.jobId}` : "This automation";
+  const recoveryCommand = params.jobId
+    ? `openclaw automations edit ${params.jobId} --tools <tool,...>`
+    : "openclaw automations list --all";
+  return (
+    `${subject} cannot run because its captured exec restriction is missing or invalid. ` +
+    "No trigger, script, or agent action was executed. Recreate it from a fresh authenticated creator turn, " +
+    `or explicitly reauthorize its complete tool cap from a trusted operator shell with ` +
+    `\`${recoveryCommand}\`.`
+  );
+}
+
 /** Server-authored provenance for a persisted scheduled tool-cap authority envelope. */
 export type CronScheduledToolPolicy =
   | {

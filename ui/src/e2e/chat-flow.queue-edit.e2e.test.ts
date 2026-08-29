@@ -1,3 +1,4 @@
+import { mkdir } from "node:fs/promises";
 import { expect, it } from "vitest";
 import {
   createChatFlowE2eSuite,
@@ -9,6 +10,8 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+
+const queuedBubbleSelector = ".chat-group.user:has(.chat-queue__item)";
 
 const QUEUED = ["review the migration", "then update the docs", "finally run the smoke"] as const;
 
@@ -33,25 +36,31 @@ suite.define(() => {
       for (const message of QUEUED) {
         await composer.fill(message);
         await composer.press("Enter");
-        await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
+        await page.locator(queuedBubbleSelector, { hasText: message }).waitFor({ timeout: 10_000 });
       }
       const queueText = () =>
-        page.locator(".chat-queue__item").evaluateAll((rows) =>
+        page.locator(queuedBubbleSelector).evaluateAll((rows) =>
           rows.map((row) => {
             const editor = row.querySelector(".chat-queue__edit-input");
             return editor instanceof HTMLTextAreaElement
               ? editor.value
-              : (row.querySelector(".chat-queue__text")?.textContent ?? "");
+              : (row.querySelector(".chat-bubble .chat-text")?.textContent?.trim() ?? "");
           }),
         );
       expect(await queueText()).toEqual([...QUEUED]);
 
       await composer.fill("a separate composer draft");
 
-      // Double-click is the shortcut; the pencil on the row is the visible path.
-      await page.locator(".chat-queue__item").nth(1).dblclick();
+      const queuedBubbles = page.locator(queuedBubbleSelector);
+      expect(await page.locator(".chat-queue").count()).toBe(0);
+      expect(await queuedBubbles.count()).toBe(3);
+      await queuedBubbles.nth(1).locator(".chat-queue__more").click();
+      await queuedBubbles.nth(1).locator('wa-dropdown-item[value="edit"]').click();
 
-      const rowEditor = page.locator(".chat-queue__item").nth(1).locator(".chat-queue__edit-input");
+      const rowEditor = page
+        .locator(queuedBubbleSelector)
+        .nth(1)
+        .locator(".chat-queue__edit-input");
       await rowEditor.waitFor({ timeout: 10_000 });
       await rowEditor.press("ControlOrMeta+A");
       expect(await rowEditor.inputValue()).toBe(QUEUED[1]);
@@ -90,12 +99,12 @@ suite.define(() => {
       for (const message of QUEUED) {
         await composer.fill(message);
         await composer.press("Enter");
-        await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
+        await page.locator(queuedBubbleSelector, { hasText: message }).waitFor({ timeout: 10_000 });
       }
 
       await composer.fill("a separate composer draft");
-      const row = page.locator(".chat-queue__item").nth(1);
-      await row.dblclick();
+      const row = page.locator(queuedBubbleSelector).nth(1);
+      await row.locator(".chat-bubble").dblclick();
       const rowEditor = row.locator(".chat-queue__edit-input");
       await rowEditor.waitFor({ timeout: 10_000 });
       await rowEditor.fill("a replacement the operator abandons");
@@ -103,9 +112,15 @@ suite.define(() => {
       await rowEditor.press("Escape");
 
       await expect
-        .poll(() => page.locator(".chat-queue__item .chat-queue__text").allTextContents(), {
-          timeout: 10_000,
-        })
+        .poll(
+          () =>
+            page
+              .locator(`${queuedBubbleSelector} .chat-bubble .chat-text`)
+              .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim() ?? "")),
+          {
+            timeout: 10_000,
+          },
+        )
         .toEqual([...QUEUED]);
       expect(await composer.inputValue()).toBe("a separate composer draft");
     } finally {
@@ -131,28 +146,34 @@ suite.define(() => {
       for (const message of QUEUED) {
         await composer.fill(message);
         await composer.press("Enter");
-        await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
+        await page.locator(queuedBubbleSelector, { hasText: message }).waitFor({ timeout: 10_000 });
       }
 
-      const row = page.locator(".chat-queue__item").nth(1);
-      await row.dblclick();
+      const row = page.locator(queuedBubbleSelector).nth(1);
+      await row.locator(".chat-bubble").dblclick();
       const rowEditor = row.locator(".chat-queue__edit-input");
       await rowEditor.waitFor({ timeout: 10_000 });
       await composer.fill("a separate composer send");
       await composer.press("Enter");
 
       await page
-        .locator(".chat-queue__item", { hasText: "a separate composer send" })
+        .locator(queuedBubbleSelector, { hasText: "a separate composer send" })
         .waitFor({ timeout: 10_000 });
       await expect.poll(() => rowEditor.inputValue(), { timeout: 10_000 }).toBe(QUEUED[1]);
       expect(await composer.inputValue()).toBe("");
-      expect(await page.locator(".chat-queue__item").count()).toBe(4);
+      expect(await page.locator(queuedBubbleSelector).count()).toBe(4);
 
       await rowEditor.press("Escape");
       await expect
-        .poll(() => page.locator(".chat-queue__item .chat-queue__text").allTextContents(), {
-          timeout: 10_000,
-        })
+        .poll(
+          () =>
+            page
+              .locator(`${queuedBubbleSelector} .chat-bubble .chat-text`)
+              .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim() ?? "")),
+          {
+            timeout: 10_000,
+          },
+        )
         .toEqual([...QUEUED, "a separate composer send"]);
     } finally {
       await suite.closeBrowserContext(context);
@@ -161,6 +182,9 @@ suite.define(() => {
 
   it("keeps edit, remove, and reorder outcomes exact through reconnect", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    if (artifactDir) {
+      await mkdir(artifactDir, { recursive: true });
+    }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir
@@ -196,7 +220,13 @@ suite.define(() => {
       for (const message of ["send first", "edit before send", "remove me", "send last"]) {
         await composer.fill(message);
         await page.getByRole("button", { name: "Queue message" }).click();
-        await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
+        await page.locator(queuedBubbleSelector, { hasText: message }).waitFor({ timeout: 10_000 });
+      }
+      expect(await page.locator(".chat-queue").count()).toBe(0);
+      expect(await page.locator(queuedBubbleSelector).count()).toBe(4);
+      await composer.fill("keep this composer draft while editing and reordering");
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/queue-controls-before.png`, fullPage: true });
       }
       await gateway.setOnline(false);
       await gateway.closeLatest();
@@ -206,18 +236,17 @@ suite.define(() => {
         )
         .waitFor({ timeout: 10_000 });
 
-      const editRow = page.locator(".chat-queue__item", { hasText: "edit before send" });
-      await editRow.dblclick();
-      // `hasText` stops matching once the row text becomes a textarea value.
+      const editRow = page.locator(queuedBubbleSelector, { hasText: "edit before send" });
+      await editRow.locator(".chat-bubble").dblclick();
       const inlineEditor = page.locator(".chat-queue__edit-input");
       await inlineEditor.waitFor({ timeout: 10_000 });
       await inlineEditor.press("ControlOrMeta+A");
       await page.keyboard.insertText("edited before send");
       await inlineEditor.press("Control+Enter");
-      await page.locator(".chat-queue__item", { hasText: "edited before send" }).waitFor();
+      await page.locator(queuedBubbleSelector, { hasText: "edited before send" }).waitFor();
 
       const lastGrip = page
-        .locator(".chat-queue__item", { hasText: "send last" })
+        .locator(queuedBubbleSelector, { hasText: "send last" })
         .locator(".chat-queue__grip");
       await lastGrip.focus();
       for (const expected of [
@@ -227,11 +256,24 @@ suite.define(() => {
       ]) {
         await page.keyboard.press("ArrowUp");
         await expect
-          .poll(() => page.locator(".chat-queue__item .chat-queue__text").allTextContents())
+          .poll(() =>
+            page
+              .locator(`${queuedBubbleSelector} .chat-bubble .chat-text`)
+              .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim() ?? "")),
+          )
           .toEqual(expected);
       }
 
-      const row = page.locator(".chat-queue__item", {
+      expect(await composer.inputValue()).toBe(
+        "keep this composer draft while editing and reordering",
+      );
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/queue-controls-reordered.png`,
+          fullPage: true,
+        });
+      }
+      const row = page.locator(queuedBubbleSelector, {
         hasText: "remove me",
       });
 
@@ -287,14 +329,25 @@ suite.define(() => {
             const target = event.target instanceof Element ? event.target : null;
             trace.push({
               detail: (event as MouseEvent).detail,
-              rowText: target?.closest(".chat-queue__item")?.querySelector(".chat-queue__text")
-                ?.textContent,
+              rowText: target
+                ?.closest(".chat-group.user")
+                ?.querySelector(".chat-bubble .chat-text")
+                ?.textContent?.trim(),
             });
           },
           { capture: true },
         );
       });
-      await row.locator(".chat-queue__remove").dblclick();
+      await row.locator(".chat-queue__remove").click();
+      await row.waitFor({ state: "detached", timeout: 10_000 });
+      // Transcript reflow can move the next row away from the first click's coordinates.
+      // Aim the native second click at its remove control without another first click.
+      await page
+        .locator(queuedBubbleSelector, { hasText: "edited before send" })
+        .locator(".chat-queue__remove")
+        .hover();
+      await page.mouse.down({ clickCount: 2 });
+      await page.mouse.up({ clickCount: 2 });
       expect(
         await page.evaluate(
           () =>
@@ -308,17 +361,20 @@ suite.define(() => {
         { detail: 1, rowText: "remove me" },
         { detail: 2, rowText: "edited before send" },
       ]);
-      await row.waitFor({ state: "detached", timeout: 10_000 });
       await page.getByRole("alert").waitFor({ state: "detached", timeout: 10_000 });
       await expect
-        .poll(() => page.locator(".chat-queue__item .chat-queue__text").allTextContents())
+        .poll(() =>
+          page
+            .locator(`${queuedBubbleSelector} .chat-bubble .chat-text`)
+            .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim() ?? "")),
+        )
         .toEqual(["send last", "send first", "edited before send"]);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
       const queueDisposable = async (text: string) => {
         await composer.fill(text);
         await composer.press("Enter");
-        const disposable = page.locator(".chat-queue__item", { hasText: text });
+        const disposable = page.locator(queuedBubbleSelector, { hasText: text });
         await disposable.waitFor({ timeout: 10_000 });
         return disposable;
       };
@@ -382,7 +438,7 @@ suite.define(() => {
       ]);
       expect(new Set(params.map((entry) => entry.idempotencyKey)).size).toBe(4);
       await expectRequestCountStable(gateway, "chat.send", 4);
-      await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
+      await page.locator(queuedBubbleSelector).waitFor({ state: "detached", timeout: 10_000 });
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/03-exact-drain.png`, fullPage: true });
       }

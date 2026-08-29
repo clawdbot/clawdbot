@@ -839,6 +839,12 @@ does not accept a target token.
 | `/acp set <key> <value>`     | generic                              | `key=cwd` uses the cwd override path.                                                                                                                                                                      |
 | `/acp reset-options`         | clears all runtime overrides         | -                                                                                                                                                                                                          |
 
+When a backend returns its accepted controls, OpenClaw keeps an already-selected
+thinking level in sync with that response. A model switch may lower the level or
+remove thinking support; subsequent turns and reconnects use the accepted
+selection instead of replaying the old level. Backend defaults do not become new
+session overrides, and the model reference keeps its OpenClaw provider prefix.
+
 ## acpx harness, plugin setup, and permissions
 
 For acpx harness configuration (Claude Code / Codex / Gemini CLI aliases),

@@ -57,6 +57,23 @@ describe("resolveApplicationStartupSettings", () => {
     expect(startup.pendingBootstrapProfile).toBeNull();
     expect(startup.location).toEqual({ pathname: "/dash", search: "", hash: "" });
   });
+
+  it("re-scopes the selected token when native auth changes only the Gateway and password", () => {
+    window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+      gatewayUrl: "wss://gateway-b.example",
+      password: "next-password",
+    };
+    const initial = makeUiSettings("wss://gateway-a.example", { token: "old-token" });
+
+    const startup = resolveApplicationStartupSettings(initial, {
+      pathname: "/",
+      search: "",
+      hash: "",
+    });
+
+    expect(startup.settings.token).toBe("");
+    expect(startup.password).toBe("next-password");
+  });
 });
 
 describe("loadSettings default gateway URL derivation", () => {

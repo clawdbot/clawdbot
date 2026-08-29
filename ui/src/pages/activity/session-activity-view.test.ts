@@ -30,9 +30,12 @@ function row(
   } satisfies GatewaySessionRow;
 }
 
-function props(
-  overrides: Partial<Parameters<typeof renderSessionActivityView>[0]> = {},
-): Parameters<typeof renderSessionActivityView>[0] {
+function props({
+  rows = [],
+  ...overrides
+}: Partial<Parameters<typeof renderSessionActivityView>[0]> & {
+  rows?: GatewaySessionRow[];
+} = {}): Parameters<typeof renderSessionActivityView>[0] {
   return {
     context: {
       basePath: "",
@@ -44,13 +47,11 @@ function props(
     } as unknown as ApplicationContext,
     filters: { personId: null, query: "", time: "7d" as const },
     presenceViewers: [] as PresenceViewer[],
-    retainedIdentity: null,
-    rows: [] as GatewaySessionRow[],
     result: {
       ts: 1,
       path: "",
-      count: overrides.rows?.length ?? 0,
-      sessions: [...(overrides.rows ?? [])],
+      count: rows.length,
+      sessions: rows,
       defaults: { model: null, modelProvider: null, contextTokens: null },
       people: [
         {
@@ -236,38 +237,92 @@ describe("session activity people filter", () => {
     ).toBe("1");
   });
 
-  it("shows the client IP and self-reported time zone on the device row", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    render(
-      renderSessionActivityView(
-        props({
-          filters: { personId: "online", query: "", time: "7d" },
-          retainedIdentity: {
+  it.each([false, true])(
+    "keeps online identity details and only known watched sessions in recency order (facet present: %s)",
+    (hasFacet) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const input = props({
+        filters: { personId: "online", query: "", time: "7d" },
+        rows: [
+          row("agent:main:first", { id: "online" }, 10),
+          row("agent:main:second", { id: "online" }, 20),
+          row("agent:main:unwatched", { id: "online" }, 30),
+        ],
+        presenceViewers: [
+          {
             id: "online",
-            name: "Online person",
-            watchedSessions: [],
+            email: "online@example.test",
+            watchedSessions: ["agent:main:first", "agent:main:second", "missing"],
             entries: [
               {
-                host: "openclaw-control-ui",
+                host: "Alice's Mac",
                 platform: "Win32",
                 deviceFamily: "Mac16,6",
                 ip: "203.0.113.7",
                 timeZone: "Europe/Vienna",
-                ts: Date.now(),
+                lastInputSeconds: 30,
+                ts: 10,
               },
+              { host: "Alice's phone", ts: 20 },
             ],
           },
-        }),
-      ),
-      container,
-    );
+        ],
+      });
+      if (!hasFacet) {
+        input.result!.people = [];
+      }
+      render(renderSessionActivityView(input), container);
+      const identity = container.querySelector('[data-activity-identity="online"]');
+      // A sparse online identity wins as a whole, without borrowing the facet's label.
+      expect(identity?.querySelector("h2")?.textContent).toBe("online@example.test");
+      expect(identity?.textContent).toContain("Online");
+      expect(
+        [...container.querySelectorAll(".activity-feed__device-name")].map((device) =>
+          device.textContent?.trim(),
+        ),
+      ).toEqual(["Alice's Mac", "Alice's phone"]);
+      const device = identity?.querySelector(".activity-feed__device")?.textContent;
+      expect(device).toContain("203.0.113.7");
+      expect(device).toContain("Europe/Vienna");
+      expect(
+        [...container.querySelectorAll(".activity-feed__viewing-list [data-activity-session]")].map(
+          (session) => session.getAttribute("data-activity-session"),
+        ),
+      ).toEqual(["agent:main:second", "agent:main:first"]);
+    },
+  );
 
-    const device = container.querySelector(".activity-feed__device")?.textContent;
-    expect(device).toContain("203.0.113.7");
-    expect(device).toContain("Europe/Vienna");
-  });
+  it.each(["offline", "unknown", "Offline"])(
+    "resolves the selected %s identity only from an exact server profile facet",
+    (personId) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const input = props({
+        filters: { personId, query: "", time: "7d" },
+        rows: [
+          row("Visible session", { id: personId, label: "Row actor" }, 10, {
+            participants: [{ identity: { type: "profile", id: personId }, label: "Preview actor" }],
+          }),
+        ],
+      });
+      render(renderSessionActivityView({ ...input, result: undefined, loading: true }), container);
+      expect(container.querySelector(".activity-feed__not-found")).toBeNull();
+      expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading");
+
+      render(renderSessionActivityView(input), container);
+      if (personId === "offline") {
+        const identity = container.querySelector('[data-activity-identity="offline"]');
+        expect(identity?.querySelector("h2")?.textContent).toBe("Offline person");
+        expect(identity?.textContent).toContain("Offline");
+        expect(identity?.querySelector(".activity-feed__viewing-list")).toBeNull();
+      } else {
+        expect(container.querySelector(".activity-feed__not-found")).not.toBeNull();
+        expect(container.querySelector("[data-activity-identity]")).toBeNull();
+        expect(container.querySelector("[data-activity-session]")).toBeNull();
+      }
+    },
+  );
 
   it("selecting Everyone clears the person while preserving the other filters", () => {
     const onFiltersChange = vi.fn();
@@ -277,7 +332,6 @@ describe("session activity people filter", () => {
       renderSessionActivityView(
         props({
           filters: { personId: "online", query: "release", time: "30d" },
-          retainedIdentity: { id: "online", name: "Online person", watchedSessions: [] },
           rows: [row("Release session", { id: "online", label: "Online person" }, Date.now())],
           onFiltersChange,
         }),
@@ -351,7 +405,7 @@ describe("session activity automation grouping", () => {
       { filters: { personId: null, query: "Automation", time: "7d" as const } },
       {
         filters: { personId: "owner", query: "", time: "7d" as const },
-        retainedIdentity: { id: "owner", name: "Owner", watchedSessions: [] },
+        presenceViewers: [{ id: "owner", name: "Owner", watchedSessions: [] }],
       },
     ]) {
       render(

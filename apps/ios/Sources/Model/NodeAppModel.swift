@@ -1671,7 +1671,9 @@ final class NodeAppModel {
                 self.applyMainSessionKey(decoded.mainkey)
 
                 let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !selected.isEmpty, !decoded.agents.contains(where: { $0.id == selected }) {
+                if !selected.isEmpty,
+                   !decoded.agents.contains(where: { $0.id == selected && $0.isSelectableAgent })
+                {
                     self.selectedAgentId = nil
                     self.focusedChatSessionKey = nil
                 }

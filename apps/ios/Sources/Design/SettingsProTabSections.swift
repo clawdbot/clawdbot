@@ -55,7 +55,6 @@ private struct AppearanceSettingsRow: View {
 private struct AppearanceSettingsScreen: View {
     @Environment(AppAppearanceModel.self) private var appearanceModel
     @Environment(\.dismiss) private var dismiss
-    @AppStorage(RootSidebar.visibleAgentCountKey) private var sidebarVisibleAgentCount: Int = 1
 
     var body: some View {
         List {
@@ -85,23 +84,6 @@ private struct AppearanceSettingsScreen: View {
                 }
             } footer: {
                 Text("System follows this device’s appearance setting.")
-                    .font(OpenClawType.footnote)
-            }
-
-            Section {
-                Stepper(value: self.$sidebarVisibleAgentCount, in: 1...3) {
-                    HStack {
-                        Text("Sidebar Agents")
-                            .font(OpenClawType.body)
-                        Spacer()
-                        Text(verbatim: self.sidebarVisibleAgentCount.formatted())
-                            .font(OpenClawType.body)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .accessibilityIdentifier("settings-appearance-sidebar-agents")
-            } footer: {
-                Text("How many agents the sidebar lists before the switcher menu.")
                     .font(OpenClawType.footnote)
             }
         }

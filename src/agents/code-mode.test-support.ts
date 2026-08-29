@@ -172,15 +172,22 @@ export async function runUntilCompleted(params: {
   language?: "javascript" | "typescript";
   restartSafe?: boolean;
 }) {
-  // Code Mode may return a waiting state before completion; tests poll through
-  // the public wait tool instead of reaching into activeRuns.
-  let details = resultDetails(
+  const details = resultDetails(
     await params.execTool.execute("code-call-1", {
       code: params.code,
       language: params.language,
       restartSafe: params.restartSafe,
     }),
   );
+  return await waitUntilCompleted({ details, waitTool: params.waitTool });
+}
+
+export async function waitUntilCompleted(params: {
+  details: Record<string, unknown>;
+  waitTool: AnyAgentTool;
+}) {
+  // Resume the existing run through public waits; never replay its actions.
+  let details = params.details;
   for (let index = 0; index < 8 && details.status === "waiting"; index += 1) {
     const runId = details.runId;
     expect(typeof runId).toBe("string");
