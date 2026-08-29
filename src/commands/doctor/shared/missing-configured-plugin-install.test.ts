@@ -2915,6 +2915,117 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
   });
 
+  it.each([
+    {
+      name: "upgrade fallback",
+      installedVersion: VERSION,
+      compatibilityHostVersion: "9999.1.1",
+      shouldRepair: true,
+    },
+    {
+      name: "downgrade target",
+      installedVersion: "2026.5.2",
+      compatibilityHostVersion: "2026.5.2",
+      shouldRepair: false,
+    },
+  ])(
+    "uses the compatibility host version when classifying a managed runtime ($name)",
+    async ({ installedVersion, compatibilityHostVersion, shouldRepair }) => {
+      const installDir = tempDirs.make("openclaw-plugin-stub-repair-");
+      fs.writeFileSync(
+        path.join(installDir, "package.json"),
+        JSON.stringify({ name: "@openclaw/codex", version: installedVersion }),
+      );
+      const records = {
+        codex: {
+          source: "npm" as const,
+          spec: "@openclaw/codex",
+          resolvedName: "@openclaw/codex",
+          resolvedSpec: `@openclaw/codex@${installedVersion}`,
+          resolvedVersion: installedVersion,
+          version: installedVersion,
+          integrity: "sha512-old-codex",
+          installPath: installDir,
+        },
+      };
+      const pluginMetadata = {
+        id: "codex",
+        packageName: "@openclaw/codex",
+        packageVersion: installedVersion,
+        providers: ["codex"],
+        channels: [],
+        origin: "global" as const,
+        rootDir: installDir,
+      };
+      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({
+        plugins: [pluginMetadata],
+        diagnostics: [],
+        byPluginId: new Map([["codex", pluginMetadata]]),
+      });
+      const targetDir = tempDirs.make("openclaw-doctor-compat-runtime-");
+      fs.writeFileSync(
+        path.join(targetDir, "package.json"),
+        JSON.stringify({ name: "@openclaw/codex", version: compatibilityHostVersion }),
+      );
+      mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
+        successfulInstall({
+          pluginId: "codex",
+          npmSpec: "@openclaw/codex",
+          version: compatibilityHostVersion,
+          targetDir,
+        }),
+      );
+      mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+        {
+          id: "codex",
+          label: "Codex",
+          install: {
+            npmSpec: "@openclaw/codex",
+            defaultChoice: "npm",
+          },
+        },
+      ]);
+
+      const { repairMissingConfiguredPluginInstalls } =
+        await import("./missing-configured-plugin-install.js");
+      const result = await repairMissingConfiguredPluginInstalls({
+        cfg: {
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.5",
+            },
+          },
+        },
+        env: { OPENCLAW_COMPATIBILITY_HOST_VERSION: compatibilityHostVersion },
+      });
+
+      if (!shouldRepair) {
+        expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+        expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+        expect(result).toEqual({ changes: [], warnings: [], records });
+        return;
+      }
+      expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
+        spec: `@openclaw/codex@${compatibilityHostVersion}`,
+        expectedPluginId: "codex",
+        trustedSourceLinkedOfficialInstall: true,
+        mode: "update",
+      });
+      expect(result.changes).toEqual([
+        `Refreshed stale configured plugin "codex" from @openclaw/codex@${compatibilityHostVersion}.`,
+      ]);
+      expectRecordFields(result.records.codex, {
+        source: "npm",
+        spec: "@openclaw/codex",
+        installPath: targetDir,
+        version: compatibilityHostVersion,
+        resolvedVersion: compatibilityHostVersion,
+        resolvedSpec: `@openclaw/codex@${compatibilityHostVersion}`,
+      });
+    },
+  );
+
   it("does not classify or replace a stale third-party runtime from old official resolution fields", async () => {
     const installDir = tempDirs.make("openclaw-plugin-stub-repair-");
     fs.writeFileSync(
