@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { loadModelProvidersData } from "./load.ts";
+import { loadModelProvidersData, loadModelProvidersSupplementalData } from "./load.ts";
 
 describe("loadModelProvidersData", () => {
   it("keeps full catalog discovery out of the initial page load", async () => {
@@ -22,7 +22,7 @@ describe("loadModelProvidersData", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
 
-    await loadModelProvidersData(client, { agentId: "writer" });
+    const result = await loadModelProvidersData(client, { agentId: "writer" });
 
     expect(request).toHaveBeenCalledWith("models.list", {
       view: "configured",
@@ -35,6 +35,10 @@ describe("loadModelProvidersData", () => {
           method === "models.list" && (params as { view?: string } | undefined)?.view === "all",
       ),
     ).toHaveLength(0);
+    expect(request.mock.calls.some(([method]) => method === "usage.status")).toBe(false);
+    expect(request.mock.calls.some(([method]) => method === "sessions.usage")).toBe(false);
+    expect(result.providerUsage).toBeNull();
+    expect(result.costByProvider).toBeNull();
   });
 
   it("scopes only credential status to the selected agent", async () => {
@@ -66,10 +70,8 @@ describe("loadModelProvidersData", () => {
       ["models.list", { view: "configured", agentId: "writer", refresh: true }],
     ]);
     expect(result.providerOutcomes).toEqual([]);
-    expect(request).toHaveBeenCalledWith("usage.status");
-    const sessionUsageCall = request.mock.calls.find(([method]) => method === "sessions.usage");
-    expect(sessionUsageCall?.[1]).not.toHaveProperty("agentId");
-    expect(sessionUsageCall?.[1]).toHaveProperty("agentScope", "all");
+    expect(request.mock.calls.some(([method]) => method === "usage.status")).toBe(false);
+    expect(request.mock.calls.some(([method]) => method === "sessions.usage")).toBe(false);
   });
 
   it("does not send a configured refresh for an already-retired page task", async () => {
@@ -165,8 +167,8 @@ describe("loadModelProvidersData", () => {
     expect(result.providerOutcomes).toEqual([]);
     expect(result.catalogError).toBeNull();
     expect(result.config).toEqual({});
-    expect(result.providerUsage).toEqual({ ok: true, value: { updatedAt: 1, providers: [] } });
-    expect(result.costByProvider).toEqual([]);
+    expect(result.providerUsage).toBeNull();
+    expect(result.costByProvider).toBeNull();
     expect(result.error).toBeNull();
   });
 
@@ -189,13 +191,13 @@ describe("loadModelProvidersData", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
 
-    const result = await loadModelProvidersData(client, { agentId: "main" });
+    const result = await loadModelProvidersSupplementalData(client, new AbortController().signal);
 
     expect(result.providerUsage).toEqual({
       ok: false,
       error: { kind: "request-failed" },
     });
-    expect(result.error).toBeNull();
+    expect(result.costByProvider).toEqual([]);
   });
 
   it("keeps provider-scoped usage errors as data instead of a global request failure", async () => {
@@ -227,12 +229,31 @@ describe("loadModelProvidersData", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
 
-    const result = await loadModelProvidersData(client, { agentId: "main" });
+    const result = await loadModelProvidersSupplementalData(client, new AbortController().signal);
 
     expect(result.providerUsage).toMatchObject({
       ok: true,
       value: { providers: [{ error: "provider API unavailable" }] },
     });
+  });
+
+  it("cancels both supplemental requests through the shared task signal", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "usage.status"
+        ? { updatedAt: 1, providers: [] }
+        : { aggregates: { byProvider: [] } },
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const signal = new AbortController().signal;
+
+    await loadModelProvidersSupplementalData(client, signal);
+
+    expect(request).toHaveBeenCalledWith("usage.status", undefined, { signal });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.usage",
+      expect.objectContaining({ agentScope: "all", groupBy: "family" }),
+      { signal },
+    );
   });
 
   it("surfaces an explicit catalog refresh failure while retaining cached configured models", async () => {

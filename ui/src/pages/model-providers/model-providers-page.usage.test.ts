@@ -6,7 +6,9 @@ import {
   advanceUsageRetries,
   appendPage,
   createHarness,
+  deferred,
   focusDocument,
+  requestCount,
 } from "./model-providers-page.test-support.ts";
 
 afterEach(() => {
@@ -85,9 +87,9 @@ describe("ModelProvidersPage usage convergence", () => {
     await page.updateComplete;
     expect(page.textContent ?? "").toContain("did not finish loading");
 
-    // loadModelProvidersData turns a rejected usage.status into providerUsage:
-    // null. Read as a completed load that would reset the budget and erase the
-    // notice, leaving broken usage looking exactly like absent usage.
+    // The supplemental load turns a rejected usage.status into a failed result.
+    // Treating it as complete would reset the budget and erase the notice,
+    // leaving broken usage looking exactly like absent usage.
     harness.failUsageStatus();
     page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
     await page.updateComplete;
@@ -137,7 +139,7 @@ describe("ModelProvidersPage usage convergence", () => {
     await vi.waitFor(() =>
       expect(
         harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
-      ).toBe(2),
+      ).toBe(1),
     );
     releaseOldLoad();
     await vi.waitFor(() =>
@@ -146,5 +148,44 @@ describe("ModelProvidersPage usage convergence", () => {
         value: { updatedAt: 2 },
       }),
     );
+  });
+
+  it("cancels and replaces supplemental work on reconnect", async () => {
+    const harness = createHarness("main");
+    const oldUsage = deferred<unknown>();
+    const originalRequest = harness.request.getMockImplementation()!;
+    let firstSignal: AbortSignal | undefined;
+    let usageCall = 0;
+    harness.request.mockImplementation(
+      async (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
+        if (method !== "usage.status") {
+          return originalRequest(method);
+        }
+        usageCall += 1;
+        if (usageCall === 1) {
+          firstSignal = options?.signal;
+          return oldUsage.promise;
+        }
+        return { updatedAt: 2, providers: [] };
+      },
+    );
+    const page = appendPage(harness.context);
+    await vi.waitFor(() => expect(requestCount(harness.request, "usage.status")).toBe(1));
+
+    harness.publishPhase("offline");
+    await page.updateComplete;
+    expect(firstSignal?.aborted).toBe(true);
+    harness.publishPhase("connected");
+
+    await vi.waitFor(() => expect(requestCount(harness.request, "usage.status")).toBe(2));
+    await vi.waitFor(() =>
+      expect(page.data?.providerUsage).toMatchObject({ ok: true, value: { updatedAt: 2 } }),
+    );
+    oldUsage.resolve({ updatedAt: 1, providers: [] });
+    await Promise.resolve();
+    await page.updateComplete;
+
+    expect(requestCount(harness.request, "usage.status")).toBe(2);
+    expect(page.data?.providerUsage).toMatchObject({ ok: true, value: { updatedAt: 2 } });
   });
 });

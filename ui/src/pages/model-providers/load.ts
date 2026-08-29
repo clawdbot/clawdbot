@@ -38,6 +38,8 @@ export type ModelProvidersData = {
   error: string | null;
 };
 
+type ModelProvidersSupplementalData = Pick<ModelProvidersData, "providerUsage" | "costByProvider">;
+
 type RequestResult<T> = { ok: true; result: T } | { ok: false; error: unknown };
 
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
@@ -97,24 +99,14 @@ export async function loadModelProvidersData(
         refreshResult.ok ? refreshResult : loadConfiguredCatalog({ preparedOnly: true }),
       )
     : loadConfiguredCatalog({ preparedOnly: true });
-  const [authStatus, catalog, refreshResult, config, providerUsageFetch, costByProvider] =
-    await Promise.all([
-      settleRequest(loadModelAuthStatus(client, opts)),
-      catalogLoad,
-      catalogRefresh ?? Promise.resolve(undefined),
-      request<ConfigSnapshot>("config.get", {})
-        .then((snapshot) => resolveEditableSnapshotConfig(snapshot))
-        .catch(() => null),
-      requestProviderUsage(client, opts.signal ? { signal: opts.signal } : undefined),
-      requestSessionUsage(client, {
-        startDate: localDate(MODEL_PROVIDERS_COST_DAYS - 1),
-        endDate: localDate(0),
-        scope: "family",
-        timeZone: "local",
-      })
-        .then((result) => result?.aggregates?.byProvider ?? null)
-        .catch(() => null),
-    ]);
+  const [authStatus, catalog, refreshResult, config] = await Promise.all([
+    settleRequest(loadModelAuthStatus(client, opts)),
+    catalogLoad,
+    catalogRefresh ?? Promise.resolve(undefined),
+    request<ConfigSnapshot>("config.get", {})
+      .then((snapshot) => resolveEditableSnapshotConfig(snapshot))
+      .catch(() => null),
+  ]);
   return {
     authStatus:
       authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
@@ -127,11 +119,38 @@ export async function loadModelProvidersData(
           ? null
           : errorMessage(catalog.error),
     config,
-    providerUsage: providerUsageFetch,
-    costByProvider,
+    providerUsage: null,
+    costByProvider: null,
     updatedAt: Date.now(),
     // Auth status is the primary provider list; its failure is the only one
     // worth surfacing as a page-level error.
     error: authStatus.ok ? null : errorMessage(authStatus.error),
   };
+}
+
+export async function loadModelProvidersSupplementalData(
+  client: GatewayBrowserClient,
+  signal: AbortSignal,
+): Promise<ModelProvidersSupplementalData> {
+  const [providerUsage, costByProvider] = await Promise.all([
+    requestProviderUsage(client, { signal }),
+    requestSessionUsage(
+      client,
+      {
+        startDate: localDate(MODEL_PROVIDERS_COST_DAYS - 1),
+        endDate: localDate(0),
+        scope: "family",
+        timeZone: "local",
+      },
+      { signal },
+    )
+      .then((result) => result?.aggregates?.byProvider ?? null)
+      .catch((error: unknown) => {
+        if (signal.aborted) {
+          throw error;
+        }
+        return null;
+      }),
+  ]);
+  return { providerUsage, costByProvider };
 }

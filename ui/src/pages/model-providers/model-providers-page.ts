@@ -47,6 +47,7 @@ import {
 } from "./mutations.ts";
 import { isMissingMethodError, mergeProbeResults } from "./probe-results.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
+import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
 import { renderModelProviders, type ModelProviderRowMessage } from "./view.ts";
 
 const MODEL_PROVIDERS_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
@@ -87,7 +88,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       if (!client || !agentId) {
         return initialState;
       }
-      this.refreshPolicy.beginLoad();
       return loadModelProvidersData(client, {
         agentId,
         ...(force ? { refresh: true } : {}),
@@ -97,17 +97,23 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     onComplete: ({ client, data }) => {
       this.loadClient = null;
       this.adoptLoadedData(client, data);
-      this.refreshPolicy.flushPending();
     },
     onError: () => {
       this.loadClient = null;
-      this.refreshPolicy.flushPending();
     },
   });
   private readonly refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () => this.loadClient !== null,
-    reload: () => void this.refresh({ force: false }),
+    isLoading: () => this.loadClient !== null || this.supplemental.loading,
+    reload: () => this.supplemental.load(),
     onIncompleteUsageExhausted: () => this.requestUpdate(),
+  });
+  private readonly supplemental = new ModelProviderSupplementalLoader(this, {
+    getGateway: () => this.gateway,
+    getData: () => this.data,
+    getDataClient: () => this.dataClient,
+    setData: (data) => (this.data = data),
+    setDataClient: (client) => (this.dataClient = client),
+    refreshPolicy: this.refreshPolicy,
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -122,7 +128,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         this.resetConnectionState({ preserveVisibleData: true });
       }
       if (change.becameConnected && !change.initial) {
-        this.refreshPolicy.request("reconnect");
+        void this.refresh({ force: false });
       }
     },
     onPageActivation: () => this.refreshPolicy.request("focus"),
@@ -201,15 +207,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private adoptLoadedData(client: GatewayBrowserClient | null, data: ModelProvidersData) {
-    this.data = data;
-    this.dataClient = client;
-    this.refreshPolicy.markProviderUsage(data.providerUsage, data.updatedAt, this.gateway.epoch);
+    this.supplemental.adoptCoreData(client, data);
   }
 
   private invalidateRequests() {
-    this.refreshPolicy.interrupt();
     this.loadClient = null;
     void this.refreshTask.run([null, this.selectedAgentId, false]);
+    this.supplemental.invalidate();
   }
 
   private resetConnectionState(options: { preserveVisibleData?: boolean } = {}) {
@@ -627,6 +631,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       refreshing: this.loadClient !== null,
       error: rosterError ?? data.error ?? data.catalogError,
       providerUsageFailed: data.providerUsage?.ok === false,
+      supplementalLoading: this.supplemental.loading,
       updatedAt: data.updatedAt,
       costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selectedAgentLabel,
