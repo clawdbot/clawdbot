@@ -1085,9 +1085,8 @@ export function createCodexAppServerBindingStore(
               isSameSupervisionOwner(active.binding, mutation.binding);
             const clearsPendingSupervisionOwner =
               mutation.kind === "clear" &&
-              active?.binding.connectionScope === "supervision" &&
               matchesPendingSupervisionClear(
-                active.binding,
+                active?.binding,
                 mutation.threadId,
                 mutation.expectedPendingSupervisionBranch,
               );
@@ -1110,11 +1109,12 @@ export function createCodexAppServerBindingStore(
                 mutation.kind === "commit-pending-supervision-branch") &&
                 !matchesPendingSupervisionBranch(active?.binding, mutation.expected)) ||
               (mutation.kind === "clear" &&
-                ((mutation.threadId !== undefined &&
-                  active?.binding.threadId !== mutation.threadId) ||
-                  !ownsGeneration ||
-                  (active?.binding.connectionScope === "supervision" &&
-                    !clearsPendingSupervisionOwner)))
+                (!ownsGeneration ||
+                  (mutation.expectedPendingSupervisionBranch
+                    ? !clearsPendingSupervisionOwner
+                    : (mutation.threadId !== undefined &&
+                        active?.binding.threadId !== mutation.threadId) ||
+                      active?.binding.connectionScope === "supervision")))
             ) {
               return { result: false };
             }
@@ -1423,18 +1423,20 @@ function isSameSupervisionOwner(
 }
 
 function matchesPendingSupervisionClear(
-  binding: CodexAppServerThreadBinding,
+  binding: CodexAppServerThreadBinding | undefined,
   threadId: string | undefined,
   expected: CodexAppServerPendingSupervisionBranch | undefined,
 ): boolean {
-  if (!expected) {
+  if (!expected || threadId !== expected.sourceThreadId) {
     return false;
   }
-  const sourceThreadId = expected.sourceThreadId;
+  // Failed creation may never have written its binding. The transaction separately
+  // fences the generation; only this exact-pending clear is idempotent when absent.
   return (
-    threadId === sourceThreadId &&
-    binding.supervisionSourceThreadId === sourceThreadId &&
-    matchesPendingSupervisionBranch(binding, expected)
+    !binding ||
+    (binding.connectionScope === "supervision" &&
+      binding.supervisionSourceThreadId === expected.sourceThreadId &&
+      matchesPendingSupervisionBranch(binding, expected))
   );
 }
 

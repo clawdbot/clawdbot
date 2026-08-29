@@ -254,6 +254,9 @@
       "openclaw/plugin-sdk/access-groups": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/access-groups.d.ts"
       ],
+      "openclaw/plugin-sdk/browser-cdp": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/browser-cdp.d.ts"
+      ],
       "openclaw/plugin-sdk/browser-config": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/browser-config.d.ts"
       ],

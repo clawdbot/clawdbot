@@ -94,6 +94,12 @@ suite.define(() => {
       const imageFrame = page.locator(".chat-image-frame--managed").filter({ has: image });
       await imageFrame.hover();
       const imageActions = imageFrame.locator(".chat-image-actions");
+      await expect.poll(() => imageActions.getByRole("button").count()).toBe(2);
+      await expect
+        .poll(() =>
+          imageActions.getByRole("button", { name: "Open image Ticketed generated image" }).count(),
+        )
+        .toBe(0);
       const downloadButton = imageActions.getByRole("button", { name: "Download image" });
       await expect
         .poll(() =>
@@ -118,9 +124,7 @@ suite.define(() => {
       await downloadButton.click();
       expect((await download).suggestedFilename()).toBe("Ticketed generated image.png");
 
-      await imageActions
-        .getByRole("button", { name: "Open image Ticketed generated image" })
-        .click();
+      await page.getByRole("button", { name: "Open image Ticketed generated image" }).click();
       await page
         .getByRole("dialog", { name: "Image preview: Ticketed generated image" })
         .waitFor({ state: "visible" });

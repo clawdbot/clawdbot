@@ -100,10 +100,20 @@ export function describeSessionsSendTool(): string {
   ].join(" ");
 }
 
+export function describeSubagentSpawnContext(threadAvailable: boolean): string {
+  return [
+    'Native: explicit context="isolated" starts clean; context="fork" copies requester transcript and requires the same agent.',
+    threadAvailable
+      ? "Omitted context follows configured threadBindings.defaultSpawnContext policy (fork by default) with thread=true; without a thread it is isolated."
+      : "Omitted context is isolated.",
+  ].join(" ");
+}
+
 /** Describes the sessions_spawn tool for model-facing instructions. */
 export function describeSessionsSpawnTool(options?: {
   acpAvailable?: boolean;
   threadAvailable?: boolean;
+  subagentThreadAvailable?: boolean;
   swarmEnabled?: boolean;
   sessionToolsVisibility?: SessionVisibilityScope;
   spawnRestricted?: boolean;
@@ -115,8 +125,8 @@ export function describeSessionsSpawnTool(options?: {
     : `Session listing/addressing obeys \`tools.sessions.visibility\` (\`tree\` default: ${describeSessionVisibilityScope("tree")}).`;
   const runtimeDescription =
     options?.acpAvailable === false
-      ? 'Spawn clean child; default `runtime="subagent"`.'
-      : 'Spawn clean child; default `runtime="subagent"`; ACP needs explicit `runtime="acp"`.';
+      ? 'Spawn child session; default `runtime="subagent"`.'
+      : 'Spawn child session; default `runtime="subagent"`; ACP needs explicit `runtime="acp"`.';
   const sessionCompletionGuidance =
     options?.acpAvailable === false
       ? "After spawn, do non-overlap work. Run result returns; session output stays thread."
@@ -137,11 +147,11 @@ export function describeSessionsSpawnTool(options?: {
           "`collect=true` (swarm): parallel fan-out collector children; structured result per `outputSchema`; `groupId` groups a batch.",
         ]
       : []),
-    "Inherits parent workspace. Native task arrives as first `[Subagent Task]`.",
+    "Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message.",
     ...(options?.acpAvailable === false
       ? []
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
-    'Native transcript needed: `context="fork"`; else omit/isolated.',
+    describeSubagentSpawnContext(options?.subagentThreadAvailable === true),
     "Hidden child: research, parallel/batch reads, throwaway side tasks. Coding, PRs, long builds, anything worth keeping: `visible=true`. No spawn for quick lookup/single read.",
     completionGuidance,
   ].join(" ");

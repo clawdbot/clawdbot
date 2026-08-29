@@ -1,4 +1,4 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { render, type ReactiveController, type ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -25,6 +25,7 @@ import {
 } from "./chat-state-refresh.ts";
 import { resolveChatAvatarUrl, selectedChatSessionRow } from "./chat-state-route.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
+import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
@@ -93,6 +94,110 @@ describe("canonical session message recovery", () => {
       return item.kind === "stream" ? [{ role: "assistant", text: item.text }] : [];
     });
   }
+
+  it("reconciles live approval events for the selected session", () => {
+    const { state } = createSessionEventState();
+    const approval = {
+      id: "plugin:approval-live",
+      status: "pending" as const,
+      presentation: {
+        kind: "plugin" as const,
+        title: "Run Codex execution on node",
+        description: "Allows node account access",
+        severity: "critical" as const,
+        pluginId: "codex",
+        agentId: "main",
+        allowedDecisions: ["allow-once", "deny"] as const,
+      },
+      urlPath: "/approve/plugin%3Aapproval-live",
+      createdAtMs: 1_000,
+      expiresAtMs: 10_000,
+    };
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.approval",
+      payload: {
+        sessionKey: "agent:main:main",
+        sourceSessionKey: "agent:main:cloud-child",
+        phase: "pending",
+        updatedAtMs: 1_000,
+        approval,
+      },
+      seq: 1,
+    });
+
+    expect(state.chatSessionApprovalQueue).toEqual([
+      expect.objectContaining({
+        id: approval.id,
+        sourceSessionKey: "agent:main:cloud-child",
+      }),
+    ]);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.approval",
+      payload: {
+        sessionKey: "agent:main:main",
+        sourceSessionKey: "agent:main:cloud-child",
+        phase: "terminal",
+        updatedAtMs: 2_000,
+        approval: {
+          ...approval,
+          status: "denied",
+          decision: "deny",
+          reason: "user",
+          resolvedAtMs: 2_000,
+        },
+      },
+      seq: 2,
+    });
+
+    expect(state.chatSessionApprovalQueue).toEqual([]);
+
+    state.sessionKey = "global";
+    state.assistantAgentId = "research";
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.approval",
+      payload: {
+        sessionKey: "agent:research:global",
+        phase: "pending",
+        updatedAtMs: 3_000,
+        approval,
+      },
+      seq: 3,
+    });
+    expect(state.chatSessionApprovalQueue).toEqual([
+      expect.objectContaining({
+        id: approval.id,
+        request: expect.objectContaining({ sessionKey: "global" }),
+      }),
+    ]);
+
+    for (const [sessionKey, expectedCount] of [
+      ["agent:main:global", 1],
+      ["agent:research:global", 0],
+    ] as const) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.approval",
+        payload: {
+          sessionKey,
+          phase: "terminal",
+          updatedAtMs: 4_000,
+          approval: {
+            ...approval,
+            status: "denied",
+            decision: "deny",
+            reason: "user",
+            resolvedAtMs: 4_000,
+          },
+        },
+      });
+      expect(state.chatSessionApprovalQueue).toHaveLength(expectedCount);
+    }
+  });
 
   it("rejects envelope-only sequence for an incomplete imported user identity", () => {
     const { state } = createSessionEventState({ connected: false });
@@ -287,6 +392,206 @@ describe("canonical session message recovery", () => {
     expect([...(state.activityEventSeqById?.keys() ?? [])]).toEqual([
       `tool:${JSON.stringify([siblingRunId, "tool-2"])}:result`,
     ]);
+  });
+
+  it.each([
+    { persistence: "before-stream", terminal: "final" },
+    { persistence: "between-deltas", terminal: "final" },
+    { persistence: "after-stream", terminal: "final" },
+    { persistence: "after-tool", terminal: "final" },
+    { persistence: "before-stream", terminal: "error" },
+  ])(
+    "renders one durable answer while finishing with persistence $persistence and $terminal",
+    ({ persistence, terminal }) => {
+      const runId = "finishing-run";
+      const text = "The workspace changes are ready.";
+      const partial = "The workspace";
+      const { state, request } = createSessionEventState({
+        chatRunId: runId,
+        chatStream: null,
+        chatStreamSegments: [],
+        chatToolMessages: [],
+      });
+      let agentSeq = 0;
+      const delta = (snapshot: string, deltaText: string) => {
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "agent",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            seq: ++agentSeq,
+            ts: 1,
+            stream: "assistant",
+            data: { text: snapshot, delta: deltaText },
+          },
+        });
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "chat",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            state: "delta",
+            deltaText,
+            message: { role: "assistant", content: [{ type: "text", text: snapshot }] },
+          },
+        });
+      };
+      const persist = () =>
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "session.message",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            hasActiveRun: true,
+            messageId: "durable-answer",
+            messageSeq: 2,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              __openclaw: { id: "durable-answer", seq: 2, runId },
+            },
+          },
+        });
+      if (persistence === "before-stream") {
+        persist();
+      }
+      delta(partial, partial);
+      if (persistence === "between-deltas") {
+        persist();
+      }
+      delta(text, text.slice(partial.length));
+      if (persistence === "after-stream") {
+        persist();
+      }
+      if (persistence === "after-tool") {
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "agent",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            seq: ++agentSeq,
+            ts: 2,
+            stream: "tool",
+            data: { phase: "result", toolCallId: "workspace-tool", name: "read" },
+          },
+        });
+        persist();
+      }
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "agent",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          seq: ++agentSeq,
+          ts: 3,
+          stream: "lifecycle",
+          data: { phase: "finishing" },
+        },
+      });
+      expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
+        { role: "assistant", text },
+      ]);
+      expect(state.chatRunId).toBe(runId);
+      expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
+
+      // Replayed cumulative deltas must not revive the retired projection.
+      delta(text, text.slice(partial.length));
+      expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
+        { role: "assistant", text },
+      ]);
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          state: terminal,
+          ...(terminal === "error" ? { errorMessage: "Workspace reconciliation failed." } : {}),
+          message: { role: "assistant", content: [{ type: "text", text }] },
+        },
+      });
+      delta(text, text);
+      expect(state.chatRunId).toBeNull();
+      expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
+        { role: "assistant", text },
+      ]);
+      expect(state.chatMessages.filter((message) => extractText(message) === text)).toHaveLength(1);
+      if (terminal === "error") {
+        expect(state.chatRunError?.summary).toContain("Workspace reconciliation failed.");
+      }
+    },
+  );
+
+  it("preserves repeated commentary and distinct answers within the same active run", () => {
+    const runId = "repeated-run";
+    const text = "Checking the workspace.";
+    const { state } = createSessionEventState({
+      connected: false,
+      chatRunId: runId,
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+    });
+    for (const itemId of ["commentary-one", "commentary-two"]) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "agent",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          seq: 1,
+          ts: 1,
+          stream: "item",
+          data: { kind: "preamble", itemId, progressText: text },
+        },
+      });
+    }
+    const stream = (snapshot: string) =>
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          state: "delta",
+          message: { role: "assistant", content: [{ type: "text", text: snapshot }] },
+        },
+      });
+    const persist = (id: string, seq: number, itemId?: string) =>
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          hasActiveRun: true,
+          messageId: id,
+          messageSeq: seq,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            ...(itemId
+              ? { openclawStreamFallback: { itemId, source: "segment", replacementText: text } }
+              : {}),
+          },
+        },
+      });
+    persist("durable-commentary", 1, "commentary-one");
+    stream(text);
+    expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text]);
+    persist("first-answer", 2);
+    expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text]);
+    stream(`${text} ${text}`);
+    expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text, text]);
+    persist("second-answer", 3);
+    expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text, text]);
+    expect(state.chatMessages).toHaveLength(3);
+    expect(state.chatStreamSegments.filter((segment) => segment.itemId)).toHaveLength(1);
   });
 
   it("keeps cumulative assistant output split across an authoritative steer", () => {
@@ -526,15 +831,14 @@ describe("canonical session message recovery", () => {
 
     // Rendering collapses consecutive identical messages behind a count badge,
     // so the transcript itself has to hold exactly one copy of the reply.
-    const canonicalReply = scenario.aborted
-      ? {
-          ...persistedReply,
-          __openclaw: {
-            ...persistedReplyIdentity,
-            idempotencyKey: `${activeRunId}:assistant`,
-          },
-        }
-      : persistedReply;
+    const canonicalReply = {
+      ...persistedReply,
+      __openclaw: {
+        ...persistedReplyIdentity,
+        ...(scenario.producerOwned ? { runId: activeRunId } : {}),
+        ...(scenario.aborted ? { idempotencyKey: `${activeRunId}:assistant` } : {}),
+      },
+    };
     expect(state.chatMessages.filter((message) => extractText(message) === replyText)).toEqual([
       canonicalReply,
     ]);
@@ -644,6 +948,54 @@ describe("canonical session message recovery", () => {
     },
   );
 
+  it("recovers once when history completed the run before its message-less terminal arrives", async () => {
+    const runId = "run-completed-by-history-before-terminal";
+    const prompt = {
+      role: "user",
+      content: [{ type: "text", text: "Finish after the tool call" }],
+      __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const persistedReply = {
+      role: "assistant",
+      content: [{ type: "text", text: "The durable final arrived after the snapshot." }],
+      stopReason: "stop",
+      __openclaw: { id: "reply-1", runId, seq: 2 },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [prompt, persistedReply],
+      sessionId: "selected-session",
+      sessionInfo: {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 2,
+        hasActiveRun: false,
+        activeRunIds: [],
+        status: "done",
+      },
+    });
+    const { state } = createSessionEventState({
+      chatMessages: [prompt],
+      chatHistoryPagination: { hasMore: false },
+      chatRunId: runId,
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    reduceChatSessionProjection(state, { type: "runTerminal", runId, status: "completed" });
+
+    const terminalEvent = {
+      type: "event",
+      event: "chat",
+      payload: { sessionKey: state.sessionKey, runId, state: "final" },
+    } satisfies Parameters<typeof handlePageGatewayEvent>[1];
+    handlePageGatewayEvent(state, terminalEvent);
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(state.chatMessages).toContainEqual(persistedReply));
+
+    request.mockClear();
+    handlePageGatewayEvent(state, terminalEvent);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("stops terminal recovery after a media-only reply becomes durable", async () => {
     vi.useFakeTimers();
     try {
@@ -689,6 +1041,60 @@ describe("canonical session message recovery", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(1);
       expect(state.chatMessages).toContainEqual(persistedReply);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds terminal recovery when no durable reply appears", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "run-without-durable-reply";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Finish without persisting a reply" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(5);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(request).toHaveBeenCalledTimes(5);
+      expect(renderedTranscript(state)).toEqual([
+        { role: "user", text: "Finish without persisting a reply" },
+      ]);
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(5);
     } finally {
       vi.useRealTimers();
     }
@@ -922,6 +1328,7 @@ describe("canonical session message recovery", () => {
       const persistedReply = {
         role: "assistant",
         content: [{ type: "text", text: "The current reply is now durable." }],
+        stopReason: "stop",
         __openclaw: { id: "current-reply", runId, seq: 3 },
       };
       const sessionInfo = {
@@ -2910,6 +3317,53 @@ describe("session pull request refresh", () => {
 });
 
 describe("image lightbox lifecycle", () => {
+  it("accepts only matching base64 video at the page boundary", () => {
+    const context = {
+      agents: { state: { agentsList: null }, ensureList: vi.fn(async () => null) },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(
+      context,
+      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      { querySelector: () => null },
+    );
+
+    const source = "data:video/mp4;base64,AAAA";
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: { kind: "video", label: "Clip", mimeType: "video/mp4", url: source },
+          },
+        ],
+        { onOpenImage: state.handleOpenImage },
+      ),
+      container,
+    );
+    const player = container.querySelector("openclaw-chat-video-player") as HTMLElement & {
+      onExpand: (src: string) => void;
+    };
+    player.onExpand(source);
+    expect(state.imageLightbox?.src).toBe("data:video/mp4;base64,AAAA");
+
+    state.handleOpenImage({ kind: "video", src: "data:audio/mp3;base64,AAAA", title: "Audio" });
+    expect(state.imageLightbox).toBeNull();
+    container.remove();
+  });
+
   it("invalidates immediately when beginning a deferred image open", () => {
     const invalidate = vi.fn();
     const context = {

@@ -1,9 +1,6 @@
 /** Builds the static and plugin-derived registry of secret migration targets. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  loadBundledPluginManifestRegistry,
-  type PluginManifestRecord,
-} from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
@@ -95,25 +92,19 @@ function listPluginConfigSecretTargetRegistryEntries(
 
 function listChannelSecretTargetRegistryEntries(
   channelPlugins: readonly PluginManifestRecord[],
-  params?: { sourceTree?: boolean; failOnChannelContractError?: boolean },
+  throwOnLoadError = false,
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
 
   for (const record of channelPlugins) {
     try {
-      const contractApi = loadChannelSecretContractApiForRecord(record, {
-        sourceTree: params?.sourceTree,
-        failOnLoadError: params?.failOnChannelContractError,
-      });
+      const contractApi = loadChannelSecretContractApiForRecord(record, { throwOnLoadError });
       entries.push(...(contractApi?.secretTargetRegistryEntries ?? []));
     } catch (error) {
-      if (params?.failOnChannelContractError) {
-        const detail = error instanceof Error ? error.message : String(error);
-        throw new Error(`Failed to load channel secret contract for ${record.id}: ${detail}`, {
-          cause: error,
-        });
+      // Runtime can isolate unavailable owners; generated docs must never silently lose targets.
+      if (throwOnLoadError) {
+        throw error;
       }
-      // Ignore channels that do not expose a usable secret contract artifact.
     }
   }
   return entries;
@@ -461,8 +452,7 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   preferPersisted?: boolean;
-  sourceTree?: boolean;
-  failOnChannelContractError?: boolean;
+  throwOnLoadError?: boolean;
 }): SecretTargetRegistryEntry[] {
   const plugins = resolvePluginMetadataSnapshot({
     ...(params.config !== undefined ? { config: params.config } : {}),
@@ -470,16 +460,13 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
     allowWorkspaceScopedCurrent: true,
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   }).plugins;
-  return buildSecretTargetRegistryFromPlugins(plugins, {
-    sourceTree: params.sourceTree,
-    failOnChannelContractError: params.failOnChannelContractError,
-  });
+  return buildSecretTargetRegistryFromPlugins(plugins, params);
 }
 
 /** Builds secret targets from one exact manifest-registry plugin set. */
 export function buildSecretTargetRegistryFromPlugins(
   plugins: readonly PluginManifestRecord[],
-  params?: { sourceTree?: boolean; failOnChannelContractError?: boolean },
+  options?: { throwOnLoadError?: boolean },
 ): SecretTargetRegistryEntry[] {
   const channelPlugins = plugins.filter(
     (record) =>
@@ -498,10 +485,7 @@ export function buildSecretTargetRegistryFromPlugins(
     ...CORE_SECRET_TARGET_REGISTRY,
     ...listPluginWebProviderSecretTargetRegistryEntries(plugins),
     ...listPluginConfigSecretTargetRegistryEntries(plugins),
-    ...listChannelSecretTargetRegistryEntries(channelPlugins, {
-      sourceTree: params?.sourceTree,
-      failOnChannelContractError: params?.failOnChannelContractError,
-    }),
+    ...listChannelSecretTargetRegistryEntries(channelPlugins, options?.throwOnLoadError),
     ...listOfficialExternalChannelSecretTargetRegistryEntries(),
   ];
   const seen = new Set<string>();
@@ -527,21 +511,17 @@ export function getSecretTargetRegistry(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   sourceTree?: boolean;
-  failOnChannelContractError?: boolean;
 }): SecretTargetRegistryEntry[] {
   if (params?.sourceTree) {
-    // Docs generation must not consult operator-installed, configured, or workspace plugins.
-    const env = {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
-    };
-    return buildSecretTargetRegistryFromPlugins(
-      loadBundledPluginManifestRegistry({ env }).plugins,
-      {
-        sourceTree: true,
-        failOnChannelContractError: params.failOnChannelContractError,
+    // Docs generation needs the source plugin tree, never a process-cached or persisted snapshot.
+    return loadSecretTargetRegistryFromPluginMetadata({
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
       },
-    );
+      preferPersisted: false,
+      throwOnLoadError: true,
+    });
   }
   if (params?.config) {
     // Config-scoped plugin roots and policy are not process-stable. Compile these registries per

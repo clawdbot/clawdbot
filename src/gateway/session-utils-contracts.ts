@@ -9,16 +9,14 @@ import type { ThinkLevel, listThinkingLevelOptions } from "../auto-reply/thinkin
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
+import type { CurrentUserProfileDisplay } from "./current-user-profile-display.js";
 
 export type GatewayModelThinkingProfile = {
   thinkingLevels: ReturnType<typeof listThinkingLevelOptions>;
   thinkingDefault: ThinkLevel;
 };
 
-export type SessionActorProfileIdentity = {
-  label?: string;
-  avatarUrl?: string;
-};
+export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
 
 export type SessionListRowContext = {
   subagentRuns: SubagentRunReadIndex<SubagentRunReadRecord>;

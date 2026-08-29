@@ -1,5 +1,6 @@
+import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -8,9 +9,12 @@ import {
 } from "../state/openclaw-state-db.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import { resolvePluginInstallDir } from "./install-paths.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import {
   cleanupTrackedTempDirs,
@@ -34,12 +38,19 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
   }),
 }));
 
-const { listManagedPlugins, refreshManagedPluginMetadata, setManagedPluginEnabled } =
-  await import("./management-service.js");
+const {
+  listManagedPlugins,
+  refreshManagedPluginMetadata,
+  setManagedPluginEnabled,
+  uninstallManagedPlugin,
+} = await import("./management-service.js");
 const roots: string[] = [];
 
-afterEach(() => {
+beforeEach(() => {
   clearPluginMetadataLifecycleCaches();
+});
+
+afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(roots);
   vi.unstubAllEnvs();
@@ -87,6 +98,75 @@ it("refreshes an externally changed install ledger before publishing management 
   );
   expect(getGatewayPluginMetadataSnapshot()).toBe(boot);
   expect(boot.byPluginId.has(fixture.pluginId)).toBe(false);
+});
+
+it("removes an npm-pack plugin from management inventory without replacing Gateway metadata", async () => {
+  const root = makeTrackedTempDir("managed-npm-pack-uninstall", roots);
+  const stateDir = path.join(root, "state");
+  const packageName = "@example/tgz-visible";
+  const pluginRoot = resolvePluginInstallDir("tgz-visible", path.join(stateDir, "extensions"));
+  mkdirSafeDir(pluginRoot);
+  const fixture = createColdPluginFixture({
+    rootDir: pluginRoot,
+    pluginId: "tgz-visible",
+    packageName,
+  });
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+  let config: OpenClawConfig = {
+    plugins: { entries: { [fixture.pluginId]: { enabled: true } } },
+  };
+  const installRecord = {
+    source: "npm",
+    spec: `${packageName}@1.0.0`,
+    sourcePath: path.join(root, `${fixture.pluginId}.tgz`),
+    installPath: pluginRoot,
+    artifactKind: "npm-pack",
+    artifactFormat: "tgz",
+  } as const;
+  configIo.read.mockImplementation(async () => ({
+    snapshot: {
+      valid: true,
+      parsed: config,
+      path: path.join(stateDir, "openclaw.json"),
+      sourceConfig: config,
+      hash: "base-hash",
+    },
+    writeOptions: { expectedConfigPath: path.join(stateDir, "openclaw.json") },
+  }));
+  configIo.write.mockImplementation(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
+    config = nextConfig;
+  });
+  await writePersistedInstalledPluginIndex(
+    loadInstalledPluginIndex({
+      config,
+      env: process.env,
+      installRecords: { [fixture.pluginId]: installRecord },
+    }),
+  );
+  const boot = loadPluginMetadataSnapshot({
+    config,
+    env: process.env,
+    preferPersisted: false,
+  });
+  setGatewayPluginMetadataSnapshot(boot, { config, env: process.env });
+  expect((await listManagedPlugins({ config })).plugins).toContainEqual(
+    expect.objectContaining({ id: fixture.pluginId, installed: true }),
+  );
+
+  await uninstallManagedPlugin({ pluginId: fixture.pluginId });
+
+  expect(fs.existsSync(pluginRoot)).toBe(false);
+  expect(
+    (await readPersistedInstalledPluginIndex())?.plugins.some(
+      (plugin) => plugin.pluginId === fixture.pluginId,
+    ),
+  ).toBe(false);
+  expect((await listManagedPlugins({ config })).plugins).not.toContainEqual(
+    expect.objectContaining({ id: fixture.pluginId }),
+  );
+  expect(getGatewayPluginMetadataSnapshot()).toBe(boot);
+  expect(boot.byPluginId.has(fixture.pluginId)).toBe(true);
 });
 
 it.each([undefined, "main"])(

@@ -25,6 +25,7 @@ import {
   isProviderAdvertised,
   parseProvidersFromHelp,
 } from "../../scripts/crabbox-wrapper-providers.mts";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
@@ -643,15 +644,6 @@ async function waitForProcessExit(
   ]);
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function runSignalCleanupProof(sendSignals: (pid: number) => Promise<void>): Promise<void> {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-descendant-"));
   tempDirs.push(root);
@@ -678,8 +670,8 @@ async function runSignalCleanupProof(sendSignals: (pid: number) => Promise<void>
     const runnerExit = waitForProcessExit(runner);
     await sendSignals(runner.pid!);
     await expect(runnerExit).resolves.toEqual({ status: 143, signal: null });
-    // The wrapper waits for the detached process group to disappear before exit.
-    // A live PID here would expose the cleanup-ordering regression this proves.
+    // Check immediately after wrapper exit for executing descendants.
+    // Linux zombies are already terminated even while their PIDs await reaping.
     expect(isProcessAlive(descendantPid)).toBe(false);
   } finally {
     if (runner.pid && isProcessAlive(runner.pid)) {

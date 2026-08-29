@@ -819,6 +819,26 @@ describe("run-node script", () => {
     expect(spawnCalls).toEqual([statusCommandSpawn()]);
   });
 
+  it.for([undefined, "/explicit/checkout"])(
+    "carries the checkout selector into the CLI (override: %s)",
+    async (override, { tmp }) => {
+      await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+      const { spawnSync } = createCurrentGitSpawnRecorder();
+      let childEnv: NodeJS.ProcessEnv | undefined;
+      const exitCode = await runNodeCommand(tmp, {
+        env: { OPENCLAW_DEV_SOURCE_ROOT: override },
+        spawn: (_cmd, _args, options) => {
+          childEnv = options.env;
+          return createExitedProcess(0);
+        },
+        spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
+      expect(exitCode).toBe(0);
+      expect(childEnv?.OPENCLAW_DEV_SOURCE_ROOT).toBe(override ?? tmp);
+    },
+  );
+
   it("skips rebuilding for private QA commands when the private QA facades are present", async ({
     tmp,
   }) => {

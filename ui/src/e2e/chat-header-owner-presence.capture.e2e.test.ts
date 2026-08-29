@@ -29,14 +29,21 @@ suite.define(() => {
         await installMockGateway(page, {
           hasMultipleSessionSharingIdentities: true,
           presenceUsers: [
-            { self: true, id: "profile-operator", name: "Operator" },
+            {
+              self: true,
+              id: "profile-operator",
+              identity: { type: "profile", id: "profile-operator" },
+              name: "Operator",
+            },
             {
               id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
               name: "Ada",
               watchedSessions: [sessionKey],
             },
             {
               id: "profile-zoe",
+              identity: { type: "profile", id: "profile-zoe" },
               name: "Zoe",
               watchedSessions: [sessionKey],
             },
@@ -46,17 +53,37 @@ suite.define(() => {
             "sessions.list": {
               count: 1,
               owners: [
-                { type: "human", id: "profile-ada", label: "Ada" },
-                { type: "human", id: "profile-zoe", label: "Zoe" },
+                {
+                  type: "human",
+                  id: "profile-ada",
+                  identity: { type: "profile", id: "profile-ada" },
+                  label: "Ada",
+                },
+                {
+                  type: "human",
+                  id: "profile-zoe",
+                  identity: { type: "profile", id: "profile-zoe" },
+                  label: "Zoe",
+                },
               ],
               defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
               path: "",
               sessions: [
                 {
                   contextTokens: null,
-                  createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+                  createdActor: {
+                    type: "human",
+                    id: "profile-ada",
+                    identity: { type: "profile", id: "profile-ada" },
+                    label: "Ada",
+                  },
                   owner: {
-                    actor: { type: "human", id: "profile-ada", label: "Ada" },
+                    actor: {
+                      type: "human",
+                      id: "profile-ada",
+                      identity: { type: "profile", id: "profile-ada" },
+                      label: "Ada",
+                    },
                   },
                   displayName: "Owner presence",
                   hasActiveRun: false,

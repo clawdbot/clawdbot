@@ -70,17 +70,23 @@ const buzzSetupAdapter: ChannelSetupAdapter<BuzzSetupInput> = {
     }
     return null;
   },
-  applyAccountConfig: ({ cfg, input }) => {
+  applyAccountConfig: ({ cfg, accountId, input }) => {
+    const namedConfig = applyAccountNameToChannelSection({
+      cfg,
+      channelKey: "buzz",
+      accountId,
+      name: input.name,
+    });
     const currentPrivateKey = resolveComparableCurrentKey(cfg);
     const nextPrivateKey = input.useEnv
       ? process.env.BUZZ_PRIVATE_KEY?.trim()
       : input.privateKey?.trim();
     const keepAuthTag = isSameBuzzIdentity(currentPrivateKey, nextPrivateKey);
-    const { privateKey: _privateKey, authTag, ...existing } = cfg.channels?.buzz ?? {};
+    const { privateKey: _privateKey, authTag, ...existing } = namedConfig.channels?.buzz ?? {};
     return {
-      ...cfg,
+      ...namedConfig,
       channels: {
-        ...cfg.channels,
+        ...namedConfig.channels,
         buzz: {
           ...existing,
           enabled: true,

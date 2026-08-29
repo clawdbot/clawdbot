@@ -498,7 +498,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       const result = await state.sessions.forkAtMessage(sourceKey, entryId, agentParams);
       const editorText = result.editorText ?? "";
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !visibleSessionMatches(state, sourceKey, agentParams.agentId)
       ) {
         return;
@@ -516,7 +516,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       });
     } catch (error) {
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !visibleSessionMatches(state, sourceKey, agentParams.agentId)
       ) {
         return;

@@ -158,7 +158,9 @@ function liveLane(name: string, command: string, options: LaneOptions = {}) {
   return lane(name, command, {
     ...options,
     live: true,
-    needsLiveImage: options.needsLiveImage ?? true,
+    // Package-backed live lanes use their E2E image; live credentials alone do
+    // not require building the separate source live-test image.
+    needsLiveImage: options.needsLiveImage ?? !options.e2eImageKind,
     resources: ["live", ...liveProviderResources(options), ...(options.resources ?? [])],
     retryPatterns: options.retryPatterns ?? LIVE_RETRY_PATTERNS,
     retries: options.retries ?? DEFAULT_LIVE_RETRIES,
@@ -188,10 +190,8 @@ function releaseTypedOnboardingLane() {
     "release-typed-onboarding",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-typed-onboarding",
     {
-      resources: ["npm", "service"],
-      stateScenario: "empty",
+      ...npmOnboardLaneOptions,
       timeoutMs: 20 * 60 * 1000,
-      weight: 3,
     },
   );
 }
@@ -288,7 +288,6 @@ function liveOpenAiChatToolsLane() {
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-chat-tools",
     {
       e2eImageKind: "functional",
-      needsLiveImage: false,
       provider: "openai",
       resources: ["service"],
       stateScenario: "empty",
@@ -333,7 +332,6 @@ function liveMcpCodeModeGatewayLane() {
     {
       cacheKey: "mcp-code-mode-gateway",
       e2eImageKind: "functional",
-      needsLiveImage: false,
       provider: "openai",
       resources: ["npm", "service"],
       stateScenario: "empty",
@@ -439,7 +437,6 @@ export const mainLanes: DockerE2eLane[] = [
   ),
   liveLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
     e2eImageKind: "functional",
-    needsLiveImage: false,
     provider: "openai",
     resources: ["service"],
     timeoutMs: OPENWEBUI_TIMEOUT_MS,
@@ -851,7 +848,6 @@ export const publicInstallerLanes: DockerE2eLane[] = [
     ),
     {
       e2eImageKind: "bare",
-      needsLiveImage: false,
       provider: "openai",
       resources: ["npm", "service"],
       timeoutMs: 15 * 60 * 1000,
@@ -867,7 +863,6 @@ export const publicInstallerLanes: DockerE2eLane[] = [
     ),
     {
       e2eImageKind: "bare",
-      needsLiveImage: false,
       provider: "claude",
       resources: ["npm", "service"],
       weight: 3,
@@ -971,7 +966,6 @@ function chunkMatchesReleaseProfile(chunk: string, releaseProfile: DockerE2eRele
 function openWebUILane() {
   return liveLane("openwebui", RELEASE_OPENWEBUI_COMMAND, {
     e2eImageKind: "functional",
-    needsLiveImage: false,
     provider: "openai",
     resources: ["service"],
     timeoutMs: OPENWEBUI_TIMEOUT_MS,

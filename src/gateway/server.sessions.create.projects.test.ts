@@ -41,6 +41,7 @@ vi.mock("../projects/project-clone.js", async (importOriginal) => {
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const controlUiClient = {
   client: {
@@ -105,13 +106,19 @@ async function settleWorkspaceRuns(
   }
 }
 
-test.each([false, true])(
-  "sessions.create admits remote project work (worktree=%s) before materialization and dispatches only after authoritative binding",
-  async (worktree) => {
+test.each([
+  { worktree: false, sandboxed: false },
+  { worktree: true, sandboxed: false },
+  { worktree: false, sandboxed: true },
+])(
+  "sessions.create admits remote project work (worktree=$worktree, sandboxed=$sandboxed) before materialization and dispatches only after authoritative binding",
+  async ({ worktree, sandboxed }) => {
     const root = tempDirs.make("openclaw-session-remote-project-startup-");
     const workspace = await initializeRepository(root, "workspace");
-    const projectRoot = await initializeRepository(root, "project");
-    testState.agentConfig = { workspace };
+    const projectRoot = await initializeRepository(sandboxed ? workspace : root, "project");
+    const alias = path.join(root, "workspace-alias");
+    await fs.symlink(workspace, alias, directoryLinkType);
+    testState.agentConfig = { workspace: alias, sandbox: { mode: sandboxed ? "all" : "off" } };
     const { storePath } = await createSessionStoreDir();
     const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
     const materialization = createDeferredCore<typeof project>();
@@ -767,7 +774,9 @@ test("sessions.create terminalizes remote project preparation outside a sandboxe
         runId,
         sessionKey: key,
         state: "error",
-        errorMessage: expect.stringMatching(/outside the sandboxed agent workspace/u),
+        errorMessage: expect.stringContaining(
+          "sessions.create project is outside the sandboxed agent workspace",
+        ),
       }),
       expect.anything(),
     );
@@ -784,22 +793,43 @@ test("sessions.create terminalizes remote project preparation outside a sandboxe
   }
 });
 
-test("sessions.create starts directly in a synthesized non-Git workspace project", async () => {
-  const root = tempDirs.make("openclaw-session-workspace-project-");
-  const workspace = path.join(root, "workspace");
-  await fs.mkdir(workspace);
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
+test.each(["workspace", "registered"])(
+  "sessions.create starts in a sandboxed %s project through a workspace alias",
+  async (kind) => {
+    const root = tempDirs.make("openclaw-session-workspace-project-");
+    const workspace = path.join(root, "workspace");
+    const alias = path.join(root, "workspace-alias");
+    await fs.mkdir(workspace);
+    await fs.symlink(workspace, alias, directoryLinkType);
+    testState.agentConfig = { workspace: alias, sandbox: { mode: "all" } };
+    const { storePath } = await createSessionStoreDir();
+    const projectRoot =
+      kind === "workspace" ? workspace : await initializeRepository(workspace, "project");
+    const projectId =
+      kind === "workspace"
+        ? "workspace:main"
+        : (await registerProjectRegistry({ path: projectRoot })).id;
 
-  const created = await directSessionReq<{ entry?: { spawnedCwd?: string } }>(
-    "sessions.create",
-    { agentId: "main", projectId: "workspace:main" },
-    { client: { connect: { scopes: ["operator.write"] } } as never },
-  );
+    const created = await directSessionReq<{
+      key: string;
+      entry?: { sessionRoot?: string; spawnedCwd?: string };
+    }>(
+      "sessions.create",
+      { agentId: "main", projectId },
+      { client: { connect: { scopes: ["operator.write"] } } as never },
+    );
 
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.entry?.spawnedCwd).toBe(workspace);
-});
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.entry).toMatchObject({
+      sessionRoot: projectRoot,
+      spawnedCwd: projectRoot,
+    });
+    expect(loadSessionEntry({ sessionKey: created.payload!.key, storePath })).toMatchObject({
+      sessionRoot: projectRoot,
+      spawnedCwd: projectRoot,
+    });
+  },
+);
 
 test("sessions.create starts directly in an outside registered project at write scope", async () => {
   const root = tempDirs.make("openclaw-session-direct-project-");

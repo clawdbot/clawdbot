@@ -21,7 +21,7 @@ import {
   requestProviderUsage,
   type ProviderUsageRequestResult,
 } from "../../lib/provider-usage-request.ts";
-import { requestSessionUsage } from "../../lib/sessions/index.ts";
+import { requestSessionUsage } from "../../lib/sessions/usage.ts";
 
 /** Local session-spend window shown on each card. */
 export const MODEL_PROVIDERS_COST_DAYS = 30;

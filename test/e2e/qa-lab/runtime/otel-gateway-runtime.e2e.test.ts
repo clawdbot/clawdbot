@@ -4,9 +4,10 @@ import { describe, expect, test } from "vitest";
 import {
   createQaBusState,
   startQaBusServer,
-  startQaGatewayChild,
+  createQaGatewayChild,
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { type CapturedSpan, startLocalOtlpReceiver } from "./otel-test-support.js";
 
 const CODE_MODE_RECONCILIATION_NEEDLE =
@@ -92,14 +93,14 @@ describe("diagnostics-otel gateway runtime", () => {
     let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
     let receiver: Awaited<ReturnType<typeof startOtlpReceiver>> | undefined;
     let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
-    let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+    const gatewayOwner = createQaGatewayChild();
 
     try {
       bus = await startQaBusServer({ state });
       const activeReceiver = await startOtlpReceiver(["qa-plugin-usage-secret-sentinel"]);
       receiver = activeReceiver;
       mock = await startQaMockOpenAiServer();
-      gateway = await startQaGatewayChild({
+      await gatewayOwner.start({
         repoRoot,
         useRepoCli: true,
         providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -388,7 +389,7 @@ describe("diagnostics-otel gateway runtime", () => {
     } finally {
       await settleCleanup(
         async () => {
-          await gateway?.stop();
+          await stopQaGatewayFixture(gatewayOwner);
         },
         async () => {
           await mock?.stop();

@@ -34,7 +34,7 @@ const originalExecPath = process.execPath;
 const validatedNodePath = "/opt/Validated Node/bin/node";
 const validatedBunPath = "/opt/Validated Bun/bin/bun";
 const missingSelectedNodeError =
-  "No supported Node runtime was selected for the daemon. Install Node 24.15+ (recommended) or Node 22 LTS (22.22.3+), then retry.";
+  "No supported Node runtime was selected for the daemon. Install Node >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0 (Node 26 recommended), then retry.";
 const missingSelectedBunError =
   "No supported Bun runtime was selected for the daemon. Install Bun 1.4 or newer with WAL-reset-safe node:sqlite, then retry.";
 

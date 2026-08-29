@@ -75,13 +75,14 @@ async function main(): Promise<void> {
     return;
   }
   try {
-    // Managed run owns the whole tsgo process tree: on timeout it SIGKILLs the
-    // process group, because a wedged checker ignores SIGTERM and would otherwise
-    // block the caller forever on a compiler that will never report.
+    // Managed cleanup forwards SIGTERM before bounded SIGKILL escalation, then
+    // joins the compiler group and output before reporting a timeout.
     process.exitCode = await runManagedCommand({
       bin: tsgoPath,
       args: finalArgs,
       env,
+      // The compiler owns a nested group that outer preparation cannot verify.
+      requireProcessTreeExit: process.platform !== "win32",
       timeoutMs,
     });
   } catch (error) {

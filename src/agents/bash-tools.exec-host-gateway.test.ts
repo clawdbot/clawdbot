@@ -3888,6 +3888,7 @@ EOF`,
             cwd: workdir,
             env: undefined,
           }),
+          expiresAtMs: null,
         },
       });
       expect(resolved.outcome).toBe("resolved");
@@ -3911,6 +3912,7 @@ EOF`,
         agentId: "main",
         jobId: "job-1",
         jobConfigRevision: revision,
+        jobName: "Nightly backup",
       });
       const security = captureSecurityEvents();
       const result = await runGatewayAllowlist({
@@ -3940,6 +3942,7 @@ EOF`,
         agentId: "main",
         jobId: "job-1",
         jobConfigRevision: revision,
+        jobName: "Nightly backup",
       });
       const security = captureSecurityEvents();
       const result = await runGatewayAllowlist({
@@ -3977,6 +3980,7 @@ EOF`,
         agentId: "main",
         jobId: "job-1",
         jobConfigRevision: revision,
+        jobName: "Nightly backup",
       });
       const result = await runGatewayAllowlist({
         command: grantCommand,
@@ -3995,6 +3999,7 @@ EOF`,
         agentId: "main",
         jobId: "job-1",
         jobConfigRevision: revision,
+        jobName: "Nightly backup",
       });
       resolveExecApprovalWaitOutcomeMock.mockResolvedValueOnce({
         kind: "resolved",

@@ -106,6 +106,10 @@ describe("package Telegram live Docker E2E", () => {
     expect(runtimeRun).toContain("source scripts/lib/openclaw-e2e-instance.sh");
     expect(runtimeRun).toContain('sut_command="/npm-global/bin/openclaw"');
     expect(runtimeRun).toContain('openclaw_e2e_run_command "$sut_command" --version');
+    expect(runtimeRun).toContain(
+      'openclaw_e2e_run_command "$sut_command" plugins install @openclaw/codex',
+    );
+    expect(runtimeRun).toContain("--accept-capabilities");
     expect(runtimeRun).toContain('openclaw_e2e_run_command "$sut_command" onboard');
     expect(runtimeRun).toContain(
       'OPENAI_API_KEY="$hotpath_model_value" openclaw_e2e_run_command "$sut_command" onboard',
@@ -120,6 +124,9 @@ describe("package Telegram live Docker E2E", () => {
     expect(runtimeRun).toContain('openclaw_e2e_print_log "$file"');
     expect(runtimeRun).not.toContain("sed -n '1,220p'");
     expect(runtimeRun).not.toMatch(/^\s*openclaw (onboard|channels add|doctor )/mu);
+    expect(
+      runtimeRun.indexOf('openclaw_e2e_run_command "$sut_command" plugins install @openclaw/codex'),
+    ).toBeLessThan(runtimeRun.indexOf('openclaw_e2e_run_command "$sut_command" onboard'));
   });
 
   it("isolates onboarding hot-path config from the live suite", () => {

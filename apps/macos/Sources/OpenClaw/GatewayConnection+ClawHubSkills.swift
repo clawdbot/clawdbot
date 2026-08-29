@@ -32,7 +32,6 @@ extension GatewayConnection {
     func skillsInstallClawHub(
         slug: String,
         version: String?,
-        acknowledgeRisk: Bool = false,
         on route: Route) async throws -> SkillInstallResult
     {
         var params: [String: AnyCodable] = [
@@ -42,9 +41,6 @@ extension GatewayConnection {
         ]
         if let version {
             params["version"] = AnyCodable(version)
-        }
-        if acknowledgeRisk {
-            params["acknowledgeClawHubRisk"] = AnyCodable(true)
         }
         return try await self.requestDecoded(
             method: .skillsInstall,

@@ -38,10 +38,8 @@ import {
   withPluginRuntimePluginScope,
   withPluginRuntimeRegistryScope,
 } from "./runtime/gateway-request-scope.js";
-import {
-  buildPluginRuntimeLoadOptions,
-  resolvePluginRuntimeLoadContext,
-} from "./runtime/load-context.js";
+import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
 import {
   buildPluginToolDescriptorCacheKey,

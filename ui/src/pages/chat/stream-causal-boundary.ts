@@ -8,6 +8,7 @@ import {
 } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { userTurnSendIdentity } from "./chat-thread-items.ts";
+import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 
 export type StreamCausalBoundaryState = {
   chatMessages?: unknown[];
@@ -233,7 +234,10 @@ export function resolveCumulativeAssistantTail(
   for (let index = 0; index < endIndex; index += 1) {
     const message = messages[index];
     const identity = readSessionMessageIdentity(message);
-    const persistedText = identity?.runId === runId ? extractText(message) : null;
+    const persistedText =
+      identity?.runId === runId && !isKeyedAssistantStreamFallbackMessage(message)
+        ? extractText(message)
+        : null;
     if (
       identity?.role === "assistant" &&
       persistedText &&
@@ -245,13 +249,24 @@ export function resolveCumulativeAssistantTail(
   }
   const turnStart =
     ownedPrefixIndex >= 0 ? ownedPrefixIndex : lastUserMessageIndex(messages, endIndex) + 1;
+  const persistedTexts = messages.slice(turnStart, endIndex).map((message) => {
+    const identity = readSessionMessageIdentity(message);
+    // Keyed commentary mirrors travel through item events, outside the cumulative buffer.
+    return identity?.role === "assistant" &&
+      (!identity.runId || identity.runId === runId) &&
+      !isKeyedAssistantStreamFallbackMessage(message)
+      ? extractText(message)
+      : null;
+  });
+  return resolveAssistantTextTail(persistedTexts, cumulativeText);
+}
+
+export function resolveAssistantTextTail(
+  persistedTexts: readonly (string | null)[],
+  cumulativeText: string,
+): string | null {
   let persistedPrefixLength = 0;
-  for (let index = turnStart; index < endIndex; index += 1) {
-    const identity = readSessionMessageIdentity(messages[index]);
-    if (identity?.role !== "assistant" || (identity.runId && identity.runId !== runId)) {
-      continue;
-    }
-    const persistedText = extractText(messages[index]);
+  for (const persistedText of persistedTexts) {
     if (!persistedText) {
       continue;
     }

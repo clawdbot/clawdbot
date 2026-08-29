@@ -35,11 +35,14 @@ const WORKER_WALLPAPER_PATH = fileURLToPath(
   new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
 );
 const INSPECT_FAILURE_PREFIX = "Crabbox inspect failed with exit code 2: ";
+// Capture is on by default; these lifecycle cases assert warmup/inspect/heartbeat command
+// sequences, so they opt out to stay focused. Capture and fork are owned by the warm-image suite.
 const PROFILE = {
   provider: "aws",
   class: "standard",
   ttl: "24h",
   idleTimeout: "60m",
+  warmImage: false,
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
@@ -59,6 +62,31 @@ function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
     termination: "exit",
     ...overrides,
   };
+}
+
+function classProfile(
+  machineClass: string,
+  primary: Record<string, unknown> = {},
+  selectors: Record<string, unknown> = {},
+) {
+  return {
+    class: machineClass,
+    target: "linux",
+    architecture: "amd64",
+    primary: {
+      type: "native-8vcpu-16gb",
+      architecture: "amd64",
+      vcpu: null,
+      memory: null,
+      ...primary,
+    },
+    fallbacks: [],
+    ...selectors,
+  };
+}
+
+function mappedCatalog(profiles: unknown[]) {
+  return { disposition: "mapped", profiles };
 }
 
 function inspectJson(overrides: Record<string, unknown> = {}): string {
@@ -183,14 +211,20 @@ describe("Crabbox worker provider", () => {
             },
             {
               provider: "aws",
-              classes: [
-                { class: "tiny", type: "c7a.2xlarge", vcpu: 8, memoryGb: 16 },
-                { class: "small", type: "c7a.4xlarge", vcpu: 16, memoryGb: 32 },
-                { class: "standard", type: "c7a.8xlarge", vcpu: 32, memoryGb: 64 },
-                { class: "fast", type: "c7a.16xlarge", vcpu: 64, memoryGb: 128 },
-                { class: "large", type: "c7a.24xlarge", vcpu: 96, memoryGb: 192 },
-                { class: "beast", type: "c7a.48xlarge", vcpu: 192, memoryGb: 384 },
-              ],
+              classCatalog: mappedCatalog(
+                (
+                  [
+                    ["tiny", 8],
+                    ["small", 16],
+                    ["standard", 32],
+                    ["fast", 64],
+                    ["large", 96],
+                    ["beast", 192],
+                  ] as const
+                ).map(([name, vcpu]) =>
+                  classProfile(name, { vcpu, memory: { value: vcpu * 2, unit: "GiB" } }),
+                ),
+              ),
             },
             { provider: "machine0", classCatalog: { disposition: "unmapped", profiles: [] } },
           ]),
@@ -230,23 +264,140 @@ describe("Crabbox worker provider", () => {
     expect(calls.filter((argv) => argv[1] === "providers")).toHaveLength(1);
   });
 
-  it.each(["machine0", "firecracker"])(
-    "honors unmapped %s metadata over stray legacy classes",
-    async (backend) => {
+  it.each(["unmapped", "unknown", undefined])(
+    "requires mapped disposition, ignoring %s catalogs and stray legacy classes",
+    async (disposition) => {
       const provider = providerWithRunner(async () =>
         commandResult({
           stdout: JSON.stringify([
             {
-              provider: backend,
-              classCatalog: { disposition: "unmapped", profiles: [] },
+              provider: "aws",
+              classCatalog: { disposition, profiles: [classProfile("standard")] },
               classes: [{ class: "standard", vcpu: 8, memoryGb: 16 }],
             },
           ]),
         }),
       );
-      expect(
-        await provider.listMachineOptions?.({ ...PROFILE, provider: backend, class: "custom" }),
-      ).toEqual([]);
+      expect(await provider.listMachineOptions?.({ ...PROFILE, class: "custom" })).toEqual([]);
+    },
+  );
+
+  it("offers all canonical-only Machine0 classes with their primary resources", async () => {
+    const provider = providerWithRunner(async () =>
+      commandResult({
+        stdout: JSON.stringify([
+          {
+            provider: "machine0",
+            classCatalog: mappedCatalog([
+              classProfile("tiny", { type: "large", vcpu: 2, memory: { value: 4, unit: "GB" } }),
+              classProfile("small", { type: "xl", vcpu: 4, memory: { value: 8, unit: "GB" } }),
+              classProfile("standard", { type: "xxl", vcpu: 8, memory: { value: 16, unit: "GB" } }),
+              classProfile("fast", { type: "xxxl", vcpu: 16, memory: { value: 64, unit: "GB" } }),
+              classProfile("large", { type: "4xl", vcpu: 32, memory: { value: 128, unit: "GB" } }),
+              classProfile("beast", { type: "5xl", vcpu: 48, memory: { value: 192, unit: "GB" } }),
+            ]),
+          },
+        ]),
+      }),
+    );
+    expect(await provider.listMachineOptions?.({ ...PROFILE, provider: "machine0" })).toEqual([
+      { id: "tiny", label: "Tiny", cpu: 2, memoryGb: 4 },
+      { id: "small", label: "Small", cpu: 4, memoryGb: 8 },
+      { id: "standard", label: "Standard", cpu: 8, memoryGb: 16, default: true },
+      { id: "fast", label: "Fast", cpu: 16, memoryGb: 64 },
+      { id: "large", label: "Large", cpu: 32, memoryGb: 128 },
+      { id: "beast", label: "Beast", cpu: 48, memoryGb: 192 },
+    ]);
+  });
+
+  it.each([
+    { backend: "aws", type: "c7a.8xlarge", cpu: 32, memoryGb: 64, unit: "GiB" },
+    { backend: "azure", type: "Standard_D32ads_v6", cpu: 32, memoryGb: 128, unit: "GiB" },
+    { backend: "gcp", type: "c4-standard-32", cpu: 32, memoryGb: 120, unit: "GB" },
+    { backend: "hetzner", type: "ccx33", cpu: 8, memoryGb: 32, unit: "GB" },
+    { backend: "namespace-instance", type: "4x8", cpu: 4, memoryGb: 8, unit: "GB" },
+    ...(
+      [
+        ["cloudflare", "standard-4"],
+        ["digitalocean", "s-1vcpu-1gb"],
+        ["linode", "g6-standard-1"],
+        ["namespace-devbox", "S"],
+        ["ovh", "b3-8"],
+        ["phala", "tdx.small"],
+        ["scaleway", "DEV1-S"],
+        ["tencentcloud", "SA5.MEDIUM2"],
+        ["vultr", "vc2-1c-1gb"],
+      ] as const
+    ).map(([backend, type]) => ({
+      backend,
+      type,
+      cpu: undefined,
+      memoryGb: undefined,
+      unit: "GB",
+    })),
+  ])(
+    "uses $backend canonical metadata without inferring native-type dimensions",
+    async ({ backend, type, cpu, memoryGb, unit }) => {
+      const provider = providerWithRunner(async () =>
+        commandResult({
+          stdout: JSON.stringify([
+            {
+              provider: backend,
+              classCatalog: mappedCatalog([
+                classProfile("standard", {
+                  type,
+                  vcpu: cpu ?? null,
+                  memory: memoryGb ? { value: memoryGb, unit } : null,
+                }),
+              ]),
+            },
+          ]),
+        }),
+      );
+      expect(await provider.listMachineOptions?.({ ...PROFILE, provider: backend })).toEqual([
+        {
+          id: "standard",
+          label: "Standard",
+          default: true,
+          ...(cpu ? { cpu } : {}),
+          ...(memoryGb ? { memoryGb } : {}),
+        },
+      ]);
+    },
+  );
+
+  it.each([
+    { value: 16, unit: "GB", memoryGb: 16 },
+    { value: 16, unit: "GiB", memoryGb: 16 },
+    { value: 16000, unit: "MB", memoryGb: undefined },
+    { value: 16384, unit: "MiB", memoryGb: undefined },
+    { value: 15.5, unit: "GB", memoryGb: undefined },
+    { value: 0, unit: "GB", memoryGb: undefined },
+    { value: 16, unit: "unknown", memoryGb: undefined },
+  ])(
+    "projects $value $unit using Crabbox's integer GB/GiB summary contract",
+    async ({ value, unit, memoryGb }) => {
+      const provider = providerWithRunner(async () =>
+        commandResult({
+          stdout: JSON.stringify([
+            {
+              provider: "aws",
+              classCatalog: mappedCatalog([
+                classProfile("standard", { vcpu: 8, memory: { value, unit } }),
+              ]),
+            },
+          ]),
+        }),
+      );
+      expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
+        {
+          id: "standard",
+          label: "Standard",
+          cpu: 8,
+          default: true,
+          ...(memoryGb ? { memoryGb } : {}),
+        },
+      ]);
     },
   );
 
@@ -256,13 +407,28 @@ describe("Crabbox worker provider", () => {
         stdout: JSON.stringify([
           {
             provider: "aws",
-            classCatalog: { disposition: "mapped" },
-            classes: [
-              { class: "memory", memoryGb: 16 },
-              { class: "standard", vcpu: 8 },
-              { class: "unknown", vcpu: null, memoryGb: null },
-              { class: "standard", vcpu: 99, memoryGb: 99 },
-            ],
+            classCatalog: mappedCatalog([
+              classProfile("standard", { vcpu: 128 }, { target: "windows", windowsMode: "normal" }),
+              classProfile("standard", { vcpu: 64 }, { architecture: "arm64" }),
+              classProfile("memory", { memory: { value: 16, unit: "GB" } }),
+              classProfile(
+                "standard",
+                { vcpu: 8 },
+                {
+                  fallbacks: [
+                    {
+                      type: "fallback",
+                      architecture: "amd64",
+                      vcpu: 32,
+                      memory: { value: 64, unit: "GB" },
+                    },
+                  ],
+                },
+              ),
+              classProfile("unknown"),
+              classProfile("standard", { vcpu: 99, memory: { value: 99, unit: "GB" } }),
+            ]),
+            classes: [{ class: "standard", vcpu: 128, memoryGb: 256 }],
           },
         ]),
       }),
@@ -276,16 +442,19 @@ describe("Crabbox worker provider", () => {
 
   it("bounds and filters malformed catalogs before gateway normalization", async () => {
     const invalidClass = "x".repeat(129);
-    const classes = [
-      { class: invalidClass, vcpu: 1, memoryGb: 2 },
-      ...Array.from({ length: 40 }, (_, index) => ({
-        class: `class-${String(index).padStart(2, "0")}`,
-        vcpu: index === 0 ? 0 : index + 1,
-        memoryGb: index === 0 ? 1.5 : (index + 1) * 2,
-      })),
+    const profiles = [
+      classProfile(invalidClass),
+      ...Array.from({ length: 40 }, (_, index) =>
+        classProfile(`class-${String(index).padStart(2, "0")}`, {
+          vcpu: index === 0 ? 0 : index + 1,
+          memory: { value: index === 0 ? 1.5 : (index + 1) * 2, unit: "GB" },
+        }),
+      ),
     ];
     const provider = providerWithRunner(async () =>
-      commandResult({ stdout: JSON.stringify([{ provider: "aws", classes }]) }),
+      commandResult({
+        stdout: JSON.stringify([{ provider: "aws", classCatalog: mappedCatalog(profiles) }]),
+      }),
     );
 
     const options = await provider.listMachineOptions?.({ ...PROFILE, class: "class-00" });
@@ -315,7 +484,9 @@ describe("Crabbox worker provider", () => {
         stdout: JSON.stringify([
           {
             provider: "aws",
-            classes: [{ class: "standard", type: "t", vcpu, memoryGb: vcpu * 2 }],
+            classCatalog: mappedCatalog([
+              classProfile("standard", { vcpu, memory: { value: vcpu * 2, unit: "GB" } }),
+            ]),
           },
         ]),
       });
@@ -387,11 +558,14 @@ describe("Crabbox worker provider", () => {
           stdout: JSON.stringify([
             {
               provider: "hetzner",
-              classCatalog: { disposition: "mapped" },
-              classes: [
-                { class: "tiny", type: "ccx13", vcpu: 2, memoryGb: 8 },
-                { class: "standard", type: "ccx33", vcpu: 8, memoryGb: 32 },
-              ],
+              classCatalog: mappedCatalog([
+                classProfile("tiny", { type: "ccx13", vcpu: 2, memory: { value: 8, unit: "GB" } }),
+                classProfile("standard", {
+                  type: "ccx33",
+                  vcpu: 8,
+                  memory: { value: 32, unit: "GB" },
+                }),
+              ]),
             },
           ]),
         }),
@@ -433,7 +607,12 @@ describe("Crabbox worker provider", () => {
     healthy.resolve(
       commandResult({
         stdout: JSON.stringify([
-          { provider: "aws", classes: [{ class: "standard", vcpu: 32, memoryGb: 64 }] },
+          {
+            provider: "aws",
+            classCatalog: mappedCatalog([
+              classProfile("standard", { vcpu: 32, memory: { value: 64, unit: "GB" } }),
+            ]),
+          },
         ]),
       }),
     );
@@ -453,30 +632,34 @@ describe("Crabbox worker provider", () => {
       result: () => Promise.resolve(commandResult({ stdout: "[]" })),
     },
     {
-      name: "omits classes",
+      name: "omits the catalog",
       result: () =>
         Promise.resolve(commandResult({ stdout: JSON.stringify([{ provider: "aws" }]) })),
     },
     ...[
-      { name: "returns empty classes", metadata: { classes: [] } },
+      { name: "returns empty profiles", metadata: { classCatalog: mappedCatalog([]) } },
       {
-        name: "returns unusable classes",
-        metadata: { classes: [null, {}, { class: " " }, { class: "x".repeat(129) }] },
+        name: "returns unusable profiles",
+        metadata: {
+          classCatalog: mappedCatalog([null, {}, classProfile(" "), classProfile("x".repeat(129))]),
+        },
       },
       {
-        name: "reports only a mapped rich catalog",
+        name: "reports only legacy classes",
+        metadata: { classes: [{ class: "standard", vcpu: 8, memoryGb: 16 }] },
+      },
+      {
+        name: "omits mapped profiles",
+        metadata: { classCatalog: { disposition: "mapped" } },
+      },
+      {
+        name: "reports only non-default selectors",
         metadata: {
-          classCatalog: {
-            disposition: "mapped",
-            profiles: [
-              {
-                class: "standard",
-                target: "linux",
-                architecture: "amd64",
-                primary: { type: "xxl", vcpu: 8, memory: { value: 16, unit: "GB" } },
-              },
-            ],
-          },
+          classCatalog: mappedCatalog([
+            classProfile("standard", { vcpu: 32 }, { target: "windows", windowsMode: "wsl2" }),
+            classProfile("standard", { vcpu: 64 }, { architecture: "arm64" }),
+            classProfile("standard", { vcpu: 96 }, { architecture: "mixed" }),
+          ]),
         },
       },
     ].map(({ name, metadata }) => ({
@@ -494,7 +677,7 @@ describe("Crabbox worker provider", () => {
             stdout: JSON.stringify([
               {
                 provider: "gcp",
-                classes: [{ class: "standard", vcpu: 32, memoryGb: 64 }],
+                classCatalog: mappedCatalog([classProfile("standard", { vcpu: 32 })]),
               },
             ]),
           }),

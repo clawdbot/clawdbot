@@ -3072,6 +3072,11 @@ describe("EmbeddedTuiBackend", () => {
       finalPayloads: [],
       expectedText: "Draft answer",
     },
+    {
+      name: "preserves an ordinary MEDIA-like suffix in the authoritative final answer",
+      finalPayloads: [{ text: "The selected size is\nM" }],
+      expectedText: "The selected size is\nM",
+    },
   ])("$name", async ({ finalPayloads, expectedText }) => {
     const pending = deferred<EmbeddedAgentResult>();
     agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
@@ -3109,6 +3114,53 @@ describe("EmbeddedTuiBackend", () => {
       message: {
         role: "assistant",
         content: [{ type: "text", text: expectedText }],
+        timestamp: embeddedEventTimestamp,
+      },
+    });
+  });
+
+  it("preserves generic relative media URLs in the authoritative final answer", async () => {
+    const pending = deferred<EmbeddedAgentResult>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events = captureBackendEvents(backend);
+
+    backend.start();
+    await sendMainChat(backend, "show the image", "run-local-relative-media");
+
+    registeredListener?.({
+      runId: "run-local-relative-media",
+      stream: "assistant",
+      data: {
+        text: "MEDIA:./image.png",
+        delta: "MEDIA:./image.png",
+        mediaUrls: ["./image.png"],
+      },
+    });
+    registeredListener?.({
+      runId: "run-local-relative-media",
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+
+    pending.resolve({ payloads: [{ text: "MEDIA:./image.png" }], meta: {} });
+    await flushMicrotasks();
+
+    expect(
+      events
+        .filter((event) => event.event === "chat")
+        .map((event) => event.payload)
+        .at(-1),
+    ).toStrictEqual({
+      runId: "run-local-relative-media",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      state: "final",
+      stopReason: "stop",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "MEDIA:./image.png" }],
         timestamp: embeddedEventTimestamp,
       },
     });

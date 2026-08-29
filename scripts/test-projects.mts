@@ -8,7 +8,7 @@ import { formatMs } from "./lib/check-timing-summary.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import {
   isE2eBuildSkipped,
-  resolveVitestPretestBuildMode,
+  prepareVitestRuntime,
   runE2eGlobalSetup,
 } from "./lib/vitest-build-prerequisites.mts";
 import {
@@ -310,9 +310,6 @@ async function main() {
     return;
   }
 
-  const pretestBuildMode = resolveVitestPretestBuildMode(
-    runSpecs.map((spec) => ({ configs: [spec.config], includePatterns: spec.includePatterns })),
-  );
   const runBuildCommand = (commandArgs: string[], env: NodeJS.ProcessEnv) =>
     runManagedCommand({ bin: process.execPath, args: commandArgs, cwd: process.cwd(), env });
   const e2eSpecs = runSpecs.filter((spec) => spec.config === "test/vitest/vitest.e2e.config.ts");
@@ -326,12 +323,11 @@ async function main() {
         spec.env = { ...spec.env, OPENCLAW_E2E_USE_PREBUILT_DIST: "1" };
       }
     }
-  } else if (pretestBuildMode) {
-    console.error(`[test] preparing ${pretestBuildMode} runtime before Vitest workers`);
-    const code = await runBuildCommand(["scripts/run-node.mjs", "--version"], {
-      ...baseEnv,
-      ...(pretestBuildMode === "private-qa" ? { OPENCLAW_BUILD_PRIVATE_QA: "1" } : {}),
-    });
+  } else {
+    const code = await prepareVitestRuntime(
+      runSpecs.map((spec) => ({ configs: [spec.config], includePatterns: spec.includePatterns })),
+      baseEnv,
+    );
     if (code !== 0) {
       printTestSummary("failed", 0, performance.now() - suiteStartedAt);
       process.exitCode = code;

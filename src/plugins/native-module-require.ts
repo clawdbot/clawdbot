@@ -91,14 +91,11 @@ export function tryNativeRequireJavaScriptModule(
   }
 }
 
-/** Clears a native-loaded module and dependency subtree under the plugin dependency root. */
-export function clearNativeRequireJavaScriptModuleCache(
+/** Clears native and source-transformed modules within the plugin dependency root. */
+export function clearPluginModuleRequireCache(
   modulePath: string,
   options: { dependencyRoot?: string } = {},
 ): void {
-  if (!isJavaScriptModulePath(modulePath)) {
-    return;
-  }
   try {
     const resolved = nodeRequire.resolve(modulePath);
     clearRequireCacheSubtree(
@@ -107,7 +104,7 @@ export function clearNativeRequireJavaScriptModuleCache(
       new Set(),
     );
   } catch {
-    // Best-effort lifecycle cleanup: unresolved paths were not native-loaded.
+    // Best-effort lifecycle cleanup: unresolved paths were not loaded.
   }
 }
 

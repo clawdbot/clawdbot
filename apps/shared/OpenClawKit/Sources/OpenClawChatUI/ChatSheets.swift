@@ -2,6 +2,7 @@ import Observation
 import SwiftUI
 
 @MainActor
+// periphery:ignore - The macOS chat shell presents this public sheet across the package boundary.
 public struct ChatSessionsSheet: View {
     private enum SessionScope: String, CaseIterable, Identifiable {
         case active

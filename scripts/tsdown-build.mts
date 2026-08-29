@@ -1479,6 +1479,7 @@ export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
     resolvedMaxOldSpaceMb: maxOldSpaceMb,
   };
   return {
+    env: resolveTsdownEnv(params.env ?? process.env, preparedParams),
     maxOldSpaceMb,
     heapShortfall:
       budget.unresolvedCgroupMemory || isFullTsdownBuildPlan(params.args ?? [])

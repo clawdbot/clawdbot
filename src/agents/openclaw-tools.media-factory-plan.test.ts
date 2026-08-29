@@ -183,20 +183,22 @@ function installSnapshot(
   workspaceDir?: string,
 ) {
   // Builds the current plugin metadata snapshot used by factory planning.
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "test",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: plugins.map((plugin) => createInstalledPluginRecord(plugin, enabledPluginIds)),
+    diagnostics: [],
+  };
   const snapshot = {
     policyHash: resolveInstalledPluginIndexPolicyHash(config),
     ...(workspaceDir ? { workspaceDir } : {}),
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: plugins.map((plugin) => createInstalledPluginRecord(plugin, enabledPluginIds)),
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins, diagnostics: [] },
     plugins,

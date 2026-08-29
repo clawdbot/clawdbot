@@ -62,8 +62,11 @@ affected session is marked for recovery.
 
 When a gateway host wakes from sleep, a virtual machine resumes, or the process
 continues after a long pause, the gateway detects the freeze within about 30
-seconds. It restarts channel connections and refreshes cached health and
-presence so clients do not wait for stale sockets or snapshots to expire.
+seconds. It restarts channel connections once tracked Gateway work is idle, then
+refreshes cached health and presence. The health and presence refresh still runs
+when a busy gateway defers only the channel restart. This keeps stale sockets from
+waiting for their normal expiry without interrupting an active reply or agent
+startup when a busy event loop caused the timer gap.
 
 The macOS app and Linux companion cooperate with a local gateway by preparing a
 short suspension lease before the host sleeps and resuming it after wake. Remote

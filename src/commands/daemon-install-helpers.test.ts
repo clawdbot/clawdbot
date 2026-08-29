@@ -169,7 +169,7 @@ function mockNodeGatewayPlanFixture(
   mocks.resolveSystemNodeInfo.mockResolvedValue({
     path: "/opt/node",
     version,
-    supported,
+    status: supported ? "supported" : "unsupported",
   });
   mocks.renderSystemNodeWarning.mockReturnValue(warning);
   mocks.buildServiceEnvironment.mockReturnValue(serviceEnvironment);
@@ -583,6 +583,9 @@ describe("buildGatewayInstallPlan", () => {
       firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
         .wrapperPath,
     ).toBeUndefined();
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimePath: "/opt/node" }),
+    );
     expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
     expect(
       firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").env?.OPENCLAW_WRAPPER,

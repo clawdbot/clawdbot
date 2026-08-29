@@ -508,6 +508,7 @@ export async function finalizeCronRun(params: {
     agentId: prepared.agentId,
     agentSessionKey: prepared.agentSessionKey,
     sourceSessionKey: prepared.sourceSessionKey,
+    sourceSessionGeneration: prepared.sourceSessionGeneration,
     runSessionKey: prepared.runSessionKey,
     sessionId: prepared.currentRunSessionId(),
     lifecycleRevision: prepared.cronSession.lifecycleRevision,

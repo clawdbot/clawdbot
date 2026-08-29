@@ -56,14 +56,7 @@ export async function activateChatHeaderPanelAction(page: Page, label: string): 
     }
   }
   await action.waitFor({ state: "visible" });
-  const afterHide = menu.locator("wa-dropdown").evaluate(
-    (dropdown) =>
-      new Promise<void>((resolve) => {
-        dropdown.addEventListener("wa-after-hide", () => resolve(), { once: true });
-      }),
-  );
   await action.click();
-  await afterHide;
   await page.waitForFunction(() => {
     const dropdown = document.querySelector("openclaw-chat-header-session-menu wa-dropdown");
     return !dropdown || Reflect.get(dropdown, "open") !== true;

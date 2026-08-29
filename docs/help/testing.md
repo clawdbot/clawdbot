@@ -457,56 +457,6 @@ gh workflow run package-acceptance.yml --ref main \
     `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send
     request to observed SUT reply.
 
-`Mantis Telegram Live` is the PR-evidence wrapper around this lane. It runs
-the candidate ref with Convex-leased Telegram credentials, renders the
-redacted QA report/evidence bundle in a Crabbox desktop browser, records MP4
-evidence, generates a motion-trimmed GIF, uploads the artifact bundle, and
-posts inline PR evidence through the Mantis GitHub App when `pr_number` is
-set. Maintainers can start it from the Actions UI through `Mantis Scenario`
-(`scenario_id: telegram-live`).
-
-`Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
-before/after wrapper for PR visual proof. Start it from the Actions UI with
-freeform `instructions`, through `Mantis Scenario` (`scenario_id:
-telegram-desktop-proof`), or from a maintainer PR comment:
-
-```text
-@openclaw-mantis
-@openclaw-mantis verify the streamed reply stays visible while it arrives
-```
-
-ClawSweeper's `mantis: telegram-visible-proof` label starts this workflow
-automatically for branches in `openclaw/openclaw`. Fork PRs require the
-maintainer comment. Mantis reacts with 👀 when it accepts a comment, then
-posts the active workflow link in its evidence comment and replaces that same
-comment with the result. Any text after the mention is optional proof guidance.
-Manual requests stop before desktop setup and comment
-`There was nothing visible to test in this PR at all.` when the diff has no
-Telegram-visible behavior.
-
-The Mantis agent reads the PR, decides what Telegram-visible behavior proves
-the change, runs the real-user Crabbox Telegram Desktop proof lane on
-baseline and candidate refs, iterates until the native GIFs are useful,
-writes a paired `motionPreview` manifest, and posts the same 2-column GIF
-table through the Mantis GitHub App when `pr_number` is set.
-
-- `pnpm openclaw qa mantis telegram-desktop-builder`
-  - Leases or reuses a Crabbox Linux desktop, installs native Telegram
-    Desktop, configures OpenClaw with a leased Telegram SUT bot token,
-    starts the gateway, and records screenshot/MP4 evidence from the
-    visible VNC desktop.
-  - Defaults to `--credential-source convex` so workflows only need the
-    Convex broker secret. Use `--credential-source env` with the same
-    `OPENCLAW_QA_TELEGRAM_*` variables as `pnpm openclaw qa telegram`.
-  - Telegram Desktop still needs a user login/profile. The bot token
-    configures OpenClaw only. Use `--telegram-profile-archive-env <name>`
-    for a base64 `.tgz` profile archive, or use `--keep-lease` and log in
-    manually through VNC once.
-  - Writes `mantis-telegram-desktop-builder-report.md`,
-    `mantis-telegram-desktop-builder-summary.json`,
-    `telegram-desktop-builder.png`, and `telegram-desktop-builder.mp4`
-    under the output directory.
-
 Live transport lanes share one standard contract so new transports do not
 drift; the per-lane coverage matrix lives in
 [QA overview - Live transport coverage](/concepts/qa-e2e-automation#buzz%2C-discord%2C-slack%2C-telegram%2C-and-whatsapp-qa-reference).
@@ -594,13 +544,6 @@ Payload shape for Telegram kind:
 - `{ groupId: string, driverToken: string, sutToken: string }`
 - `groupId` must be a numeric Telegram chat id string.
 - `admin/add` validates this shape for `kind: "telegram"` and rejects malformed payloads.
-
-Payload shape for Telegram real-user kind:
-
-- `{ groupId: string, sutToken: string, testerUserId: string, testerUsername: string, telegramApiId: string, telegramApiHash: string, tdlibDatabaseEncryptionKey: string, tdlibArchiveBase64: string, tdlibArchiveSha256: string, desktopTdataArchiveBase64: string, desktopTdataArchiveSha256: string }`
-- `groupId`, `testerUserId`, and `telegramApiId` must be numeric strings.
-- `tdlibArchiveSha256` and `desktopTdataArchiveSha256` must be SHA-256 hex strings.
-- `kind: "telegram-user"` is reserved for the Mantis Telegram Desktop proof workflow. Generic QA Lab lanes must not acquire it.
 
 Broker-validated multi-channel payloads:
 
@@ -725,8 +668,10 @@ Native dependency policy:
   <Accordion title="Fast local iteration">
 
     - `pnpm changed:lanes` shows which architectural lanes a diff triggers.
-    - The pre-commit hook is formatting-only. It restages formatted files
-      and does not run lint, typecheck, or tests.
+    - The pre-commit hook formats and restages files. When private rules are
+      configured, it also scans staged content before and after formatting.
+      See [Local commit hook setup](https://github.com/openclaw/openclaw/blob/main/CONTRIBUTING.md#local-commit-hook).
+      It does not run lint, typecheck, or tests.
     - Run `pnpm check:changed` explicitly before handoff or push when you
       need the smart local check gate.
     - `pnpm test:changed` routes through cheap scoped lanes by default. Use
@@ -848,12 +793,13 @@ Native dependency policy:
   - Opt-in only; not part of the default `pnpm test:e2e` run
   - Requires a local `openshell` CLI plus a working Docker daemon
   - Requires an active local OpenShell gateway and its config source
-  - Uses isolated `HOME` / `XDG_CONFIG_HOME`, then destroys the test sandbox
+  - Uses isolated `HOME` / `XDG_CONFIG_HOME`, then waits for durable sandbox absence before deleting the test workspace
+  - Reports cleanup failures, including failed inventory queries; it does not retry database errors
 - Useful overrides:
   - `OPENCLAW_E2E_OPENSHELL=1` to enable the test when running the broader e2e suite manually
   - `OPENCLAW_E2E_OPENSHELL_COMMAND=/path/to/openshell` to point at a non-default CLI binary or wrapper script
   - `OPENCLAW_E2E_OPENSHELL_CONFIG_HOME=/path/to/config` to expose the registered gateway config to the isolated test
-  - `OPENCLAW_E2E_OPENSHELL_HOST_IP=172.18.0.1` to override the sandbox-visible `host.openshell.internal` address used by the network policy fixture; Docker Desktop may resolve this differently from the bridge gateway
+  - `OPENCLAW_E2E_OPENSHELL_HOST_IP=172.18.0.1` to replace the host policy fixture's default ranges with one explicit Docker gateway address and its existing `/32` suffix
 
 ### Live (real providers + real models)
 

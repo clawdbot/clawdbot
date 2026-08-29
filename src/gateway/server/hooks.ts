@@ -273,7 +273,7 @@ export function createGatewayHookDispatcher(params: {
     });
     const sessionKey = target.eventSessionKey;
     const eventOptions = { sessionKey };
-    enqueueSystemEvent(
+    const queued = enqueueSystemEvent(
       value.text,
       isUnscopedSessionKeySentinel(sessionKey)
         ? withSystemEventOwner(eventOptions, agentId)
@@ -287,6 +287,7 @@ export function createGatewayHookDispatcher(params: {
         ...target.heartbeatTarget,
       });
     }
+    return { eventOutcome: queued ? "queued" : "coalesced" } as const;
   };
 
   const dispatchAgentHook = async (

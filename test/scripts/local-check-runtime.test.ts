@@ -342,38 +342,95 @@ describe("local-check-runtime", () => {
     expect(env.GOMEMLIMIT).toBe("5GiB");
   });
 
-  it("passes the throttled Go concurrency limit to the oxlint child", () => {
-    const cwd = createTempDir("openclaw-oxlint-go-limit-");
-    const binDir = path.join(cwd, "node_modules", ".bin");
-    const capturePath = path.join(cwd, "gomaxprocs.txt");
-    const oxlintPath = path.join(binDir, "oxlint");
-    fs.mkdirSync(binDir, { recursive: true });
-    fs.writeFileSync(
-      oxlintPath,
-      "#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.CAPTURE_PATH, process.env.GOMAXPROCS || '');\n",
-      "utf8",
-    );
-    fs.chmodSync(oxlintPath, 0o755);
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      CAPTURE_PATH: capturePath,
-      OPENCLAW_LOCAL_CHECK: "1",
-      OPENCLAW_LOCAL_CHECK_MODE: "throttled",
-      OPENCLAW_OXLINT_SKIP_PREPARE: "1",
-    };
-    delete env.GOMAXPROCS;
+  it.each([
+    {
+      name: "default Go settings",
+      goEnv: { GOMAXPROCS: undefined, GOGC: undefined, GOMEMLIMIT: undefined },
+      prepGoEnv: { GOMAXPROCS: null, GOGC: null, GOMEMLIMIT: null },
+      lintGoEnv: {
+        GOMAXPROCS: String(Math.min(2, Math.max(1, os.availableParallelism()))),
+        GOGC: "30",
+        GOMEMLIMIT: "3GiB",
+      },
+    },
+    {
+      name: "explicit user Go settings",
+      goEnv: { GOMAXPROCS: "3", GOGC: "80", GOMEMLIMIT: "5GiB" },
+      prepGoEnv: { GOMAXPROCS: "3", GOGC: "80", GOMEMLIMIT: "5GiB" },
+      lintGoEnv: { GOMAXPROCS: "3", GOGC: "80", GOMEMLIMIT: "5GiB" },
+    },
+  ])(
+    "keeps prep and oxlint resource policies separate with $name",
+    ({ goEnv, prepGoEnv, lintGoEnv }) => {
+      const cwd = createTempDir("openclaw-oxlint-go-limit-");
+      const binDir = path.join(cwd, "node_modules", ".bin");
+      const tsxDir = path.join(cwd, "node_modules", "tsx");
+      const scriptsDir = path.join(cwd, "scripts");
+      const capturePath = path.join(cwd, "children.jsonl");
+      const oxlintPath = path.join(binDir, "oxlint");
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.mkdirSync(tsxDir, { recursive: true });
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      // Prep's raw --import tsx resolves here; the fixture needs only native ESM.
+      fs.writeFileSync(
+        path.join(tsxDir, "package.json"),
+        '{"type":"module","exports":"./index.js"}\n',
+      );
+      fs.writeFileSync(path.join(tsxDir, "index.js"), "export {};\n");
+      const captureSource = `
+const goEnv = Object.fromEntries(["GOMAXPROCS", "GOGC", "GOMEMLIMIT"].map(key => [key, process.env[key] ?? null]));
+fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: process.argv.slice(2) }) + "\\n");
+`;
+      fs.writeFileSync(
+        path.join(scriptsDir, "prepare-extension-package-boundary-artifacts.mts"),
+        `import fs from "node:fs";\nconst step = "prep";\n${captureSource}`,
+        "utf8",
+      );
+      fs.writeFileSync(
+        oxlintPath,
+        `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst step = "lint";\n${captureSource}`,
+        "utf8",
+      );
+      fs.chmodSync(oxlintPath, 0o755);
+      const env = makeEnv({
+        CAPTURE_PATH: capturePath,
+        OPENCLAW_OXLINT_SKIP_PREPARE: undefined,
+        ...goEnv,
+      });
 
-    const result = spawnSync(
-      process.execPath,
-      [path.resolve("scripts/run-oxlint.mjs"), "--tsconfig", "config/tsconfig/oxlint.core.json"],
-      { cwd, encoding: "utf8", env },
-    );
+      const result = spawnSync(
+        process.execPath,
+        [
+          path.resolve("scripts/run-oxlint.mjs"),
+          "--tsconfig",
+          "config/tsconfig/oxlint.extensions.json",
+        ],
+        { cwd, encoding: "utf8", env },
+      );
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(fs.readFileSync(capturePath, "utf8")).toBe(
-      String(Math.min(2, Math.max(1, os.availableParallelism()))),
-    );
-  });
+      expect(result.status, result.stderr).toBe(0);
+      const children = fs
+        .readFileSync(capturePath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(children).toEqual([
+        { step: "prep", goEnv: prepGoEnv, args: [] },
+        {
+          step: "lint",
+          goEnv: lintGoEnv,
+          args: [
+            "--tsconfig",
+            "config/tsconfig/oxlint.extensions.json",
+            "--type-aware",
+            "--report-unused-disable-directives-severity",
+            "error",
+            "--threads=1",
+          ],
+        },
+      ]);
+    },
+  );
 
   it("allows forcing full-speed oxlint runs on roomy hosts", () => {
     const { args, env } = applyLocalOxlintPolicy(

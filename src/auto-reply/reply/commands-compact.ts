@@ -18,6 +18,7 @@ import {
 } from "../../agents/openai-routing.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
 import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -317,6 +318,12 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     workspaceDir: params.workspaceDir,
     agentDir: sessionAgentDir,
     config: params.cfg,
+    // Group session keys carry no account identity, so without this manual
+    // /compact resolves the root history limit while prompt preparation used the
+    // account limit.
+    agentAccountId: params.ctx.AccountId,
+    conversationRoutePeerId: params.ctx.ConversationRoutePeerId,
+    chatType: normalizeChatType(params.ctx.ChatType),
     skillsSnapshot: targetSessionEntry.skillsSnapshot,
     provider: params.provider,
     model: params.model,

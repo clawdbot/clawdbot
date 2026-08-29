@@ -1,6 +1,7 @@
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
+import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
 import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
 import {
   handleInlineSlashArgKeydown,
@@ -21,6 +22,7 @@ type ComposerKeyDownDeps = {
   syncDraftAfterSend: (target: HTMLTextAreaElement | null) => void;
   showAbortableUi: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
+  goalComposer: GoalComposerController;
 };
 
 export function createComposerKeyDownHandler({
@@ -35,6 +37,7 @@ export function createComposerKeyDownHandler({
   syncDraftAfterSend,
   showAbortableUi,
   alternateFollowUpMode,
+  goalComposer,
 }: ComposerKeyDownDeps): (event: KeyboardEvent) => void {
   return (event) => {
     // The handler only ever binds to the composer textarea; narrowing here
@@ -44,6 +47,23 @@ export function createComposerKeyDownHandler({
       return;
     }
     if (state.composerComposing || event.isComposing || event.keyCode === 229) {
+      return;
+    }
+
+    if (goalComposer.active) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        goalComposer.cancel();
+      } else if (
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        (sendShortcut === "enter" || event.metaKey || event.ctrlKey) &&
+        canSubmitDraft(target.value)
+      ) {
+        event.preventDefault();
+        commitDraft(target.value);
+        void goalComposer.submit(event);
+      }
       return;
     }
 

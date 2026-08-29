@@ -1,4 +1,5 @@
 // Explicit schema exports keep public protocol changes reviewable.
+export * from "./schema/sessions-goal.js";
 export {
   isCloudWorkerPlacementState,
   ConnectParamsSchema,
@@ -331,6 +332,7 @@ export {
   AuditListParamsSchema,
   AuditListResultSchema,
   GIT_COAUTHOR_PREFERENCE_KEY,
+  isGitCoauthorCreditEnabled,
   normalizeUiAppearancePreference,
   UI_APPEARANCE_PREFERENCE_KEYS,
   UserProfileSchema,

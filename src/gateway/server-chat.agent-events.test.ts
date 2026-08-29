@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { buildAssistantStreamData } from "../agents/embedded-agent-subscribe.handlers.messages.stream.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -39,9 +40,12 @@ vi.mock("./live-chat-projector.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./live-chat-projector.js")>();
   return {
     ...actual,
-    normalizeLiveAssistantBufferedText: (text: string) => {
-      normalizeLiveAssistantBufferedTextMock(text);
-      return actual.normalizeLiveAssistantBufferedText(text);
+    normalizeLiveAssistantBufferedText: (
+      text: string,
+      options?: Parameters<typeof actual.normalizeLiveAssistantBufferedText>[1],
+    ) => {
+      normalizeLiveAssistantBufferedTextMock(text, options);
+      return actual.normalizeLiveAssistantBufferedText(text, options);
     },
   };
 });
@@ -94,6 +98,7 @@ import {
   resolveChatErrorKindFromError,
   type AgentEventHandlerOptions,
 } from "./server-chat.js";
+import { broadcastChatError } from "./server-methods/chat-broadcast.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 function waitForFast<T>(
@@ -211,9 +216,13 @@ describe("agent event handler", () => {
     harness: ReturnType<typeof createHarness>,
     text: string,
     field: "text" | "delta" = "text",
+    managedMediaUrls?: string[],
   ): ReturnType<typeof createHarness> {
     registerChatRun(harness.chatRunState, "run-1", "session-1", "client-1");
-    emitAgentEvent(harness.handler, "run-1", "assistant", { [field]: text });
+    emitAgentEvent(harness.handler, "run-1", "assistant", {
+      [field]: text,
+      ...(managedMediaUrls ? { managedMediaUrls } : {}),
+    });
     return harness;
   }
 
@@ -1175,6 +1184,136 @@ describe("agent event handler", () => {
     };
     expect(payload.message?.content?.[0]?.text).toBe("Hello  world ");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("withholds MEDIA directives from assistant chat events", () => {
+    const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
+      createHarness({ now: 1_000 }),
+      [
+        "Prepared the batch.",
+        "MEDIA:./attachment-catalog-tiny/demo.jpg",
+        "MEDIA:./attachment-catalog-tiny/demo.mp3",
+      ].join("\n"),
+      "text",
+      ["./attachment-catalog-tiny/demo.jpg", "./attachment-catalog-tiny/demo.mp3"],
+    );
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(payload.message?.content?.[0]?.text).toBe("Prepared the batch.");
+    expect(JSON.stringify(payload)).not.toContain("MEDIA:");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("keeps a media-only assistant event pending without an empty or raw delta", () => {
+    const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    registerNamedChatRun(chatRunState, "media-only");
+
+    emitAgentEvent(
+      handler,
+      "run-media-only",
+      "assistant",
+      {
+        text: "MEDIA:./attachment-catalog-tiny/demo.jpg",
+        managedMediaUrls: ["./attachment-catalog-tiny/demo.jpg"],
+      },
+      { seq: 1 },
+    );
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+
+    emitLifecycleEnd(handler, "run-media-only", 2);
+    const payloads = chatBroadcastCalls(broadcast).map(([, payload]) => payload) as Array<{
+      state?: string;
+      message?: unknown;
+    }>;
+    expect(payloads).toEqual([expect.objectContaining({ state: "final", message: undefined })]);
+    expect(JSON.stringify(payloads)).not.toContain("MEDIA:");
+    nowSpy?.mockRestore();
+  });
+
+  it("withholds split MEDIA prefixes before a relative directive is complete", () => {
+    const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    registerNamedChatRun(chatRunState, "split-media");
+
+    for (const [index, delta] of [
+      "Prepared the batch.\n  M",
+      "EDIA:./attachment-catalog-tiny/",
+      "demo.jpg",
+    ].entries()) {
+      emitAgentEvent(
+        handler,
+        "run-split-media",
+        "assistant",
+        {
+          delta,
+          ...(index === 2 ? { managedMediaUrls: ["./attachment-catalog-tiny/demo.jpg"] } : {}),
+        },
+        { seq: index + 1 },
+      );
+    }
+    emitLifecycleEnd(handler, "run-split-media", 4);
+
+    const payloads = chatBroadcastCalls(broadcast).map(([, payload]) => payload) as Array<{
+      message?: { content?: Array<{ text?: string }> };
+    }>;
+    expect(payloads.length).toBeGreaterThan(0);
+    for (const payload of payloads) {
+      const text = payload.message?.content?.[0]?.text ?? "";
+      expect(text).not.toMatch(/(?:^|\n)\s*(?:M|ME|MED|MEDI|MEDIA:)/u);
+      expect(text).not.toContain("attachment-catalog-tiny");
+    }
+    expect(payloads.at(-1)?.message?.content?.[0]?.text).toBe("Prepared the batch.");
+    nowSpy?.mockRestore();
+  });
+
+  it.each(["MEDIA:chart.png", "MEDIA:./image.png"])(
+    "preserves an ordinary relative reference without managed-media facts: %s",
+    (text) => {
+      const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+      registerNamedChatRun(chatRunState, "ordinary-relative-media");
+
+      emitAgentEvent(
+        handler,
+        "run-ordinary-relative-media",
+        "assistant",
+        buildAssistantStreamData({ text, mediaUrls: [text.slice("MEDIA:".length)] }),
+        { seq: 1 },
+      );
+      emitLifecycleEnd(handler, "run-ordinary-relative-media", 2);
+
+      const finalPayload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+        state?: string;
+        message?: { content?: Array<{ text?: string }> };
+      };
+      expect(finalPayload.state).toBe("final");
+      expect(finalPayload.message?.content?.[0]?.text).toBe(text);
+      nowSpy?.mockRestore();
+    },
+  );
+
+  it("restores an ordinary MEDIA-like prefix when the assistant run ends", () => {
+    const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    registerNamedChatRun(chatRunState, "terminal-media-prefix");
+
+    emitAgentEvent(
+      handler,
+      "run-terminal-media-prefix",
+      "assistant",
+      { text: "The selected size is\nM" },
+      { seq: 1 },
+    );
+    emitLifecycleEnd(handler, "run-terminal-media-prefix", 2);
+
+    const finalPayload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(finalPayload.state).toBe("final");
+    expect(finalPayload.message?.content?.[0]?.text).toBe("The selected size is\nM");
     nowSpy?.mockRestore();
   });
 
@@ -4391,6 +4530,62 @@ describe("agent event handler", () => {
     expect(clearAgentRunContext).toHaveBeenCalledWith("run-chat-send");
     expect(agentRunSeq.has("run-chat-send")).toBe(false);
   });
+
+  it.each([false, true])(
+    "preserves reply-dispatch completion ownership through error grace (settled=%s)",
+    async (settled) => {
+      vi.useFakeTimers();
+      const settleTrackedTerminal = vi.fn();
+      const harness = createHarness({
+        resolveSessionKeyForRun: () => "session-reply-dispatch",
+        settleTrackedTerminal,
+      });
+      const { broadcast, chatRunState, clearAgentRunContext, agentRunSeq, handler } = harness;
+      const runId = "run-reply-dispatch";
+      registerChatRun(chatRunState, runId, "session-reply-dispatch", runId);
+      registerAgentRunContext(runId, { sessionKey: "session-reply-dispatch" });
+      chatRunState.getOrCreate(runId).buffer = "pending delivered reply";
+
+      emitAgentEvent(handler, runId, "lifecycle", {
+        phase: "error",
+        error: "ACP turn failed",
+        completionSource: "reply-dispatch",
+      });
+      expect.soft(chatRunState.runs.get(runId)?.buffer).toBe("pending delivered reply");
+      expect(agentRunSeq.get(runId)).toBe(1);
+      if (settled) {
+        broadcastChatError({
+          context: harness,
+          runId,
+          sessionKey: "session-reply-dispatch",
+          errorMessage: "ACP turn failed",
+        });
+        chatRunState.clearRun(runId);
+        chatRunState.registry.remove(runId, runId);
+      }
+
+      // Run the production grace timer, even after the dispatch owner settled.
+      await vi.runAllTimersAsync();
+
+      const terminals = chatBroadcastCalls(broadcast);
+      expect(terminals).toHaveLength(settled ? 1 : 0);
+      if (settled) {
+        expectPayloadFields(terminals[0]?.[1], { state: "error", seq: 2 });
+        expect(agentRunSeq.has(runId)).toBe(false);
+      } else {
+        expect(chatRunState.runs.get(runId)?.buffer).toBe("pending delivered reply");
+        expect(chatRunState.registry.peek(runId)?.clientRunId).toBe(runId);
+        expect(agentRunSeq.get(runId)).toBe(1);
+      }
+      expect(clearAgentRunContext).not.toHaveBeenCalled();
+      expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledOnce();
+      expect(settleTrackedTerminal).toHaveBeenCalledWith({
+        runId,
+        clientRunId: runId,
+        sessionKey: "session-reply-dispatch",
+      });
+    },
+  );
 
   it("suppresses live client events but persists lifecycle for non-control-UI-visible runs", () => {
     const { broadcast, nodeSendToSession, handler } = createHarness({

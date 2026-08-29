@@ -33,7 +33,8 @@ openclaw gateway run   # equivalent, explicit form
 <AccordionGroup>
   <Accordion title="Startup behavior">
     - Refuses to start unless `gateway.mode=local` is set in `~/.openclaw/openclaw.json`. Use `--allow-unconfigured` for ad-hoc/dev runs; it bypasses the guard without writing or repairing config.
-    - When startup finds a repairable invalid config, an interactive terminal offers to run `openclaw doctor --fix` and retries startup once after consent. Non-interactive runs never repair automatically; they print the command instead. If the repaired config is still invalid, startup remains stopped.
+    - Startup automatically applies deterministic, prompt-free legacy-key migrations to eligible invalid single-file configs, including in non-interactive service runs. It writes only after full validation, including plugins, and keeps the previous config in the `.bak` ring. Configs using `$include`, Nix-managed configs, and configs written by a newer version are excluded. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale).
+    - If automatic migration cannot make the config valid, an interactive terminal can offer to run `openclaw doctor --fix` and retry startup once after consent. Non-interactive runs print the command instead. If the repaired config is still invalid, startup remains stopped.
     - `openclaw onboard --mode local` and `openclaw setup` write `gateway.mode=local`. If the config file exists but `gateway.mode` is missing, that is treated as damaged/clobbered config and the Gateway refuses to guess `local` for you — re-run onboarding, set the key manually, or pass `--allow-unconfigured`.
     - Binding beyond loopback without auth is blocked.
     - `--bind` values `lan`, `tailnet`, and `custom` resolve over IPv4-only paths today; IPv6-only bring-your-own-host setups need an IPv4 sidecar or proxy in front of the Gateway.
@@ -150,6 +151,34 @@ Service management (`install`, `start`, `stop`, `restart`, `uninstall`, Doctor s
 On macOS and Windows, native service-managed profile names must be lowercase. Runtime-only profiles may still use uppercase, but case-distinct names such as `Main` and `main` share paths on normal case-insensitive filesystems and cannot safely own separate native services. On macOS, the lowercase names `gateway` and `node` are also unavailable for native service management because their historical LaunchAgent labels collide with the default Gateway and node-host services.
 
 Named profiles must also use the native service identity derived from `OPENCLAW_PROFILE`. Unset `OPENCLAW_LAUNCHD_LABEL`, `OPENCLAW_SYSTEMD_UNIT`, or `OPENCLAW_WINDOWS_TASK_NAME` before service management; custom identities remain available for the default profile or runtime-only/external-supervisor setups.
+
+On Linux, `openclaw gateway install --force` refuses a sealed systemd service
+definition, or one whose write authority cannot be verified, before changing
+configuration, authentication tokens, or service files. The error keeps its
+`SERVICE_DEFINITION_SEALED` or `SERVICE_DEFINITION_UNKNOWN` prefix and adds a
+reason tag and next action, without printing private paths, config, environment values,
+or underlying inspection errors.
+
+For `[unsafe-permissions]`, inspect the named artifact category locally. The
+service directory is `~/.config/systemd/user`; on a fresh install, its nearest
+existing ancestor may be `~/.config`. The service state directory belongs to the
+selected profile. Check directory metadata, not file contents:
+
+```bash
+ls -ld ~/.config ~/.config/systemd ~/.config/systemd/user
+```
+
+Missing directories are normal on a fresh install. After confirming the affected
+path is yours and is not intentionally shared, remove group/other write access
+with `chmod go-w <path>` and retry the same command. Mode `0700` is appropriate
+for private directories. Do not recursively chmod, take ownership of system
+paths, or use `sudo`/`--force` to bypass the check. Foreign-owned files and sealed
+mounts require the deployment owner; inspection failures require restoring
+filesystem or native service-manager access first.
+
+Type-wide `service.d` defaults are inspected as shared read-only inputs and do
+not require write access. Root-owned selected units and unit-specific drop-ins
+remain protected.
 
 ### External supervisors
 
@@ -598,7 +627,7 @@ openclaw gateway restart
   <Accordion title="Command options">
     - `gateway status`: `--url`, `--port`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
     - `gateway install`: `--port`, `--runtime <node|bun>` (default: `node`), `--token`, `--wrapper <path>`, `--force`, `--json`
-    - `gateway restart`: `--safe`, `--skip-deferral`, `--force`, `--wait <duration>`, `--json`
+    - `gateway restart`: `--safe`, `--skip-deferral`, `--force`, `--wait <duration>`, `--preserve-definition`, `--json`
     - `gateway uninstall|start`: `--json`
     - `gateway stop`: `--disable`, `--force`, `--json`
 
@@ -613,6 +642,8 @@ openclaw gateway restart
     - If no managed service is installed, `gateway start` prints install hints and exits nonzero. `gateway restart` can first recover an installed-but-unloaded LaunchAgent or a verified unmanaged Gateway; if neither a managed service nor recovery handles the action, it prints the same hints and exits nonzero. Stopping an absent service remains a successful no-op.
     - If `gateway start` or `gateway restart` needs to repair a stale service definition, the command refuses when the invoking shell resolves a different state directory, config path, or port than the installed service. Match or unset the conflicting environment overrides, or use `openclaw gateway install --force` to retarget the service intentionally.
     - On Linux, `gateway start` and `gateway restart` also refuse ineffective repairs when an operator-owned systemd drop-in overrides the command or working directory. Inspect the effective unit with `systemctl --user cat <unit>.service`, then update or remove that drop-in. `gateway install --force` rewrites only the managed base unit and warns if the override remains; `Environment=` drop-ins remain supported.
+    - `gateway restart --preserve-definition` restarts only an inspectable native service, skips automatic definition repair, and checks health at the installed launcher's port. It does not recover an unmanaged listener and cannot be combined with `--safe` or external supervision. On macOS it can bootstrap an unloaded readable plist without rewriting the plist, environment, wrapper, or permissions; denied native activation fails without file repair. On Windows it also retains existing Startup entries. The legacy `daemon restart` command accepts the same option. Older CLIs reject the option before running restart or repair.
+    - During writable Linux service installs or refreshes, keep the unit and state directories stationary and avoid concurrent manual edits. OpenClaw serializes its own writers and aborts on detected changes, but cannot coordinate arbitrary filesystem edits. Moving or replacing a parent directory mid-publication can leave a temporary file inside the moved directory; inspect it before retrying.
     - Use `gateway restart` to restart a managed service. Do not chain `gateway stop` and `gateway start` as a restart substitute.
     - In a non-interactive shell, `gateway stop` requires `--force`. Interactive terminals keep the existing prompt-free behavior. For automation and tests, prefer `gateway run --dev` or an isolated `--profile` with a free port.
     - On macOS, `gateway stop` uses `launchctl bootout` by default, which removes the LaunchAgent from the current boot session without persisting a disable — KeepAlive auto-recovery stays active for future crashes and `gateway start` re-enables cleanly without a manual `launchctl enable`. Pass `--disable` to persistently suppress KeepAlive and RunAtLoad so the gateway does not respawn until the next explicit `gateway start`; use this when a manual stop should survive reboots.

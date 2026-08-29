@@ -27,7 +27,6 @@ const surfacePath = path.join(repoRoot, "docs/reference/secretref-credential-sur
 const currentSurface = fs.readFileSync(surfacePath, "utf8");
 const registry = getSecretTargetRegistry({
   sourceTree: true,
-  failOnChannelContractError: true,
 });
 const matrix = buildSecretRefCredentialMatrix(registry);
 const artifacts = [

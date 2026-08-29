@@ -1,4 +1,5 @@
 // Compile-time identity for the Control UI artifact.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeControlUiBuildInfo } from "./build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./build-info-types.ts";
 
@@ -27,6 +28,21 @@ export function reloadControlUiIfStale(identity: {
     return true;
   }
   return false;
+}
+
+/** Whether a service worker activation retires this document, so it has to
+ * reload onto the announced build. The announcement (`ui/public/sw.js`) is the
+ * only truthful view of which build controls the document: an update keeps the
+ * registered `sw.js?v=<registering build>` URL while serving new bytes, so a
+ * worker's `scriptURL` names the build that registered it, not the one it runs.
+ * A worker announcing this document's own build replaces nothing. */
+export function controlUiWorkerActivationRetires(message: unknown): boolean {
+  return (
+    isRecord(message) &&
+    message.type === "sw-updated" &&
+    typeof message.version === "string" &&
+    message.version !== CONTROL_UI_BUILD_INFO.buildId
+  );
 }
 
 /** Exact artifact comparison when both sides expose it. Configured roots opt

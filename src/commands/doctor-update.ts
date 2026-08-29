@@ -6,9 +6,9 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createUpdateProgress } from "../cli/update-cli/progress.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
-import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { UPDATE_RUNNER_TIMEOUT_MS } from "../infra/update-runner-command.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -44,93 +44,6 @@ async function detectOpenClawGitCheckout(root: string): Promise<"git" | "not-git
     : "not-git";
 }
 
-type GatewayServiceUpdatePolicy = {
-  allowGatewayServiceRepair: boolean;
-  allowGatewayActivation: boolean;
-};
-
-type GatewayServiceUpdateInspection = GatewayServiceUpdatePolicy & {
-  service?: ReturnType<typeof resolveGatewayService>;
-  state?: Awaited<ReturnType<typeof readGatewayServiceState>>;
-};
-
-const NO_GATEWAY_SERVICE_UPDATE: GatewayServiceUpdatePolicy = {
-  allowGatewayServiceRepair: false,
-  allowGatewayActivation: false,
-};
-
-async function inspectGatewayServiceForUpdate(
-  root: string,
-): Promise<GatewayServiceUpdateInspection> {
-  if (!isDefaultInstallIdentity(process.env) || isServiceRepairExternallyManaged()) {
-    return NO_GATEWAY_SERVICE_UPDATE;
-  }
-  try {
-    const service = resolveGatewayService();
-    const state = await readGatewayServiceState(service, { env: process.env });
-    if (state.loadState.status === "unknown" || !state.installed) {
-      return NO_GATEWAY_SERVICE_UPDATE;
-    }
-    const layout = await summarizeGatewayServiceLayout(state.command);
-    const serviceRoot = layout?.packageRootReal ?? layout?.packageRoot;
-    const serviceEntrypoint = layout?.entrypoint;
-    if (
-      !serviceRoot ||
-      !serviceEntrypoint ||
-      (!path.isAbsolute(serviceEntrypoint) && !path.win32.isAbsolute(serviceEntrypoint))
-    ) {
-      return NO_GATEWAY_SERVICE_UPDATE;
-    }
-    const [serviceRootReal, updateRootReal] = await Promise.all([
-      resolveComparablePath(serviceRoot),
-      resolveComparablePath(root),
-    ]);
-    if (serviceRootReal !== updateRootReal) {
-      return NO_GATEWAY_SERVICE_UPDATE;
-    }
-    return {
-      allowGatewayServiceRepair: true,
-      allowGatewayActivation: state.running,
-      service,
-      state,
-    };
-  } catch {
-    // Repair or activation can disrupt a different checkout, so unknown ownership fails closed.
-    return NO_GATEWAY_SERVICE_UPDATE;
-  }
-}
-
-async function restartRunningGatewayServiceAfterUpdate(
-  runtime: RuntimeEnv,
-  root: string,
-  wasOwnedAndRunning: boolean,
-): Promise<boolean> {
-  if (isServiceRepairExternallyManaged()) {
-    note(EXTERNAL_SERVICE_REPAIR_NOTE, "Update");
-    return true;
-  }
-  if (!wasOwnedAndRunning) {
-    return true;
-  }
-  const inspection = await inspectGatewayServiceForUpdate(root);
-  // Revalidate ownership after checkout replacement, but restart even when the
-  // previously running service stopped during the update.
-  if (!inspection.allowGatewayServiceRepair || !inspection.service || !inspection.state) {
-    return true;
-  }
-  try {
-    await inspection.service.restart({
-      env: inspection.state.env,
-      stdout: process.stdout,
-    });
-    note("Restarted the running gateway service after updating OpenClaw.", "Update");
-    return true;
-  } catch (err) {
-    runtime.error(`Update completed, but gateway service restart failed: ${String(err)}`);
-    return false;
-  }
-}
-
 /** Offers to update OpenClaw before doctor when running interactively from an updatable install. */
 export async function maybeOfferUpdateBeforeDoctor(params: {
   runtime: RuntimeEnv;
@@ -159,50 +72,146 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
     if (!shouldUpdate) {
       return { updated: false };
     }
+    const updateRoot = params.root;
+    const externallyManaged = isServiceRepairExternallyManaged();
+    const serviceLifecycle =
+      isDefaultInstallIdentity(process.env) && !externallyManaged
+        ? await import("../cli/update-cli/managed-gateway-update.runtime.js")
+        : undefined;
+    let inspection = await serviceLifecycle?.maybeStopManagedServiceBeforeMutableUpdate({
+      updateInstallKind: "git",
+      root: updateRoot,
+      shouldRestart: true,
+      jsonMode: false,
+      phase: "inspect",
+    });
+    if (inspection?.blockMessage) {
+      note(inspection.blockMessage, "Update");
+      return { updated: false };
+    }
+    if (inspection?.serviceMutationSkipMessage) {
+      note(inspection.serviceMutationSkipMessage, "Update");
+    }
+    let gitMutationAuthorized = false;
     note("Running update…", "Update");
-    const serviceInspection = await inspectGatewayServiceForUpdate(params.root);
-    const serviceUpdatePolicy: GatewayServiceUpdatePolicy = {
-      allowGatewayServiceRepair: serviceInspection.allowGatewayServiceRepair,
-      allowGatewayActivation: serviceInspection.allowGatewayActivation,
-    };
     const { progress, stop } = createUpdateProgress(process.stdout.isTTY);
     let result: UpdateRunResult;
     try {
       result = await runGatewayUpdate({
-        cwd: params.root,
+        cwd: updateRoot,
         argv1: process.argv[1],
         progress,
-        ...serviceUpdatePolicy,
+        allowGatewayServiceRepair:
+          inspection?.serviceUpdateVerdict?.kind === "owned" &&
+          inspection.serviceUpdateVerdict.refreshDefinition,
+        allowGatewayActivation: Boolean(
+          inspection?.running && inspection.serviceUpdateVerdict?.kind === "owned",
+        ),
+        beforeGitMutation: serviceLifecycle
+          ? async () => {
+              const previousSkip = inspection?.serviceMutationSkipMessage;
+              inspection = await serviceLifecycle.maybeStopManagedServiceBeforeMutableUpdate({
+                updateInstallKind: "git",
+                root: updateRoot,
+                shouldRestart: true,
+                jsonMode: false,
+                phase: "prepare",
+              });
+              if (inspection.blockMessage) {
+                throw new Error(inspection.blockMessage);
+              }
+              if (
+                inspection.serviceMutationSkipMessage !== previousSkip &&
+                inspection.serviceMutationSkipMessage
+              ) {
+                note(inspection.serviceMutationSkipMessage, "Update");
+              }
+              gitMutationAuthorized = true;
+              return serviceLifecycle.resolvePreparedGatewayUpdatePolicy(inspection, true);
+            }
+          : undefined,
       });
+    } catch (err) {
+      if (inspection?.stopped && gitMutationAuthorized) {
+        note(
+          "The gateway service remains stopped because the source checkout may be partially mutated. " +
+            `Inspect and repair the checkout, then restart the gateway manually with \`${formatCliCommand("openclaw gateway restart")}\`.`,
+          "Update",
+        );
+      } else if (inspection?.stopped) {
+        await serviceLifecycle?.maybeRestartServiceAfterFailedMutableUpdate({
+          preManagedServiceStop: inspection,
+          jsonMode: false,
+        });
+      }
+      throw err;
     } finally {
       stop();
     }
-    note(
-      [
-        `Status: ${result.status}`,
-        `Mode: ${result.mode}`,
-        result.root ? `Root: ${result.root}` : null,
-        result.reason ? `Reason: ${result.reason}` : null,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      "Update result",
-    );
-    if (result.status === "ok") {
-      const restarted = await restartRunningGatewayServiceAfterUpdate(
-        params.runtime,
-        params.root,
-        serviceUpdatePolicy.allowGatewayActivation,
-      );
-      if (!restarted) {
-        params.outro("Update completed, but gateway service restart failed.");
+    const resultDetails = [
+      `Status: ${result.status}`,
+      `Mode: ${result.mode}`,
+      result.root && `Root: ${result.root}`,
+      result.reason && `Reason: ${result.reason}`,
+    ].filter(Boolean);
+    note(resultDetails.join("\n"), "Update result");
+    if (result.status !== "ok") {
+      if (result.recovery?.serviceRestartSafe !== false) {
+        await serviceLifecycle?.maybeRestartServiceAfterFailedMutableUpdate({
+          root: result.root,
+          preManagedServiceStop: inspection,
+          jsonMode: false,
+        });
+      }
+      return { updated: true, handled: false };
+    }
+    if (externallyManaged) {
+      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Update");
+    } else if (inspection?.stopped && inspection.serviceEnv && serviceLifecycle) {
+      try {
+        const service = resolveGatewayService();
+        const serviceState = await readGatewayServiceState(service, {
+          env: inspection.serviceEnv,
+          requireEffective: true,
+        });
+        const verdict = await serviceLifecycle.revalidateManagedGatewayServiceAfterUpdate({
+          state: serviceState,
+          root: updateRoot,
+          preManagedServiceStop: inspection,
+        });
+        // Doctor already ran during the update; reuse activation/health without another repair.
+        const activated = await serviceLifecycle.maybeRestartService({
+          shouldRestart: true,
+          result,
+          channel: "dev",
+          opts: {},
+          refreshServiceEnv: false,
+          serviceUpdateVerdict:
+            verdict.kind === "owned" ? { ...verdict, refreshDefinition: false } : verdict,
+          serviceEnv: serviceState.env,
+          gatewayPort: await serviceLifecycle.resolveUpdatedGatewayRestartPort({
+            serviceEnv: serviceState.env,
+            serviceCommand: serviceState.command,
+          }),
+          requireRunningServiceAfterRestart: true,
+          timeoutMs: UPDATE_RUNNER_TIMEOUT_MS,
+        });
+        if (!activated) {
+          throw new Error(
+            "Gateway restart was not verified; run `openclaw gateway status --deep` before restarting manually.",
+          );
+        }
+        note("Restarted the running gateway service after updating OpenClaw.", "Update");
+      } catch (err) {
+        const message = "Update completed, but gateway service restart failed";
+        params.runtime.error(`${message}: ${String(err)}`);
+        params.outro(`${message}.`);
         params.runtime.exit(1);
         return { updated: true, handled: true };
       }
-      params.outro("Update completed (doctor already ran as part of the update).");
-      return { updated: true, handled: true };
     }
-    return { updated: true, handled: false };
+    params.outro("Update completed (doctor already ran as part of the update).");
+    return { updated: true, handled: true };
   }
 
   if (git === "not-git") {

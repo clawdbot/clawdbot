@@ -200,6 +200,18 @@ export async function recoverEmbeddedRunAttempt(input: {
     shouldSurfaceCodexCompletionTimeout:
       attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" && timedOut,
   };
+  const buildAttemptErrorMeta = () =>
+    buildErrorAgentMeta({
+      sessionId: sessionIdUsed,
+      sessionFile: sessionPromptState.sessionFile,
+      provider: preparedRuntime.provider,
+      model: preparedRuntime.model.id,
+      credentialSource: attempt.modelAttempt?.credentialSource,
+      ...runtime.outerContextTokenMeta,
+      usageAccumulator: input.usageAccumulator,
+      lastRunPromptUsage: input.lastRunPromptUsage,
+      currentAttemptAssistant,
+    });
 
   if (promptErrorSource === "hook:before_agent_run" && !terminalInterrupted) {
     const errorText = formatErrorMessage(promptError);
@@ -212,16 +224,7 @@ export async function recoverEmbeddedRunAttempt(input: {
         errorKind: "hook_block",
         errorMessage: errorText,
         durationMs: Date.now() - runInput.startedAtMs,
-        agentMeta: buildErrorAgentMeta({
-          sessionId: sessionIdUsed,
-          sessionFile: sessionPromptState.sessionFile,
-          provider: preparedRuntime.provider,
-          model: preparedRuntime.model.id,
-          ...runtime.outerContextTokenMeta,
-          usageAccumulator: input.usageAccumulator,
-          lastRunPromptUsage: input.lastRunPromptUsage,
-          currentAttemptAssistant,
-        }),
+        agentMeta: buildAttemptErrorMeta(),
         attempt,
         replayInvalid,
       }),
@@ -344,16 +347,7 @@ export async function recoverEmbeddedRunAttempt(input: {
         errorKind: overflowRecovery.kind,
         errorMessage: overflowRecovery.errorText,
         durationMs: Date.now() - runInput.startedAtMs,
-        agentMeta: buildErrorAgentMeta({
-          sessionId: sessionIdUsed,
-          sessionFile: sessionPromptState.sessionFile,
-          provider: preparedRuntime.provider,
-          model: preparedRuntime.model.id,
-          ...runtime.outerContextTokenMeta,
-          usageAccumulator: input.usageAccumulator,
-          lastRunPromptUsage: input.lastRunPromptUsage,
-          currentAttemptAssistant,
-        }),
+        agentMeta: buildAttemptErrorMeta(),
         attempt,
         replayInvalid,
         finalPromptText: attempt.finalPromptText,
@@ -438,17 +432,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       suspendForFailure: runInput.suspendForFailure,
       resolveReplayInvalid: resolveReplayInvalidForAttempt,
       setTerminalLifecycleMeta,
-      buildErrorAgentMeta: () =>
-        buildErrorAgentMeta({
-          sessionId: sessionIdUsed,
-          sessionFile: sessionPromptState.sessionFile,
-          provider: preparedRuntime.provider,
-          model: preparedRuntime.model.id,
-          ...runtime.outerContextTokenMeta,
-          usageAccumulator: input.usageAccumulator,
-          lastRunPromptUsage: input.lastRunPromptUsage,
-          currentAttemptAssistant,
-        }),
+      buildErrorAgentMeta: buildAttemptErrorMeta,
       startedAtMs: runInput.startedAtMs,
       fallbackConfigured: runInput.fallbackConfigured,
       aborted,
