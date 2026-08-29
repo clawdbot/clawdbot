@@ -222,6 +222,33 @@ const createForumTopicTelegram = vi.fn(async () => ({
   name: "Topic",
   chatId: "123",
 }));
+const getTelegramChatInfo = vi.fn<typeof telegramActionRuntime.getTelegramChatInfo>(
+  async () =>
+    ({
+      id: -1001,
+      type: "supergroup",
+      title: "Test Group",
+      membersCount: 42,
+    }) as Awaited<ReturnType<typeof telegramActionRuntime.getTelegramChatInfo>>,
+);
+const getTelegramChatMember = vi.fn<typeof telegramActionRuntime.getTelegramChatMember>(
+  async () =>
+    ({
+      status: "member",
+      userId: 999,
+      isBot: false,
+      displayName: "Alice",
+    }) as Awaited<ReturnType<typeof telegramActionRuntime.getTelegramChatMember>>,
+);
+const getTelegramChatAdministrators = vi.fn<
+  typeof telegramActionRuntime.getTelegramChatAdministrators
+>(async () => ({
+  members: [
+    { status: "creator", userId: 1, isBot: false, displayName: "Owner", isAnonymous: false },
+  ],
+  truncatedCount: 0,
+}) as Awaited<ReturnType<typeof telegramActionRuntime.getTelegramChatAdministrators>>,
+);
 let envSnapshot: ReturnType<typeof captureEnv>;
 let openClawState: OpenClawTestState;
 
@@ -368,6 +395,9 @@ describe("handleTelegramAction", () => {
       editForumTopicTelegram,
       pinMessageTelegram,
       createForumTopicTelegram,
+      getTelegramChatInfo,
+      getTelegramChatMember,
+      getTelegramChatAdministrators,
     });
     reactMessageTelegram.mockClear();
     getTelegramAllowedReactions.mockReset().mockResolvedValue(null);
@@ -381,6 +411,9 @@ describe("handleTelegramAction", () => {
     editForumTopicTelegram.mockClear();
     pinMessageTelegram.mockClear();
     createForumTopicTelegram.mockClear();
+    getTelegramChatInfo.mockClear();
+    getTelegramChatMember.mockClear();
+    getTelegramChatAdministrators.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
@@ -766,6 +799,135 @@ describe("handleTelegramAction", () => {
       ),
     ).rejects.toThrow("actions.reactions");
     expect(getTelegramAllowedReactions).not.toHaveBeenCalled();
+  });
+
+  it("returns chat info for channel-info with direct-operator chatId", async () => {
+    const details = resultDetails(
+      await handleTelegramAction(
+        { action: "channel-info", chatId: "-1001" },
+        telegramConfig(),
+      ),
+    );
+
+    expect(details).toEqual({
+      ok: true,
+      provider: "telegram",
+      action: "channel-info",
+      channel: { id: -1001, type: "supergroup", title: "Test Group", membersCount: 42 },
+    });
+    expect(getTelegramChatInfo).toHaveBeenCalledWith("-1001", expect.anything());
+    expect(getTelegramChatAdministrators).not.toHaveBeenCalled();
+  });
+
+  it("includes administrators in channel-info when includeMembers is set", async () => {
+    const details = resultDetails(
+      await handleTelegramAction(
+        { action: "channel-info", chatId: "-1001", includeMembers: true },
+        telegramConfig(),
+      ),
+    );
+
+    expect(details.ok).toBe(true);
+    expect(details.members).toEqual([
+      { status: "creator", userId: 1, isBot: false, displayName: "Owner", isAnonymous: false },
+    ]);
+    expect(getTelegramChatAdministrators).toHaveBeenCalledWith("-1001", expect.anything());
+  });
+
+  it("returns member info for member-info with chatId and userId", async () => {
+    const details = resultDetails(
+      await handleTelegramAction(
+        { action: "member-info", chatId: "-1001", userId: 999 },
+        telegramConfig(),
+      ),
+    );
+
+    expect(details).toEqual({
+      ok: true,
+      channel: "telegram",
+      action: "member-info",
+      member: { status: "member", userId: 999, isBot: false, displayName: "Alice" },
+    });
+    expect(getTelegramChatMember).toHaveBeenCalledWith("-1001", 999, expect.anything());
+  });
+
+  it("rejects member-info when userId is missing", async () => {
+    await expect(
+      handleTelegramAction(
+        { action: "member-info", chatId: "-1001" },
+        telegramConfig(),
+      ),
+    ).rejects.toThrow("userId");
+    expect(getTelegramChatMember).not.toHaveBeenCalled();
+  });
+
+  it("lists the current bound conversation for channel-list", async () => {
+    const details = resultDetails(
+      await handleTelegramAction({ action: "channel-list" }, telegramConfig(), {
+        conversationReadOrigin: "delegated",
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001:topic:77",
+          currentThreadTs: "77",
+        },
+      }),
+    );
+
+    expect(details.ok).toBe(true);
+    expect(details.channels).toEqual([
+      { id: -1001, type: "supergroup", title: "Test Group", membersCount: 42 },
+    ]);
+    expect(getTelegramChatInfo).toHaveBeenCalledWith("-1001", expect.anything());
+  });
+
+  it("soft-fails channel-list without a bound conversation context", async () => {
+    const details = resultDetails(
+      await handleTelegramAction({ action: "channel-list" }, telegramConfig()),
+    );
+
+    expect(details.ok).toBe(false);
+    expect(details.reason).toBe("no_bound_conversation");
+    expect(getTelegramChatInfo).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "a different provider",
+      requesterAccountId: "default",
+      currentChannelProvider: "discord",
+    },
+    {
+      name: "a different account",
+      requesterAccountId: "other",
+      currentChannelProvider: "telegram",
+    },
+  ])("rejects delegated channel-list for $name before Telegram I/O", async (testCase) => {
+    await expect(
+      handleTelegramAction({ action: "channel-list" }, telegramConfig(), {
+        conversationReadOrigin: "delegated",
+        requesterAccountId: testCase.requesterAccountId,
+        toolContext: {
+          currentChannelProvider: testCase.currentChannelProvider,
+          currentChannelId: "telegram:-1001",
+        },
+      }),
+    ).rejects.toThrow("exact current chat and account");
+    expect(getTelegramChatInfo).not.toHaveBeenCalled();
+  });
+
+  it("rejects delegated channel-info for a different chat", async () => {
+    await expect(
+      handleTelegramAction({ action: "channel-info", chatId: "-1002" }, telegramConfig(), {
+        conversationReadOrigin: "delegated",
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001",
+        },
+      }),
+    ).rejects.toThrow("exact current chat and account");
+    expect(getTelegramChatInfo).not.toHaveBeenCalled();
   });
 
   it("adds reactions when reactionLevel is extensive", async () => {

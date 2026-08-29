@@ -51,6 +51,9 @@ const TELEGRAM_MESSAGE_ACTION_MAP = {
   "sticker-search": "searchSticker",
   "topic-create": "createForumTopic",
   "topic-edit": "editForumTopic",
+  "channel-info": "channel-info",
+  "member-info": "member-info",
+  "channel-list": "channel-list",
 } as const satisfies Partial<Record<ChannelMessageActionName, string>>;
 
 const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set([
@@ -198,6 +201,11 @@ function describeTelegramMessageTool({
   if (discovery.isEnabled("editForumTopic")) {
     actions.add("topic-edit");
   }
+  // Read-only chat introspection mirrors the Feishu channel-info/member-info/
+  // channel-list contract; available wherever a configured bot is present.
+  actions.add("channel-info");
+  actions.add("member-info");
+  actions.add("channel-list");
   const schema: ChannelMessageToolSchemaContribution[] = [];
   if (discovery.pollEnabled) {
     schema.push({
@@ -228,12 +236,23 @@ function describeTelegramMessageTool({
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
-  providerOwnedReadGates: ["react", "edit", "delete", "emoji-list"],
+  providerOwnedReadGates: [
+    "react",
+    "edit",
+    "delete",
+    "emoji-list",
+    "channel-info",
+    "member-info",
+    "channel-list",
+  ],
   resolveExecutionMode: () => "gateway",
   messageActionTargetAliases: {
     react: { aliases: ["messageId"], deliveryTargetAliases: [] },
     edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
     delete: { aliases: ["messageId"], deliveryTargetAliases: [] },
+    "channel-info": { aliases: ["chatId"], deliveryTargetAliases: [] },
+    "member-info": { aliases: ["chatId"], deliveryTargetAliases: [] },
+    "channel-list": { aliases: ["chatId"], deliveryTargetAliases: [] },
   },
   prepareSendPayload: prepareTelegramSendPayload,
   resolveCliActionRequest: ({ action, args }) => {

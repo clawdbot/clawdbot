@@ -26,6 +26,9 @@ describe("telegram actions contract", () => {
           "edit",
           "topic-create",
           "topic-edit",
+          "channel-info",
+          "member-info",
+          "channel-list",
         ],
         expectedCapabilities: ["delivery-pin", "presentation"],
       },
@@ -38,10 +41,19 @@ describe("telegram actions contract", () => {
       "edit",
       "delete",
       "emoji-list",
+      "channel-info",
+      "member-info",
+      "channel-list",
     ]);
     for (const action of ["react", "edit", "delete"] as const) {
       expect(telegramPlugin.actions?.messageActionTargetAliases?.[action]).toEqual({
         aliases: ["messageId"],
+        deliveryTargetAliases: [],
+      });
+    }
+    for (const action of ["channel-info", "member-info", "channel-list"] as const) {
+      expect(telegramPlugin.actions?.messageActionTargetAliases?.[action]).toEqual({
+        aliases: ["chatId"],
         deliveryTargetAliases: [],
       });
     }

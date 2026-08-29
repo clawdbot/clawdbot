@@ -60,6 +60,9 @@ import {
   editMessageReplyMarkupTelegram,
   editMessageTelegram,
   getTelegramAllowedReactions,
+  getTelegramChatAdministrators,
+  getTelegramChatInfo,
+  getTelegramChatMember,
   pinMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
@@ -79,6 +82,9 @@ export const telegramActionRuntime = {
   editMessageReplyMarkupTelegram,
   editMessageTelegram,
   getTelegramAllowedReactions,
+  getTelegramChatAdministrators,
+  getTelegramChatInfo,
+  getTelegramChatMember,
   getCacheStats,
   pinMessageTelegram,
   reactMessageTelegram,
@@ -113,6 +119,9 @@ const TELEGRAM_ACTION_ALIASES = {
   "sticker-search": "searchSticker",
   "topic-create": "createForumTopic",
   "topic-edit": "editForumTopic",
+  "channel-info": "channel-info",
+  "member-info": "member-info",
+  "channel-list": "channel-list",
 } as const;
 
 type TelegramActionName = (typeof TELEGRAM_ACTION_ALIASES)[keyof typeof TELEGRAM_ACTION_ALIASES];
@@ -488,6 +497,126 @@ export async function handleTelegramAction(
             : { identifier: reaction.custom_emoji_id, type: "custom_emoji" },
         ),
       ...(allowed === null ? { note: "All standard Telegram reactions are allowed." } : {}),
+    });
+  }
+
+  if (action === "channel-info") {
+    const chatId = resolveTelegramConversationReadChatId({
+      chatId:
+        readStringOrNumberParam(params, "chatId") ??
+        readStringOrNumberParam(params, "channelId") ??
+        readStringOrNumberParam(params, "to"),
+      cfg,
+      accountId,
+      context: options,
+      actionLabel: "channel-info",
+    });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const channel = await telegramActionRuntime.getTelegramChatInfo(chatId, {
+      cfg,
+      token,
+      accountId: accountId ?? undefined,
+      ...(options?.gatewayClientScopes ? { gatewayClientScopes: options.gatewayClientScopes } : {}),
+    });
+    const includeMembers =
+      params.includeMembers === true || params.members === true;
+    if (!includeMembers) {
+      return jsonResult({ ok: true, provider: "telegram", action: "channel-info", channel });
+    }
+    const administrators = await telegramActionRuntime.getTelegramChatAdministrators(chatId, {
+      cfg,
+      token,
+      accountId: accountId ?? undefined,
+      ...(options?.gatewayClientScopes ? { gatewayClientScopes: options.gatewayClientScopes } : {}),
+    });
+    return jsonResult({
+      ok: true,
+      provider: "telegram",
+      action: "channel-info",
+      channel,
+      members: administrators.members,
+      ...(administrators.truncatedCount > 0
+        ? { membersTruncatedCount: administrators.truncatedCount }
+        : {}),
+    });
+  }
+
+  if (action === "member-info") {
+    const userId = readPositiveIntegerParam(params, "userId", {
+      message: "Telegram member-info requires a userId (positive integer).",
+    });
+    if (userId == null) {
+      throw new Error("Telegram member-info requires a userId (positive integer).");
+    }
+    const chatId = resolveTelegramConversationReadChatId({
+      chatId:
+        readStringOrNumberParam(params, "chatId") ??
+        readStringOrNumberParam(params, "channelId") ??
+        readStringOrNumberParam(params, "to"),
+      cfg,
+      accountId,
+      context: options,
+      actionLabel: "member-info",
+    });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const member = await telegramActionRuntime.getTelegramChatMember(chatId, userId, {
+      cfg,
+      token,
+      accountId: accountId ?? undefined,
+      ...(options?.gatewayClientScopes ? { gatewayClientScopes: options.gatewayClientScopes } : {}),
+    });
+    return jsonResult({ ok: true, channel: "telegram", action: "member-info", member });
+  }
+
+  if (action === "channel-list") {
+    // Telegram Bot API has no "list all chats" method; the platform-known
+    // index is the conversation bound to the current tool context.
+    const currentTarget =
+      options?.toolContext?.currentChannelId ?? options?.toolContext?.currentMessagingTarget;
+    if (!currentTarget || !String(currentTarget).trim()) {
+      return jsonResult({
+        ok: false,
+        reason: "no_bound_conversation",
+        hint: "Telegram channel-list requires a current conversation context. Telegram Bot API has no list-all-chats method; bind the agent to a chat first. Do not retry without context.",
+      });
+    }
+    // channel-list is declared provider-owned, so the host dispatcher skips its
+    // exact-current check; the plugin must run the canonical guard itself to
+    // reject a delegated mismatched provider or requester account.
+    const chatId = resolveTelegramConversationReadChatId({
+      chatId: currentTarget,
+      cfg,
+      accountId,
+      context: options,
+      actionLabel: "channel-list",
+    });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const channel = await telegramActionRuntime.getTelegramChatInfo(chatId, {
+      cfg,
+      token,
+      accountId: accountId ?? undefined,
+      ...(options?.gatewayClientScopes ? { gatewayClientScopes: options.gatewayClientScopes } : {}),
+    });
+    return jsonResult({
+      ok: true,
+      channel: "telegram",
+      action: "channel-list",
+      channels: [channel],
     });
   }
 

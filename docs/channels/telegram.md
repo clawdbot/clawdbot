@@ -593,10 +593,13 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `deleteMessage` (`chatId`, `messageId`)
     - `editMessage` (`chatId`, `messageId`, `content` or `caption`, optional `presentation` inline buttons; button-only edits update reply markup)
     - `createForumTopic` (`chatId`, `name`, optional `iconColor`, `iconCustomEmojiId`)
+    - `channel-info` (optional `chatId`; optional `includeMembers` to also list administrators)
+    - `member-info` (`chatId`, `userId`)
+    - `channel-list` (no parameters; returns the currently bound conversation)
 
     Ergonomic aliases: `send`, `react`, `delete`, `edit`, `sticker`, `sticker-search`, `topic-create`.
 
-    Gating: `channels.telegram.actions.sendMessage`, `deleteMessage`, `reactions`, `sticker` (default: disabled). `reactions` controls both `react` and `emoji-list`. `edit`, `createForumTopic`, and `editForumTopic` are enabled by default with no dedicated toggle.
+    Gating: `channels.telegram.actions.sendMessage`, `deleteMessage`, `reactions`, `sticker` (default: disabled). `reactions` controls both `react` and `emoji-list`. `edit`, `createForumTopic`, `editForumTopic`, `channel-info`, `member-info`, and `channel-list` are enabled by default with no dedicated toggle.
     Runtime sends use the active config/secrets snapshot from startup/reload, so action paths do not re-resolve `SecretRef` values per send.
 
     Use `emoji-list` to inspect reactions in the current trusted chat and account. Agents cannot inspect another chat; direct operators may provide a different `chatId`. `limit` defaults to and cannot exceed 100:
@@ -614,6 +617,12 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Pass a Unicode identifier or numeric custom emoji identifier directly to `react`. Chats without reaction restrictions return the known standard Telegram reactions and a `note` explaining that all standard reactions are allowed. When Telegram rejects a reaction and the chat's allowed Unicode reactions are known, the error includes a short sample of valid alternatives.
 
     Reaction removal semantics: [/tools/reactions](/tools/reactions).
+
+    Read-only chat introspection (`channel-info`, `member-info`, `channel-list`) mirrors the Feishu chat-introspection contract. Agents can only inspect the currently bound conversation: the Telegram provider, chat/thread, and requester account must match before any Bot API I/O, so a delegated agent cannot enumerate another chat. Direct operators may pass a different `chatId` for ad-hoc inspection.
+
+    - `channel-info` returns a bounded chat projection (`id`, `type`, `title`, `username`, `membersCount`, `isForum`, `pinnedMessageText`). With `includeMembers: true` it also returns `members`, a bounded administrator roster (capped at 20 entries; `membersTruncatedCount` reports how many were dropped).
+    - `member-info` (`userId`, positive integer) returns a bounded member projection (`status`, `userId`, `isBot`, `displayName`, and for administrators `customTitle`, `isAnonymous`, `privileges`).
+    - `channel-list` returns only the bound conversation as a single-entry `channels` array, not a bot-wide chat directory.
 
   </Accordion>
 
