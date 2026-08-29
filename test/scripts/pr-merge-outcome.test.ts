@@ -89,6 +89,7 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
     mode: "success",
     landing: "requested",
     reads: 0,
+    observations: [] as Array<{ main?: string; pr?: Record<string, unknown> }>,
     calls: [] as string[][],
     mutations: 0,
     mergeBody: null as string | null,
@@ -177,7 +178,7 @@ else if(args[0]==="pr"&&args[1]==="view") {
   if(s.unavailable) fail("metadata unavailable");
   if(s.invalid) {out({data:{repository:{}}});process.exit(0);}
   if(args.some(x=>x.includes("viewerMergeBodyText"))) {out({data:{repository:{pullRequest:{...s.pr,viewerMergeBodyText:"Fixture body"}}}});}
-  else {const pr={...s.pr};if(s.drift&&s.reads%2===0) pr.baseRefName="changed";out({data:{repository:{...s.repo,ref:{target:{oid:main()}},pullRequest:pr}}});}
+  else {const observation=s.observations.shift()??{};const pr={...s.pr,...observation.pr};if(s.drift&&s.reads%2===0) pr.baseRefName="changed";out({data:{repository:{...s.repo,ref:{target:{oid:observation.main??main()}},pullRequest:pr}}});}
 } else if(args.some(x=>x.includes("/comments"))) {
   if(args.includes("POST")) {
     s.posts++;
@@ -325,6 +326,85 @@ merge_run 123 "\${1:-false}"
 }
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it.each([false, true])("settles unknown mergeability before dispatch with auto=%s", (auto) => {
+    const f = fixture();
+    f.save({
+      ...f.state(),
+      pr: { ...f.state().pr, mergeStateStatus: "CLEAN" },
+      observations: Array.from({ length: auto ? 2 : 1 }, () => ({
+        pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
+      })),
+    });
+    const run = f.run(auto);
+    expect(run.status, run.output).toBe(0);
+    expect(f.record()).toMatchObject({ phase: "complete", route: "immediate", head: f.head });
+    expect(f.state().mutations).toBe(1);
+    expect(f.state().posts).toBe(1);
+  });
+  it.each(["mergeable", "mergeStateStatus"])(
+    "refuses unresolved mergeability field %s within the read budget",
+    (field) => {
+      const f = fixture();
+      f.save({
+        ...f.state(),
+        observations: Array.from({ length: 3 }, () => ({ pr: { [field]: "UNKNOWN" } })),
+      });
+      const run = f.run();
+      expect(run.status, run.output).toBe(1);
+      expect(run.output).toContain("mergeability remained unknown");
+      expect(f.state().reads).toBe(3);
+      expect(f.state().mutations).toBe(0);
+      expect(f.state().posts).toBe(0);
+      expect(() => f.record()).toThrow();
+    },
+  );
+  it.each([
+    "head",
+    "main",
+    "state",
+    "base",
+    "draft",
+    "auto",
+    "queue",
+    "queue-policy",
+    "settled-mergeable",
+    "settled-status",
+  ])("refuses %s drift while mergeability settles", (change) => {
+    const f = fixture();
+    const pr: Record<string, unknown> = {};
+    if (change === "head") pr.headRefOid = f.base;
+    if (change === "state") pr.state = "CLOSED";
+    if (change === "base") pr.baseRefName = "release";
+    if (change === "draft") pr.isDraft = true;
+    if (change === "auto") pr.autoMergeRequest = { mergeMethod: "SQUASH" };
+    if (change === "queue") pr.isInMergeQueue = true;
+    if (change === "queue-policy") pr.isMergeQueueEnabled = true;
+    if (change === "settled-mergeable") pr.mergeable = "CONFLICTING";
+    const pending = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
+    if (change === "settled-mergeable") pending.mergeable = "MERGEABLE";
+    if (change === "settled-status") pending.mergeStateStatus = "CLEAN";
+    f.save({
+      ...f.state(),
+      observations: [{ pr: pending }, { pr, ...(change === "main" ? { main: f.head } : {}) }],
+    });
+    const run = f.run();
+    expect(run.status, run.output).toBe(1);
+    expect(f.state().reads).toBe(2);
+    expect(f.state().mutations).toBe(0);
+    expect(f.state().posts).toBe(0);
+    expect(() => f.record()).toThrow();
+  });
+  it("reconciles a merged receipt without waiting for terminal mergeability", () => {
+    const f = fixture();
+    const unknown = { pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } };
+    f.save({ ...f.state(), observations: [{}, {}, unknown, unknown] });
+    const run = f.run();
+    expect(run.status, run.output).toBe(0);
+    expect(f.record().phase).toBe("complete");
+    expect(f.state().reads).toBe(4);
+    expect(f.state().mutations).toBe(1);
+    expect(f.state().posts).toBe(1);
+  });
   it.each([false, true])("confirms a real multi-commit rebase with queue=%s", (queue) => {
     const f = fixture(undefined, [["prefix\n"], ["after\n"]]);
     const main = f.advance("before\n");
@@ -637,6 +717,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     "invalid",
     "unavailable",
     "conflict",
+    "calculated-conflict",
     "drift",
     "no-op",
     "ancestral-revert",
@@ -651,6 +732,11 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     if (change === "unavailable") next.unavailable = true;
     if (change === "drift") next.drift = true;
     if (change === "conflict") f.advance("conflict\n");
+    if (change === "calculated-conflict")
+      next.observations = [
+        { pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
+        { pr: { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" } },
+      ];
     if (change === "no-op") f.advance();
     if (change === "ancestral-revert") {
       f.git(["push", "-q", "origin", f.head + ":refs/heads/main"]);
