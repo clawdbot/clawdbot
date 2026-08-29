@@ -211,8 +211,6 @@ export class AcpTranslatorAgentEvents {
     const approvalEvent = params.approvalEvent;
     const existing = this.approvalRelays.get(approvalEvent.approvalId);
     if (existing) {
-      // A relay holding the user's decision retries it instead of re-asking:
-      // a duplicate broadcast means the first resolve never landed.
       void this.retryApprovalRelayDecision(existing);
       return;
     }
@@ -303,11 +301,8 @@ export class AcpTranslatorAgentEvents {
           // Keep completed relays until prompt cleanup as replay/dedup sentinels.
           current.state = "completed";
         } else if (decision) {
-          // The user already decided but the resolve did not land (gateway
-          // flap). Approval events are live broadcasts with no catch-up replay,
-          // so deleting the relay would silently drop their decision: the
-          // gateway-side approval stays pending and nobody re-asks. Keep the
-          // exact decision on the relay for reconnect/duplicate-event retry.
+          // Approval broadcasts have no catch-up replay. Retain the user's
+          // decision until reconnect or a duplicate event can deliver it.
           current.pendingDecision = decision;
         } else {
           this.approvalRelays.delete(relay.approvalId);
@@ -316,7 +311,6 @@ export class AcpTranslatorAgentEvents {
     }
   }
 
-  /** Retries a relay's recorded user decision; completes the relay once it lands. */
   private async retryApprovalRelayDecision(relay: AcpPendingApprovalRelay): Promise<void> {
     const decision = relay.pendingDecision;
     // Prompt cleanup revokes relay ownership. A detached stored decision must
@@ -325,17 +319,16 @@ export class AcpTranslatorAgentEvents {
       return;
     }
     const resolved = await this.resolveGatewayApproval(relay.approvalId, decision);
-    const current = this.approvalRelays.get(relay.approvalId);
-    if (current !== relay || current.state !== "active" || !resolved) {
+    if (!resolved || !this.isApprovalRelayActive(relay)) {
       return;
     }
-    current.pendingDecision = undefined;
-    current.state = "completed";
+    relay.pendingDecision = undefined;
+    relay.state = "completed";
   }
 
-  /** Replays user decisions captured while the gateway was unreachable. */
   async replayApprovalDecisionsOnReconnect(): Promise<void> {
-    for (const relay of [...this.approvalRelays.values()]) {
+    // Prompt cleanup mutates the map across awaits; replay one stable reconnect snapshot.
+    for (const relay of Array.from(this.approvalRelays.values())) {
       await this.retryApprovalRelayDecision(relay);
     }
   }
