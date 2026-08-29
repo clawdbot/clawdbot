@@ -10,6 +10,10 @@ import {
   type UpdateChannel,
 } from "../../../infra/update-channels.js";
 import {
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+} from "../../../plugins/config-state.js";
+import {
   resolveDefaultPluginExtensionsDir,
   resolvePluginInstallDir,
 } from "../../../plugins/install-paths.js";
@@ -112,6 +116,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
     });
   const installedPluginIdsWithMissingRequiredDependencies =
     collectInstalledPluginMissingRequiredDependencies({
+      cfg: params.cfg,
       snapshot,
       installRecords: records,
       env: params.env,
@@ -500,10 +505,12 @@ function activePluginMatchesRepairableInstallRecord(params: {
  * Maps each active, record-backed installed plugin to its missing required packages.
  */
 function collectInstalledPluginMissingRequiredDependencies(params: {
+  cfg: OpenClawConfig;
   snapshot: PluginMetadataSnapshot;
   installRecords: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
 }): Map<string, string[]> {
+  const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
   const missingByPluginId = new Map<string, string[]>();
   for (const plugin of params.snapshot.plugins) {
     if (
@@ -512,6 +519,16 @@ function collectInstalledPluginMissingRequiredDependencies(params: {
         record: params.installRecords[plugin.id],
         env: params.env,
       })
+    ) {
+      continue;
+    }
+    if (
+      !resolveEffectiveEnableState({
+        id: plugin.id,
+        origin: "global",
+        config: normalizedPluginConfig,
+        rootConfig: params.cfg,
+      }).enabled
     ) {
       continue;
     }
