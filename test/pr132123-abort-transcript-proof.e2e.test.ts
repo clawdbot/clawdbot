@@ -13,6 +13,7 @@ import {
 } from "../src/gateway/test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { captureEnv, setTestEnvValue } from "../src/test-utils/env.js";
+import { createDeferred } from "./helpers/promise.js";
 
 const envKeys = [
   "HOME",
@@ -78,7 +79,7 @@ describe("PR #132123 real gateway proof", () => {
           setTestEnvValue(key, value);
         }
 
-        const secondStreamStarted = Promise.withResolvers<void>();
+        const secondStreamStarted = createDeferred<void>();
         let providerRequests = 0;
         providerServer = createServer((_request, response) => {
           providerRequests += 1;
