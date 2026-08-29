@@ -40,8 +40,7 @@
               if (raw) break;
             }
           }
-          if (!raw) return;
-          var s = JSON.parse(raw);
+          var s = raw ? JSON.parse(raw) : null;
           var t = s && s.theme;
           var m = s && s.themeMode;
           if (typeof t !== "string") t = "";
