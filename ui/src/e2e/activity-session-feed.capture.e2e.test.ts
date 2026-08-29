@@ -213,9 +213,15 @@ suite.define(() => {
         await installMockGateway(page, {
           hasMultipleSessionSharingIdentities: true,
           presenceUsers: [
-            { self: true, id: "profile-self", name: "Operator" },
+            {
+              self: true,
+              id: "profile-self",
+              identity: { type: "profile", id: "profile-self" },
+              name: "Operator",
+            },
             {
               id: "profile-alice",
+              identity: { type: "profile", id: "profile-alice" },
               name: "Alice Chen",
               email: "alice@example.test",
               host: "Alice's MacBook Pro",
@@ -227,6 +233,7 @@ suite.define(() => {
             },
             {
               id: "profile-bob",
+              identity: { type: "profile", id: "profile-bob" },
               name: "Bob Rivera",
               email: "bob@example.test",
               host: "Bob's Mac Studio",
@@ -237,12 +244,14 @@ suite.define(() => {
             },
             {
               id: "profile-carol",
+              identity: { type: "profile", id: "profile-carol" },
               name: "Carol Singh",
               lastInputSeconds: 14,
               watchedSessions: [releaseKey],
             },
             {
               id: "profile-dan",
+              identity: { type: "profile", id: "profile-dan" },
               name: "Dan Wu",
               lastInputSeconds: 70,
               watchedSessions: [designKey],
