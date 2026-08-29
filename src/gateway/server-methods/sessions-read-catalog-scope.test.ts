@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveThinkingProfile as resolveOpenAIThinkingProfile } from "../../../extensions/openai/provider-policy-api.js";
 import type {
   AgentsListResult,
   SessionsListParams,
@@ -12,6 +11,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { resolveProviderPolicySurface } from "../../plugins/provider-public-artifacts.js";
 import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -206,7 +206,10 @@ describe("sessions.list catalog scoping", () => {
           config,
           agentId: "main",
           entries,
-          pluginRegistry: thinkingRegistry("openai", resolveOpenAIThinkingProfile),
+          pluginRegistry: thinkingRegistry(
+            "openai",
+            resolveProviderPolicySurface("openai")!.resolveThinkingProfile!,
+          ),
         });
         // The Gateway startup registry need not contain the model-selected provider.
         setActivePluginRegistry(createEmptyPluginRegistry());
