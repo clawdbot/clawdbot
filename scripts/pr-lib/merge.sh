@@ -425,8 +425,10 @@ merge_run() {
   fi
 
   local crabbox_final_main_sha="" route=immediate
-  local admission_attempt admission_authority initial_authority=""
-  for admission_attempt in 1 2 3 4 5 6; do
+  local admission_attempt previous_observation=""
+  # Only fresh admission waits for calculation; retained intent reconciles immediately.
+  # Pin all other facts and each projection as soon as it becomes known.
+  for admission_attempt in 1 2 3; do
     merge_outcome_observe "$pr" || return 1
     if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg head "$PREP_HEAD_SHA" '
       .pr.state == "OPEN" and .pr.headRefOid == $head and .pr.baseRefName == "main" and
@@ -436,25 +438,26 @@ merge_run() {
       merge_outcome_stop "require OPEN, exact prepared head, main base, non-draft, no conflicts, and no existing auto/queue request; inspect current PR state"
       return 1
     fi
-    # Only initial UNKNOWN projections may settle; all other facts stay pinned.
-    # Keep the complete observation for routing and the unchanged final reread.
-    admission_authority=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -c 'del(.pr.mergeable, .pr.mergeStateStatus)') || return 1
-    [ -n "$initial_authority" ] || initial_authority="$admission_authority"
-    if [ "$admission_authority" != "$initial_authority" ]; then
+    if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" '
+      del(.pr.mergeable,.pr.mergeStateStatus) == ($previous | del(.pr.mergeable,.pr.mergeStateStatus)) and
+      ($previous.pr.mergeable == "UNKNOWN" or .pr.mergeable == $previous.pr.mergeable) and
+      ($previous.pr.mergeStateStatus == "UNKNOWN" or .pr.mergeStateStatus == $previous.pr.mergeStateStatus)
+    ' >/dev/null; then
       merge_outcome_stop "PR or main changed while waiting for mergeability; stopped before intent/dispatch"
       return 1
     fi
     if printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.mergeable != "UNKNOWN" and .pr.mergeStateStatus != "UNKNOWN"' >/dev/null; then
       break
     fi
-    if [ "$admission_attempt" -eq 6 ]; then
-      merge_outcome_stop "mergeability remained UNKNOWN after 6 observations; stopped before intent/dispatch"
+    if [ "$admission_attempt" -eq 3 ]; then
+      merge_outcome_stop "mergeability remained UNKNOWN after 3 observations; stopped before intent/dispatch"
       return 1
     fi
     if [ "$admission_attempt" -eq 1 ]; then
-      echo "Waiting for GitHub mergeability to settle (up to 6 observations, 2 seconds between UNKNOWN samples)."
+      echo "Waiting for GitHub mergeability to settle (up to 3 observations, waiting 1 then 2 seconds for UNKNOWN samples)."
     fi
-    sleep 2
+    previous_observation="$MERGE_OBSERVATION"
+    sleep "$admission_attempt"
   done
   if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ]; then
     route="admin"

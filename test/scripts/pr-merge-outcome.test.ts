@@ -91,7 +91,7 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
     landing: "requested",
     reads: 0,
     observationReads: 0,
-    settlementSleeps: 0,
+    settlementSleeps: [] as number[],
     observations: [] as Array<{
       pr?: Record<string, unknown>;
       main?: string;
@@ -134,7 +134,7 @@ const git=(args,input)=>execFileSync("git",["-c","commit.gpgsign=false","-c","co
 const save=()=>fs.writeFileSync(file,JSON.stringify(s));
 const out=(value)=>console.log(typeof value==="string"?value:JSON.stringify(value));
 const fail=(text)=>{save();console.error(text);process.exit(1)};
-if(route==="sleep") {s.settlementSleeps++;save();process.exit(0);}
+if(route==="sleep") {s.settlementSleeps.push(Number(args[0]));save();process.exit(0);}
 s.calls.push([route,...args]);save();
 const main=()=>git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse","refs/heads/main"]);
 if(args[0]==="repo") out(args.includes("--jq")?s.repo.nameWithOwner:s.repo);
@@ -238,7 +238,7 @@ node() { if [[ "$1" == */watch-pr-ci.mjs ]]; then return 0; fi; command node "$@
 gh() { command node "$FIXTURE_GH" path "$@"; }
 gh_plain() { command node "$FIXTURE_GH" direct "$@"; }
 # Skip only admission settlement delays; preserve the operation lock's short sleeps.
-sleep() { if [ "$#" = 1 ] && [ "$1" = 2 ]; then command node "$FIXTURE_GH" sleep; else command sleep "$@"; fi; }
+sleep() { if [ "$#" = 1 ] && { [ "$1" = 1 ] || [ "$1" = 2 ]; }; then command node "$FIXTURE_GH" sleep "$1"; else command sleep "$@"; fi; }
 verify_crabbox_admin_merge_bypass() {
   [ "$(command jq -r .admin "$FIXTURE_STATE")" = true ] || return 1
   command jq --arg main "$(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/main)" '{mainSha:$main,crabboxCheckUrl:"fixture",ciGateUrl:"fixture"}' "$FIXTURE_STATE" > .local/merge-crabbox-bypass.json
@@ -346,79 +346,6 @@ merge_run 123 "\${1:-false}"
 }
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
-  it.each([false, true])("settles unknown mergeability before dispatch with auto=%s", (auto) => {
-    const f = fixture();
-    f.save({
-      ...f.state(),
-      pr: { ...f.state().pr, mergeStateStatus: "CLEAN" },
-      observations: [
-        ...Array.from({ length: auto ? 2 : 1 }, () => ({ pr: unknownProjection })),
-        { pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } },
-      ],
-    });
-    const run = f.run(auto);
-    expect(run.status, run.output).toBe(0);
-    expect(f.record()).toMatchObject({ phase: "complete", route: "immediate", head: f.head });
-    expect(f.state().mutations).toBe(1);
-    expect(f.state().posts).toBe(1);
-  });
-  it.each(["mergeable", "mergeStateStatus"])(
-    "refuses unresolved mergeability field %s within the read budget",
-    (field) => {
-      const f = fixture();
-      f.save({
-        ...f.state(),
-        observations: Array.from({ length: 3 }, () => ({ pr: { [field]: "UNKNOWN" } })),
-      });
-      const run = f.run();
-      expect(run.status, run.output).toBe(1);
-      expect(run.output).toContain("mergeability remained unknown");
-      expect(f.state().reads).toBe(3);
-      expect(f.state().mutations).toBe(0);
-      expect(f.state().posts).toBe(0);
-      expect(() => f.record()).toThrow();
-    },
-  );
-  it.each([
-    "head",
-    "main",
-    "state",
-    "base",
-    "draft",
-    "auto",
-    "queue",
-    "queue-policy",
-    "settled-mergeable",
-    "settled-status",
-  ])("refuses %s drift while mergeability settles", (change) => {
-    const f = fixture();
-    const pr: Record<string, unknown> = {};
-    if (change === "head") pr.headRefOid = f.base;
-    if (change === "state") pr.state = "CLOSED";
-    if (change === "base") pr.baseRefName = "release";
-    if (change === "draft") pr.isDraft = true;
-    if (change === "auto") pr.autoMergeRequest = { mergeMethod: "SQUASH" };
-    if (change === "queue") pr.isInMergeQueue = true;
-    if (change === "queue-policy") pr.isMergeQueueEnabled = true;
-    if (change === "settled-mergeable") pr.mergeable = "CONFLICTING";
-    if (change === "settled-status") pr.mergeStateStatus = "BEHIND";
-    const pending = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
-    if (change === "settled-mergeable") pending.mergeable = "MERGEABLE";
-    if (change === "settled-status") pending.mergeStateStatus = "CLEAN";
-    f.save({
-      ...f.state(),
-      observations: [
-        { pr: pending },
-        { pr: { ...f.state().pr, ...pr }, ...(change === "main" ? { main: f.head } : {}) },
-      ],
-    });
-    const run = f.run();
-    expect(run.status, run.output).toBe(1);
-    expect(f.state().reads).toBe(2);
-    expect(f.state().mutations).toBe(0);
-    expect(f.state().posts).toBe(0);
-    expect(() => f.record()).toThrow();
-  });
   it("reconciles a merged receipt without waiting for terminal mergeability", () => {
     const f = fixture();
     const unknown = { pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } };
@@ -427,6 +354,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(run.status, run.output).toBe(0);
     expect(f.record().phase).toBe("complete");
     expect(f.state().reads).toBe(4);
+    expect(f.state().settlementSleeps).toEqual([]);
     expect(f.state().mutations).toBe(1);
     expect(f.state().posts).toBe(1);
   });
@@ -454,7 +382,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(f.state().mutations, run.output).toBe(0);
       expect(run.status, run.output).toBe(1);
       expect(f.state().posts).toBe(0);
-      expect(f.state().settlementSleeps).toBe(settles ? 1 : 0);
+      expect(f.state().settlementSleeps).toEqual(settles ? [1] : []);
       expect(() => f.record()).toThrow();
       expect(existsSync(join(f.worktree, ".local/merge-output.log"))).toBe(false);
       expect(existsSync(f.worktree)).toBe(true);
@@ -465,16 +393,17 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     { auto: false, mergeStateStatus: "CLEAN", route: "immediate" },
     { auto: true, mergeStateStatus: "CLEAN", route: "immediate" },
     { auto: true, mergeStateStatus: "BEHIND", route: "auto" },
+    { auto: false, mergeStateStatus: "CLEAN", route: "immediate", statusFirst: true },
   ])(
     "settles initial UNKNOWN projections before one pinned dispatch: %j",
-    ({ auto, mergeStateStatus, route }) => {
+    ({ auto, mergeStateStatus, route, statusFirst }) => {
       const f = fixture();
       f.save({
         ...f.state(),
         observations: [
           { pr: unknownProjection },
-          { pr: { mergeable: "MERGEABLE" } },
-          { pr: { mergeStateStatus } },
+          { pr: statusFirst ? { mergeStateStatus } : { mergeable: "MERGEABLE" } },
+          { pr: statusFirst ? { mergeable: "MERGEABLE" } : { mergeStateStatus } },
         ],
       });
       const run = f.run(auto);
@@ -487,7 +416,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(args.includes("--auto")).toBe(route === "auto");
       expect(state.mutations).toBe(1);
       expect(state.posts).toBe(1);
-      expect(state.settlementSleeps).toBe(2);
+      expect(state.settlementSleeps).toEqual([1, 2]);
       expect(f.record()).toMatchObject({ route, phase: "complete", head: f.head, main: f.base });
       expect(f.git(["show", `${f.record().landed}:owner.txt`])).toBe("after");
     },
@@ -508,6 +437,10 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   it.each([
     "persistent UNKNOWN",
     "persistent UNKNOWN mergeable",
+    "persistent UNKNOWN status",
+    "known mergeable reverts",
+    "known status reverts",
+    "known status changes",
     "invalid metadata",
     "API error",
     "PR identity",
@@ -574,10 +507,19 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
         step.pr = { mergeCommit: { oid: f.head } };
         break;
       case "conflicting":
-        step.pr = { mergeable: "CONFLICTING" };
+        step.pr = { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" };
         break;
       case "known BLOCKED":
         step.pr = { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" };
+        break;
+      case "known mergeable reverts":
+        step.pr = { mergeable: "UNKNOWN" };
+        break;
+      case "known status reverts":
+        step.pr = { mergeStateStatus: "UNKNOWN" };
+        break;
+      case "known status changes":
+        step.pr = { mergeStateStatus: "BEHIND" };
         break;
       case "final UNKNOWN mergeable":
         step.pr = { mergeable: "UNKNOWN" };
@@ -593,6 +535,17 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     const persistent = fault.startsWith("persistent ");
     if (fault === "persistent UNKNOWN mergeable")
       next.observations = [{ pr: { mergeable: "UNKNOWN", mergeStateStatus: "CLEAN" } }];
+    if (fault === "persistent UNKNOWN status")
+      next.observations = [{ pr: { mergeable: "MERGEABLE", mergeStateStatus: "UNKNOWN" } }];
+    const projectionDrift =
+      fault === "known mergeable reverts" || fault.startsWith("known status ");
+    if (projectionDrift)
+      next.observations.push({
+        pr:
+          fault === "known mergeable reverts"
+            ? { mergeable: "MERGEABLE" }
+            : { mergeStateStatus: "CLEAN" },
+      });
     const finalRead = fault.startsWith("final ");
     if (finalRead)
       next.observations.push({ pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } });
@@ -601,8 +554,8 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     const run = f.run(true);
     expect(run.status, run.output).toBe(1);
     const state = f.state();
-    expect(state.observationReads).toBe(persistent ? 6 : finalRead ? 3 : 2);
-    expect(state.settlementSleeps).toBe(persistent ? 5 : 1);
+    expect(state.observationReads).toBe(persistent || finalRead || projectionDrift ? 3 : 2);
+    expect(state.settlementSleeps).toEqual(persistent || projectionDrift ? [1, 2] : [1]);
     expect(state.mutations).toBe(0);
     expect(state.posts).toBe(0);
     expect(() => f.record()).toThrow();
@@ -613,6 +566,8 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(run.output).toContain("Waiting for GitHub mergeability to settle");
     if (persistent) expect(run.output).toContain("stopped before intent/dispatch");
     if (finalRead) expect(run.output).toContain("PR or main changed during observation");
+    if (projectionDrift)
+      expect(run.output).toContain("PR or main changed while waiting for mergeability");
     if (fault === "known BLOCKED")
       expect(run.output).toContain(
         "auto-merge admission requires MERGEABLE with CLEAN or BEHIND status",
@@ -642,7 +597,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(run.status, run.output).toBe(state === "MERGED" ? 0 : 1);
       expect(f.state().mutations).toBe(1);
       expect(f.state().posts).toBe(0);
-      expect(f.state().settlementSleeps).toBe(0);
+      expect(f.state().settlementSleeps).toEqual([]);
       expect(f.state().observationReads).toBe(2);
       expect(readFileSync(join(f.worktree, ".local/merge-output.log"), "utf8")).toBe(capture);
       expect(existsSync(f.worktree)).toBe(true);
@@ -966,7 +921,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     "invalid",
     "unavailable",
     "conflict",
-    "calculated-conflict",
     "drift",
     "no-op",
     "ancestral-revert",
@@ -981,11 +935,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     if (change === "unavailable") next.unavailable = true;
     if (change === "drift") next.drift = true;
     if (change === "conflict") f.advance("conflict\n");
-    if (change === "calculated-conflict")
-      next.observations = [
-        { pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
-        { pr: { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" } },
-      ];
     if (change === "no-op") f.advance();
     if (change === "ancestral-revert") {
       f.git(["push", "-q", "origin", f.head + ":refs/heads/main"]);
@@ -1002,7 +951,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     { auto: false, method: "squash" },
     { auto: false, method: "merge" },
     { auto: true, method: "squash" },
-  ])("retains accepted pending intent for %j", ({ auto, method }) => {
+  ])("reconciles accepted pending UNKNOWN intent without polling for %j", ({ auto, method }) => {
     const f = fixture();
     f.save({
       ...f.state(),
@@ -1016,8 +965,22 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     const first = f.run(auto, f.repo, method);
     expect(first.status, first.output).toBe(0);
     expect(first.output).toContain("AUTO/QUEUE PENDING");
-    expect(f.run(auto, f.repo, method).status).toBe(0);
+    const before = f.git(["rev-parse", outcomeRef]);
+    const capture = readFileSync(join(f.worktree, ".local/merge-output.log"), "utf8");
+    f.save({
+      ...f.state(),
+      observationReads: 0,
+      pr: { ...f.state().pr, ...unknownProjection },
+    });
+    const pending = f.run(auto, f.repo, method);
     expect(f.state().mutations).toBe(1);
+    expect(f.state().posts).toBe(0);
+    expect(f.git(["rev-parse", outcomeRef])).toBe(before);
+    expect(readFileSync(join(f.worktree, ".local/merge-output.log"), "utf8")).toBe(capture);
+    expect(pending.status, pending.output).toBe(0);
+    expect(pending.output).toContain("AUTO/QUEUE PENDING");
+    expect(f.state().settlementSleeps).toEqual([]);
+    expect(f.state().observationReads).toBe(2);
     const landed = f.advance("after\n", "stable\n");
     f.save({
       ...f.state(),
