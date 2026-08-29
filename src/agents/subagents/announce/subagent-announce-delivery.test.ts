@@ -1768,6 +1768,48 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
   it.each([
     {
+      name: "caption plus structured and directive media",
+      payload: {
+        text: "Image ready\nMEDIA:/tmp/directive.png",
+        mediaUrls: ["/tmp/structured.png", "/tmp/directive.png"],
+      },
+      expectedContent: "Image ready",
+      expectedMediaUrls: ["/tmp/structured.png", "/tmp/directive.png"],
+    },
+    {
+      name: "directive-only media",
+      payload: { text: "MEDIA:/tmp/directive-only.png" },
+      expectedContent: "",
+      expectedMediaUrls: ["/tmp/directive-only.png"],
+    },
+    {
+      name: "structured media without a caption",
+      payload: { mediaUrls: ["/tmp/structured-only.png"] },
+      expectedContent: "",
+      expectedMediaUrls: ["/tmp/structured-only.png"],
+    },
+  ])("directly delivers $name from the announce payload", async (testCase) => {
+    const callGateway = createGatewayMock({ result: { payloads: [testCase.payload] } });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+    });
+
+    expectDeliveryPath(result, "direct");
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: testCase.expectedContent,
+        mediaUrls: testCase.expectedMediaUrls,
+        idempotencyKey: "announce-dm-fallback-empty:text-direct",
+      }),
+    );
+  });
+
+  it.each([
+    {
       name: "intentional suppression",
       suppressionReason: "cancelled_by_message_sending_hook",
       disposition: "intentional_non_delivery",

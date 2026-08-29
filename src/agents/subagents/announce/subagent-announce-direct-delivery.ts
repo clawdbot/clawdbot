@@ -226,6 +226,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       };
     }
     const tryTextCompletionDirectDelivery = (
+      agentResult?: { payloads?: unknown },
       contentKind: "completed_result" | "failed_notice" = "completed_result",
     ) =>
       deliverCompletionDirect({
@@ -237,6 +238,7 @@ export async function sendSubagentAnnounceDirectly(params: {
         internalEvents: params.internalEvents,
         contentKind,
         signal: params.signal,
+        agentResult,
         onDeliveryResult: params.onDeliveryResult,
         isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
       });
@@ -420,7 +422,10 @@ export async function sendSubagentAnnounceDirectly(params: {
         isSubagentCompletion &&
         directCompletionFallbackKind
       ) {
-        const textDelivery = await tryTextCompletionDirectDelivery(directCompletionFallbackKind);
+        const textDelivery = await tryTextCompletionDirectDelivery(
+          undefined,
+          directCompletionFallbackKind,
+        );
         if (textDelivery) {
           return textDelivery;
         }
@@ -493,7 +498,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       !hasVisibleNonSilentGatewayPayload &&
       !hasMessagingToolDelivery
     ) {
-      const textDelivery = await tryTextCompletionDirectDelivery();
+      const textDelivery = await tryTextCompletionDirectDelivery(directAnnounceResult ?? undefined);
       if (textDelivery) {
         return textDelivery;
       }
@@ -536,7 +541,9 @@ export async function sendSubagentAnnounceDirectly(params: {
         };
       }
       if (subagentDirectMessageCompletionRequiresMessageTool) {
-        const textDelivery = await tryTextCompletionDirectDelivery();
+        const textDelivery = await tryTextCompletionDirectDelivery(
+          directAnnounceResult ?? undefined,
+        );
         if (textDelivery) {
           return textDelivery;
         }
