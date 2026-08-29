@@ -606,11 +606,10 @@ export async function prepareFormattedSystemEvents(params: {
   }
   const pendingManagedDeliveries = pendingManagedSettlements.map((settlement) => {
     const authorityKey = readPreparedSystemEventAuthorityKey(settlement.event);
-    return {
-      id: settlement.id,
-      acknowledge: () => settleManagedDelivery(params.sessionKey, settlement),
-      ...(authorityKey ? { authorityKey } : {}),
-    };
+    const acknowledge = () => settleManagedDelivery(params.sessionKey, settlement);
+    return authorityKey
+      ? { id: settlement.id, acknowledge, authorityKey }
+      : { id: settlement.id, acknowledge };
   });
   return {
     blocks,
