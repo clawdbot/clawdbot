@@ -308,22 +308,14 @@ async function settleCodeModeResult(params: {
     result.pendingRequests.length > 0 &&
     result.pendingRequests.every((request) => request.method !== "yield")
   ) {
-    if (params.replaySafe) {
-      // Replay-safe runs never inline-drain: namespace calls stay a hard error
-      // and other pending work falls through to the replay-safe snapshot check.
-      if (result.pendingRequests.every((request) => request.method === "namespace")) {
-        cancelPendingBridgeStates(pending);
-        return {
-          status: "failed" as const,
-          error: "restart-safe code mode cannot call namespace tools.",
-          code: "invalid_input" as const,
-          failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("input" as const),
-          bridgeDispatchStarted: params.bridgeDispatch.started,
-          output: output.slice(deliveredOutputCount),
-          replaySafe: true,
-          telemetry: telemetry(params.runtime),
-        };
-      }
+    if (
+      params.replaySafe &&
+      !pendingBridgeRequestsReplaySafe(
+        result.pendingRequests,
+        params.runtime,
+        params.catalogProjection,
+      )
+    ) {
       break;
     }
     const remainingMs = settleDeadline() - Date.now();
@@ -388,7 +380,7 @@ async function settleCodeModeResult(params: {
           runId: activeRunId,
           replayId: params.codeModeReplayId,
           pending,
-          replaySafe: false,
+          replaySafe: params.replaySafe,
           settlementMode: result.settlementMode,
           snapshotBytes: result.snapshotBytes,
           parentToolCallId: params.parentToolCallId,
@@ -456,8 +448,9 @@ async function settleCodeModeResult(params: {
       cancelPendingBridgeStates(pending);
       return {
         status: "failed" as const,
-        error:
-          "restart-safe code mode cannot call tool surfaces that are not proven replay-safe; recovery runs must use audited read, grep, or find tools.",
+        error: result.pendingRequests.every((request) => request.method === "namespace")
+          ? "restart-safe code mode cannot call namespace tools."
+          : "restart-safe code mode cannot call tool surfaces that are not proven replay-safe; recovery runs must use audited read, grep, or find tools.",
         code: "invalid_input" as const,
         failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("input" as const),
         bridgeDispatchStarted: params.bridgeDispatch.started,

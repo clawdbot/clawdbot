@@ -626,6 +626,7 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(
       [".github/workflows/ci.yml"],
       [
+        "test/scripts/ci-platform-checkout.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/check-workflows.test.ts",
@@ -654,6 +655,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/dockerfile.test.ts",
         "test/scripts/full-release-validation-state.test.ts",
         "test/scripts/full-release-validation-at-sha.test.ts",
+        "test/scripts/full-release-candidate-reuse.test.ts",
         "test/scripts/find-reusable-release-validation.test.ts",
         "test/scripts/openclaw-npm-extended-stable-full-validation-workflow.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
@@ -668,6 +670,26 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/openclaw-performance-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
         "test/scripts/validate-full-release-validation-evidence.test.ts",
+      ],
+    );
+  });
+
+  it.each([
+    "scripts/full-release-candidate-reuse.mjs",
+    "scripts/lib/full-release-candidate-reuse.mjs",
+    "scripts/lib/full-release-candidate-reuse.d.mts",
+  ])("routes candidate reuse library changes through the owner test for %s", (changedPath) => {
+    expectChangedTargets([changedPath], ["test/scripts/full-release-candidate-reuse.test.ts"]);
+  });
+
+  it("keeps full release candidate workflow edits on candidate contract tests", () => {
+    expectChangedTargets(
+      [".github/workflows/full-release-candidate.yml"],
+      [
+        "test/scripts/full-release-candidate-reuse.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/check-workflows.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
       ],
     );
   });

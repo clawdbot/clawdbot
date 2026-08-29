@@ -192,11 +192,12 @@ export async function runBeforeToolCallHook(args: {
         ? {
             ...(args.ctx.cwd ? { cwd: args.ctx.cwd } : {}),
             ...(args.ctx.sandbox ? { sandbox: args.ctx.sandbox } : {}),
+            ...(args.signal ? { signal: args.signal } : {}),
           }
         : undefined;
-    const derivedToolParams = deriveToolParams(toolName, normalizedParams, deriveOptions);
-    const deriveToolEventParams = (candidateParams: Record<string, unknown>) => {
-      const derived = deriveToolParams(toolName, candidateParams, deriveOptions);
+    const derivedToolParams = await deriveToolParams(toolName, normalizedParams, deriveOptions);
+    const deriveToolEventParams = async (candidateParams: Record<string, unknown>) => {
+      const derived = await deriveToolParams(toolName, candidateParams, deriveOptions);
       return derived.derivedPaths ? { derivedPaths: derived.derivedPaths } : {};
     };
     const toolIdentity = {
@@ -305,7 +306,7 @@ export async function runBeforeToolCallHook(args: {
     const policyAdjustedToolContext = buildToolContext(policyAdjustedToolIdentity);
     const policyAdjustedDerivedToolParams =
       trustedPolicyResult?.params && isPlainObject(policyAdjustedParams)
-        ? deriveToolParams(toolName, policyAdjustedParams, deriveOptions)
+        ? await deriveToolParams(toolName, policyAdjustedParams, deriveOptions)
         : derivedToolParams;
     if (!hasBeforeToolCallHooks) {
       const finalApprovalOutcome = await resolveSkillWorkshopApprovalForFinalParams({

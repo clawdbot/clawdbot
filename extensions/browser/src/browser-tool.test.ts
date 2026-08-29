@@ -86,6 +86,13 @@ const browserActionsMocks = vi.hoisted(() => ({
       requests: [],
     }),
   ),
+  browserErrors: vi.fn(
+    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+      ok: true,
+      targetId: "t1",
+      errors: [],
+    }),
+  ),
   browserPageText: vi.fn(
     async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
       ok: true,
@@ -300,6 +307,7 @@ vi.mock("./browser-tool.runtime.js", async () => {
         supportsDownloads: !existingSession,
         supportsPdf: !existingSession,
         supportsRequests: !existingSession,
+        supportsErrors: !existingSession,
         supportsPageText: !existingSession,
         supportsEmulation: !existingSession,
       };
@@ -4663,6 +4671,81 @@ describe("browser observation actions and tab previews", () => {
     expect(result.details).toMatchObject({ total: 3, returned: 1, truncated: true });
   });
 
+  it.each([
+    ["host", undefined],
+    ["node", undefined],
+    ["host", 2],
+    ["node", 2],
+  ] as const)("bounds and wraps recent errors on %s (limit=%s)", async (target, limit) => {
+    const errors = Array.from({ length: 60 }, (_, index) => ({
+      message: `page-error-${index}`,
+      name: "Error",
+      stack: `Error: page-error-${index}`,
+      timestamp: "2026-08-28T00:00:00.000Z",
+    }));
+    const payload = { ok: true, targetId: "canonical", url: "https://example.com", errors };
+    if (target === "node") {
+      mockSingleBrowserProxyNode();
+      gatewayMocks.callGatewayTool.mockResolvedValueOnce({ payload: { result: payload } });
+    } else {
+      browserActionsMocks.browserErrors.mockResolvedValueOnce(payload);
+    }
+    const result = await createBrowserTool().execute("errors", {
+      action: "errors",
+      target,
+      targetId: "t1",
+      profile: "openclaw",
+      clear: true,
+      limit,
+    });
+    const returned = limit ?? 50;
+    const text = firstResultText(result);
+    expect(text).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+    expect(text).not.toContain(`"message": "page-error-${59 - returned}"`);
+    expect(text).toContain(`"message": "page-error-${60 - returned}"`);
+    expect(text).toContain('"message": "page-error-59"');
+    expect(result.details).toMatchObject({
+      total: 60,
+      returned,
+      truncated: true,
+      externalContent: { untrusted: true, kind: "errors", wrapped: true },
+      browserTab: { targetId: "canonical", url: payload.url },
+    });
+    expect(result.details).not.toHaveProperty("errors");
+    if (target === "node") {
+      expect(nodeInvokeCall(0).request.params).toMatchObject({
+        method: "GET",
+        path: "/errors",
+        profile: "openclaw",
+        query: { targetId: "t1", clear: true },
+      });
+    } else {
+      expect(browserActionsMocks.browserErrors).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({ targetId: "t1", profile: "openclaw", clear: true }),
+      );
+    }
+  });
+
+  it("keeps error counts truthful when the text budget drops oversized records", async () => {
+    browserActionsMocks.browserErrors.mockResolvedValueOnce({
+      ok: true,
+      targetId: "t1",
+      errors: [
+        { message: "old" },
+        { message: "large", stack: "x".repeat(20_000) },
+        { message: "latest" },
+      ],
+    });
+    const result = await createBrowserTool().execute("errors", { action: "errors", limit: 2 });
+    const text = firstResultText(result);
+    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(text).toContain('"returned": 1');
+    expect(text).toContain('"message": "latest"');
+    expect(text).not.toContain('"message": "large"');
+    expect(result.details).toMatchObject({ total: 3, returned: 1, truncated: true });
+  });
+
   it.each(["host", "node"])("extracts and bounds untrusted page text on %s", async (target) => {
     const payload = {
       ok: true,
@@ -4739,7 +4822,7 @@ describe("browser observation actions and tab previews", () => {
     ).rejects.toThrow("positive integer");
   });
 
-  it.each(["requests", "text", "emulate"])(
+  it.each(["requests", "errors", "text", "emulate"])(
     "gives recovery guidance for existing-session %s",
     async (action) => {
       setResolvedBrowserProfiles({ user: { driver: "existing-session", attachOnly: true } });

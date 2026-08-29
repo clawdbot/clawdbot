@@ -2054,6 +2054,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     const observeToolTerminal = vi.fn(() => ({
       executionStarted: true,
       sideEffectEvidence: true,
+      effectReceipt: { state: "uncertain" as const },
     }));
     const sdkTool = await convertOpenClawToolToSdkToolForTest(
       makeTool({ execute, name: "message" }),

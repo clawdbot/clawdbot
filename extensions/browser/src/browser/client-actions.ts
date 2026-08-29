@@ -15,6 +15,7 @@ export {
 export {
   browserConsoleMessages,
   browserRequests,
+  browserErrors,
   browserPageText,
   browserEmulateSetting,
   browserPdfSave,

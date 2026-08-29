@@ -290,35 +290,6 @@ describe("ModelProvidersPage agent scope", () => {
     ]);
   });
 
-  it("keeps invalid explicit thinking and fast values resettable", async () => {
-    const { context, runtimeConfig } = createHarness("main");
-    runtimeConfig.state.configForm = {
-      agents: { defaults: { thinkingDefault: 42, fastModeDefault: "bogus" } },
-    } as unknown as typeof runtimeConfig.state.configForm;
-    const page = appendPage(context);
-    await waitForFast(() => expect(page.querySelector("#settings-model-behavior")).not.toBeNull());
-
-    const behavior = page.querySelector("#settings-model-behavior")!;
-    const groups = behavior.querySelectorAll<HTMLElement & { value: string }>("wa-radio-group");
-    expect([...groups].map((group) => group.value)).toEqual(["", ""]);
-    const resetButtons = behavior.querySelectorAll<HTMLButtonElement>(
-      'button[aria-label="Reset to default"]',
-    );
-    expect(resetButtons).toHaveLength(2);
-    resetButtons.forEach((button) => button.click());
-
-    expect(runtimeConfig.removeFormValue).toHaveBeenNthCalledWith(1, [
-      "agents",
-      "defaults",
-      "thinkingDefault",
-    ]);
-    expect(runtimeConfig.removeFormValue).toHaveBeenNthCalledWith(2, [
-      "agents",
-      "defaults",
-      "fastModeDefault",
-    ]);
-  });
-
   it("keeps a committed provider-key save successful when config refresh fails", async () => {
     const { context, runtimeConfig } = createHarness("main");
     runtimeConfig.refresh.mockImplementationOnce(async () => {

@@ -8,6 +8,12 @@ import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
+import {
+  normalizeCronToolsAllowExecTarget,
+  normalizeCronToolsAllowExecTargetRequirement,
+  restoreCronPinnedExecGrant,
+  stripCronPinnedExecGrant,
+} from "../scheduled-tool-policy.js";
 import type { CronJobState, CronStoredJob, CronStoreFile } from "../types.js";
 import { deliveryFromJson, deliveryToJson } from "./delivery-codec.js";
 import { normalizeNumber, tryParseJsonObject } from "./scalar-codec.js";
@@ -23,9 +29,20 @@ function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<strin
     updatedAtMs: _updatedAtMs,
     ...rest
   } = job;
+  const payload = isRecord(rest.payload) ? rest.payload : undefined;
+  const toolsAllow = Array.isArray(payload?.toolsAllow)
+    ? payload.toolsAllow.filter((tool): tool is string => typeof tool === "string")
+    : undefined;
+  const storedToolsAllow = stripCronPinnedExecGrant({
+    toolsAllow,
+    requirement: rest.toolsAllowExecTargetRequirement,
+  });
   // Runtime state and authority have separate owners; JSON is canonical for config.
   return {
     ...rest,
+    ...(payload && storedToolsAllow
+      ? { payload: { ...payload, toolsAllow: storedToolsAllow } }
+      : {}),
     ...(rest.delivery ? { delivery: deliveryToJson(rest.delivery) } : {}),
     state: {},
   };
@@ -111,12 +128,33 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
   if (!state || getInvalidPersistedCronJobReason(jobJson)) {
     return null;
   }
+  const toolsAllowExecTarget = normalizeCronToolsAllowExecTarget(jobJson.toolsAllowExecTarget);
+  const toolsAllowExecTargetRequirement = normalizeCronToolsAllowExecTargetRequirement(
+    jobJson.toolsAllowExecTargetRequirement,
+  );
   const createdAtMs =
     typeof jobJson.createdAtMs === "number" && Number.isFinite(jobJson.createdAtMs)
       ? jobJson.createdAtMs
       : Date.now();
   // Doctor retains unresolved legacy markers in config JSON; runtime never consumes them.
-  const { notify: _legacyNotify, ...runtimeConfig } = decodeCronJobConfig(jobJson);
+  const {
+    notify: _legacyNotify,
+    toolsAllowExecTarget: _rawToolsAllowExecTarget,
+    toolsAllowExecTargetRequirement: _rawToolsAllowExecTargetRequirement,
+    ...runtimeConfig
+  } = decodeCronJobConfig(jobJson);
+  const payload = isRecord(runtimeConfig.payload) ? runtimeConfig.payload : undefined;
+  const toolsAllow = Array.isArray(payload?.toolsAllow)
+    ? payload.toolsAllow.filter((tool): tool is string => typeof tool === "string")
+    : undefined;
+  const runtimeToolsAllow = restoreCronPinnedExecGrant({
+    toolsAllow,
+    requirement: toolsAllowExecTargetRequirement,
+    execTarget: toolsAllowExecTarget,
+  });
+  if (payload && runtimeToolsAllow) {
+    runtimeConfig.payload = { ...payload, toolsAllow: runtimeToolsAllow };
+  }
   if (isRecord(runtimeConfig.delivery) && runtimeConfig.delivery.mode === undefined) {
     // Legacy destination-only config remains untouched for doctor; runtime defaults to announce.
     runtimeConfig.delivery = deliveryFromJson({ ...runtimeConfig.delivery, mode: "announce" });
@@ -124,6 +162,8 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
   return {
     ...runtimeConfig,
     id: row.job_id,
+    ...(toolsAllowExecTarget ? { toolsAllowExecTarget } : {}),
+    ...(toolsAllowExecTargetRequirement ? { toolsAllowExecTargetRequirement } : {}),
     createdAtMs,
     updatedAtMs:
       normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at) ?? createdAtMs,

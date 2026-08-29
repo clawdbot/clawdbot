@@ -41,10 +41,6 @@ export function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
 }
 
-export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
-  return resolveSystemdUnitPath(env);
-}
-
 // Unit file parsing/rendering: see systemd-unit.ts
 
 type SystemdEnvironmentFileSpec = string | [string, boolean];
@@ -455,9 +451,7 @@ export function resolveLegacyNodeSystemdEnvironmentFilePath(params: {
   if (params.environment?.OPENCLAW_SERVICE_KIND?.trim() !== "node") {
     return null;
   }
-  const legacyPath = path.join(params.stateDir, SYSTEMD_GATEWAY_DOTENV_FILENAME);
-  const currentPath = resolveSystemdEnvironmentFilePath(params);
-  return legacyPath === currentPath ? null : legacyPath;
+  return path.join(params.stateDir, SYSTEMD_GATEWAY_DOTENV_FILENAME);
 }
 
 export function isNodeSystemdEnvironment(env: GatewayServiceEnv): boolean {

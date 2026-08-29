@@ -1160,7 +1160,7 @@ jobs:
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
           PUBLISH_TAG: ${{ matrix.plugin.publishTag }}
-          RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active' || 'manual-recovery') || '' }}
+          RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}
           RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
           RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
           RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
@@ -1370,7 +1370,7 @@ jobs:
           OPENCLAW_RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
           OPENCLAW_RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
           OPENCLAW_RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
-          OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active' || 'manual-recovery') || '' }}
+          OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}
           OPENCLAW_RELEASE_TOOLING_ALLOW_PREVALIDATED_REF: "true"
           OPENCLAW_RELEASE_TOOLING_FULL_REF: ${{ github.ref }}
           OPENCLAW_RELEASE_TOOLING_IDENTITY_REQUIRED: "true"
@@ -1442,7 +1442,7 @@ jobs:
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
           PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
           PUBLISH_TAG: ${{ steps.publication_evidence.outputs.publish_tag }}
-          RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active' || 'manual-recovery') || '' }}
+          RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}
           RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
           RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}

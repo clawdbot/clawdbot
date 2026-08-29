@@ -230,19 +230,20 @@ export function validateFullReleaseValidationEvidence({
       `SHA-pinned validation target ref mismatch: expected ${expectedTargetSha}, got ${displayValue(manifest.targetRef)}.`,
     );
   }
-  if (protectedTag) {
-    if (run.headSha !== expectedTrustedWorkflowSha) {
-      throw new Error(
-        `Protected-tag release evidence workflow SHA ${run.headSha} does not match trusted tooling ${expectedTrustedWorkflowSha}.`,
-      );
-    }
-    return { run, source: "sha-pinned-protected-tag" };
+  // The protected tag authenticates the current publisher. An older validation
+  // producer remains trusted only through its independent current-main lineage.
+  const historicalProtectedProducer = protectedTag && run.headSha !== expectedTrustedWorkflowSha;
+  if ((historicalProtectedProducer || !protectedTag) && !isTrustedMainAncestor?.(run.headSha)) {
+    const subject = protectedTag
+      ? "Protected-tag release evidence workflow SHA"
+      : "SHA-pinned validation workflow";
+    throw new Error(`${subject} ${run.headSha} is not reachable from current main.`);
   }
-  if (!isTrustedMainAncestor?.(run.headSha)) {
-    throw new Error(
-      `SHA-pinned validation workflow ${run.headSha} is not reachable from current main.`,
-    );
-  }
+  const source = protectedTag
+    ? historicalProtectedProducer
+      ? "sha-pinned-protected-tag-main-ancestor"
+      : "sha-pinned-protected-tag"
+    : "sha-pinned-main";
   if (Object.hasOwn(manifest, "evidenceReuse")) {
     const reuse = manifest.evidenceReuse;
     const exactTarget =
@@ -292,7 +293,7 @@ export function validateFullReleaseValidationEvidence({
       throw new Error("SHA-pinned validation evidence reuse failed strict chain validation.");
     }
   }
-  return { run, source: "sha-pinned-main" };
+  return { run, source };
 }
 
 /**

@@ -103,13 +103,14 @@ export function createSessionMcpRuntimeManager(
         store.sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
       }
 
-      const fullConfig = loadSessionMcpConfig({
+      const configParams = {
         workspaceDir: params.workspaceDir,
         cfg: params.cfg,
         logDiagnostics: false,
         manifestRegistry: params.manifestRegistry,
         toolOverrides: params.toolOverrides,
-      });
+      };
+      const fullConfig = loadSessionMcpConfig(configParams);
       // Safe names from the FULL declared set so partial resolution never changes tool names.
       const safeServerNamesByServer = assignSafeServerNames(
         Object.keys(fullConfig.loaded.mcpServers),
@@ -121,6 +122,17 @@ export function createSessionMcpRuntimeManager(
         resolverRequesterServerNames,
       } = partitionMcpServersByConnectionScope(fullConfig.loaded.mcpServers);
       const hasRequesterScoped = requesterScopedServerNames.length > 0;
+      const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
+      lifecycle.reconcileAdvertisedScopedCatalogConfig(
+        params.sessionId,
+        loadSessionMcpConfig({
+          ...configParams,
+          loaded: fullConfig.loaded,
+          redactConnectionServerNames: new Set(requesterScopedServerNames),
+          safeServerNamesByServer,
+        }).fingerprint,
+        hasRequesterScoped && requesterSenderId !== undefined,
+      );
 
       if (!hasRequesterScoped) {
         return await install.getOrCreateRuntimeEntry({
@@ -170,7 +182,6 @@ export function createSessionMcpRuntimeManager(
         });
       }
 
-      const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
       if (requesterSenderId) {
         const { runtimeKey, runtime: scopedRuntime } = await materializeRequesterScopedRuntime({
           ...params,
@@ -214,9 +225,36 @@ export function createSessionMcpRuntimeManager(
       });
     },
     async getOrCreateRequesterScoped(params) {
-      // Anonymous turns own no requester runtime; avoid leaking session keys or
-      // sweeping unrelated runtimes before confirming the requester exists.
+      // Anonymous turns own no requester runtime; reconcile first so a cached
+      // catalog cannot survive a senderless harness turn.
       const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
+      const configParams = {
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        logDiagnostics: false,
+        manifestRegistry: params.manifestRegistry,
+        toolOverrides: params.toolOverrides,
+      };
+      const fullConfig = loadSessionMcpConfig(configParams);
+      const {
+        requesterScopedServerNames,
+        oauthRequesterServerNames,
+        resolverRequesterServerNames,
+      } = partitionMcpServersByConnectionScope(fullConfig.loaded.mcpServers);
+      const safeServerNamesByServer = assignSafeServerNames(
+        Object.keys(fullConfig.loaded.mcpServers),
+      );
+      const advertisedCatalogConfigFingerprint = loadSessionMcpConfig({
+        ...configParams,
+        loaded: fullConfig.loaded,
+        redactConnectionServerNames: new Set(requesterScopedServerNames),
+        safeServerNamesByServer,
+      }).fingerprint;
+      lifecycle.reconcileAdvertisedScopedCatalogConfig(
+        params.sessionId,
+        advertisedCatalogConfigFingerprint,
+        requesterSenderId !== undefined && requesterScopedServerNames.length > 0,
+      );
       if (!requesterSenderId) {
         return undefined;
       }
@@ -225,24 +263,9 @@ export function createSessionMcpRuntimeManager(
       if (params.sessionKey) {
         store.sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
       }
-      const fullConfig = loadSessionMcpConfig({
-        workspaceDir: params.workspaceDir,
-        cfg: params.cfg,
-        logDiagnostics: false,
-        manifestRegistry: params.manifestRegistry,
-        toolOverrides: params.toolOverrides,
-      });
-      const {
-        requesterScopedServerNames,
-        oauthRequesterServerNames,
-        resolverRequesterServerNames,
-      } = partitionMcpServersByConnectionScope(fullConfig.loaded.mcpServers);
       if (requesterScopedServerNames.length === 0) {
         return undefined;
       }
-      const safeServerNamesByServer = assignSafeServerNames(
-        Object.keys(fullConfig.loaded.mcpServers),
-      );
       const scopedNameSet = new Set(requesterScopedServerNames);
       const { runtimeKey, runtime } = await materializeRequesterScopedRuntime({
         ...params,
@@ -253,10 +276,11 @@ export function createSessionMcpRuntimeManager(
         safeServerNamesByServer,
         requesterSenderId,
       });
-      if (runtime) {
-        await lifecycle.enforceRequesterRuntimeCap(params.sessionId, runtimeKey);
+      if (!runtime) {
+        return undefined;
       }
-      return runtime;
+      await lifecycle.enforceRequesterRuntimeCap(params.sessionId, runtimeKey);
+      return { runtime, advertisedCatalogConfigFingerprint };
     },
     rememberAdvertisedScopedCatalog: lifecycle.rememberAdvertisedScopedCatalog,
     getAdvertisedScopedCatalog: lifecycle.getAdvertisedScopedCatalog,

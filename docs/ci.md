@@ -101,6 +101,36 @@ and reserves native-memory headroom. If the default budget cannot fit the build,
 it stops before build steps or cache restoration; `OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB`
 remains the explicit operator override for attempting a different budget.
 
+## Watching pull request CI
+
+From a source checkout with an authenticated `gh` CLI, wait for one exact
+pull-request head:
+
+```bash
+node scripts/watch-pr-ci.mjs <pr-number> <full-head-sha>
+```
+
+The default `rollup` mode waits for the attached CI workflow to succeed and
+for the remaining rollup checks to finish without failures. Supersession stays
+within workflow identity; `Auto response` is excluded from the wait.
+
+GitHub can retain queued rerun placeholders while omitting the successful
+same-name job from the rollup. The watcher reconciles a placeholder only after
+verifying the successful exact-head attempt, its complete same-name job group,
+and direct job evidence that every queued alias has no runner or executed
+steps. Each poll permits at most 32 direct alias lookups, and evidence requests
+share the remaining watcher timeout. Groups exceeding that lookup budget remain
+pending with a warning. Before applying that proof, the watcher refreshes the
+PR head, state, and check rollup, then rechecks the attached run. Proof applies
+only to checks that still have the verified name and queued state. Active
+retries, unrelated checks, and ambiguous or incomplete evidence still block
+completion. This is an observation of CI state, not atomic merge authorization.
+
+`--completion ci-run` waits only for the attached CI workflow. Callers must
+separately verify required checks; CI success does not override another
+required check. The native `scripts/pr` merge flow uses this mode and then
+performs its own required-check verification before merging.
+
 ## PR context and evidence
 
 External contributor PRs run a PR context and evidence gate from
@@ -116,6 +146,14 @@ redacted log, or artifact link. The body provides intent and useful validation;
 reviewers inspect the code, tests, and CI to assess correctness.
 
 When the check fails, update the PR body instead of pushing another code commit.
+
+## Checkout ownership
+
+The shared Linux Node checkout (`linux_node_checkout_step`) and shared Windows/macOS/iOS checkout (`platform_checkout_step`) use one process owner for every Git command within those anchors. Linux allows five whole-checkout attempts, clearing the workspace before each attempt, with 120-second candidate and trusted workflow-harness fetch deadlines and an increasing five-second backoff. Windows, macOS, and iOS retain 90-second fetch deadlines, three candidate fetch attempts on timeout only, five-second backoff, and one harness fetch attempt. Candidate and harness revisions remain separately pinned; Linux also fetches the optional ratchet base at depth one.
+
+Timeout, cancellation, and leader exit drain the owned POSIX process group or Windows Job Object before workspace deletion, another Git command, or step completion. Cleanup has a ten-second allowance. If ownership inspection or cleanup fails, checkout exits with code 125 without retrying. The bootstrap uses the runner's Python standard library because repository helpers are unavailable before checkout. A fetch timeout alone does not explain why transport stalled.
+
+Separate bootstrap and checkout flows in preflight, security, skills-python, ClawHub, and Android still use GNU timeout and are outside these shared anchors' ownership guarantees.
 
 ## Scope and routing
 
@@ -154,7 +192,7 @@ The slowest Node test families are split or balanced so each job stays small wit
 - The build-artifact job also persists content-fingerprinted `build-all` step outputs. CI's self-built plugin SDK declarations hash the complete repository-owned TypeScript/JSON source graph, exclude installed and generated directories, and restore both flat declarations and package bridges after `tsdown` clears `dist`. Documentation, workflow, plugin, and other changes outside that graph can reuse the declaration snapshot; source changes rebuild it before the export gate runs. The built Doctor plugin-index proof reuses that exact `dist/` output instead of invoking the E2E harness's fallback TypeScript build a second time.
 - Full declaration builds split `tsdown` into AI, workspace-package, and unified groups. Each group caches declarations only, then still rebuilds runtime JavaScript before restoring those declarations. Core or plugin changes therefore invalidate only the large unified graph, while workspace-package changes conservatively invalidate every dependent declaration group. Public full builds generally use an immutable Actions cache; coarse restore keys seed partial changes, per-group content fingerprints reject stale data, and GitHub's cache quota evicts old generations. The weekly Node 22 lane instead publishes a 14-day artifact after successful `main` runs and restores only artifacts whose immutable producer identity resolves to that workflow on `main`, avoiding quota churn without allowing PR code to write a shared cache. Private-QA declarations are never persisted in Actions caches because cache namespaces are not confidentiality boundaries.
 - `check-additional-*` stripes the supplemental boundary guard list (`scripts/run-additional-boundary-checks.mts`) into one prompt-heavy shard (`check-additional-boundaries-a`, which includes the Codex prompt snapshot drift check) and one combined shard for the remaining stripes (`check-additional-boundaries-bcd`), each running independent guards concurrently and printing per-check timings. Package-boundary compile/canary work stays together, and runtime topology architecture runs separately from the gateway watch coverage embedded in `build-artifacts`.
-- On the 32-vCPU self-hosted build runner, Gateway watch, channel tests, and the core support-boundary shard start together inside `build-artifacts` after `dist/` and `dist-runtime/` are already built. GitHub-hosted fallback runs keep Gateway watch serial so low-core contention cannot consume its readiness deadline. Both paths then run the two built TUI PTY artifact canaries alone; the pull request fallback plus manual and release full matrices own the dedicated full serial shard.
+- On the 32-vCPU self-hosted build runner, Gateway watch, channel tests, and the core support-boundary shard start together inside `build-artifacts` after `dist/` and `dist-runtime/` are already built. GitHub-hosted fallback runs keep Gateway watch serial so low-core contention cannot consume its readiness deadline. Full Node builds then verify Discord component attachment filenames through a serial public Gateway message action, checking the built revision and retaining the named-test JSON result; frozen targets that predate the case explicitly report unavailable proof. Both paths then run the two built TUI PTY artifact canaries alone; the pull request fallback plus manual and release full matrices own the dedicated full serial shard.
 
 Once admitted, canonical Linux CI permits up to 28 concurrent Node test jobs with
 the all-Blacksmith planner and 96 with the `github` or `hybrid` planner profile. The smaller
@@ -785,6 +823,17 @@ profile=all|agent-runtime-boundary|config-boundary|core-auth-secrets|channel-run
 ```
 
 The narrow profiles are teaching/iteration hooks for running one quality shard in isolation.
+
+On pull requests, the network runtime shard starts with a fast diff scan. Sensitive
+socket imports/calls and proxy-policy tokens, edits to its queries/config/fixtures, and
+changes to the Codex transport select full CodeQL analysis in the same PR job.
+Absent or null patches for monitored non-test sources also select full analysis;
+metadata fetch or parse failures stop shard selection rather than silently skipping it.
+Known ordinary diffs keep the fast path. The full path runs semantic query tests before
+analysis, including coverage of the configured `packages/net-policy/src` directory
+and preservation of exact owner/function allowances and test-path exclusions.
+Full analysis fails the job on any SARIF finding or missing SARIF output; a
+sensitive diff is a routing signal, not a finding.
 
 | Category                                                | Surface                                                                                                                                                           |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |

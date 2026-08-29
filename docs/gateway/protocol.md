@@ -714,6 +714,12 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `node.rename` updates a paired node label.
     - `node.invoke` forwards a command to a connected node.
     - `node.invoke.result` returns the result for an invoke request.
+      A node may return `NODE_NOT_READY` only when lifecycle cleanup prevented
+      execution, before calling a command handler or emitting progress. The
+      Gateway retries this rejection up to four times within the original invoke
+      deadline, rechecking the connection, pairing, and command authorization at
+      each dispatch. General `UNAVAILABLE` errors, disconnects, timeouts, and
+      failures after progress are not retried.
     - `mcp.tools.call.v1` is the headless node-host command for calling a configured node-local MCP tool. It is carried through `node.invoke`, requires the node to declare the command, and remains subject to pairing approval and `gateway.nodes.commands.deny`.
     - `node.event` carries node-originated events back into the gateway.
     - `node.pluginTools.update` is the only publication path for replacing the connected node's agent-visible plugin/MCP tool descriptors; `connect` params do not carry them.

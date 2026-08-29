@@ -53,11 +53,7 @@ defineDiscordVoiceTests(
 
       expect(result.ok).toBe(true);
       const entry = getSessionEntry(manager);
-      const ownerTurn = entry?.realtime?.beginSpeakerTurn(
-        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
-        "u-owner",
-      );
-      ownerTurn?.sendInputAudio(Buffer.alloc(8));
+      beginSpeakerTurn(entry);
       const providerOptions = requireRecord(
         lastMockCall(
           resolveConfiguredRealtimeVoiceProviderMock as unknown as MockCallSource,
@@ -226,7 +222,10 @@ defineDiscordVoiceTests(
 
     it("does not require speaker context for internal exact-speech consults", async () => {
       const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
-      const realtime = entry.realtime as unknown as {
+      if (entry.realtimeLifecycle.status !== "active") {
+        throw new Error("expected active Discord realtime session");
+      }
+      const realtime = entry.realtimeLifecycle.instance as unknown as {
         playback: { enqueueExactSpeechMessage: (text: string) => void };
       };
       realtime.playback.enqueueExactSpeechMessage("already answered");
@@ -423,7 +422,10 @@ defineDiscordVoiceTests(
 
     it("drains a complete 6.8-second provider burst in order after backpressure and response completion", async () => {
       const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
-      const realtime = entry.realtime as unknown as {
+      if (entry.realtimeLifecycle.status !== "active") {
+        throw new Error("expected active Discord realtime session");
+      }
+      const realtime = entry.realtimeLifecycle.instance as unknown as {
         playback: { currentOutputStream: () => PassThrough | null };
       };
       // Real provider chunks are 400 ms; Discord's consumer has not drained any yet.
@@ -452,7 +454,10 @@ defineDiscordVoiceTests(
 
     it("does not let a cancelled response's drain resume or end a later response", async () => {
       const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
-      const realtime = entry.realtime as unknown as {
+      if (entry.realtimeLifecycle.status !== "active") {
+        throw new Error("expected active Discord realtime session");
+      }
+      const realtime = entry.realtimeLifecycle.instance as unknown as {
         playback: { currentOutputStream: () => PassThrough | null };
       };
       for (let index = 0; index < 17; index += 1) {
@@ -478,7 +483,10 @@ defineDiscordVoiceTests(
 
     it("releases queued speech after an encoder failure without waiting for a missing idle event", async () => {
       const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
-      const realtime = entry.realtime as unknown as {
+      if (entry.realtimeLifecycle.status !== "active") {
+        throw new Error("expected active Discord realtime session");
+      }
+      const realtime = entry.realtimeLifecycle.instance as unknown as {
         playback: { enqueueExactSpeechMessage: (text: string) => void };
       };
       realtime.playback.enqueueExactSpeechMessage("first answer");
@@ -515,7 +523,12 @@ defineDiscordVoiceTests(
       ],
     ])("retires each response once and plays a later response", async (outcome, terminalType) => {
       const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
-      const realtime = entry.realtime as unknown as { harness: RealtimeVoiceSessionHarness };
+      if (entry.realtimeLifecycle.status !== "active") {
+        throw new Error("expected active Discord realtime session");
+      }
+      const realtime = entry.realtimeLifecycle.instance as unknown as {
+        harness: RealtimeVoiceSessionHarness;
+      };
 
       bridgeParams.onEvent?.({
         direction: "server",

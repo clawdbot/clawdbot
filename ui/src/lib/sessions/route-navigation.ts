@@ -25,8 +25,13 @@ export function composerDraftSearch(draft: string): string {
 const SESSION_KEY_UUID_SUFFIX_RE =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
+type SessionNavigationContext<TRouteId extends string> = Pick<
+  ApplicationContext<TRouteId>,
+  "agents" | "agentSelection" | "basePath" | "gateway" | "sessions"
+>;
+
 type ContextSessionNavigationTargetParams<TRouteId extends string> = {
-  context: ApplicationContext<TRouteId>;
+  context: SessionNavigationContext<TRouteId>;
   face: BoardFace;
   sessionKey: string;
   agentId?: string;

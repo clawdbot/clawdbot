@@ -628,6 +628,7 @@ function loadPluginMetadataSnapshotImpl(
     }),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     index,
+    registryIndex: index,
     registryDiagnostics: registryResult.diagnostics,
     manifestRegistry,
     plugins: manifestRegistry.plugins,

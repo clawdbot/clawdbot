@@ -125,6 +125,59 @@ async function waitForCommittedAttachmentDraft(
 }
 
 suite.define(() => {
+  it("restores an attachment staged offline after reload and reconnect", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page);
+        const sessionKey = "global";
+        const text = "offline attachment draft";
+        const contents = "offline attachment contents";
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await composer.waitFor();
+
+        await gateway.setOnline(false);
+        await page.locator('.agent-chat__composer-underlaps[data-tone="warn"]').waitFor();
+        await composer.fill(text);
+        await page.locator(".agent-chat__file-input").setInputFiles({
+          name: "offline.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from(contents),
+        });
+        await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
+        await waitForCommittedAttachmentDraft(page, sessionKey, text);
+
+        await page.reload();
+        await gateway.setOnline(true);
+        await expect.poll(() => composer.inputValue()).toBe(text);
+        await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
+        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({ path: path.join(artifactDir, "offline-draft-restored.png") });
+        }
+        await composer.press("Enter");
+
+        const request = await gateway.waitForRequest("chat.send");
+        expect(request.params).toMatchObject({
+          attachments: [
+            {
+              content: Buffer.from(contents).toString("base64"),
+              fileName: "offline.txt",
+              mimeType: "text/plain",
+            },
+          ],
+          message: text,
+        });
+      },
+    );
+  });
+
   it("restores isolated session drafts across fresh pages and retires sent or removed attachments", async () => {
     const firstSession = "agent:main:restart-session-a";
     const secondSession = "agent:main:restart-session-b";

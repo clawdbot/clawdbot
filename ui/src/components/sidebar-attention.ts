@@ -14,7 +14,7 @@ import {
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
-import { createInitialCronState, loadCronJobsPage } from "../lib/cron/index.ts";
+import { createInitialCronState, loadCronJobsPage, loadCronStatus } from "../lib/cron/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -68,6 +68,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   private context?: ApplicationContext;
 
   @state() private cronJobs: CronJob[] = [];
+  @state() private cronSchedulerEnabled: boolean | null = null;
   @state() private modelAuthStatus: ModelAuthStatusResult | null = null;
   @state() private dismissed: SidebarAttentionDismissals = {};
   @state() private panelOpen = false;
@@ -116,9 +117,10 @@ class SidebarAttention extends OpenClawLightDomElement {
       const cron = createInitialCronState({ client, connected: true });
       cron.cronAgentId = agentScope.scopeId;
       const loads: Promise<unknown>[] = [
-        loadCronJobsPage(cron).then(() => {
+        Promise.all([loadCronJobsPage(cron), loadCronStatus(cron)]).then(() => {
           if (!signal.aborted) {
             this.cronJobs = cron.cronJobs;
+            this.cronSchedulerEnabled = cron.cronStatus?.enabled ?? null;
           }
         }),
       ];
@@ -327,6 +329,7 @@ class SidebarAttention extends OpenClawLightDomElement {
       this.loadedAgentScope = null;
       this.modelAuthAgentId = null;
       this.cronJobs = [];
+      this.cronSchedulerEnabled = null;
       this.modelAuthStatus = null;
       return;
     }
@@ -403,6 +406,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   private buildAttentionEntries() {
     return buildSidebarAttentionEntries({
       cronJobs: this.cronJobs,
+      cronSchedulerEnabled: this.cronSchedulerEnabled,
       cronOwnerByJobId: this.cronOwnerByJobId(),
       modelAuthStatus: this.modelAuthStatus,
       modelAuthAgentId: this.modelAuthAgentId,

@@ -62,6 +62,8 @@ export type ToolSearchCatalogToolExecutor = (params: {
   sourceName?: string;
   toolCallId: string;
   parentToolCallId?: string;
+  /** Exact registered-instance classification resolved by the catalog owner. */
+  replaySafe?: boolean;
   input: unknown;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;

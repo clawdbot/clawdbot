@@ -492,8 +492,47 @@ describe("createSessionVisibilityGuard", () => {
     });
 
     expect(access).toEqual({ allowed: true });
-    expect(gateway).toHaveBeenCalledTimes(1);
-    expect(gateway).toHaveBeenCalledWith(expect.objectContaining({ method: "sessions.resolve" }));
+    expect(gateway.mock.calls.map(([request]) => request.method)).toEqual([
+      "sessions.describe",
+      "sessions.resolve",
+    ]);
+  });
+
+  it.each([
+    { action: "send" as const },
+    { action: "status" as const },
+    { action: "history" as const, displayAction: "search" as const },
+  ])("does not grant durable-row ownership to $action tools", async ({ action, displayAction }) => {
+    const requesterSessionKey = "agent:main:subagent:parent";
+    const targetSessionKey = "agent:main:subagent:old-child";
+    const gateway = vi.fn(async (request: { method?: string }) => {
+      if (request.method === "sessions.describe") {
+        return {
+          session: {
+            key: targetSessionKey,
+            sessionId: "old-child-session",
+            parentSessionKey: requesterSessionKey,
+          },
+        };
+      }
+      return {};
+    });
+
+    const access = await resolveSessionToolAccess({
+      action,
+      displayAction,
+      requesterAgentId: "main",
+      requesterSessionKey,
+      targetAgentId: "main",
+      targetSessionKey,
+      requesterOwned: false,
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
+      callGateway: gateway as never,
+    });
+
+    expect(access).toMatchObject({ allowed: false, reasonCode: "tree_visibility_restricted" });
+    expect(gateway.mock.calls.map(([request]) => request.method)).toEqual(["sessions.resolve"]);
   });
 
   it("returns a private typed denial without presentation text", async () => {
@@ -676,6 +715,7 @@ describe("createSessionVisibilityGuard", () => {
 
     expect(access).toEqual({ allowed: true });
     expect(gateway.mock.calls.map(([request]) => request.method)).toEqual([
+      "sessions.describe",
       "sessions.resolve",
       "sessions.list",
     ]);
@@ -789,7 +829,7 @@ describe("createSessionVisibilityGuard", () => {
   });
 
   it("retains lookup-failure guidance for a cross-agent ACP child candidate", async () => {
-    const gateway = vi.fn(async () => {
+    const gateway = vi.fn(async (_request: { method?: string }) => {
       throw new GatewayClientRequestError({
         code: "UNAVAILABLE",
         message: "transport timeout",
@@ -822,7 +862,10 @@ describe("createSessionVisibilityGuard", () => {
         "Session history denied because spawned-session ownership lookup failed (transient); retry once, then ask the operator to inspect OpenClaw logs.",
       );
     }
-    expect(gateway).toHaveBeenCalledTimes(1);
+    expect(gateway.mock.calls.map(([request]) => request.method)).toEqual([
+      "sessions.describe",
+      "sessions.resolve",
+    ]);
   });
 
   it("blocks cross-agent send when agent-to-agent is disabled", async () => {

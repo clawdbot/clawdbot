@@ -68,7 +68,7 @@ describe("browser page text route", () => {
     expect(pageText).not.toHaveBeenCalled();
   });
 
-  it.each(["text", "requests"])(
+  it.each(["text", "requests", "errors"])(
     "rejects existing-session %s with a supported alternative",
     async (route) => {
       setBrowserControlServerProfiles(
@@ -81,6 +81,7 @@ describe("browser page text route", () => {
       expect(await response.json()).toMatchObject({ error: expect.stringContaining("snapshot") });
       expect(pageText).not.toHaveBeenCalled();
       expect(networkRequests).not.toHaveBeenCalled();
+      expect(pwMocks.getPageErrorsViaPlaywright).not.toHaveBeenCalled();
     },
   );
 });

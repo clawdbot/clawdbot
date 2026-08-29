@@ -324,6 +324,9 @@ export function projectChatTranscript(
     ...sharedMessageRenderOptions,
     assistant: assistantIdentity,
   } satisfies StreamGroupOptions;
+  // Latest ownership crosses rows: the former owner must rerender when a
+  // newer answer arrives even if its own message object stays stable.
+  let latestAssistantItemKey: string | null = null;
   const renderGroupOptions = (item: MessageGroup) => {
     const lastMessage = item.messages.at(-1)?.message;
     const rewindEntryId =
@@ -361,6 +364,8 @@ export function projectChatTranscript(
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
       onRetryQueuedMessage: props.onRetryQueuedMessage,
+      queuedMessageAction: props.queuedMessageAction,
+      queueControls: props.queueControls,
       personActivity: props.personActivity,
       showAvatarGutter: !isDirectThread,
       contextWindow: threadContextWindow,
@@ -384,6 +389,7 @@ export function projectChatTranscript(
       rewindDisabled: Boolean(props.runActive || props.runWorking),
       activeContinuation: activeContinuationByGroupKey.get(item.key),
       turnRecap: turnRecapByGroupKey.get(item.key),
+      latestAssistant: item.key === latestAssistantItemKey,
     } satisfies Parameters<typeof renderMessageGroup>[1];
   };
   const renderGroupItem = (item: MessageGroup) => {
@@ -402,7 +408,7 @@ export function projectChatTranscript(
       const recap = turnRecapByGroupKey.get(item.key);
       return `${hasWorkingIndicator ? workingUsageKey : ""}|${
         recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : ""
-      }`;
+      }|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
     }
     if (item.kind === "stream-run") {
       return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
@@ -419,7 +425,9 @@ export function projectChatTranscript(
       ? `${continuation.parts.map((part) => part.key).join(" ")}${workingUsageKey}`
       : "";
     const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
-    return `${continuationKey}|${recapKey}`;
+    return `${continuationKey}|${recapKey}|${
+      item.key === latestAssistantItemKey ? "latest-assistant" : ""
+    }`;
   };
   const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
     if (item.kind === "divider") {
@@ -544,6 +552,21 @@ export function projectChatTranscript(
     });
     return false;
   });
+  // Default disclosure belongs only to a settled assistant at the transcript
+  // tail; any newer visible row returns the prior answer to hover/tap behavior.
+  const lastTranscriptItem = transcriptItems.at(-1);
+  latestAssistantItemKey =
+    props.runActive || props.runWorking || searchFiltering
+      ? null
+      : lastTranscriptItem?.kind === "agent-run-frame" &&
+          lastTranscriptItem.outcome.kind === "completed" &&
+          lastTranscriptItem.outcome.actionOwner !== null
+        ? lastTranscriptItem.key
+        : lastTranscriptItem?.kind === "group" &&
+            !lastTranscriptItem.isStreaming &&
+            assistantGroupCanOwnActiveRunStatus(lastTranscriptItem)
+          ? lastTranscriptItem.key
+          : null;
   for (const item of transcriptItems) {
     const groups =
       item.kind === "agent-run-frame"
@@ -675,6 +698,14 @@ export function projectChatTranscript(
     threadContextWindow,
     Boolean(props.onSetReply),
     Boolean(props.onRetryQueuedMessage),
+    props.queuedMessageAction?.id,
+    props.queuedMessageAction?.label,
+    props.queuedMessageAction?.onAction,
+    props.queue.length ? props.queue : undefined,
+    props.queueControls?.offline,
+    props.queueControls?.editingId,
+    props.queueControls?.editingText,
+    Boolean(props.queueControls?.onQueueSteer),
     props.replyMessageAccess?.revision ?? 0,
     props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,

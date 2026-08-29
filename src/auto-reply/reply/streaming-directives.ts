@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Converts streaming reply directives into payload delivery decisions.
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -62,12 +61,11 @@ export const splitTrailingDirective = (text: string): { text: string; tail: stri
     }
   }
 
-  const prefixMatch = text.match(/(?:^|\n)(MEDIA|MEDI|MED|ME|M)$/i);
+  const prefixMatch = lastLine.match(/^[\t ]*(MEDIA|MEDI|MED|ME|M)$/i);
   if (prefixMatch) {
-    const prefixStart =
-      text.length - expectDefined(prefixMatch[1], "prefix match capture group 1").length;
-    if (prefixStart < bufferStart) {
-      bufferStart = prefixStart;
+    const mediaLineStart = lastNewline < 0 ? 0 : lastNewline + 1;
+    if (mediaLineStart < bufferStart) {
+      bufferStart = mediaLineStart;
     }
   }
 

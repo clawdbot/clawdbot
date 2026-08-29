@@ -31,7 +31,11 @@ export function verifyReleaseToolingIdentity(
   input: ReleaseToolingIdentityInput & {
     repository: string;
     releasePublishFullRef?: string;
-    releasePublishParentStatePolicy?: "active" | "active-or-success" | "manual-recovery";
+    releasePublishParentStatePolicy?:
+      | "active"
+      | "active-or-failure"
+      | "active-or-success"
+      | "manual-recovery";
     releasePublishRef?: string;
     releasePublishRunAttempt?: string;
     releasePublishRunId?: string;
@@ -42,7 +46,11 @@ export function verifyReleaseToolingIdentity(
 export function validateReleasePublishParentRun(input: {
   identity: Pick<ReleaseToolingIdentity, "fullRef" | "ref" | "sha">;
   releasePublishFullRef: string;
-  releasePublishParentStatePolicy: "active" | "active-or-success" | "manual-recovery";
+  releasePublishParentStatePolicy:
+    | "active"
+    | "active-or-failure"
+    | "active-or-success"
+    | "manual-recovery";
   releasePublishRef: string;
   releasePublishRunAttempt: string;
   releasePublishRunId: string;

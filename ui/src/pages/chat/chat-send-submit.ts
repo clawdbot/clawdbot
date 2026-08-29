@@ -49,6 +49,7 @@ import {
 } from "./chat-send-queue-state.ts";
 import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import {
+  chatSendHoldReason,
   formatTerminalChatSendAckError,
   OFFLINE_QUEUE_STORAGE_ERROR,
 } from "./chat-send-support.ts";
@@ -376,6 +377,11 @@ export async function handleSendChat(
       parsed?.command.key === "model" && shouldForwardModelCommandToServer(parsed.args);
     if (parsed?.command.executeLocal && !forwardModel) {
       if (shouldQueueLocalSlashCommand(parsed.command.key)) {
+        const holdReason = chatSendHoldReason(host, submittedSessionKey);
+        if (holdReason) {
+          setChatError(host, holdReason);
+          return undefined;
+        }
         const submitKey = chatSubmitKey(host, "local", message, attachmentsToSend);
         await withChatSubmitGuard(host, submitKey, async () => {
           if (messageOverride == null) {
@@ -531,6 +537,11 @@ export async function handleSendChat(
       (resumedEditCandidate !== inlineEdit ||
         resumedEditCandidate.revision !== submittedInlineEditRevision)
     ) {
+      return;
+    }
+    const holdReason = chatSendHoldReason(host, submittedSessionKey);
+    if (holdReason) {
+      setChatError(host, holdReason);
       return;
     }
     const cleared =

@@ -42,6 +42,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/config-reload/mutate-metadata.mjs!",
   "scripts/e2e/lib/docker-artifact-proof/write-identities.ts!",
   "scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs!",
+  "scripts/e2e/lib/doctor-install-switch/assert-exec-start.mjs!",
   "scripts/e2e/lib/doctor-install-switch/write-wrapper.mjs!",
   "scripts/e2e/lib/fixture.mjs!",
   "scripts/e2e/lib/fixtures/config.mjs!",

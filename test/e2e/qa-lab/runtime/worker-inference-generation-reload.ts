@@ -10,11 +10,12 @@ import {
   createQaChannelTransport,
   QA_EVIDENCE_FILENAME,
   startQaBusServer,
-  startQaGatewayChild,
+  createQaGatewayChild,
   startQaMockOpenAiServer,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   MODEL_REF as DEFAULT_MOCK_MODEL_REF,
   PROOF_TIMEOUT_MS,
@@ -449,6 +450,7 @@ async function runProof(options: ProducerOptions) {
   const channelBus = await startQaBusServer({ state: channelState });
   const mock = await startQaMockOpenAiServer({ modelRefs: [MODEL_REF] });
   const authProxy = await startAuthInspectingProxy(mock.baseUrl);
+  const gatewayOwner = createQaGatewayChild();
   let gateway: WireGateway | undefined;
   let operator: GatewayClient | undefined;
   let worker: PairedNodeWorkerHost | undefined;
@@ -460,7 +462,7 @@ async function runProof(options: ProducerOptions) {
     await fs.rm(tracePath, { force: true });
     await fs.writeFile(barrierPath, "released\n", "utf8");
     published = await createPublishedWireWorkspace(root);
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       command: {
         executablePath: process.execPath,
@@ -695,7 +697,7 @@ async function runProof(options: ProducerOptions) {
   const cleanup = await Promise.allSettled([
     operator?.stopAndWait({ timeoutMs: 1_000 }) ?? Promise.resolve(),
     worker?.stop() ?? Promise.resolve(),
-    gateway?.stop() ?? Promise.resolve(),
+    stopQaGatewayFixture(gatewayOwner),
     published ? closeWireServer(published.server) : Promise.resolve(),
     authProxy.stop(),
     mock.stop(),
