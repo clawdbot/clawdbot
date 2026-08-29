@@ -229,7 +229,7 @@ export function collectChannelSchemaMetadataWithOwnership(
         configSchema,
         configUiHints: channelConfig.uiHints as ChannelUiMetadata["configUiHints"],
         schemaPluginId: configSchema === undefined ? undefined : record.id,
-        schemaPluginOrigin: configSchema === undefined ? undefined : record.origin,
+        schemaPluginOrigin: record.origin,
         originRank,
       });
     }
