@@ -1,11 +1,7 @@
 import {
   resolveAgentConfig,
   resolveDefaultAgentId as resolveConfiguredDefaultAgentId,
-} from "openclaw/plugin-sdk/agent-runtime";
-import {
-  optionalFiniteNumberSchema,
-  optionalPositiveIntegerSchema,
-} from "openclaw/plugin-sdk/channel-actions";
+} from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -232,7 +228,12 @@ export default definePluginEntry({
             "Search through long-term memories. Use when you need context about user preferences, past decisions, or previously discussed topics.",
           parameters: Type.Object({
             query: Type.String({ description: "Search query" }),
-            limit: optionalPositiveIntegerSchema({ description: "Max results (default: 5)" }),
+            limit: Type.Optional(
+              Type.Integer({
+                description: "Max results (default: 5)",
+                minimum: 1,
+              }),
+            ),
           }),
           async execute(_toolCallId, params) {
             // Tool definitions outlive hot config reloads; revalidate before memory I/O.
@@ -353,11 +354,13 @@ export default definePluginEntry({
             "Save important information in long-term memory. Text over the configured capture limit is rejected. Success means the exact text already exists or the database commit completed; it does not guarantee semantic recall.",
           parameters: Type.Object({
             text: Type.String({ description: "Information to remember" }),
-            importance: optionalFiniteNumberSchema({
-              description: "Importance 0-1 (default: 0.7)",
-              minimum: 0,
-              maximum: 1,
-            }),
+            importance: Type.Optional(
+              Type.Number({
+                description: "Importance 0-1 (default: 0.7)",
+                minimum: 0,
+                maximum: 1,
+              }),
+            ),
             category: Type.Optional(Type.Enum(MEMORY_CATEGORIES, { type: "string" })),
           }),
           async execute(_toolCallId, params) {
