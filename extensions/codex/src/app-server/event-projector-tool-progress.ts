@@ -481,10 +481,8 @@ export class CodexToolProgressProjection {
 
   private shouldIncludeFormattedMeta(commandBearing: boolean): boolean {
     // Channel command detail comes from structured events, where commandText policy applies.
-    return (
-      !commandBearing ||
-      (!this.params.messageChannel && !this.params.messageProvider && this.shouldEmitToolOutput())
-    );
+    const channel = this.params.messageChannel ?? this.params.messageProvider;
+    return !commandBearing || (!channel && this.shouldEmitToolOutput());
   }
 
   private emitTranscriptToolCallProgress(params: ToolTranscriptCallInput): void {
