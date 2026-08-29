@@ -270,7 +270,6 @@ export function buildSlackProgressCommentaryRun(
         );
         if (
           safeToolTimestamps.size !== 1 ||
-          safeToolTimestamps.has(undefined) ||
           safeToolTimestamps.has(commentaryTs) ||
           safeToolTimestamps.has(finalMessage.ts)
         ) {
@@ -302,7 +301,6 @@ export function buildSlackProgressCommentaryRun(
         if (
           toolTimestamps.size !== 1 ||
           outputTimestamps.size !== 1 ||
-          outputTimestamps.has(undefined) ||
           outputTimestamps.has(commentaryTs) ||
           outputTimestamps.has(finalMessage.ts)
         ) {
