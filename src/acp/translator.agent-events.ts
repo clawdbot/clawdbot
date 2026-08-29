@@ -327,8 +327,7 @@ export class AcpTranslatorAgentEvents {
   }
 
   async replayApprovalDecisionsOnReconnect(): Promise<void> {
-    // Prompt cleanup mutates the map across awaits; replay one stable reconnect snapshot.
-    for (const relay of Array.from(this.approvalRelays.values())) {
+    for (const relay of this.approvalRelays.values()) {
       await this.retryApprovalRelayDecision(relay);
     }
   }
