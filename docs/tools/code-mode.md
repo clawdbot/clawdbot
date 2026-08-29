@@ -680,7 +680,7 @@ initial execution that completes without suspending does not consume a slot.
 - the caller is not in the same run/session scope as the suspended run.
 - a `wait` is already in flight for that `runId`.
 - QuickJS-WASI restore fails.
-- resuming would exceed `maxOutputBytes` or `maxSnapshotBytes`.
+- resuming would exceed `maxSnapshotBytes`. Ordinary oversized successful output is truncated and remains successful.
 
 ## Guest runtime API
 
@@ -1009,9 +1009,9 @@ the bridge as JSON-compatible values with explicit size caps.
 type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: unknown };
 ```
 
-Rules: output order matches guest calls. Nested tool results, cumulative guest
-output, and the final value or failure diagnostic share the `maxOutputBytes`
-serialized UTF-8 budget. Oversized errors retain their leading cause and end
+Output order matches guest calls. Each nested tool result is bounded separately
+by `maxOutputBytes`. Cumulative guest output and the final value or failure
+diagnostic share one `maxOutputBytes` serialized UTF-8 budget across all waits. Oversized errors retain their leading cause and end
 with `[error truncated]`; truncation does not turn a failure into success.
 Catalog search rejects when its callable-name array cannot fit this budget;
 narrow the query or lower `limit` and retry. For other successful results that
@@ -1022,6 +1022,12 @@ reduce the search scope, paginate, select fewer files, or return a smaller
 projection. Non-serializable values are converted to plain strings or errors;
 binary values are not supported. Images and files travel through ordinary
 OpenClaw tools, not through the code-mode bridge.
+
+Marker prefixes and omitted-byte counts describe the original compact JSON after
+normalization, including array brackets, separators, and JSON escaping. Ordinary
+output is delivered incrementally. An unchanged cumulative summary is not repeated;
+new output or a changed final-value/error reservation can produce a replacement
+summary of that same original output.
 
 ## Tool catalog
 
