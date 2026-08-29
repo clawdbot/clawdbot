@@ -794,7 +794,14 @@ describe("LINE webhook spool", () => {
           _destination: string,
           control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
         ) => {
-          order.push((events[0] as webhook.MessageEvent).message.type);
+          const kind = (events[0] as webhook.MessageEvent).message.type;
+          if (kind === "image") {
+            // The real handler fetches every part's media before its turn exists.
+            // The lane has to stay held across that work, not just until the set
+            // is taken, or the later message wins the race to the agent.
+            await new Promise((resolve) => setTimeout(resolve, 200));
+          }
+          order.push(kind);
           await control.turnAdoptionLifecycle.onAdopted();
         },
       );

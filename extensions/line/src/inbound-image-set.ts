@@ -40,6 +40,12 @@ type PendingImageSet<TEvent, TLifecycle> = {
 export type LineImageSetDelivery<TEvent, TLifecycle> = {
   events: readonly TEvent[];
   lifecycles: readonly TLifecycle[];
+  /**
+   * Frees the lane. Call it once the set has been delivered, not when it is
+   * taken: the holder still has to fetch media and build its turn, and anything
+   * released before that finishes would overtake the images it waited for.
+   */
+  finish: () => void;
 };
 
 function orderedParts<TEvent, TLifecycle>(
@@ -145,12 +151,16 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
       pending.release();
     }
     await whole;
-    pendingByLane.delete(input.laneKey);
-    pending.finishTaken();
     const ordered = orderedParts(pending);
     return {
       events: ordered.map((entry) => entry.event),
       lifecycles: ordered.map((entry) => entry.lifecycle),
+      finish: () => {
+        if (pendingByLane.get(input.laneKey) === pending) {
+          pendingByLane.delete(input.laneKey);
+        }
+        pending.finishTaken();
+      },
     };
   };
 

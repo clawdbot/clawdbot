@@ -185,6 +185,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       const imageSet = resolveLineInboundImageSet(event);
       let turnEvents: readonly webhook.Event[] = [event];
       let turnLifecycles: readonly (typeof lifecycle)[] = [lifecycle];
+      let finishSet: (() => void) | undefined;
       if (imageSet) {
         if (!acceptsDeferredClaims) {
           // Shutting down: a claim parked in the buffer would never flush, so hand
@@ -210,6 +211,9 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         }
         turnEvents = set.events;
         turnLifecycles = set.lifecycles;
+        // Hold the lane until this delivery is done, or a message sent after the
+        // images overtakes them while this turn is still fetching their media.
+        finishSet = set.finish;
       } else {
         // The lane was released so a set could form; keep this behind it so a
         // message sent after the images is not delivered before them.
@@ -257,6 +261,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         await delivery;
       } finally {
         activeDeliveries.delete(delivery);
+        finishSet?.();
       }
       if (!handedOff && !stopTask) {
         // A gated or deliberately skipped turn still consumed every source claim.

@@ -40,7 +40,7 @@ describe("createLineImageSetIngressBuffer", () => {
     await expect(arrive({ index: 1, total: 3 })).resolves.toBeNull();
     await expect(arrive({ index: 3, total: 3 })).resolves.toBeNull();
 
-    await expect(held).resolves.toEqual({
+    await expect(held).resolves.toMatchObject({
       events: ["image-1", "image-2", "image-3"],
       // Every part's claim travels with it, so one turn can own them all.
       lifecycles: ["claim-1", "claim-2", "claim-3"],
@@ -124,7 +124,11 @@ describe("createLineImageSetIngressBuffer", () => {
     expect(laneFree).toBe(false);
 
     await vi.advanceTimersByTimeAsync(500);
-    await held;
+    const set = await held;
+    // Taking the set is not enough: the holder still has to deliver it.
+    expect(laneFree).toBe(false);
+
+    set.finish();
     await later;
     expect(laneFree).toBe(true);
   });
@@ -135,6 +139,6 @@ describe("createLineImageSetIngressBuffer", () => {
     await expect(buffer.awaitLane("user:UOTHER")).resolves.toBeUndefined();
 
     await vi.advanceTimersByTimeAsync(1_000);
-    await held;
+    (await held)?.finish();
   });
 });
