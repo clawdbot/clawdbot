@@ -520,6 +520,53 @@ describe("loadControlUiGitHubPreview", () => {
     expect(redirectResponse.bodyUsed).toBe(true);
   });
 
+  it("re-checks visibility when the commits request is redirected into another repository", async () => {
+    vi.stubEnv("GH_TOKEN", "github-test-token");
+    const visibilityChecks: string[] = [];
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/repos/openclaw/openclaw")) {
+        visibilityChecks.push(url);
+        return githubJson({ private: false });
+      }
+      if (url.endsWith("/repos/openclaw/secret")) {
+        visibilityChecks.push(url);
+        // The token can read it; the Control UI viewer must not.
+        return githubJson({ private: true });
+      }
+      if (url.includes("/commits")) {
+        return new Response("moved", {
+          status: 301,
+          headers: {
+            Location: "https://api.github.com/repos/openclaw/secret/pulls/88201/commits",
+          },
+        });
+      }
+      if (url.includes("avatars.githubusercontent.com")) {
+        return new Response(new Uint8Array([137, 80, 78, 71]), {
+          headers: { "Content-Type": "image/png" },
+        });
+      }
+      return githubJson(previewPayload());
+    });
+
+    const preview = await loadControlUiGitHubPreview(
+      { kind: "pull", number: 88201, owner: "openclaw", repo: "openclaw" },
+      fetchMock,
+    );
+
+    // The card still renders; only the co-author decoration is withheld.
+    expect(preview.login).toBe("steipete");
+    expect(preview.coAuthors).toBeUndefined();
+    // The redirect target was visibility-checked, and its commits were never fetched.
+    expect(visibilityChecks).toContain("https://api.github.com/repos/openclaw/secret");
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        requestUrl(input).startsWith("https://api.github.com/repos/openclaw/secret/pulls"),
+      ),
+    ).toHaveLength(0);
+  });
+
   it("stops private and missing repositories before fetching item metadata", async () => {
     vi.stubEnv("GH_TOKEN", "github-test-token");
     const fetchMock = vi

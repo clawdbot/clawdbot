@@ -127,24 +127,26 @@ async function assertPublicRepositoryUrl(
 function redirectedRepositoryApiUrl(target: ControlUiGitHubPreviewTarget, url: URL): string | null {
   const segments = url.pathname.split("/").filter(Boolean);
   const collection = target.kind === "pull" ? "pulls" : "issues";
+  // The commits request redirects to the same item path plus one known suffix.
+  const itemSegments = segments.at(-1) === "commits" ? segments.slice(0, -1) : segments;
   if (
-    segments.length === 5 &&
-    segments[0] === "repos" &&
-    segments[1] &&
-    segments[2] &&
-    segments[3] === collection &&
-    /^\d+$/u.test(segments[4] ?? "")
+    itemSegments.length === 5 &&
+    itemSegments[0] === "repos" &&
+    itemSegments[1] &&
+    itemSegments[2] &&
+    itemSegments[3] === collection &&
+    /^\d+$/u.test(itemSegments[4] ?? "")
   ) {
-    return `${GITHUB_API_ORIGIN}/repos/${segments[1]}/${segments[2]}`;
+    return `${GITHUB_API_ORIGIN}/repos/${itemSegments[1]}/${itemSegments[2]}`;
   }
   if (
-    segments.length === 4 &&
-    segments[0] === "repositories" &&
-    /^\d+$/u.test(segments[1] ?? "") &&
-    segments[2] === collection &&
-    /^\d+$/u.test(segments[3] ?? "")
+    itemSegments.length === 4 &&
+    itemSegments[0] === "repositories" &&
+    /^\d+$/u.test(itemSegments[1] ?? "") &&
+    itemSegments[2] === collection &&
+    /^\d+$/u.test(itemSegments[3] ?? "")
   ) {
-    return `${GITHUB_API_ORIGIN}/repositories/${segments[1]}`;
+    return `${GITHUB_API_ORIGIN}/repositories/${itemSegments[1]}`;
   }
   return null;
 }
@@ -230,11 +232,12 @@ async function fetchCoAuthors(
   authorLogin: string,
   fetchImpl: typeof fetch,
   token: string | undefined,
+  beforeRedirect: ((url: URL) => Promise<void>) | undefined,
 ): Promise<{ coAuthors: { login: string; avatarDataUrl?: string }[]; coAuthorCount: number }> {
   const empty = { coAuthors: [], coAuthorCount: 0 };
   let commits: unknown;
   try {
-    const response = await fetchGitHubApi(commitsApiUrl(target), fetchImpl, token);
+    const response = await fetchGitHubApi(commitsApiUrl(target), fetchImpl, token, beforeRedirect);
     if (!response.ok) {
       await discardResponse(response);
       return empty;
@@ -320,21 +323,19 @@ async function fetchPreview(
   if (token) {
     await assertPublicRepositoryUrl(repositoryApiUrl(target), fetchImpl, token);
   }
+  // Every credentialed fetch below shares this guard: a rename or transfer can
+  // redirect into a repository the token can read but the viewer may not see.
+  const beforeRedirect = token
+    ? async (url: URL) => {
+        const repositoryUrl = redirectedRepositoryApiUrl(target, url);
+        if (!repositoryUrl) {
+          throw new ControlUiGitHubError(502, "GitHub item returned an unsafe redirect");
+        }
+        await assertPublicRepositoryUrl(repositoryUrl, fetchImpl, token);
+      }
+    : undefined;
   const parsed = await readGitHubJsonResponse(
-    await fetchGitHubApi(
-      previewApiUrl(target),
-      fetchImpl,
-      token,
-      token
-        ? async (url) => {
-            const repositoryUrl = redirectedRepositoryApiUrl(target, url);
-            if (!repositoryUrl) {
-              throw new ControlUiGitHubError(502, "GitHub item returned an unsafe redirect");
-            }
-            await assertPublicRepositoryUrl(repositoryUrl, fetchImpl, token);
-          }
-        : undefined,
-    ),
+    await fetchGitHubApi(previewApiUrl(target), fetchImpl, token, beforeRedirect),
   );
   if (!isRecord(parsed)) {
     throw new ControlUiGitHubError(502, "GitHub response was not an object");
@@ -348,7 +349,7 @@ async function fetchPreview(
   const [avatarDataUrl, coAuthorFacts] = await Promise.all([
     fetchAvatarDataUrl(avatarUrl, fetchImpl),
     target.kind === "pull"
-      ? fetchCoAuthors(target, preview.login, fetchImpl, token)
+      ? fetchCoAuthors(target, preview.login, fetchImpl, token, beforeRedirect)
       : Promise.resolve({ coAuthors: [], coAuthorCount: 0 }),
   ]);
   return {
