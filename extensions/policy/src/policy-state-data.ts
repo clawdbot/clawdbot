@@ -6,11 +6,7 @@ import {
   asNonArrayRecord,
   isRecord,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  collectPolicyConfiguredAgents,
-  ocPathSegment,
-  policyAgentPathSegment,
-} from "./policy-state-helpers.js";
+import { collectPolicyConfiguredAgents, ocPathSegment } from "./policy-state-helpers.js";
 import type {
   PolicyAuthProfileEvidence,
   PolicyDataHandlingEvidence,
@@ -165,7 +161,7 @@ function pushMemorySessionTranscriptIndexing(
     return;
   }
   configuredAgents.forEach((configured) => {
-    const { agentId, container, value: rawAgent } = configured;
+    const { agentId, value: rawAgent } = configured;
     if (!isRecord(rawAgent)) {
       return;
     }
@@ -180,15 +176,14 @@ function pushMemorySessionTranscriptIndexing(
     }
     const explicit = memorySearchSessionTranscriptIndexingHasLocalConfig(memorySearch);
     const experimental = asNonArrayRecord(memorySearch?.experimental);
-    const pathSegment = policyAgentPathSegment(configured);
     entries.push({
       id: `${agentId}-memory-session-transcripts`,
       kind: "memorySessionTranscriptIndexing",
       source: explicit
         ? readBoolean(memorySearch?.rememberAcrossConversations) === undefined &&
           readBoolean(experimental.sessionMemory) !== undefined
-          ? `oc://openclaw.config/agents/${container}/${pathSegment}/memory/search/experimental/sessionMemory`
-          : `oc://openclaw.config/agents/${container}/${pathSegment}/memory/search/rememberAcrossConversations`
+          ? `${configured.sourceBase}/memory/search/experimental/sessionMemory`
+          : `${configured.sourceBase}/memory/search/rememberAcrossConversations`
         : "oc://openclaw.config/memory/search/rememberAcrossConversations",
       scope: "agent",
       agentId: normalizeAgentId(agentId),

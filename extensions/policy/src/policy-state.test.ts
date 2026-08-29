@@ -1,8 +1,6 @@
 // Policy tests cover policy state plugin behavior.
 import { describe, expect, it } from "vitest";
 import { scanPolicySandboxPosture } from "./policy-state-sandbox.js";
-import { scanPolicyToolPosture } from "./policy-state-tool-posture.js";
-import { scanPolicyAgentWorkspace } from "./policy-state-workspace.js";
 import { collectPolicyEvidence } from "./policy-state.js";
 
 const scanPolicyChannels = (cfg: Record<string, unknown>) => collectPolicyEvidence(cfg).channels;
@@ -15,17 +13,14 @@ async function scanPolicyTools(raw: string) {
 const scanPolicyExecApprovals = (raw: string) =>
   collectPolicyEvidence({}, { execApprovalsRaw: raw }).execApprovals ?? [];
 
-describe("keyed agents.entries scanning", () => {
-  // Regression: these scanners only walked the legacy `agents.list` array, so on any
-  // config that `doctor` had already migrated to the keyed `agents.entries` map they
-  // produced zero per-agent evidence. Scoped policy rules then fell back to the
-  // global/default posture, silently reporting a locked-down agent as unconstrained.
+describe("configured agent scanning", () => {
   const keyedConfig = {
     tools: { elevated: { enabled: true } },
     agents: {
       defaults: { sandbox: { mode: "off" } },
       entries: {
         guest: {
+          models: { "openai/gpt-5.6-luna": {} },
           sandbox: { mode: "all", workspaceAccess: "none" },
           tools: { deny: ["exec"], elevated: { enabled: false } },
         },
@@ -33,9 +28,9 @@ describe("keyed agents.entries scanning", () => {
     },
   };
 
-  it("reports sandbox posture for agents.entries", () => {
-    const evidence = scanPolicySandboxPosture(keyedConfig);
-    expect(evidence).toEqual(
+  it("uses agents.entries across policy evidence", () => {
+    const evidence = collectPolicyEvidence(keyedConfig);
+    expect(evidence.sandboxPosture).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           kind: "mode",
@@ -46,14 +41,10 @@ describe("keyed agents.entries scanning", () => {
         }),
       ]),
     );
-  });
-
-  it("reports tool posture for agents.entries", () => {
-    const evidence = scanPolicyToolPosture(keyedConfig);
     expect(
-      evidence.filter((entry) => entry.scope === "agent" && entry.agentId === "guest"),
+      evidence.toolPosture?.filter((entry) => entry.scope === "agent" && entry.agentId === "guest"),
     ).not.toHaveLength(0);
-    expect(evidence).toEqual(
+    expect(evidence.toolPosture).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           scope: "agent",
@@ -63,11 +54,7 @@ describe("keyed agents.entries scanning", () => {
         }),
       ]),
     );
-  });
-
-  it("reports workspace posture for agents.entries", () => {
-    const evidence = scanPolicyAgentWorkspace(keyedConfig);
-    expect(evidence).toEqual(
+    expect(evidence.agentWorkspace).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           scope: "agent",
@@ -77,16 +64,28 @@ describe("keyed agents.entries scanning", () => {
         }),
       ]),
     );
+    expect(evidence.modelRefs).toContainEqual({
+      ref: "openai/gpt-5.6-luna",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      source: 'oc://openclaw.config/agents/entries/guest/models/"openai/gpt-5.6-luna"',
+    });
   });
 
-  it("still scans the legacy agents.list array", () => {
-    const evidence = scanPolicySandboxPosture({
+  it("still uses legacy agents.list across policy evidence", () => {
+    const evidence = collectPolicyEvidence({
       agents: {
         defaults: { sandbox: { mode: "off" } },
-        list: [{ id: "legacy", sandbox: { mode: "all" } }],
+        list: [
+          {
+            id: "legacy",
+            models: { "openai/gpt-5.6-luna": {} },
+            sandbox: { mode: "all" },
+          },
+        ],
       },
     });
-    expect(evidence).toEqual(
+    expect(evidence.sandboxPosture).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           kind: "mode",
@@ -96,6 +95,24 @@ describe("keyed agents.entries scanning", () => {
           source: "oc://openclaw.config/agents/list/#0/sandbox/mode",
         }),
       ]),
+    );
+    expect(evidence.modelRefs).toContainEqual(
+      expect.objectContaining({
+        ref: "openai/gpt-5.6-luna",
+        source: 'oc://openclaw.config/agents/list/#0/models/"openai/gpt-5.6-luna"',
+      }),
+    );
+  });
+
+  it("does not fall back to stale agents.list when entries owns the roster", () => {
+    const evidence = collectPolicyEvidence({
+      agents: {
+        entries: {},
+        list: [{ id: "legacy", sandbox: { mode: "all" } }],
+      },
+    });
+    expect(evidence.sandboxPosture).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ agentId: "legacy" })]),
     );
   });
 

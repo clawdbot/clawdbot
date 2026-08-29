@@ -4,11 +4,7 @@ import {
   asBoolean as readBoolean,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  collectPolicyConfiguredAgents,
-  ocPathSegment,
-  policyAgentPathSegment,
-} from "./policy-state-helpers.js";
+import { collectPolicyConfiguredAgents, ocPathSegment } from "./policy-state-helpers.js";
 import type { PolicyToolPostureEvidence } from "./policy-state-types.js";
 
 export function scanPolicyToolPosture(
@@ -35,16 +31,15 @@ export function scanPolicyToolPosture(
     if (!isRecord(agent)) {
       return;
     }
-    const agentId = configured.agentId;
     pushToolPostureEvidence(entries, {
-      id: agentId,
+      id: configured.agentId,
       scope: "agent",
-      agentId,
+      agentId: configured.agentId,
       tools: asNonArrayRecord(agent.tools),
       inheritedTools: globalTools,
       sandbox: asNonArrayRecord(agent.sandbox),
       inheritedSandbox: defaultSandbox,
-      sourceBase: `oc://openclaw.config/agents/${configured.container}/${policyAgentPathSegment(configured)}/tools`,
+      sourceBase: `${configured.sourceBase}/tools`,
       inheritedSourceBase: "oc://openclaw.config/tools",
     });
   });

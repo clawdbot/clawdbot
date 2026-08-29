@@ -4,7 +4,7 @@ import {
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { collectPolicyConfiguredAgents, policyAgentPathSegment } from "./policy-state-helpers.js";
+import { collectPolicyConfiguredAgents } from "./policy-state-helpers.js";
 import { AGENT_WORKSPACE_POLICY_TOOLS, readStringArray } from "./policy-state-tool-posture.js";
 import type { PolicyAgentWorkspaceEvidence } from "./policy-state-types.js";
 import { toolListCoversTool } from "./tool-policy-conformance.js";
@@ -35,21 +35,19 @@ export function scanPolicyAgentWorkspace(
     if (!isRecord(agent)) {
       return;
     }
-    const agentId = configured.agentId;
     const sandbox = asNonArrayRecord(agent.sandbox);
     const tools = asNonArrayRecord(agent.tools);
-    const agentBase = `oc://openclaw.config/agents/${configured.container}/${policyAgentPathSegment(configured)}`;
     pushAgentWorkspaceEvidence(entries, {
-      id: agentId,
+      id: configured.agentId,
       scope: "agent",
-      agentId,
+      agentId: configured.agentId,
       sandbox,
       inheritedSandbox: defaultSandbox,
       tools,
       inheritedTools: defaultTools,
-      workspaceSourceBase: agentBase,
+      workspaceSourceBase: configured.sourceBase,
       inheritedWorkspaceSourceBase: "oc://openclaw.config/agents/defaults",
-      toolsSourceBase: `${agentBase}/tools`,
+      toolsSourceBase: `${configured.sourceBase}/tools`,
       inheritedToolsSourceBase: "oc://openclaw.config/tools",
     });
   });

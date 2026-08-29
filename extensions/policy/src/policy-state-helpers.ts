@@ -22,58 +22,25 @@ export function readBooleanPath(value: unknown, path: readonly string[]): boolea
   return typeof current === "boolean" ? current : undefined;
 }
 
-/** One configured agent, from either the keyed `agents.entries` map or the legacy `agents.list` array. */
-type PolicyConfiguredAgent = {
-  readonly agentId: string;
-  readonly container: "entries" | "list";
-  /** Key for `entries`, array index for `list`. Feed to {@link policyAgentPathSegment}. */
-  readonly pathId: string;
-  readonly value: unknown;
-};
-
-/**
- * Collect configured agents from `cfg.agents`, preferring the keyed `entries` map and
- * falling back to the legacy `list` array.
- *
- * Scanners must go through this helper. Reading `agents.list` directly makes a scanner
- * blind to every agent on configs that `doctor` has already migrated to `agents.entries`,
- * which silently downgrades scoped policy rules to the global/default posture.
- */
-export function collectPolicyConfiguredAgents(
-  agents: Record<string, unknown>,
-): readonly PolicyConfiguredAgent[] {
-  const entries = isRecord(agents.entries)
-    ? Object.entries(agents.entries).map(([entryId, value]) => ({
-        agentId: entryId,
-        container: "entries" as const,
-        pathId: entryId,
+export function collectPolicyConfiguredAgents(agents: Record<string, unknown>) {
+  const entries = agents.entries;
+  if (Object.hasOwn(agents, "entries") && entries !== undefined) {
+    return isRecord(entries)
+      ? Object.entries(entries).map(([agentId, value]) => ({
+          agentId,
+          sourceBase: `oc://openclaw.config/agents/entries/${ocPathSegment(agentId)}`,
+          value,
+        }))
+      : [];
+  }
+  return Array.isArray(agents.list)
+    ? agents.list.map((value, index) => ({
+        agentId:
+          isRecord(value) && typeof value.id === "string" && value.id.trim() !== ""
+            ? value.id.trim()
+            : `agent-${index}`,
+        sourceBase: `oc://openclaw.config/agents/list/#${index}`,
         value,
       }))
     : [];
-  if (entries.length > 0) {
-    return entries;
-  }
-  return Array.isArray(agents.list)
-    ? agents.list.flatMap((value, index) => {
-        if (!isRecord(value)) {
-          return [];
-        }
-        return [
-          {
-            agentId:
-              typeof value.id === "string" && value.id.trim() !== ""
-                ? value.id.trim()
-                : `agent-${index}`,
-            container: "list" as const,
-            pathId: String(index),
-            value,
-          },
-        ];
-      })
-    : [];
-}
-
-/** Path segment for a configured agent: `#0` for legacy list indexes, escaped key for entries. */
-export function policyAgentPathSegment(agent: PolicyConfiguredAgent): string {
-  return agent.container === "list" ? `#${agent.pathId}` : ocPathSegment(agent.pathId);
 }

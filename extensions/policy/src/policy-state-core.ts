@@ -4,7 +4,6 @@ import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-ru
 import {
   collectPolicyConfiguredAgents,
   ocPathSegment,
-  policyAgentPathSegment,
   readBooleanPath,
 } from "./policy-state-helpers.js";
 import { RESERVED_CHANNEL_CONFIG_KEYS } from "./policy-state-types.js";
@@ -246,11 +245,7 @@ function collectModelRefsFromAgentAllowlist(
     if (!isRecord(agent) || !isRecord(agent.models)) {
       continue;
     }
-    collectModelRefsFromModelMap(
-      refs,
-      agent.models,
-      `oc://openclaw.config/agents/${configured.container}/${policyAgentPathSegment(configured)}/models`,
-    );
+    collectModelRefsFromModelMap(refs, agent.models, `${configured.sourceBase}/models`);
   }
 }
 
