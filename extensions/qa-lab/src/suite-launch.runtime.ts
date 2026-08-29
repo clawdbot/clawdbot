@@ -1334,7 +1334,7 @@ async function runUnifiedQaSuite(params: {
   };
   // Native children opt out of their destructive global build only after this
   // scheduler has established the shared runtime they consume concurrently.
-  if (concurrentTestFileScenariosByKind.size > 0) {
+  if (concurrentTestFileScenariosByKind.has("vitest")) {
     await prepareQaSuiteNativeRuntime(repoRoot);
   }
   const concurrentPartitionResults = await runPartitionTasks(concurrentPartitionTasks, concurrency);

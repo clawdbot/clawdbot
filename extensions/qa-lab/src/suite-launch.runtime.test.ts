@@ -1206,6 +1206,7 @@ describe("qa suite runtime launcher", () => {
       },
     });
     expect(runQaFlowSuite).not.toHaveBeenCalled();
+    expect(runPluginCommandWithTimeout).not.toHaveBeenCalled();
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
     const [call] = runQaTestFileScenarios.mock.calls[0] ?? [];
     expect(call).toMatchObject({
