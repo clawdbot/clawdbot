@@ -1,5 +1,6 @@
 /** Converts cron jobs between public store shape and normalized SQLite rows. */
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
@@ -320,6 +321,16 @@ export function replaceCronRows(
   return normalizedJobs;
 }
 
+function cronRuntimeStateOwnerMatches(previous: CronStoredJob, next: CronStoredJob): boolean {
+  if (!isDeepStrictEqual(previous.trigger, next.trigger)) {
+    return false;
+  }
+  if (previous.payload.kind !== "script" && next.payload.kind !== "script") {
+    return true;
+  }
+  return isDeepStrictEqual(previous.payload, next.payload);
+}
+
 /** Upserts one persisted cron row without rewriting unrelated jobs in its store partition. */
 export function upsertCronJobRow(
   db: DatabaseSync,
@@ -354,6 +365,7 @@ export function upsertCronJobRow(
     existing.schedule_identity === values.schedule_identity &&
     existingRuntimeJob !== null &&
     normalizeCronJobForSqlite(existingRuntimeJob) !== null &&
+    cronRuntimeStateOwnerMatches(existingRuntimeJob, normalized) &&
     existingRuntimeUpdatedAt !== undefined &&
     incomingRuntimeUpdatedAt !== undefined &&
     existingRuntimeUpdatedAt > incomingRuntimeUpdatedAt

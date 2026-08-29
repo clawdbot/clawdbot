@@ -163,7 +163,7 @@ describe("cron service store seam coverage", () => {
     const externalUpdatedAtMs = STORE_TEST_NOW + 12_000;
     const database = openOpenClawStateDatabase().db;
     const storeKey = cronStoreKey(storePath);
-    await manager.updateWithPrecondition(job.id, { name: "after rename" }, () => {
+    const updated = await manager.updateWithPrecondition(job.id, { name: "after rename" }, () => {
       database
         .prepare(
           "UPDATE cron_jobs SET state_json = ?, runtime_updated_at_ms = ? WHERE store_key = ? AND job_id = ?",
@@ -179,6 +179,15 @@ describe("cron service store seam coverage", () => {
         );
     });
 
+    expect(updated).toMatchObject({
+      name: "after rename",
+      updatedAtMs: externalUpdatedAtMs,
+      state: {
+        nextRunAtMs: externalNextRunAtMs,
+        lastRunAtMs: STORE_TEST_NOW + 7_000,
+      },
+    });
+
     const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
     expect(persisted).toMatchObject({
       name: "after rename",
@@ -192,6 +201,62 @@ describe("cron service store seam coverage", () => {
       .prepare("SELECT runtime_updated_at_ms FROM cron_jobs WHERE store_key = ? AND job_id = ?")
       .get(storeKey, job.id) as { runtime_updated_at_ms?: unknown } | undefined;
     expect(persistedRuntime?.runtime_updated_at_ms).toBe(externalUpdatedAtMs);
+  });
+
+  it("does not restore trigger-owned state after a trigger definition changes", async () => {
+    const { storePath } = await makeStorePath();
+    const job = createReloadCronJob({
+      id: "trigger-owner-edit",
+      trigger: { script: "return true" },
+      state: {
+        nextRunAtMs: STORE_TEST_NOW + 60_000,
+        triggerState: { owner: "old-trigger" },
+        triggerEvalCount: 3,
+      },
+    });
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+
+    const manager = new CronService({
+      storePath,
+      cronEnabled: false,
+      log: logger,
+      nowMs: () => STORE_TEST_NOW + 10_000,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    await manager.list({ includeDisabled: true });
+
+    const database = openOpenClawStateDatabase().db;
+    const storeKey = cronStoreKey(storePath);
+    const updated = await manager.updateWithPrecondition(
+      job.id,
+      { trigger: { script: "return false" } },
+      () => {
+        database
+          .prepare(
+            "UPDATE cron_jobs SET state_json = ?, runtime_updated_at_ms = ? WHERE store_key = ? AND job_id = ?",
+          )
+          .run(
+            JSON.stringify({
+              nextRunAtMs: STORE_TEST_NOW + 900_000,
+              triggerState: { owner: "old-trigger" },
+              triggerEvalCount: 9,
+            }),
+            STORE_TEST_NOW + 12_000,
+            storeKey,
+            job.id,
+          );
+      },
+    );
+
+    expect(updated.trigger).toEqual({ script: "return false" });
+    expect(updated.state.triggerState).toBeUndefined();
+    expect(updated.state.triggerEvalCount).toBeUndefined();
+    const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
+    expect(persisted?.trigger).toEqual({ script: "return false" });
+    expect(persisted?.state.triggerState).toBeUndefined();
+    expect(persisted?.state.triggerEvalCount).toBeUndefined();
   });
 
   it("does not drain post-persist notifications when there is no store to write", async () => {

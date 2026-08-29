@@ -235,6 +235,7 @@ async function persistUpdatedJob(params: {
       ? cronRunReceiptOwnerMutationHooks({ state, jobId: nextJob.id })
       : undefined,
   });
+  const committedJob = findJobOrThrow(state, nextJob.id);
   if (!cronSchedulingInputsEqual(previousJob, nextJob)) {
     // Mark only committed edits; a failed SQLite write cannot retire the run's
     // schedule ownership, and idempotent re-saves must not create a new claim.
@@ -255,11 +256,12 @@ async function persistUpdatedJob(params: {
   }
   armTimer(state);
   emit(state, {
-    jobId: nextJob.id,
+    jobId: committedJob.id,
     action: "updated",
-    job: nextJob,
-    nextRunAtMs: nextJob.state.nextRunAtMs,
+    job: committedJob,
+    nextRunAtMs: committedJob.state.nextRunAtMs,
   });
+  return committedJob;
 }
 
 function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
@@ -384,8 +386,13 @@ export async function add(
         scheduleChanged: !isDeepStrictEqual(existing.schedule, nextJob.schedule),
         explicitTriggerState: normalizedInput.state,
       });
-      await persistUpdatedJob({ state, snapshot, previousJob: existing, nextJob });
-      return { ...nextJob, created: false, updated: true, job: nextJob };
+      const committedJob = await persistUpdatedJob({
+        state,
+        snapshot,
+        previousJob: existing,
+        nextJob,
+      });
+      return { ...committedJob, created: false, updated: true, job: committedJob };
     }
 
     if (normalizedId && state.store?.jobs.some((job) => job.id === normalizedId)) {
@@ -532,8 +539,7 @@ async function updateLoadedJob(params: {
       patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
   });
   const snapshot = snapshotStoreForRollback(state);
-  await persistUpdatedJob({ state, snapshot, previousJob: job, nextJob });
-  return nextJob;
+  return await persistUpdatedJob({ state, snapshot, previousJob: job, nextJob });
 }
 
 /** Updates a cron job patch in-place, recomputes affected schedule state, and persists it. */
