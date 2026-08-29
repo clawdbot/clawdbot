@@ -53,6 +53,7 @@ export class PreparedModelCatalogGenerationRecoveryOwner {
 
     const key = ownerKey(owner.input);
     const replacement = createPreparedModelRuntimeReplacement();
+    const isReplacementCurrent = () => dependencies.getPendingReplacement() === replacement;
     dependencies.setPendingReplacement(replacement);
     dependencies.adoptAuthPublication(replacement);
     const staleError = new Error(
@@ -68,7 +69,11 @@ export class PreparedModelCatalogGenerationRecoveryOwner {
     notifyPreparedModelRuntimePublication({ phase: "invalidated" });
 
     const recovery = dependencies.enqueuePublication(async () => {
-      if (dependencies.owners.get(key) !== owner || owner.snapshot !== snapshot) {
+      if (
+        !isReplacementCurrent() ||
+        dependencies.owners.get(key) !== owner ||
+        owner.snapshot !== snapshot
+      ) {
         return;
       }
       await publishPreparedModelRuntimeOwnerBatch({
@@ -76,10 +81,17 @@ export class PreparedModelCatalogGenerationRecoveryOwner {
         owners: dependencies.owners,
         agentBuildCompletions: dependencies.agentBuildCompletions,
         buildTimeoutMs: dependencies.buildTimeoutMs,
+        isPublicationCurrent: isReplacementCurrent,
+        isBuildCurrent: isReplacementCurrent,
       });
-      await dependencies.drainPendingAuthMutations(() =>
-        dependencies.commitAuthPublication(replacement),
-      );
+      if (!isReplacementCurrent()) {
+        return;
+      }
+      await dependencies.drainPendingAuthMutations(() => {
+        if (isReplacementCurrent()) {
+          dependencies.commitAuthPublication(replacement);
+        }
+      });
     });
     this.#recoveries.set(owner, recovery);
     try {
@@ -91,12 +103,13 @@ export class PreparedModelCatalogGenerationRecoveryOwner {
       }
     } catch (error) {
       const refreshError = toStringifiedError(error);
-      if (dependencies.getPendingReplacement() === replacement) {
-        dependencies.setPendingReplacement(undefined);
-        dependencies.rejectAuthPublication(replacement, refreshError);
-        replacement.reject(refreshError);
-        notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
+      if (!isReplacementCurrent()) {
+        return true;
       }
+      dependencies.setPendingReplacement(undefined);
+      dependencies.rejectAuthPublication(replacement, refreshError);
+      replacement.reject(refreshError);
+      notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
       throw refreshError;
     } finally {
       if (this.#recoveries.get(owner) === recovery) {

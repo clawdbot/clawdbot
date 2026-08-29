@@ -63,4 +63,55 @@ describe("prepared model runtime catalog recovery", () => {
     ).resolves.toMatchObject({ agentId: "secondary" });
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4);
   });
+
+  it("defers to a config replacement that supersedes recovery", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const defaultInput = {
+      agentId: "default",
+      config,
+      agentDir: "/tmp/unused-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/unused-workspace",
+    };
+    const initialDefault = getPreparedModelRuntimeSnapshot(defaultInput);
+    expect(initialDefault).toBeDefined();
+    if (!initialDefault) {
+      throw new Error("default prepared model runtime owner was not published");
+    }
+
+    let signalRecoveryBuildStarted: (() => void) | undefined;
+    const recoveryBuildStarted = new Promise<void>((resolve) => {
+      signalRecoveryBuildStarted = resolve;
+    });
+    let releaseRecoveryBuild: (() => void) | undefined;
+    const recoveryBuildBlocked = new Promise<void>((resolve) => {
+      releaseRecoveryBuild = resolve;
+    });
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
+      signalRecoveryBuildStarted?.();
+      await recoveryBuildBlocked;
+      return { agentDir: "/tmp/unused-agent", wrote: false };
+    });
+
+    const recovery =
+      replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch(initialDefault);
+    await recoveryBuildStarted;
+    const replacementConfig = { gateway: { mode: "local" as const } };
+    const configReplacement = refreshPreparedModelRuntimeSnapshots(replacementConfig, {
+      gatewayLifecycle: true,
+    });
+    releaseRecoveryBuild?.();
+
+    await expect(recovery).resolves.toBe(true);
+    await expect(configReplacement).resolves.toBeUndefined();
+    await expect(
+      prepareModelRuntimeSnapshot({ ...defaultInput, config: replacementConfig }),
+    ).resolves.toMatchObject({ config: replacementConfig });
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+    ).resolves.toMatchObject({ config: replacementConfig });
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3);
+  });
 });
