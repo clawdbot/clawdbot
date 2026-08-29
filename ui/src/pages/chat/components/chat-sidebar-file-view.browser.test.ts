@@ -72,6 +72,24 @@ afterEach(() => {
 });
 
 describe.runIf(browserMode)("chat file editor", () => {
+  it("keeps long lines inside Review and gives horizontal scroll to the editor", async () => {
+    const panel = await mountFile({
+      kind: "file",
+      path: "src/long-line.ts",
+      name: "long-line.ts",
+      content: `export const value = "${"long-content-".repeat(80)}";`,
+    });
+    panel.style.width = "320px";
+
+    const fileView = panel.querySelector<HTMLElement>(".file-view")!;
+    const scroller = panel.querySelector<HTMLElement>(".cm-scroller")!;
+    await expect.poll(() => fileView.clientWidth).toBeGreaterThan(0);
+    expect(fileView.clientWidth).toBeLessThanOrEqual(panel.clientWidth);
+    expect(fileView.scrollWidth).toBe(fileView.clientWidth);
+    expect(scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth);
+    expect(getComputedStyle(scroller).overflowX).toBe("auto");
+  });
+
   it("renders content and decorates the requested line", async () => {
     const panel = await mountFile({
       kind: "file",
