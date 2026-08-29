@@ -78,6 +78,15 @@ function createMaintenanceResult() {
   };
 }
 
+// The context engine reads history from the canonical store, so the runner must forward
+// the exact target it was given rather than re-deriving one from a session file token.
+const CONTEXT_ENGINE_SESSION_TARGET = {
+  agentId: "main",
+  sessionId: "openclaw-session-1",
+  sessionKey: "agent:main:main",
+  storePath: "/tmp/openclaw-cli-context-engine-test/openclaw-agent.sqlite",
+} as const;
+
 function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunContext {
   // Prepared contexts mirror the shape produced by prepare.runtime without
   // loading full backend setup in every lifecycle assertion.
@@ -97,6 +106,7 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
       sessionKey: "agent:main:main",
       agentId: "main",
       sessionFile: "session.jsonl",
+      sessionTarget: CONTEXT_ENGINE_SESSION_TARGET,
       workspaceDir: "/tmp/openclaw-cli-context-engine-test",
       prompt: "visible ask",
       transcriptPrompt: "transcript visible ask",
@@ -296,11 +306,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       diagnosticUsage: { input: 21, output: 9, total: 30 },
     });
     expect(loadCliSessionContextEngineMessagesMock).toHaveBeenCalledWith({
-      sessionId: "openclaw-session-1",
-      sessionFile: "session.jsonl",
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      config: undefined,
+      sessionTarget: CONTEXT_ENGINE_SESSION_TARGET,
     });
     expect(loadCliSessionHistoryMessagesMock).not.toHaveBeenCalled();
     expect(bootstrap).toHaveBeenCalledTimes(1);
