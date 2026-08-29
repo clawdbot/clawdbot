@@ -1358,6 +1358,117 @@ describe("Anthropic provider", () => {
 
     expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toBeUndefined();
   });
+
+  it("rebuilds Fable output at a mid-stream server-side fallback boundary", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_fallback",
+          model: "claude-fable-5",
+          usage: { input_tokens: 5, output_tokens: 0 },
+        },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "thinking", thinking: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "pre-boundary reasoning" },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "partial " },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "content_block_start",
+        index: 2,
+        content_block: { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+      },
+      { type: "content_block_stop", index: 2 },
+      {
+        type: "content_block_start",
+        index: 3,
+        content_block: {
+          type: "fallback",
+          from: { model: "claude-fable-5" },
+          to: { model: "claude-opus-4-8" },
+        },
+      },
+      { type: "content_block_stop", index: 3 },
+      {
+        type: "content_block_start",
+        index: 4,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 4,
+        delta: { type: "text_delta", text: "continued" },
+      },
+      { type: "content_block_stop", index: 4 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { input_tokens: 5, output_tokens: 9 },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const stream = streamAnthropic(
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    // Pre-boundary thinking/tool blocks must not replay or execute; text is
+    // the continuation prefix the fallback model built on.
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([
+      { type: "text", text: "partial " },
+      { type: "text", text: "continued" },
+    ]);
+    expect(result.responseModel).toBe("claude-opus-4-8");
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "provider_fallback",
+        details: {
+          provider: "anthropic",
+          fromModel: "claude-fable-5",
+          toModel: "claude-opus-4-8",
+        },
+      }),
+    ]);
+    expect(eventTypes).not.toContain("thinking_start");
+    expect(eventTypes).not.toContain("toolcall_start");
+    expect(eventTypes.filter((type) => type === "start")).toHaveLength(1);
+    // Fallback-served turns bill at the serving model's rates, not Fable's:
+    // 5 input tokens at $5/MTok plus 9 output tokens at $25/MTok.
+    expect(result.usage.cost.input).toBeCloseTo(0.000025, 10);
+    expect(result.usage.cost.output).toBeCloseTo(0.000225, 10);
+    expect(result.usage.cost.total).toBeCloseTo(0.00025, 10);
+  });
+
   it("records a pre-output server-side fallback and keeps the continuation", async () => {
     const client = createAnthropicSseClient([
       {
@@ -1419,6 +1530,55 @@ describe("Anthropic provider", () => {
     ]);
     expect(result.usage.cost.total).toBeCloseTo(0.000075, 10);
   });
+
+  it("routes interleaved active content blocks by their event indexes", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_interleaved", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text" },
+      },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "second" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "first" },
+      },
+      { type: "content_block_stop", index: 1 },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { input_tokens: 1, output_tokens: 2 },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const result = await streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    ).result();
+
+    expect(result.content).toEqual([
+      { type: "text", text: "first" },
+      { type: "text", text: "second" },
+    ]);
+  });
+
   it("rejects a malformed later tool before any sibling becomes executable", async () => {
     const client = createAnthropicSseClient([
       {
@@ -2267,6 +2427,54 @@ describe("Anthropic provider", () => {
     // ...and NOT on the trailing volatile carrier, which is left uncached.
     expect(messages[1]?.content).toBe("volatile current-turn metadata");
   });
+
+  it("emits start event only after message_start so pre-stream SSE errors arrive before any non-error event", async () => {
+    function createSseEventResponse(lines: string): Response {
+      return new Response(lines, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
+
+    const client = {
+      messages: {
+        create: vi.fn(() => ({
+          asResponse: () =>
+            Promise.resolve(
+              createSseEventResponse(
+                "event: message_start\ndata: " +
+                  JSON.stringify({
+                    type: "message_start",
+                    message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
+                  }) +
+                  "\n\nevent: message_stop\ndata: " +
+                  JSON.stringify({ type: "message_stop" }) +
+                  "\n\n",
+              ),
+            ),
+        })),
+      },
+    };
+
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+      { apiKey: "sk-ant-key", client: client as never },
+    );
+
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+
+    // start must come after message_start processing, not before the loop
+    const startIndex = eventTypes.indexOf("start");
+    expect(startIndex).toBeGreaterThanOrEqual(0);
+    // No error before start — the start event should be first non-error event
+    const errorBeforeStart = eventTypes.slice(0, startIndex).some((t) => t === "error");
+    expect(errorBeforeStart).toBe(false);
+  });
+
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {
     function createSseEventResponse(lines: string): Response {
       return new Response(lines, {
