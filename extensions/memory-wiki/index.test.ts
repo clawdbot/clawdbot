@@ -298,59 +298,61 @@ describe("memory-wiki plugin", () => {
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
   });
 
-  it("closes queued dashboard source sync before it can activate a vault", async () => {
-    const rootDir = await createTempDir("memory-wiki-index-stop-sync-");
-    const { api, registerGatewayMethod, registerService } = createPluginApi();
-    api.pluginConfig = { vault: { path: rootDir } };
-    plugin.register(api);
-    const config = resolveMemoryWikiConfig(api.pluginConfig);
-    const service = registerService.mock.calls[0]?.[0];
-    await service?.start?.();
+  it.each(["wiki.importInsights", "wiki.compile"])(
+    "closes queued %s source sync before it can activate a vault",
+    async (method) => {
+      const rootDir = await createTempDir("memory-wiki-index-stop-sync-");
+      const { api, registerGatewayMethod, registerService } = createPluginApi();
+      api.pluginConfig = { vault: { path: rootDir } };
+      plugin.register(api);
+      const config = resolveMemoryWikiConfig(api.pluginConfig);
+      const service = registerService.mock.calls[0]?.[0];
+      await service?.start?.();
 
-    const mutationEntered = deferred();
-    const releaseMutation = deferred();
-    const mutation = withMemoryWikiVaultMutation(rootDir, async () => {
-      mutationEntered.resolve();
-      await releaseMutation.promise;
-    });
-    await mutationEntered.promise;
-    const handler = registerGatewayMethod.mock.calls.find(
-      ([method]) => method === "wiki.importInsights",
-    )?.[1];
-    if (!handler) {
-      throw new Error("Expected wiki.importInsights gateway handler");
-    }
-    await handler({ params: {}, respond: vi.fn() });
-    await vi.waitFor(async () => {
-      const drainState = await Promise.race([
-        waitForMemoryWikiImportedSourceSyncs().then(() => "settled" as const),
-        new Promise<"pending">((resolve) => {
-          setImmediate(() => resolve("pending"));
-        }),
-      ]);
-      expect(drainState).toBe("pending");
-    });
+      const mutationEntered = deferred();
+      const releaseMutation = deferred();
+      const mutation = withMemoryWikiVaultMutation(rootDir, async () => {
+        mutationEntered.resolve();
+        await releaseMutation.promise;
+      });
+      await mutationEntered.promise;
+      const handler = registerGatewayMethod.mock.calls.find(([name]) => name === method)?.[1];
+      if (!handler) {
+        throw new Error(`Expected ${method} gateway handler`);
+      }
+      const request = handler({ params: {}, respond: vi.fn() });
+      await vi.waitFor(async () => {
+        const drainState = await Promise.race([
+          waitForMemoryWikiImportedSourceSyncs().then(() => "settled" as const),
+          new Promise<"pending">((resolve) => {
+            setImmediate(() => resolve("pending"));
+          }),
+        ]);
+        expect(drainState).toBe("pending");
+      });
 
-    const stop = service?.stop?.();
-    releaseMutation.resolve();
-    await mutation;
-    await stop;
+      const stop = service?.stop?.();
+      releaseMutation.resolve();
+      await mutation;
+      await request;
+      await stop;
 
-    const snapshot = emptyCompiledSnapshot();
-    await expect(
-      writeMemoryWikiCompiledCache(
-        config,
-        snapshot,
-        resolveMemoryWikiCompiledCacheGeneration(snapshot),
-        createMemoryWikiCompiledCachePublicationId(),
-        null,
-        async () => {},
-        async () => {},
-        () => loadMemoryWikiValidatedVaultIdentity(rootDir),
-      ),
-    ).rejects.toThrow("vault is not active");
-    await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
-  });
+      const snapshot = emptyCompiledSnapshot();
+      await expect(
+        writeMemoryWikiCompiledCache(
+          config,
+          snapshot,
+          resolveMemoryWikiCompiledCacheGeneration(snapshot),
+          createMemoryWikiCompiledCachePublicationId(),
+          null,
+          async () => {},
+          async () => {},
+          () => loadMemoryWikiValidatedVaultIdentity(rootDir),
+        ),
+      ).rejects.toThrow("vault is not active");
+      await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+    },
+  );
 
   it("clears active owners before a fallible lifecycle identity refresh", async () => {
     const rootDir = await createTempDir("memory-wiki-index-refresh-failure-");

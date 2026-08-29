@@ -409,7 +409,10 @@ async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promi
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-async function readPageSummaries(rootDir: string): Promise<{
+async function readPageSummaries(
+  rootDir: string,
+  signal?: AbortSignal,
+): Promise<{
   pages: WikiPageSummary[];
   frontmatterErrors: WikiPageFrontmatterError[];
   importInsights: MemoryWikiImportInsightItem[];
@@ -418,17 +421,21 @@ async function readPageSummaries(rootDir: string): Promise<{
   const filePaths = (
     await Promise.all(COMPILE_PAGE_GROUPS.map((group) => collectMarkdownFiles(rootDir, group.dir)))
   ).flat();
+  signal?.throwIfAborted();
 
   const readResult = await runTasksWithConcurrency({
     tasks: filePaths.map((relativePath) => async () => {
+      signal?.throwIfAborted();
       const absolutePath = path.join(rootDir, relativePath);
       const raw = await retryTransientMemoryRead(
         () => fs.readFile(absolutePath, "utf8"),
         `read wiki page ${absolutePath}`,
       );
+      signal?.throwIfAborted();
       // Large imported pages are parsed off the request path, but the compiler
       // still yields between pages so background recovery cannot starve Gateway ticks.
       await yieldToEventLoop();
+      signal?.throwIfAborted();
       const scan = scanWikiPageSummary({ absolutePath, relativePath, raw });
       if (scan.status !== "valid") {
         return { scan, importInsight: null, overviewItem: null };
@@ -446,6 +453,7 @@ async function readPageSummaries(rootDir: string): Promise<{
   if (readResult.hasError) {
     throw readResult.firstError;
   }
+  signal?.throwIfAborted();
 
   return {
     pages: readResult.results
@@ -892,6 +900,7 @@ function buildRelatedBlockBody(params: {
 async function refreshPageRelatedBlocks(params: {
   config: ResolvedMemoryWikiConfig;
   pages: WikiPageSummary[];
+  signal?: AbortSignal;
 }): Promise<string[]> {
   if (!params.config.render.createBacklinks) {
     return [];
@@ -899,10 +908,12 @@ async function refreshPageRelatedBlocks(params: {
   const root = await fsRoot(params.config.vault.path);
   const updatedFiles: string[] = [];
   for (const page of params.pages) {
+    params.signal?.throwIfAborted();
     if (page.kind === "report") {
       continue;
     }
     const original = await root.readText(page.relativePath);
+    params.signal?.throwIfAborted();
     if (original.trim().length === 0) {
       continue;
     }
@@ -923,6 +934,7 @@ async function refreshPageRelatedBlocks(params: {
       continue;
     }
     await root.write(page.relativePath, updated);
+    params.signal?.throwIfAborted();
     updatedFiles.push(page.absolutePath);
   }
   return updatedFiles;
@@ -957,9 +969,12 @@ async function writeManagedMarkdownFile(params: {
   startMarker: string;
   endMarker: string;
   body: string;
+  signal?: AbortSignal;
 }): Promise<boolean> {
+  params.signal?.throwIfAborted();
   const root = await fsRoot(params.rootDir);
   const original = await root.readText(params.relativePath).catch(() => `# ${params.title}\n`);
+  params.signal?.throwIfAborted();
   // Generated indexes bypass page discovery. Parse existing content here so
   // managed-block updates cannot rewrite malformed frontmatter.
   parseWikiMarkdown(original);
@@ -975,6 +990,7 @@ async function writeManagedMarkdownFile(params: {
     return false;
   }
   await root.write(params.relativePath, rendered);
+  params.signal?.throwIfAborted();
   return true;
 }
 
@@ -1062,6 +1078,7 @@ async function refreshDashboardPages(params: {
   managedImportedSourcePagePaths: Set<string>;
   rootDir: string;
   pages: WikiPageSummary[];
+  signal?: AbortSignal;
 }): Promise<string[]> {
   if (!params.config.render.createDashboards) {
     return [];
@@ -1069,6 +1086,7 @@ async function refreshDashboardPages(params: {
   const now = new Date();
   const updatedFiles: string[] = [];
   for (const definition of DASHBOARD_PAGES) {
+    params.signal?.throwIfAborted();
     if (
       await writeDashboardPage({
         config: params.config,
@@ -1081,6 +1099,7 @@ async function refreshDashboardPages(params: {
     ) {
       updatedFiles.push(path.join(params.rootDir, definition.relativePath));
     }
+    params.signal?.throwIfAborted();
   }
   return updatedFiles;
 }
@@ -1300,14 +1319,18 @@ async function compileMemoryWikiVaultUnlocked(
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
   );
-  let scan = await readPageSummaries(rootDir);
+  let scan = await readPageSummaries(rootDir, options?.signal);
   let pages = scan.pages;
   const updatedFiles =
     options?.sourcePageWrites === "preserve"
       ? []
-      : await refreshPageRelatedBlocks({ config, pages });
+      : await refreshPageRelatedBlocks({
+          config,
+          pages,
+          ...(options?.signal ? { signal: options.signal } : {}),
+        });
   if (updatedFiles.length > 0) {
-    scan = await readPageSummaries(rootDir);
+    scan = await readPageSummaries(rootDir, options?.signal);
     pages = scan.pages;
   }
   const dashboardUpdatedFiles = await refreshDashboardPages({
@@ -1315,10 +1338,11 @@ async function compileMemoryWikiVaultUnlocked(
     managedImportedSourcePagePaths,
     rootDir,
     pages,
+    ...(options?.signal ? { signal: options.signal } : {}),
   });
   updatedFiles.push(...dashboardUpdatedFiles);
   if (dashboardUpdatedFiles.length > 0) {
-    scan = await readPageSummaries(rootDir);
+    scan = await readPageSummaries(rootDir, options?.signal);
     pages = scan.pages;
   }
   const compiledSnapshot = buildCompiledCacheSnapshot(scan);
@@ -1336,6 +1360,7 @@ async function compileMemoryWikiVaultUnlocked(
       startMarker: "<!-- openclaw:wiki:index:start -->",
       endMarker: "<!-- openclaw:wiki:index:end -->",
       body: buildRootIndexBody({ config, pages, counts }),
+      ...(options?.signal ? { signal: options.signal } : {}),
     })
   ) {
     updatedFiles.push(rootIndexPath);
@@ -1352,6 +1377,7 @@ async function compileMemoryWikiVaultUnlocked(
         startMarker: `<!-- openclaw:wiki:${group.dir}:index:start -->`,
         endMarker: `<!-- openclaw:wiki:${group.dir}:index:end -->`,
         body: buildDirectoryIndexBody({ config, pages, group }),
+        ...(options?.signal ? { signal: options.signal } : {}),
       })
     ) {
       updatedFiles.push(filePath);
@@ -1379,7 +1405,7 @@ async function compileMemoryWikiVaultUnlocked(
         throw new Error("Memory Wiki vault changed while its compiled cache was being built.");
       }
       const sourceGenerationBeforeScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
-      const verifiedScan = await readPageSummaries(rootDir);
+      const verifiedScan = await readPageSummaries(rootDir, options?.signal);
       const verifiedGeneration = resolveMemoryWikiCompiledCacheGeneration(
         buildCompiledCacheSnapshot(verifiedScan),
       );

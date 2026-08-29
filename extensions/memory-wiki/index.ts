@@ -96,7 +96,11 @@ export default definePluginEntry({
         // Context-free tool discovery cannot safely choose one agent's vault.
         return null;
       }
-      return { appConfig, config: resolveConfig(agentId, appConfig) };
+      return {
+        appConfig,
+        config: resolveConfig(agentId, appConfig),
+        ...(sourceSyncAbortController ? { signal: sourceSyncAbortController.signal } : {}),
+      };
     };
     configureMemoryWikiSourceSyncStateStore(
       createMemoryWikiSourceSyncStateStore(api.runtime.state.openKeyedStore),
@@ -190,6 +194,7 @@ export default definePluginEntry({
         return resolved
           ? createWikiStatusTool(resolved.config, resolved.appConfig, {
               agentId: resolved.config.agentId ?? ctx.agentId,
+              ...(resolved.signal ? { signal: resolved.signal } : {}),
             })
           : null;
       },
@@ -198,14 +203,18 @@ export default definePluginEntry({
     api.registerTool(
       (ctx) => {
         const resolved = resolveToolContext(ctx.agentId);
-        return resolved ? createWikiLintTool(resolved.config, resolved.appConfig) : null;
+        return resolved
+          ? createWikiLintTool(resolved.config, resolved.appConfig, resolved.signal)
+          : null;
       },
       { name: "wiki_lint" },
     );
     api.registerTool(
       (ctx) => {
         const resolved = resolveToolContext(ctx.agentId);
-        return resolved ? createWikiApplyTool(resolved.config, resolved.appConfig) : null;
+        return resolved
+          ? createWikiApplyTool(resolved.config, resolved.appConfig, resolved.signal)
+          : null;
       },
       { name: "wiki_apply" },
     );
@@ -220,6 +229,7 @@ export default definePluginEntry({
           agentSessionKey: ctx.sessionKey,
           sandboxed: ctx.sandboxed,
           conversationRecall: ctx.conversationRecall,
+          ...(resolved.signal ? { signal: resolved.signal } : {}),
         });
       },
       { name: "wiki_search" },
@@ -235,6 +245,7 @@ export default definePluginEntry({
           agentSessionKey: ctx.sessionKey,
           sandboxed: ctx.sandboxed,
           conversationRecall: ctx.conversationRecall,
+          ...(resolved.signal ? { signal: resolved.signal } : {}),
         });
       },
       { name: "wiki_get" },

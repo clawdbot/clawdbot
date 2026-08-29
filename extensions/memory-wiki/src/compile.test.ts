@@ -415,7 +415,7 @@ describe("compileMemoryWikiVault", () => {
     ).resolves.toContain("[Alpha Synthesis](alpha-synthesis.md)");
   });
 
-  it("bounds concurrent page reads while compiling", async () => {
+  it("bounds concurrent page reads and stops the queue after abort", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
       initialize: true,
@@ -437,6 +437,8 @@ describe("compileMemoryWikiVault", () => {
     }
 
     const originalReadFile = fs.readFile.bind(fs);
+    const abortController = new AbortController();
+    let pageReads = 0;
     let activePageReads = 0;
     let maxActivePageReads = 0;
     const readFileSpy = vi
@@ -451,7 +453,11 @@ describe("compileMemoryWikiVault", () => {
         }
 
         activePageReads += 1;
+        pageReads += 1;
         maxActivePageReads = Math.max(maxActivePageReads, activePageReads);
+        if (pageReads === 16) {
+          abortController.abort();
+        }
         try {
           await Promise.resolve();
           return await originalReadFile(...args);
@@ -461,12 +467,14 @@ describe("compileMemoryWikiVault", () => {
       });
 
     try {
-      await compileMemoryWikiVault(config);
+      await expect(
+        compileMemoryWikiVault(config, { signal: abortController.signal }),
+      ).rejects.toThrow();
     } finally {
       readFileSpy.mockRestore();
     }
 
-    expect(maxActivePageReads).toBeGreaterThan(0);
+    expect(pageReads).toBe(16);
     expect(maxActivePageReads).toBeLessThanOrEqual(16);
   });
 

@@ -2,6 +2,7 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
+import { compileMemoryWikiVault } from "./compile.js";
 import { MemoryWikiDashboardUnavailableError } from "./compiled-cache.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { listMemoryWikiImportInsights } from "./import-insights.js";
@@ -324,6 +325,31 @@ describe("memory-wiki gateway methods", () => {
       vaultMode: "isolated",
       vaultExists: true,
     });
+  });
+
+  it("binds manual compilation to the active service generation", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-compile-signal-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+    const signal = new AbortController().signal;
+
+    registerMemoryWikiGatewayMethods({
+      api,
+      config,
+      resolveSourceSyncSignal: () => signal,
+    });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.compile");
+    if (!handler) {
+      throw new Error("wiki.compile handler missing");
+    }
+
+    await handler({ params: {}, respond: vi.fn() });
+
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
+      config,
+      appConfig: undefined,
+      signal,
+    });
+    expect(compileMemoryWikiVault).toHaveBeenCalledWith(config, { signal });
   });
 
   it("keeps global vault requests on the shared base config", async () => {
