@@ -1085,6 +1085,7 @@ describe("doctor repair sequencing", () => {
         },
       }) as unknown as PluginMetadataSnapshot;
     const refreshedSnapshot = createRefreshedSnapshot(true);
+    const repairedIndex = { plugins: [] };
     const configWideManifestRegistry = {
       plugins: [
         {
@@ -1097,12 +1098,14 @@ describe("doctor repair sequencing", () => {
       diagnostics: [],
     };
     mocks.resolveConfigWidePluginManifestRegistry.mockReturnValue(configWideManifestRegistry);
+    mocks.loadInstalledPluginIndex.mockReturnValueOnce(repairedIndex);
     mocks.loadPluginMetadataSnapshot.mockImplementationOnce((params: { workspaceDir?: string }) =>
       params.workspaceDir === workspaceDir ? refreshedSnapshot : createRefreshedSnapshot(false),
     );
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
       changes: ['Removed stale managed install record for bundled plugin "google-meet".'],
       warnings: [],
+      records: {},
       pluginInventoryChanged: true,
     });
     const { repairStaleAgentModelRefs: repairStaleAgentModelRefsActual } = await vi.importActual<
@@ -1166,6 +1169,7 @@ describe("doctor repair sequencing", () => {
         },
       },
       env: process.env,
+      index: repairedIndex,
       workspaceDir,
     });
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
