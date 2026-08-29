@@ -282,6 +282,9 @@ async function command() {
         process.exit(0);
       }
       if (result === "hang") {
+        if (!options.cancelDuringCleanup) {
+          publish(`fetch-tick-${attempt}.json`, attempt);
+        }
         return;
       }
       if (result === 0) {

@@ -5,6 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import {
+  accelerateCiCheckoutFetchClock,
   ciCheckoutFixture,
   expectCiCheckoutCleanup,
   readCiCheckoutStep,
@@ -79,22 +80,8 @@ it.each([
     }
     // Only a ready, deliberately stalled tree advances the fetch clock. Real
     // process startup and teardown retain their independent wall-clock watchdogs.
-    const accelerated = run
+    const accelerated = accelerateCiCheckoutFetchClock(run)
       .replace(/fetch_timeout_seconds = [^\n]+/u, "fetch_timeout_seconds = 2")
-      .replace(
-        "def run_git(",
-        `def fetch_clock():
-    return 2 * sum(name.startswith("fetch-tick-") and name.endswith(".json")
-                   for name in os.listdir(os.environ["TMPDIR"]))
-
-
-def run_git(`,
-      )
-      .replace("deadline = time.monotonic() + timeout", "deadline = fetch_clock() + timeout")
-      .replace(
-        "deadline is not None and time.monotonic() >= deadline",
-        "deadline is not None and fetch_clock() >= deadline",
-      )
       .replace("kill_at = deadline - cleanup_seconds / 2", "kill_at = time.monotonic()")
       .replace(/retry_at = time\.monotonic\(\) \+ [^\n]+/u, "retry_at = time.monotonic() + 0.05");
     expect(accelerated).not.toBe(run);
