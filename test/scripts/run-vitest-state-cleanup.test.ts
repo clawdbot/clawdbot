@@ -12,7 +12,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const posixIt = process.platform === "win32" ? it.skip : it;
 
-posixIt.each([
+const cleanupCases = [
   { route: "main", pool: "threads", failRun: false },
   { route: "main", pool: "threads", failRun: true },
   { route: "main", pool: "forks", failRun: false },
@@ -21,9 +21,16 @@ posixIt.each([
     { route, pool: "threads", failRun: false },
     { route, pool: "forks", failRun: true },
   ]),
-])(
-  "$route cleans its namespace after $pool completion (failed run: $failRun)",
-  async ({ route, pool, failRun }) => {
+  ...["profile-main", "profile-runner"].flatMap((route) => [
+    { route, pool: "forks", failRun: false },
+    { route, pool: "threads", failRun: true },
+  ]),
+].map((testCase) => ({ ...testCase, pauseAfterAck: false }));
+cleanupCases.push({ route: "profile-runner", pool: "forks", failRun: true, pauseAfterAck: true });
+
+posixIt.each(cleanupCases)(
+  "$route cleans its namespace after $pool completion (failed run: $failRun, paused after acknowledgement: $pauseAfterAck)",
+  async ({ route, pool, failRun, pauseAfterAck }) => {
     const root = tempDirs.make("oc-vt-state-");
     const tmp = path.join(root, "tmp");
     const home = path.join(root, "home");
@@ -164,6 +171,33 @@ export default {
     };
     const vitestArgs = ["--root", root, "--configLoader", "native"];
     const profileDir = path.join(root, "profiles");
+    const pauseReceipt = path.join(root, "pause.json");
+    if (pauseAfterAck) {
+      const preload = path.join(root, "pause-after-ack.cjs");
+      fs.writeFileSync(
+        preload,
+        `
+const { subscribe } = require("node:diagnostics_channel");
+const fs = require("node:fs");
+subscribe("child_process", ({ process: child }) => {
+  let selected = false;
+  let paused = false;
+  child.once("spawn", () => {
+    selected = child.spawnargs.some(arg => arg.replaceAll("\\\\", "/").endsWith("/vitest/dist/workers/forks.js"));
+  });
+  child.on("message", message => {
+    if (!selected || paused || message?.__vitest_worker_response__ !== true || message.type !== "stopped") return;
+    // No I/O before the signal: even logging can let native exit profiling finish.
+    paused = child.kill("SIGSTOP");
+  });
+  child.once("exit", (code, signal) => {
+    if (selected) fs.writeFileSync(${JSON.stringify(pauseReceipt)}, JSON.stringify({ paused, code, signal }));
+  });
+});
+`,
+      );
+      env.NODE_OPTIONS = `--require=${preload}`;
+    }
     const mirrorPath = path.join(root, "mirror.ansi");
     const batchEntry = path.join(root, "batch.mts");
     fs.writeFileSync(
@@ -213,6 +247,13 @@ process.exitCode = await runVitestBatch({ config: ${JSON.stringify(configPath)},
       );
       expect(result.code, result.output).toBe(failRun ? 1 : 0);
       if (failRun) expect(result.output).toContain("intentional failure after SQLite allocation");
+      if (pauseAfterAck) {
+        expect(JSON.parse(fs.readFileSync(pauseReceipt, "utf8"))).toEqual({
+          paused: true,
+          code: null,
+          signal: "SIGKILL",
+        });
+      }
       const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as {
         path: string;
         resetVerified: boolean;
@@ -226,9 +267,27 @@ process.exitCode = await runVitestBatch({ config: ${JSON.stringify(configPath)},
       }
       if (route.startsWith("profile-")) {
         const artifacts = fs.readdirSync(profileDir);
-        expect(artifacts.some((file) => file.endsWith(".cpuprofile"))).toBe(true);
+        const profileEvidence = `${result.output}\nProfile artifacts: ${JSON.stringify(artifacts)}`;
+        expect(
+          artifacts.some((file) => file.endsWith(".cpuprofile")),
+          profileEvidence,
+        ).toBe(true);
         if (route === "profile-runner")
-          expect(artifacts.some((file) => file.endsWith(".heapprofile"))).toBe(true);
+          expect(
+            artifacts.some((file) => file.endsWith(".heapprofile")),
+            profileEvidence,
+          ).toBe(true);
+        for (const artifact of artifacts) {
+          const profile = JSON.parse(fs.readFileSync(path.join(profileDir, artifact), "utf8"));
+          if (artifact.endsWith(".cpuprofile")) {
+            expect(profile.nodes.length, artifact).toBeGreaterThan(0);
+            expect(profile.samples.length, artifact).toBeGreaterThan(0);
+            expect(profile.endTime, artifact).toBeGreaterThan(profile.startTime);
+          } else if (artifact.endsWith(".heapprofile")) {
+            expect(profile.head.children.length, artifact).toBeGreaterThan(0);
+            expect(profile.samples.length, artifact).toBeGreaterThan(0);
+          }
+        }
       }
       if (route === "pty")
         expect(fs.readFileSync(mirrorPath, "utf8")).toContain("namespace fixture frame");
