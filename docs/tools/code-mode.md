@@ -170,6 +170,8 @@ Set `codeMode: true` or `codeMode: false` on an exact `provider/model` entry in
 `agents.defaults.models`. Omit `codeMode` to inherit the parent activation
 setting, including its `"auto"` behavior. The model field accepts only a
 boolean; `"auto"` belongs on the global or per-agent `tools.codeMode` setting.
+Wildcard rows such as `"openai/*"` may configure runtime policy, but cannot set
+`codeMode`; config validation rejects them instead of ignoring the override.
 
 ```json5
 {
@@ -202,7 +204,7 @@ Activation resolves from the first explicit setting in this order:
 3. `agents.defaults.models["provider/model"].codeMode`.
 4. `tools.codeMode.enabled` (or its shorthand), defaulting to `false`.
 
-In the Control UI, open **Settings → Agent Defaults**, show **Advanced**
+In the Control UI, open **Settings → Agents → Agent defaults**, show **Advanced**
 settings, and find **Models** under **Agent Defaults**. Each model has a
 **Code Mode** selector beside its runtime: **Default** removes the override,
 **On** saves `true`, and **Off** saves `false`. Use **Raw** config or the CLI

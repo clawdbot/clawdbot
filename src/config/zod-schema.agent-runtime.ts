@@ -1,4 +1,5 @@
 // Defines Zod schema fragments for per-agent runtime configuration.
+import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -885,7 +886,7 @@ const AgentRuntimePolicySchema = z
   .strict()
   .optional();
 
-export const AgentModelRuntimeEntrySchema = z
+const AgentModelRuntimeEntrySchema = z
   .object({
     alias: z.string().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
@@ -894,6 +895,23 @@ export const AgentModelRuntimeEntrySchema = z
     streaming: z.boolean().optional(),
   })
   .strict();
+
+export const AgentModelMapSchema = z
+  .record(z.string(), AgentModelRuntimeEntrySchema)
+  .superRefine((models, ctx) => {
+    for (const [ref, entry] of Object.entries(models)) {
+      // Runtime policy supports wildcard rows; Code Mode resolves exact models.
+      // Reject an authored override that would otherwise be silently ignored.
+      if (entry.codeMode !== undefined && (ref.includes("*") || !parseProviderModelRef(ref))) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [ref, "codeMode"],
+          message:
+            "Code Mode requires an exact provider/model entry; wildcard and bare model keys are not supported.",
+        });
+      }
+    }
+  });
 
 export const AgentModelPolicySchema = z
   .object({
@@ -910,7 +928,7 @@ export const AgentEntrySchema = z
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
     utilityModel: z.string().optional(),
-    models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
+    models: AgentModelMapSchema.optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
