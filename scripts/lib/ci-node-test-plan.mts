@@ -1,4 +1,5 @@
 // Builds CI node/Vitest shard plans from the full suite configuration.
+import { statSync } from "node:fs";
 import { matchesGlob, relative } from "node:path";
 import {
   agentVitestProjectOwners,
@@ -21,6 +22,7 @@ import {
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import { boundaryTestFiles, isUnitConfigTestFile } from "../../test/vitest/vitest.unit-paths.mjs";
+import { buildVitestRunPlans, isTestFileTarget } from "../test-projects.test-support.mts";
 import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import { listTrackedTestFiles } from "./list-test-files.mts";
 import {
@@ -55,6 +57,7 @@ type NodeTestShard = {
 };
 
 type NodeTestPlanOptions = {
+  changedPaths?: readonly string[];
   includeReleaseOnlyPluginShards?: boolean;
   compact?: boolean;
   compactMode?: CompactNodeTestPlanMode;
@@ -1899,6 +1902,17 @@ function formatNodeTestShardCheckName(shardName: string): string {
 /** Create node test shard descriptors for CI, optionally excluding release-only plugin shards. */
 export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTestShard[] {
   const includeReleaseOnlyPluginShards = options.includeReleaseOnlyPluginShards ?? true;
+  const changedTestPlans = includeReleaseOnlyPluginShards
+    ? []
+    : (options.changedPaths ?? [])
+        .map(normalizeChangedPath)
+        .filter(
+          (file) =>
+            isTestFileTarget(file) &&
+            !file.endsWith(".live.test.ts") &&
+            statSync(file, { throwIfNoEntry: false })?.isFile(),
+        )
+        .flatMap((file) => buildVitestRunPlans([file]));
 
   return fullSuiteVitestShards.flatMap((shard) => {
     if (EXCLUDED_FULL_SUITE_SHARDS.has(shard.config)) {
@@ -1913,13 +1927,6 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
     const splitShards = SPLIT_NODE_SHARDS.get(shard.name);
     if (splitShards) {
       return splitShards.flatMap((splitShard) => {
-        if (
-          RELEASE_ONLY_PLUGIN_SHARDS.has(splitShard.shardName) &&
-          !includeReleaseOnlyPluginShards
-        ) {
-          return [];
-        }
-
         const splitConfigs = splitShard.includeExternalConfigs
           ? splitShard.configs
           : splitShard.configs.filter((config) => configs.includes(config));
@@ -1927,8 +1934,27 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
           return [];
         }
 
+        let includePatterns = splitShard.includePatterns;
+        if (
+          RELEASE_ONLY_PLUGIN_SHARDS.has(splitShard.shardName) &&
+          !includeReleaseOnlyPluginShards
+        ) {
+          // PR fallback must retain directly edited tests without enabling the
+          // release sweep or stealing files from their canonical Vitest owners.
+          includePatterns = [
+            ...new Set(
+              changedTestPlans
+                .filter((plan) => splitConfigs.includes(plan.config))
+                .flatMap((plan) => plan.includePatterns ?? []),
+            ),
+          ].toSorted();
+          if (includePatterns.length === 0) {
+            return [];
+          }
+        }
+
         const pretestBuildMode = resolveVitestPretestBuildMode([
-          { configs: splitConfigs, includePatterns: splitShard.includePatterns },
+          { configs: splitConfigs, includePatterns },
         ]);
 
         return [
@@ -1937,7 +1963,7 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
             shardName: splitShard.shardName,
             configs: splitConfigs,
             ...(splitShard.env ? { env: splitShard.env } : {}),
-            ...(splitShard.includePatterns ? { includePatterns: splitShard.includePatterns } : {}),
+            ...(includePatterns ? { includePatterns } : {}),
             ...(pretestBuildMode ? { pretestBuildMode } : {}),
             runner: splitShard.runner ?? DEFAULT_NODE_TEST_RUNNER,
             requiresDist: splitShard.requiresDist,

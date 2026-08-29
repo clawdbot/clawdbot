@@ -1301,6 +1301,7 @@ jobs:
               : [
                   ...createNodeTestPlan({
                     includeReleaseOnlyPluginShards: false,
+                    ...(compactPullRequest && changedPaths ? { changedPaths } : {}),
                     // Keep the legacy boolean for historical target planners;
                     // current planners use the event-specific mode.
                     compact: compactPlanMode !== undefined,

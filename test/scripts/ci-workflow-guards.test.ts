@@ -272,6 +272,7 @@ function runCiManifestFixture(options: {
   bundledPlanner: boolean;
   changedPlannerImportFails?: boolean;
   changedPaths?: string[] | null;
+  repository?: string;
   eventName?: "pull_request" | "push" | "workflow_dispatch";
   historicalCompatibility?: boolean;
   iosCapabilities?: boolean;
@@ -312,6 +313,7 @@ function runCiManifestFixture(options: {
           export const createNodeTestShardBundles = (options = {}) => [{
             checkName: "bundled-node-plan",
             configs: ["test/vitest/bundled.config.ts"],
+            includePatterns: options.changedPaths,
             env: {
               OPENCLAW_CI_TEST_COMPACT_MODE: options.compactMode ?? "full",
               OPENCLAW_CI_TEST_RUNNER_BACKEND: options.runnerBackend ?? "",
@@ -483,7 +485,7 @@ function runCiManifestFixture(options: {
           options.releaseCandidateCompatibility === true ? "true" : "false",
         OPENCLAW_CI_TARGET_CONTEXT_TARGET:
           options.targetContextCompatibility === true ? "true" : "false",
-        OPENCLAW_CI_REPOSITORY: "openclaw/openclaw",
+        OPENCLAW_CI_REPOSITORY: options.repository ?? "openclaw/openclaw",
         OPENCLAW_CI_RUN_ANDROID: "true",
         OPENCLAW_CI_RUN_CONTROL_UI_I18N: "true",
         OPENCLAW_CI_RUN_IOS_BUILD: "true",
@@ -7799,6 +7801,34 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(
         JSON.parse(expectDefined(manifest.outputs.checks_windows_matrix, "Windows matrix")).include,
       ).toHaveLength(selectedJobs.includes("checks-windows") ? 2 : 0);
+    },
+  );
+
+  it.each([
+    ["pull_request", "openclaw/openclaw", true],
+    ["pull_request", "example/openclaw", false],
+    ["push", "openclaw/openclaw", false],
+    ["workflow_dispatch", "openclaw/openclaw", false],
+  ] as const)(
+    "forwards changed paths only to canonical PR fallback (%s, %s)",
+    (eventName, repository, forwardsChangedPaths) => {
+      const changedPaths = [
+        "src/plugins/manifest-tool-availability.ts",
+        "src/plugins/tools.optional.test.ts",
+      ];
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        changedPaths,
+        eventName,
+        repository,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const rows = JSON.parse(
+        expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "fallback matrix"),
+      ).include;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].check_name).toBe("bundled-node-plan");
+      expect(rows[0].includePatterns).toEqual(forwardsChangedPaths ? changedPaths : undefined);
     },
   );
 
