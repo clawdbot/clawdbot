@@ -10,6 +10,10 @@ import {
 } from "node:fs";
 import { delimiter, join } from "node:path";
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/gu, `'\\''`)}'`;
+}
+
 // Keep the complete wrapper/lock/entry/gate owners. Command resolution, Git
 // transport faults, and GitHub responses are synthetic; rg invocation is forbidden.
 export function createMainRefreshFixture(directory: string) {
@@ -219,8 +223,9 @@ function runGit(args, input) {
   return result.stdout.trim();
 }
 `;
+  const instrumentedGit = join(bin, "git-instrumented.mjs");
   writeFileSync(
-    join(bin, "git"),
+    instrumentedGit,
     prelude +
       `
 const mainFetch = args.includes('fetch') && args.some(arg =>
@@ -270,6 +275,20 @@ if (mainFetch && result.status === 0) {
   });
 }
 process.exit(result.status ?? 1);
+`,
+  );
+  // Scan every argument like the Node shim, including values after -C/-c prefixes.
+  // Unobserved queries can execute real Git directly without starting another Node process.
+  writeFileSync(
+    join(bin, "git"),
+    `#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    fetch|merge-base|diff|checkout|update-ref|push)
+      exec ${shellQuote(process.execPath)} ${shellQuote(instrumentedGit)} "$@" ;;
+  esac
+done
+exec ${shellQuote(realGit)} "$@"
 `,
   );
   writeFileSync(
