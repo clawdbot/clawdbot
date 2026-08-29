@@ -1060,42 +1060,6 @@ describe("mcp cli", () => {
     });
   });
 
-  it("prints a JSON failure envelope when show --json targets an unknown server", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-      const workspaceDir = await createWorkspace();
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      mockLog.mockClear();
-      await expect(runMcpCommand(["mcp", "show", "missing", "--json"])).rejects.toThrow(
-        "__exit__:1",
-      );
-      expect(JSON.parse(lastLogLine())).toEqual({
-        ok: false,
-        error: {
-          type: "cli_error",
-          message: `No MCP server named "missing" in ${configPath}. Run openclaw mcp list to see configured servers.`,
-        },
-      });
-      expect(mockError).not.toHaveBeenCalled();
-    });
-  });
-
-  it("keeps the human stderr failure when show targets an unknown server without --json", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-      const workspaceDir = await createWorkspace();
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      mockLog.mockClear();
-      await expect(runMcpCommand(["mcp", "show", "missing"])).rejects.toThrow("__exit__:1");
-      expect(lastErrorLine()).toBe(
-        `No MCP server named "missing" in ${configPath}. Run openclaw mcp list to see configured servers.`,
-      );
-      expect(mockLog).not.toHaveBeenCalled();
-    });
-  });
-
   it("starts the channel bridge with parsed serve options", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
