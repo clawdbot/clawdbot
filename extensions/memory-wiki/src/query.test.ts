@@ -34,9 +34,12 @@ vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
 
 vi.mock("@openclaw/memory-core/api.js", { spy: true });
 
+vi.mock("openclaw/plugin-sdk/agent-scope-runtime", () => ({
+  resolveSessionAgentIdStrict: resolveSessionAgentIdMock,
+}));
+
 vi.mock("openclaw/plugin-sdk/memory-host-core", () => ({
   resolveDefaultAgentId: resolveDefaultAgentIdMock,
-  resolveSessionAgentId: resolveSessionAgentIdMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => {

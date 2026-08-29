@@ -156,6 +156,19 @@ export function getDevelopmentProfile() {
   );
 }
 
+export async function reopenWorkerEnvironmentStore() {
+  await testState.service?.stop();
+  testState.service = undefined;
+  closeOpenClawStateDatabaseForTest();
+  testState.stateDb = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: testState.root },
+  });
+  testState.store = createWorkerEnvironmentStore({
+    database: testState.stateDb,
+    now: () => testState.nowMs,
+  });
+}
+
 export function createService(
   provider: WorkerProvider,
   serviceOptions: Partial<
@@ -211,6 +224,7 @@ export function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerP
   return {
     id: "fake",
     supportedExecutionModes: ["remote-exec"],
+    resolveAllocation: async () => ({ leaseId: "lease-1", sharedHost: false }),
     provision: async () => ({ leaseId: "lease-1", ssh: SSH_ENDPOINT }),
     inspect: async () => ({ status: "active" }),
     destroy: async () => {},

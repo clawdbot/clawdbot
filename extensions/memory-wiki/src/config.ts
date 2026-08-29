@@ -5,7 +5,7 @@ import path from "node:path";
 // event-store/kysely graph, which doctor enumeration must not cold-load.
 import {
   resolveDefaultAgentId,
-  resolveSessionAgentId,
+  resolveSessionAgentIdStrict,
 } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
@@ -307,7 +307,7 @@ export function resolveMemoryWikiConfiguredAgentIds(
     if (!rawId) {
       return [];
     }
-    return [resolveSessionAgentId({ config: appConfig, agentId: rawId })];
+    return [resolveSessionAgentIdStrict({ config: appConfig, agentId: rawId })];
   });
   return [...new Set(ids.length > 0 ? ids : [resolveDefaultAgentId(appConfig ?? {})])];
 }
@@ -330,7 +330,7 @@ export function resolveMemoryWikiAgentConfig(params: {
   if (!requestedAgentId && configuredAgentIds.length > 1) {
     throw new Error("agentId is required for memory-wiki when vault.scope=agent.");
   }
-  const agentId = resolveSessionAgentId({
+  const agentId = resolveSessionAgentIdStrict({
     config: params.appConfig,
     agentId: requestedAgentId ?? resolveDefaultAgentId(params.appConfig ?? {}),
   });

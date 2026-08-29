@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
 import { handleInvoke } from "../node-host/invoke.js";
+import type { Deferred } from "../shared/deferred.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -30,6 +32,7 @@ let invokeCount: number;
 let afterPrepare: () => Promise<void>;
 let request: ExecuteNodeHostCommandParams & { workdir: string };
 let resolveDecision: (result: { decision: string }) => void;
+let decisionEntered: Deferred;
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "node-exec-policy" });
   await state.writeConfig({});
@@ -52,6 +55,7 @@ beforeEach(async () => {
   const decision = new Promise<{ decision: string }>((resolve) => {
     resolveDecision = resolve;
   });
+  decisionEntered = createDeferred();
   rpc.mockReset().mockImplementation(async (method, _options, params) => {
     if (method === "exec.approvals.node.get") {
       return readExecApprovalsSnapshot();
@@ -60,6 +64,7 @@ beforeEach(async () => {
       return { id: params.id, expiresAtMs: Date.now() + 60000 };
     }
     if (method === "exec.approval.waitDecision") {
+      decisionEntered.resolve();
       return await decision;
     }
     if (method !== "node.invoke") {
@@ -121,9 +126,8 @@ it.each(["allow-once", "allow-always"])(
     }).finally(() => {
       completed = true;
     });
-    await vi.waitFor(() =>
-      expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true),
-    );
+    await Promise.race([decisionEntered.promise, result]);
+    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
     expect(completed).toBe(false);
     resolveDecision({ decision });
     expect((await result).details).toMatchObject({
@@ -137,9 +141,8 @@ it.each(["allow-once", "allow-always"])(
 it("prompts for target ask=always even when the caller is full/off", async () => {
   setRuntimeConfigSnapshot({ tools: { exec: { security: "full", ask: "always" } } });
   const result = executeNodeHostCommand(request);
-  await vi.waitFor(() =>
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true),
-  );
+  await Promise.race([decisionEntered.promise, result]);
+  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
   expect(invokeCount).toBe(0);
   resolveDecision({ decision: "allow-once" });
   expect((await result).details.status).toBe("completed");
@@ -172,20 +175,26 @@ it("reports target policy denial as not executed", async () => {
 
 it("does not dispatch a late approval after cancellation", async () => {
   const controller = new AbortController();
+  const reason = new Error("originating turn closed");
   const execution = executeNodeHostCommand({
     ...request,
     security: "allowlist",
     ask: "on-miss",
     signal: controller.signal,
   });
-  const rejected = expect(execution).rejects.toThrow();
-  await vi.waitFor(() =>
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true),
-  );
-  controller.abort(new Error("originating turn closed"));
-  resolveDecision({ decision: "allow-once" });
-  await rejected;
-  expect(invokeCount).toBe(0);
+  const drained = execution.catch(() => undefined);
+  try {
+    await Promise.race([decisionEntered.promise, execution]);
+    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
+    controller.abort(reason);
+    resolveDecision({ decision: "allow-once" });
+    await expect(execution).rejects.toBe(reason);
+    expect(invokeCount).toBe(0);
+  } finally {
+    controller.abort(reason);
+    resolveDecision({ decision: "deny" });
+    await drained;
+  }
 });
 
 it("preserves a target deny introduced while approval was pending", async () => {
@@ -194,9 +203,8 @@ it("preserves a target deny introduced while approval was pending", async () => 
     security: "allowlist",
     ask: "on-miss",
   });
-  await vi.waitFor(() =>
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true),
-  );
+  await Promise.race([decisionEntered.promise, execution]);
+  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
   setRuntimeConfigSnapshot({ tools: { exec: { security: "deny", ask: "off" } } });
   resolveDecision({ decision: "allow-once" });
   expect((await execution).details).toMatchObject({
@@ -322,9 +330,8 @@ it("refuses a cwd replaced by a symlink after approval preparation", async () =>
   const moved = path.join(request.workdir, "moved");
   await fs.mkdir(approved);
   const execution = executeNodeHostCommand({ ...request, workdir: approved, ask: "always" });
-  await vi.waitFor(() =>
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true),
-  );
+  await Promise.race([decisionEntered.promise, execution]);
+  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
   await fs.rename(approved, moved);
   await fs.symlink(moved, approved, "dir");
   resolveDecision({ decision: "allow-once" });

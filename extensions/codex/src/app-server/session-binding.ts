@@ -11,9 +11,9 @@ import {
   ensureAuthProfileStore,
   resolveDefaultAgentDir,
   resolveProviderIdForAuth,
-  resolveSessionAgentIds,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -64,7 +64,7 @@ export function sessionBindingIdentity(params: {
   agentId?: string;
   config?: OpenClawConfig;
 }): Extract<CodexAppServerBindingIdentity, { kind: "session" }> {
-  const { sessionAgentId } = resolveSessionAgentIds(params);
+  const { sessionAgentId } = resolveSessionAgentIdsStrict(params);
   const sessionKey = params.sessionKey?.trim();
   return {
     kind: "session",
@@ -956,6 +956,52 @@ export function createCodexAppServerBindingStore(
     }
   };
 
+  const transitionSessionGeneration = async (
+    identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
+    mode: "reset" | "retire",
+  ): Promise<CodexSessionGenerationRetirementResult> => {
+    return await runBindingMutation(async () => {
+      const key = bindingStoreKey(identity);
+      const ttlMs =
+        mode === "reset"
+          ? leaseContext.getStore()?.has(key)
+            ? undefined
+            : 1
+          : identity.sessionKey?.trim()
+            ? undefined
+            : PHYSICAL_SESSION_RETIRE_TTL_MS;
+      return await transactKey(
+        key,
+        (current, leaseToken) => {
+          if (!current) {
+            return { result: "absent" as const };
+          }
+          if (!ownsStoredSessionGeneration(identity, current)) {
+            return { result: "conflict" as const };
+          }
+          // Retirement is idempotent, but reset cannot clear a same-id deletion fence.
+          // Only the authoritative session-store reclaim path can prove an in-place reset.
+          if (current.state === "cleared" && current.retired === true) {
+            return { result: mode === "retire" ? ("applied" as const) : ("conflict" as const) };
+          }
+          return {
+            result: "applied" as const,
+            next: {
+              version: 1,
+              state: "cleared",
+              ...(mode === "retire" ? { retired: true as const } : {}),
+              ...storedSessionGeneration(identity, current),
+              ...(current.lease && current.lease.token === leaseToken
+                ? { lease: current.lease }
+                : {}),
+            },
+          };
+        },
+        ttlMs,
+      );
+    });
+  };
+
   return {
     async read(identity) {
       const key = bindingStoreKey(identity);
@@ -1085,9 +1131,8 @@ export function createCodexAppServerBindingStore(
               isSameSupervisionOwner(active.binding, mutation.binding);
             const clearsPendingSupervisionOwner =
               mutation.kind === "clear" &&
-              active?.binding.connectionScope === "supervision" &&
               matchesPendingSupervisionClear(
-                active.binding,
+                active?.binding,
                 mutation.threadId,
                 mutation.expectedPendingSupervisionBranch,
               );
@@ -1110,11 +1155,12 @@ export function createCodexAppServerBindingStore(
                 mutation.kind === "commit-pending-supervision-branch") &&
                 !matchesPendingSupervisionBranch(active?.binding, mutation.expected)) ||
               (mutation.kind === "clear" &&
-                ((mutation.threadId !== undefined &&
-                  active?.binding.threadId !== mutation.threadId) ||
-                  !ownsGeneration ||
-                  (active?.binding.connectionScope === "supervision" &&
-                    !clearsPendingSupervisionOwner)))
+                (!ownsGeneration ||
+                  (mutation.expectedPendingSupervisionBranch
+                    ? !clearsPendingSupervisionOwner
+                    : (mutation.threadId !== undefined &&
+                        active?.binding.threadId !== mutation.threadId) ||
+                      active?.binding.connectionScope === "supervision")))
             ) {
               return { result: false };
             }
@@ -1206,72 +1252,8 @@ export function createCodexAppServerBindingStore(
       });
     },
 
-    async resetSessionGeneration(identity) {
-      return await runBindingMutation(async () => {
-        const key = bindingStoreKey(identity);
-        return await transactKey(
-          key,
-          (current, leaseToken) => {
-            if (!current) {
-              return { result: "absent" as const };
-            }
-            if (!ownsStoredSessionGeneration(identity, current)) {
-              return { result: "conflict" as const };
-            }
-            // A retired same-id row may be a deletion fence. Only the authoritative
-            // session-store reclaim path can prove it belongs to an in-place reset.
-            if (current.state === "cleared" && current.retired === true) {
-              return { result: "conflict" as const };
-            }
-            return {
-              result: "applied" as const,
-              next: {
-                version: 1,
-                state: "cleared",
-                ...storedSessionGeneration(identity, current),
-                ...(current.lease && current.lease.token === leaseToken
-                  ? { lease: current.lease }
-                  : {}),
-              },
-            };
-          },
-          leaseContext.getStore()?.has(key) ? undefined : 1,
-        );
-      });
-    },
-
-    async retireSessionGeneration(identity) {
-      return await runBindingMutation(async () => {
-        const key = bindingStoreKey(identity);
-        return await transactKey(
-          key,
-          (current, leaseToken) => {
-            if (!current) {
-              return { result: "absent" as const };
-            }
-            if (!ownsStoredSessionGeneration(identity, current)) {
-              return { result: "conflict" as const };
-            }
-            if (current.state === "cleared" && current.retired === true) {
-              return { result: "applied" as const };
-            }
-            return {
-              result: "applied" as const,
-              next: {
-                version: 1,
-                state: "cleared",
-                retired: true,
-                ...storedSessionGeneration(identity, current),
-                ...(current.lease && current.lease.token === leaseToken
-                  ? { lease: current.lease }
-                  : {}),
-              },
-            };
-          },
-          identity.sessionKey?.trim() ? undefined : PHYSICAL_SESSION_RETIRE_TTL_MS,
-        );
-      });
-    },
+    resetSessionGeneration: (identity) => transitionSessionGeneration(identity, "reset"),
+    retireSessionGeneration: (identity) => transitionSessionGeneration(identity, "retire"),
 
     async withThreadArchiveFence(run) {
       pendingArchives += 1;
@@ -1423,18 +1405,20 @@ function isSameSupervisionOwner(
 }
 
 function matchesPendingSupervisionClear(
-  binding: CodexAppServerThreadBinding,
+  binding: CodexAppServerThreadBinding | undefined,
   threadId: string | undefined,
   expected: CodexAppServerPendingSupervisionBranch | undefined,
 ): boolean {
-  if (!expected) {
+  if (!expected || threadId !== expected.sourceThreadId) {
     return false;
   }
-  const sourceThreadId = expected.sourceThreadId;
+  // Failed creation may never have written its binding. The transaction separately
+  // fences the generation; only this exact-pending clear is idempotent when absent.
   return (
-    threadId === sourceThreadId &&
-    binding.supervisionSourceThreadId === sourceThreadId &&
-    matchesPendingSupervisionBranch(binding, expected)
+    !binding ||
+    (binding.connectionScope === "supervision" &&
+      binding.supervisionSourceThreadId === expected.sourceThreadId &&
+      matchesPendingSupervisionBranch(binding, expected))
   );
 }
 
@@ -1449,7 +1433,7 @@ export function bindingStoreKey(identity: CodexAppServerBindingIdentity): string
     if (!sessionId) {
       throw new Error("Codex app-server binding requires a session id");
     }
-    const agentId = resolveSessionAgentIds({ agentId: rawAgentId }).sessionAgentId;
+    const agentId = resolveSessionAgentIdsStrict({ agentId: rawAgentId }).sessionAgentId;
     const sessionKey = identity.sessionKey?.trim();
     if (sessionKey) {
       const digest = createHash("sha256").update(sessionKey).digest("base64url");

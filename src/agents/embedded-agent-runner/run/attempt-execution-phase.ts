@@ -58,7 +58,7 @@ export async function runEmbeddedAttemptExecutionPhase(
   const { capabilityToolNames, liveAllowedToolNames, replayAllowedToolNames } =
     toolCatalog.toolSearchRunPlan;
   const { runtimeChannel } = systemPrompt;
-  const { toolSearchTargetTranscriptProjections } = toolBase;
+  const { nestedToolActivities } = toolBase;
   activeSession[agentSessionSetContextReplacementHook](() =>
     toolBase.skillInstructionDeliveryCache.clear(),
   );
@@ -111,6 +111,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
       cacheTrace,
       capabilityToolNames,
+      compactionReplayEnabled: sessionRuntime.transport.compactionReplayEnabled,
       effectiveWorkspace: input.setup.effectiveWorkspace,
       isOpenAIResponsesApi,
       isRawModelRun: input.isRawModelRun,
@@ -207,7 +208,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     hookAgentId,
     diagnosticTrace: input.diagnostics.diagnosticTrace,
     clientToolCallSlots,
-    toolSearchTargetTranscriptProjections,
+    nestedToolActivities,
     isReplaySafeTool: (tool) => replaySafeTools.has(tool as never),
     hasDeliveredSourceReply,
     markSourceReplyDelivered,

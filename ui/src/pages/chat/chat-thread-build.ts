@@ -1,5 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -99,10 +100,12 @@ export type BuildChatItemsProps = {
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const tools = props.toolMessages.filter((message) => asRecord(message) !== null);
-  const history = props.messages.filter(
-    (message) =>
-      !isAssistantHeartbeatAckForDisplay(message) &&
-      (props.persistCommentary !== false || !isKeyedAssistantStreamFallbackMessage(message)),
+  const history = composeTranscriptDisplay(
+    props.messages.filter(
+      (message) =>
+        !isAssistantHeartbeatAckForDisplay(message) &&
+        (props.persistCommentary !== false || !isKeyedAssistantStreamFallbackMessage(message)),
+    ),
   );
   const historyKeys = buildMessageKeys(history);
   const toolKeys = buildMessageKeys(tools, history.length);

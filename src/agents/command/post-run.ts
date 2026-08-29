@@ -1,5 +1,6 @@
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { FollowupRun } from "../../auto-reply/reply/queue.js";
+import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -18,13 +19,20 @@ import {
   shouldPersistCurrentRunSessionCleanup,
 } from "../agent-command-restart-recovery.js";
 import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
+  mergeAgentRunTerminalOutcome,
+} from "../agent-run-terminal-outcome.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
+import { buildMainSessionRecoveryClearPatch } from "../main-session-recovery/main-session-recovery-clear.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
+import type { deliverAgentCommandResult } from "./delivery.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import type { runEmbeddedAgentAttempt } from "./run-embedded-attempt.js";
 import {
@@ -104,6 +112,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
   const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.opts.bootstrapContextRunKind);
   let sessionEntry = params.sessionEntry;
   let result = params.attempt.result;
+  let deliveryResult: Awaited<ReturnType<typeof deliverAgentCommandResult>>;
+  let hasResultError: boolean;
   let { runOwnedSessionId, sessionReboundDuringRun } = params.sessionOwnership;
   const publishSessionOwnership = () => {
     // Outer restart-recovery cleanup runs even after later delivery failures.
@@ -506,11 +516,11 @@ export async function finalizeEmbeddedAgentCommand(params: {
       payloads,
       assertDeliveryCurrent: () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
       onDeliveryResult: (
-        deliveryResult: Parameters<
+        delivered: Parameters<
           NonNullable<Parameters<typeof deliverAgentCommandResult>[0]["onDeliveryResult"]>
         >[0],
       ) => {
-        const deliveryStatus = deliveryResult.deliveryStatus;
+        const deliveryStatus = delivered.deliveryStatus;
         const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
           deliveryStatus && {
             status: deliveryStatus.status,
@@ -521,11 +531,11 @@ export async function finalizeEmbeddedAgentCommand(params: {
           terminal.metadata.terminalDelivery = terminalDelivery;
         }
         params.onTerminalDeliveryEvidenceChanged(
-          buildRestartRecoveryTerminalDeliveryEvidence(deliveryResult),
+          buildRestartRecoveryTerminalDeliveryEvidence(delivered),
         );
       },
     };
-    const deliveryResult = await deliverAgentCommandResult(
+    deliveryResult = await deliverAgentCommandResult(
       resolveFreshSessionEntryForDelivery
         ? {
             ...deliveryParams,
@@ -555,8 +565,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
       const clearOwnedPendingFinal =
         deliveryResult?.deliverySucceeded === true &&
         pendingFinalDeliveryMarker.pendingFinalDeliveryIntentId !== undefined;
-      // Preserve the exact local claim through sibling session writes so a delivered
-      // source is tombstoned before admission release can erase its ownership fields.
+      // Preserve the exact claim snapshot through sibling session writes, then
+      // revalidate its durable owner immediately before committing cleanup.
       const recoveryClaimEntry =
         entry.restartRecoveryDeliveryRunId === runId
           ? entry
@@ -565,6 +575,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
             : params.sessionEntry?.restartRecoveryDeliveryRunId === runId
               ? params.sessionEntry
               : undefined;
+      const clearsRecoveryCycle = entry.restartRecoveryDeliveryRunId === runId;
       if (clearOwnedPendingFinal || clearStaleTransportOnly || recoveryClaimEntry) {
         const now = Date.now();
         sessionEntry = await persistAgentSession({
@@ -591,12 +602,13 @@ export async function finalizeEmbeddedAgentCommand(params: {
                   terminalRunId: runId,
                 })
               : {}),
+            ...(clearsRecoveryCycle ? buildMainSessionRecoveryClearPatch(entry) : {}),
           },
           shouldPersist: (current) =>
             shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId) &&
             (!recoveryClaimEntry ||
-              current?.restartRecoveryDeliveryRunId === undefined ||
-              current.restartRecoveryDeliveryRunId === runId) &&
+              current?.restartRecoveryDeliveryRunId === runId ||
+              (!clearsRecoveryCycle && current?.restartRecoveryDeliveryRunId === undefined)) &&
             (!clearOwnedPendingFinal ||
               current?.pendingFinalDelivery?.intentId ===
                 pendingFinalDeliveryMarker.pendingFinalDeliveryIntentId) &&
@@ -605,21 +617,39 @@ export async function finalizeEmbeddedAgentCommand(params: {
       }
     }
 
-    if (fallbackExhausted || lifecycle.resolveResultError(result, false)) {
+    hasResultError = Boolean(fallbackExhausted || lifecycle.resolveResultError(result, false));
+    if (hasResultError) {
       lifecycle.emitResultError(result, fallbackExhausted, terminal);
     } else {
       lifecycle.emitEnd(terminal);
     }
-    return {
-      deliveryResult,
-      sessionEntry,
-      runOwnedSessionId,
-      sessionReboundDuringRun,
-    };
   } catch (error) {
     lifecycle.emitPostTurnError(error, terminal);
     throw error;
   } finally {
     await deferredLifecycle.complete();
   }
+
+  // Cancellation can arrive while delivery or deferred cleanup still owns the run.
+  // Record the final fact on the projected reply without changing its JSON output.
+  const outcome = deferredLifecycle.signal.aborted
+    ? mergeAgentRunTerminalOutcome(
+        terminal.outcome,
+        buildAgentRunTerminalOutcomeFromLifecycleEvent({
+          phase: "end",
+          abortSignal: deferredLifecycle.signal,
+        }),
+      )
+    : terminal.outcome;
+  return {
+    deliveryResult: recordAgentRunTerminalOutcome(
+      deliveryResult,
+      hasResultError || classifyAgentRunTerminalOutcome(outcome) !== "success"
+        ? "failed"
+        : "completed",
+    ),
+    sessionEntry,
+    runOwnedSessionId,
+    sessionReboundDuringRun,
+  };
 }

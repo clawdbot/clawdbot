@@ -138,9 +138,28 @@ describe("plugin doctor session identity evidence", () => {
           config: { session: { store: storePath } },
         });
 
-        await expect(
-          context.readSessionIdentityEvidenceBatch?.([{ agentId: "main", sessionId: "live" }]),
-        ).resolves.toEqual([{ agentId: "main", sessionId: "live", state: "current", sessionKey }]);
+        const requests = [
+          { agentId: "main", sessionId: "live" },
+          { agentId: "main", sessionId: "gone" },
+          { agentId: "main", sessionId: "live" },
+        ];
+        await expect(context.readSessionIdentityEvidenceBatch?.([])).resolves.toEqual([]);
+        await expect(context.readSessionIdentityEvidenceBatch?.(requests)).resolves.toEqual([
+          { agentId: "main", sessionId: "live", state: "current", sessionKey },
+          { agentId: "main", sessionId: "gone", state: "absent" },
+          { agentId: "main", sessionId: "live", state: "current", sessionKey },
+        ]);
+
+        // Discovery may be cached within a context; row evidence must be read anew.
+        await replaceSessionEntry(
+          { agentId: "main", env, sessionKey, storePath },
+          { sessionId: "gone", updatedAt: 2 },
+        );
+        await expect(context.readSessionIdentityEvidenceBatch?.(requests)).resolves.toEqual([
+          { agentId: "main", sessionId: "live", state: "absent" },
+          { agentId: "main", sessionId: "gone", state: "current", sessionKey },
+          { agentId: "main", sessionId: "live", state: "absent" },
+        ]);
       },
     );
   });

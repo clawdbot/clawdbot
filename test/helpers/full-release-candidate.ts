@@ -65,7 +65,7 @@ export function fullReleaseCandidateManifestFixture(
     fullReleaseCandidateRequestInput(requestOverrides),
   );
   return {
-    schema: "openclaw.full-release-candidate/v1" as const,
+    schema: "openclaw.full-release-candidate/v2" as const,
     request,
     requestSha256: canonicalTestSha256(request),
     producer: {
@@ -75,7 +75,18 @@ export function fullReleaseCandidateManifestFixture(
       runId: "77",
       runAttempt: "1",
       jobId: "201",
-      jobName: "Prepare shared release candidate / Prepare shared Docker E2E image",
+      jobName:
+        "Acquire full release candidate / Prepare shared release candidate / Prepare shared Docker E2E image",
+    },
+    publisher: {
+      repository: request.repository,
+      workflowPath: ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
+      workflowSha: request.toolingSha,
+      runId: "77",
+      runAttempt: "1",
+      jobId: "202",
+      jobName:
+        "Acquire full release candidate / Prepare shared release candidate / Bind full release candidate evidence",
     },
     preparation: {
       planSha256: "d".repeat(64),
@@ -114,10 +125,10 @@ export function fullReleaseCandidateBindingFixture(requestOverrides: Record<stri
   const manifest = fullReleaseCandidateManifestFixture(requestOverrides);
   const { schema: _schema, ...manifestFields } = manifest;
   return {
-    schema: "openclaw.full-release-candidate-binding/v1" as const,
+    schema: "openclaw.full-release-candidate-binding/v2" as const,
     ...manifestFields,
     evidenceArtifact: fullReleaseCandidateArtifact(
-      `full-release-candidate-v1-${manifest.requestSha256}`,
+      `full-release-candidate-v2-${manifest.requestSha256}`,
       {
         id: "104",
         digest: "4".repeat(64),

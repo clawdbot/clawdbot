@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
     response: new Response(null, { status: 204 }),
     release: vi.fn(async () => {}),
   })),
-  startQaGatewayChild: vi.fn(async () => ({
+  startQaGatewayChild: vi.fn(async (_params: unknown) => ({
     baseUrl: "http://127.0.0.1:18789",
     token: "qa-test-token",
     cfg: {},
@@ -42,7 +42,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
 }));
 vi.mock("./gateway-child.js", () => ({
-  startQaGatewayChild: mocks.startQaGatewayChild,
+  createQaGatewayChild: () => ({
+    start: (params: unknown) => mocks.startQaGatewayChild(params),
+    stop: async () => ({ process: "confirmed-stopped", errors: [] }),
+  }),
 }));
 vi.mock("./crabline-transport.js", () => ({
   createQaCrablineTransportAdapter: vi.fn(async () => ({

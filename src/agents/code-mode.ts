@@ -137,6 +137,7 @@ function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[])
 function createCodeModeExecDescription(
   ctx: CodeModeToolContext,
   catalog?: readonly ToolSearchCatalogEntry[],
+  config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId),
 ): string {
   const namespacePrompt = describeCodeModeNamespacesForPrompt(catalog);
   // A known run catalog with neither MCP nor swarm has no virtual API files.
@@ -162,10 +163,7 @@ function createCodeModeExecDescription(
   const skillsGuidance = ctx.codeModeSkills?.length
     ? " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)`."
     : "";
-  const maxOutputBytes = resolveCodeModeConfig(
-    ctx.runtimeConfig ?? ctx.config,
-    ctx.agentId,
-  ).maxOutputBytes;
+  const { maxOutputBytes } = config;
   const projection = catalog
     ? createCodeModeCatalogProjection(
         catalog.map((entry) => compactToolSearchCatalogEntry(entry)),
@@ -178,7 +176,7 @@ function createCodeModeExecDescription(
     : undefined;
   const catalogIndex = projection ? formatCodeModeCatalogIndex(projection.bindings) : "";
   return (
-    `Run JavaScript or TypeScript in OpenClaw code mode. Enabled tools are async global functions listed in the quick index. Await dependent calls in order; independent calls may run with Promise.all. Declared output fields may feed later calls in the same program; do not spend another \`exec\` merely inspecting them. Return the final value; otherwise the result is \`null\`. \`-> ?\` means unknown output: do not feed it into guessed field-dependent logic in the same program. Return the raw value first, observe it, then use a later \`exec\` for dependent composition. If a tool is omitted from the bounded index, use \`catalog.search(query)\`; results are callable: \`const [tool] = await catalog.search("..."); return await tool({...});\`. Handles expose \`describe()\` when a schema is needed. \`setTimeout\` and \`clearTimeout\` work. Nested calls enforce normal tool policy and approvals. Tool failures are catchable JavaScript errors; otherwise, use a safe failed result to correct your code or choose another tool. If an action may have started, inspect its outcome without repeating mutations. Never replay actions that already ran. Nested results, output, and final value share ${maxOutputBytes} bytes; truncation reports omitted bytes and asks you to rerun with narrower args. Node.js modules and \`require\`/\`import\` are NOT available; use enabled globals for shell, file, network, or external actions.` +
+    `Run JavaScript or TypeScript in OpenClaw code mode. Enabled tools are async global functions listed in the quick index. Await dependent calls in order; independent calls may run with Promise.all. Declared output fields may feed later calls in the same program; do not spend another \`exec\` merely inspecting them. Return the final value; otherwise the result is \`null\`. \`-> ?\` means unknown output: do not feed it into guessed field-dependent logic in the same program. Return the raw value first, observe it, then use a later \`exec\` for dependent composition. If a tool is omitted from the bounded index, use \`catalog.search(query)\`; results are callable: \`const [tool] = await catalog.search("..."); return await tool({...});\`. Handles expose \`describe()\` when a schema is needed. \`setTimeout\` and \`clearTimeout\` work. Nested calls enforce normal tool policy and approvals. Tool failures are catchable JavaScript errors; otherwise, use a safe failed result to correct your code or choose another tool. If an action may have started, inspect its outcome without repeating mutations. Never replay actions that already ran. Each nested result is bounded separately to ${maxOutputBytes} bytes. Cumulative output and the final value or error share ${maxOutputBytes} bytes across waits. Output/value truncation reports a prefix and omitted bytes of the original normalized JSON; rerun with narrower args. Ordinary output is incremental; unchanged summaries are suppressed, changed cumulative summaries replace earlier ones. Node.js modules and \`require\`/\`import\` are NOT available; use enabled globals for shell, file, network, or external actions.` +
     apiGuidance +
     mcpGuidance +
     swarmGuidance +
@@ -193,10 +191,13 @@ function createCodeModeExecDescription(
 }
 
 export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
+  // The surface planner owns activation. Capture limits once so an admitted
+  // control remains executable during model overrides and restart recovery.
+  const config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
   const execTool = markCodeModeControlTool({
     name: CODE_MODE_EXEC_TOOL_NAME,
     label: "exec",
-    description: createCodeModeExecDescription(ctx),
+    description: createCodeModeExecDescription(ctx, undefined, config),
     parameters: Type.Object({
       // `command` stays runtime-only for hook compatibility. Requiring the sole
       // model-facing field prevents schema-valid empty calls from constrained models.
@@ -228,6 +229,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         await runCodeModeExec({
           toolCallId,
           ctx,
+          config,
           code: input.code,
           assistantTurnId:
             executionContext?.assistantMessage.responseId?.trim() ||
@@ -248,9 +250,13 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     name: CODE_MODE_WAIT_TOOL_NAME,
     label: "wait",
     hideFromChannelProgress: true,
-    description: "Resume a suspended OpenClaw code mode run returned by exec.",
+    description:
+      'Resume only when the outer exec result has status "waiting", using its top-level runId. A completed exec may return a still-running tool operation inside value; manage that operation through its enabled tool in a new exec. Never pass a nested sessionId or process ID to wait.',
     parameters: Type.Object({
-      runId: Type.String({ description: "Code mode run id returned by exec." }),
+      runId: Type.String({
+        description:
+          'Top-level runId from an exec result with status "waiting", never a nested tool sessionId.',
+      }),
     }),
     execute: async (
       toolCallId: string,
@@ -289,18 +295,7 @@ export function applyCodeModeCatalog(params: {
   toolHookContext?: HookContext;
   directToolNames?: Iterable<string>;
   codeModeSkills?: CodeModeToolContext["codeModeSkills"];
-  forceEnabled?: boolean;
 }) {
-  const config = resolveCodeModeConfig(params.config, params.agentId);
-  // Engagement (including "auto" per-model resolution) is decided by the run
-  // gates before this is called; only a hard `false` may disable compaction.
-  if (config.enabled === false && params.forceEnabled !== true) {
-    return applyToolCatalogCompaction({
-      ...params,
-      enabled: false,
-      isVisibleControlTool: isCodeModeControlTool,
-    });
-  }
   const tools = params.tools.filter(
     (tool) =>
       isCodeModeControlTool(tool) ||
@@ -353,7 +348,7 @@ export function addClientToolsToCodeModeCatalog(params: {
 }) {
   return addClientToolsToToolCatalog({
     ...params,
-    // Callers gate on run engagement; "auto" counts as enabled here.
-    enabled: resolveCodeModeConfig(params.config, params.agentId).enabled !== false,
+    // The caller selects this catalog only after the run's activation gate.
+    enabled: true,
   });
 }

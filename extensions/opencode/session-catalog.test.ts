@@ -269,6 +269,7 @@ function captureOpenCodeContinuationCatalog() {
       pluginOwnerId: "opencode",
       initializationPending: true as const,
       ...(params.label ? { label: params.label } : {}),
+      ...(params.displayName ? { displayName: params.displayName } : {}),
       ...(params.spawnedCwd ? { spawnedCwd: params.spawnedCwd } : {}),
       pluginExtensions: params.initialEntry.pluginExtensions,
     };
@@ -591,9 +592,10 @@ describe("OpenCode session catalog", () => {
       },
     });
     expect(createSessionEntry).toHaveBeenCalledTimes(1);
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
-        label: "Catalog session",
+        displayName: "Catalog session",
         spawnedCwd: "/workspace",
         initialEntry: {
           acpBackendId: "acpx",

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -8,9 +9,13 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
+import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import {
+  readTranscriptDisplayDelta,
   readRecentSessionTranscriptHistoryEvents,
   readSessionTranscriptHistoryEvents,
+  readSessionTranscriptHistoryEventById,
+  readSessionTranscriptHistoryEventPage,
 } from "./session-accessor.sqlite-history-events.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -50,8 +55,8 @@ function insertSyntheticHistory(
   );
   const insertActive = database.db.prepare(
     `INSERT INTO session_transcript_active_events
-       (session_id, active_position, event_seq, message_position)
-     VALUES (?, ?, ?, ?)`,
+       (session_id, active_position, event_seq, message_position, context_eligible)
+     VALUES (?, ?, ?, ?, 1)`,
   );
   runSqliteImmediateTransactionSync(database.db, () => {
     for (let seq = 2; seq <= lastSeq; seq += 1) {
@@ -113,6 +118,91 @@ describe("SQLite transcript history events", () => {
     vi.restoreAllMocks();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+  });
+
+  it("preserves physical dispatch cuts across history pages and deltas", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "exec", parentId: null, message: { role: "assistant", content: "exec" } },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "custom",
+      id: "control",
+      parentId: "exec",
+      customType: "test",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "wait", parentId: "control", message: { role: "assistant", content: "wait" } },
+        ...["control", "first"].map((afterEntryId, startOrder) => {
+          const id = startOrder === 0 ? "first" : "later";
+          return {
+            eventId: id,
+            parentId: startOrder === 0 ? "wait" : "first",
+            message: createNestedToolActivity({
+              runId: "run",
+              scopeId: "attempt",
+              afterEntryId,
+              startOrder,
+              parentToolCallId: "exec",
+              toolCallId: id,
+              toolName: "read",
+              input: {},
+              result: { content: [{ type: "text", text: "done" }] },
+              isError: false,
+              startedAt: 1,
+              timestamp: 2,
+            }),
+          };
+        }),
+      ],
+      touchSessionEntry: false,
+    });
+    const raw = readTranscriptRawDelta(scope);
+    const delta = readTranscriptDisplayDelta(scope);
+    expect(raw.kind).toBe("page");
+    expect(delta.kind).toBe("page");
+    if (raw.kind !== "page" || delta.kind !== "page") {
+      throw new Error("missing transcript page");
+    }
+    const rawSeq = new Map(raw.events.map((row) => [historyEventId(row), row.seq]));
+    const history = readSessionTranscriptHistoryEvents(scope);
+    expect(history.map(historyEventId)).toEqual(["exec", "wait", "first", "later"]);
+    expect(history.map(({ seq }) => seq)).toEqual([1, 2, 3, 4]);
+    const source = history[0]?.displayPosition?.source;
+    expect(source).toEqual(expect.any(String));
+    for (const [id, afterId, startOrder] of [
+      ["first", "control", 0],
+      ["later", "first", 1],
+    ] as const) {
+      const position = {
+        source,
+        rawSeq: rawSeq.get(id),
+        activity: { afterRawSeq: rawSeq.get(afterId), scopeId: "attempt", startOrder },
+      };
+      const expected = { displayPosition: position };
+      expect(history.find((row) => historyEventId(row) === id)).toMatchObject(expected);
+      expect(delta.events.find((row) => historyEventId(row) === id)).toMatchObject(expected);
+      expect(readSessionTranscriptHistoryEventById(scope, id)).toMatchObject(expected);
+      const page = readSessionTranscriptHistoryEventPage(scope, {
+        offset: id === "later" ? 0 : 1,
+        maxMessages: 1,
+      });
+      expect(page.events).toHaveLength(1);
+      expect(page.events[0]).toMatchObject(expected);
+      expect(
+        readRecentSessionTranscriptHistoryEvents(scope, {
+          maxBytes: 65536,
+          maxLines: 1,
+          maxMessages: 1,
+        }).events[0],
+      ).toMatchObject({ displayPosition: { rawSeq: rawSeq.get("later") } });
+    }
+    expect(delta.cursor).toBe(raw.cursor);
+    expect(delta.serializedBytes).toBe(raw.serializedBytes);
+    expect(delta.events.map(({ event, seq }) => ({ event, seq }))).toEqual(raw.events);
   });
 
   it("retains an oversized newest history row without parsing excluded older payloads", async () => {
@@ -205,8 +295,8 @@ describe("SQLite transcript history events", () => {
     );
     const insertActive = database.db.prepare(
       `INSERT INTO session_transcript_active_events
-         (session_id, active_position, event_seq, message_position)
-       VALUES (?, ?, ?, NULL)`,
+         (session_id, active_position, event_seq, message_position, context_eligible)
+       VALUES (?, ?, ?, NULL, 1)`,
     );
     for (const event of boundaryEvents) {
       insertEvent.run(scope.sessionId, event.seq, event.eventJson, event.seq);

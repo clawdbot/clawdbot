@@ -73,6 +73,7 @@ public struct OpenClawChatWindowShell: View {
                 voiceNoteControl: self.voiceNoteControl,
                 speech: self.speech,
                 mediaPlaybackAllowed: self.mediaPlaybackAllowed)
+                .environment(\.openClawChatDesktopLayout, true)
                 .navigationTitle(self.activeSessionTitle)
                 .navigationSubtitle(self.subtitle)
                 .toolbar { self.detailToolbar }
@@ -171,12 +172,7 @@ public struct OpenClawChatWindowShell: View {
     }
 
     private var activeSessionEntry: OpenClawChatSessionEntry? {
-        self.viewModel.sessions.first { $0.key == self.viewModel.sessionKey } ??
-            self.viewModel.sessions.first {
-                self.viewModel.matchesCurrentSessionKey(
-                    incoming: $0.key,
-                    current: self.viewModel.sessionKey)
-            }
+        self.viewModel.currentSessionEntry()
     }
 
     private var activeSessionKey: String {
@@ -207,6 +203,24 @@ public struct OpenClawChatWindowShell: View {
 
     @ToolbarContentBuilder
     private var detailToolbar: some ToolbarContent {
+        if OpenClawSessionColor(name: self.activeSessionEntry?.color) != nil {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) {
+                    OpenClawSessionColorDot(color: self.activeSessionEntry?.color)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(self.activeSessionTitle)
+                            .font(OpenClawChatTypography.body.weight(.semibold))
+                            .lineLimit(1)
+                        if !self.subtitle.isEmpty {
+                            Text(self.subtitle)
+                                .font(OpenClawChatTypography.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+        }
         ToolbarItemGroup(placement: .primaryAction) {
             if let usage = self.viewModel.contextUsage {
                 ChatContextUsageMenu(usage: usage) {
@@ -214,133 +228,7 @@ public struct OpenClawChatWindowShell: View {
                 }
             }
 
-            if self.viewModel.showsThinkingPicker {
-                self.thinkingPicker
-            }
-
-            self.verbosityPicker
-            if self.viewModel.selectedModelSupportsFastMode {
-                self.fastModeToggle
-            }
-
-            if self.viewModel.showsModelPicker {
-                self.modelPicker
-            }
-
             self.sessionActionsMenu
-        }
-    }
-
-    private var thinkingPicker: some View {
-        Picker(selection: Binding(
-            get: { self.viewModel.thinkingSelectionID },
-            set: { self.viewModel.selectThinkingLevel($0) }))
-        {
-            Text(String(localized: "Default (inherited)"))
-                .font(OpenClawChatTypography.body)
-                .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
-            ForEach(self.viewModel.thinkingLevelOptions) { option in
-                Text(String(
-                    format: String(localized: "%@ (override)"),
-                    option.label))
-                    .font(OpenClawChatTypography.body)
-                    .tag(option.id)
-            }
-        } label: {
-            Text("Thinking")
-                .font(OpenClawChatTypography.body)
-        }
-        .pickerStyle(.menu)
-        .help(String(localized: "Thinking level"))
-        .disabled(self.viewModel.isUpdatingSessionSettings)
-    }
-
-    private var verbosityPicker: some View {
-        Picker(selection: Binding(
-            get: { self.viewModel.verboseLevel },
-            set: { self.viewModel.selectVerboseLevel($0) }))
-        {
-            Text(String(localized: "Default (inherited)"))
-                .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
-            Text(String(localized: "Off")).tag("off")
-            Text(String(localized: "On")).tag("on")
-            Text(String(localized: "Full")).tag("full")
-        } label: {
-            Text(String(localized: "Verbosity"))
-                .font(OpenClawChatTypography.body)
-        }
-        .pickerStyle(.menu)
-        .help(String(localized: "Verbosity"))
-        .disabled(self.viewModel.isUpdatingSessionSettings)
-    }
-
-    private var fastModeToggle: some View {
-        Picker(selection: Binding(
-            get: { self.viewModel.fastModeSelectionID },
-            set: { self.viewModel.selectFastMode($0) }))
-        {
-            Text(String(localized: "Default (inherited)"))
-                .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
-            Text(String(localized: "On")).tag("on")
-            Text(String(localized: "Off")).tag("off")
-        } label: {
-            Label(String(localized: "Fast"), systemImage: "bolt.fill")
-        }
-        .pickerStyle(.menu)
-        .help(String(localized: "Fast responses"))
-        .disabled(self.viewModel.isUpdatingSessionSettings)
-    }
-
-    private var modelPicker: some View {
-        let sections = self.viewModel.modelPickerSections
-        return Picker(selection: Binding(
-            get: { self.viewModel.modelSelectionID },
-            set: { self.viewModel.selectModel($0) }))
-        {
-            Text(self.viewModel.defaultModelLabel)
-                .font(OpenClawChatTypography.body)
-                .tag(OpenClawChatViewModel.defaultModelSelectionID)
-            if !sections.pinned.isEmpty {
-                Section("Pinned") { self.modelOptions(sections.pinned) }
-            }
-            if !sections.recent.isEmpty {
-                Section("Recent") { self.modelOptions(sections.recent) }
-            }
-            ForEach(sections.providers) { provider in
-                Section {
-                    self.modelOptions(provider.models)
-                } header: {
-                    HStack(spacing: 4) {
-                        Text(provider.displayName)
-                        if provider.isDefaultProvider {
-                            Text(String(localized: "Default"))
-                                .font(OpenClawChatTypography.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-        } label: {
-            Text("Model")
-                .font(OpenClawChatTypography.body)
-        }
-        .pickerStyle(.menu)
-        .help("Model")
-        .disabled(self.viewModel.isUpdatingSessionSettings)
-    }
-
-    private func modelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
-        ForEach(models) { model in
-            HStack(spacing: 4) {
-                Text(model.displayLabel)
-                    .font(OpenClawChatTypography.body)
-                if self.viewModel.isDefaultModel(model) {
-                    Text(String(localized: "Default"))
-                        .font(OpenClawChatTypography.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .tag(model.selectionID)
         }
     }
 
@@ -441,6 +329,11 @@ public struct OpenClawChatWindowShell: View {
                             ? "tray.and.arrow.up"
                             : "archivebox")
                 }
+            }
+
+            OpenClawSessionColorMenu(color: self.activeSessionEntry?.color) { color in
+                let key = self.activeSessionKey
+                Task { await self.viewModel.setSessionColor(key: key, color: color) }
             }
 
             Divider()

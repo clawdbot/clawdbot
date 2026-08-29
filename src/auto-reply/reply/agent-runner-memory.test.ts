@@ -546,6 +546,41 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ contextWindowTokens: 32_000 }));
   });
 
+  it.each([
+    ["default", 8_767, false, false],
+    ["default", 8_768, true, false],
+    ["default", 12_767, true, false],
+    ["default", 12_768, true, true],
+    ["custom", 18_767, false, false],
+    ["custom", 18_768, true, false],
+    ["custom", 20_767, true, false],
+    ["custom", 20_768, true, true],
+  ] as const)(
+    "separates early flush and blocking compaction for %s plan at %i tokens",
+    async (plan, totalTokens, flushExpected, compactionExpected) => {
+      if (plan === "custom") {
+        registerMemoryCapability("third-party-memory", {
+          flushPlanResolver: () =>
+            createModifiedMemoryFlushPlan({
+              reserveTokensFloor: 12_000,
+              softThresholdTokens: 2_000,
+            }),
+        });
+      }
+      const entry = createFlushSessionEntry({ totalTokens, compactionCount: 0 });
+      const storePath = path.join(rootDir, "sessions.json");
+      await writeTestSessionStore(storePath, "main", entry);
+      const overrides = { modelContextTokens: 32_768, promptForEstimate: "", storePath };
+      const first = await runDefaultMemoryFlush(entry, overrides);
+      expect(first.outcome).toBe(flushExpected ? "completed" : "skipped");
+      const second = await runDefaultMemoryFlush(first.sessionEntry ?? entry, overrides);
+      expect(second.outcome).toBe("skipped");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(flushExpected ? 1 : 0);
+      await runDefaultPreflight(first.sessionEntry ?? entry, overrides);
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(compactionExpected ? 1 : 0);
+    },
+  );
+
   it("runs exactly one auto-reply memory flush turn, rotates, and persists metadata", async () => {
     const followupRun = createTestFollowupRun({
       authProfileId: "anthropic:work",
@@ -1906,32 +1941,64 @@ describe("runMemoryFlushIfNeeded", () => {
   );
   it.each([
     {
-      label: "below threshold",
-      totalTokens: 897_999,
+      label: "below the 32K threshold",
+      totalTokens: 12_767,
       shouldCompact: false,
       requestedRuntime: "openclaw",
+      contextWindowTokens: 32_768,
+    },
+    {
+      label: "at the 32K threshold",
+      totalTokens: 12_768,
+      shouldCompact: true,
+      requestedRuntime: "openclaw",
+      contextWindowTokens: 32_768,
+    },
+    {
+      label: "below the capped 8K threshold",
+      totalTokens: 3_999,
+      shouldCompact: false,
+      requestedRuntime: "openclaw",
+      contextWindowTokens: 8_000,
+    },
+    {
+      label: "at the capped 8K threshold",
+      totalTokens: 4_000,
+      shouldCompact: true,
+      requestedRuntime: "openclaw",
+      contextWindowTokens: 8_000,
+    },
+    {
+      label: "below threshold",
+      totalTokens: 901_999,
+      shouldCompact: false,
+      requestedRuntime: "openclaw",
+      contextWindowTokens: 922_000,
     },
     {
       label: "at threshold",
-      totalTokens: 898_000,
+      totalTokens: 902_000,
       shouldCompact: true,
       requestedRuntime: "openclaw",
+      contextWindowTokens: 922_000,
     },
     {
       label: "reported pressure",
       totalTokens: 904_869,
       shouldCompact: true,
       requestedRuntime: "openclaw",
+      contextWindowTokens: 922_000,
     },
     {
       label: "reported pressure after a runtime fallback",
       totalTokens: 904_869,
       shouldCompact: true,
       requestedRuntime: "codex",
+      contextWindowTokens: 922_000,
     },
   ] as const)(
     "applies session compaction at $label with memory flush disabled",
-    async ({ totalTokens, shouldCompact, requestedRuntime }) => {
+    async ({ totalTokens, shouldCompact, requestedRuntime, contextWindowTokens }) => {
       // A disabled memory plugin supplies no flush plan; compaction still owns its budget.
       registerMemoryFlushPlanResolverForTest(() => null);
       const sessionEntry = createFlushSessionEntry({
@@ -1977,7 +2044,7 @@ describe("runMemoryFlushIfNeeded", () => {
           agentDir: rootDir,
         }),
         defaultModel: "openai/gpt-5.6-luna",
-        modelContextTokens: 922_000,
+        modelContextTokens: contextWindowTokens,
         promptForEstimate: "",
         authorize,
         ...(requestedRuntime === "codex" ? { agentHarnessId: "openclaw" } : {}),
@@ -1992,7 +2059,7 @@ describe("runMemoryFlushIfNeeded", () => {
       if (shouldCompact) {
         expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
           agentHarnessId: "openclaw",
-          contextTokenBudget: 922_000,
+          contextTokenBudget: contextWindowTokens,
           currentTokenCount: totalTokens,
           force: true,
           forcePreflight: true,
@@ -2416,7 +2483,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
-      totalTokens: 70_000,
+      totalTokens: 72_000,
       totalTokensFresh: true,
       totalTokensVersion: 1,
     };
@@ -2426,7 +2493,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     expect(requireCompactEmbeddedAgentSessionCall().currentTokenCount).toBeGreaterThanOrEqual(
-      80_000,
+      82_000,
     );
   });
 
@@ -2906,7 +2973,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it.each([
     ["below", 20_000, false],
-    ["above", 70_000, true],
+    ["above", 72_000, true],
   ])(
     "uses a provider usage anchor older than the scan window when pressure is %s threshold",
     async (_label, providerPromptTokens, shouldCompact) => {
@@ -3088,48 +3155,61 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.currentTokenCount).toBeGreaterThan(100_000);
   });
 
-  it("combines latest usage with post-usage tail pressure for preflight compaction", async () => {
-    const sessionFile = path.join(rootDir, "combined-tail-pressure-session.jsonl");
-    await writeTestSessionTranscript({
-      rootDir,
-      events: [
-        {
-          type: "message",
-          message: {
-            role: "assistant",
-            content: "small answer",
-            usage: { input: 86_000, output: 2_000 },
+  it.each([0, 513])(
+    "combines latest usage with post-usage tail pressure across %i display-only messages",
+    async (activityCount) => {
+      const sessionFile = path.join(rootDir, "combined-tail-pressure-session.jsonl");
+      await writeTestSessionTranscript({
+        rootDir,
+        events: [
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              content: "small answer",
+              usage: { input: 90_000, output: 2_000 },
+            },
           },
-        },
-        {
-          type: "message",
-          message: {
-            role: "user",
-            content: `moderate follow-up ${"x".repeat(36_000)}`,
+          ...Array.from({ length: activityCount }, () => ({
+            type: "message",
+            message: {
+              role: "custom",
+              customType: "tool-activity",
+              display: true,
+              excludeFromContext: true,
+              content: "completed",
+            },
+          })),
+          {
+            type: "message",
+            message: {
+              role: "user",
+              content: `moderate follow-up ${"x".repeat(36_000)}`,
+            },
           },
-        },
-      ],
-    });
-    registerMemoryFlushPlanResolverForTest(() =>
-      createModifiedMemoryFlushPlan({ reserveTokensFloor: 0 }),
-    );
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokensFresh: false,
-    };
-
-    await runDefaultPreflight(sessionEntry, {
-      followupRun: createTestFollowupRun({
+        ],
+      });
+      registerMemoryFlushPlanResolverForTest(() =>
+        createModifiedMemoryFlushPlan({ reserveTokensFloor: 0 }),
+      );
+      const sessionEntry: SessionEntry = {
         sessionId: "session",
-        sessionFile,
-        sessionKey: "main",
-      }),
-    });
+        updatedAt: Date.now(),
+        totalTokensFresh: false,
+      };
 
-    const compactCall = requireCompactEmbeddedAgentSessionCall();
-    expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(96_000);
-  });
+      await runDefaultPreflight(sessionEntry, {
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "main",
+        }),
+      });
+
+      const compactCall = requireCompactEmbeddedAgentSessionCall();
+      expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
+    },
+  );
 
   it("does not count bytes from a large latest usage record as post-usage tail pressure", async () => {
     const sessionFile = path.join(rootDir, "large-usage-record-session.jsonl");

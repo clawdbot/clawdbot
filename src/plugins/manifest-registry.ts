@@ -792,7 +792,7 @@ function resolveDuplicatePrecedenceRank(params: {
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
 }): number {
-  if (params.candidate.origin === "config") {
+  if (params.candidate.origin === "config" || params.candidate.configSelected) {
     return 0;
   }
   if (

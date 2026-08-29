@@ -1,14 +1,15 @@
+import { randomUUID } from "node:crypto";
 /**
  * Prepares stream subscription, tool execution, and the active run queue.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import {
   closeDiagnosticEmbeddedRunOwner,
@@ -19,9 +20,19 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import {
+  createNestedToolActivity,
+  readNestedToolActivity,
+  projectNestedToolActivityForHooks,
+  type NestedToolActivity,
+} from "../../../sessions/nested-tool-activity.js";
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import {
+  buildToolLifecycleErrorResult,
+  sanitizeToolResult,
+} from "../../embedded-agent-tool-results.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
 import {
@@ -34,13 +45,10 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { isToolResultError } from "../../tool-result-error.js";
-import {
-  projectToolSearchTargetTranscriptMessages,
-  type ToolSearchCatalogToolExecutor,
-  type ToolSearchTargetTranscriptProjection,
-} from "../../tool-search.js";
+import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
+import { redactTranscriptMessage } from "../../transcript-redact.js";
 import { log } from "../logger.js";
-import { setActiveEmbeddedRunLifecycleGeneration } from "../run-state.js";
+import { ACTIVE_EMBEDDED_RUNS, setActiveEmbeddedRunLifecycleGeneration } from "../run-state.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
@@ -88,7 +96,7 @@ export function prepareEmbeddedAttemptStream(input: {
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
   clientToolCallSlots: readonly EmbeddedAttemptClientToolCallSlot[];
-  toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[];
+  nestedToolActivities: NestedToolActivity[];
   isReplaySafeTool: (tool: Parameters<ToolSearchCatalogToolExecutor>[0]["tool"]) => boolean;
   runAbortController: AbortController;
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
@@ -110,6 +118,8 @@ export function prepareEmbeddedAttemptStream(input: {
   >[0]["trajectoryRecorder"];
 }) {
   const attempt = input.attempt;
+  const activityScope = randomUUID();
+  let nestedStartOrder = 0;
   const hookRunner = input.hookRunner;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
@@ -161,9 +171,9 @@ export function prepareEmbeddedAttemptStream(input: {
         ) {
           return;
         }
-        const hookMessages = projectToolSearchTargetTranscriptMessages(
+        const hookMessages = projectNestedToolActivityForHooks(
           input.activeSession.messages.slice(),
-          input.toolSearchTargetTranscriptProjections,
+          input.nestedToolActivities,
         );
         const reportedModelRef = resolveReportedModelRef({
           provider: attempt.provider,
@@ -352,24 +362,29 @@ export function prepareEmbeddedAttemptStream(input: {
     const runSignal = input.runAbortController.signal;
     const signal = AbortSignal.any([toolParams.signal ?? runSignal, runSignal]);
     const yieldRunSignal = toolParams.toolName === "sessions_yield" ? runSignal : undefined;
-    try {
-      if (toolParams.source === "openclaw" && toolParams.sourceName === "core") {
-        recordStructuredReplayTrustForToolCall(
-          toolParams.toolCallId,
-          toolParams.tool as never,
-          attempt.runId,
-        );
-      }
-      const lifecycle = subscription.runToolLifecycle({
+    const startedAt = Date.now();
+    const startOrder = nestedStartOrder++;
+    const manager = input.activeSession.sessionManager;
+    const afterEntryId = manager.getAppendParentId();
+    if (toolParams.source === "openclaw" && toolParams.sourceName === "core") {
+      recordStructuredReplayTrustForToolCall(
+        toolParams.toolCallId,
+        toolParams.tool as never,
+        attempt.runId,
+      );
+    }
+    return await raceWithAbortSignal(
+      subscription.runToolLifecycle({
         toolName: toolParams.toolName,
         toolCallId: toolParams.toolCallId,
         args: toolParams.input,
-        replaySafe: input.isReplaySafeTool(toolParams.tool),
+        replaySafe: toolParams.replaySafe ?? input.isReplaySafeTool(toolParams.tool),
         hideFromChannelProgress:
           "hideFromChannelProgress" in toolParams.tool &&
           toolParams.tool.hideFromChannelProgress === true,
-        execute: (onImplementationStart) =>
-          raceWithAbortSignal(
+        execute: async (onImplementationStart) => {
+          // Acceptance belongs inside execution: observers must never see a rejected success.
+          const outcome = await raceWithAbortSignal(
             (async () => {
               signal.throwIfAborted();
               const preparer = getInternalToolExecutionPreparer(toolParams.tool);
@@ -400,46 +415,61 @@ export function prepareEmbeddedAttemptStream(input: {
               } finally {
                 prepared.dispose();
               }
-            })(),
+            })().then(toolParams.acceptResultBeforeProjection),
             signal,
             yieldRunSignal,
-          ),
-      });
-      const result = await raceWithAbortSignal(lifecycle, signal, yieldRunSignal);
-      // Settlement persists every queued projection. Validate the final result
-      // first so a rejected hidden-tool value never enters session history.
-      const acceptedResult = await toolParams.acceptResultBeforeProjection(result);
-      const isError = isToolResultError(acceptedResult);
-      input.toolSearchTargetTranscriptProjections.push({
-        parentToolCallId: toolParams.parentToolCallId,
-        toolCallId: toolParams.toolCallId,
-        toolName: toolParams.toolName,
-        input: toolParams.input,
-        result: acceptedResult,
-        // Fulfilled tools can still carry a canonical failure result (for example MCP isError).
-        // Preserve that fact before the hidden target call is projected into session history.
-        isError,
-        timestamp: Date.now(),
-      });
-      notifyToolActivity(attempt.runId);
-      return acceptedResult;
-    } catch (error) {
-      const message = formatErrorMessage(error);
-      input.toolSearchTargetTranscriptProjections.push({
-        parentToolCallId: toolParams.parentToolCallId,
-        toolCallId: toolParams.toolCallId,
-        toolName: toolParams.toolName,
-        input: toolParams.input,
-        result: {
-          content: [{ type: "text", text: message }],
-          details: { status: "error", error: message },
+          ).then(
+            (result) => ({ result }),
+            (error: unknown) => ({ result: buildToolLifecycleErrorResult(error), error }),
+          );
+          const activity = createNestedToolActivity({
+            runId: attempt.runId,
+            scopeId: activityScope,
+            afterEntryId,
+            startOrder,
+            parentToolCallId: toolParams.parentToolCallId,
+            toolCallId: toolParams.toolCallId,
+            toolName: toolParams.toolName,
+            input: toolParams.input,
+            result: sanitizeToolResult(outcome.result),
+            isError: isToolResultError(outcome.result),
+            startedAt,
+            timestamp: Date.now(),
+          });
+          await runWithOwnedSessionTranscriptWrite(
+            { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
+            () => {
+              // Revalidate the exact attempt after awaited acceptance and writer admission.
+              if (
+                ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) !== queueHandle ||
+                input.getRunState().aborted
+              ) {
+                return;
+              }
+              const message = {
+                ...activity,
+                idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
+              };
+              manager.appendMessage(message);
+              const recorded = readNestedToolActivity(
+                redactTranscriptMessage(activity, attempt.config),
+              );
+              if (!recorded) {
+                throw new Error("Nested activity became invalid during transcript redaction");
+              }
+              input.nestedToolActivities.push(recorded);
+            },
+          );
+          notifyToolActivity(attempt.runId);
+          if ("error" in outcome) {
+            throw outcome.error;
+          }
+          return outcome.result;
         },
-        isError: true,
-        timestamp: Date.now(),
-      });
-      notifyToolActivity(attempt.runId);
-      throw error;
-    }
+      }),
+      signal,
+      yieldRunSignal,
+    );
   };
 
   let externalAbortAccepted = false;

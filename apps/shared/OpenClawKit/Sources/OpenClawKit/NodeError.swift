@@ -6,6 +6,8 @@ public enum OpenClawNodeErrorCode: String, Codable, Sendable {
     case backgroundUnavailable = "NODE_BACKGROUND_UNAVAILABLE"
     case invalidRequest = "INVALID_REQUEST"
     case unavailable = "UNAVAILABLE"
+    /// Rejected before a command handler or progress frame; safe for bounded admission recovery.
+    case notReady = "NODE_NOT_READY"
     case systemRunDenied = "SYSTEM_RUN_DENIED"
 }
 

@@ -3,6 +3,7 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
+import type { BrowserTabTarget } from "./browser/browser-target.ts";
 
 export const TERMINAL_PANEL_TOGGLE_EVENT = "openclaw:terminal-toggle";
 export const TERMINAL_PANEL_DOCK_BOTTOM_EVENT = "openclaw:terminal-dock-bottom";
@@ -31,6 +32,8 @@ export type BrowserPanelToggleDetail = {
   dock?: "bottom" | "right";
   newTab?: boolean;
   open?: boolean;
+  /** Existing tab to focus when the panel opens (browser-tab chat cards). */
+  browserTab?: BrowserTabTarget;
   url?: string;
 };
 

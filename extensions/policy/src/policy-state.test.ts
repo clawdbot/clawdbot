@@ -1,7 +1,11 @@
 // Policy tests cover policy state plugin behavior.
 import { describe, expect, it } from "vitest";
 import { scanPolicySandboxPosture } from "./policy-state-sandbox.js";
-import { collectPolicyEvidence } from "./policy-state.js";
+import {
+  collectPolicyEvidence,
+  createPolicyAttestation,
+  policyDocumentHash,
+} from "./policy-state.js";
 
 const scanPolicyChannels = (cfg: Record<string, unknown>) => collectPolicyEvidence(cfg).channels;
 
@@ -12,6 +16,148 @@ async function scanPolicyTools(raw: string) {
 
 const scanPolicyExecApprovals = (raw: string) =>
   collectPolicyEvidence({}, { execApprovalsRaw: raw }).execApprovals ?? [];
+
+describe("configured agent scanning", () => {
+  const keyedConfig = {
+    tools: { elevated: { enabled: true } },
+    agents: {
+      defaults: { sandbox: { mode: "off" } },
+      entries: {
+        guest: {
+          models: { "openai/gpt-5.6-luna": {} },
+          sandbox: { mode: "all", workspaceAccess: "none" },
+          tools: { deny: ["exec"], elevated: { enabled: false } },
+        },
+      },
+    },
+  };
+
+  it("uses agents.entries across policy evidence", () => {
+    const evidence = collectPolicyEvidence(keyedConfig);
+    expect(evidence.sandboxPosture).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "mode",
+          scope: "agent",
+          agentId: "guest",
+          value: "all",
+          source: "oc://openclaw.config/agents/entries/guest/sandbox/mode",
+        }),
+      ]),
+    );
+    expect(
+      evidence.toolPosture?.filter((entry) => entry.scope === "agent" && entry.agentId === "guest"),
+    ).not.toHaveLength(0);
+    expect(evidence.toolPosture).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: "agent",
+          agentId: "guest",
+          source: "oc://openclaw.config/agents/entries/guest/tools/elevated/enabled",
+          value: false,
+        }),
+      ]),
+    );
+    expect(evidence.agentWorkspace).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: "agent",
+          agentId: "guest",
+          source: "oc://openclaw.config/agents/entries/guest/sandbox/workspaceAccess",
+          value: "none",
+        }),
+      ]),
+    );
+    expect(evidence.modelRefs).toContainEqual({
+      ref: "openai/gpt-5.6-luna",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      source: 'oc://openclaw.config/agents/entries/guest/models/"openai/gpt-5.6-luna"',
+    });
+  });
+
+  it("still uses legacy agents.list across policy evidence", () => {
+    const evidence = collectPolicyEvidence({
+      agents: {
+        defaults: { sandbox: { mode: "off" } },
+        list: [
+          {
+            id: "legacy",
+            models: { "openai/gpt-5.6-luna": {} },
+            sandbox: { mode: "all" },
+          },
+        ],
+      },
+    });
+    expect(evidence.sandboxPosture).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "mode",
+          scope: "agent",
+          agentId: "legacy",
+          value: "all",
+          source: "oc://openclaw.config/agents/list/#0/sandbox/mode",
+        }),
+      ]),
+    );
+    expect(evidence.modelRefs).toContainEqual(
+      expect.objectContaining({
+        ref: "openai/gpt-5.6-luna",
+        source: 'oc://openclaw.config/agents/list/#0/models/"openai/gpt-5.6-luna"',
+      }),
+    );
+  });
+
+  it("does not fall back to stale agents.list when entries owns the roster", () => {
+    const evidence = collectPolicyEvidence({
+      agents: {
+        entries: {},
+        list: [{ id: "legacy", sandbox: { mode: "all" } }],
+      },
+    });
+    expect(evidence.sandboxPosture).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ agentId: "legacy" })]),
+    );
+  });
+
+  it("keeps attestations stable across keyed entry order", () => {
+    const first = {
+      alpha: { models: { "openai/gpt-5.6-luna": {} } },
+      omega: { models: { "openai/gpt-5.6-luna": {} } },
+    };
+    const attestationHash = (entries: Record<string, unknown>) =>
+      createPolicyAttestation({
+        ok: true,
+        checkedAt: new Date(0).toISOString(),
+        policyPath: "policy.jsonc",
+        policyHash: policyDocumentHash({}),
+        evidence: collectPolicyEvidence({ agents: { entries } }),
+        findings: [],
+      }).attestationHash;
+
+    expect(attestationHash(first)).toBe(
+      attestationHash({ omega: first.omega, alpha: first.alpha }),
+    );
+  });
+
+  it("escapes entry keys that are not bare identifiers", () => {
+    const evidence = scanPolicySandboxPosture({
+      agents: {
+        defaults: { sandbox: { mode: "off" } },
+        entries: { "team/qa": { sandbox: { mode: "all" } } },
+      },
+    });
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "mode",
+          agentId: "team/qa",
+          source: 'oc://openclaw.config/agents/entries/"team/qa"/sandbox/mode',
+        }),
+      ]),
+    );
+  });
+});
 
 describe("scanPolicySandboxPosture", () => {
   it("keeps explicit Podman identity while exposing shared container settings", () => {

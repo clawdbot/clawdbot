@@ -11,6 +11,7 @@ import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getPluginCache, getScopedPluginCache, type PluginCache } from "../plugins/plugin-cache.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
@@ -93,6 +94,13 @@ const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
 const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
 const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn(async () => ({})));
 const resolvePluginCliRootOwnerIdsMock = vi.hoisted(() => vi.fn());
+const createPluginCliLoadSessionMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    readConfig: <T>(read: () => Promise<T>) => read(),
+    withCache: <T>(run: () => T) => run(),
+    close: vi.fn(),
+  })),
+);
 const loadPluginCliDescriptorsMock = vi.hoisted(() =>
   vi.fn<
     () => Promise<
@@ -179,7 +187,11 @@ const createCliProgressMock = vi.hoisted(() =>
     done: progressDoneMock,
   })),
 );
-const loadConfigMock = vi.hoisted(() => vi.fn(() => ({})));
+const loadConfigMock = vi.hoisted(() =>
+  vi.fn<
+    (...args: Parameters<typeof import("../config/io.js").readBestEffortConfig>) => OpenClawConfig
+  >(() => ({})),
+);
 const readSourceConfigBestEffortMock = vi.hoisted(() => vi.fn(async () => ({})));
 const startProxyMock = vi.hoisted(() =>
   vi.fn<(config: unknown) => Promise<unknown>>(async () => null),
@@ -403,6 +415,7 @@ vi.mock("../plugins/cli.js", () => ({
 
 vi.mock("../plugins/cli-registry-loader.js", () => ({
   loadPluginCliDescriptors: loadPluginCliDescriptorsMock,
+  createPluginCliLoadSession: createPluginCliLoadSessionMock,
   resolvePluginCliRootOwnerIds: resolvePluginCliRootOwnerIdsMock,
 }));
 
@@ -462,6 +475,9 @@ vi.mock("./progress.js", () => ({
 
 vi.mock("../config/io.js", () => ({
   readBestEffortConfig: loadConfigMock,
+  readBestEffortConfigSnapshot: async (...args: Parameters<typeof loadConfigMock>) => ({
+    config: loadConfigMock(...args),
+  }),
   readSourceConfigBestEffort: readSourceConfigBestEffortMock,
 }));
 
@@ -611,6 +627,62 @@ describe("runCli exit behavior", () => {
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     delete process.env.OPENCLAW_HIDE_BANNER;
     loggingState.forceConsoleToStderr = false;
+  });
+
+  it("carries one lightweight generation through builtin reads, nested registration and actions", async () => {
+    const outside = getPluginCache();
+    const phases: PluginCache[] = [];
+    loadConfigMock.mockImplementationOnce(() => {
+      phases.push(getPluginCache());
+      return {};
+    });
+    registerSubCliByNameMock.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      phases.push(getPluginCache());
+    });
+    const parseAsync = vi.fn(async () => {
+      await Promise.resolve();
+      phases.push(getPluginCache());
+    });
+    const program = {
+      commands: [{ name: () => "plugins", aliases: () => [] }],
+      parseAsync,
+    };
+    buildProgramMock.mockReturnValueOnce(program).mockReturnValueOnce(program);
+    tryRouteCliMock.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+
+    await runCli(["node", "openclaw", "plugins", "late"]);
+
+    expect(phases).toHaveLength(3);
+    const owner = phases[0]!;
+    expect(owner.kind).toBe("operation");
+    expect(phases.every((cache) => cache === owner)).toBe(true);
+    expect(owner).not.toBe(outside);
+    expect(getPluginCache()).toBe(outside);
+    expect(createPluginCliLoadSessionMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+
+    await runCli(["node", "openclaw", "plugins", "late"]);
+    expect(phases.at(-1)).not.toBe(owner);
+    expect(getPluginCache()).toBe(outside);
+  });
+
+  it("does not replace Gateway's cache owner on the full Commander path", async () => {
+    const owner = getPluginCache();
+    const scoped = getScopedPluginCache();
+    const parseAsync = vi.fn(async () => {
+      await Promise.resolve();
+      expect(getPluginCache()).toBe(owner);
+      expect(getScopedPluginCache()).toBe(scoped);
+    });
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "gateway", aliases: () => [] }],
+      parseAsync,
+    });
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    await runCli(["node", "openclaw", "--log-level", "debug", "gateway", "run"]);
+    expect(parseAsync).toHaveBeenCalledTimes(1);
+    expect(getPluginCache()).toBe(owner);
   });
 
   it("does not load inactive provider cleanup modules for cold help", async () => {
@@ -2482,6 +2554,31 @@ describe("runCli exit behavior", () => {
   });
 
   it.each([
+    ["worker", { observe: false, pluginValidation: "core-only" }],
+    ["run", { skipPluginValidation: true }],
+  ])(
+    "preserves node %s config ownership when startup tracing is enabled",
+    async (subcommand, readOptions) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-timeline-"));
+      const timelinePath = path.join(root, "timeline.jsonl");
+      tryRouteCliMock.mockResolvedValueOnce(true);
+      loadConfigMock.mockResolvedValueOnce({ diagnostics: { flags: ["timeline"] } });
+      try {
+        await withEnvAsync(
+          { OPENCLAW_DIAGNOSTICS: "", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath },
+          async () => {
+            await runCli(["node", "openclaw", "node", subcommand]);
+          },
+        );
+        expect(loadConfigMock).toHaveBeenCalledWith(readOptions);
+        expect(await fs.readFile(timelinePath, "utf8")).toContain("cli.main.argv");
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
     ["root command", ["node", "openclaw", "update", "--dry-run", "--json"]],
     ["root shorthand", ["node", "openclaw", "--update", "--dry-run", "--json"]],
   ])("reads source-only proxy config for the update dry-run %s", async (_name, argv) => {
@@ -2741,17 +2838,17 @@ describe("runCli exit behavior", () => {
         exists: true,
         valid: true,
         sourceConfig: {
-          env: { vars: { OPENCLAW_TEST_PROXY_SELECTION: "selected" } },
+          env: { vars: { OPENCLAW_TEST_PROXY_SELECTION: "http://127.0.0.1:19876" } },
           gateway: { mode: "local" },
         },
       });
       loadConfigMock.mockImplementationOnce(() => ({
-        proxy: { selected: process.env.OPENCLAW_TEST_PROXY_SELECTION },
+        proxy: { proxyUrl: process.env.OPENCLAW_TEST_PROXY_SELECTION },
       }));
 
       await runCli(["node", "openclaw", "gateway", "run"]);
 
-      expect(startProxyMock).toHaveBeenCalledWith({ selected: "selected" });
+      expect(startProxyMock).toHaveBeenCalledWith({ proxyUrl: "http://127.0.0.1:19876" });
     });
   });
 
@@ -3138,7 +3235,12 @@ describe("runCli exit behavior", () => {
       program,
       undefined,
       undefined,
-      { mode: "lazy", primary: "workboard", skipPluginValidation: false },
+      {
+        mode: "lazy",
+        primary: "workboard",
+        skipPluginValidation: false,
+        session: createPluginCliLoadSessionMock.mock.results.at(-1)?.value,
+      },
     );
     expect(program.parseAsync).not.toHaveBeenCalled();
   });
@@ -3282,7 +3384,12 @@ describe("runCli exit behavior", () => {
       expect.anything(),
       undefined,
       undefined,
-      { mode: "lazy", primary: "memory", skipPluginValidation: true },
+      {
+        mode: "lazy",
+        primary: "memory",
+        skipPluginValidation: true,
+        session: createPluginCliLoadSessionMock.mock.results.at(-1)?.value,
+      },
     );
     expect(stderrDuringPluginRegistration).toBe(true);
     expect(stderrDuringParse).toBe(true);
@@ -3389,7 +3496,16 @@ describe("runCli exit behavior", () => {
       expect.anything(),
       undefined,
       undefined,
-      { mode: "lazy", primary: "memory", skipPluginValidation: false },
+      {
+        mode: "lazy",
+        primary: "memory",
+        skipPluginValidation: false,
+        session: createPluginCliLoadSessionMock.mock.results.at(-1)?.value,
+      },
+    );
+    const session = createPluginCliLoadSessionMock.mock.results.at(-1)?.value;
+    expect(session?.close.mock.invocationCallOrder[0]).toBeLessThan(
+      parseAsync.mock.invocationCallOrder[0]!,
     );
     expect(stderrDuringPluginRegistration).toBe(false);
     expect(loggingState.forceConsoleToStderr).toBe(false);

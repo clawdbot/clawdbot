@@ -501,6 +501,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["node", "worker"],
     exact: true,
     policy: {
+      // The app worker owns node startup, not Gateway channel schemas or Doctor preflight.
+      configGuard: "validate",
       hideBanner: true,
       loadPlugins: "never",
       ownsProtocolStdout: true,

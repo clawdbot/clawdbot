@@ -26,6 +26,13 @@ type PendingToolUse = {
   name: string;
   kind: CliToolUseStartDelta["kind"];
   inputJsonParts: string[];
+  /**
+   * Complete input carried on `content_block_start`. Some CLI backends send the
+   * whole tool input there and never emit `input_json_delta` chunks, so without
+   * this the start event reports empty args and the later complete copy is
+   * dropped by the `startedIds` dedup in `emitToolStartOnce`.
+   */
+  blockInput?: Record<string, unknown>;
 };
 
 type ToolUseTracker = {
@@ -275,6 +282,7 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
             name,
             kind: block.type,
             inputJsonParts: [],
+            ...(isRecord(block.input) ? { blockInput: block.input } : {}),
           });
         }
       } else if (isClaudeAssistantToolResultBlockType(block.type)) {
@@ -305,12 +313,19 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
       const pending = tracker.pendingByIndex.get(event.index);
       tracker.pendingByIndex.delete(event.index);
       if (pending) {
+        // Delta presence, not key count, decides the winner: a no-argument call
+        // arrives as an explicit `{}` delta, so keying on key count would let the
+        // start snapshot overwrite it.
+        const args =
+          pending.inputJsonParts.length > 0
+            ? parseToolInputJson(pending.inputJsonParts)
+            : (pending.blockInput ?? {});
         emitToolStartOnce(
           tracker,
           pending.toolCallId,
           pending.name,
           pending.kind,
-          parseToolInputJson(pending.inputJsonParts),
+          args,
           params.onToolUseStart,
         );
       }

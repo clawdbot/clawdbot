@@ -874,14 +874,7 @@ describe("generateSummary thinking options", () => {
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createUsage(0),
       stopReason: "stop",
       timestamp: 1,
     };
@@ -975,72 +968,100 @@ describe("generateSummary thinking options", () => {
 });
 
 describe("split-turn compaction", () => {
-  it("serializes history and turn-prefix summaries", async () => {
-    const model: Model = {
-      id: "summary-model",
-      name: "Summary Model",
-      api: "test-api",
-      provider: "test-provider",
-      baseUrl: "https://example.test",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 100_000,
-      maxTokens: 8_000,
-    };
-    let active = 0;
-    let maxActive = 0;
-    let callCount = 0;
-    const streamFn = vi.fn<StreamFn>(() => {
-      active++;
-      maxActive = Math.max(maxActive, active);
-      callCount++;
-      const stream = createAssistantMessageEventStream();
-      setTimeout(() => {
-        active--;
-        const message: AssistantMessage = {
-          role: "assistant",
-          content: [{ type: "text", text: `summary-${callCount}` }],
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "stop",
-          timestamp: 1,
-        };
-        stream.push({ type: "done", reason: "stop", message });
-        stream.end();
-      }, 5);
-      return stream;
-    });
-    const result = await compact(
-      {
-        firstKeptEntryId: "kept-entry",
-        messagesToSummarize: [{ role: "user", content: "history", timestamp: 1 }],
-        turnPrefixMessages: [{ role: "user", content: "prefix", timestamp: 2 }],
-        isSplitTurn: true,
-        tokensBefore: 100,
-        fileOps: createFileOps(),
-        settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
-      },
-      model,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      streamFn,
-    );
+  const operatorFocus = "Preserve API decisions.";
+  it.each([
+    { name: "ordinary history", history: true, prefix: false, budgets: [800] },
+    { name: "history and prefix", history: true, prefix: true, budgets: [800, 500] },
+    { name: "prefix-only", history: false, prefix: true, budgets: [500] },
+    {
+      name: "caller-owned instructions",
+      history: true,
+      prefix: true,
+      budgets: [800, 500],
+      focus: `<policy>${"preserve generated policy ".repeat(200)}</policy>`,
+    },
+  ])(
+    "forwards focus and serializes $name summaries",
+    async ({ history, prefix, budgets, focus = operatorFocus }) => {
+      const model: Model = {
+        id: "summary-model",
+        name: "Summary Model",
+        api: "test-api",
+        provider: "test-provider",
+        baseUrl: "https://example.test",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 100_000,
+        maxTokens: 8_000,
+      };
+      const prompts: string[] = [];
+      const outputBudgets: Array<number | undefined> = [];
+      const usageSink = vi.fn();
+      let active = 0;
+      let maxActive = 0;
+      const streamFn = vi.fn<StreamFn>((_model, context, options) => {
+        const message = context.messages[0];
+        if (message?.role !== "user") {
+          throw new Error("expected a user summary prompt");
+        }
+        prompts.push(
+          typeof message.content === "string"
+            ? message.content
+            : message.content.map((block) => (block.type === "text" ? block.text : "")).join(""),
+        );
+        outputBudgets.push(options?.maxTokens);
+        active++;
+        maxActive = Math.max(maxActive, active);
+        const stream = createAssistantMessageEventStream();
+        setTimeout(() => {
+          active--;
+          const response: AssistantMessage = {
+            role: "assistant",
+            content: [{ type: "text", text: "summary" }],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: createUsage(outputBudgets.length * 10 + 1),
+            stopReason: "stop",
+            timestamp: 1,
+          };
+          stream.push({ type: "done", reason: "stop", message: response });
+          stream.end();
+        }, 5);
+        return stream;
+      });
+      const result = await compact(
+        {
+          firstKeptEntryId: "kept-entry",
+          messagesToSummarize: history ? [{ role: "user", content: "history", timestamp: 1 }] : [],
+          turnPrefixMessages: prefix ? [{ role: "user", content: "prefix", timestamp: 2 }] : [],
+          isSplitTurn: prefix,
+          tokensBefore: 100,
+          fileOps: createFileOps(),
+          settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
+        },
+        model,
+        undefined,
+        undefined,
+        focus,
+        undefined,
+        undefined,
+        streamFn,
+        { completeSimple: vi.fn(), internalUsageSink: usageSink },
+      );
 
-    expect(result.ok).toBe(true);
-    expect(streamFn).toHaveBeenCalledTimes(2);
-    expect(maxActive).toBe(1);
-  });
+      expect(result.ok).toBe(true);
+      expect(streamFn).toHaveBeenCalledTimes(budgets.length);
+      expect(maxActive).toBe(1);
+      expect(outputBudgets).toEqual(budgets);
+      expect(usageSink.mock.calls.map(([usage]) => usage.totalTokens)).toEqual(
+        budgets.map((_, index) => (index + 1) * 10 + 1),
+      );
+      for (const prompt of prompts) {
+        expect(prompt).toContain(focus);
+        expect(prompt.indexOf(focus)).toBeGreaterThan(prompt.lastIndexOf("</conversation>"));
+      }
+    },
+  );
 });

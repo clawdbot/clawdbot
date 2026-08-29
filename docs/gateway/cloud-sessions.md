@@ -19,6 +19,20 @@ Sessions can run in three places, and every one of them uses the same session, t
 
 In all remote placements, model inference stays proxied through the Gateway — provider credentials never reach the remote machine — and completed work reconciles back into the session's managed worktree. Both the OpenClaw runtime (`worker-turn`) and Codex (`remote-exec`) can use the same destinations.
 
+## Images and attachments
+
+Attach images and PDFs through the normal chat composer, including on later turns in an existing cloud session. The Gateway prepares native image input, including rendered pages from scanned PDFs. Codex receives image input through its Gateway-side app-server. Its `remote-exec` placement stages managed originals for remote file tools before execution; those temporary copies are excluded from workspace reconciliation. The retained-input rules below apply to OpenClaw `worker-turn` sessions.
+
+OpenClaw `worker-turn` sessions accept images, including image-only messages and ordered mixtures of inline and offloaded images. For models with vision support, the Gateway hydrates current input and recent replay from its managed media using the same image sanitization, ordering, and history pruning as local sessions. Text-only models receive attachment file paths without native image input. The Gateway keeps the canonical transcript and original attachment references; only the worker's input receives remote file paths.
+
+Attachments sent after dispatch are copied into the worker workspace through the authenticated transfer channel. This requires a current node-host installation as well as the worker bundle; update paired devices or the cloud profile's node package before using it. File tools can read their source files, including non-image attachments. Copies do not replace the active workspace or overwrite earlier worker edits to the same attachment. Placement and turn ownership are checked before transfer and launch; an unavailable or oversized current attachment produces an error instead of silently dropping the image. Unavailable historical sources, including originals expired by configured attachment retention, are omitted from replay staging with a warning so they do not block a new turn. Canonical transcript references and existing private copies remain unchanged.
+
+Raw inputs use an OpenClaw-owned directory under `media/inbound/openclaw-staged-<id>/`, with a local Git exclusion. Local and writable sandbox sessions use the same rule. Automatic input retention requires a producer-generated directory name and its intact regular `.gitignore` ownership marker; similarly named ignored project directories are not selected merely by their name. Input copies and edits remain available through workspace reconciliation, worker replacement, and managed-worktree removal and restore, but ordinary Git publication does not include them. To publish an image or document as part of the project, explicitly copy it to an ordinary project path first. Existing tracked files stay project-owned; this does not remove files from earlier commits or undo prior publication.
+
+Turn cancellation, admitted-run closure, or loss of the exact placement claim cancels attachment streaming and the node transfer invocation, and prevents the abandoned turn from launching. Once cancellation is observed, no subsequent attachment is installed. There is a bounded final-write limitation with `fs-safe` 0.5.6: an exclusive `create()` that has already been entered may finish and leave its private copy. The transfer still rejects after that operation returns. Previously completed copies and worker edits remain intact; cancellation does not unlink files by path. TODO(fs-safe): adopt guarded exclusive-create with identity-bound rollback once the dependency supports it, closing this remaining window.
+
+Attachment staging uses the existing workspace-result transfer limits (25,000 files and 256 MiB total), with a 6 MiB per-file media read limit. Encoded launch, inference, and image-bearing transcript frames must also fit within 25 MiB; base64 encoding counts toward those frame limits. Non-image transcript content and unrelated control traffic retain their 64 KiB limits. Worker turns have no native steering transport: messages received during a turn use the existing queued follow-up path, retaining their images and media metadata.
+
 ## Paired devices: your own hardware as session hosts
 
 Pair any machine with one pasted command, then opt it into session hosting:
@@ -41,6 +55,12 @@ Configure a profile under `cloudWorkers.profiles` and the bundled Crabbox plugin
 
 See [Cloud Workers](/gateway/cloud-workers) for profiles, requirements, dispatching, moving sessions between destinations, and the security model.
 
+## Viewing the session desktop
+
+Open **Desktop** from a session to view its execution machine. Cloud sessions select their worker desktop; sessions on paired devices select that device. The pop-out window keeps the session in its link. Both viewers follow placement changes and disconnect from the previous machine when the session moves or stops. A stopped cloud session does not switch either viewer to the Gateway desktop.
+
+The machine must already support desktop viewing. For cloud workers, enable the [Cloud Worker Desktop lab and desktop profile setting](/gateway/cloud-workers#desktop-interactive). Opening Desktop starts in view-only mode and does not change the machine's permissions or the agent's tool policy. The global Desktop command in the command palette still opens the machine picker, including on chat pages.
+
 ## Automatic load balancing across devices
 
 You do not have to pick a device. Choosing **Auto** (least-busy device) in the Place picker — or dispatching with `autoDevice: true` — selects a paired session host automatically and retries up to three ranked hosts if provisioning fails before a machine is allocated. OpenClaw `worker-turn` placements rank hosts by most free worker slots, breaking ties by device ID; Codex `remote-exec` placements do not consume worker slots, so eligible hosts are ranked by device ID alone. When no host qualifies, the error says exactly why: no session hosts paired, all disconnected, or all at capacity.
@@ -52,7 +72,7 @@ See [Nodes](/nodes#host-openclaw-sessions) for the selection rules and [Control 
 Two profile settings turn cloud workers from always-on machines into compute that sleeps when idle:
 
 - `suspendAfter: "2h"` — after the session has been idle for the duration, the Gateway performs the same safe stop as **Stop cloud worker…**: it reconciles the workspace first, then releases the machine. While suspended, you pay for retained snapshot storage only. The next message provisions a replacement automatically — no button to press.
-- `settings.warmImage: true` — capture a scrubbed machine image when a worker stops, and start later workers for the same profile from that image instead of provisioning cold. Paired with `suspendAfter`, a suspended session wakes on a warm machine in a fraction of the cold provisioning time.
+- `settings.warmImage` — capture a scrubbed machine image when a worker stops, and start later workers for the same profile from that image instead of provisioning cold. On by default, so a suspended session wakes on a warm machine in a fraction of the cold provisioning time. Profiles that forward host environment into setup (`setupEnv`) capture only when you opt in explicitly, and `settings.warmImage: false` keeps any profile cold.
 
 With warm images enabled, repeat sessions for the same repository can also avoid a fresh clone. For clean workspaces eligible for the published-origin path, node-tunnel sync copies the machine's per-repository Git seed, fetches only the Git delta, and checks out the requested commit. Other workspaces keep the normal sync path.
 

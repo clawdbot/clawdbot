@@ -1,7 +1,6 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
-import * as parentCoreApiModule from "../core-api.js";
 import * as cliCoreApiModule from "./core-api.js";
 
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -29,11 +28,9 @@ const systemProfileMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../sdk-node-runtime.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../sdk-node-runtime.js")>("../sdk-node-runtime.js");
-  return { ...actual, callGatewayFromCli: gatewayMocks.callGatewayFromCli };
-});
+vi.spyOn(cliCoreApiModule, "callGatewayFromCli").mockImplementation(
+  gatewayMocks.callGatewayFromCli,
+);
 
 vi.mock("../system-profile-api.js", () => ({
   assertSystemCookiePlatform: vi.fn(),
@@ -41,7 +38,7 @@ vi.mock("../system-profile-api.js", () => ({
   resolveSystemCookieSource: vi.fn(),
 }));
 
-vi.spyOn(parentCoreApiModule, "runCommandWithRuntime").mockImplementation(
+vi.spyOn(cliCoreApiModule, "runCommandWithRuntime").mockImplementation(
   async (_runtime, action, onError) => {
     try {
       await action();

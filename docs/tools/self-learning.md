@@ -77,9 +77,11 @@ results never enter the foreground transcript or session record.
 
 The reviewer is detached and biased toward small, well-evidenced captures. It
 receives an authoritative receipt of the skills the foreground run actually
-read or command-invoked, plus a bounded workspace skill list. It prefers a used
-writable skill when that skill governs the learning, then another existing
-skill, and creates a new skill only when nothing covers the class.
+read or command-invoked, plus a bounded writable workspace skill list that
+explicitly reports when no writable skills exist. It prefers a used writable
+skill when that skill governs the learning, then another writable skill, and
+creates a new skill only when no writable skill covers the class. Read-only skills
+in the inherited foreground catalog cannot be read or updated during review.
 
 Before changing an existing skill, the reviewer reads its current body. If the
 complete body is omitted, it can call `prepare_patch` for one non-empty unique

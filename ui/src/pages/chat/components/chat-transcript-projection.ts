@@ -2,6 +2,7 @@
 import { nothing, type TemplateResult } from "lit";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import { i18n, t } from "../../../i18n/index.ts";
+import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
@@ -52,13 +53,14 @@ import {
   getTranscriptState,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
+import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
-import type { ChatTranscriptSession } from "./chat-transcript-controller.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
 } from "./chat-transcript-render-guard.ts";
+import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
@@ -68,7 +70,7 @@ type ChatTranscriptProjection = {
   isEmpty: boolean;
   showLoadingSkeleton: boolean;
   searchOpen: boolean;
-  renderRows: (overlay?: unknown) => TemplateResult;
+  renderRows: (overlay?: unknown, header?: TranscriptHeader | null) => TemplateResult;
 };
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
@@ -173,6 +175,10 @@ export function projectChatTranscript(
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
   });
+  const latestBrowserTabs =
+    props.browserTabPreviewsActive === false
+      ? latestBrowserTabCards([], [])
+      : latestBrowserTabCards(props.messages, props.toolMessages);
   syncToolCardExpansionState(
     props.sessionKey,
     chatItems,
@@ -320,7 +326,13 @@ export function projectChatTranscript(
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
     assistant: assistantIdentity,
+    startupLabel: props.startupLabel,
+    waitingApproval: props.waitingApproval,
+    runOutputTokens: props.runOutputTokens,
   } satisfies StreamGroupOptions;
+  // Latest ownership crosses rows: the former owner must rerender when a
+  // newer answer arrives even if its own message object stays stable.
+  let latestAssistantItemKey: string | null = null;
   const renderGroupOptions = (item: MessageGroup) => {
     const lastMessage = item.messages.at(-1)?.message;
     const rewindEntryId =
@@ -329,18 +341,12 @@ export function projectChatTranscript(
         : null;
     return {
       ...sharedMessageRenderOptions,
+      latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
       autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
       isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
-      onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
-        setExpansionState(
-          expandedToolCards,
-          messageId,
-          !(expanded ?? expandedToolCards.get(messageId) ?? false),
-        );
-        requestUpdate();
-      },
+      onToggleToolMessageExpanded: toggleToolCardExpanded,
       isUserMessageExpanded: (messageId: string) => expandedUserMessages.get(messageId) ?? false,
       onToggleUserMessageExpanded: (messageId: string) => {
         setExpansionState(expandedUserMessages, messageId, !expandedUserMessages.get(messageId));
@@ -357,6 +363,7 @@ export function projectChatTranscript(
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
       onRetryQueuedMessage: props.onRetryQueuedMessage,
+      queuedMessageAction: props.queuedMessageAction,
       personActivity: props.personActivity,
       showAvatarGutter: !isDirectThread,
       contextWindow: threadContextWindow,
@@ -380,6 +387,7 @@ export function projectChatTranscript(
       rewindDisabled: Boolean(props.runActive || props.runWorking),
       activeContinuation: activeContinuationByGroupKey.get(item.key),
       turnRecap: turnRecapByGroupKey.get(item.key),
+      latestAssistant: item.key === latestAssistantItemKey,
     } satisfies Parameters<typeof renderMessageGroup>[1];
   };
   const renderGroupItem = (item: MessageGroup) => {
@@ -398,7 +406,7 @@ export function projectChatTranscript(
       const recap = turnRecapByGroupKey.get(item.key);
       return `${hasWorkingIndicator ? workingUsageKey : ""}|${
         recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : ""
-      }`;
+      }|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
     }
     if (item.kind === "stream-run") {
       return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
@@ -415,7 +423,9 @@ export function projectChatTranscript(
       ? `${continuation.parts.map((part) => part.key).join(" ")}${workingUsageKey}`
       : "";
     const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
-    return `${continuationKey}|${recapKey}`;
+    return `${continuationKey}|${recapKey}|${
+      item.key === latestAssistantItemKey ? "latest-assistant" : ""
+    }`;
   };
   const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
     if (item.kind === "divider") {
@@ -428,15 +438,16 @@ export function projectChatTranscript(
       return renderStreamGroup(item.parts, {
         ...streamGroupOptions,
         questionPrompts,
-        startupLabel: props.startupLabel,
-        waitingApproval: props.waitingApproval,
-        runOutputTokens: props.runOutputTokens,
       });
     }
     if (item.kind === "work-group") {
       const workExpanded = expandedToolCards.get(item.key) ?? false;
       return renderWorkGroupSummary(item, {
         expanded: workExpanded,
+        browserTabPreviews: renderBrowserTabPreviews(item.groups, {
+          sessionKey: props.sessionKey,
+          latestBrowserTabs,
+        }),
         onToggle: () => {
           setExpansionState(expandedToolCards, item.key, !workExpanded);
           requestUpdate();
@@ -459,9 +470,6 @@ export function projectChatTranscript(
         streamOptions: {
           ...streamGroupOptions,
           questionPrompts,
-          startupLabel: props.startupLabel,
-          waitingApproval: props.waitingApproval,
-          runOutputTokens: props.runOutputTokens,
         },
         renderGroupOptions,
         isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
@@ -527,15 +535,25 @@ export function projectChatTranscript(
     // Keeping the status in the reply avoids a second claw/assistant row.
     activeContinuationByGroupKey.set(previous.key, {
       parts: activeStatusParts,
-      options: {
-        ...streamGroupOptions,
-        startupLabel: props.startupLabel,
-        waitingApproval: props.waitingApproval,
-        runOutputTokens: props.runOutputTokens,
-      },
+      options: streamGroupOptions,
     });
     return false;
   });
+  // Default disclosure belongs only to a settled assistant at the transcript
+  // tail; any newer visible row returns the prior answer to hover/tap behavior.
+  const lastTranscriptItem = transcriptItems.at(-1);
+  latestAssistantItemKey =
+    props.runActive || props.runWorking || searchFiltering
+      ? null
+      : lastTranscriptItem?.kind === "agent-run-frame" &&
+          lastTranscriptItem.outcome.kind === "completed" &&
+          lastTranscriptItem.outcome.actionOwner !== null
+        ? lastTranscriptItem.key
+        : lastTranscriptItem?.kind === "group" &&
+            !lastTranscriptItem.isStreaming &&
+            assistantGroupCanOwnActiveRunStatus(lastTranscriptItem)
+          ? lastTranscriptItem.key
+          : null;
   for (const item of transcriptItems) {
     const groups =
       item.kind === "agent-run-frame"
@@ -636,6 +654,7 @@ export function projectChatTranscript(
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
     getToolTitlesVersion(),
+    JSON.stringify([...latestBrowserTabs]),
     props.sessionKey,
     props.boardProvider,
     props.boardProvider?.canPinWidgets,
@@ -666,6 +685,9 @@ export function projectChatTranscript(
     threadContextWindow,
     Boolean(props.onSetReply),
     Boolean(props.onRetryQueuedMessage),
+    props.queuedMessageAction?.id,
+    props.queuedMessageAction?.label,
+    props.queuedMessageAction?.onAction,
     props.replyMessageAccess?.revision ?? 0,
     props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
@@ -689,13 +711,14 @@ export function projectChatTranscript(
     isEmpty,
     showLoadingSkeleton,
     searchOpen: state.searchOpen,
-    renderRows: (overlay: unknown = nothing) =>
+    renderRows: (overlay: unknown = nothing, header: TranscriptHeader | null = null) =>
       transcript.render(
         transcriptRows,
         (row) => (row.kind === "item" ? renderItem(row.item) : row.content),
         latestTranscriptAnnouncement(collapsedItems),
         props.announceTranscript !== false && !state.searchOpen && !props.loading,
         overlay,
+        header,
       ),
   };
 }

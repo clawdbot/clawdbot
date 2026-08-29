@@ -763,6 +763,30 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("myazure", "gpt-5.6-sol", catalog, "codex")).not.toContain("ultra");
   });
 
+  it("preserves catalog-advertised Ultra for non-OpenClaw runtimes", () => {
+    const catalog = [
+      {
+        provider: "myazure",
+        id: "gpt-5.6-sol",
+        reasoning: true,
+        compat: {
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        },
+      },
+    ];
+
+    expect(listThinkingLevels("myazure", "gpt-5.6-sol", catalog, "codex")).toContain("ultra");
+    expect(
+      isThinkingLevelSupported({
+        provider: "myazure",
+        model: "gpt-5.6-sol",
+        level: "ultra",
+        catalog,
+        agentRuntime: "codex",
+      }),
+    ).toBe(true);
+  });
+
   it("does not let catalog xhigh compat override binary thinking providers", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [

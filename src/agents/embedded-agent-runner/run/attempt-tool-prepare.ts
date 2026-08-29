@@ -11,6 +11,7 @@ import {
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createOpenClawCodingTools } from "../../agent-tools.js";
 import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
@@ -32,7 +33,6 @@ import { isAgentToolRestartSafe } from "../../tool-replay-safety.js";
 import {
   createToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
-  type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
 import { resolveAgentToolSurfacePlan } from "../../tool-surface-plan.js";
 import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
@@ -45,7 +45,6 @@ import { resolveAttemptToolPolicyMessageProvider } from "./attempt-run-decisions
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
-  mergeForcedEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "./attempt-tool-construction-plan.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
@@ -80,14 +79,15 @@ export function prepareEmbeddedAttemptToolBase(params: {
     attempt.forceCodeModeReconciliationTools === true
       ? false
       : messageToolOwnsVisibleReply(attempt);
+  const toolRunContext = buildEmbeddedAttemptToolRunContext({
+    ...attempt,
+    forceMessageTool: forceDirectMessageTool,
+    trace: params.runTrace,
+  });
   const toolsAllowWithForcedRuntimeTools =
     attempt.forceCodeModeReconciliationTools === true
       ? ["read"]
-      : mergeForcedEmbeddedAttemptToolsAllow(attempt.toolsAllow, {
-          forceMessageTool: forceDirectMessageTool,
-          forceToolNames:
-            attempt.swarmCollector && attempt.swarmOutputSchema ? ["structured_output"] : undefined,
-        });
+      : toolRunContext.runtimeToolAllowlist;
   const toolsEnabled = supportsModelTools(attempt.model);
   const isRawModelRun = attempt.modelRun === true || attempt.promptMode === "none";
   const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
@@ -107,6 +107,9 @@ export function prepareEmbeddedAttemptToolBase(params: {
     sessionKey: params.sandboxSessionKey,
     forceDirectMessageTool,
     model: attempt.model,
+    modelProvider: attempt.provider,
+    modelId: attempt.modelId,
+    codeModeOverride: attempt.codeModeOverride,
     toolsEnabled,
     disableTools: attempt.disableTools,
     isRawModelRun,
@@ -146,7 +149,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun
       ? createToolSearchCatalogRef()
       : undefined;
-  const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
+  const nestedToolActivities: NestedToolActivity[] = [];
   const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
     ? []
     : params.codeModeSkills;
@@ -246,7 +249,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     : (() => {
         const allTools = createOpenClawCodingTools({
           agentId: params.sessionAgentId,
-          ...buildEmbeddedAttemptToolRunContext({ ...attempt, trace: params.runTrace }),
+          ...toolRunContext,
           messageChannel: attempt.messageChannel,
           clientCaps: attempt.clientCaps,
           toolBindings: attempt.toolBindings,
@@ -349,8 +352,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
           taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
           inboundEventKind: attempt.currentInboundEventKind,
           disableMessageTool: attempt.disableMessageTool,
-          swarmCollector: attempt.swarmCollector,
-          swarmOutputSchema: attempt.swarmOutputSchema,
           forceMessageTool: attempt.forceMessageTool,
           enableHeartbeatTool: attempt.enableHeartbeatTool,
           forceHeartbeatTool: attempt.forceHeartbeatTool,
@@ -412,7 +413,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolSearchConfig,
     toolSearchControlsEnabledForRun,
     toolSearchRuntimeConfig,
-    toolSearchTargetTranscriptProjections,
+    nestedToolActivities,
     toolsEnabled,
     toolsRaw,
   };

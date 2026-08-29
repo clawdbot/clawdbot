@@ -7,7 +7,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import type { SessionCreatedActor } from "./session-entry-provenance.js";
+import type { SessionActor } from "./session-entry-provenance.js";
 import type { SessionEntry } from "./types.js";
 
 export type SqliteSessionOwnerRow = {
@@ -23,7 +23,7 @@ const ownerColumnAvailability = new WeakMap<
   { available: boolean; schemaVersion: number }
 >();
 
-function actorFromColumns(type: unknown, id: unknown): SessionCreatedActor | undefined {
+function actorFromColumns(type: unknown, id: unknown): SessionActor | undefined {
   const normalizedType = type === "human" || type === "agent" || type === "system" ? type : null;
   const normalizedId = normalizeOptionalString(id);
   return normalizedType && normalizedId ? { type: normalizedType, id: normalizedId } : undefined;

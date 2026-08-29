@@ -3,7 +3,19 @@
  * checks.
  */
 import type { Command } from "commander";
+import { redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
 import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
+import type {
+  BrowserCreateProfileResult,
+  BrowserDeleteProfileResult,
+  BrowserImportProfileResult,
+  BrowserResetProfileResult,
+  BrowserStatus,
+  BrowserTab,
+  BrowserTransport,
+  ProfileStatus,
+  SystemProfileInfo,
+} from "../browser/client.js";
 import type { BrowserDoctorReport } from "../browser/doctor.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
@@ -14,22 +26,7 @@ import {
   runBrowserCliCommand as runBrowserCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import {
-  danger,
-  defaultRuntime,
-  info,
-  redactCdpUrl,
-  shortenHomePath,
-  type BrowserCreateProfileResult,
-  type BrowserDeleteProfileResult,
-  type BrowserImportProfileResult,
-  type BrowserResetProfileResult,
-  type BrowserStatus,
-  type BrowserTab,
-  type BrowserTransport,
-  type ProfileStatus,
-  type SystemProfileInfo,
-} from "./core-api.js";
+import { danger, defaultRuntime, info, shortenHomePath } from "./core-api.js";
 
 const BROWSER_MANAGE_REQUEST_TIMEOUT_MS = 45_000;
 

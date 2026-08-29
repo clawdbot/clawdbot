@@ -59,7 +59,6 @@ import {
 import type { AgentHarness, AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/harness");
-export { resolveAgentHarnessPolicy } from "./policy.js";
 export { resolveAvailableAgentHarnessPolicy } from "./availability.js";
 
 type AgentHarnessSelectionParams = {
@@ -152,6 +151,7 @@ type PluginHarnessToolPolicyContext = Pick<
   | "runtimePluginToolGrant"
   | "toolsAllow"
   | "disableTools"
+  | "swarmCollector"
 >;
 
 type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
@@ -876,9 +876,13 @@ function resolvePluginHarnessToolPolicies(
       requestedToolPolicy,
     ],
     safeDeniedToolNames: collectHarnessSafeDeniedToolNames(explicitPolicies, safeDenyToolNameSet),
-    toolPolicyRestricted: explicitPolicies.some((explicitPolicy) =>
-      toolPolicyRestrictsHarnessNativeTools(explicitPolicy, safeDenyToolNameSet),
-    ),
+    // Native tools bypass the collector's noninteractive OpenClaw wrappers.
+    // Keep policy-allowed host replacements, without ambient input or approval surfaces.
+    toolPolicyRestricted:
+      params.swarmCollector === true ||
+      explicitPolicies.some((explicitPolicy) =>
+        toolPolicyRestrictsHarnessNativeTools(explicitPolicy, safeDenyToolNameSet),
+      ),
   };
 }
 

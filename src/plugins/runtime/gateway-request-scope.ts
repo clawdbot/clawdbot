@@ -82,9 +82,10 @@ export function getSharedGatewayContextResolver(
   owners: readonly object[],
 ): GatewayContextResolver | undefined {
   const first = owners[0] ? gatewayContextResolvers.get(owners[0]) : undefined;
-  return first && owners.every((owner) => gatewayContextResolvers.get(owner) === first)
+  // Absence permits ambient routing; incompatible owners must retain a rejecting binding.
+  return owners.every((owner) => gatewayContextResolvers.get(owner) === first)
     ? first
-    : undefined;
+    : () => undefined;
 }
 
 /**

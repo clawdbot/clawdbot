@@ -11,6 +11,11 @@ import {
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import {
+  getReusableCachedPluginRegistry,
+  isPluginRegistryCacheEnabled,
+  setCachedPluginRegistry,
+} from "./loader-cache.js";
 import { resolvePluginLoadDiscovery } from "./loader-discovery.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
@@ -48,6 +53,19 @@ export async function loadOpenClawPluginCliRegistry(
   options: PluginLoadOptions = {},
 ): Promise<PluginRegistry> {
   const context = resolvePluginLoadCacheContext({ ...options, activate: false });
+  // One CLI invocation resolves descriptors from several bootstrap stages; without reuse each
+  // stage re-executes every legacy external plugin's register and re-emits its diagnostics.
+  // The namespace is required: a runtime load with activate:false shares this cacheKey but
+  // produces a completely different registry. Diagnostics ride the cached registry, so only
+  // the duplicate log emission is dropped.
+  const cacheKey = `cli-metadata::${context.cacheKey}`;
+  const cacheEnabled = isPluginRegistryCacheEnabled(options);
+  if (cacheEnabled) {
+    const cached = getReusableCachedPluginRegistry(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
   const logger = options.logger ?? createPluginLoaderLogger();
   const onlyPluginIdSet = createPluginIdScopeSet(context.onlyPluginIds);
   const loadPluginModule = createPluginModuleLoader({
@@ -181,6 +199,7 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
     const validatedConfig = validatePluginConfig({
+      origin: candidate.origin,
       schema: manifestRecord.configSchema,
       cacheKey: manifestRecord.schemaCacheKey,
       value: entry?.config,
@@ -345,6 +364,9 @@ export async function loadOpenClawPluginCliRegistry(
         diagnosticMessagePrefix: "plugin failed during register: ",
       });
     }
+  }
+  if (cacheEnabled) {
+    setCachedPluginRegistry(cacheKey, registry);
   }
   return registry;
 }

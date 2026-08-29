@@ -583,7 +583,13 @@ test("sessions.reset of an incognito session broadcasts a delete, not a reset", 
   expect(broadcast.mock.calls[0]?.[0]).toBe("socket.drain");
   expect(broadcast.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ reason: "delete" }));
   expect(broadcast.mock.calls[1]?.[0]).toBe("sessions.changed");
-  expect(broadcast.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ reason: "delete" }));
+  expect(broadcast.mock.calls[1]?.[1]).toEqual({
+    sessionKey: reset.payload?.key,
+    agentId: "main",
+    sessionId: "sess-incognito",
+    reason: "delete",
+    ts: expect.any(Number),
+  });
 });
 
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {

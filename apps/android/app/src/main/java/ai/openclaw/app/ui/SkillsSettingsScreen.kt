@@ -14,7 +14,6 @@ import ai.openclaw.app.ui.design.ClawIconButton
 import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPill
-import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawSegmentedControl
 import ai.openclaw.app.ui.design.ClawStatus
@@ -195,9 +194,6 @@ internal fun SkillsSettingsScreen(
           onQueryChange = { clawHubQuery = it },
           onSearch = { viewModel.searchClawHubSkills(clawHubQuery) },
           onReviewInstall = viewModel::reviewClawHubSkillInstall,
-          onAcknowledgeInstall = { slug, version ->
-            viewModel.installClawHubSkill(slug, acknowledgeClawHubRisk = true, version = version)
-          },
           onClearMessage = viewModel::clearClawHubSkillMessage,
         )
     }
@@ -546,7 +542,6 @@ private fun ClawHubSkillSearchPanel(
   onQueryChange: (String) -> Unit,
   onSearch: () -> Unit,
   onReviewInstall: (GatewayClawHubSkillSummary) -> Unit,
-  onAcknowledgeInstall: (String, String?) -> Unit,
   onClearMessage: () -> Unit,
 ) {
   ClawPanel {
@@ -588,11 +583,6 @@ private fun ClawHubSkillSearchPanel(
     ClawHubNoticeCard(
       errorText = state.errorText,
       messageText = state.messageText,
-      acknowledgeSlug = state.acknowledgeSlug,
-      acknowledgeVersion = state.acknowledgeVersion,
-      canAcknowledge = methodsAvailable && canManageSkills,
-      installingSlugs = state.installingSlugs,
-      onAcknowledgeInstall = onAcknowledgeInstall,
       onDismiss = onClearMessage,
     )
   }
@@ -646,54 +636,21 @@ private fun ClawHubSkillSearchPanel(
 private fun ClawHubNoticeCard(
   errorText: String?,
   messageText: String?,
-  acknowledgeSlug: String?,
-  acknowledgeVersion: String?,
-  canAcknowledge: Boolean,
-  installingSlugs: Set<String>,
-  onAcknowledgeInstall: (String, String?) -> Unit,
   onDismiss: () -> Unit,
 ) {
-  val requiresAcknowledgement = acknowledgeSlug != null
-  val status =
-    when {
-      requiresAcknowledgement -> ClawStatus.Warning
-      errorText != null -> ClawStatus.Danger
-      else -> ClawStatus.Success
-    }
+  val isError = errorText != null
   val rawText = errorText ?: messageText.orEmpty()
-  val summary =
-    if (requiresAcknowledgement) {
-      nativeString("The Gateway will verify this exact release with ClawHub before download. If the release needs explicit risk acknowledgement, Android will show the Gateway warning before retrying.")
-    } else {
-      rawText.substringBefore("\n\n").trim()
-    }
+  val summary = rawText.substringBefore("\n\n").trim()
   val details =
-    when {
-      requiresAcknowledgement -> rawText.takeIf(String::isNotBlank)
-      "\n\n" in rawText -> rawText.substringAfter("\n\n").trim().takeIf(String::isNotBlank)
-      else -> null
+    if ("\n\n" in rawText) {
+      rawText.substringAfter("\n\n").trim().takeIf(String::isNotBlank)
+    } else {
+      null
     }
   var detailsExpanded by rememberSaveable(rawText) { mutableStateOf(false) }
-  val accent =
-    when (status) {
-      ClawStatus.Success -> ClawTheme.colors.success
-      ClawStatus.Warning -> ClawTheme.colors.warning
-      ClawStatus.Danger -> ClawTheme.colors.danger
-      ClawStatus.Neutral -> ClawTheme.colors.textSubtle
-    }
-  val background =
-    when (status) {
-      ClawStatus.Success -> ClawTheme.colors.successSoft
-      ClawStatus.Warning -> ClawTheme.colors.warningSoft
-      ClawStatus.Danger -> ClawTheme.colors.dangerSoft
-      ClawStatus.Neutral -> ClawTheme.colors.surfaceRaised
-    }
-  val title =
-    when {
-      requiresAcknowledgement -> nativeString("Needs attention")
-      errorText != null -> nativeString("Blocked")
-      else -> nativeString("Installed")
-    }
+  val accent = if (isError) ClawTheme.colors.danger else ClawTheme.colors.success
+  val background = if (isError) ClawTheme.colors.dangerSoft else ClawTheme.colors.successSoft
+  val title = if (isError) nativeString("Blocked") else nativeString("Installed")
 
   Surface(
     modifier = Modifier.fillMaxWidth(),
@@ -739,14 +696,6 @@ private fun ClawHubNoticeCard(
           modifier = Modifier.weight(1f),
         )
       }
-      acknowledgeSlug?.let { slug ->
-        ClawPrimaryButton(
-          text = nativeString("Acknowledge Gateway warning and install"),
-          onClick = { onAcknowledgeInstall(slug, acknowledgeVersion) },
-          enabled = canAcknowledge && slug !in installingSlugs && (details == null || detailsExpanded),
-          modifier = Modifier.fillMaxWidth(),
-        )
-      }
     }
   }
 }
@@ -770,7 +719,7 @@ private fun ClawHubInstallReviewDialog(
         ReviewLine(label = nativeString("Version"), value = review.version)
         ReviewLine(label = nativeString("Publisher"), value = review.author)
         Text(
-          text = nativeString("The Gateway will verify this exact release with ClawHub before download. If the release needs explicit risk acknowledgement, Android will show the Gateway warning before retrying."),
+          text = nativeString("The Gateway verifies this exact release with ClawHub before download. Review findings appear in the install result. Blocked releases or unavailable security verification prevent installation."),
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
         )

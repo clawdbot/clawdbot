@@ -3,8 +3,8 @@
   "version": "2026.8.1",
   "openclaw": {
     "schemaVersions": {
-      "state": 13,
-      "agent": 18
+      "state": 15,
+      "agent": 19
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -37,7 +37,7 @@
     "dist/",
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",
-    "!dist/OpenClaw.app/**",
+    "!dist/**/*.app",
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
     "!dist/plugin-sdk/access-groups.d.ts",
@@ -56,6 +56,7 @@
     "!dist/plugin-sdk/approval-reaction-runtime.d.ts",
     "!dist/plugin-sdk/approval-reference-runtime.d.ts",
     "!dist/plugin-sdk/async-lock-runtime.d.ts",
+    "!dist/plugin-sdk/browser-cdp.d.ts",
     "!dist/plugin-sdk/browser-config.d.ts",
     "!dist/plugin-sdk/bundled-channel-config-schema.d.ts",
     "!dist/plugin-sdk/channel-activity-runtime.d.ts",
@@ -98,6 +99,7 @@
     "!dist/plugin-sdk/fetch-runtime.d.ts",
     "!dist/plugin-sdk/file-access-runtime.d.ts",
     "!dist/plugin-sdk/file-lock.d.ts",
+    "!dist/plugin-sdk/gateway-config-runtime.d.ts",
     "!dist/plugin-sdk/global-singleton.d.ts",
     "!dist/plugin-sdk/group-activation.d.ts",
     "!dist/plugin-sdk/heartbeat-runtime.d.ts",
@@ -340,6 +342,7 @@
     "!dist/extensions/twitch/**",
     "!dist/extensions/venice/**",
     "!dist/extensions/vercel-ai-gateway/**",
+    "!dist/extensions/visitor-access/**",
     "!dist/extensions/voice-call/**",
     "!dist/extensions/volcengine/**",
     "!dist/extensions/voyage/**",
@@ -774,6 +777,9 @@
       "types": "./dist/plugin-sdk/security-runtime.d.ts",
       "default": "./dist/plugin-sdk/security-runtime.js"
     },
+    "./plugin-sdk/gateway-config-runtime": {
+      "default": "./dist/plugin-sdk/gateway-config-runtime.js"
+    },
     "./plugin-sdk/gateway-method-runtime": {
       "types": "./dist/plugin-sdk/gateway-method-runtime.d.ts",
       "default": "./dist/plugin-sdk/gateway-method-runtime.js"
@@ -909,6 +915,9 @@
       "types": "./dist/plugin-sdk/allowlist-config-edit.d.ts",
       "default": "./dist/plugin-sdk/allowlist-config-edit.js"
     },
+    "./plugin-sdk/browser-cdp": {
+      "default": "./dist/plugin-sdk/browser-cdp.js"
+    },
     "./plugin-sdk/browser-config": {
       "default": "./dist/plugin-sdk/browser-config.js"
     },
@@ -963,6 +972,10 @@
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
       "default": "./dist/plugin-sdk/device-bootstrap.js"
+    },
+    "./plugin-sdk/diagnostic-flags": {
+      "types": "./dist/plugin-sdk/diagnostic-flags.d.ts",
+      "default": "./dist/plugin-sdk/diagnostic-flags.js"
     },
     "./plugin-sdk/diagnostic-runtime": {
       "types": "./dist/plugin-sdk/diagnostic-runtime.d.ts",
@@ -1529,9 +1542,9 @@
     "build:ci-artifacts": "node --import ./scripts/tsx.mjs scripts/build-all.mts ciArtifacts",
     "build:docker": "pnpm plugins:assets:build && node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node --import ./scripts/tsx.mjs scripts/check-cli-bootstrap-imports.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/build-stamp.mts && node --import ./scripts/tsx.mjs scripts/runtime-postbuild-stamp.mts && pnpm plugins:assets:copy && node --import ./scripts/tsx.mjs scripts/write-build-info.ts && node --import ./scripts/tsx.mjs scripts/write-cli-startup-metadata.ts",
     "build:package": "node --import ./scripts/tsx.mjs scripts/build-all.mts package",
-    "build:plugin-sdk:dts": "node scripts/run-tsgo.mjs -p tsconfig.plugin-sdk.dts.json --declaration true",
-    "build:plugin-sdk:strict-smoke": "node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import ./scripts/tsx.mjs scripts/write-plugin-sdk-entry-dts.ts && node --import ./scripts/tsx.mjs scripts/check-plugin-sdk-exports.mts",
-    "build:strict-smoke": "pnpm plugins:assets:build && node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node --import ./scripts/tsx.mjs scripts/check-cli-bootstrap-imports.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/build-stamp.mts && node --import ./scripts/tsx.mjs scripts/runtime-postbuild-stamp.mts && node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import ./scripts/tsx.mjs scripts/write-plugin-sdk-entry-dts.ts && node --import ./scripts/tsx.mjs scripts/check-plugin-sdk-exports.mts",
+    "build:plugin-sdk:dts": "node --import ./scripts/tsx.mjs scripts/write-plugin-sdk-entry-dts.ts",
+    "build:plugin-sdk:strict-smoke": "node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/check-plugin-sdk-exports.mts",
+    "build:strict-smoke": "pnpm plugins:assets:build && node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node --import ./scripts/tsx.mjs scripts/check-cli-bootstrap-imports.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/build-stamp.mts && node --import ./scripts/tsx.mjs scripts/runtime-postbuild-stamp.mts && node --import ./scripts/tsx.mjs scripts/check-plugin-sdk-exports.mts",
     "canvas:a2ui:bundle": "node --import ./scripts/tsx.mjs scripts/bundle-a2ui.mts",
     "channels:catalog:check": "node scripts/write-official-channel-catalog.mjs --check",
     "channels:catalog:gen": "node scripts/write-official-channel-catalog.mjs --write",
@@ -1548,7 +1561,7 @@
     "check:deprecated-api-usage": "node --import ./scripts/tsx.mjs scripts/check-deprecated-api-usage.mts",
     "check:deprecated-jsdoc": "node --import ./scripts/tsx.mjs scripts/check-deprecated-jsdoc.mts",
     "check:doctor-deprecation-registry": "node --import ./scripts/tsx.mjs scripts/check-doctor-deprecation-registry.ts",
-    "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-mdx && pnpm docs:check-i18n-glossary && pnpm docs:check-links && pnpm docs:check-config-examples",
+    "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm lint:templates && pnpm docs:check-mdx && pnpm docs:check-i18n-glossary && pnpm docs:check-links && pnpm docs:check-config-examples",
     "check:env-var-count": "node --import ./scripts/tsx.mjs scripts/check-env-var-count.mts",
     "check:host-env-policy:swift": "node --import ./scripts/tsx.mjs scripts/generate-host-env-security-policy-swift.mts --check",
     "check:import-cycles": "node --import ./scripts/tsx.mjs scripts/check-import-cycles.ts",
@@ -1570,6 +1583,8 @@
     "check:timed:architecture": "node --import ./scripts/tsx.mjs scripts/check-timed.mts --include-architecture",
     "check:workflows": "node --import ./scripts/tsx.mjs scripts/check-workflows.mts",
     "ci:full-release": "node scripts/full-release-validation-at-sha.mjs",
+    "ci:git-owner:check": "node scripts/generate-ci-git-owner.mts --check",
+    "ci:git-owner:gen": "node scripts/generate-ci-git-owner.mts",
     "frv": "node scripts/frv.mjs",
     "ci:timings": "node scripts/ci-run-timings.mjs --latest-main",
     "ci:timings:refit": "node --import ./scripts/tsx.mjs scripts/ci-refit-test-timings.mts",
@@ -1592,8 +1607,8 @@
     "crabbox:warmup": "node scripts/crabbox-wrapper.mjs warmup",
     "deadcode:dependencies": "pnpm deadcode:full",
     "deadcode:exports": "node --import ./scripts/tsx.mjs scripts/check-deadcode-exports.mts",
-    "deadcode:full": "pnpm --config.minimum-release-age=0 dlx --package knip@6.32.2 knip --config config/knip.config.ts --production --no-progress --reporter compact --no-config-hints --exclude duplicates && pnpm --config.minimum-release-age=0 dlx --package knip@6.32.2 knip --config config/knip.all-exports.config.ts --no-progress --reporter compact --no-config-hints --exports --exclude duplicates",
-    "deadcode:knip": "pnpm --config.minimum-release-age=0 dlx --package knip@6.32.2 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --dependencies",
+    "deadcode:full": "pnpm dlx --package knip@6.32.2 knip --config config/knip.config.ts --production --no-progress --reporter compact --no-config-hints --exclude duplicates && pnpm dlx --package knip@6.32.2 knip --config config/knip.all-exports.config.ts --no-progress --reporter compact --no-config-hints --exports --exclude duplicates",
+    "deadcode:knip": "pnpm dlx --package knip@6.32.2 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --dependencies",
     "deadcode:report": "pnpm deadcode:full && pnpm deadcode:exports",
     "deadcode:unused-files": "node --import ./scripts/tsx.mjs scripts/check-deadcode-unused-files.mts",
     "deps:root-ownership": "node --import ./scripts/tsx.mjs scripts/root-dependency-ownership-audit.mts",
@@ -1672,6 +1687,8 @@
     "lint:kysely": "node --import ./scripts/tsx.mjs scripts/check-kysely-guardrails.mts",
     "lint:docs": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc",
     "lint:docs:fix": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc --fix",
+    "lint:templates": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-templates.jsonc",
+    "lint:templates:fix": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-templates.jsonc --fix",
     "lint:extensions:no-deprecated-channel-access": "node --import ./scripts/tsx.mjs scripts/check-no-deprecated-channel-access.ts",
     "lint:extensions:telegram-grammy-types": "node --import ./scripts/tsx.mjs scripts/check-telegram-grammy-types-imports.mts",
     "lint:extensions": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions",
@@ -1760,7 +1777,6 @@
     "proxy:run": "node scripts/run-node.mjs proxy run",
     "proxy:start": "node scripts/run-node.mjs proxy start",
     "qa:e2e": "node --import ./scripts/tsx.mjs scripts/qa-e2e.ts",
-    "qa:telegram-desktop-recorder": "node --import ./scripts/tsx.mjs scripts/e2e/telegram-desktop-recorder.ts",
     "qa:lab:build": "vite build --config extensions/qa-lab/web/vite.config.ts",
     "qa:lab:ui": "pnpm openclaw qa ui",
     "qa:lab:up": "node --import ./scripts/tsx.mjs scripts/qa-lab-up.ts",
@@ -1902,7 +1918,7 @@
     "test:type-suppression-inventory:report": "node --import ./scripts/tsx.mjs scripts/type-suppression-inventory.ts",
     "test:e2e": "pnpm test:e2e:gateway && pnpm test:e2e:agent-plugin-gateway && pnpm test:ui:e2e",
     "test:e2e:agent-plugin-gateway": "node --import ./scripts/tsx.mjs scripts/agent-plugin-gateway-e2e.ts",
-    "test:e2e:browser-extension": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
+    "test:e2e:browser-extension": "pnpm build && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
     "test:e2e:gateway": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
     "test:e2e:openshell": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_E2E_OPENSHELL=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/openshell/src/backend.e2e.test.ts",
     "test:e2e:status-corrupt-plugin-deps": "bash scripts/e2e/status-corrupt-plugin-deps.sh",
@@ -1934,7 +1950,7 @@
     "test:live:media:music": "node --import ./scripts/tsx.mjs test/e2e/qa-lab/media/hosted-media-provider-live.ts music",
     "test:live:media:video": "node --import ./scripts/tsx.mjs test/e2e/qa-lab/media/hosted-media-provider-live.ts video",
     "test:live:models-profiles": "node --import ./scripts/tsx.mjs scripts/test-live.mts -- src/agents/models.profiles.live.test.ts",
-    "test:macos:ci": "node --import ./scripts/tsx.mjs scripts/test-projects.mts src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/gateway/worker-environments/workspace-rsync-path.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts src/process/supervisor/adapters/child.service-lifecycle.test.ts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/package-mac-dist.test.ts test/scripts/create-dmg.test.ts test/scripts/codesign-mac-app.test.ts test/scripts/notarize-mac-artifact.test.ts test/scripts/mac-elevation-host.test.ts",
+    "test:macos:ci": "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/scripts/ci-platform-checkout.test.ts test/scripts/macos-native-test-launch.test.ts src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/gateway/worker-environments/workspace-rsync-path.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts src/process/supervisor/adapters/child.service-lifecycle.test.ts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/restart-mac.test.ts test/scripts/mac-node-worker.test.ts test/scripts/verify-mac-node-worker-fs.test.ts test/scripts/package-mac-dist.test.ts test/scripts/create-dmg.test.ts test/scripts/codesign-mac-app.test.ts test/scripts/notarize-mac-artifact.test.ts test/scripts/mac-elevation-host.test.ts",
     "test:max": "node --import ./scripts/tsx.mjs scripts/test-projects-max.mts",
     "test:parallels:linux": "bash scripts/e2e/parallels-linux-smoke.sh",
     "test:parallels:macos": "bash scripts/e2e/parallels-macos-smoke.sh",
@@ -1980,7 +1996,7 @@
     "test:voicecall:closedloop": "node --import ./scripts/tsx.mjs scripts/test-voicecall-closedloop.mts",
     "test:watch": "node --import ./scripts/tsx.mjs scripts/test-projects.mts --watch",
     "test:windows:ci": "pnpm test:windows:ci:1 && pnpm test:windows:ci:2",
-    "test:windows:ci:1": "node --import ./scripts/tsx.mjs scripts/test-projects.mts src/state/openclaw-state-ownership.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/node-host/node-worker-transfer-client.test.ts packages/terminal-core/src/display-string.test.ts src/config/sessions/session-accessor.sqlite-archive.worker.test.ts src/commands/doctor-gateway-auth-token.windows.test.ts src/infra/state-migrations.audit-logs.windows.test.ts src/commands/backup-verify.test.ts src/commands/agents.commands.list.test.ts src/shared/runtime-import.test.ts src/shared/worker-bundle-archive.test.ts src/node-host/node-worker-bundle-installer.test.ts test/scripts/direct-run-entrypoints.test.ts test/scripts/format-generated-module.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts src/agents/tools/media-tool-file-url.windows.test.ts extensions/memory-core/src/memory-extra-file-path.windows.test.ts src/daemon/schtasks.startup-fallback.test.ts src/plugin-sdk/node-host.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts extensions/lobster/src/lobster-runner.test.ts src/gateway/worker-environments/workspace-quiescence.windows.test.ts",
+    "test:windows:ci:1": "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/scripts/ci-platform-checkout.test.ts src/state/openclaw-state-ownership.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/node-host/node-worker-transfer-client.test.ts packages/terminal-core/src/display-string.test.ts src/config/sessions/session-accessor.sqlite-archive.worker.test.ts src/commands/doctor-gateway-auth-token.windows.test.ts src/infra/state-migrations.audit-logs.windows.test.ts src/commands/backup-verify.test.ts src/commands/agents.commands.list.test.ts src/shared/runtime-import.test.ts src/shared/worker-bundle-archive.test.ts src/node-host/node-worker-bundle-installer.test.ts test/scripts/direct-run-entrypoints.test.ts test/scripts/format-generated-module.test.ts test/scripts/install-ps1.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts src/agents/tools/media-tool-file-url.windows.test.ts extensions/memory-core/src/memory-extra-file-path.windows.test.ts src/daemon/schtasks.startup-fallback.test.ts src/plugin-sdk/node-host.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts extensions/lobster/src/lobster-runner.test.ts src/gateway/worker-environments/workspace-quiescence.windows.test.ts",
     "test:windows:ci:2": "node --import ./scripts/tsx.mjs scripts/test-projects.mts src/infra/sqlite-snapshot.test.ts src/infra/ports.test.ts src/infra/advertised-lan-host.windows.test.ts src/infra/update-managed-service-handoff-command.test.ts src/infra/update-managed-service-handoff-lifecycle.test.ts src/infra/executable-path.test.ts src/infra/fs-safe-remove.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/infra/windows-install-roots.test.ts src/infra/ssh-client.windows.test.ts src/infra/exec-allowlist-pattern.test.ts src/infra/process-env.test.ts src/infra/openclaw-cli-shim.windows.test.ts src/agents/sessions/windows-git-bash-path.test.ts test/scripts/npm-runner.test.ts test/scripts/ts-topology.test.ts src/test-utils/openclaw-test-state.test.ts src/utils.test.ts src/media/local-media-path.windows.test.ts src/media/web-media.file-url.windows.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/agents/sessions/exec.real.test.ts src/process/windows-command.test.ts src/process/terminal-pty.test.ts src/process/supervisor/supervisor.anchored-shell.real.test.ts src/tui/tui.resolve-codex-bin.test.ts src/media-understanding/attachments.file-url.windows.test.ts src/cli/daemon-cli/status.print.test.ts src/cli/mcp-cli.path-case.windows.test.ts src/auto-reply/usage-bar/template.windows.test.ts src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts src/agents/provider-local-service.env-case.test.ts src/agents/bash-tools.exec.script-preflight.test.ts src/agents/agent-tools.read.windows.test.ts src/agents/agent-tools.read.host-operations.test.ts src/agents/sandbox/fs-paths.test.ts src/agents/sessions/tools/render-utils.test.ts src/agents/sessions/tools/path-utils.test.ts extensions/msteams/src/media-helpers.test.ts extensions/msteams/src/messenger.test.ts extensions/mxc/test/mxc-backend.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts",
     "test:windows:schtasks:integration": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts CI_WINDOWS_SCHTASKS_INTEGRATION=1 OPENCLAW_E2E_SKIP_BUILD=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 -- node scripts/run-vitest.mjs src/daemon/schtasks.integration.e2e.test.ts",
     "tool-display:check": "node --import ./scripts/tsx.mjs scripts/tool-display.ts --check",
@@ -2035,7 +2051,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
-    "@anthropic-ai/claude-agent-sdk": "0.3.238",
+    "@anthropic-ai/claude-agent-sdk": "0.3.239",
     "@anthropic-ai/sdk": "0.120.0",
     "@clack/core": "1.4.3",
     "@clack/prompts": "1.7.0",
@@ -2045,7 +2061,7 @@
     "@grammyjs/transformer-throttler": "1.2.1",
     "@homebridge/ciao": "1.3.12",
     "@lydell/node-pty": "1.2.0-beta.15",
-    "@mistralai/mistralai": "2.5.0",
+    "@mistralai/mistralai": "2.6.4",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
@@ -2135,7 +2151,7 @@
     "markdown-it": "15.0.0",
     "marked": "18.0.10",
     "oxfmt": "0.60.0",
-    "oxlint": "1.78.0",
+    "oxlint": "1.79.0",
     "oxlint-tsgolint": "7.0.2001",
     "playwright": "1.62.1",
     "postcss": "8.5.26",
@@ -2158,5 +2174,5 @@
   "engines": {
     "node": ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0"
   },
-  "packageManager": "pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621"
+  "packageManager": "pnpm@12.0.0+sha512.9e2e3dc3911995868dc94b8175c217c27e95408fa03b4a22749778f2b34f773b77cdd3b39ede8171b22fcd53be6a35342e9fac9948a68ef58df6488ce89a7e67"
 }

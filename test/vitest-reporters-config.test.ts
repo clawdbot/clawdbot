@@ -4,6 +4,7 @@ import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 
 const reporterConfigs = [
   "vitest.config.ts",
+  "test/vitest/vitest.tooling.config.ts",
   "test/vitest/vitest.cli-process.config.ts",
   "test/vitest/vitest.ui.config.ts",
   "test/vitest/vitest.ui-e2e.config.ts",

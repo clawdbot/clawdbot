@@ -340,7 +340,7 @@ Supported implicit mention facts are channel-specific:
 | Fact                  | Current built-in producers                       |
 | --------------------- | ------------------------------------------------ |
 | Reply to the bot      | Discord, Microsoft Teams, QQBot, Slack, Telegram |
-| Quote of the bot      | WhatsApp, Zalo personal                          |
+| Quote of the bot      | LINE, WhatsApp, Zalo personal                    |
 | Bot joined the thread | Mattermost, Slack, Tlon                          |
 
 Each fact defaults to enabled when the channel produces it. Among bundled channels, Mattermost, Slack, and Tlon read the corresponding `implicitMentions` flag; set it to `false` to stop that fact from bypassing mention gating. Native explicit mentions remain unaffected. The other bundled producers listed above do not currently read `implicitMentions`, so their facts always count as mentions and the flag cannot turn them off. A flag also has no effect on channels that do not produce that fact.
@@ -520,9 +520,9 @@ Group/channel tool restrictions are applied in addition to global/agent tool pol
 
 When `channels.whatsapp.groups`, `channels.telegram.groups`, or `channels.imessage.groups` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior.
 
-<Warning>
+<Note>
 Common confusion: DM pairing approval is not the same as group authorization. For channels that support DM pairing, the pairing store unlocks DMs only. Group commands still require explicit group sender authorization from config allowlists such as `groupAllowFrom` or the documented config fallback for that channel.
-</Warning>
+</Note>
 
 Common intents (copy/paste):
 

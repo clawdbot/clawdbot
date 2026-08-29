@@ -539,6 +539,15 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
   /^test\/helpers\//u,
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
+  [
+    "patches/vitest@4.1.11.patch",
+    [
+      "test/scripts/run-vitest-profile.test.ts",
+      "test/scripts/run-vitest-state-cleanup.test.ts",
+      "test/scripts/vitest-fork-shutdown.test.ts",
+    ],
+  ],
+  ["test/fixtures/vitest-fork-shutdown.mjs", ["test/scripts/vitest-fork-shutdown.test.ts"]],
   ...[
     "src/system-agent/setup-inference-persist.ts",
     "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
@@ -1358,6 +1367,11 @@ export function findUnmatchedExplicitTestTargets(args: string[], cwd = process.c
   const unmatched: UnmatchedExplicitTestTarget[] = [];
   for (const targetArg of targetArgs) {
     const relative = toRepoRelativeTarget(targetArg, cwd);
+    const absolute = path.resolve(cwd, targetArg);
+    // Existing exact tests need no inventory scan; lane assignment belongs to the run planner.
+    if (!isGlobTarget(relative) && isTestFileTarget(relative) && fs.existsSync(absolute)) {
+      continue;
+    }
     if (
       resolveVitestConfigTargetKind(relative) ||
       (isVitestConfigFileTarget(relative) && isExistingFileTarget(targetArg, cwd))
@@ -1378,7 +1392,6 @@ export function findUnmatchedExplicitTestTargets(args: string[], cwd = process.c
       continue;
     }
 
-    const absolute = path.resolve(cwd, targetArg);
     if (!fs.existsSync(absolute)) {
       if (resolveExplicitTestPrefixTargets(targetArg, cwd)) {
         continue;
@@ -1390,10 +1403,6 @@ export function findUnmatchedExplicitTestTargets(args: string[], cwd = process.c
           ? { includePattern: `${relative}{,.*}.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}` }
           : {}),
       });
-      continue;
-    }
-
-    if (isTestFileTarget(relative)) {
       continue;
     }
 
@@ -2110,10 +2119,12 @@ const pluginSdkEntryOwners = [
 // Keep only genuinely ambiguous paths explicit; conventional discovery owns
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
+  [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"]],
   [
-    ".github/workflows/mantis-telegram-live.yml",
-    ["mantis-telegram-desktop-proof-workflow", packageAcceptance, workflowGuards],
+    "test/scripts/fixtures/ci-platform-checkout.mjs",
+    ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"],
   ],
+  ["scripts/generate-ci-git-owner.mts", ["ci-git-owner"]],
   [
     ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
     [packageAcceptance, workflowGuards, "release-workflow-matrix-plan", installDocker],
@@ -2255,7 +2266,11 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
 ]);
 
 const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
-  [/^scripts\/pr$/u, ["pr-merge", "pr-operation-lock", "pr-wrappers"]],
+  [
+    /^(?:git-hooks\/pre-commit|scripts\/pre-commit\/(?:guard-staged-content\.mjs|filter-staged-files\.mjs|format-staged\.sh|run-node-tool\.sh)|test\/git-hooks-pre-commit\.test-support\.ts)$/u,
+    ["test/git-hooks-pre-commit.test.ts", "test/git-hooks-pre-commit-boundaries.test.ts"],
+  ],
+  [/^scripts\/pr$/u, ["pr-merge", "pr-merge-outcome", "pr-operation-lock", "pr-wrappers"]],
   [
     /^scripts\/pr-lib\/crabbox-gate-contract\.mjs$/u,
     ["pr-crabbox-gate-publisher", "pr-crabbox-merge-bypass"],
@@ -2264,7 +2279,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^scripts\/pr-lib\/crabbox-gate-plan\.mts$/u,
     ["pr-crabbox-gate-plan", "pr-crabbox-gate-publisher", "pr-prepare-gates"],
   ],
-  [/^scripts\/pr-lib\/crabbox-merge-bypass\.sh$/u, ["pr-crabbox-merge-bypass", "pr-merge"]],
+  [
+    /^scripts\/pr-lib\/crabbox-merge-bypass\.sh$/u,
+    ["pr-crabbox-merge-bypass", "pr-merge", "pr-merge-outcome"],
+  ],
   [/^scripts\/lib\/windows-taskkill\.mjs$/u, ["managed-child-process", "run-with-env"]],
   [
     /^scripts\/lib\/config-boundary-guard\.mts$/u,
@@ -2303,6 +2321,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/dockerfile.test.ts",
       "full-release-validation-state",
       "full-release-validation-at-sha",
+      "full-release-candidate-reuse",
       "find-reusable-release-validation",
       "openclaw-npm-extended-stable-full-validation-workflow",
       "release-no-push-workflow",
@@ -2311,6 +2330,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       pluginPrerelease,
       "check-workflows",
     ],
+  ],
+  [
+    /^\.github\/workflows\/full-release-candidate\.yml$/u,
+    ["full-release-candidate-reuse", packageAcceptance, "check-workflows", workflowGuards],
   ],
   [
     /^\.github\/workflows\/openclaw-release-checks\.yml$/u,
@@ -2366,15 +2389,14 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [packageAcceptance, workflowGuards],
   ],
   [
-    /^\.github\/workflows\/mantis-telegram-desktop-proof\.yml$/u,
-    ["mantis-telegram-desktop-proof-workflow", packageAcceptance, workflowGuards],
-  ],
-  [
     /^\.github\/workflows\/mantis-web-ui-chat-proof\.yml$/u,
     ["mantis-web-ui-chat-proof-workflow", packageAcceptance, workflowGuards],
   ],
   [/^\.github\/workflows\/android-release\.yml$/u, [packageAcceptance, workflowGuards]],
-  [/^\.github\/actions\/ensure-base-commit\/action\.yml$/u, [workflowGuards]],
+  [
+    /^\.github\/actions\/(?:ensure-base-commit|git-owner)\//u,
+    ["ci-git-owner", "ci-linux-git", "ci-platform-checkout"],
+  ],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],
   [/^scripts\/test-projects\.test-support\.mts$/u, ["test-projects"]],
   [/^scripts\/ci-changed-scope\.mjs$/u, [...changedScopeTests, "control-ui-i18n"]],
@@ -2398,7 +2420,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^scripts\/run-node\.(?:mjs|mts)$/u, [runNode]],
   [/^scripts\/ios-write-swift-filelist\.m[jt]s$/u, ["ios-run"]],
-  [/^scripts\/pr-lib\/merge\.sh$/u, ["pr-merge"]],
+  [/^scripts\/pr-lib\/merge(?:-outcome)?\.sh$/u, ["pr-merge", "pr-merge-outcome"]],
   [/^scripts\/plugin-clawhub-publish\.sh$/u, ["test/plugin-clawhub-release.test.ts"]],
   [/^scripts\/openclaw-npm-postpublish-verify\.ts$/u, [npmPostpublish]],
   [
@@ -2420,7 +2442,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^scripts\/write-plugin-sdk-entry-dts\.ts$/u,
-    ["build-all", "prepare-extension-package-boundary-artifacts"],
+    ["build-all", "declaration-stage", "tsdown-build"],
   ],
   [/^scripts\/pr-lib\/worktree\.sh$/u, ["test/vitest/vitest.tooling.config.ts"]],
   [/^scripts\/dev\/gateway-smoke\.ts$/u, ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"]],
@@ -2583,7 +2605,14 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ],
   ],
   [/^scripts\/lib\/npm-pack-budget\.mts$/u, [releaseCheck, installDocker]],
-  [/^scripts\/lib\/actions-artifact-archive\.mjs$/u, ["plugin-publication-artifact"]],
+  [
+    /^scripts\/lib\/actions-artifact-archive\.mjs$/u,
+    ["full-release-candidate-reuse", "plugin-publication-artifact"],
+  ],
+  [
+    /^scripts\/(?:lib\/)?full-release-candidate-reuse\.(?:mjs|d\.mts)$/u,
+    ["full-release-candidate-reuse"],
+  ],
   [
     /^scripts\/lib\/static-extension-assets\.(?:mjs|mts)$/u,
     ["bundled-plugin-assets", "runtime-postbuild", runNode, "plugin-npm-runtime-build-args"],
@@ -2610,7 +2639,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [dockerBuild, "docker-e2e-observability", dockerE2e, pluginPrerelease],
   ],
   [
-    /^scripts\/e2e\/mcp-code-mode-gateway-(?:live-)?docker\.sh$/u,
+    /^scripts\/e2e\/(?:mcp-code-mode-gateway-(?:live-)?docker|lib\/mcp-code-mode\/scenario)\.sh$/u,
     [
       dockerBuild,
       dockerE2e,

@@ -221,7 +221,8 @@ enum GatewayLaunchAgentManager {
     /// ownership record so update callers fail closed instead of consuming it.
     static func launchdProgramArguments() -> [String]? {
         guard FileManager.default.fileExists(atPath: self.plistURL.path) else { return [] }
-        return self.launchdConfigSnapshot()?.programArguments
+        guard let arguments = self.launchdConfigSnapshot()?.programArguments, !arguments.isEmpty else { return nil }
+        return arguments
     }
 
     static func launchdGatewayLogPath() -> String {

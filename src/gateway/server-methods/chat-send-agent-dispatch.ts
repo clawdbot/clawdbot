@@ -5,9 +5,12 @@ import {
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
+import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyMessageInjectionAttempt } from "../../auto-reply/reply/reply-run-registry.js";
+import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
@@ -17,6 +20,7 @@ import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
@@ -28,12 +32,12 @@ import {
 import { createChatSendDispatchErrorLifecycle } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import { finalizeAcceptedChatSendMessageInjection } from "./chat-send-message-injection.js";
-import { finalizeChatSendNonAgentReplies } from "./chat-send-nonagent-finalization.js";
 import {
   applyChatSendReplyContextFields,
   type ChatSendReplyContextFields,
 } from "./chat-send-reply-context.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
+import { finalizeChatSendDispatchedReplies } from "./chat-send-reply-finalization.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
@@ -146,9 +150,14 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   const { chatSendAckedAtMs, chatSendTiming } = timing;
 
   let agentRunStarted = false;
+  let replyDispatchRun: ReplyDispatchRun | undefined;
   const replyDispatch = createChatSendReplyDispatch({
     accountId,
     isAgentRunStarted: () => agentRunStarted,
+    isRunCurrent: () =>
+      !activeRunAbort.controller.signal.aborted &&
+      context.chatAbortControllers.get(clientRunId) === activeRunAbort.entry,
+    getReplyDispatchRun: () => replyDispatchRun,
     logGateway: context.logGateway,
     session,
     userTurnRecorder,
@@ -179,6 +188,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     session,
     terminalizeRestartSafeAdmission,
     userTurnRecorder,
+    isReplyDispatchRun: () => replyDispatchRun !== undefined,
   });
   const emitServerTiming = (
     phase: ChatSendServerTimingPhase,
@@ -270,6 +280,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               onSessionMetadataChanges: (changes) =>
                 changes.forEach((change) => emitSessionsChanged(context, change)),
               replyOptions: {
+                prepareAssistantTranscriptMessage: replyDispatch.prepareAssistantTranscriptMessage,
                 runId: clientRunId,
                 skillWorkshopProposalRevision,
                 ...(cronCreatorAuthority
@@ -322,7 +333,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                   : {}),
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                 fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
-                onAgentRunStart: (runId) => {
+                onAgentRunStart: (runId, _identity, options) => {
+                  replyDispatchRun = options;
                   if (activeRunAbort.markExecutionStarted()) {
                     emitSessionsChanged(context, {
                       sessionKey,
@@ -366,6 +378,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                       }
                     }
                   }
+                  return options?.completionSource;
                 },
                 onModelSelected: (modelSelection) => {
                   updateChatRunProvider(context.chatAbortControllers, {
@@ -407,7 +420,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
         },
       ),
     )
-    .then(async () => {
+    .then(async (dispatchResult) => {
       if (acceptedMessageInjection) {
         return;
       }
@@ -416,69 +429,92 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       await measureDiagnosticsTimelineSpan(
         "gateway.chat_send.post_dispatch",
         async () => {
+          const replyDispatchResult = replyDispatchRun?.getResult();
+          const runtimeOutcome = replyDispatchResult?.terminalOutcome;
+          const recordedOutcome = readAgentRunTerminalOutcome(dispatchResult);
+          // ACP owns a rich terminal result; native runs record their outcome on dispatch.
+          // Delivered warnings or source replies cannot replace either authoritative result.
+          const runtimeClassification = runtimeOutcome
+            ? classifyAgentRunTerminalOutcome(runtimeOutcome)
+            : recordedOutcome === "failed"
+              ? "failure"
+              : recordedOutcome === "completed"
+                ? "success"
+                : undefined;
+          const runtimeCancelled = runtimeClassification === "cancellation";
+          const runtimeFailed =
+            runtimeClassification === "failure" || runtimeClassification === "timeout";
           const returnedAgentErrorPayloads = replyDispatch.deliveredReplies
             .map((entryInner) => entryInner.payload)
             .filter((payload) => payload.isError);
-          const hasReturnedAgentError =
-            returnedAgentErrorPayloads.length > 0 &&
-            (agentRunStarted || !isInternalTextSlashCommandTurn);
+          const hasReturnedAgentError = runtimeClassification
+            ? runtimeFailed
+            : returnedAgentErrorPayloads.length > 0 &&
+              (agentRunStarted || !isInternalTextSlashCommandTurn);
           const returnedAgentErrorMessage =
-            returnedAgentErrorPayloads
+            runtimeOutcome?.error ??
+            (returnedAgentErrorPayloads
               .map((payload) => payload.text?.trim())
               .filter((text): text is string => Boolean(text))
-              .join(" | ") || undefined;
+              .join(" | ") ||
+              (runtimeFailed ? "agent run failed" : undefined));
           if (
-            hasReturnedAgentError &&
-            !userTurnRecorder.hasPersisted() &&
-            !userTurnRecorder.isBlocked()
-          ) {
-            await persistGatewayUserTurnTranscriptBestEffort();
-          }
-          if (
-            agentRunStarted &&
-            returnedAgentErrorPayloads.length === 0 &&
             !userTurnRecorder.hasPersisted() &&
             !userTurnRecorder.isBlocked() &&
-            userTurnRecorder.hasRuntimePersistencePending()
+            (hasReturnedAgentError ||
+              (agentRunStarted &&
+                returnedAgentErrorPayloads.length === 0 &&
+                userTurnRecorder.hasRuntimePersistencePending()))
           ) {
             await persistGatewayUserTurnTranscriptBestEffort();
           }
-          let broadcastedSourceReplyFinal = false;
-          // Agent runs persist model-visible turns through SessionManager; this dispatcher owns
-          // live delivery. Mirroring agent finals would duplicate normal assistant turns. The
-          // non-agent branch has no runtime-owned turn, so it appends one before broadcasting.
-          if (!agentRunStarted && !queuedFollowup.isEnqueued() && !hasReturnedAgentError) {
-            await finalizeChatSendNonAgentReplies({
+          let finalizedSourceReply = false;
+          // A dispatched runtime owns its persisted turn; this owner projects
+          // only settled, post-hook replies. Native runtimes project their own stream.
+          if (
+            (!agentRunStarted || replyDispatchRun) &&
+            !queuedFollowup.isEnqueued() &&
+            !hasReturnedAgentError &&
+            !context.chatRunState.hasAbortMarker(clientRunId)
+          ) {
+            await finalizeChatSendDispatchedReplies({
               accountId,
               context,
               deliveredReplies: replyDispatch.deliveredReplies,
               emitFirstAssistantServerTiming,
-              foldCommandBlocks: isInternalTextSlashCommandTurn,
+              foldCommandBlocks: isInternalTextSlashCommandTurn || replyDispatchRun !== undefined,
               persistUserTurnTranscript: persistGatewayUserTurnTranscriptBestEffort,
               session,
-              suppressReplies: replyDispatch.hasAppendedWebchatAgentMedia(),
+              suppressReplies: !replyDispatchRun && replyDispatch.hasAppendedWebchatAgentMedia(),
+              runtimeOwnsTranscript: replyDispatchResult?.assistantTranscript !== undefined,
+              state: runtimeCancelled ? "aborted" : "final",
+              stopReason: runtimeOutcome?.stopReason,
             });
-          } else {
-            broadcastedSourceReplyFinal = await finalizeChatSendSourceReplies({
+          } else if (!context.chatRunState.hasAbortMarker(clientRunId)) {
+            finalizedSourceReply = await finalizeChatSendSourceReplies({
               accountId,
               context,
               deliveredReplies: replyDispatch.deliveredReplies,
               emitFirstAssistantServerTiming,
               hasReturnedAgentErrorPayloads: hasReturnedAgentError,
               session,
+              suppressFinal: runtimeFailed,
             });
           }
-          const shouldBroadcastAgentError = hasReturnedAgentError && !broadcastedSourceReplyFinal;
-          if (shouldBroadcastAgentError) {
-            broadcastChatError({
-              context,
-              runId: clientRunId,
-              sessionKey,
-              agentId,
-              errorMessage: returnedAgentErrorMessage,
-            });
-          }
+          const shouldBroadcastAgentError =
+            hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply);
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
+            if (shouldBroadcastAgentError) {
+              broadcastChatError({
+                context,
+                runId: clientRunId,
+                sessionKey,
+                agentId,
+                errorMessage: returnedAgentErrorMessage,
+                errorKind: runtimeClassification === "timeout" ? "timeout" : undefined,
+                stopReason: runtimeOutcome?.stopReason,
+              });
+            }
             const returnedAgentError = shouldBroadcastAgentError
               ? errorShape(
                   ErrorCodes.UNAVAILABLE,
@@ -494,10 +530,26 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 payload: shouldBroadcastAgentError
                   ? {
                       runId: clientRunId,
-                      status: "error" as const,
+                      status: runtimeClassification === "timeout" ? "timeout" : "error",
                       summary: returnedAgentErrorMessage ?? "agent returned an error payload",
+                      ...(runtimeOutcome ? { endedAt: runtimeOutcome.endedAt } : {}),
+                      ...(runtimeOutcome?.stopReason
+                        ? { stopReason: runtimeOutcome.stopReason }
+                        : {}),
                     }
-                  : { runId: clientRunId, status: "ok" as const },
+                  : runtimeCancelled
+                    ? buildAbortedChatSendPayload({
+                        runId: clientRunId,
+                        endedAt: runtimeOutcome?.endedAt ?? Date.now(),
+                        stopReason: runtimeOutcome?.stopReason,
+                      })
+                    : {
+                        runId: clientRunId,
+                        status: "ok",
+                        ...(replyDispatchResult?.terminalOutcome?.stopReason
+                          ? { stopReason: replyDispatchResult.terminalOutcome.stopReason }
+                          : {}),
+                      },
                 ...(returnedAgentError ? { error: returnedAgentError } : {}),
               },
             });

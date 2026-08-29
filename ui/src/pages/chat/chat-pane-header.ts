@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionVisibility } from "../../api/types.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
@@ -17,7 +17,11 @@ import { listAssignableSessionOwners } from "../../components/session-owner-chip
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { hasSessionPresenceViewers, projectPresencePayload } from "../../lib/presence-users.ts";
+import {
+  projectPresenceViewers,
+  presenceMatchesProfile,
+  projectPresencePayload,
+} from "../../lib/presence-users.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
@@ -47,7 +51,10 @@ import {
   resolveChatPaneParentSession,
   resolveChatPaneWorkspace,
 } from "./components/chat-pane-header.ts";
-import { renderChatSessionSharing } from "./components/chat-session-sharing.ts";
+import {
+  canManageChatSessionSharing,
+  renderChatSessionSharing,
+} from "./components/chat-session-sharing.ts";
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
@@ -178,6 +185,30 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       sharingReadAccess.allowed || sharingVisibilityAccess.allowed
         ? undefined
         : sharingReadAccess.reason;
+    const sharing =
+      sharingMethodsSupported && row
+        ? {
+            session: row,
+            state: this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key)),
+            allowedVisibilities: sharingSnapshot.hello?.policy?.allowedSessionVisibilities,
+            membersAvailable: sharingReadAccess.allowed,
+            openDisabledReason: sharingOpenDisabledReason,
+            visibilityDisabledReason: sharingVisibilityAccess.allowed
+              ? undefined
+              : sharingVisibilityAccess.reason,
+            memberAddDisabledReason: sharingMemberAddAccess.allowed
+              ? undefined
+              : sharingMemberAddAccess.reason,
+            memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
+              ? undefined
+              : sharingMemberRemoveAccess.reason,
+            onOpen: () => void this.loadSessionSharing(row),
+            onVisibilityChange: (visibility: SessionVisibility) =>
+              void this.setSessionVisibility(row, visibility),
+            onMemberChange: (identityId: string, member: boolean) =>
+              void this.setSessionMember(row, identityId, member),
+          }
+        : null;
     const renameAccess = row
       ? readSessionMethodAccess(this.context.gateway.snapshot, {
           method: "sessions.patch",
@@ -364,8 +395,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       row,
     });
     const key = this.state?.sessionKey ?? "";
-    const selfId = sharingSnapshot.selfUser?.id;
-    const instanceId = sharingSnapshot.client?.instanceId;
     const result = this.state?.sessionsResult;
     const knownGroups = collectKnownSessionGroups(
       this.context.sessions?.state?.groups ?? [],
@@ -373,10 +402,19 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     );
     const showOwnerChip = (result?.owners?.length ?? 0) >= 2 || (row?.participantCount ?? 0) > 0;
     const personActivity = this.personActivityRouting();
-    const renderedOwnerId = showOwnerChip ? row?.owner?.actor.id : undefined;
-    const presence = projectPresencePayload(this.presencePayload, selfId, instanceId);
-    const ownerViewing = presence.users.some(
-      (user) => user.id === renderedOwnerId && user.watchedSessions.includes(key),
+    const renderedOwnerIdentity = showOwnerChip ? row?.owner?.actor.identity : undefined;
+    const viewers = catalog
+      ? undefined
+      : projectPresenceViewers(
+          this.presencePayload,
+          sharingSnapshot.selfUser,
+          sharingSnapshot.client?.instanceId,
+          key,
+          renderedOwnerIdentity,
+        );
+    const ownerViewing = projectPresencePayload(this.presencePayload).users.some(
+      (user) =>
+        presenceMatchesProfile(user, renderedOwnerIdentity) && user.watchedSessions.includes(key),
     );
     const ownerOptions = listAssignableSessionOwners({
       facet: result?.owners,
@@ -399,6 +437,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       ownerViewing,
       personActivity,
       catalog,
+      catalogColor: this.catalogSession?.color,
       editing: this.headerEditing && this.headerRenameSession?.key === row?.key,
       renameValue: this.headerRenameValue,
       workspaceRoot: workspace.root,
@@ -418,21 +457,15 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       backgroundTasksAction: nothing,
       sessionRailAction: nothing,
       workspaceAction: nothing,
-      presence:
-        !catalog &&
-        hasSessionPresenceViewers(this.presencePayload, selfId, instanceId, key, renderedOwnerId)
-          ? html`<openclaw-viewer-facepile
-              class="chat-pane__presence"
-              .presencePayload=${this.presencePayload}
-              .selfUserId=${selfId}
-              .selfInstanceId=${instanceId}
-              .sessionKey=${key}
-              .excludeUserId=${renderedOwnerId}
-              .maxVisible=${4}
-              .personActivity=${personActivity}
-              variant="session"
-            ></openclaw-viewer-facepile>`
-          : nothing,
+      presence: viewers?.length
+        ? html`<openclaw-viewer-facepile
+            class="chat-pane__presence"
+            .staticUsers=${viewers}
+            .maxVisible=${4}
+            .personActivity=${personActivity}
+            variant="session"
+          ></openclaw-viewer-facepile>`
+        : nothing,
       faceControl: renderBoardViewSwitch({
         hasBoard: board.hasBoard,
         face: board.face,
@@ -467,31 +500,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         },
         onDockSideChange: (dock) => this.handleBoardDockChange(dock),
       }),
-      sharingControl: sharingMethodsSupported
-        ? renderChatSessionSharing({
-            session: row,
-            state: row
-              ? this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key))
-              : undefined,
-            allowedVisibilities: sharingSnapshot.hello?.policy?.allowedSessionVisibilities,
-            membersAvailable: sharingReadAccess.allowed,
-            openDisabledReason: sharingOpenDisabledReason,
-            visibilityDisabledReason: sharingVisibilityAccess.allowed
-              ? undefined
-              : sharingVisibilityAccess.reason,
-            memberAddDisabledReason: sharingMemberAddAccess.allowed
-              ? undefined
-              : sharingMemberAddAccess.reason,
-            memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
-              ? undefined
-              : sharingMemberRemoveAccess.reason,
-            onOpen: () => row && void this.loadSessionSharing(row),
-            onVisibilityChange: (visibility) =>
-              row && void this.setSessionVisibility(row, visibility),
-            onMemberChange: (identityId, member) =>
-              row && void this.setSessionMember(row, identityId, member),
-          })
-        : nothing,
+      sharingControl:
+        sharing && (!this.narrow || !canManageChatSessionSharing(sharing.session))
+          ? renderChatSessionSharing(sharing)
+          : nothing,
       sessionMenuAction:
         row && this.state
           ? html`<openclaw-chat-header-session-menu
@@ -507,6 +519,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
                 archived: row.archived === true,
                 category: normalizeOptionalString(row.category) ?? null,
                 icon: normalizeOptionalString(row.icon) ?? null,
+                color: normalizeOptionalString(row.color) ?? null,
                 categoryClearReturnsToGroups: false,
               }}
               .worktreePath=${row.execNode || !isNativeLocalGateway() ? null : workspace.root}
@@ -518,6 +531,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
               .statusActions=${this.compactHeaderStatusActions()}
+              .sharing=${sharing}
               .groups=${knownGroups}
               .ownerOptions=${ownerOptions}
               .selfOwner=${selfOwner}

@@ -1,13 +1,14 @@
 import type { RouteLocation } from "@openclaw/uirouter";
+import type { AgentsListResult } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { routeIdFromPath } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import {
+  normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
-  type UiSessionDefaultsHost,
 } from "../lib/sessions/session-key.ts";
 import { isDefaultChatLanding } from "../pages/model-setup/first-run.ts";
 import type { ApplicationGateway } from "./context.ts";
@@ -17,6 +18,20 @@ type ReleasedSessionQuery = {
   face: BoardFace;
   sessionKey: string;
 };
+
+function resolvePersistedAgentId(
+  selectedAgentId: string | null | undefined,
+  agentsList: AgentsListResult | null,
+): string | null {
+  const selectedId = selectedAgentId?.trim();
+  if (!selectedId || !agentsList) {
+    return null;
+  }
+  const normalizedId = normalizeAgentId(selectedId);
+  return agentsList.agents.some((agent) => normalizeAgentId(agent.id) === normalizedId)
+    ? normalizedId
+    : null;
+}
 
 function releasedSessionQuery(
   location: RouteLocation,
@@ -47,7 +62,8 @@ async function normalizeReleasedSessionQueryLocation(params: {
   location: RouteLocation;
   basePath: string;
   gateway: Pick<ApplicationGateway, "snapshot" | "subscribe">;
-  agentsList: () => UiSessionDefaultsHost["agentsList"];
+  agentsList: () => AgentsListResult | null;
+  selectedAgentId?: string | null;
   signal: AbortSignal;
 }): Promise<RouteLocation | null> {
   const released = releasedSessionQuery(params.location, params.basePath);
@@ -66,7 +82,10 @@ async function normalizeReleasedSessionQueryLocation(params: {
     agentsList: params.agentsList(),
     hello: params.gateway.snapshot.hello,
   };
-  const agentId = parsed?.agentId ?? resolveUiDefaultAgentId(defaults);
+  const agentId =
+    parsed?.agentId ??
+    (resolvePersistedAgentId(params.selectedAgentId, defaults.agentsList) ||
+      resolveUiDefaultAgentId(defaults));
   const mainKey = resolveUiConfiguredMainKey(defaults);
   const pathname = released.sessionKey
     ? pathForSession(released.face, agentId, released.sessionKey, params.basePath, {
@@ -107,7 +126,8 @@ export async function resolveInitialApplicationLocation(params: {
   basePath: string;
   sessionKey: string;
   gateway: Pick<ApplicationGateway, "snapshot" | "subscribe">;
-  agentsList: () => UiSessionDefaultsHost["agentsList"];
+  agentsList: () => AgentsListResult | null;
+  selectedAgentId?: string | null;
   signal: AbortSignal;
 }): Promise<RouteLocation> {
   const releasedLocation = await normalizeReleasedSessionQueryLocation(params);
@@ -130,7 +150,8 @@ export async function resolveInitialApplicationLocation(params: {
     params.location,
     params.basePath,
     params.sessionKey.trim() || params.gateway.snapshot.sessionKey,
-    resolveUiDefaultAgentId(defaults),
+    resolvePersistedAgentId(params.selectedAgentId, defaults.agentsList) ||
+      resolveUiDefaultAgentId(defaults),
     resolveUiConfiguredMainKey(defaults),
   );
 }

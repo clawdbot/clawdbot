@@ -32,6 +32,7 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -61,6 +62,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
+import { agentWaitHandler } from "./agent-wait.js";
 import { handleChatSend, handleChatSendWithRuntimeTools } from "./chat-send-handler.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -500,6 +502,7 @@ vi.mock("../../agents/sandbox/context.js", async () => {
 });
 
 vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => ({
+  SANDBOX_MEDIA_MAX_BYTES: 50 * 1024 * 1024,
   stageSandboxMedia: vi.fn(
     async (params: {
       ctx: { media?: Array<{ path?: string; contentType?: string; workspaceDir?: string }> };
@@ -703,6 +706,7 @@ function readSqliteMainSessionEntry(): Record<string, any> | undefined {
 async function appendSourceReplyMirrorEntry(params: {
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
+  openclawDelivery?: Record<string, unknown>;
   text: string;
   provider?: string;
   model?: string;
@@ -719,6 +723,7 @@ async function appendSourceReplyMirrorEntry(params: {
       provider: params.provider ?? "openclaw",
       model: params.model ?? "delivery-mirror",
       ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+      ...(params.openclawDelivery ? { openclawDelivery: params.openclawDelivery } : {}),
       usage: {
         input: 0,
         output: 0,
@@ -1226,11 +1231,18 @@ function createSourceReply(
 function createMainSourceReply(params: {
   idempotencyKey: string;
   mediaUrls?: string[];
+  replyToCurrent?: boolean;
+  replyToId?: string;
   text?: string;
 }): TestReply {
-  const { idempotencyKey, mediaUrls, text } = params;
+  const { idempotencyKey, mediaUrls, replyToCurrent, replyToId, text } = params;
   return createSourceReply(
-    { ...(text ? { text } : {}), ...(mediaUrls ? { mediaUrls } : {}) },
+    {
+      ...(text ? { text } : {}),
+      ...(mediaUrls ? { mediaUrls } : {}),
+      ...(replyToCurrent ? { replyToCurrent } : {}),
+      ...(replyToId ? { replyToId } : {}),
+    },
     {
       sessionKey: "main",
       ...(text ? { text } : {}),
@@ -1342,6 +1354,7 @@ async function expectUnpersistedAgentRunFinal(params: {
   idempotencyKey: string;
   payload: (typeof mockState.dispatchedReplies)[number]["payload"];
   staleAudio?: boolean;
+  expectedMediaFailure?: { code: string; kind: string; label: string; mimeType?: string };
 }) {
   const transcriptDir = await createTranscriptFixture(params.transcriptPrefix);
   const staleAudioPath = path.join(transcriptDir, "stale.mp3");
@@ -1365,15 +1378,29 @@ async function expectUnpersistedAgentRunFinal(params: {
   const { send } = createChatRequestFixture();
   await send({ idempotencyKey: params.idempotencyKey, expectBroadcast: false, waitFor: "dedupe" });
 
+  const assistantUpdates = findAssistantTranscriptUpdates();
+  const assistantEntries = readTranscriptJsonLines(mockState.transcriptPath).filter(
+    (entry) =>
+      (entry as { message?: { role?: string } }).message?.role === "assistant" ||
+      (entry as { role?: string }).role === "assistant",
+  );
+  if (params.expectedMediaFailure) {
+    expect(assistantUpdates).toHaveLength(1);
+    expect(assistantUpdates[0]?.message).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: params.payload.text },
+        { type: "attachment_error", attachment: params.expectedMediaFailure },
+      ],
+    });
+    expect(assistantEntries).toHaveLength(1);
+    expect(JSON.stringify(assistantUpdates)).not.toContain(staleAudioPath);
+    return;
+  }
+
   // Agent-run delivery is a live projection; message_end alone owns persisted assistant turns.
-  expect(findAssistantTranscriptUpdates()).toStrictEqual([]);
-  expect(
-    readTranscriptJsonLines(mockState.transcriptPath).filter(
-      (entry) =>
-        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
-        (entry as { role?: string }).role === "assistant",
-    ),
-  ).toStrictEqual([]);
+  expect(assistantUpdates).toStrictEqual([]);
+  expect(assistantEntries).toStrictEqual([]);
 }
 
 async function expectImageOnlyFinal(params: {
@@ -1386,9 +1413,22 @@ async function expectImageOnlyFinal(params: {
   const { send } = createChatRequestFixture();
   const payload = await send({ idempotencyKey: params.idempotencyKey });
   const content = getMessageContent(payload);
+  const mediaUrl = params.finalPayload.mediaUrl;
+  if (typeof mediaUrl !== "string") {
+    throw new Error("Expected an image-only final media URL");
+  }
+  const image = content.find((block) => block.type === "image");
   expect(getMessage(payload)?.role).toBe("assistant");
-  expect(content[0]).toEqual({ type: "text", text: "Image reply" });
-  expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
+  expect(content).toHaveLength(1);
+  expect(image).toMatchObject({
+    type: "image",
+    artifactId: expect.stringMatching(/^artifact_managed_image_/u),
+    mimeType: "image/png",
+    url: expect.stringMatching(/\/api\/chat\/media\/outgoing\//u),
+    openUrl: expect.stringMatching(/\/api\/chat\/media\/outgoing\//u),
+  });
+  expect(content.some((block) => block.type === "attachment_error")).toBe(false);
+  expect(JSON.stringify(content)).not.toContain(mediaUrl);
 }
 
 beforeAll(() => {
@@ -2762,9 +2802,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     const serialized = JSON.stringify(payload?.message);
-    expect(serialized).toContain(
-      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
-    );
+    expect(serialized).toContain('"type":"attachment_error"');
+    expect(serialized).toContain('"code":"delivery-failed"');
+    expect(serialized).toContain('"label":"Generated audio 1"');
     expect(serialized).not.toContain(source);
     expect(Buffer.byteLength(serialized)).toBeLessThan(1_024);
     const assistantEntries = await readActiveAssistantTranscriptMessages();
@@ -2779,13 +2819,22 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: mirrorKey,
       text: `Artifacts ready\nMEDIA:${mediaUrl}`,
     });
-    setAgentRunReplies([
-      createMainSourceReply({
-        idempotencyKey: mirrorKey,
-        text: "Artifacts ready\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
-        mediaUrls: [mediaUrl],
-      }),
-    ]);
+    const sourceReply = createMainSourceReply({
+      idempotencyKey: mirrorKey,
+      text: "Artifacts ready\n⚠️ report.7z: Delivery failed. Try sending this file again.",
+      mediaUrls: [mediaUrl],
+    });
+    setReplyPayloadMetadata(sourceReply.payload, {
+      assistantMediaFailures: [
+        {
+          code: "delivery-failed",
+          kind: "document",
+          label: "report.7z",
+          mimeType: "application/x-7z-compressed",
+        },
+      ],
+    });
+    setAgentRunReplies([sourceReply]);
     const { send } = createChatRequestFixture();
 
     await send({
@@ -2794,9 +2843,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     const assistantEntries = await readActiveAssistantTranscriptMessages();
-    expect(JSON.stringify(assistantEntries[0])).toContain(
-      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
-    );
+    expect(JSON.stringify(assistantEntries[0])).toContain('"type":"attachment_error"');
+    expect(JSON.stringify(assistantEntries[0])).toContain('"label":"report.7z"');
+    expect(JSON.stringify(assistantEntries[0])).not.toContain("Media failed");
     expect(JSON.stringify(assistantEntries[0])).not.toContain("MEDIA:");
   });
 
@@ -3248,7 +3297,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("replaces a runtime-owned media reply instead of appending a duplicate assistant", async () => {
+  it("replaces reply-to-current with an explicit id on a runtime-owned media rewrite", async () => {
     await withTranscriptFixtureState("openclaw-chat-send-owned-media-", async (fixtureDir) => {
       const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
       writeSavedPng(fixtureDir, "reply.png");
@@ -3260,6 +3309,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       });
       await appendSourceReplyMirrorEntry({
         idempotencyKey: "runtime-owned-assistant",
+        openclawDelivery: { audioAsVoice: true, replyToCurrent: true },
         text: `Dinner options\nMEDIA:${mediaUrl}`,
         provider: "openai",
         model: "codex",
@@ -3272,6 +3322,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
               text: "Dinner options",
               mediaUrl,
               mediaUrls: [mediaUrl],
+              replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
             },
             {
               assistantTranscriptOwned: true,
@@ -3299,6 +3350,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         : [];
       expect(content[0]).toEqual({ type: "text", text: "Dinner options" });
       expect(content.filter((block) => block.type === "image")).toHaveLength(1);
+      expect(rewritten?.openclawDelivery).toEqual({
+        audioAsVoice: true,
+        mediaUrls: [mediaUrl],
+        replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
+      });
+      expect(JSON.stringify(rewritten)).not.toContain("[[reply_to:");
       expect(JSON.stringify(messages)).not.toContain(":assistant-media");
     });
   });
@@ -3369,6 +3426,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         });
         expect(JSON.stringify(content)).toContain("artifact_managed_image_");
         expect(JSON.stringify(content)).not.toContain("MEDIA:");
+        expect(messages[1]?.openclawDelivery).toEqual({ mediaUrls: [mediaUrl] });
         expect(JSON.stringify(messages)).not.toContain(":assistant-media");
         expect(messages[2]?.content).toEqual([
           { type: "text", text: `Later reply\nMEDIA:${mediaUrl}` },
@@ -3491,7 +3549,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("does not mirror agent-run stale media final text from live delivery", async () => {
+  it("persists a named failure when agent-run media disappears before delivery", async () => {
     await expectUnpersistedAgentRunFinal({
       transcriptPrefix: "openclaw-chat-send-agent-stale-tts-",
       idempotencyKey: "idem-stale-agent-media",
@@ -3499,6 +3557,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         text: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
       },
       staleAudio: true,
+      expectedMediaFailure: {
+        code: "delivery-failed",
+        kind: "audio",
+        label: "stale.mp3",
+        mimeType: "audio/mpeg",
+      },
     });
   });
 
@@ -3631,7 +3695,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(await readActiveAssistantTranscriptMessages()).toStrictEqual([]);
   });
 
-  it("does not duplicate media-bearing internal-ui source replies in the transcript", async () => {
+  it("replaces an explicit reply id with reply-to-current on a source reply rewrite", async () => {
     await withTranscriptFixtureState(
       "openclaw-chat-send-agent-source-reply-media-",
       async (fixtureDir) => {
@@ -3647,12 +3711,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         });
         await appendSourceReplyMirrorEntry({
           idempotencyKey: mirrorIdempotencyKey,
+          openclawDelivery: { audioAsVoice: true, replyToId: "stale-reply-id" },
           text: "Codex source reply with media",
         });
         const sourceReply = createMainSourceReply({
           idempotencyKey: mirrorIdempotencyKey,
           text: "Codex source reply with media",
           mediaUrls: [mediaUrl],
+          replyToCurrent: true,
         });
         setAgentRunReplies([sourceReply]);
         const { send } = createChatRequestFixture();
@@ -3680,7 +3746,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           expect(assistantEntries).toHaveLength(1);
           expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
           expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-          expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
+          expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
+          expect(assistantEntries[0]?.openclawDelivery).toEqual({
+            audioAsVoice: true,
+            mediaUrls: [mediaUrl],
+            replyToCurrent: true,
+          });
+          expect(JSON.stringify(assistantEntries[0])).not.toContain("[[reply_to:");
           const entry = readSqliteMainSessionEntry();
           expect(entry?.updatedAt).toBeGreaterThanOrEqual(rewrittenAt);
           expect(entry?.updatedAt).toBeGreaterThan(updatedAt);
@@ -3722,7 +3794,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect(assistantEntries).toHaveLength(1);
         expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
         expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-        expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
+        expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
       },
     );
   });
@@ -3761,7 +3833,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
         expect(JSON.stringify(assistantEntries[0])).toContain(replyText);
         expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-        expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
+        expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
       },
     );
   });
@@ -3813,8 +3885,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         ]);
         expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
         expect(JSON.stringify(assistantEntries[1])).toContain("/api/chat/media/outgoing/");
-        expect(JSON.stringify(assistantEntries[0])).not.toContain(firstMediaUrl);
-        expect(JSON.stringify(assistantEntries[1])).not.toContain(secondMediaUrl);
+        expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(firstMediaUrl);
+        expect(JSON.stringify(assistantEntries[1]?.content)).not.toContain(secondMediaUrl);
       },
     );
   });
@@ -3860,7 +3932,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect(assistantEntries).toHaveLength(1);
         expect(assistantEntries[0]?.idempotencyKey).toBe(backedMirrorKey);
         expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-        expect(JSON.stringify(assistantEntries[0])).not.toContain(firstMediaUrl);
+        expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(firstMediaUrl);
         expect(JSON.stringify(broadcastContent)).not.toContain(secondMediaUrl);
       },
     );
@@ -4199,50 +4271,155 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it.each([
-    ["after start", true],
-    ["before launch", false],
-  ] as const)("broadcasts returned agent-run error payloads $0", async (_name, agentStarted) => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-agent-returned-error-");
-    const errorMessage = agentStarted
-      ? "LLM idle timeout (120s): no response from model"
-      : STALE_WORKER_BUILD_REASON;
-    mockState.triggerAgentRunStart = agentStarted;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: {
-          text: errorMessage,
-          isError: true,
-        },
-      },
-    ];
-    const { context, send } = createChatRequestFixture();
-    const runId = agentStarted ? "idem-agent-returned-error" : "idem-agent-rejected-before-launch";
+    ["error payload after start", true, "error", undefined],
+    ["error payload before launch", false, "error", undefined],
+    ["recorded failure with ordinary output", true, "ordinary", "failed"],
+    ["recorded failure without output", true, "empty", "failed"],
+    ["recorded failure with source reply", true, "source", "failed"],
+    ["recorded success with ordinary output", true, "ordinary", "completed"],
+    ["recorded success with a recoverable warning", true, "warning", "completed"],
+    ["recorded success with source reply plus warning", true, "source-warning", "completed"],
+  ] as const)(
+    "projects agent-run terminal: $0",
+    async (name, agentStarted, presentation, outcome) => {
+      const fixtureDir = await createGatewayUserTurnSqliteFixture(
+        "openclaw-chat-send-agent-terminal-",
+      );
+      const runId = `idem-agent-terminal-${name.replaceAll(" ", "-")}`;
+      const failed = outcome === "failed" || presentation === "error";
+      const sourceReply = presentation === "source" || presentation === "source-warning";
+      const replyText = "Partial agent reply";
+      const errorMessage =
+        presentation === "error"
+          ? agentStarted
+            ? "LLM idle timeout (120s): no response from model"
+            : STALE_WORKER_BUILD_REASON
+          : "agent run failed";
+      const mirrorIdempotencyKey = `${runId}:internal-source-reply:0`;
+      const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+      mockState.triggerAgentRunStart = agentStarted;
+      if (outcome) {
+        await appendTestTranscriptMessage({
+          eventId: `${runId}:user`,
+          role: "user",
+          content: "please keep working",
+          now: 0,
+          parentId: null,
+        });
+        mockState.triggerUserMessagePersisted = true;
+      }
+      if (sourceReply) {
+        writeSavedPng(fixtureDir, "source-terminal.png");
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: mirrorIdempotencyKey,
+          text: replyText,
+        });
+        mockState.dispatchedReplies = [
+          createMainSourceReply({
+            idempotencyKey: mirrorIdempotencyKey,
+            text: replyText,
+            mediaUrls: [mediaUrl],
+          }),
+        ];
+      } else if (presentation === "empty") {
+        mockState.finalText = "";
+      } else if (presentation === "error") {
+        mockState.dispatchedReplies = [
+          {
+            kind: "final",
+            payload: { text: errorMessage, isError: true },
+          },
+        ];
+      } else {
+        mockState.runtimeAssistantTextsBeforeDelivery = [replyText];
+        mockState.dispatchedReplies = [{ kind: "final", payload: { text: replyText } }];
+      }
+      if (presentation === "warning" || presentation === "source-warning") {
+        mockState.dispatchedReplies.push({
+          kind: "final",
+          payload: { text: "tool warning", isError: true },
+        });
+      }
+      if (outcome) {
+        const dispatch = expectDefined(
+          dispatchInboundMessageMock.getMockImplementation(),
+          "default chat dispatch fixture",
+        );
+        dispatchInboundMessageMock.mockImplementationOnce(async (params: TestDispatchParams) =>
+          recordAgentRunTerminalOutcome(await dispatch(params), outcome),
+        );
+      }
+      const { context, send } = createChatRequestFixture();
 
-    const broadcast = await send({
-      idempotencyKey: runId,
-      message: "please keep working",
-    });
-
-    expect(broadcast).toMatchObject({
-      runId,
-      sessionKey: "agent:main:main",
-      state: "error",
-      errorMessage,
-    });
-    expect(broadcast).not.toHaveProperty("message");
-    const dedupe = context.dedupe.get(`chat:${runId}`);
-    expect(dedupe?.ok).toBe(false);
-    expect(dedupe?.payload).toMatchObject({
-      runId,
-      status: "error",
-      summary: errorMessage,
-    });
-    const userUpdate = findUserUpdate();
-    expectUserUpdateIdentity(userUpdate);
-    const assistantUpdates = findAssistantTranscriptUpdates();
-    expect(assistantUpdates).toStrictEqual([]);
-  });
+      await send({
+        idempotencyKey: runId,
+        message: "please keep working",
+        waitFor: "none",
+      });
+      // Admission already owns a dedupe entry; observe the first terminal write, not key presence.
+      await waitForAssertion(() => {
+        expect(["ok", "error"]).toContain(context.dedupe.get(`chat:${runId}`)?.payload?.status);
+      });
+      const dedupe = context.dedupe.get(`chat:${runId}`);
+      expect(dedupe?.ok).toBe(!failed);
+      expect(dedupe?.payload).toMatchObject({
+        runId,
+        status: failed ? "error" : "ok",
+        ...(failed ? { summary: errorMessage } : {}),
+      });
+      const waitRespond = vi.fn<RespondFn>();
+      await agentWaitHandler({
+        params: { runId, timeoutMs: 0 },
+        respond: waitRespond,
+        context,
+        req: {} as never,
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      expect(waitRespond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId, status: failed ? "error" : "ok" }),
+      );
+      const broadcasts = context.broadcast.mock.calls
+        .filter(([event]) => event === "chat")
+        .map(([, payload]) => payload);
+      if (failed) {
+        expect(broadcasts).toEqual([
+          expect.objectContaining({
+            runId,
+            sessionKey: "agent:main:main",
+            state: "error",
+            errorMessage,
+          }),
+        ]);
+        expect(broadcasts[0]).not.toHaveProperty("message");
+      } else if (sourceReply) {
+        expect(broadcasts).toEqual([expect.objectContaining({ runId, state: "final" })]);
+        expect(extractFirstTextBlock(broadcasts[0])).toBe(replyText);
+      } else {
+        expect(broadcasts).toEqual([]);
+      }
+      const assistantEntries = await readActiveAssistantTranscriptMessages();
+      if (presentation === "error" || presentation === "empty") {
+        expect(assistantEntries).toEqual([]);
+        expect(findAssistantTranscriptUpdates()).toEqual([]);
+      } else {
+        expect(assistantEntries).toHaveLength(1);
+        expect(JSON.stringify(assistantEntries[0]?.content)).toContain(replyText);
+      }
+      if (sourceReply) {
+        expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
+        expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
+        expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
+        expect(fs.existsSync(mockState.transcriptPath)).toBe(false);
+      }
+      if (presentation === "error") {
+        expectUserUpdateIdentity(findUserUpdate());
+      } else {
+        expect(readPersistedUserMessages()).toHaveLength(1);
+      }
+    },
+  );
 
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
     const transcriptDir = await createTranscriptFixture("openclaw-chat-send-command-tts-final-");
@@ -4758,7 +4935,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-agent-image-");
     mockState.finalPayload = {
       text: "Scan this QR code with the OpenClaw iOS app:",
-      mediaUrl: "data:image/png;base64,cG5n",
+      mediaUrl: `data:image/png;base64,${TINY_PNG_BASE64}`,
     };
     const { send } = createChatRequestFixture();
 
@@ -4767,13 +4944,22 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     const content = getMessageContent(payload);
+    const image = content.find((block) => block.type === "image");
     expect(getMessage(payload)?.role).toBe("assistant");
     expect(content[0]).toEqual({
       type: "text",
       text: "Scan this QR code with the OpenClaw iOS app:",
     });
-    expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
-    expect(JSON.stringify(payload?.message)).not.toContain("MEDIA:data:image/png;base64,cG5n");
+    expect(image).toMatchObject({
+      type: "image",
+      artifactId: expect.stringMatching(/^artifact_managed_image_/u),
+      mimeType: "image/png",
+      url: expect.stringMatching(/\/api\/chat\/media\/outgoing\//u),
+      openUrl: expect.stringMatching(/\/api\/chat\/media\/outgoing\//u),
+    });
+    expect(JSON.stringify(payload?.message)).not.toContain(
+      `MEDIA:data:image/png;base64,${TINY_PNG_BASE64}`,
+    );
   });
 
   it("suppresses reasoning payloads from webchat transcript replies", async () => {
@@ -5952,7 +6138,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await expectImageOnlyFinal({
       transcriptPrefix: "openclaw-chat-send-media-only-final-",
       idempotencyKey: "idem-media-only-final",
-      finalPayload: { mediaUrl: "data:image/png;base64,cG5n" },
+      finalPayload: { mediaUrl: `data:image/png;base64,${TINY_PNG_BASE64}` },
     });
   });
 
@@ -5960,7 +6146,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await expectImageOnlyFinal({
       transcriptPrefix: "openclaw-chat-send-media-only-silent-final-",
       idempotencyKey: "idem-media-only-silent-final",
-      finalPayload: { text: "NO_REPLY", mediaUrl: "data:image/png;base64,cG5n" },
+      finalPayload: { text: "NO_REPLY", mediaUrl: `data:image/png;base64,${TINY_PNG_BASE64}` },
     });
   });
 
@@ -5968,7 +6154,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await expectImageOnlyFinal({
       transcriptPrefix: "openclaw-chat-send-media-reply-tags-",
       idempotencyKey: "idem-media-reply-tags",
-      finalPayload: { replyToCurrent: true, mediaUrl: "data:image/png;base64,cG5n" },
+      finalPayload: {
+        replyToCurrent: true,
+        mediaUrl: `data:image/png;base64,${TINY_PNG_BASE64}`,
+      },
     });
     const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
       (update) =>
@@ -5985,8 +6174,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       type: "text",
       text: "Image reply",
     });
+    expect(transcriptMessage?.content?.[1]).toMatchObject({
+      type: "image",
+      artifactId: expect.stringMatching(/^artifact_managed_image_/u),
+      mimeType: "image/png",
+    });
     expect(JSON.stringify(transcriptUpdate)).not.toContain("[[reply_to_current]]");
-    expect(JSON.stringify(transcriptUpdate)).not.toContain("data:image/png;base64,cG5n");
+    expect(JSON.stringify(transcriptUpdate)).not.toContain(TINY_PNG_BASE64);
   });
 
   it("does not persist sensitive image media into transcript updates", async () => {
@@ -6537,16 +6731,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
-  it("passes already-managed oversized inbound PDFs through staging instead of rejecting", async () => {
-    // #90097: a managed inbound PDF above the sandbox staging cap is read
-    // host-side (media-understanding) rather than copied into the sandbox, so
-    // it must reach dispatch with its managed media path instead of a 4xx.
+  it("stages already-managed PDFs above the generic media-store limit", async () => {
+    // #90097: the sandbox staging ceiling is intentionally higher than the
+    // generic media-store limit, so a 6 MiB PDF should still land in the
+    // workspace rather than taking the oversized host-path fallback.
     await createReadyChatTranscript("openclaw-chat-send-managed-pdf-pass-through-");
     useChatTestModel("vision-model");
     setSavedMediaResults(["/home/user/.openclaw/media/inbound/huge.pdf", "application/pdf"]);
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stagedRelativePaths = ["media/inbound/huge.pdf"];
     const { send } = createChatRequestFixture();
-    // 6MB PDF — above STAGED_MEDIA_MAX_BYTES (5MB) but below the 20MB parse cap.
+    // 6 MiB PDF — above MEDIA_MAX_BYTES (5 MiB) but below both the default
+    // 20 MiB parser cap and the 50 MiB sandbox staging cap.
     const oversized = Buffer.alloc(6 * 1024 * 1024);
     oversized.set(Buffer.from("%PDF-1.4\n"), 0);
 
@@ -6561,13 +6757,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    // Reaches dispatch with the managed media path; not staged into the sandbox,
-    // so no workspace dir, and the media-store entry is kept (not cleaned up).
+    // Reaches dispatch through the same staged workspace path as other files.
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
-        path: "/home/user/.openclaw/media/inbound/huge.pdf",
+        path: "media/inbound/huge.pdf",
         contentType: "application/pdf",
-        workspaceDir: "/home/user/.openclaw/media/inbound",
+        workspaceDir: "/sandbox/workspace",
       },
     ]);
     expect(mockState.deleteMediaBufferCalls).toEqual([]);
@@ -6690,14 +6885,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
-  it("rejects sandbox-oversized non-image attachments as 4xx before staging", async () => {
-    // Regression: resolveChatAttachmentMaxBytes defaults to 20MB, but
-    // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (5MB) and
-    // silently drops oversize files. Without a pre-check, a sandbox session
-    // accepting a 5-20MB non-image would fail staging and surface as a
-    // retryable 5xx UNAVAILABLE, misleading clients into retrying a
-    // deterministically broken request. Managed PDFs pass through (see above);
-    // other oversized non-image files must still be rejected.
+  it("stages non-image attachments above the generic media-store limit", async () => {
+    // Regression: Gateway used MEDIA_MAX_BYTES (5 MiB) as a pre-staging cap
+    // even though stageSandboxMedia accepts files up to 50 MiB.
     await createReadyChatTranscript("openclaw-chat-send-sandbox-oversize-");
     useChatTestModel("vision-model");
     setSavedMediaResults([
@@ -6705,8 +6895,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "application/octet-stream",
     ]);
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    const { respond, send } = createChatRequestFixture();
-    // 6MB buffer — above STAGED_MEDIA_MAX_BYTES (5MB) but below the 20MB parse cap.
+    mockState.stagedRelativePaths = ["media/inbound/huge.bin"];
+    const { send } = createChatRequestFixture();
+    // 6 MiB buffer — above MEDIA_MAX_BYTES but below the default 20 MiB parser
+    // cap and the canonical 50 MiB sandbox staging cap.
     const oversized = Buffer.alloc(6 * 1024 * 1024);
     oversized.set(Buffer.from("OPENCLAW-BINARY\n"), 0);
     const oversizedPayload = oversized.toString("base64");
@@ -6720,20 +6912,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         ],
       },
       expectBroadcast: false,
-      waitFor: "none",
     });
 
-    expect(mockState.lastDispatchCtx).toBeUndefined();
-    expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, payload, error] = lastRespondCall(respond) ?? [];
-    expect(ok).toBe(false);
-    expect(payload).toBeUndefined();
-    // 4xx, not 5xx — retrying a file that exceeds the staging cap cannot
-    // succeed, so the failure must be surfaced as a client-side rejection.
-    expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
-    expect(responseErrorMessage(error)).toMatch(/sandbox staging limit/i);
-    // Orphaned media-store entries are cleaned up before the 4xx surfaces.
-    expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "media/inbound/huge.bin",
+        contentType: "application/octet-stream",
+        workspaceDir: "/sandbox/workspace",
+      },
+    ]);
+    expect(mockState.deleteMediaBufferCalls).toEqual([]);
   });
 
   it("passes imageOrder for mixed inline and offloaded chat.send attachments", async () => {

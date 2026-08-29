@@ -69,6 +69,43 @@ marked `catalogMode: "direct-only"` use `openclaw_direct`, which Codex keeps
 directly model-visible as `DirectModelOnly` instead of exposing it to nested
 Code Mode execution.
 
+## Recovery after a hard Gateway stop
+
+On POSIX systems, OpenClaw checks for registered orphaned Codex app-server
+processes before spawning each fresh stdio child. Gateway startup also runs a
+best-effort background sweep; the before-spawn check remains authoritative.
+OpenClaw records the parent and child process identities in the current state
+directory's SQLite plugin store
+before sending Codex `initialize`, so a child cannot start a native turn before
+its registration is durable.
+
+Cleanup only targets a registered child whose original OpenClaw parent is no
+longer running. It checks process IDs, start times, and process groups before
+terminating the orphan and its discoverable descendants. When recorded, a
+fingerprint of the child command line must also match the live process before
+signaling; the durable registration stores only that digest, never the raw
+arguments. Another live
+OpenClaw instance, processes registered under another state directory, and externally
+managed WebSocket or Unix-socket app-servers are left alone. These portable
+process checks do not provide an atomic operating-system ownership guarantee
+or discover descendants that independently reparented before inspection.
+
+Linux reads process identities directly from `/proc`, including the boot ID
+and process start ticks, so Alpine/BusyBox installations do not need `procps`.
+macOS uses its native `ps` with a fixed locale and timezone.
+
+If process inspection or bounded cleanup cannot confirm that the registered
+orphan is gone, the new stdio connection fails instead of spawning another
+child. Follow the reported action: check `/proc` access on Linux or `ps` on
+macOS, or verify and stop
+the reported orphan process, then retry. If the cleanup budget expires, retry
+to finish the remaining registrations.
+
+This recovery requires a spawn-time registration. It does not discover
+unregistered children left by an older OpenClaw version or scan command names
+to infer ownership. Windows does not yet have equivalent orphan registration
+and recovery.
+
 ## Thread bindings and model changes
 
 When an OpenClaw session is attached to an existing Codex thread, the next
@@ -131,11 +168,15 @@ in another process, so confirmation covers unknown clients and the gap between
 status read and archive. A supervised model-locked Chat cannot be deleted while
 it protects the native binding.
 
-Paired-node catalogs stay metadata-only in the initial release. The current
-node invoke boundary is request/response and cannot carry the long-lived turn
-events, approval requests, or streaming output required by a real Codex harness
-binding. Remote **Continue** and **Archive** therefore remain unavailable even
-when the row is idle.
+Paired-node catalogs expose bounded, paginated transcripts. Eligible stored or
+idle rows can also create or reopen a model-locked Chat when the connected node
+advertises and permits the catalog list, transcript read, and
+`codex.cli.session.resume` commands, and the operator has `operator.admin`.
+Later messages resume the exact native thread through the node's Codex CLI and
+return its final text; this is not the Gateway-local branch flow or a streaming
+App Server harness bridge. Nodes without those capabilities remain readable
+without continuation, and paired-node archive remains unavailable. See
+[paired-node limits](/plugins/codex-supervision#understand-paired-node-limits).
 
 See [Codex supervision](/plugins/codex-supervision) for operator setup and the
 visible Control UI behavior.
@@ -343,6 +384,13 @@ Active-run queue steering maps onto Codex app-server `turn/steer`. With the
 default `messages.queue.mode: "steer"`, OpenClaw batches steer-mode chat
 messages for the configured quiet window and sends them as one `turn/steer`
 request in arrival order.
+
+Inline images and stored attachments keep their original image order. Stored
+images use the same hydration, size limits, and filesystem restrictions as a
+new turn. If an attachment cannot be prepared or steering is rejected, the
+complete message remains queued for a follow-up turn. Preparation and the
+`turn/steer` acknowledgment do not count as consumption; a message sent to
+Codex without confirmed consumption is not replayed automatically.
 
 When Codex confirms consumption, OpenClaw saves completed visible assistant
 items before the steered user message, including items before a tool or sleep

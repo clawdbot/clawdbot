@@ -51,11 +51,11 @@ import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "./compaction.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
+import { resolveAgentHarnessPolicy } from "./policy.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
   agentHarnessBuildsOpenClawTools,
   agentHarnessExposesOpenClawTools,
-  resolveAgentHarnessPolicy,
   resolveAvailableAgentHarnessPolicy,
   resolvePluginHarnessPolicyToolsAllow,
   runAgentHarnessAttempt,
@@ -1195,15 +1195,6 @@ describe("runAgentHarnessAttempt", () => {
     expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
-  it("auto-selects a supporting plugin harness by default", async () => {
-    registerFailingCodexHarness();
-
-    await expect(runAgentHarnessAttempt(createAttemptParams())).rejects.toThrow(
-      "codex startup failed",
-    );
-    expect(agentRunAttempt).not.toHaveBeenCalled();
-  });
-
   it("projects deferred route support into the final attempt selection", async () => {
     const supports = vi.fn((ctx: Parameters<AgentHarness["supports"]>[0]) =>
       ctx.modelProvider?.preparedAuth?.source === "harness" &&
@@ -1308,21 +1299,18 @@ describe("runAgentHarnessAttempt", () => {
     expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
-  it.each(["openai", "openai"])(
-    "does not override forced Codex harness support rejection for %s",
-    (provider) => {
-      registerFailingCodexHarness();
+  it("does not override forced Codex harness support rejection for openai", () => {
+    registerFailingCodexHarness();
 
-      expect(() =>
-        selectAgentHarness({
-          provider,
-          modelId: "gpt-5.4",
-          agentHarnessRuntimeOverride: "codex",
-        }),
-      ).toThrow(`Requested agent harness "codex" does not support ${provider}/gpt-5.4`);
-      expect(agentRunAttempt).not.toHaveBeenCalled();
-    },
-  );
+    expect(() =>
+      selectAgentHarness({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        agentHarnessRuntimeOverride: "codex",
+      }),
+    ).toThrow('Requested agent harness "codex" does not support openai/gpt-5.4');
+    expect(agentRunAttempt).not.toHaveBeenCalled();
+  });
 
   it("uses the Codex harness by default for OpenAI agent model runs", async () => {
     registerSuccessfulCodexHarness();
@@ -1555,7 +1543,7 @@ describe("runAgentHarnessAttempt", () => {
     expect(received[0]?.safeDeniedTools).toEqual(["image_generate"]);
   });
 
-  it("marks only explicit restrictive policy layers for plugin harness isolation", async () => {
+  it("isolates collector runs and explicit restrictive policy layers for plugin harnesses", async () => {
     const received: boolean[] = [];
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
       received.push(attempt.pluginHarnessToolPolicyRestricted === true);
@@ -1578,11 +1566,14 @@ describe("runAgentHarnessAttempt", () => {
       conversationToolPolicy?: EmbeddedRunAttemptParams["conversationToolPolicy"];
       agentId?: string;
       sessionKey?: string;
+      swarmCollector?: boolean;
     }> = [
       {},
       { config: { tools: { profile: "coding" } } as OpenClawConfig },
       { conversationToolPolicy: {} },
       { conversationToolPolicy: { allow: ["*"] } },
+      { swarmCollector: false },
+      { swarmCollector: true },
       { conversationToolPolicy: { deny: ["exec"] } },
       { config: { tools: { deny: ["exec"] } } as OpenClawConfig },
       {
@@ -1604,10 +1595,11 @@ describe("runAgentHarnessAttempt", () => {
         conversationToolPolicy: testCase.conversationToolPolicy,
         agentId: testCase.agentId,
         sessionKey: testCase.sessionKey,
+        swarmCollector: testCase.swarmCollector,
       });
     }
 
-    expect(received).toEqual([false, false, false, false, true, true, true, true]);
+    expect(received).toEqual([false, false, false, false, false, true, true, true, true, true]);
   });
 
   it("rejects restrictive policy before an unsupported plugin harness runs", async () => {

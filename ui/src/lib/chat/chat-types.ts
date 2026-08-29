@@ -1,12 +1,12 @@
+import type { MediaKind } from "@openclaw/media-core/constants";
 /**
  * Chat message types for the UI layer.
  */
-
-import type { MediaKind } from "@openclaw/media-core/constants";
 import type {
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
@@ -259,6 +259,15 @@ export type MessageContentItem =
       };
     }
   | {
+      type: "attachment_error";
+      attachment: {
+        code: "file-not-found" | "unsupported-format" | "delivery-failed";
+        kind: Exclude<MediaKind, "sticker" | "unknown">;
+        label: string;
+        mimeType?: string;
+      };
+    }
+  | {
       type: "canvas";
       preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
       rawText?: string | null;
@@ -305,27 +314,31 @@ export type ToolCard = {
   /** True once a result landed, including historical results with empty output. */
   completed?: boolean;
   messageId?: string;
-  preview?: {
-    kind: "canvas";
-    surface: "assistant_message";
-    render: "url";
-    title?: string;
-    preferredHeight?: number;
-    url?: string;
-    viewId?: string;
-    className?: string;
-    style?: string;
-    sandbox?: "strict" | "scripts";
-    boardWidgetName?: string;
-    mcpApp?: {
-      viewId: string;
-      serverName?: string;
-      toolName?: string;
-      uiResourceUri?: string;
-      toolCallId?: string;
-      originSessionKey?: string;
-    };
-  };
+  /** UI-local preview identity for results without a call or transcript id. */
+  previewRevision?: string;
+  preview?:
+    | {
+        kind: "canvas";
+        surface: "assistant_message";
+        render: "url";
+        title?: string;
+        preferredHeight?: number;
+        url?: string;
+        viewId?: string;
+        className?: string;
+        style?: string;
+        sandbox?: "strict" | "scripts";
+        boardWidgetName?: string;
+        mcpApp?: {
+          viewId: string;
+          serverName?: string;
+          toolName?: string;
+          uiResourceUri?: string;
+          toolCallId?: string;
+          originSessionKey?: string;
+        };
+      }
+    | (BrowserTabTarget & { kind: "browser-tab"; url?: string; title?: string });
 };
 
 export type ToolCardOutcome = "running" | "succeeded" | "failed" | "unknown";

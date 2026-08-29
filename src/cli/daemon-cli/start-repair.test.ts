@@ -126,7 +126,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     defaultRuntimeLogMock.mockClear();
     assertGatewayServiceMutationAllowedMock.mockReset();
     resolveBunRuntimeInfoMock.mockReset();
-    resolveBunRuntimeInfoMock.mockResolvedValue({ supported: true });
+    resolveBunRuntimeInfoMock.mockResolvedValue({ status: "supported" });
 
     resolveGatewayInstallTokenMock.mockResolvedValue({
       tokenRefConfigured: false,
@@ -146,14 +146,36 @@ describe("repairLoadedGatewayServiceForStart", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["sealed", "unknown"] as const)(
-    "denies definition repair before config or token work when authority is %s",
-    async (kind) => {
+  it.each([
+    {
+      kind: "sealed",
+      reason: "foreign-owner",
+      artifact: "service-file",
+      guidance: "deployment owner",
+    },
+    {
+      kind: "unknown",
+      reason: "unsafe-permissions",
+      artifact: "service-directory",
+      guidance: "chmod go-w",
+    },
+    {
+      kind: "unknown",
+      reason: "inspection-failed",
+      artifact: "service-file",
+      guidance: "Inspect service definition access",
+    },
+  ] as const)(
+    "explains $reason without exposing raw details or doing config/token work",
+    async ({ guidance, ...capability }) => {
       const install = vi.fn();
       const service = {
         install,
         isLoaded: vi.fn(async () => true),
-        readDefinitionMutationCapability: vi.fn(async () => ({ kind, detail: "protected" })),
+        readDefinitionMutationCapability: vi.fn(async () => ({
+          ...capability,
+          detail: "repair-inspection-secret-canary",
+        })),
       };
       const state: GatewayServiceState = {
         installed: true,
@@ -165,15 +187,22 @@ describe("repairLoadedGatewayServiceForStart", () => {
           environment: { HOME: "/home/openclaw" },
         },
       };
-      await expect(
-        repairLoadedGatewayServiceForStart({
-          service,
-          state,
-          issues: [{ code: "missing-program", message: "missing" }],
-          json: true,
-          stdout: process.stdout,
-        }),
-      ).rejects.toThrow(`SERVICE_DEFINITION_${kind.toUpperCase()}`);
+      const params = {
+        service,
+        state,
+        issues: [{ code: "missing-program" as const, message: "missing" }],
+        json: true,
+        stdout: process.stdout,
+      };
+      for (const action of ["start", "restart"] as const) {
+        const repair =
+          action === "restart"
+            ? repairLoadedGatewayServiceForStart({ ...params, action })
+            : repairLoadedGatewayServiceForStart(params);
+        await expect(repair).rejects.toThrow(`SERVICE_DEFINITION_${capability.kind.toUpperCase()}`);
+        await expect(repair).rejects.toThrow(guidance);
+        await expect(repair).rejects.not.toThrow("secret-canary");
+      }
       expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
       expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
       expect(install).not.toHaveBeenCalled();
@@ -254,12 +283,14 @@ describe("repairLoadedGatewayServiceForStart", () => {
   });
 
   it.each([
-    { supported: true, expectedRuntime: "bun" },
-    { supported: false, expectedRuntime: "node" },
+    { status: "supported", expectedRuntime: "bun" },
+    { status: "unsupported", expectedRuntime: "node" },
+    { status: "probe-failed", expectedRuntime: null },
   ])(
-    "$expectedRuntime is selected when repairing an installed Bun Gateway with supported=$supported",
-    async ({ supported, expectedRuntime }) => {
-      resolveBunRuntimeInfoMock.mockResolvedValue({ supported });
+    "repairs an installed Bun Gateway only when its probe result is known ($status)",
+    async ({ status, expectedRuntime }) => {
+      const error = new Error("Bun runtime probe failed (cwd /root): EACCES");
+      resolveBunRuntimeInfoMock.mockResolvedValue({ status, error });
       const service = {
         install: vi.fn(async () => {}),
         isLoaded: vi.fn(async () => true),
@@ -281,13 +312,20 @@ describe("repairLoadedGatewayServiceForStart", () => {
         },
       };
 
-      await repairLoadedGatewayServiceForStart({
+      const repair = repairLoadedGatewayServiceForStart({
         service,
         state,
         issues: [{ code: "port-mismatch", message: "old port" }],
         json: true,
         stdout: process.stdout,
       });
+      if (status === "probe-failed") {
+        await expect(repair).rejects.toBe(error);
+        expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
+        expect(service.install).not.toHaveBeenCalled();
+        return;
+      }
+      await repair;
 
       const plan = readFirstInstallPlanArg();
       expect(plan.runtime).toBe(expectedRuntime);

@@ -1,9 +1,11 @@
+import { addAbortListener } from "node:events";
 import {
   buildEmbeddedForegroundPromptContext,
   embeddedAgentLog,
   formatErrorMessage,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -12,6 +14,7 @@ import {
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
 import { buildCodexContinuityCalibration } from "./context-engine-projection.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
@@ -93,8 +96,25 @@ export async function finalizeCodexAttempt(
     notifyUserMessagePersisted,
   } = activeTurn;
   await completion;
-  // Include projection work already queued when timeout completion wins.
-  await drainNotificationQueue();
+  await state.abortCleanup;
+  // Timeout and Stop still join queued projections within the abort grace;
+  // normal completion awaits the full drain.
+  const drain = drainNotificationQueue();
+  const abortGraceElapsed = createDeferred<void>();
+  let abortGraceTimer: ReturnType<typeof setTimeout> | undefined;
+  const abortListener = addAbortListener(runAbortController.signal, () => {
+    abortGraceTimer = setTimeout(
+      () => abortGraceElapsed.resolve(),
+      TURN_FINALIZE_DRAIN_ABORT_GRACE_MS,
+    );
+    abortGraceTimer.unref?.();
+  });
+  try {
+    await Promise.race([drain, abortGraceElapsed.promise]);
+  } finally {
+    abortListener[Symbol.dispose]();
+    clearTimeout(abortGraceTimer);
+  }
   const hasQuiescentCompletedAssistant =
     activeProjector.hasCompletedTerminalAssistantText() &&
     state.activeAppServerTurnRequests === 0 &&

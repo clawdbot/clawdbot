@@ -124,6 +124,8 @@ or raw errors out of the transcript/runtime path.
 
 Assistant deltas buffer into chat `delta` messages. A chat `final` is emitted on **lifecycle end/error**.
 
+Run-duration metadata belongs to the current run, including when preparation fails before the model starts. In Control UI completed-work rollups, independent sends have separate elapsed-time boundaries: a failed turn and the idle time before the next send are not part of that next turn's work. Steering remains associated with its target run rather than being treated as an independent retry.
+
 ## Timeouts
 
 | Timeout                                          | Default                                | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |

@@ -255,6 +255,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
     providers: [],
     resolvedDefault: { provider: "openai", model: "gpt-4.1" },
     modelNames: new Map<string, string>(),
+    modelCatalog: [],
   })) as TelegramBotDeps["buildModelsProviderData"],
   listSkillCommandsForAgents: vi.fn(() => []) as TelegramBotDeps["listSkillCommandsForAgents"],
   wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],

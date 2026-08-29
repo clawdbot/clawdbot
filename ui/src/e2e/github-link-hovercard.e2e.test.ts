@@ -50,6 +50,24 @@ async function captureArtifact(page: Page, name: string): Promise<void> {
 
 const pullPreviewResponse = {
   additions: 101,
+  coAuthorCount: 5,
+  coAuthors: [
+    {
+      login: "roboclaw-bot",
+      avatarDataUrl:
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=",
+    },
+    {
+      login: "ada",
+      avatarDataUrl:
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=",
+    },
+    {
+      login: "mira",
+      avatarDataUrl:
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=",
+    },
+  ],
   avatarDataUrl:
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=",
   changedFiles: 3,
@@ -330,6 +348,11 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + 4);
     await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2);
     expect(await card.count()).toBe(1);
+    const faces = card.locator(".github-link-hovercard__coauthors img");
+    await expect.poll(() => faces.count()).toBe(3);
+    await expect
+      .poll(() => card.locator(".github-link-hovercard__coauthors-more").textContent())
+      .toBe("+2");
     await captureArtifact(page, "github-hovercard-pointer-open");
 
     // Staying on the card holds it open regardless of elapsed time, mirroring

@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
-import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -16,10 +15,16 @@ export function resolveChatPaneDesktopTarget(
     return null;
   }
   const placement = session.placement;
-  if (isCloudWorkerPlacementState(placement?.state)) {
-    return "environmentId" in placement
-      ? (normalizeOptionalString(placement.environmentId) ?? null)
-      : null;
+  if (placement && placement.state !== "local") {
+    // Wait for the active owner; starting or reclaimed sessions do not own a desktop yet.
+    if (placement.state !== "active") {
+      return null;
+    }
+    if (placement.runner?.kind === "device") {
+      const nodeId = normalizeOptionalString(placement.runner.deviceId);
+      return placement.runner.status === "available" && nodeId ? `node:${nodeId}` : null;
+    }
+    return normalizeOptionalString(placement.environmentId) ?? null;
   }
   const execNode = normalizeOptionalString(session.execNode);
   return execNode ? `node:${execNode}` : "gateway";

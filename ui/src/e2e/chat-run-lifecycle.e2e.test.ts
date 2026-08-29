@@ -3,7 +3,11 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
-import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  pauseVirtualClock,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -15,15 +19,181 @@ const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 let page: Page | undefined;
 suite.define(() => {
   afterEach(async () => {
-    await page
-      ?.context()
-      .close()
-      .catch(() => {});
+    if (page) {
+      await suite.closeBrowserContext(page.context());
+    }
     page = undefined;
   });
 
+  it("retires failed history released after clicking Send", async () => {
+    const context = await suite.newBrowserContext({});
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const sessionKey = "agent:main:main";
+    const diagnostic = "Earlier preparation failed before model output";
+    const gateway = await installMockGateway(currentPage, {
+      sessionKey,
+      // Account recovery can replace startup with a scoped history request.
+      heldMethods: ["chat.startup", "chat.history", "chat.send"],
+      sessionInfo: {
+        key: sessionKey,
+        status: "failed",
+        hasActiveRun: false,
+        lastRunId: "failed-run",
+        lastRunError: diagnostic,
+      },
+    });
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    const startup = await gateway.waitForRequest("chat.startup");
+    expect(startup.params).toMatchObject({ sessionKey });
+    await currentPage.locator(".agent-chat__input textarea").fill("Try again");
+    await currentPage.getByRole("button", { name: "Send message" }).click();
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+    // Fault injection controls only WebSocket delivery, never application state.
+    await gateway.resolveDeferred("chat.startup");
+    await expect
+      .poll(async () =>
+        (await gateway.getRequests()).some(
+          ({ method }) => method === "chat.history" || method === "chat.send",
+        ),
+      )
+      .toBe(true);
+    if ((await gateway.getRequests("chat.history")).length > 0) {
+      await gateway.resolveDeferred("chat.history");
+    }
+    const send = await gateway.waitForRequest("chat.send");
+    const { idempotencyKey: runId } = send.params as { idempotencyKey: string };
+    expect(runId).toEqual(expect.any(String));
+    const alert = currentPage.getByRole("alert").filter({ hasText: diagnostic });
+    await alert.waitFor();
+    await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+    await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
+    await gateway.emitChatFinal({ sessionKey, runId, text: "Recovery completed." });
+    await currentPage
+      .locator(".chat-group.assistant")
+      .getByText("Recovery completed.", { exact: true })
+      .waitFor();
+    await expect.poll(() => alert.count()).toBe(0);
+    expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
+  });
+
+  it("excludes a reply-less failed turn's idle time from the next successful turn", async () => {
+    const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const sessionKey = "agent:main:dashboard:failed-turn-elapsed";
+    const gateway = await installMockGateway(currentPage, { sessionKey });
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    const composer = currentPage.locator(".agent-chat__input textarea");
+    await composer.fill("First attempt");
+    // Freeze wall time without pausing the animation frames that publish sends.
+    const firstStartedAt = Date.now();
+    await currentPage.clock.setFixedTime(firstStartedAt);
+    const messages: Record<string, unknown>[] = [];
+    const persistUser = async (text: string, timestamp: number, after: number) => {
+      const send = await gateway.waitForRequest("chat.send", { after });
+      expect(send.params).toMatchObject({ sessionKey, idempotencyKey: expect.any(String) });
+      const { idempotencyKey: runId } = send.params as { idempotencyKey: string };
+      const message = {
+        role: "user",
+        content: text,
+        timestamp,
+        __openclaw: {
+          id: `user-${after}`,
+          idempotencyKey: `${runId}:user`,
+          senderId: "operator",
+        },
+      };
+      messages.push(message);
+      await gateway.setHistoryMessages(messages);
+      await gateway.emitGatewayEvent("session.message", {
+        sessionKey,
+        clientRunId: runId,
+        message,
+        messageId: message["__openclaw"].id,
+        messageSeq: messages.length,
+        activeRunIds: [runId],
+        hasActiveRun: true,
+      });
+      await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
+      return runId;
+    };
+    await currentPage.getByRole("button", { name: "Send message" }).click();
+    const failedRunId = await persistUser("First attempt", firstStartedAt, 0);
+    await gateway.emitGatewayEvent("chat", {
+      sessionKey,
+      runId: failedRunId,
+      state: "error",
+      errorMessage: "Failed before model output",
+    });
+    await currentPage
+      .getByRole("alert")
+      .filter({ hasText: "Failed before model output" })
+      .waitFor();
+    expect(await currentPage.locator(".chat-group.assistant").count()).toBe(0);
+    expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
+
+    await currentPage.clock.setFixedTime(firstStartedAt + 981_000);
+    await composer.fill("Try again independently");
+    await currentPage.getByRole("button", { name: "Send message" }).click();
+    const runId = await persistUser("Try again independently", firstStartedAt + 981_000, 1);
+    expect(runId).not.toBe(failedRunId);
+    await currentPage.clock.setFixedTime(firstStartedAt + 982_000);
+    const tool = {
+      role: "toolResult",
+      toolName: "bash",
+      toolCallId: "successful-tool",
+      content: "ok",
+      timestamp: firstStartedAt + 982_000,
+      __openclaw: { id: "successful-tool-result", runId },
+    };
+    messages.push(tool);
+    await gateway.setHistoryMessages(messages);
+    await gateway.emitGatewayEvent("session.message", {
+      sessionKey,
+      runId,
+      message: tool,
+      messageId: tool["__openclaw"].id,
+      messageSeq: messages.length,
+      activeRunIds: [runId],
+      hasActiveRun: true,
+    });
+    await currentPage.clock.setFixedTime(firstStartedAt + 994_000);
+    const reply = {
+      role: "assistant",
+      content: "Success after the earlier failure.",
+      timestamp: firstStartedAt + 994_000,
+      __openclaw: { id: "successful-reply", runId },
+    };
+    messages.push(reply);
+    // The same canonical history must survive a full page reload, not just
+    // the live terminal projection or its retained local timestamps.
+    await gateway.setMethodResponse("chat.history", {
+      messages,
+      sessionId: "control-ui-e2e-session",
+      sessionInfo: { key: sessionKey, hasActiveRun: false, activeRunIds: [], status: "done" },
+    });
+    await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "final", message: reply });
+    const replyBody = currentPage
+      .locator(".chat-group.assistant")
+      .getByText(reply.content, { exact: true });
+    await replyBody.waitFor();
+    const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
+    await elapsedLabel.waitFor();
+    expect.soft(await elapsedLabel.textContent()).toBe("Worked for 13s");
+    expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
+
+    await currentPage.reload();
+    await gateway.waitForRequest("chat.startup");
+    await replyBody.waitFor();
+    await elapsedLabel.waitFor();
+    expect(await elapsedLabel.textContent()).toBe("Worked for 13s");
+    expect(await currentPage.locator(".chat-group.user").count()).toBe(2);
+  });
+
   it("keeps a continuing run inside its latest assistant reply", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     await installMockGateway(currentPage, {
@@ -60,7 +230,7 @@ suite.define(() => {
   });
 
   it("keeps a different active run in its own status row", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     await installMockGateway(currentPage, {
@@ -99,7 +269,7 @@ suite.define(() => {
     if (captureProof) {
       await mkdir(artifactDir, { recursive: true });
     }
-    const context = await suite.browser.newContext({
+    const context = await suite.newBrowserContext({
       viewport: { height: 800, width: 1200 },
       ...(captureProof
         ? { recordVideo: { dir: artifactDir, size: { height: 800, width: 1200 } } }
@@ -142,7 +312,7 @@ suite.define(() => {
   });
 
   it("shows compaction savings and live working time", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     await currentPage.clock.install();
@@ -184,7 +354,7 @@ suite.define(() => {
   });
 
   it("clears shared session activity when chat final arrives first", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     await currentPage.clock.install();
@@ -332,7 +502,7 @@ suite.define(() => {
   });
 
   it("does not announce Done when a yielded parent is waiting for continuation", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     const gateway = await installMockGateway(currentPage, {
@@ -410,7 +580,7 @@ suite.define(() => {
     if (captureProof) {
       await mkdir(artifactDir, { recursive: true });
     }
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     const gateway = await installMockGateway(currentPage);

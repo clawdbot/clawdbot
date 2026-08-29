@@ -342,6 +342,23 @@ describe("session permission filesystem tools", () => {
     });
   });
 
+  it("denies exec when a turn tightens the dispatch-provided full mode", async () => {
+    await withTempDir("openclaw-permission-exec-", async (root) => {
+      const tools = createOpenClawCodingTools({
+        workspaceDir: root,
+        sessionPermissionPolicy: { root, mode: "full" },
+        exec: { host: "gateway", mode: "full", security: "deny", ask: "off" },
+      });
+      const exec = tools.find((tool) => tool.name === "exec");
+      if (!exec) {
+        throw new Error("expected exec tool");
+      }
+      await expect(
+        exec.execute("tightened-exec", { command: "echo exec-policy-proof" }),
+      ).rejects.toThrow(/security=deny/);
+    });
+  });
+
   it("keeps full mode filesystem access unrestricted", async () => {
     await withTempDir("openclaw-permission-full-", async (root) => {
       const outside = path.join(path.dirname(root), `outside-${path.basename(root)}.txt`);

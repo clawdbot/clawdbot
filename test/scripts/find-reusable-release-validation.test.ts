@@ -228,7 +228,7 @@ function normalizedEvidence(options: {
     (validationInputs.npmTelegramPackageSpec.length > 0 ||
       validationInputs.releasePackageSpec.length > 0);
   const manifest = {
-    version: shaPinned ? 3 : 2,
+    version: 4,
     workflowName: "Full Release Validation",
     workflowRef,
     workflowSha: producerSha,
@@ -250,8 +250,10 @@ function normalizedEvidence(options: {
     childRuns: {
       normalCi: "201",
       npmTelegram: npmTelegramRequired ? "205" : "",
-      pluginPrerelease: "202",
-      releaseChecks: "203",
+      pluginPrereleaseIndependent: "202",
+      pluginPrereleaseCandidate: "206",
+      releaseChecksIndependent: "203",
+      releaseChecksCandidate: "207",
       productPerformance: {
         blocking: true,
         conclusion: "success",
@@ -269,7 +271,7 @@ function normalizedEvidence(options: {
     },
     conclusion: "success",
     manifest,
-    manifestVersion: shaPinned ? 3 : 2,
+    manifestVersion: 4,
     runAttempt: 2,
     runId,
     status: "completed",
@@ -284,7 +286,7 @@ function normalizedEvidence(options: {
       ? "manifest-v3-protected-tag-exact-sha"
       : shaPinned
         ? "manifest-v3-sha-pinned-main-ancestry"
-        : "legacy-v2-main-ancestry",
+        : "manifest-v3-branch",
     workflowRefType: "branch",
     workflowRunPath: shaPinned
       ? `.github/workflows/full-release-validation.yml@${workflowFullRef}`
@@ -294,22 +296,40 @@ function normalizedEvidence(options: {
   const roles = [
     ["normalCi", "201", 1, 1, "CI", "ci.yml", "-ci"],
     [
-      "pluginPrerelease",
+      "pluginPrereleaseIndependent",
       "202",
       2,
       1,
       "Plugin Prerelease",
       "plugin-prerelease.yml",
-      "-plugin-prerelease",
+      "-plugin-prerelease-independent",
     ],
     [
-      "releaseChecks",
+      "pluginPrereleaseCandidate",
+      "206",
+      1,
+      2,
+      "Plugin Prerelease",
+      "plugin-prerelease.yml",
+      "-plugin-prerelease-candidate",
+    ],
+    [
+      "releaseChecksIndependent",
       "203",
+      1,
+      1,
+      "OpenClaw Release Checks",
+      "openclaw-release-checks.yml",
+      "-release-checks-independent",
+    ],
+    [
+      "releaseChecksCandidate",
+      "207",
       1,
       2,
       "OpenClaw Release Checks",
       "openclaw-release-checks.yml",
-      "-release-checks",
+      "-release-checks-candidate",
     ],
     ...(npmTelegramRequired
       ? ([
@@ -369,7 +389,7 @@ function normalizedEvidence(options: {
     rerunGroup: "all",
     root,
     runReleaseSoak: soak,
-    schema: "openclaw.release-validation-evidence/v3",
+    schema: "openclaw.release-validation-evidence/v4",
     producerOnTrustedMainLineage: !protectedTagRoute,
     trustedWorkflowFullRef,
     trustedWorkflowRef,

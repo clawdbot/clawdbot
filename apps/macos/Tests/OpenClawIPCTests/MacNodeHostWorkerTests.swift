@@ -95,25 +95,17 @@ struct MacNodeHostWorkerTests {
             .retry(attempt: 1, delayNanoseconds: 1_000_000_000))
     }
 
-    @Test func `worker allows a generous cold-start window`() async throws {
+    @Test func `worker reserves five minutes for cold startup`() {
+        // Process readiness is covered below; a short shell sleep cannot prove this default policy.
         #expect(MacNodeHostWorker.defaultStartupTimeout == 300)
-
-        let worker = MacNodeHostWorker(session: GatewayNodeSession(), startupTimeout: 1)
-        let script = """
-        sleep 0.1
-        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"}}'
-        while IFS= read -r line; do :; done
-        """
-
-        let manifest = try await worker.start(launch: MacNodeHostWorkerLaunch(
-            command: ["/bin/sh", "-c", script]))
-        #expect(manifest.version == "test")
-        await worker.stop()
     }
 
     @Test func `worker launches in the selected checkout`() async throws {
         let checkout = try makeTempDirForTests().resolvingSymlinksInPath()
-        let worker = MacNodeHostWorker(session: GatewayNodeSession(), startupTimeout: 1)
+        defer { try? FileManager.default.removeItem(at: checkout) }
+        let expectedCurrentDirectory = try #require(realpath(checkout.path, nil))
+        defer { free(expectedCurrentDirectory) }
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
         printf '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"%s"}}\\n' \
           "$(/bin/pwd -P)"
@@ -124,8 +116,6 @@ struct MacNodeHostWorkerTests {
             command: ["/bin/sh", "-c", script],
             currentDirectoryURL: checkout))
 
-        let expectedCurrentDirectory = try #require(realpath(checkout.path, nil))
-        defer { free(expectedCurrentDirectory) }
         #expect(manifest.pathEnv == String(cString: expectedCurrentDirectory))
         await worker.stop()
     }

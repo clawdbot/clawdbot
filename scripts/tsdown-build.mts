@@ -17,7 +17,13 @@ import { decodeMountInfoPath } from "../packages/normalization-core/src/mountinf
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
+  resolveDistArtifactLockPath,
+  withDistArtifactOwnership,
+} from "./lib/dist-artifact-ownership.mts";
+import { toErrorObject } from "./lib/error-format.mts";
+import {
   inspectManagedProcessGroup,
+  signalExitCode,
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
@@ -184,6 +190,9 @@ function assertTsdownCleanOutputRoots(params: OutputRootParams = {}) {
         "Cannot clean the current working directory or one of its ancestors. Please specify a dedicated output directory.",
       );
     }
+    if (isPathInside(rootPath, resolveDistArtifactLockPath(cwd))) {
+      throw new Error("Cannot clean the checkout's dist artifact ownership location.");
+    }
     // A safe final component is insufficient: recursive removal follows symlinked parents.
     // Validate every component below the nearest common ancestor before any mutation begins.
     let candidatePath = rootPath;
@@ -278,6 +287,26 @@ function listExistingDeclarationOutputPaths(cwd: string, fsImpl: typeof fs, root
 
 function listExistingPreservedOutputPaths(cwd: string, env: NodeJS.ProcessEnv, fsImpl: typeof fs) {
   const protectedPaths = new Set<string>();
+  // Mac packaging owns replacement of signed bundles. Rebuilding its JS must
+  // leave the previous app (including its private runtime) usable on failure.
+  const pendingDirectories = [path.join(cwd, "dist")];
+  while (pendingDirectories.length > 0) {
+    const directory = pendingDirectories.pop()!;
+    if (!fsImpl.existsSync(directory)) {
+      continue;
+    }
+    for (const entry of fsImpl.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const child = path.join(directory, entry.name);
+      if (entry.name.endsWith(".app")) {
+        protectedPaths.add(child);
+      } else {
+        pendingDirectories.push(child);
+      }
+    }
+  }
   if (env[PRESERVE_CLI_STARTUP_METADATA_ENV] !== "1") {
     return protectedPaths;
   }
@@ -1479,6 +1508,7 @@ export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
     resolvedMaxOldSpaceMb: maxOldSpaceMb,
   };
   return {
+    env: resolveTsdownEnv(params.env ?? process.env, preparedParams),
     maxOldSpaceMb,
     heapShortfall:
       budget.unresolvedCgroupMemory || isFullTsdownBuildPlan(params.args ?? [])
@@ -1550,6 +1580,7 @@ export async function runTsdownBuildInvocation(
     parseNonNegativeIntegerEnv(env.OPENCLAW_TSDOWN_HEARTBEAT_MS, "OPENCLAW_TSDOWN_HEARTBEAT_MS") ??
     DEFAULT_HEARTBEAT_MS;
   let timedOut = false;
+  let parentSignal: NodeJS.Signals | undefined;
   let settled = false;
   let lastOutputAt = Date.now();
   let forceKillAt: number | null = null;
@@ -1590,10 +1621,9 @@ export async function runTsdownBuildInvocation(
 
   function relayParentSignal(signal: NodeJS.Signals) {
     const handler = () => {
+      parentSignal ??= signal;
       signalChild(signal);
       signalChild("SIGKILL");
-      cleanupParentSignalHandlers();
-      process.kill(process.pid, signal);
     };
     parentSignalHandlers.push({ signal, handler });
     process.once(signal, handler);
@@ -1692,35 +1722,114 @@ export async function runTsdownBuildInvocation(
       });
     });
     child.once("close", (status, signal) => {
+      let exitStatus = status;
       function finish() {
         settled = true;
         cleanupParentSignalHandlers();
         clearInterval(heartbeat ?? undefined);
         clearTimeout(timeout ?? undefined);
         resolve({
-          status,
-          signal,
+          status: parentSignal ? signalExitCode(parentSignal) : exitStatus,
+          signal: parentSignal ?? signal,
           timedOut,
           error: null,
           ...scanner.finish(),
         });
       }
 
-      if (timedOut) {
-        void finishTimedOutProcessTree().then(finish, finish);
-        return;
-      }
-
-      finish();
+      void (async () => {
+        if (timedOut || parentSignal) {
+          await finishTimedOutProcessTree();
+        } else if (processTreeAlive()) {
+          signalChild("SIGKILL");
+          await waitForProcessTreeExit(POST_FORCE_KILL_WAIT_MS);
+          exitStatus = 1;
+        }
+        if (processTreeAlive()) {
+          // Keep ownership when the group could still mutate output after close.
+          throw Object.assign(new Error("tsdown process group did not exit"), {
+            code: "EPROCESSGROUP_CLEANUP_FAILED",
+            processTreeState: "live",
+          });
+        }
+        finish();
+      })().catch((error: unknown) => {
+        settled = true;
+        cleanupParentSignalHandlers();
+        clearInterval(heartbeat ?? undefined);
+        clearTimeout(timeout ?? undefined);
+        resolve({
+          status: 1,
+          signal,
+          timedOut,
+          error: toErrorObject(error, "tsdown cleanup failed"),
+          ...scanner.finish(),
+        });
+      });
     });
   });
 }
 
-if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  const args = parseTsdownBuildArgs(process.argv.slice(2));
+/** Execute CLI and staged declaration plans with the same diagnostics and deadlines. */
+export async function executeTsdownBuildPlan(
+  plan: NonNullable<ReturnType<typeof prepareTsdownBuildExecution>>,
+) {
+  let result: TsdownBuildResult | undefined;
+  for (const [index, invocation] of plan.invocations.entries()) {
+    const startedAt = performance.now();
+    result = await runTsdownBuildInvocation(invocation);
+    if (result.error) {
+      throw result.error;
+    }
+    // Per-invocation timing separates the AI-declarations pass from the main
+    // graph in CI logs; the combined step is otherwise a single opaque cost.
+    console.log(
+      `[tsdown-build] invocation ${index + 1}/${plan.invocations.length} finished in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
+    );
+    if (
+      result.timedOut ||
+      result.status !== 0 ||
+      result.hasIneffectiveDynamicImport ||
+      result.fatalUnresolvedImport
+    ) {
+      break;
+    }
+  }
+
+  if (!result) {
+    return 1;
+  }
+
+  if (result.status === 0 && result.hasIneffectiveDynamicImport) {
+    console.error(
+      "Build emitted [INEFFECTIVE_DYNAMIC_IMPORT]. Replace transparent runtime re-export facades with real runtime boundaries.",
+    );
+    return 1;
+  }
+
+  if (result.status === 0 && result.fatalUnresolvedImport) {
+    console.error(
+      `Build emitted [UNRESOLVED_IMPORT] outside extensions: ${result.fatalUnresolvedImport}`,
+    );
+    return 1;
+  }
+
+  if (result.timedOut) {
+    return 124;
+  }
+
+  if (typeof result.status === "number") {
+    return result.status;
+  }
+
+  return 1;
+}
+
+export async function runTsdownBuild(argv: string[] = process.argv.slice(2)): Promise<number> {
+  const args = parseTsdownBuildArgs(argv);
   if (args.help) {
     console.log(tsdownBuildUsage());
-    process.exit(0);
+    return 0;
   }
   const plan = prepareTsdownBuildExecution(
     { args: args.forwardedArgs },
@@ -1735,47 +1844,14 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     },
   );
   if (!plan) {
-    process.exit(1);
+    return 1;
   }
-  let result: TsdownBuildResult | undefined;
-  for (const [index, invocation] of plan.invocations.entries()) {
-    const startedAt = performance.now();
-    result = await runTsdownBuildInvocation(invocation);
-    // Per-invocation timing separates the AI-declarations pass from the main
-    // graph in CI logs; the combined step is otherwise a single opaque cost.
-    console.log(
-      `[tsdown-build] invocation ${index + 1}/${plan.invocations.length} finished in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
-    );
-    if (result.status !== 0 || result.hasIneffectiveDynamicImport || result.fatalUnresolvedImport) {
-      break;
-    }
-  }
+  return executeTsdownBuildPlan(plan);
+}
 
-  if (!result) {
-    process.exit(1);
-  }
-
-  if (result.status === 0 && result.hasIneffectiveDynamicImport) {
-    console.error(
-      "Build emitted [INEFFECTIVE_DYNAMIC_IMPORT]. Replace transparent runtime re-export facades with real runtime boundaries.",
-    );
-    process.exit(1);
-  }
-
-  if (result.status === 0 && result.fatalUnresolvedImport) {
-    console.error(
-      `Build emitted [UNRESOLVED_IMPORT] outside extensions: ${result.fatalUnresolvedImport}`,
-    );
-    process.exit(1);
-  }
-
-  if (result.timedOut) {
-    process.exit(124);
-  }
-
-  if (typeof result.status === "number") {
-    process.exit(result.status);
-  }
-
-  process.exit(1);
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
+  const argv = process.argv.slice(2);
+  process.exitCode = parseTsdownBuildArgs(argv).help
+    ? await runTsdownBuild(argv)
+    : await withDistArtifactOwnership(process.cwd(), () => runTsdownBuild(argv));
 }

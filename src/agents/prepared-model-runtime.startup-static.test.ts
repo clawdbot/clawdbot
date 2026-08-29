@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type CreateStaticCatalogResolver =
@@ -59,7 +60,13 @@ const mocks = vi.hoisted(() => {
       }),
     ),
     buildPreparedModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
-    runPreparedModelCatalogWorker: vi.fn(async () => ({ entries: [], routeVariants: [] })),
+    runPreparedModelCatalogWorker: vi.fn<() => Promise<ModelCatalogSnapshot>>(async () => ({
+      entries: [],
+      routeVariants: [],
+    })),
+    resolveProviderPolicySurface: vi.fn<
+      typeof import("../plugins/provider-public-artifacts.js").resolveProviderPolicySurface
+    >(() => null),
     loadAgentRuntimePluginRegistryHandle: vi.fn(),
     loadStaticCatalog: vi.fn(async () => []),
     prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({
@@ -114,6 +121,11 @@ vi.mock("./agent-auth-discovery.js", () => ({
   resolveAmbientAgentCredentialsForDiscovery: mocks.resolveAmbientCredentials,
 }));
 
+vi.mock("../plugins/provider-public-artifacts.js", () => ({
+  resolveProviderPolicySurface: mocks.resolveProviderPolicySurface,
+  resolveBundledProviderPolicySurface: mocks.resolveProviderPolicySurface,
+}));
+
 vi.mock("./prepared-model-catalog-worker.js", () => ({
   createPreparedModelCatalogWorkerInput: ({ agentFacts }: { agentFacts: unknown }) => ({
     generationFingerprint: "test-generation",
@@ -156,7 +168,7 @@ vi.mock("./legacy-inherited-auth-dir.js", () => ({
   resolveLegacyInheritedAuthDir: () => "/tmp/prepared-static-agent",
 }));
 
-vi.mock("./agent-scope.js", () => ({
+const agentScopeMocks = vi.hoisted(() => ({
   listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
   listAgentIds: () => ["default"],
   resolveAgentDir: () => "/tmp/prepared-static-agent",
@@ -173,6 +185,14 @@ vi.mock("./agent-scope.js", () => ({
     defaultAgentId: "default",
     sessionAgentId: agentId ?? "default",
   }),
+}));
+
+vi.mock("./agent-scope.js", () => agentScopeMocks);
+vi.mock("./agent-scope-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
+  listAgentIds: agentScopeMocks.listAgentIds,
+  resolveAgentDir: agentScopeMocks.resolveAgentDir,
+  resolveAgentWorkspaceDir: agentScopeMocks.resolveAgentWorkspaceDir,
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
@@ -221,6 +241,7 @@ const { prepareScopedReadOnlyLiveModelCatalog, prepareScopedReadOnlyModelCatalog
   await import("./prepared-model-runtime.scoped-catalog.js");
 const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("./prepared-model-runtime.test-support.js");
+const { resolveThinkingProfile } = await import("../auto-reply/thinking.js");
 
 beforeEach(() => {
   resetPreparedModelRuntimeSnapshotsForTest();
@@ -230,9 +251,96 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.modelRegistry.find.mockReset();
   mocks.resolveStaticCatalogModel.mockReturnValue(undefined);
+  mocks.resolveProviderPolicySurface.mockReset().mockReturnValue(null);
 });
 
 describe("prepared model runtime Gateway catalog mode", () => {
+  it.each([
+    {
+      name: "native orchestration",
+      profile: {
+        levels: [{ id: "off" }, { id: "max" }, { id: "ultra" }],
+        defaultLevel: "ultra",
+      },
+    },
+    {
+      name: "binary thinking",
+      profile: {
+        levels: [{ id: "off" }, { id: "low", label: "on" }],
+        defaultLevel: "low",
+      },
+    },
+  ] as const)(
+    "publishes $name policy for lightweight configured and full catalog reads",
+    async ({ profile }) => {
+      const config = { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } };
+      const policy = { resolveThinkingProfile: () => profile };
+      mocks.resolveProviderPolicySurface.mockReturnValue(policy);
+      await refreshPreparedModelRuntimeSnapshots(config, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+      });
+      const snapshot = getPreparedModelRuntimeSnapshot({
+        agentId: "default",
+        config,
+        agentDir: "/tmp/prepared-static-agent",
+        inheritedAuthDir: "/tmp/prepared-static-agent",
+        workspaceDir: "/tmp/prepared-static-workspace",
+      });
+      expect(snapshot).toBeDefined();
+      expect(snapshot!.pluginRegistry?.providers).toEqual([]);
+      const configuredCatalog = snapshot!.modelCatalog;
+      expect(configuredCatalog.entries).toHaveLength(1);
+      const project = (
+        catalog: ModelCatalogSnapshot,
+        providerPolicySource: Parameters<
+          typeof resolveThinkingProfile
+        >[0]["providerPolicySource"] = "active",
+      ) => {
+        const resolved = resolveThinkingProfile({
+          provider: "openai",
+          model: "gpt-5.5",
+          catalog: catalog.entries,
+          agentRuntime: "codex",
+          providerPolicySource,
+        });
+        return {
+          levels: resolved.levels.map(({ id, label }) => ({ id, label })),
+          defaultLevel: resolved.defaultLevel,
+        };
+      };
+      const expected = {
+        levels: profile.levels.map((level) => ({
+          id: level.id,
+          label: "label" in level ? level.label : level.id,
+        })),
+        defaultLevel: profile.defaultLevel,
+      };
+      mocks.resolveProviderPolicySurface.mockImplementation(() => {
+        throw new Error("lightweight projection must not load provider artifacts");
+      });
+      expect(project(configuredCatalog)).toEqual(expected);
+      expect(project(configuredCatalog, snapshot!.pluginRegistry)).toEqual(expected);
+
+      // Full catalogs cross a worker boundary; prepare their new rows before publication too.
+      mocks.resolveProviderPolicySurface.mockReturnValue(policy);
+      const workerCatalog = structuredClone(configuredCatalog);
+      expect(JSON.stringify(configuredCatalog)).toBe(JSON.stringify(workerCatalog));
+      for (const entry of workerCatalog.entries) {
+        expect(Object.getOwnPropertySymbols(entry)).toEqual([]);
+      }
+      mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(workerCatalog);
+      const fullCatalog = await snapshot!.loadFullModelCatalog!();
+      mocks.resolveProviderPolicySurface.mockImplementation(() => {
+        throw new Error("lightweight projection must not load provider artifacts");
+      });
+      expect(project(fullCatalog)).toEqual(expected);
+      expect(project(fullCatalog, snapshot!.pluginRegistry)).toEqual(expected);
+      expect(project(configuredCatalog)).toEqual(expected);
+      expect(project(configuredCatalog, snapshot!.pluginRegistry)).toEqual(expected);
+    },
+  );
+
   it("imports and materializes only configured and auth-candidate providers", async () => {
     const config = {
       models: {

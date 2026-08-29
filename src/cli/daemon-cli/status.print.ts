@@ -400,7 +400,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     defaultRuntime.error(errorText(`Retry: ${formatCliCommand("openclaw gateway status --deep")}`));
     spacer();
   }
-  const systemdUnavailableDetail = serviceInspectionDetail ?? service.runtime?.detail;
+  const systemdUnavailableDetail =
+    serviceInspectionDetail ??
+    service.runtime?.inspectionFailure?.detail ??
+    service.runtime?.detail;
   const systemdUnavailable =
     process.platform === "linux" &&
     (serviceInspectionDetail !== undefined || rpc?.ok !== true) &&

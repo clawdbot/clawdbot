@@ -21,6 +21,7 @@ import type {
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
+import { invokeNodeWithReadinessRetry } from "./node-invoke-readiness.js";
 import type { NodeSession } from "./node-registry.js";
 import { runApprovalRequestDeliveries } from "./server-methods/approval-request-delivery.js";
 import {
@@ -127,6 +128,10 @@ function createApprovalRuntime(params: {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
       const turnSource = resolveNodeInvokeTurnSourceFields(params.turnSource);
       const callerIdentity = params.client?.internal?.agentRuntimeIdentity;
+      const invocationSessionKey =
+        params.client?.internal?.pluginRuntimeOwnerId === params.pluginId
+          ? params.client.internal.nodeInvokeApprovalSessionKey
+          : undefined;
       if (
         callerIdentity &&
         params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
@@ -161,7 +166,11 @@ function createApprovalRuntime(params: {
         toolName: sanitizeOptionalMeta(input.toolName),
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
         agentId: callerIdentity?.agentId ?? sanitizeOptionalMeta(input.agentId),
-        sessionKey: callerIdentity?.sessionKey ?? normalizeOptionalString(input.sessionKey) ?? null,
+        sessionKey:
+          callerIdentity?.sessionKey ??
+          invocationSessionKey ??
+          normalizeOptionalString(input.sessionKey) ??
+          null,
         runId: callerIdentity?.operationalRunInstance.runId ?? null,
         turnSourceChannel: turnSource.turnSourceChannel,
         turnSourceTo: turnSource.turnSourceTo,
@@ -499,7 +508,7 @@ export async function applyPluginNodeInvokePolicy(params: {
         "Gateway node pairing, capability, and plugin policy gates allowed transport dispatch.",
     });
     nodeGateDecisionRecorded = true;
-    const res = await params.context.nodeRegistry.invoke({
+    const res = await invokeNodeWithReadinessRetry(params.context.nodeRegistry, {
       nodeId: params.nodeSession.nodeId,
       expectedConnId: params.nodeSession.connId,
       ...(params.nodeSession.pairingGeneration

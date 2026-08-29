@@ -5,6 +5,8 @@ import {
   buildMentionRegexes,
   isChannelPartialDeliveryError,
   matchesMentionPatterns,
+  implicitMentionKindWhen,
+  type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   resolveStableChannelMessageIngress,
@@ -48,7 +50,9 @@ import {
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
-import { getLineGroupSummary, pushMessageLine, replyMessageLine } from "./send.js";
+import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
+import { quotesLineBotMessage } from "./outbound-message-log.js";
+import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
@@ -60,10 +64,7 @@ type PostbackEvent = webhook.PostbackEvent;
 type UnfollowEvent = webhook.UnfollowEvent;
 type WebhookEvent = webhook.Event;
 
-interface MediaRef {
-  path: string;
-  contentType?: string;
-}
+type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
 
 const LINE_DOWNLOADABLE_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   "image",
@@ -206,7 +207,12 @@ async function shouldProcessLineEvent(
   );
   const mentionFacts = (() => {
     if (!isGroup || event.type !== "message") {
-      return { canDetectMention: false, wasMentioned: false, hasAnyMention: false };
+      return {
+        canDetectMention: false,
+        wasMentioned: false,
+        hasAnyMention: false,
+        implicitMentionKinds: [],
+      };
     }
     const peerId = groupId ?? roomId ?? userId ?? "unknown";
     const { agentId } = resolveAgentRoute({
@@ -223,6 +229,10 @@ async function shouldProcessLineEvent(
       canDetectMention: event.message.type === "text",
       wasMentioned: wasMentionedByNative || wasMentionedByPattern,
       hasAnyMention: hasAnyLineMention(event.message),
+      implicitMentionKinds: implicitMentionKindWhen(
+        "quoted_bot",
+        quotesLineBotMessage(account.accountId, resolveLineQuotedMessageId(event.message)),
+      ),
     };
   })();
   const resolveAccess = async (contextBinding?: ChannelIngressContextBinding) =>
@@ -253,7 +263,7 @@ async function shouldProcessLineEvent(
               canDetectMention: mentionFacts.canDetectMention,
               wasMentioned: mentionFacts.wasMentioned,
               hasAnyMention: mentionFacts.hasAnyMention,
-              implicitMentionKinds: [],
+              implicitMentionKinds: mentionFacts.implicitMentionKinds,
             }
           : undefined,
       event: { kind: event.type === "postback" ? "postback" : "message" },
@@ -348,26 +358,11 @@ async function shouldProcessLineEvent(
   return null;
 }
 
-function getLineMentionees(
-  message: MessageEvent["message"],
-): Array<{ type?: string; isSelf?: boolean }> {
-  if (message.type !== "text") {
-    return [];
-  }
-  const mentionees = (
-    message as Record<string, unknown> & {
-      mention?: { mentionees?: Array<{ type?: string; isSelf?: boolean }> };
-    }
-  ).mention?.mentionees;
-  return Array.isArray(mentionees) ? mentionees : [];
-}
-
-function isLineBotMentioned(message: MessageEvent["message"]): boolean {
-  return getLineMentionees(message).some((m) => m.isSelf === true || m.type === "all");
-}
-
-function hasAnyLineMention(message: MessageEvent["message"]): boolean {
-  return getLineMentionees(message).length > 0;
+// LINE reports a quote only on the message kinds a person can quote from.
+function resolveLineQuotedMessageId(message: MessageEvent["message"]): string | undefined {
+  return message.type === "text" || message.type === "sticker"
+    ? message.quotedMessageId
+    : undefined;
 }
 
 function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
@@ -401,11 +396,22 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     const historyKey = groupId ?? roomId;
     const senderId = sourceInfo.userId ?? "unknown";
     if (historyKey && context.groupHistories) {
+      const displayName = sourceInfo.userId
+        ? await getUserDisplayName(sourceInfo.userId, {
+            cfg,
+            accountId: account.accountId,
+            channelAccessToken: account.channelAccessToken,
+            groupId,
+            roomId,
+          })
+        : senderId;
+      // History has one sender string; keep the stable ID when display names collide.
+      const sender = displayName === senderId ? senderId : `${displayName} (${senderId})`;
       createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
         historyKey,
         limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
         entry: {
-          sender: `user:${senderId}`,
+          sender,
           body: rawText || `<${message.type}>`,
           timestamp: event.timestamp,
         },
@@ -442,6 +448,9 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         allMedia.push({
           path: media.path,
           contentType: media.contentType,
+          // LINE names only file messages; the model needs that name to answer
+          // questions that refer to the attachment by it.
+          ...(originalFilename ? { fileName: originalFilename } : {}),
         });
       } catch (err) {
         if (abortSignal?.aborted) {
@@ -534,19 +543,14 @@ async function handleJoinEvent(event: JoinEvent, context: LineHandlerContext): P
     resolveRoomContext: async () => {
       // LINE cannot retrieve prior messages, and multi-person rooms have no name API.
       const roomContext = { historyUnavailable: true };
-      if (!groupId) {
-        return roomContext;
-      }
-      try {
-        const summary = await getLineGroupSummary(groupId, {
-          cfg,
-          accountId: account.accountId,
-          channelAccessToken: account.channelAccessToken,
-        });
-        return { ...roomContext, title: summary.groupName };
-      } catch {
-        return roomContext;
-      }
+      const title = groupId
+        ? await getLineGroupName(groupId, {
+            cfg,
+            accountId: account.accountId,
+            channelAccessToken: account.channelAccessToken,
+          })
+        : undefined;
+      return title ? { ...roomContext, title } : roomContext;
     },
   });
 }

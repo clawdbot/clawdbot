@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
@@ -41,7 +42,7 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+        "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/thinking/lightContext or attachment staging.",
     }),
   ),
   category: Type.Optional(
@@ -134,6 +135,8 @@ export async function maybeSpawnVisibleSession(params: {
   const modelOverride = normalizeToolModelOverride(readToolStringParam(params.raw, "model"));
   const requestedCwd = readToolStringParam(params.raw, "cwd");
   const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
+  // A visible session starts one run; empty attachment fields request no staging.
+  const requestedMode = params.raw.mode === "run" ? undefined : params.raw.mode;
   const unsupported = [
     [
       "runtime",
@@ -150,7 +153,7 @@ export async function maybeSpawnVisibleSession(params: {
       params.raw.thread === true ? true : undefined,
       "visible sessions route to the dashboard, not a channel thread",
     ],
-    ["mode", params.raw.mode, "visible sessions are persistent dashboard sessions"],
+    ["mode", requestedMode, "visible sessions are persistent dashboard sessions"],
     [
       "lightContext",
       params.raw.lightContext === true ? true : undefined,
@@ -158,12 +161,16 @@ export async function maybeSpawnVisibleSession(params: {
     ],
     [
       "attachments",
-      Array.isArray(params.raw.attachments) ? params.raw.attachments : undefined,
+      Array.isArray(params.raw.attachments) && params.raw.attachments.length > 0
+        ? params.raw.attachments
+        : undefined,
       "attachment staging is not wired to the sessions.create path",
     ],
     [
       "attachAs",
-      params.raw.attachAs,
+      isRecord(params.raw.attachAs)
+        ? readToolStringParam(params.raw.attachAs, "mountPath")
+        : params.raw.attachAs,
       "attachment staging is not wired to the sessions.create path",
     ],
   ] as const;

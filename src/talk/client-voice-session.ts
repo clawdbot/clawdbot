@@ -256,7 +256,7 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
       }
       return buildSessionCreationStamp({
         via: "talk",
-        actor: params.creation?.actor ?? { type: "human" },
+        actor: params.creation?.actor ?? { type: "human", source: "unknown" },
         sandbox: params.creation?.sandbox,
       });
     },
@@ -296,6 +296,20 @@ export function registerClientVoiceConsultRun(params: {
     },
     { agentId: params.agentId },
   );
+  const previousBinding = voiceSessionByRunId.get(params.runId);
+  if (
+    previousBinding &&
+    (previousBinding.agentId !== params.agentId ||
+      previousBinding.voiceSessionId !== params.voiceSessionId)
+  ) {
+    // A run ID has one authoritative voice scope. Replacing it must retire the
+    // prior scope's post-close grant or completion can no longer find that owner.
+    releaseClientVoiceConfirmationRun(
+      previousBinding.agentId,
+      previousBinding.voiceSessionId,
+      params.runId,
+    );
+  }
   voiceSessionByRunId.set(params.runId, {
     agentId: params.agentId,
     voiceSessionId: params.voiceSessionId,

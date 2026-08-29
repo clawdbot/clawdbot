@@ -30,6 +30,7 @@ function createFakeGh() {
   const realGh = join(tempDir, "real-gh");
   const calls = join(tempDir, "calls.log");
   const dispatched = join(tempDir, "dispatched");
+  const pollingPreload = join(tempDir, "immediate-poll.mjs");
   mkdirSync(binDir);
   const fakeGhScript = `#!/usr/bin/env bash
 set -euo pipefail
@@ -68,7 +69,14 @@ esac
   writeFileSync(realGh, fakeGhScript);
   chmodSync(pathGh, 0o755);
   chmodSync(realGh, 0o755);
-  return { binDir, calls, dispatched, realGh };
+  // The GitHub fixture is synchronous; keep poll scheduling without real backoff waits.
+  writeFileSync(
+    pollingPreload,
+    `const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (callback, _delay, ...args) => realSetTimeout(callback, 0, ...args);
+`,
+  );
+  return { binDir, calls, dispatched, pollingPreload, realGh };
 }
 
 function runDispatch(
@@ -143,6 +151,8 @@ function runDispatch(
   return spawnSync(
     process.execPath,
     [
+      "--import",
+      fakeGh.pollingPreload,
       dispatchScript,
       "12345",
       "contributor/fix-hosted-gates",

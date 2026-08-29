@@ -276,7 +276,7 @@ export async function runMatrixQaE2eeKeyBootstrapFailureScenario(
     },
     details: [
       "Matrix E2EE bootstrap failure surfaced through real SDK bootstrap.",
-      `faulted endpoint: GET ${MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT}`,
+      `faulted endpoint: GET/POST ${MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT}`,
       `fault hits: ${faultHits.length}`,
       `bootstrap success: ${result.success ? "yes" : "no"}`,
       `bootstrap error: ${bootstrapError || "<none>"}`,

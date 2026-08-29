@@ -128,6 +128,9 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     if (method === "cron.list") {
       return Promise.resolve({ jobs: [], total: 0 } as T);
     }
+    if (method === "cron.status") {
+      return Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 0 } as T);
+    }
     if (method === "models.authStatus") {
       return Promise.resolve({ ts: 0, providers: [] } as T);
     }
@@ -377,6 +380,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     },
     assignOwner,
     patchMany,
+    deletionState: () => undefined,
     delete: deleteSession,
     deleteMany,
     list,
@@ -604,7 +608,7 @@ export const manyAgents = (count: number) =>
   }) as AgentsListResult;
 
 export const catalogPage = (
-  sessions: Array<{ threadId: string; name: string; sessionKey?: string }>,
+  sessions: Array<{ threadId: string; name: string; sessionKey?: string; color?: string }>,
   nextCursor?: string,
   catalogId = "codex",
 ): SessionsCatalogListResult => ({

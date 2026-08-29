@@ -337,6 +337,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     clientCaps: params.clientCaps,
     chatType: params.chatType ?? undefined,
     agentAccountId: params.agentAccountId ?? undefined,
+    conversationRoutePeerId: params.conversationRoutePeerId,
     currentChannelId: params.currentChannelId ?? undefined,
     currentThreadTs: params.currentThreadTs ?? undefined,
     currentMessageId: params.currentMessageId ?? undefined,

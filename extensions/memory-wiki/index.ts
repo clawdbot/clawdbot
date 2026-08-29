@@ -36,6 +36,7 @@ import {
   configureMemoryWikiSourceSyncStateStore,
   createMemoryWikiSourceSyncStateStore,
 } from "./src/source-sync-state.js";
+import { waitForMemoryWikiImportedSourceSyncs } from "./src/source-sync.js";
 import {
   createWikiApplyTool,
   createWikiGetTool,
@@ -95,7 +96,11 @@ export default definePluginEntry({
         // Context-free tool discovery cannot safely choose one agent's vault.
         return null;
       }
-      return { appConfig, config: resolveConfig(agentId, appConfig) };
+      return {
+        appConfig,
+        config: resolveConfig(agentId, appConfig),
+        ...(sourceSyncAbortController ? { signal: sourceSyncAbortController.signal } : {}),
+      };
     };
     configureMemoryWikiSourceSyncStateStore(
       createMemoryWikiSourceSyncStateStore(api.runtime.state.openKeyedStore),
@@ -109,34 +114,38 @@ export default definePluginEntry({
       },
     });
     configureMemoryWikiCompiledCacheStore(compiledCacheStore);
+    let sourceSyncAbortController: AbortController | undefined;
     api.registerService({
       id: "memory-wiki-compiled-cache-owner-cleanup",
       async start() {
-        const appConfig = getAppConfig();
-        const activeConfigs =
-          config.vault.scope === "global"
-            ? [resolveConfig(undefined, appConfig)]
-            : resolveMemoryWikiConfiguredAgentIds(appConfig).map((agentId) =>
-                resolveConfig(agentId, appConfig),
-              );
-        // Clear every previously trusted owner before fallible vault reads. A failed
-        // lifecycle refresh must leave prompt preparation closed, not stale-but-active.
-        deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
-        const preparedOwners: Array<{
-          config: ReturnType<MemoryWikiConfigResolver>;
-          identity: {
-            vaultGeneration: string;
-            compiledCachePublicationId: string | null;
-          };
-        }> = [];
-        for (const activeConfig of activeConfigs) {
-          const identity = await loadConfiguredVaultIdentity(activeConfig.vault.path);
-          if (identity) {
-            preparedOwners.push({ config: activeConfig, identity });
-          }
-        }
-        const activeOwnerIds = new Set<string>();
+        sourceSyncAbortController?.abort();
+        const abortController = new AbortController();
+        sourceSyncAbortController = abortController;
         try {
+          const appConfig = getAppConfig();
+          const activeConfigs =
+            config.vault.scope === "global"
+              ? [resolveConfig(undefined, appConfig)]
+              : resolveMemoryWikiConfiguredAgentIds(appConfig).map((agentId) =>
+                  resolveConfig(agentId, appConfig),
+                );
+          // Clear every previously trusted owner before fallible vault reads. A failed
+          // lifecycle refresh must leave prompt preparation closed, not stale-but-active.
+          deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+          const preparedOwners: Array<{
+            config: ReturnType<MemoryWikiConfigResolver>;
+            identity: {
+              vaultGeneration: string;
+              compiledCachePublicationId: string | null;
+            };
+          }> = [];
+          for (const activeConfig of activeConfigs) {
+            const identity = await loadConfiguredVaultIdentity(activeConfig.vault.path);
+            if (identity) {
+              preparedOwners.push({ config: activeConfig, identity });
+            }
+          }
+          const activeOwnerIds = new Set<string>();
           for (const { config: activeConfig, identity } of preparedOwners) {
             activateMemoryWikiCompiledCacheOwner(
               activeConfig,
@@ -148,12 +157,23 @@ export default definePluginEntry({
             );
             activeOwnerIds.add(resolveMemoryWikiCompiledCacheOwnerId(activeConfig));
           }
+          deactivateMemoryWikiCompiledCacheOwnersExcept(activeOwnerIds);
+          await compiledCacheStore.deleteOwnersExcept(activeOwnerIds);
         } catch (error) {
+          abortController.abort();
+          if (sourceSyncAbortController === abortController) {
+            sourceSyncAbortController = undefined;
+          }
           deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
           throw error;
         }
-        deactivateMemoryWikiCompiledCacheOwnersExcept(activeOwnerIds);
-        await compiledCacheStore.deleteOwnersExcept(activeOwnerIds);
+      },
+      async stop() {
+        sourceSyncAbortController?.abort();
+        sourceSyncAbortController = undefined;
+        deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+        await waitForMemoryWikiImportedSourceSyncs();
+        deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
       },
     });
 
@@ -166,6 +186,7 @@ export default definePluginEntry({
       appConfig: api.config,
       getAppConfig,
       resolveConfig,
+      resolveSourceSyncSignal: () => sourceSyncAbortController?.signal,
     });
     api.registerTool(
       (ctx) => {
@@ -173,6 +194,7 @@ export default definePluginEntry({
         return resolved
           ? createWikiStatusTool(resolved.config, resolved.appConfig, {
               agentId: resolved.config.agentId ?? ctx.agentId,
+              ...(resolved.signal ? { signal: resolved.signal } : {}),
             })
           : null;
       },
@@ -181,14 +203,18 @@ export default definePluginEntry({
     api.registerTool(
       (ctx) => {
         const resolved = resolveToolContext(ctx.agentId);
-        return resolved ? createWikiLintTool(resolved.config, resolved.appConfig) : null;
+        return resolved
+          ? createWikiLintTool(resolved.config, resolved.appConfig, resolved.signal)
+          : null;
       },
       { name: "wiki_lint" },
     );
     api.registerTool(
       (ctx) => {
         const resolved = resolveToolContext(ctx.agentId);
-        return resolved ? createWikiApplyTool(resolved.config, resolved.appConfig) : null;
+        return resolved
+          ? createWikiApplyTool(resolved.config, resolved.appConfig, resolved.signal)
+          : null;
       },
       { name: "wiki_apply" },
     );
@@ -203,6 +229,7 @@ export default definePluginEntry({
           agentSessionKey: ctx.sessionKey,
           sandboxed: ctx.sandboxed,
           conversationRecall: ctx.conversationRecall,
+          ...(resolved.signal ? { signal: resolved.signal } : {}),
         });
       },
       { name: "wiki_search" },
@@ -218,6 +245,7 @@ export default definePluginEntry({
           agentSessionKey: ctx.sessionKey,
           sandboxed: ctx.sandboxed,
           conversationRecall: ctx.conversationRecall,
+          ...(resolved.signal ? { signal: resolved.signal } : {}),
         });
       },
       { name: "wiki_get" },

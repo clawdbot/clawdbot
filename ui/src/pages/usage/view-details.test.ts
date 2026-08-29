@@ -114,6 +114,12 @@ function mount(
       vi.fn(),
       vi.fn(),
       vi.fn(),
+      {
+        weight: errors.contextWeight,
+        loading: false,
+        status: status(),
+      },
+      vi.fn(),
       errors.contextExpanded ?? false,
       errors.onToggleContextExpanded ?? vi.fn(),
       vi.fn(),

@@ -16,6 +16,7 @@ import type { GatewayRequestContext } from "./types.js";
 
 type SessionChangedPayload = {
   sessionKey?: string;
+  sessionId?: string;
   agentId?: string;
   reason: string;
   compacted?: boolean;
@@ -95,7 +96,9 @@ function broadcastSessionsChanged(
     ...(eventAgentId ? { agentId: eventAgentId } : {}),
     ts: Date.now(),
   };
+  // A deletion describes the removed generation, never the row now occupying its key.
   if (
+    payload.reason === "delete" ||
     !payload.sessionKey ||
     !routingAgentId ||
     (!eventAgentId && !compatibilityOwnerAgentId && !parseAgentSessionKey(payload.sessionKey))

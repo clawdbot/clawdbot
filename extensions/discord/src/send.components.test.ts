@@ -88,17 +88,18 @@ function readRecordArg(
   return arg as Record<string, unknown>;
 }
 
+// Both suites consume these bindings, including when either suite runs alone or first.
+beforeAll(async () => {
+  ({ registerDiscordComponentEntries } = await import("./components-registry.js"));
+  ({
+    editDiscordComponentMessage,
+    registerBuiltDiscordComponentMessage,
+    sendDiscordComponentMessage,
+  } = await import("./send.components.js"));
+});
+
 describe("sendDiscordComponentMessage", () => {
   let registerMock: ReturnType<typeof vi.mocked<typeof registerDiscordComponentEntries>>;
-
-  beforeAll(async () => {
-    ({ registerDiscordComponentEntries } = await import("./components-registry.js"));
-    ({
-      editDiscordComponentMessage,
-      registerBuiltDiscordComponentMessage,
-      sendDiscordComponentMessage,
-    } = await import("./send.components.js"));
-  });
 
   beforeEach(() => {
     registerMock = vi.mocked(registerDiscordComponentEntries);

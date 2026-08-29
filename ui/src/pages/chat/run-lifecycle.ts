@@ -21,6 +21,7 @@ import {
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
+import { reduceChatSessionProjection, setChatRunOwner } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 // Control UI chat module implements run lifecycle behavior.
 import {
@@ -32,6 +33,12 @@ import {
 } from "./tool-stream.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
+
+export type ChatRunError = {
+  summary: string;
+  /** Display ownership only; the session reducer retains each run's diagnostic. */
+  runId?: string;
+};
 
 export type ChatRunUiStatus = {
   phase: "done" | "interrupted";
@@ -59,6 +66,7 @@ type RunLifecycleHost = Omit<
   agentsList?: { mainKey?: string | null } | null;
   hello?: { snapshot?: unknown } | null;
   chatRunId?: string | null;
+  chatRunError?: ChatRunError | null;
   chatRunLifecycleGeneration?: number;
   chatRunSessionAbortable?: boolean;
   chatStream?: string | null;
@@ -149,7 +157,7 @@ export function isChatBusy(host: { chatSending?: boolean; chatRunId?: string | n
 }
 
 export function adoptStartedChatRun(
-  host: RunLifecycleHost,
+  host: RunLifecycleHost & Parameters<typeof reduceChatSessionProjection>[0],
   runId: string,
   startedAt: number,
 ): void {
@@ -157,10 +165,16 @@ export function adoptStartedChatRun(
   if (host.chatRunStatus?.runId === runId || host.lastLocalTerminalReconcile?.runId === runId) {
     return;
   }
+  const projection = reduceChatSessionProjection(host, { type: "runDelta", runId });
+  if (projection.runs[runId]?.status !== "streaming") {
+    return;
+  }
   const adopted = host.chatRunId === runId;
   const adoptedStream = adopted && typeof host.chatStream === "string";
   host.chatRunId = runId;
+  setChatRunOwner(host, runId);
   if (!adopted) {
+    host.chatRunError = null;
     host.chatRunStartup = null;
   }
   if (!adoptedStream) {
@@ -170,10 +184,12 @@ export function adoptStartedChatRun(
 }
 
 export function setChatRunError(
-  state: { chatRunError?: { summary: string } | null },
+  state: { chatRunError?: ChatRunError | null },
   summary: string,
+  runId?: string,
 ) {
-  state.chatRunError = { summary: formatUiExternalText(summary) };
+  setChatRunOwner(state, runId);
+  state.chatRunError = { summary: formatUiExternalText(summary), ...(runId ? { runId } : {}) };
 }
 
 type SessionRunHost = {

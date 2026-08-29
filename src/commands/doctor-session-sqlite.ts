@@ -29,6 +29,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
 import {
@@ -490,7 +491,7 @@ function readLegacySessionRecords(
       records.push({
         // Import is the migration boundary: repair legacy delivery/route shapes
         // here because the SQLite runtime read path assumes canonical entries.
-        entry: normalizeSessionEntryDelivery(value),
+        entry: migrateLegacySessionCreator(normalizeSessionEntryDelivery(value)),
         sessionKey,
         transcriptPath: resolveLegacyTranscriptPath(target, value),
       });

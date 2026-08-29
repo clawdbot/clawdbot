@@ -35,8 +35,6 @@ type SessionActivityViewProps = {
   expandedAutomationDays: ReadonlySet<string>;
   filters: SessionActivityFilters;
   presenceViewers: readonly PresenceViewer[];
-  retainedIdentity: PresenceViewer | null;
-  rows: readonly GatewaySessionRow[];
   result?: SessionsListResult;
   loading: boolean;
   error?: string;
@@ -419,8 +417,16 @@ function renderIdentityHeader(
 
 export function renderSessionActivityView(props: SessionActivityViewProps) {
   const projection = projectSessionActivity(props.result);
-  const identity = props.retainedIdentity;
-  const onlineById = new Map(props.presenceViewers.map((person) => [person.id, person]));
+  const onlineById = new Map(
+    props.presenceViewers.flatMap((person) =>
+      person.identity ? [[person.identity.id, person] as const] : [],
+    ),
+  );
+  const identity = props.filters.personId
+    ? (onlineById.get(props.filters.personId) ??
+      projection.people.find((person) => person.id === props.filters.personId) ??
+      null)
+    : null;
   const people = projection.people.map((person) => {
     const online = onlineById.get(person.id);
     return online ? { ...person, ...online, count: person.count } : person;
@@ -479,7 +485,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
           : nothing}
         ${props.result && props.filters.personId
           ? identity
-            ? renderIdentityHeader(props.context, identity, props.rows)
+            ? renderIdentityHeader(props.context, identity, projection.sessions)
             : html`<section class="activity-feed__not-found" role="status">
                 <h2>${t("activityFeed.notFoundTitle")}</h2>
                 <p>${t("activityFeed.notFoundDescription")}</p>

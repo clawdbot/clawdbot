@@ -8,6 +8,7 @@ import {
 
 const targetSha = "b".repeat(40);
 const workflowSha = "a".repeat(40);
+const publisherWorkflowSha = "c".repeat(40);
 const pinnedBranch = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
 
 function releaseRun(overrides: Record<string, unknown> = {}) {
@@ -143,7 +144,32 @@ describe("full release validation evidence", () => {
     expect(isTrustedMainAncestor).not.toHaveBeenCalled();
   });
 
-  it("rejects protected-tag evidence from a same-name branch or older ancestor", () => {
+  it("accepts historical SHA-pinned evidence from trusted main under a protected publisher", () => {
+    const isTrustedMainAncestor = vi.fn(() => true);
+    const validateEvidenceReuseStrictly = vi.fn(() => strictEvidenceReuse());
+    const trustedWorkflowRef = `release-publish/${publisherWorkflowSha.slice(0, 12)}-123`;
+    const result = validateFullReleaseValidationEvidence({
+      run: releaseRun(),
+      manifest: releaseManifest({ evidenceReuse: exactTargetEvidenceReuse() }),
+      expectedRepository: "openclaw/openclaw",
+      expectedRunId: "123",
+      expectedTargetSha: targetSha,
+      expectedTrustedWorkflowFullRef: `refs/tags/${trustedWorkflowRef}`,
+      expectedTrustedWorkflowSha: publisherWorkflowSha,
+      isTrustedMainAncestor,
+      validateEvidenceReuseStrictly,
+    });
+
+    expect(result.source).toBe("sha-pinned-protected-tag-main-ancestor");
+    expect(isTrustedMainAncestor).toHaveBeenCalledWith(workflowSha);
+    expect(validateEvidenceReuseStrictly).toHaveBeenCalledWith({
+      repository: "openclaw/openclaw",
+      runId: "123",
+      targetSha,
+    });
+  });
+
+  it("rejects protected-tag evidence from a same-name branch or untrusted ancestor", () => {
     const trustedWorkflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
     expect(() =>
       validateFullReleaseValidationEvidence({
@@ -176,9 +202,9 @@ describe("full release validation evidence", () => {
         expectedTargetSha: targetSha,
         expectedTrustedWorkflowFullRef: `refs/tags/${trustedWorkflowRef}`,
         expectedTrustedWorkflowSha: workflowSha,
-        isTrustedMainAncestor: () => true,
+        isTrustedMainAncestor: () => false,
       }),
-    ).toThrow("does not match trusted tooling");
+    ).toThrow("not reachable from current main");
 
     expect(() =>
       validateFullReleaseValidationEvidence({

@@ -313,6 +313,15 @@ gateway methods (`wiki.overview`, `wiki.get`, `wiki.importInsights`); inline
 page previews use `wiki.get`, the same lookup agents reach through the
 `wiki_get` tool.
 
+Each dashboard keeps at most the newest 2,500 cards in its compiled snapshot.
+When a vault exceeds that bound, the UI shows the returned and total item counts.
+
+Dashboard requests never scan raw vault pages or wait for a full vault compile.
+During automatic recovery, the UI reports that the dashboards are rebuilding;
+reload the tab shortly. When
+`ingest.autoCompile` is `false`, a source change or older cache reports that a
+compile is required instead. Run `openclaw wiki compile`, then reload the tab.
+
 ## Prompt and context behavior
 
 When `context.includeCompiledDigestPrompt` is enabled, memory prompt sections
@@ -393,6 +402,7 @@ Key toggles:
 | `bridge.followMemoryEvents`                | default `true`                                 | include event logs in bridge mode                                             |
 | `unsafeLocal.allowPrivateMemoryCoreAccess` | default `false`                                | required to run `unsafe-local` imports                                        |
 | `unsafeLocal.paths`                        | default `[]`                                   | explicit local paths to import in `unsafe-local` mode                         |
+| `ingest.autoCompile`                       | default `true`                                 | rebuild compiled output after imported sources change                         |
 | `search.backend`                           | `shared` (default), `local`                    |                                                                               |
 | `search.corpus`                            | `wiki` (default), `memory`, `all`              |                                                                               |
 | `context.includeCompiledDigestPrompt`      | default `false`                                | append the selected agent's compact digest snapshot to memory prompt sections |

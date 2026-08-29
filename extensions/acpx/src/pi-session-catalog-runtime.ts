@@ -1,6 +1,6 @@
 import process from "node:process";
 import { resolveAcpSessionAvailability } from "openclaw/plugin-sdk/acp-runtime";
-import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveNodeHostExecutable } from "openclaw/plugin-sdk/node-host";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -105,7 +105,7 @@ async function createAdoptedPiSession(params: {
     key: sessionCatalogAdoptedSessionKey(PI_ADOPTED_SESSION_KEY_PREFIX, params.threadId),
     agentId: params.agentId,
     recoverMatchingInitialEntry: true,
-    ...(params.session.name ? { label: params.session.name } : {}),
+    ...(params.session.name ? { displayName: params.session.name } : {}),
     ...(params.session.cwd ? { spawnedCwd: params.session.cwd } : {}),
     initialEntry: {
       acpBackendId: ACPX_BACKEND_ID,
@@ -228,7 +228,7 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
       },
       continuation: {
         resolveAgentId: (agentId) =>
-          resolveSessionAgentIds({ config: api.config, agentId }).sessionAgentId,
+          resolveSessionAgentIdsStrict({ config: api.config, agentId }).sessionAgentId,
         availability: () => resolvePiContinuationAvailability(api),
         listAdopted: (agentId, sessionEntries) =>
           listAdoptedPiSessions(api, agentId, sessionEntries),

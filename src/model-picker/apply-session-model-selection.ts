@@ -1,25 +1,25 @@
-import {
-  isDefaultAgentRuntimeId,
-  normalizeOptionalAgentRuntimeId,
-} from "../agents/agent-runtime-id.js";
 import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import { modelKey, normalizeProviderId } from "../agents/model-selection.js";
-import { resolveContextConfigProviderForRuntime } from "../agents/openai-routing.js";
+import { modelKey } from "../agents/model-selection.js";
 import {
-  resolveCompatibleAgentRuntimeForProvider,
-  resolveSessionRuntimeOverrideForProvider,
-} from "../agents/session-runtime-compat.js";
+  createModelVisibilityPolicy,
+  type ModelVisibilityPolicy,
+} from "../agents/model-visibility-policy.js";
+import { resolveContextConfigProviderForRuntime } from "../agents/openai-routing.js";
 import {
   persistStickyModelSelectionBestEffort,
   type StickyModelSelectionDispatchOutcome,
 } from "../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { applyModelRuntimeDirective } from "../auto-reply/reply/directive-handling.model-runtime.js";
+import {
+  prepareModelSelectionRuntime,
+  findSelectedCatalogEntry,
+} from "../auto-reply/reply/model-runtime-normalization.js";
 import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
 import { refreshQueuedFollowupSession } from "../auto-reply/reply/queue.js";
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
-import { isThinkingLevelSupported, resolveSupportedThinkingLevel } from "../auto-reply/thinking.js";
+import { resolveSupportedThinkingLevel } from "../auto-reply/thinking.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import {
@@ -36,6 +36,7 @@ import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../sessions/model-overrides.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 
 export type SessionModelSelectionRequest = {
   provider: string;
@@ -58,7 +59,7 @@ export type ApplySessionModelSelectionParams = {
   defaultModel: string;
   currentProvider: string;
   currentModel: string;
-  allowedModelKeys: ReadonlySet<string>;
+  modelPolicy?: ModelVisibilityPolicy;
   modelCatalog: readonly ModelCatalogEntry[];
   thinkingCatalog?: readonly ModelCatalogEntry[];
   canPersistStickyModelSelection?: boolean;
@@ -88,15 +89,15 @@ export type ApplySessionModelSelectionResult =
     }
   | {
       status: "rejected";
-      reason: "locked" | "not-allowed" | "invalid-runtime";
+      reason: "locked" | "not-allowed" | "invalid-runtime" | "unknown-provider";
       message: string;
     }
   | { status: "conflict"; message: string };
 
-type AppliedRuntimeDirective =
-  | { kind: "unchanged" }
-  | { kind: "clear" }
-  | { kind: "set"; runtime: string };
+type AppliedRuntimeDirective = Exclude<
+  Parameters<typeof applyModelRuntimeDirective>[1],
+  { kind: "invalid" }
+>;
 
 type ApplySessionModelSelectionToEntryResult = {
   changed: boolean;
@@ -131,47 +132,6 @@ function applySessionModelSelectionToEntry(params: {
   };
 }
 
-function resolveRuntimeDirective(params: {
-  cfg: OpenClawConfig;
-  entry: SessionEntry;
-  provider: string;
-  request: SessionModelSelectionRequest["runtime"];
-}): AppliedRuntimeDirective | { kind: "invalid"; message: string } {
-  if (params.request.kind === "unchanged") {
-    const persistedRuntime = params.entry.agentRuntimeOverride?.trim();
-    if (
-      persistedRuntime &&
-      !resolveSessionRuntimeOverrideForProvider({
-        provider: params.provider,
-        entry: params.entry,
-        cfg: params.cfg,
-      })
-    ) {
-      return { kind: "clear" };
-    }
-    return params.request;
-  }
-  if (params.request.kind === "clear") {
-    return params.request;
-  }
-  const runtime = normalizeOptionalAgentRuntimeId(params.request.runtime);
-  if (isDefaultAgentRuntimeId(runtime)) {
-    return { kind: "clear" };
-  }
-  const provider = normalizeProviderId(params.provider);
-  const compatibleRuntime = resolveCompatibleAgentRuntimeForProvider({
-    provider,
-    runtime,
-    cfg: params.cfg,
-  });
-  return compatibleRuntime
-    ? { kind: "set", runtime: compatibleRuntime }
-    : {
-        kind: "invalid",
-        message: `Runtime "${params.request.runtime}" is not supported for ${provider || params.provider}.`,
-      };
-}
-
 function formatModelSwitchEvent(provider: string, model: string, alias?: string): string {
   const label = `${provider}/${model}`;
   return alias ? `Model switched to ${alias} (${label}).` : `Model switched to ${label}.`;
@@ -189,18 +149,26 @@ function rejectNotAllowed(provider: string, model: string): ApplySessionModelSel
 export async function applySessionModelSelection(
   params: ApplySessionModelSelectionParams,
 ): Promise<ApplySessionModelSelectionResult> {
+  const startingStoreEntry = params.sessionStore[params.sessionKey];
   const startingEntry = params.storePath
     ? params.sessionEntry
-    : (params.sessionStore[params.sessionKey] ?? params.sessionEntry);
+    : (startingStoreEntry ?? params.sessionEntry);
+  const initialEntry = { ...startingEntry };
   if (isModelSelectionLocked(startingEntry)) {
     return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
   }
 
   const normalizedModelKey = modelKey(params.request.provider, params.request.model);
-  if (
-    (params.allowedModelKeys.size > 0 && !params.allowedModelKeys.has(normalizedModelKey)) ||
-    !params.modelCatalog.some((entry) => modelKey(entry.provider, entry.id) === normalizedModelKey)
-  ) {
+  const policy =
+    params.modelPolicy ??
+    createModelVisibilityPolicy({
+      cfg: params.cfg,
+      catalog: [...params.modelCatalog],
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
+      agentId: params.agentId,
+    });
+  if (!policy.allows(params.request)) {
     return rejectNotAllowed(params.request.provider, params.request.model);
   }
   const request: SessionModelSelectionRequest = {
@@ -208,17 +176,44 @@ export async function applySessionModelSelection(
     isDefault: normalizedModelKey === modelKey(params.defaultProvider, params.defaultModel),
   };
 
-  const runtime = resolveRuntimeDirective({
+  const prepared = await prepareModelSelectionRuntime({
     cfg: params.cfg,
-    entry: startingEntry,
+    agentId: params.agentId,
+    sessionEntry: startingEntry,
     provider: request.provider,
-    request: request.runtime,
+    model: request.model,
+    catalog: params.thinkingCatalog ?? params.modelCatalog,
+    rawRuntime:
+      request.runtime.kind === "set"
+        ? request.runtime.runtime
+        : request.runtime.kind === "clear"
+          ? "default"
+          : undefined,
   });
-  if (runtime.kind === "invalid") {
-    return { status: "rejected", reason: "invalid-runtime", message: runtime.message };
+  if (prepared.status === "rejected") {
+    return prepared;
   }
-
-  const initialEntry = { ...startingEntry };
+  // Metadata preparation can yield. Memory-only sessions need the same lock and
+  // replacement fence that persisted sessions enforce in their atomic write.
+  const currentEntry = params.storePath
+    ? startingEntry
+    : (params.sessionStore[params.sessionKey] ?? params.sessionEntry);
+  if (isModelSelectionLocked(currentEntry)) {
+    return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
+  }
+  if (
+    !params.storePath &&
+    (params.sessionStore[params.sessionKey] !== startingStoreEntry ||
+      currentEntry.sessionId !== initialEntry.sessionId)
+  ) {
+    return {
+      status: "conflict",
+      message: "Model change was not applied because the session changed. Retry.",
+    };
+  }
+  const runtime = prepared.runtime;
+  const thinkingCatalog = prepared.catalog;
+  const selectedCatalogEntry = findSelectedCatalogEntry({ catalog: thinkingCatalog, ...request });
   const nextEntry = { ...startingEntry };
   const applied = applySessionModelSelectionToEntry({
     cfg: params.cfg,
@@ -229,11 +224,12 @@ export async function applySessionModelSelection(
     runtime,
     markLiveSwitchPending: params.markLiveSwitchPending,
   });
-  const thinkingCatalog = params.thinkingCatalog ?? params.modelCatalog;
   const thinkingRuntime = resolveEffectiveAgentRuntime({
     cfg: params.cfg,
     provider: request.provider,
     modelId: request.model,
+    modelApi: selectedCatalogEntry?.api,
+    modelBaseUrl: selectedCatalogEntry?.baseUrl,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionEntry: nextEntry,
@@ -243,16 +239,7 @@ export async function applySessionModelSelection(
     ApplySessionModelSelectionResult,
     { status: "applied" }
   >["thinkingRemap"];
-  if (
-    currentThinkingLevel &&
-    !isThinkingLevelSupported({
-      provider: request.provider,
-      model: request.model,
-      level: currentThinkingLevel,
-      catalog: [...thinkingCatalog],
-      agentRuntime: thinkingRuntime,
-    })
-  ) {
+  if (currentThinkingLevel) {
     const remapped = resolveSupportedThinkingLevel({
       provider: request.provider,
       model: request.model,
@@ -329,6 +316,11 @@ export async function applySessionModelSelection(
         })
       : undefined;
   if (changed) {
+    emitSessionLifecycleEvent({
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      reason: "patch",
+    });
     triggerSessionPatchHook({
       cfg: params.cfg,
       sessionEntry: persistedEntry,
@@ -350,6 +342,8 @@ export async function applySessionModelSelection(
           cfg: params.cfg,
           provider,
           modelId: model,
+          modelApi: selectedCatalogEntry?.api,
+          modelBaseUrl: selectedCatalogEntry?.baseUrl,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           sessionEntry: persistedEntry,
@@ -365,15 +359,14 @@ export async function applySessionModelSelection(
     });
   }
 
-  const selectedCatalogEntry = params.modelCatalog.find(
-    (entry) => modelKey(entry.provider, entry.id) === normalizedModelKey,
-  );
   const contextProvider = resolveContextConfigProviderForRuntime({
     provider,
     runtimeId: resolveEffectiveAgentRuntime({
       cfg: params.cfg,
       provider,
       modelId: model,
+      modelApi: selectedCatalogEntry?.api,
+      modelBaseUrl: selectedCatalogEntry?.baseUrl,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       sessionEntry: persistedEntry,

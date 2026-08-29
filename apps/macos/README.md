@@ -54,6 +54,32 @@ ledger and orphan cleanup across app instances, and port reservation inspects
 other profiles' Gateway service claims. Use a clean test account or VM when
 validation must not access or change operator state.
 
+## Native tests
+
+Run the full app suite only in disposable macOS CI or a VM without operator
+credentials or a live Gateway. A test filter or temporary `HOME` is not enough:
+preferences and Keychain use system services, and AppKit/WebKit tests can open
+windows and helper processes. Local subsets need a verified OS sandbox as well
+as test-owned resources. See [native test safety](https://docs.openclaw.ai/platforms/mac/dev-setup#run-native-tests-safely).
+
+The `macos-swift` CI job builds tests once, then runs them through
+`scripts/test-macos-native.mts`. The full suite retains default-profile behavior;
+named-profile AppState isolation tests run separately. Each process gets private
+home, config/state paths, and a short `TMPDIR` for tools that honor it before the
+test bundle loads. Foundation uses Darwin's per-user temp directory instead;
+`TestIsolation` fixtures own and clean unique directories there, and the
+disposable OS worker owns and discards the surrounding directory. The launcher
+also creates an unlocked, disposable Keychain in that home
+and selects it as the user-domain default and search list, so catalog migration
+can save without prompting to create a login Keychain. It disables automatic
+locking only for that test resource and deletes it after the test process group
+and output pipes close. Failed or unverified cleanup retains resources and fails
+the launch.
+The disposable runner owns default preferences and system-service state; a named
+profile gets a fresh preferences domain. The launcher itself is not a sandbox.
+Local `scripts/prepush-ci.sh` keeps Swift lint/build checks but reports native
+test proof as incomplete and requires the exact commit's `macos-swift` CI result.
+
 ## Packaging flows
 
 Development bundle (signed but not notarized):

@@ -136,9 +136,32 @@ The extension excludes incognito tabs, internal pages such as `chrome://` and
 `chrome-extension://`, and tabs without a usable current URL. `file://` access
 also requires Chrome's **Allow access to file URLs** setting.
 
+An agent-created tab may start at `about:blank` while a CDP client initializes
+it before navigating. The extension allows that specific initial tab, keeps it
+in the OpenClaw group, and applies the same pause and access-mode controls.
+Existing blank tabs, manually grouped blanks, and other `about:` pages remain
+unavailable. Navigating away, replacing the tab, or restarting or reconnecting
+the extension ends the initial blank admission; returning to `about:blank`
+does not restore it.
+
+If creation fails before the extension returns the target, it attempts to close
+the tab only while it still owns it. Tabs you paused, moved, or navigated during
+creation are left alone. A redirect, lost connection, or worker shutdown can
+leave a tab behind; close it manually if needed.
+
+An explicitly commanded main-frame navigation of an authorized tab can also
+use exact `about:blank`, for example during a performance trace reset. Chrome
+must confirm the root frame and loader on the same attachment. An iframe
+navigation or a blank URL alone does not grant access.
+
+That temporary admission ends on the next nonblank document, debugger detach,
+access-mode change, pause, group or window change, tab closure or replacement,
+reconnect, or extension restart. Failed navigation never closes an existing
+tab or restores a URL over your navigation.
+
 ## Automatic setup controls
 
-Settings shows redacted relay/native bootstrap status and an **Use automatic
+Settings shows redacted relay/native bootstrap status and the **Use automatic
 local setup** switch.
 
 - Turning automatic setup off preserves a valid existing pairing but prevents
@@ -177,6 +200,13 @@ Inspect the installation without printing credentials:
 openclaw browser extension status
 openclaw browser extension status --json
 ```
+
+An `owned` registration is not necessarily launchable. Status reports a filesystem
+readiness snapshot of its registered runtime and native entry. It does not execute
+either target or verify that its code will run successfully. If an upgrade removes
+either target, rerun `openclaw browser extension install` to repair the owned
+registration. Ownership checks still refuse foreign or malformed manifests and
+launchers.
 
 Remove only OpenClaw-owned native-host manifests and launchers:
 
@@ -223,6 +253,60 @@ path without a path-rewriting proxy prefix.
 ## External CDP clients
 
 The relay supports Browser Relay Authentication v2 clients such as mcporter.
+OpenClaw and an external client can stay connected together. When a client
+enables Runtime, the extension checks current tab access before the relay
+replays existing execution contexts to that new subscriber. This does not
+reset another client's Runtime session.
+
+Runtime binding callbacks go only to logical sessions that successfully registered
+the binding name, independently of `Runtime.enable` and `Runtime.disable`.
+Removing a binding or disconnecting a client preserves other clients' registrations
+of the same name. Context-specific registrations with the same name still share
+the underlying native Runtime; use distinct names when clients need separate
+context selection.
+
+Fetch request interception has one owner per native target session. Another
+client can use other CDP domains, but cannot replace that owner's interception
+settings or resolve its paused requests. Competing interception requests return
+an error rather than silently changing the active owner's policy. Fetch response
+streams also belong to the logical session that acquired them.
+
+Related targets (such as frames and workers) have separate logical sessions
+for each interested parent. Each parent's ordered auto-attach filter is
+preserved; the native attachment uses their union. New or broadened interests
+receive existing children only after the extension accepts the command. The
+native pause-on-attach setting remains shared: the latest update wins,
+including DevTools suspend/resume. Resuming a waiting target affects all its
+logical sessions.
+
+Clients still share the underlying tabs. Navigation or page changes can
+invalidate another client's snapshot refs; this is not an isolated browser per
+client or complete isolation of every CDP domain and competing client policy.
+A complete tab-list request returns an error when native targets cannot yet be
+matched to Playwright pages, rather than reporting a partial list as complete.
+
+If the extension connection drops, its debugger attachments retire before the
+replacement connection reattaches. An uncertain native Fetch operation also
+retires the affected attachment instead of retrying the operation against a
+replacement. Fetch cleanup is bounded; debugger teardown is not a guarantee that
+pending network requests are canceled. These paths do not change the access
+mode or paused tabs. Take a fresh snapshot after the target reattaches before
+using element refs. If a client no longer exposes the target, reconnect that
+client.
+
+If native detach fails, the error is reported and cleanup debt stays with that
+exact attachment. Other tabs remain usable, but the affected tab cannot acquire
+a replacement until cleanup succeeds. After restoring Chrome access, retry an
+explicit attachment or **Disconnect**. Chrome's debugger Cancel action can also
+end the native attachment. Removing or replacing a tab alone is not treated as
+proof that its debugger client closed. Failed CDP operations are never retried
+against a replacement session.
+
+The connection-lifetime protections require updated extension code as well as
+an updated OpenClaw installation. Update the Store extension when available.
+For an unpacked development copy, rerun `openclaw browser extension install`
+and reload the installed copy from `chrome://extensions`.
+
 Print non-secret endpoint metadata:
 
 ```bash

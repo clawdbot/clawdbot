@@ -737,7 +737,11 @@ describe("runDoctorSessionSqlite", () => {
         createdVia: "channel" as const,
       };
       const authoritativeStamp = {
-        createdActor: { id: "profile-protected", type: "human" as const },
+        createdActor: {
+          id: "profile-protected",
+          type: "human" as const,
+          source: "profile" as const,
+        },
         createdAt: 1500,
         createdVia: "operator" as const,
         ...(required ? { sandbox: "required" as const } : {}),
@@ -764,7 +768,12 @@ describe("runDoctorSessionSqlite", () => {
       expect(report.totals).toMatchObject({ importedEntries: 1, issues: 0 });
       const imported = loadExactSessionEntry(scope)?.entry;
       expect(imported).toMatchObject({
-        ...(required ? authoritativeStamp : legacyStamp),
+        ...(required
+          ? authoritativeStamp
+          : {
+              ...legacyStamp,
+              createdActor: { ...legacyStamp.createdActor, source: "channel" },
+            }),
         sessionId: "session-1",
       });
       if (!required) {

@@ -12,7 +12,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createChatRunState } from "../server-chat-state.js";
-import { prepareSessionArchiveLifecycle } from "../server-methods/sessions-archive-lifecycle.js";
+import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -24,6 +24,7 @@ import {
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
+  measureLaunchTurn,
   placements,
   root,
   seedActivePlacement,
@@ -360,7 +361,8 @@ describe("worker turn launcher local placement", () => {
       removeChatRun: vi.fn(),
       workerSessionPlacementService: placements,
     } as unknown as GatewayRequestContext;
-    const archiveDrain = await prepareSessionArchiveLifecycle({
+    const archiveDrain = await prepareSessionLifecycleDrain({
+      action: "archive",
       context,
       storePath: sessionTarget.storePath,
       sessionKeys: [SESSION_KEY],
@@ -495,6 +497,7 @@ describe("worker turn launcher local placement", () => {
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
+        measureLaunchTurn,
         launchTurn,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace,
@@ -699,7 +702,6 @@ describe("worker turn launcher local placement", () => {
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        launchTurn: vi.fn(),
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(async () => ({
           assertActive: vi.fn(async () => {}),
@@ -803,6 +805,7 @@ describe("worker turn launcher local placement", () => {
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
+        measureLaunchTurn,
         launchTurn,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace,

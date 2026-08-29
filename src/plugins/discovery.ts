@@ -1094,6 +1094,20 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
 
       const fullPathRealPath = pluginCacheRealpathSync(fullPath) ?? undefined;
       const fullPathDirKey = fullPathRealPath ?? path.resolve(fullPath);
+      if (
+        params.origin === "bundled" &&
+        !isPathInside(
+          pluginCacheRealpathSync(params.dir) ?? path.resolve(params.dir),
+          fullPathDirKey,
+        )
+      ) {
+        diagnostics.push({
+          level: "error",
+          source: fullPath,
+          message: `blocked plugin candidate: package directory escapes bundled root (${fullPath})`,
+        });
+        continue;
+      }
       if (params.skipRootDirKeys?.has(fullPathDirKey)) {
         continue;
       }
@@ -1190,16 +1204,22 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     const seenDiagnostics = new Set<string>();
     const uniqueDiagnostics: PluginDiagnostic[] = [];
     for (const candidate of candidates) {
-      // Configured aliases keep their precedence, but lifecycle ownership follows
-      // the one physical package entry rather than its textual path spelling.
+      // Only an independently accepted bundled candidate can establish bundled
+      // provenance. A configured alias must not downgrade that same physical entry.
       const key = pluginCacheRealpathSync(candidate.source) ?? path.resolve(candidate.source);
       const existing = candidatesBySource.get(key);
       if (existing) {
+        const retained = candidate.origin === "bundled" ? candidate : existing;
+        const duplicate = retained === candidate ? existing : candidate;
+        if (duplicate.origin === "config" || duplicate.configSelected) {
+          retained.configSelected = true;
+        }
         mergeCandidateInstallOwner(
-          existing,
-          resolvePluginCandidateInstallOwner(candidate),
-          isPluginCandidateInstallOwnerAmbiguous(candidate),
+          retained,
+          resolvePluginCandidateInstallOwner(duplicate),
+          isPluginCandidateInstallOwnerAmbiguous(duplicate),
         );
+        candidatesBySource.set(key, retained);
         continue;
       }
       candidatesBySource.set(key, candidate);
