@@ -252,24 +252,8 @@ export const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 
-const CHAT_AUTOTYPE_INTERACTIVE_ROLES = new Set([
-  "button",
-  "checkbox",
-  "combobox",
-  "link",
-  "listbox",
-  "menuitem",
-  "menuitemcheckbox",
-  "menuitemradio",
-  "option",
-  "radio",
-  "slider",
-  "spinbutton",
-  "switch",
-  "tab",
-  "textbox",
-  "treeitem",
-]);
+const CHAT_AUTOTYPE_INTERACTIVE_ROLE =
+  /^(?:button|checkbox|combobox|link|listbox|menuitem|menuitemcheckbox|menuitemradio|option|radio|slider|spinbutton|switch|tab|textbox|treeitem)$/;
 
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
@@ -289,7 +273,7 @@ function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
       target.hasAttribute("data-chat-autotype-exempt") ||
       target.hasAttribute("tabindex") ||
       target.tabIndex >= 0 ||
-      (role !== null && CHAT_AUTOTYPE_INTERACTIVE_ROLES.has(role)) ||
+      (role !== null && CHAT_AUTOTYPE_INTERACTIVE_ROLE.test(role)) ||
       ("open" in target && (target as HTMLElement & { open?: boolean }).open === true)
     );
   });
