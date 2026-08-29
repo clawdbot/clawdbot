@@ -34,8 +34,9 @@ function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgr
   };
 }
 
-function buildTelegramTextToolProgressLine(text: string): ChannelProgressDraftLine {
+function buildTelegramTextToolProgressLine(text: string, id?: string): ChannelProgressDraftLine {
   return {
+    ...(id ? { id } : {}),
     kind: "item",
     label: "",
     text,
@@ -119,13 +120,13 @@ async function pushProgressEvent(turn: Turn, event: () => Promise<boolean>): Pro
 export async function pushToolProgress(
   turn: Turn,
   line?: string | ChannelProgressDraftLine,
-  options?: { toolName?: string; startImmediately?: boolean },
+  options?: { toolName?: string; startImmediately?: boolean; id?: string },
 ): Promise<boolean> {
   if (!canPushToolProgress(turn)) {
     return false;
   }
   return await turn.progressCompositor.pushToolProgress(
-    typeof line === "string" ? buildTelegramTextToolProgressLine(line) : line,
+    typeof line === "string" ? buildTelegramTextToolProgressLine(line, options?.id) : line,
     options,
   );
 }

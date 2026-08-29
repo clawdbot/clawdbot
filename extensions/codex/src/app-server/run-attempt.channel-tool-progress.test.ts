@@ -45,7 +45,10 @@ describe("Codex channel tool progress", () => {
       }),
     );
 
-    expect(onToolResult).toHaveBeenCalledWith({ text: "🛠️ Bash" });
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "🛠️ Bash",
+      channelData: { openclawToolProgressId: "private-command-1" },
+    });
     const toolStart = onAgentEvent.mock.calls
       .map(([event]) => event)
       .find(
@@ -72,23 +75,10 @@ describe("Codex channel tool progress", () => {
     );
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();
-    const presentationOrder: string[] = [];
     params.messageChannel = "telegram";
     params.verboseLevel = "on";
-    params.onAgentEvent = async (event) => {
-      onAgentEvent(event);
-      if (event.stream === "tool") {
-        presentationOrder.push(`event:${event.data.phase}`);
-      }
-      if (event.stream === "tool" && event.data.toolCallId === "dynamic-1") {
-        await Promise.resolve();
-        presentationOrder.push(`event:${event.data.phase}:complete`);
-      }
-    };
-    params.onToolResult = (payload) => {
-      onToolResult(payload);
-      presentationOrder.push("summary");
-    };
+    params.onAgentEvent = onAgentEvent;
+    params.onToolResult = onToolResult;
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -201,7 +191,6 @@ describe("Codex channel tool progress", () => {
 
     for (const testCase of cases) {
       const resultCount = onToolResult.mock.calls.length;
-      const presentationCount = presentationOrder.length;
       await testCase.drive();
       const toolEvents = onAgentEvent.mock.calls
         .map(([event]) => event)
@@ -223,13 +212,9 @@ describe("Codex channel tool progress", () => {
       expect(onToolResult.mock.calls.length, `${testCase.label} verbose callback`).toBe(
         resultCount + 1,
       );
-      if (testCase.label === "OpenClaw dynamic tool") {
-        expect(presentationOrder.slice(presentationCount, presentationCount + 3)).toEqual([
-          "event:start",
-          "event:start:complete",
-          "summary",
-        ]);
-      }
+      expect(onToolResult.mock.calls[resultCount]?.[0], testCase.label).toMatchObject({
+        channelData: { openclawToolProgressId: testCase.toolCallId },
+      });
     }
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });

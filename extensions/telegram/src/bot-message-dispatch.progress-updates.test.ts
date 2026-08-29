@@ -371,12 +371,16 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolResult?.({
+        text: "🧭 Agents",
+        channelData: { openclawToolProgressId: "dynamic-1" },
+      });
       await replyOptions?.onToolStart?.({
         name: "agents_list",
         phase: "start",
+        itemId: "dynamic-1",
         toolCallId: "dynamic-1",
       });
-      await replyOptions?.onToolResult?.({ text: "🧭 Agents" });
       return { queuedFinal: false };
     });
 

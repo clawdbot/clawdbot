@@ -459,6 +459,9 @@ export class CodexToolProgressProjection {
       void Promise.resolve(
         this.params.onToolResult?.({
           text,
+          ...((this.params.messageChannel || this.params.messageProvider) && {
+            channelData: { openclawToolProgressId: params.itemId },
+          }),
           ...(params.isError === true ? { isError: true } : {}),
         }),
       ).catch(() => {});

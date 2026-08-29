@@ -176,6 +176,11 @@ export function createCodexAttemptServerRequestController(
         name: call.tool,
         arguments: call.arguments,
       });
+      projector?.recordDynamicToolCall({
+        callId: call.callId,
+        tool: call.tool,
+        arguments: call.arguments,
+      });
       emitExecutionPhaseOnce(`tool:${call.callId}`, {
         phase: "tool_execution_started",
         tool: call.tool,
@@ -189,11 +194,12 @@ export function createCodexAttemptServerRequestController(
       const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
       const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool, toolArgs);
       if (shouldEmitDynamicToolProgress) {
-        await emitCodexAppServerEvent(params, {
+        void emitCodexAppServerEvent(params, {
           stream: "tool",
           data: {
             phase: "start",
             name: call.tool,
+            itemId: call.callId,
             toolCallId: call.callId,
             ...(toolMeta ? { meta: toolMeta } : {}),
             ...(toolArgs ? { args: toolArgs } : {}),
@@ -201,12 +207,6 @@ export function createCodexAttemptServerRequestController(
           },
         });
       }
-      // Emit the keyed row first so channels coalesce the formatted summary into it.
-      projector?.recordDynamicToolCall({
-        callId: call.callId,
-        tool: call.tool,
-        arguments: call.arguments,
-      });
       const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({ call, config: params.config });
       const toolStartedAt = Date.now();
       let terminalDiagnosticObserved = false;
@@ -306,6 +306,7 @@ export function createCodexAttemptServerRequestController(
             data: {
               phase: "result",
               name: call.tool,
+              itemId: call.callId,
               toolCallId: call.callId,
               ...(toolMeta ? { meta: toolMeta } : {}),
               ...(commandBearing ? { commandBearing: true } : {}),

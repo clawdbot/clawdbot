@@ -1800,6 +1800,7 @@ describe("runCodexAppServerAttempt", () => {
       data: {
         phase: "start",
         name: "python",
+        itemId: "call-1",
         toolCallId: "call-1",
         args: { code: "print('hi')" },
       },
@@ -1809,6 +1810,7 @@ describe("runCodexAppServerAttempt", () => {
       data: {
         phase: "result",
         name: "python",
+        itemId: "call-1",
         toolCallId: "call-1",
         isError: true,
         result: {
