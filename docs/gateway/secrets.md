@@ -214,6 +214,16 @@ Define providers under `secrets.providers`:
 
 Provider aliases are source-specific. A matching explicit provider entry wins; if an `env` or `store` default alias is also used by an entry for another source, that source's built-in provider wins. Non-default aliases and `file` or `exec` providers must resolve to an explicit entry with the matching source.
 
+### Effective default alias
+
+The effective default provider alias for `env` and `store` is `secrets.defaults.<source>` when set, otherwise the built-in alias `default`. With no `secrets.providers` entries at all, a SecretRef whose `provider` matches the effective default alias for its source resolves from the built-in provider — process environment variables for `env`, the shared secret store for `store`. No registration is needed:
+
+```json5
+{ source: "env", provider: "default", id: "OPENAI_API_KEY" } // works with an empty secrets config
+```
+
+The implicit alias follows your config: if you set `secrets.defaults.env: "primary"`, the implicit env alias becomes `primary`, and the literal `default` then needs an explicit `secrets.providers.default` entry. A ref that names an undeclared alias fails resolution with `SECRET_PROVIDER_NOT_CONFIGURED` during startup or reload.
+
 <Accordion title="Env provider">
 - Optional exact-name allowlist via `allowlist`.
 - Missing or empty env values fail resolution.

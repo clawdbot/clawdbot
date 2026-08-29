@@ -51,7 +51,7 @@ Plans may also include two optional top-level fields that mutate the `secrets.pr
 - `providerUpserts` -- an object keyed by provider alias. Each value is a provider definition (the same shape accepted under `secrets.providers.<alias>` in `openclaw.json`, e.g. an `exec` or `file` provider).
 - `providerDeletes` -- an array of provider aliases to remove.
 
-`providerUpserts` runs before `targets`, so a `target.ref.provider` may reference a provider alias that the same plan introduces in `providerUpserts`. Without this ordering, plans that reference an alias not yet configured in `openclaw.json` fail with `provider "<alias>" is not configured`.
+`providerUpserts` runs before `targets`, so a `target.ref.provider` may reference a provider alias that the same plan introduces in `providerUpserts`. Without this ordering, plans that reference an alias not yet configured in `openclaw.json` fail with `provider "<alias>" is not configured`. `env` and `store` refs on the effective default alias (`secrets.defaults.<source>` when set, otherwise the built-in `default`) resolve without any provider declaration; a plan may still upsert that alias to attach policy such as an env `allowlist`, but resolution does not depend on it.
 
 ```json5
 {
