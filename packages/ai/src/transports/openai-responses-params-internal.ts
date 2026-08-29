@@ -302,6 +302,7 @@ export function buildOpenAIResponsesParams(
 ) {
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
+    enablePromptCacheStripping: true,
   });
   const messages = convertOpenAIResponsesMessagesForRequest(model, context, options, replayMode);
   ensureOpenAIResponsesNonEmptyInput(messages, context);

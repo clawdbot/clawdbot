@@ -6,6 +6,7 @@ import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import { resolveOpenAIResponsesPayloadPolicy } from "../transports/openai-responses-payload-policy.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { resolveAzureDeploymentNameFromMap } from "./azure-deployment-map.js";
@@ -226,13 +227,16 @@ function buildParams(
     authProfileId: options?.authProfileId,
     replayMode,
   });
+  const shouldStripPromptCache = resolveOpenAIResponsesPayloadPolicy(model, {
+    enablePromptCacheStripping: true,
+  }).shouldStripPromptCache;
 
   const params: ResponseCreateParamsStreaming & OpenAIResponsesRequestParams = {
     model: deploymentName,
     input: messages,
     stream: true,
     prompt_cache_key:
-      options?.cacheRetention === "none"
+      options?.cacheRetention === "none" || shouldStripPromptCache
         ? undefined
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
     store: false,
