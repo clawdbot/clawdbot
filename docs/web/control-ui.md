@@ -296,6 +296,8 @@ Unsent text and staged attachments can be recovered only in the same browser pro
 
 **Projects from GitHub.** Search the same picker or paste a GitHub HTTPS or `git@github.com` repository URL to clone it into the Gateway-managed projects area and select it. Public repository search and cloning work anonymously. For affiliated and private repositories, prefer the explicit `gateway.controlUi.github.token` SecretRef so this service access has a clear runtime owner. When it is omitted, the Gateway still uses its shipped `GH_TOKEN` then `GITHUB_TOKEN` fallback from the shared process environment. When it is explicit, its exact environment or store name is excluded from agent execution without clearing unrelated native GitHub CLI variables. Search requires `operator.read`, cloning requires `operator.write`, and deleting a Gateway-managed cloned checkout requires `operator.admin`. Clone deletion refuses while a live session or managed worktree still references the checkout. SecretRef ownership is not an OS-user security boundary; use a sandbox, dedicated host, or dedicated OS user when same-account processes are not trusted.
 
+Use the Effort menu to choose Fast Mode before creating a session. New Session persists that choice before the first local or remote turn starts.
+
 For agent GitHub CLI identity and Git author setup, see [`tools.github`](/gateway/config-tools#tools-github).
 
 On multi-user gateways, only admin-scope connections can create or view incognito threads, and other sessions cannot reach them through agent session tools or transcript search. Incognito protects against storage and other gateway-mediated users, not against the gateway owner or process operator, who can always observe live sessions.
@@ -355,7 +357,7 @@ select it to open the owning Approvals page.
     - Privacy & Security: curated rows for gateway auth, exec policy, browser enablement, tool profile, device auth, and mobile pairing, above the schema-backed `security`/`approvals` sections.
     - Secrets (`/settings/secrets`) manages team-scoped secret and environment entries through `secrets.store.*`. Environment values remain visible, secret values are never returned after saving, Bulk Add accepts quoted multiline dotenv values, and mutation actions are hidden when the connected Gateway does not advertise them.
     - Approvals includes newest-first, 30-day history for resolved exec, plugin, and system-agent requests. Filter by kind or page through older rows to review the decision, reason, source session, and resolver attribution recorded by the Gateway.
-    - Labs exposes shipped experimental switches. Code Mode and Swarm are the current entries and save `tools.codeMode.enabled` and `tools.swarm.enabled` immediately; unshipped experiments do not appear or write speculative config keys.
+    - Labs exposes shipped experimental switches. Code Mode defaults off; turning it on writes `tools.codeMode.enabled: "auto"`, which engages only for models marked as preferred Code Mode performers. Code Mode and Swarm changes save immediately; unshipped experiments do not appear or write speculative config keys.
     - Notifications: browser web-push status, subscribe/unsubscribe, and a test send.
     - Advanced: every config section without a curated home, plus the raw JSON5 editor (previously the General page's Advanced mode).
     - In **Advanced → Communication → Channels**, use **Channel settings** to show one messaging channel at a time, including custom channel plugins. **Other** groups shared channel defaults and model overrides. Switching groups does not change the saved configuration.
@@ -379,6 +381,7 @@ select it to open the owning Approvals page.
     - Provider cards call `usage.status` and show live plan names, quota windows, balances, spend, and budgets reported by configured provider plugins.
     - A provider usage failure does not block the session/cost dashboard; unavailable provider cards show their own error state.
     - Incomplete session/cost totals stay readable while the visible, focused page checks for updates. Automatic checks are bounded; if they pause, select **Refresh** to check again.
+    - The overview loads session summaries first. Full system-prompt breakdowns load when you select a session; the `has:context` filter still works before opening details.
 
   </Accordion>
   <Accordion title="Debug, logs, update">

@@ -81,10 +81,6 @@ function safeRealpathSync(targetPath: string): string | null {
   return pluginCacheRealpathSync(targetPath, true);
 }
 
-function pathContains(parentDir: string, childPath: string): boolean {
-  return isPathInside(parentDir, childPath);
-}
-
 function trustedBundledPluginRootsForPackageRoot(packageRoot: string): string[] {
   const roots = [
     path.join(packageRoot, "dist", "extensions"),
@@ -135,12 +131,10 @@ function resolveTrustedExistingOverride(resolvedOverride: string): string | null
   }
 
   const modulePackageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-  const packageRoots = modulePackageRoot ? [modulePackageRoot] : [];
-  const trustedRoots = packageRoots
-    .flatMap((packageRoot) => trustedBundledPluginRootsForPackageRoot(packageRoot))
-    .map((trustedRoot) => safeRealpathSync(trustedRoot))
-    .filter((entry): entry is string => Boolean(entry));
-  if (!trustedRoots.some((trustedRoot) => pathContains(trustedRoot, realOverride))) {
+  if (
+    !modulePackageRoot ||
+    !isPluginInPackageBundledRoots({ rootDir: realOverride, packageRoot: modulePackageRoot })
+  ) {
     return null;
   }
   if (!hasUsableBundledPluginTree(realOverride)) {
@@ -149,18 +143,24 @@ function resolveTrustedExistingOverride(resolvedOverride: string): string | null
   return realOverride;
 }
 
-function overrideResolvesUnderPackageBundledRoot(params: {
-  resolvedOverride: string;
+/** Checks physical containment in a package's source or compiled plugin trees. */
+export function isPluginInPackageBundledRoots(params: {
+  rootDir: string;
   packageRoot: string;
 }): boolean {
-  const realOverride = safeRealpathSync(params.resolvedOverride);
-  if (!realOverride) {
+  const realPluginRoot = safeRealpathSync(params.rootDir);
+  const realPackageRoot = safeRealpathSync(params.packageRoot);
+  if (!realPluginRoot || !realPackageRoot) {
     return false;
   }
   return trustedBundledPluginRootsForPackageRoot(params.packageRoot)
     .map((trustedRoot) => safeRealpathSync(trustedRoot))
-    .filter((entry): entry is string => Boolean(entry))
-    .some((trustedRoot) => pathContains(trustedRoot, realOverride));
+    .some(
+      (trustedRoot) =>
+        trustedRoot !== null &&
+        isPathInside(realPackageRoot, trustedRoot) &&
+        isPathInside(trustedRoot, realPluginRoot),
+    );
 }
 
 function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefined {
@@ -222,8 +222,8 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     const rejectedOverrideUsesArgvRoot = Boolean(
       argvRoot &&
       rejectedExistingOverride &&
-      overrideResolvesUnderPackageBundledRoot({
-        resolvedOverride: rejectedExistingOverride,
+      isPluginInPackageBundledRoots({
+        rootDir: rejectedExistingOverride,
         packageRoot: argvRoot,
       }),
     );

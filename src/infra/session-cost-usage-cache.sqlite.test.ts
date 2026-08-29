@@ -38,6 +38,27 @@ afterEach(() => {
 });
 
 describe("session cost usage SQLite cache", () => {
+  it("reads only requested rollups, including an empty selection", () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-selection-");
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const agentId = "worker-1";
+      for (const rollupId of ["selected.jsonl", "unrelated.jsonl"]) {
+        writeSessionCostUsageRollup({
+          agentId,
+          rollupId,
+          previousValueJson: null,
+          valueJson: JSON.stringify({ session: rollupId }),
+          updatedAt: 1,
+        });
+      }
+      expect(readSessionCostUsageRollupRows(agentId, undefined, ["selected.jsonl"])).toEqual([
+        { key: "selected.jsonl", updatedAt: 1, valueJson: '{"session":"selected.jsonl"}' },
+      ]);
+      expect(readSessionCostUsageRollupRows(agentId, undefined, [])).toEqual([]);
+      expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(2);
+    });
+  });
+
   it("removes a persisted refresh lock owned by a Linux zombie", () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-zombie-lock-");
 

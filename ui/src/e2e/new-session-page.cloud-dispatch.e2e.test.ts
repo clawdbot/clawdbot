@@ -257,9 +257,17 @@ suite.define(() => {
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe("off,minimal,low,medium,high");
-      await expect
-        .poll(() => page.locator(".new-session-page__composer [data-chat-speed-toggle]").count())
-        .toBe(0);
+      const fastMode = page.locator(".new-session-page__composer [data-chat-speed-toggle]");
+      await expect.poll(() => fastMode.count()).toBe(1);
+      await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("false");
+      await expect.poll(() => fastMode.getAttribute("data-chat-speed-toggle")).toBe("on");
+      expect(
+        await fastMode.evaluate((element) =>
+          element.classList.contains("chat-controls__speed-toggle"),
+        ),
+      ).toBe(true);
+      await fastMode.click();
+      await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("true");
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("");
       await thinkingSlider.press("Home");
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("off");
@@ -423,6 +431,7 @@ suite.define(() => {
         worktreeBaseRef: "main",
         worktreeName: "cloud-e2e",
         thinkingLevel: "high",
+        fastMode: true,
       });
       expect(create.params).not.toHaveProperty("attachments");
       expect(create.params).not.toHaveProperty("cwd");

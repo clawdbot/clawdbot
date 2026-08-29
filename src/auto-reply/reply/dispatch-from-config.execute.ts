@@ -684,6 +684,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   abortSignal:
                     state.getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
                   onReplyStart: params.replyOptions?.onReplyStart,
+                  onAgentRunStart: params.replyOptions?.onAgentRunStart,
+                  userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
                   recordProcessed: state.recordProcessed,
                   markIdle: state.markIdle,
                 },

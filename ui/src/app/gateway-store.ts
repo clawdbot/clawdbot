@@ -1,4 +1,5 @@
 import {
+  gatewayCredentialScope,
   isRetryableGatewayStartupUnavailableError,
   readControlUiBuildMismatchId,
   resolveSafeTimeoutDelayMs,
@@ -36,6 +37,7 @@ import {
   loadSettings,
   patchSettings,
   persistSessionToken,
+  resolveGatewayCredentialsForUrlEdit,
 } from "./settings.ts";
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 import { readPresenceEntries, resolveSelfPresenceUser } from "./user-profile.ts";
@@ -73,6 +75,7 @@ function sameSelfUser(
 ): boolean {
   return (
     left?.id === right?.id &&
+    left?.identity?.id === right?.identity?.id &&
     left?.email === right?.email &&
     left?.name === right?.name &&
     left?.avatarUrl === right?.avatarUrl
@@ -324,9 +327,26 @@ export function createApplicationGateway(
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
     stopped = false;
     const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;
+    const nextGatewayUrl = connectionOverrides.gatewayUrl ?? connection.gatewayUrl;
+    const logicalGatewayChanged =
+      gatewayCredentialScope(nextGatewayUrl) !== gatewayCredentialScope(connection.gatewayUrl);
+    const scopedCredentials = resolveGatewayCredentialsForUrlEdit(
+      connection.gatewayUrl,
+      nextGatewayUrl,
+      connection,
+    );
     const nextConnection = {
       ...connection,
       ...connectionOverrides,
+      ...(logicalGatewayChanged && connectionOverrides.token === undefined
+        ? { token: scopedCredentials.token }
+        : {}),
+      ...(logicalGatewayChanged && connectionOverrides.password === undefined
+        ? { password: scopedCredentials.password }
+        : {}),
+      ...(logicalGatewayChanged && connectionOverrides.bootstrapToken === undefined
+        ? { bootstrapToken: "", bootstrapProfile: undefined }
+        : {}),
       ...(connectionOverrides.bootstrapToken !== undefined &&
       connectionOverrides.bootstrapProfile === undefined
         ? { bootstrapProfile: undefined }

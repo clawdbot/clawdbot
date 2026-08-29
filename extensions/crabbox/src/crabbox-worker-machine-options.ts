@@ -24,24 +24,38 @@ function parseCrabboxMachineShapes(stdout: string): CrabboxMachineShapes {
   }
   return new Map(
     parsed.flatMap<[string, readonly CrabboxMachineShape[]]>((entry) => {
-      // An explicit unmapped disposition overrides even a stray legacy summary.
       if (
         !isRecord(entry) ||
-        (isRecord(entry.classCatalog) && entry.classCatalog.disposition === "unmapped")
+        !isRecord(entry.classCatalog) ||
+        entry.classCatalog.disposition !== "mapped"
       ) {
         return [];
       }
-      const rawClasses = Array.isArray(entry.classes) ? entry.classes : [];
-      const classes = rawClasses.flatMap<CrabboxMachineShape>((raw) => {
-        if (!isRecord(raw)) {
+      const profiles = Array.isArray(entry.classCatalog.profiles)
+        ? entry.classCatalog.profiles
+        : [];
+      const classes = profiles.flatMap<CrabboxMachineShape>((raw) => {
+        // Match Crabbox's default Linux/amd64 projection; other selectors and
+        // fallback machines do not describe this primary choice.
+        if (
+          !isRecord(raw) ||
+          raw.target !== "linux" ||
+          raw.architecture !== "amd64" ||
+          !isRecord(raw.primary)
+        ) {
           return [];
         }
         const machineClass = nonEmptyString(raw.class);
         if (!machineClass) {
           return [];
         }
-        const cpu = asPositiveSafeInteger(raw.vcpu);
-        const memoryGb = asPositiveSafeInteger(raw.memoryGb);
+        const cpu = asPositiveSafeInteger(raw.primary.vcpu);
+        const memory = raw.primary.memory;
+        // Crabbox's integer memoryGb summary accepts GB/GiB only, without rounding.
+        const memoryGb =
+          isRecord(memory) && (memory.unit === "GB" || memory.unit === "GiB")
+            ? asPositiveSafeInteger(memory.value)
+            : undefined;
         return [
           { class: machineClass, ...(cpu ? { cpu } : {}), ...(memoryGb ? { memoryGb } : {}) },
         ];

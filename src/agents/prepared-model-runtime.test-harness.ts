@@ -68,6 +68,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     entries: [],
     routeVariants: [],
   })),
+  runtimeSyntheticAuthProviderRefs: [] as string[],
   resolveAmbientCredentials: vi.fn((..._args: unknown[]) => ({})),
   resolveStaticCatalogModel: vi.fn<StaticCatalogResolver>(() => undefined),
   warn: vi.fn(),
@@ -115,7 +116,8 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
   }),
 }));
 
-vi.mock("./model-catalog.js", () => ({
+vi.mock("./model-catalog.js", async () => ({
+  findModelCatalogEntry: (await import("./model-catalog-lookup.js")).findModelCatalogEntry,
   buildPreparedModelCatalogSnapshot: (...args: Parameters<BuildPreparedModelCatalogSnapshot>) =>
     preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot(...args),
 }));
@@ -167,10 +169,11 @@ vi.mock("./agent-model-discovery.js", () => ({
 }));
 
 vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
-  resolveRuntimeSyntheticAuthProviderRefs: () => [],
+  resolveRuntimeSyntheticAuthProviderRefs: () =>
+    preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs,
 }));
 
-vi.mock("./agent-scope.js", () => ({
+const agentScopeMocks = vi.hoisted(() => ({
   listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
   listAgentIds: () => {
     if (preparedModelRuntimeMocks.configuredAgentIdsError) {
@@ -198,6 +201,14 @@ vi.mock("./agent-scope.js", () => ({
     defaultAgentId: "default",
     sessionAgentId: agentId ?? "default",
   }),
+}));
+
+vi.mock("./agent-scope.js", () => agentScopeMocks);
+vi.mock("./agent-scope-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
+  listAgentIds: agentScopeMocks.listAgentIds,
+  resolveAgentDir: agentScopeMocks.resolveAgentDir,
+  resolveAgentWorkspaceDir: agentScopeMocks.resolveAgentWorkspaceDir,
 }));
 
 vi.mock("./legacy-inherited-auth-dir.js", () => ({
@@ -373,6 +384,7 @@ export function resetPreparedModelRuntimeHarness(): void {
     entries: [],
     routeVariants: [],
   });
+  preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs = [];
   preparedModelRuntimeMocks.resolveAmbientCredentials.mockReset().mockReturnValue({});
   preparedModelRuntimeMocks.resolveStaticCatalogModel.mockReset().mockReturnValue(undefined);
   preparedModelRuntimeMocks.createStaticCatalogResolver

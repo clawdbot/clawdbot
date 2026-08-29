@@ -38,10 +38,8 @@ import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js"
 import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
-import {
-  consumeTrustedToolNoStartError,
-  registerTrustedToolNoStartError,
-} from "./tool-result-error.js";
+import { registerToolEffectReceipt } from "./tool-effect-receipt.js";
+import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const embeddedLog = createSubsystemLogger("agent/embedded");
@@ -629,7 +627,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       };
       try {
         const result = await toolParams.execute(onImplementationStart);
-        await handleToolExecutionEnd(ctx, {
+        const terminal = await handleToolExecutionEnd(ctx, {
           type: "tool_execution_end",
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
@@ -638,10 +636,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           result,
           hideFromChannelProgress: toolParams.hideFromChannelProgress,
         } as never);
-        return result;
+        return registerToolEffectReceipt(result, terminal.effectReceipt);
       } catch (error) {
         const trustedNoStart = consumeTrustedToolNoStartError(error);
-        await handleToolExecutionEnd(ctx, {
+        const terminal = await handleToolExecutionEnd(ctx, {
           type: "tool_execution_end",
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
@@ -650,12 +648,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           result: buildToolLifecycleErrorResult(error),
           hideFromChannelProgress: toolParams.hideFromChannelProgress,
         } as never);
-        // Operation-owned no-start proof survives generic implementation entry.
-        // Only relay the same error after completion succeeds; replacements cannot inherit it.
-        if (trustedNoStart) {
-          registerTrustedToolNoStartError(error);
-        }
-        throw error;
+        const receipt = trustedNoStart
+          ? ({ state: "not_started" } as const)
+          : terminal.effectReceipt;
+        throw registerToolEffectReceipt(error, receipt);
       }
     },
     unsubscribe,

@@ -9,13 +9,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const route = { target: "host", profile: "managed" } as const;
+const tabKey = (targetId = "tab-1") => JSON.stringify(["host", null, "managed", targetId]);
+
 function browserResult(callId: string, targetId = "tab-1") {
   return {
     role: "toolResult",
     toolCallId: callId,
     toolName: "browser",
     content: "ok",
-    details: { browserTab: { targetId } },
+    details: { browserTab: { ...route, targetId } },
   };
 }
 
@@ -34,7 +37,7 @@ function screenshotClient() {
     client,
     request,
     fetchMock,
-    targetId: "tab-1",
+    tab: { ...route, targetId: "tab-1" },
     resourceBasePath: "/gateway",
     authToken: null,
   };
@@ -45,21 +48,31 @@ describe("browser tab previews", () => {
     const message = {
       role: "toolResult",
       toolName: "browser",
-      details: { browserTab: { targetId: "tab-1" } },
+      details: { browserTab: { ...route, targetId: "tab-1" } },
     };
-    const initial = latestBrowserTabCards([message], []).get("tab-1");
+    const initial = latestBrowserTabCards([message], []).get(tabKey())?.revision;
     expect(initial).toBeTruthy();
     expect(extractToolCardsCached(message, "visible-row")[0]?.previewRevision).toBe(initial);
-    expect(latestBrowserTabCards([message, { ...message }], []).get("tab-1")).not.toBe(initial);
+    expect(latestBrowserTabCards([message, { ...message }], []).get(tabKey())?.revision).not.toBe(
+      initial,
+    );
   });
 
   it("does not repeat captures when image retention evicts an old tab", async () => {
     const params = screenshotClient();
     for (let index = 0; index < 33; index++) {
-      await loadBrowserTabThumbnail({ ...params, targetId: `tab-${index}`, revision: "one" });
+      await loadBrowserTabThumbnail({
+        ...params,
+        tab: { ...route, targetId: `tab-${index}` },
+        revision: "one",
+      });
     }
     expect(
-      await loadBrowserTabThumbnail({ ...params, targetId: "tab-0", revision: "one" }),
+      await loadBrowserTabThumbnail({
+        ...params,
+        tab: { ...route, targetId: "tab-0" },
+        revision: "one",
+      }),
     ).toBeUndefined();
     expect(params.request).toHaveBeenCalledTimes(33);
   });
@@ -78,11 +91,18 @@ describe("browser tab previews", () => {
       ],
     };
     expect([...latestBrowserTabCards([null, older, latest, other], [failed, running])]).toEqual([
-      ["tab-1", "new"],
-      ["tab-2", "other"],
+      [tabKey(), { tab: { ...route, targetId: "tab-1", kind: "browser-tab" }, revision: "new" }],
+      [
+        tabKey("tab-2"),
+        { tab: { ...route, targetId: "tab-2", kind: "browser-tab" }, revision: "other" },
+      ],
     ]);
-    expect([...latestBrowserTabCards([older], [latest])]).toEqual([["tab-1", "new"]]);
-    expect([...latestBrowserTabCards([older, latest], [])]).toEqual([["tab-1", "new"]]);
+    expect([...latestBrowserTabCards([older], [latest])]).toEqual([
+      [tabKey(), { tab: { ...route, targetId: "tab-1", kind: "browser-tab" }, revision: "new" }],
+    ]);
+    expect([...latestBrowserTabCards([older, latest], [])]).toEqual([
+      [tabKey(), { tab: { ...route, targetId: "tab-1", kind: "browser-tab" }, revision: "new" }],
+    ]);
   });
 
   it("shares captures, serializes new revisions, and reads bytes only over HTTP", async () => {
@@ -102,11 +122,23 @@ describe("browser tab previews", () => {
     expect(params.request.mock.calls).toEqual([
       [
         "browser.request",
-        { method: "POST", path: "/screenshot", body: { targetId: "tab-1", type: "png" } },
+        {
+          method: "POST",
+          path: "/screenshot",
+          target: "host",
+          query: { profile: "managed" },
+          body: { targetId: "tab-1", type: "png" },
+        },
       ],
       [
         "browser.request",
-        { method: "POST", path: "/screenshot", body: { targetId: "tab-1", type: "png" } },
+        {
+          method: "POST",
+          path: "/screenshot",
+          target: "host",
+          query: { profile: "managed" },
+          body: { targetId: "tab-1", type: "png" },
+        },
       ],
     ]);
     expect(params.fetchMock.mock.calls.map(([url]) => url)).toEqual([
@@ -130,6 +162,34 @@ describe("browser tab previews", () => {
       "data:image/png;base64,c2hvdA==",
     );
     expect(params.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("separates identical tab ids and revisions by host, node, and profile", async () => {
+    const params = screenshotClient();
+    const tabs = [
+      { target: "host", profile: "managed", targetId: "t1" },
+      { target: "host", profile: "work", targetId: "t1" },
+      { target: "node", node: "node-a", profile: "managed", targetId: "t1" },
+      { target: "node", node: "node-b", profile: "managed", targetId: "t1" },
+    ] as const;
+    for (const tab of tabs) {
+      await loadBrowserTabThumbnail({ ...params, tab, revision: "same" });
+      await loadBrowserTabThumbnail({ ...params, tab, revision: "same" });
+    }
+    expect(params.request).toHaveBeenCalledTimes(tabs.length);
+    for (const [index, tab] of tabs.entries()) {
+      expect(params.request.mock.calls[index]).toEqual([
+        "browser.request",
+        {
+          method: "POST",
+          path: "/screenshot",
+          target: tab.target,
+          ...("node" in tab ? { node: tab.node } : {}),
+          query: { profile: tab.profile },
+          body: { targetId: "t1", type: "png" },
+        },
+      ]);
+    }
   });
 
   it("never reuses a shot from another Gateway client", async () => {

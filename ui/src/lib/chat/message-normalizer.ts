@@ -9,23 +9,24 @@ import {
   extractCanvasShortcodes,
   isCanvasBoardWidgetName,
 } from "../../../../src/chat/canvas-render.js";
+import { readTranscriptSenderIdentity } from "../../../../src/chat/sender-identity.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
-import { splitMediaFromOutput } from "../../../../src/media/parse.js";
+import {
+  isRelativeAssistantMediaReference,
+  splitMediaFromOutput,
+} from "../../../../src/media/parse.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import { formatSenderLabel, normalizeSenderIdentity } from "./sender-label.ts";
 
-// Older gateways baked sender labels as "name (<profile uuid>)" into transcript
-// text. The UUID is machine noise in a human label but it is also the row's
-// only author key, so split it into display + identity instead of discarding.
+// Keep legacy labels readable without treating their UUID suffix as profile evidence.
 const OPAQUE_ID_LABEL_SUFFIX_RE =
   /\s+\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/iu;
-const OPAQUE_ID_LABEL_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 const optionalMessageStringSchema = z.string().optional().catch(undefined);
 const optionalMessageNumberSchema = z.number().optional().catch(undefined);
@@ -139,20 +140,6 @@ const rawMessageSchema = z
 type RawContentBlock = z.infer<typeof rawContentBlockSchema>;
 type RawCanvasPreview = z.infer<typeof rawCanvasPreviewSchema>;
 
-function splitOpaqueIdLabel(label: string): { display: string; id: string } | null {
-  // A nameless legacy sender labels as the bare UUID; keep it as the
-  // last-resort display while still attributing the row to that profile.
-  if (OPAQUE_ID_LABEL_RE.test(label)) {
-    return { display: label, id: label };
-  }
-  const match = OPAQUE_ID_LABEL_SUFFIX_RE.exec(label);
-  if (!match?.[1]) {
-    return null;
-  }
-  const display = label.slice(0, match.index).trim();
-  return display ? { display, id: match[1] } : null;
-}
-
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
   if (lower === "user") {
@@ -257,35 +244,6 @@ function coerceCanvasPreview(
   };
 }
 
-function isRenderableAssistantAttachment(url: string): boolean {
-  const trimmed = url.trim();
-  return (
-    /^https?:\/\//i.test(trimmed) ||
-    /^data:(?:image|audio|video)\//i.test(trimmed) ||
-    /^\/(?:__openclaw__|media)\//.test(trimmed) ||
-    trimmed.startsWith("file://") ||
-    trimmed.startsWith("~") ||
-    trimmed.startsWith("/") ||
-    /^[a-zA-Z]:[\\/]/.test(trimmed)
-  );
-}
-
-function shouldPreserveRelativeAssistantAttachment(url: string): boolean {
-  const trimmed = url.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return (
-    !/^https?:\/\//i.test(trimmed) &&
-    !/^data:(?:image|audio|video)\//i.test(trimmed) &&
-    !/^\/(?:__openclaw__|media)\//.test(trimmed) &&
-    !trimmed.startsWith("file://") &&
-    !trimmed.startsWith("~") &&
-    !trimmed.startsWith("/") &&
-    !/^[a-zA-Z]:[\\/]/.test(trimmed)
-  );
-}
-
 const MIME_BY_EXT: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -304,6 +262,7 @@ const MIME_BY_EXT: Record<string, string> = {
   m4a: "audio/mp4",
   m2a: "audio/mpeg",
   mp4: "video/mp4",
+  webm: "video/webm",
   mov: "video/quicktime",
   pdf: "application/pdf",
   txt: "text/plain",
@@ -481,10 +440,8 @@ function expandTextContent(
 
   for (const segment of segments) {
     if (segment.type === "media") {
-      if (!isRenderableAssistantAttachment(segment.url)) {
-        if (shouldPreserveRelativeAssistantAttachment(segment.url)) {
-          parts.push({ type: "text", text: `MEDIA:${segment.url}` });
-        }
+      if (isRelativeAssistantMediaReference(segment.url)) {
+        parts.push({ type: "text", text: `MEDIA:${segment.url}` });
         continue;
       }
       const inferred = inferAttachmentKind(segment.url);
@@ -528,9 +485,9 @@ function expandTextContent(
     content:
       content.length > 0
         ? content
-        : (parsed.mediaUrls ?? []).some((url) => shouldPreserveRelativeAssistantAttachment(url))
+        : (parsed.mediaUrls ?? []).some(isRelativeAssistantMediaReference)
           ? (parsed.mediaUrls ?? [])
-              .filter((url) => shouldPreserveRelativeAssistantAttachment(url))
+              .filter(isRelativeAssistantMediaReference)
               .map((url) => ({ type: "text" as const, text: `MEDIA:${url}` }))
           : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
             ? [{ type: "text", text: parsed.text }]
@@ -669,30 +626,20 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const replyPreviewRecord = openClawMeta?.replyToPreview;
   const replyPreviewText = replyPreviewRecord?.text?.trim() ?? "";
   const replyPreviewSender = replyPreviewRecord?.senderLabel?.trim() ?? "";
+  const identity = readTranscriptSenderIdentity(openClawMeta?.senderIdentity);
   const metaSender = normalizeSenderIdentity({
+    identity,
     id: openClawMeta?.senderId,
     name: openClawMeta?.senderName,
     username: openClawMeta?.senderUsername,
-    profileAvatarUrl: openClawMeta?.senderProfileAvatarUrl,
+    profileAvatarUrl:
+      identity?.type === "profile" ? openClawMeta?.senderProfileAvatarUrl : undefined,
   });
   const rawLabel = m.senderLabel?.trim() ?? "";
-  const legacyLabelIdentity = rawLabel ? splitOpaqueIdLabel(rawLabel) : null;
   const senderLabel = rawLabel
-    ? (legacyLabelIdentity?.display ?? rawLabel)
+    ? rawLabel.replace(OPAQUE_ID_LABEL_SUFFIX_RE, "").trim()
     : formatSenderLabel(metaSender);
-  // Legacy transcripts baked the author's profile UUID only into the label.
-  // Keep it as structured (non-display) identity so the avatar gutter resolves
-  // the actual author instead of falling back to the local viewer.
-  const sender =
-    metaSender ??
-    (legacyLabelIdentity
-      ? normalizeSenderIdentity({
-          id: legacyLabelIdentity.id,
-          ...(legacyLabelIdentity.display !== legacyLabelIdentity.id
-            ? { name: legacyLabelIdentity.display }
-            : {}),
-        })
-      : null);
+  const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
 
   content = stripMessageDisplayMetadata(content);
 

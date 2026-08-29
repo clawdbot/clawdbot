@@ -12,7 +12,6 @@ import { renderNumberInput, renderSelect, renderTextInput } from "./config-form.
 import {
   renderFieldRow,
   isAnySchema,
-  renderRestoreDefaultButton,
   renderSchemaDefaultDescription,
   renderSegmentedControl,
   renderTags,
@@ -23,7 +22,7 @@ import {
   matchesNodeSearch,
   resolveConfigFieldMeta as resolveFieldMeta,
 } from "./config-form.search.ts";
-import { configFieldId, pathKey, schemaType } from "./config-form.shared.ts";
+import { configFieldId, hintForPath, pathKey, schemaType } from "./config-form.shared.ts";
 import { renderSettingsToggle, renderSettingsToggleRow } from "./settings-ui.ts";
 
 export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typeof nothing {
@@ -105,16 +104,13 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
         defaultDescription: renderSchemaDefaultDescription(schema, value),
         tags,
         showLabel,
-        control: html`
-          ${renderSegmentedControl({
-            options: literals,
-            resolvedValue,
-            disabled,
-            ariaLabel: label,
-            onSelect: (literal) => onPatch(path, literal),
-          })}
-          ${renderRestoreDefaultButton(params)}
-        `,
+        control: renderSegmentedControl({
+          options: literals,
+          resolvedValue,
+          disabled,
+          ariaLabel: label,
+          onSelect: (literal) => onPatch(path, literal),
+        }),
       });
     }
 
@@ -170,16 +166,13 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
         defaultDescription: renderSchemaDefaultDescription(schema, value),
         tags,
         showLabel,
-        control: html`
-          ${renderSegmentedControl({
-            options,
-            resolvedValue,
-            disabled,
-            ariaLabel: label,
-            onSelect: (option) => onPatch(path, option),
-          })}
-          ${renderRestoreDefaultButton(params)}
-        `,
+        control: renderSegmentedControl({
+          options,
+          resolvedValue,
+          disabled,
+          ariaLabel: label,
+          onSelect: (option) => onPatch(path, option),
+        }),
       });
     }
     return renderSelect({ ...params, options });
@@ -197,6 +190,11 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
 
   // Boolean - toggle row
   if (type === "boolean") {
+    // A placeholder names an optional boolean's inherited state; a toggle
+    // cannot distinguish an unset override from an explicit false.
+    if (!params.isRequired && hintForPath(path, hints)?.placeholder) {
+      return renderSelect({ ...params, options: [true, false] });
+    }
     const displayValue =
       typeof value === "boolean"
         ? value
@@ -233,7 +231,6 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
       checked: displayValue,
       disabled,
       onChange,
-      actions: renderRestoreDefaultButton(params),
     });
   }
 

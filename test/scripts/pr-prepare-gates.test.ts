@@ -199,7 +199,7 @@ function makePreparePushHeadDriftRepo(): {
 
 function prepareSyncHeadStubs(): string[] {
   return [
-    "enter_worktree() { :; }",
+    "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
     "hosted_sha=$(cat .local/hosted-sha)",
     'gh() { printf "%s\\n" "$hosted_sha"; }',
     "verify_pr_head_branch_matches_expected() { :; }",
@@ -374,6 +374,7 @@ describe("prepare gate changed-file plan", () => {
     const result = runGatesBash(
       [
         gitStub,
+        `PR_MAIN_SHA=${"a".repeat(40)}`,
         "derive_prepare_gate_change_plan",
         'printf "%s\\t%s\\t%s\\t%s\\n" "$PREPARE_GATE_CHANGED_FILES" "$PREPARE_GATE_DOCS_ONLY" "$PREPARE_GATE_CHANGELOG_ONLY" "$PREPARE_GATE_CHANGELOG_REQUIRED"',
       ].join("\n"),
@@ -389,6 +390,7 @@ describe("prepare gate changed-file plan", () => {
       [
         "git() { printf 'src/index.ts\\n'; }",
         "changelog_required_for_changed_files() { return 0; }",
+        `PR_MAIN_SHA=${"a".repeat(40)}`,
         "derive_prepare_gate_change_plan",
         'printf "%s\\n" "$PREPARE_GATE_CHANGELOG_REQUIRED"',
       ].join("\n"),
@@ -657,7 +659,8 @@ describe("prepare push head drift", () => {
     const { repoDir, recordedHead, reviewedHead } = makePreparePushHeadDriftRepo();
     const result = runGatesBash(
       [
-        "enter_worktree() { :; }",
+        "refresh_main_snapshot() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
+        "enter_worktree() { refresh_main_snapshot; }",
         `reviewed_head='${reviewedHead}'`,
         'gh() { printf "%s\\n" "$reviewed_head"; }',
         "verify_pr_head_branch_matches_expected() { :; }",
@@ -868,6 +871,7 @@ describe("prepare gate stamp transitions", () => {
       [
         `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${currentHead}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
         "run_quiet_logged() { printf 'ARG:%s\\n' \"$@\"; }",
+        "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${currentHead} false`,
       ].join("\n"),
       { cwd: repoDir },
@@ -888,6 +892,7 @@ describe("prepare gate stamp transitions", () => {
         `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
         'rg() { command grep -F -q "$3" "$4"; }',
         `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
+        "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${headSha} false`,
       ].join("\n"),
       { cwd: repoDir },
@@ -907,6 +912,7 @@ describe("prepare gate stamp transitions", () => {
         `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":true}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
         'rg() { command grep -F -q "$3" "$4"; }',
         `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
+        "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${headSha} false`,
       ].join("\n"),
       { cwd: repoDir },
@@ -944,7 +950,7 @@ describe("prepare gate stamp transitions", () => {
 
     const result = runGatesBash(
       [
-        "enter_worktree() { :; }",
+        "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
         "checkout_prep_branch() { :; }",
         "path_is_docsish() { return 0; }",
         "changelog_required_for_changed_files() { return 1; }",
@@ -988,7 +994,7 @@ describe("prepare gate stamp transitions", () => {
 
     const result = runGatesBash(
       [
-        "enter_worktree() { :; }",
+        "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
         "checkout_prep_branch() { :; }",
         "path_is_docsish() { return 1; }",
         "changelog_required_for_changed_files() { return 1; }",

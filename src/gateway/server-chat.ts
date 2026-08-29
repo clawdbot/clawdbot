@@ -684,6 +684,7 @@ export function createAgentEventHandler({
       isChatAbortMarkerCurrent(chatRunState.runs.get(clientRunId)?.abortMarker, chatLink) ||
       isChatAbortMarkerCurrent(chatRunState.runs.get(evt.runId)?.abortMarker, chatLink);
     const lifecycleAborted = evt.data?.aborted === true;
+    const replyDispatchOwnsCompletion = evt.data?.completionSource === "reply-dispatch";
     const deliverySessionKeys = sessionKey
       ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId)
       : [];
@@ -716,6 +717,7 @@ export function createAgentEventHandler({
     }
 
     if (
+      !replyDispatchOwnsCompletion &&
       !suppressRestartRecoveryProjection &&
       sessionKey &&
       (isControlUiVisible ||
@@ -779,13 +781,17 @@ export function createAgentEventHandler({
     }
 
     toolEventRecipients.markFinal(evt.runId);
-    chatRunState.clearRun(clientRunId);
-    if (suppressRestartRecoveryProjection && chatLink) {
-      chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
+    // Payload dispatch owns its chat terminal and registration until delivery
+    // settles; lifecycle observers still receive the runtime's terminal below.
+    if (!replyDispatchOwnsCompletion) {
+      chatRunState.clearRun(clientRunId);
+      if (suppressRestartRecoveryProjection && chatLink) {
+        chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
+      }
+      clearRunContextForEvent(evt);
+      agentRunSeq.delete(evt.runId);
+      agentRunSeq.delete(clientRunId);
     }
-    clearRunContextForEvent(evt);
-    agentRunSeq.delete(evt.runId);
-    agentRunSeq.delete(clientRunId);
 
     if (sessionKey) {
       clearTrackedActiveRun?.({ runId: evt.runId, clientRunId, sessionKey });
@@ -965,6 +971,13 @@ export function createAgentEventHandler({
     opts?: { controlUiVisible?: boolean },
   ) => {
     const run = chatRunState.getOrCreate(clientRunId);
+    if (input.managedMediaUrls?.length) {
+      const managedMediaUrls = (run.managedMediaUrls ??= new Set<string>());
+      for (const url of input.managedMediaUrls) {
+        managedMediaUrls.add(url);
+      }
+      delete run.bufferProjection;
+    }
     const previousRawText = run.rawBuffer ?? "";
     if (!input.itemId) {
       delete run.assistantScope;
@@ -1011,9 +1024,11 @@ export function createAgentEventHandler({
   const resolveBufferedChatTextState = (
     clientRunId: string,
     sourceRunId: string,
-    options?: { suppressLeadFragments?: boolean },
+    options?: { final?: boolean; suppressLeadFragments?: boolean },
   ) => {
-    const bufferedText = chatRunState.resolveBuffer(clientRunId).text.trim();
+    const bufferedText = chatRunState
+      .resolveBuffer(clientRunId, { final: options?.final })
+      .text.trim();
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,
@@ -1035,11 +1050,20 @@ export function createAgentEventHandler({
     sourceRunId: string,
     seq: number,
     opts?: { controlUiVisible?: boolean; firstAssistantTimingEntry?: ChatRunEntry },
+    resolved?: { text: string; shouldSuppressSilent: boolean },
   ) => {
     cancelPendingChatDeltaFlush(clientRunId);
-    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
-      suppressLeadFragments: true,
-    });
+    const streamed = resolved
+      ? projectLiveAssistantBufferedText(resolved.text, { suppressLeadFragments: true })
+      : undefined;
+    const { text, shouldSuppressSilent } = streamed
+      ? {
+          text: streamed.text.trim(),
+          shouldSuppressSilent: resolved?.shouldSuppressSilent || streamed.suppress,
+        }
+      : resolveBufferedChatTextState(clientRunId, sourceRunId, {
+          suppressLeadFragments: true,
+        });
     const shouldSuppressHeartbeatStreaming = shouldHideHeartbeatChatOutput(
       clientRunId,
       sourceRunId,
@@ -1094,12 +1118,16 @@ export function createAgentEventHandler({
     },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
+      final: true,
       suppressLeadFragments: false,
     });
     // Flush any paced delta so streaming clients receive the complete text
     // before the final event.
     // Only flush if the buffered text differs from the last broadcast to avoid duplicates.
-    flushBufferedChatDeltaIfNeeded(sessionKey, opts?.agentId, clientRunId, sourceRunId, seq, opts);
+    flushBufferedChatDeltaIfNeeded(sessionKey, opts?.agentId, clientRunId, sourceRunId, seq, opts, {
+      text,
+      shouldSuppressSilent,
+    });
     chatRunState.clearRun(clientRunId);
     const spawnedBy = resolveSpawnedBy(sessionKey);
     if (jobState !== "error") {
@@ -1686,21 +1714,23 @@ export function createAgentEventHandler({
         // has flushed the throttled tail and resolved the terminal message.
         finalizeLifecycleEvent(evt, { skipChatErrorFinal, restartRecoveryState });
       } else {
-        // Deliver the throttled tail before isolating the buffer so a fallback
-        // attempt cannot merge onto the failed attempt's text.
-        if (sessionKey) {
-          flushBufferedChatDeltaIfNeeded(
-            sessionKey,
-            sessionAgentId,
-            clientRunId,
-            evt.runId,
-            evt.seq,
-            {
-              controlUiVisible: isControlUiVisible,
-            },
-          );
+        if (evt.data.completionSource !== "reply-dispatch") {
+          // Runtime retries isolate failed text; reply-dispatch retains its
+          // post-hook payloads and abort state until its own completion settles.
+          if (sessionKey) {
+            flushBufferedChatDeltaIfNeeded(
+              sessionKey,
+              sessionAgentId,
+              clientRunId,
+              evt.runId,
+              evt.seq,
+              {
+                controlUiVisible: isControlUiVisible,
+              },
+            );
+          }
+          chatRunState.clearRun(clientRunId);
         }
-        chatRunState.clearRun(clientRunId);
         scheduleTerminalLifecycleError(evt, { skipChatErrorFinal, restartRecoveryState });
       }
       return;

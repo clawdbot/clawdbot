@@ -440,8 +440,10 @@ Each allowlist entry supports:
 ## Standing grants for automations
 
 Approvals raised by gateway-host automation (cron) runs are delivered only to
-connected approval surfaces (Control UI, TUI, macOS app) — never to chat
-channels, which would repeat a card on every occurrence. While a reviewer
+connected exec approval clients: the Control UI, the macOS/iOS/Android apps,
+and API clients that declare the `approvals` or `exec-approvals` capability.
+The TUI does not render exec approval cards, and chat channels never receive
+automation approvals, which would repeat a card on every occurrence. While a reviewer
 surface is connected, the scheduled run waits for the decision like an
 interactive run; automations are single-flight, so at most one card per job
 is pending at a time. With no approval surface connected, the request is

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveProviderContext,
   type ProviderStreamOptions,
@@ -11,6 +11,7 @@ import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import { SessionManager } from "../../sessions/index.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { testing as extraParamsTesting } from "../extra-params.test-support.js";
 import { RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import {
   prepareEmbeddedAttemptTransport,
@@ -123,11 +124,20 @@ describe("settleEmbeddedAttemptStream liveness", () => {
 });
 
 describe("prepareEmbeddedAttemptTransport", () => {
+  beforeEach(() => {
+    // These cases own prepared auth/config, not runtime plugin discovery.
+    extraParamsTesting.setProviderRuntimeDepsForTest({ wrapProviderStreamFn: () => undefined });
+  });
   afterEach(() => {
+    extraParamsTesting.resetProviderRuntimeDepsForTest();
     registerProviderStreamForModel.mockReset();
   });
 
-  it("applies the prepared transport to the live agent owner", async () => {
+  it.each([
+    { compaction: true, apiKey: "test-api-key", replayEnabled: true },
+    { compaction: true, apiKey: "test-sk-ant-oat-oauth", replayEnabled: false },
+    { compaction: false, apiKey: "test-api-key", replayEnabled: false },
+  ])("prepares transport and replay from resolved auth/config: %j", async (testCase) => {
     const streamFn = vi.fn();
     bindStreamLlmRuntime(streamFn, {
       streamSimple: streamFn,
@@ -143,19 +153,24 @@ describe("prepareEmbeddedAttemptTransport", () => {
       attempt: {
         config: {},
         model: {
-          api: "test-api",
-          provider: "test-provider",
-          id: "test-model",
+          api: "anthropic-messages",
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+          baseUrl: "https://api.anthropic.com",
         },
-        modelId: "test-model",
-        provider: "test-provider",
+        modelId: "claude-sonnet-4-6",
+        provider: "anthropic",
         promptCacheKey: undefined,
         resolvedApiKey: undefined,
+        authStorage: { getApiKey: async () => testCase.apiKey },
         runId: "run-transport-1",
         runtimePlan: {
           auth: { forwardedAuthProfileId: undefined },
           transport: {
-            resolveExtraParams: () => ({ transport: "sse" }),
+            resolveExtraParams: () => ({
+              transport: "sse",
+              anthropicServerCompaction: testCase.compaction,
+            }),
           },
         },
         sessionId: "sess-transport-1",
@@ -172,8 +187,8 @@ describe("prepareEmbeddedAttemptTransport", () => {
       agentDir: "/agent",
       abortSignal: new AbortController().signal,
       getProviderRuntimeHandle: () => ({
-        provider: "test-provider",
-        modelId: "test-model",
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
       }),
       sandboxSessionKey: "agent:main:test",
       codeModeControlsEnabled: false,
@@ -187,6 +202,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
 
     expect(result.effectiveAgentTransport).toBe("sse");
     expect(session.agent.transport).toBe("sse");
+    expect(result.compactionReplayEnabled).toBe(testCase.replayEnabled);
   });
 
   it("materializes native video from the prepared session agent workspace", async () => {

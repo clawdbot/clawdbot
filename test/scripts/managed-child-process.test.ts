@@ -934,7 +934,7 @@ require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(le
     expect(isProcessAlive(childPid)).toBe(false);
   });
 
-  it("allows bounded retry output and normal long-running work to complete", async () => {
+  it("allows bounded retry output to complete", async () => {
     await expect(
       runManagedCommand({
         bin: process.execPath,
@@ -947,6 +947,9 @@ require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(le
         timeoutMs: 1_000,
       }),
     ).resolves.toBe(0);
+  });
+
+  posixIt("allows strict normal long-running work to complete", async () => {
     await expect(
       runManagedCommand({
         bin: process.execPath,
@@ -976,17 +979,14 @@ require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(le
     expect(isProcessAlive(childPid)).toBe(false);
   });
 
-  posixIt("rejects and drains descendants left after a successful leader exit", async () => {
-    const dir = createTempDir("openclaw-managed-lingering-");
-    const descendantPidPath = path.join(dir, "descendant.pid");
-    let descendantPid = 0;
-    try {
-      await expect(
-        runManagedCommand({
-          bin: process.execPath,
-          args: [
-            "-e",
-            `
+  posixIt.each(["managed", "preparation"])(
+    "rejects and drains descendants left after a successful leader exit through %s",
+    async (runner) => {
+      const dir = createTempDir("openclaw-managed-lingering-");
+      const descendantPidPath = path.join(dir, "descendant.pid");
+      const args = [
+        "-e",
+        `
 const { spawn } = require("node:child_process");
 const child = spawn(process.execPath, [
   "-e",
@@ -995,22 +995,41 @@ const child = spawn(process.execPath, [
 ], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
 child.once("message", () => process.exit(0));
 `,
-            descendantPidPath,
-          ],
-          requireProcessTreeExit: true,
-          shell: false,
-          stdio: "ignore",
-          timeoutMs: 1_000,
-        }),
-      ).rejects.toMatchObject({ code: "EPROCESSGROUP_CLEANUP_FAILED" });
-      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
-      expect(isProcessAlive(descendantPid)).toBe(false);
-    } finally {
-      if (descendantPid && isProcessAlive(descendantPid)) {
-        process.kill(descendantPid, "SIGKILL");
+        descendantPidPath,
+      ];
+      try {
+        const command =
+          runner === "preparation"
+            ? runNodeStep("lingering-prep", args, 1_000)
+            : runManagedCommand({
+                bin: process.execPath,
+                args,
+                requireProcessTreeExit: true,
+                shell: false,
+                stdio: "ignore",
+                timeoutMs: 1_000,
+              });
+        const failure = await command.catch((error: unknown) => error);
+        const descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        expect.soft(failure).toMatchObject({ code: "EPROCESSGROUP_CLEANUP_FAILED" });
+        expect
+          .soft(
+            isProcessAlive(descendantPid),
+            `descendant ${descendantPid} must be absent at settlement`,
+          )
+          .toBe(false);
+      } finally {
+        // Recover the recorded PID even when an unexpected success fails the assertion.
+        if (fs.existsSync(descendantPidPath)) {
+          const descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+          if (Number.isSafeInteger(descendantPid) && descendantPid > 1) {
+            if (isProcessAlive(descendantPid)) process.kill(descendantPid, "SIGKILL");
+            await waitForDead(descendantPid, 2_000);
+          }
+        }
       }
-    }
-  });
+    },
+  );
 
   posixIt(
     "kills managed child process group descendants when the runner is terminated",

@@ -67,6 +67,7 @@ describe("local gateway request context", () => {
       .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
       .mockResolvedValue(
         asPublishedOwner({
+          catalogOwner: { agentId: "worker", workspaceDir: "/tmp/local-model-catalog-workspace" },
           agentId: "worker",
           agentDir: "/tmp/local-model-catalog-agent",
           workspaceDir: "/tmp/local-model-catalog-workspace",
@@ -120,6 +121,7 @@ describe("local gateway request context", () => {
       api: "openai-completions" as const,
     };
     const candidate = {
+      catalogOwner: { agentId: "main", workspaceDir: "/tmp/local-model-auth-workspace" },
       agentId: "main",
       agentDir: "/tmp/local-model-auth-agent",
       workspaceDir: "/tmp/local-model-auth-workspace",
@@ -202,6 +204,7 @@ describe("local gateway request context", () => {
       },
     } as OpenClawConfig;
     const candidate = {
+      catalogOwner: { agentId: "main", workspaceDir: "/tmp/local-model-timeout-workspace" },
       agentId: "main",
       agentDir: "/tmp/local-model-timeout-agent",
       workspaceDir: "/tmp/local-model-timeout-workspace",

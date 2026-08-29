@@ -66,18 +66,15 @@ const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
   // Type-only alias to the canonical embedding provider contract.
   "packages/memory-host-sdk/src/host/embeddings.types.ts",
   "packages/memory-host-sdk/src/host/error-utils.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-kysely.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime.ts",
-] as const;
-const MEMORY_HOST_SDK_RUNTIME_ADAPTER_FILES = [
   "packages/memory-host-sdk/src/host/openclaw-runtime-agent.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-config.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-io.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-kysely.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-memory.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-session.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts",
 ] as const;
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.
@@ -154,10 +151,10 @@ function collectCoreReferenceFiles(relativeDir: string): string[] {
     });
 }
 
-function collectOpenClawRuntimeDirectImportFiles(relativeDir: string): string[] {
+function collectCombinedRuntimeImportFiles(relativeDir: string): string[] {
   return collectCodeFiles(relativeDir).filter((file) => {
     const source = fs.readFileSync(resolve(REPO_ROOT, file), "utf8");
-    return source.includes('"./openclaw-runtime.js"');
+    return /["'][^"']*\/openclaw-runtime\.[cm]?[jt]s["']/u.test(source);
   });
 }
 
@@ -413,9 +410,34 @@ describe("opt-in extension package boundaries", () => {
     expect(collectCoreReferenceFiles("packages/memory-host-sdk/src")).toEqual([
       ...MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES,
     ]);
-    expect(collectOpenClawRuntimeDirectImportFiles("packages/memory-host-sdk/src")).toEqual([
-      ...MEMORY_HOST_SDK_RUNTIME_ADAPTER_FILES,
+    expect(collectCombinedRuntimeImportFiles("packages/memory-host-sdk/src")).toEqual([]);
+    expect(
+      fs.existsSync(resolve(REPO_ROOT, "packages/memory-host-sdk/src/host/openclaw-runtime.ts")),
+    ).toBe(false);
+  });
+
+  it("keeps memory config values independent from config IO and runtime facades", () => {
+    const source = fs.readFileSync(
+      resolve(REPO_ROOT, "packages/memory-host-sdk/src/host/openclaw-runtime-config.ts"),
+      "utf8",
+    );
+    const sources = [...source.matchAll(/\bfrom\s+["']([^"']+)["']/gu)].map(
+      (match) => match[1] ?? "",
+    );
+
+    // This facade is used by embedding metadata. Every dependency must remain a
+    // config value/shape owner; config loading belongs to the session runtime.
+    expect([...new Set(sources)].toSorted()).toEqual([
+      "../../../../src/cli/parse-duration.js",
+      "../../../../src/config/byte-size.js",
+      "../../../../src/config/paths.js",
+      "../../../../src/config/sessions/paths.js",
+      "../../../../src/config/types.memory.js",
+      "../../../../src/config/types.openclaw.js",
+      "../../../../src/config/types.secrets.js",
+      "../../../../src/config/types.tools.js",
     ]);
+    expect(source).not.toMatch(/^\s*import\b/mu);
   });
 
   it("keeps plugin-package-contract independent from core internals", () => {

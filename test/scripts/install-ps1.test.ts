@@ -194,6 +194,8 @@ describe("install.ps1 failure handling", () => {
           '  if ($actual -ne $entry.Value) { throw "version=$($entry.Key) actual=$actual" }',
           "}",
           "$script:NpmVersion = '12.0.0'",
+          "$tool = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'pnpm@12.0.0' -ExactIdentity 'pnpm@12.0.0'",
+          'if ($tool -ne "--allow-scripts=pnpm@12.0.0") { throw "tool=$tool" }',
           "$alias = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'openclaw@npm:@scope/candidate@1.0.0'",
           "if ($alias -ne '--allow-scripts=@scope/candidate') { throw \"alias=$alias\" }",
           "$tarball = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'https://example.invalid/openclaw.tgz'",
@@ -202,12 +204,55 @@ describe("install.ps1 failure handling", () => {
           '$safeCwd = Join-Path $commaRoot "safe"',
           '$candidate = Join-Path $commaRoot "candidate.tgz"',
           "$relative = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec $candidate -NpmCwd $safeCwd",
-          "if ($relative -match ',' -or $relative -notmatch '^--allow-scripts=\.\.[\\/]candidate\.tgz$') { throw \"relative=$relative\" }",
+          "if ($relative -match ',' -or $relative -notmatch '^--allow-scripts=\\.\\.[\\\\/]candidate\\.tgz$') { throw \"relative=$relative\" }",
           "foreach ($invalidVersion in @('invalid', 'npm 12.0.0 warning')) {",
           "  $script:NpmVersion = $invalidVersion",
           "  $caught = $false",
           "  try { Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'openclaw@latest' } catch { $caught = $true }",
           '  if (-not $caught) { throw "invalid npm version was accepted: $invalidVersion" }',
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "pnpm-prefer-offline-policy",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          '$root = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-pnpm-policy-" + [guid]::NewGuid().ToString("N"))',
+          '$project = Join-Path $root "project"',
+          "$previousUpper = $env:PNPM_CONFIG_PREFER_OFFLINE",
+          "$previousLower = $env:pnpm_config_prefer_offline",
+          "$script:PnpmConfigValue = 'undefined'",
+          "function Get-PnpmCommandPath { return 'Get-TestPnpmConfig' }",
+          "function Get-TestPnpmConfig {",
+          "  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)",
+          "  if ($Arguments -join ' ' -ne 'config get prefer-offline') { throw \"unexpected pnpm command: $($Arguments -join ' ')\" }",
+          '  if ((Get-Location).Path -ne $project) { throw "unexpected pnpm cwd: $(Get-Location)" }',
+          "  if ($script:PnpmConfigValue -eq 'failure') { $global:LASTEXITCODE = 1; return }",
+          "  $global:LASTEXITCODE = 0",
+          "  return $script:PnpmConfigValue",
+          "}",
+          "try {",
+          "  New-Item -ItemType Directory -Force -Path $project | Out-Null",
+          "  Remove-Item Env:PNPM_CONFIG_PREFER_OFFLINE -ErrorAction SilentlyContinue",
+          "  Remove-Item Env:pnpm_config_prefer_offline -ErrorAction SilentlyContinue",
+          "  if (-not (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project)) { throw 'default was disabled' }",
+          "  $script:PnpmConfigValue = 'false'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'false pnpm config was ignored' }",
+          "  $script:PnpmConfigValue = 'true'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'true pnpm config was ignored' }",
+          "  $script:PnpmConfigValue = 'failure'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'failed pnpm config query enabled the default' }",
+          "  $env:PNPM_CONFIG_PREFER_OFFLINE = 'false'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'uppercase override was ignored' }",
+          "  Remove-Item Env:PNPM_CONFIG_PREFER_OFFLINE -ErrorAction SilentlyContinue",
+          "  $env:pnpm_config_prefer_offline = 'false'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'lowercase override was ignored' }",
+          "} finally {",
+          "  $env:PNPM_CONFIG_PREFER_OFFLINE = $previousUpper",
+          "  $env:pnpm_config_prefer_offline = $previousLower",
+          "  Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue",
           "}",
           "",
         ].join("\n"),
@@ -949,6 +994,10 @@ describe("install.ps1 failure handling", () => {
     expectBatchedPowerShellCase("npm-lifecycle-policy");
   });
 
+  runIfPowerShell("preserves explicit pnpm prefer-offline settings for Git installs", () => {
+    expectBatchedPowerShellCase("pnpm-prefer-offline-policy");
+  });
+
   runIfPowerShell("rejects npm success without a usable candidate package", () => {
     expectBatchedPowerShellCase("npm-candidate-validation");
   });
@@ -1058,7 +1107,7 @@ describe("install.ps1 failure handling", () => {
     expect(ensurePnpmBody).toContain(
       'Invoke-CorepackCommand -Arguments @("prepare", $pnpmSpec, "--activate")',
     );
-    expect(ensurePnpmBody).toContain('Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)');
+    expect(ensurePnpmBody).toContain("Invoke-NpmCommand -Arguments $installArgs");
     expect(mainBody).toContain("Remove-PreviousNpmOwner");
     expect(mainBody).toContain("Remove-PreviousGitWrapper");
     expect(mainBody).toContain("Start-NpmShimBackup");
@@ -1277,12 +1326,10 @@ describe("install.ps1 failure handling", () => {
     expect(ensurePnpmBody).toContain(
       'Invoke-CorepackCommand -Arguments @("prepare", $pnpmSpec, "--activate")',
     );
-    expect(ensurePnpmBody).toContain('Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)');
+    expect(ensurePnpmBody).toContain("Invoke-NpmCommand -Arguments $installArgs");
     expect(ensurePnpmBody).toContain("$pnpmInstalled = ($LASTEXITCODE -eq 0)");
     expect(ensurePnpmBody).toContain("if (-not $pnpmInstalled)");
-    expect(ensurePnpmBody).toContain(
-      'Invoke-NpmCommand -Arguments @("install", "-g", "--force", $pnpmSpec)',
-    );
+    expect(ensurePnpmBody).toContain('Invoke-NpmCommand -Arguments ($installArgs + @("--force"))');
     expect(gitFilterSupportBody).toContain("git clone -h");
     expect(gitFilterSupportBody).toContain("filter");
     expect(transactionalCloneBody).toContain('$cloneArgs += "--filter=blob:none"');
@@ -1298,7 +1345,8 @@ describe("install.ps1 failure handling", () => {
     expect(mainBody).toContain("$npmInstallResults = @(Install-OpenClaw)");
     expect(mainBody).toContain("Test-BooleanSuccessResult -Results $npmInstallResults");
     expect(gitInstallBody).toContain("Push-Location -LiteralPath $RepoDir");
-    expect(gitInstallBody).toContain("$sourceInstallArgs = @(");
+    expect(gitInstallBody).toContain('$sourceInstallArgs = @("install")');
+    expect(gitInstallBody).toContain("Test-ShouldPreferOfflinePnpmInstall -ProjectDir $RepoDir");
     expect(gitInstallBody).toContain('"--config.node-linker=hoisted"');
     expect(gitInstallBody).toContain('"--config.enable-pre-post-scripts=true"');
     expect(gitInstallBody).toContain('"--config.side-effects-cache=false"');
@@ -1306,9 +1354,11 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).not.toContain('"--frozen-lockfile"');
     expect(gitInstallBody).not.toContain('"--filter"');
     expect(gitInstallBody).not.toContain('"--ignore-scripts=true"');
-    expect(gitInstallBody).toContain('"--child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY"');
     expect(gitInstallBody).toContain(
-      '"--network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY"',
+      '"--config.child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY"',
+    );
+    expect(gitInstallBody).toContain(
+      '"--config.network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY"',
     );
     expect(gitInstallBody).toContain(
       '"--config.workspace-concurrency=$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY"',

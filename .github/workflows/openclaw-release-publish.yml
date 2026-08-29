@@ -1986,29 +1986,6 @@ jobs:
             echo "- GitHub release draft: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
           }
 
-          publish_github_release() {
-            local expected_prerelease release_json
-            verify_release_tag_target
-            if is_android_release; then
-              verify_android_release_asset_contract
-            fi
-            if is_stable_release; then
-              verify_windows_release_asset_contract
-            fi
-            gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --draft=false
-            release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)"
-            expected_prerelease="false"
-            if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
-              expected_prerelease="true"
-            fi
-            if [[ "$(printf '%s' "${release_json}" | jq -r '.isDraft')" != "false" ]] ||
-              [[ "$(printf '%s' "${release_json}" | jq -r '.isPrerelease')" != "${expected_prerelease}" ]]; then
-              echo "Published GitHub release state does not match the requested draft/prerelease classification." >&2
-              exit 1
-            fi
-            echo "- GitHub release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
-          }
-
           verify_android_release_asset_contract() {
             local actual_android_assets actual_digest expected_android_assets expected_digest expected_hash release_json verify_dir
             local -a required_assets=(

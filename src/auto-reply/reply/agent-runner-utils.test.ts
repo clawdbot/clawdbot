@@ -381,7 +381,11 @@ describe("agent-runner-utils", () => {
   });
 
   it("prefers OriginatingChannel over Provider for messageProvider", () => {
-    const run = makeRun({ agentAccountId: "work", chatType: "group" });
+    const run = makeRun({
+      agentAccountId: "work",
+      chatType: "group",
+      conversationRoutePeerId: "queued-peer",
+    });
 
     const resolved = buildEmbeddedRunExecutionParams({
       run,
@@ -389,6 +393,7 @@ describe("agent-runner-utils", () => {
         Provider: "heartbeat",
         OriginatingChannel: "Telegram",
         OriginatingTo: "268300329",
+        ConversationRoutePeerId: "later-peer",
       },
       hasRepliedRef: undefined,
       provider: "openai",
@@ -399,6 +404,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageProvider).toBe("telegram");
     expect(resolved.embeddedContext.agentAccountId).toBe("work");
     expect(resolved.embeddedContext.chatType).toBe("group");
+    expect(resolved.embeddedContext.conversationRoutePeerId).toBe("queued-peer");
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
   });
 

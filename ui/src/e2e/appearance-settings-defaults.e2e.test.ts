@@ -203,7 +203,6 @@ suite.define(() => {
     );
     const page = await context.newPage();
     const initialPrefs: Record<string, unknown> = {
-      chatSendShortcut: "modifier-enter",
       locale: "en",
       theme: "knot",
       themeMode: "dark",
@@ -225,10 +224,8 @@ suite.define(() => {
       const themeSection = page.locator("#settings-appearance-theme");
       const colorModeRow = settingsRow(page, "Color mode");
       const textSizeSection = page.locator("#settings-appearance-text-size");
-      const sendShortcutRow = settingsRow(page, "Send shortcut");
       const languageSelect = languageRow.locator("wa-select");
       const colorModeGroup = colorModeRow.locator("wa-radio-group");
-      const sendShortcutSelect = sendShortcutRow.locator("[data-settings-send-shortcut]");
 
       await expect.poll(() => selectValue(languageSelect)).toBe("en");
       await expect
@@ -242,27 +239,24 @@ suite.define(() => {
             .getAttribute("aria-pressed"),
         )
         .toBe("true");
-      await expect.poll(() => sendShortcutSelect.inputValue()).toBe("modifier-enter");
       await expect.poll(() => languageRow.textContent()).toContain("Default: System");
       await expect.poll(() => themeSection.textContent()).toContain("Default: Claw");
       await expect.poll(() => colorModeRow.textContent()).toContain("Default: System");
       await expect.poll(() => textSizeSection.textContent()).toContain("Default: 100%");
-      await expect.poll(() => sendShortcutRow.textContent()).toContain("Default: Enter");
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
 
       await page.evaluate(() => window.scrollTo(0, 0));
       await captureViewport(page, "01-explicit-overrides.png");
-      await sendShortcutRow.scrollIntoViewIfNeeded();
-      await captureViewport(page, "02-explicit-chat-override.png");
 
       const withoutLocale = { ...initialPrefs };
       delete withoutLocale.locale;
       await resetSyncedPreference({
         click: () =>
-          languageRow
-            .getByRole("button", { name: "Reset to default" })
-            .click()
-            .then(() => undefined),
+          languageSelect.evaluate((element) => {
+            const select = element as HTMLElement & { value: string };
+            select.value = "system";
+            select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+          }),
         expectedKey: "locale",
         gateway,
         hash: "appearance-defaults-2",
@@ -300,18 +294,6 @@ suite.define(() => {
       await textSizeSection.locator(".settings-text-scale__btn", { hasText: "100%" }).click();
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
 
-      await resetSyncedPreference({
-        click: () =>
-          sendShortcutRow
-            .getByRole("button", { name: "Reset to default" })
-            .click()
-            .then(() => undefined),
-        expectedKey: "chatSendShortcut",
-        gateway,
-        hash: "appearance-defaults-5",
-        remainingPrefs: {},
-      });
-
       await expect.poll(() => selectValue(languageSelect)).toBe("system");
       await expect
         .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
@@ -324,7 +306,6 @@ suite.define(() => {
             .getAttribute("aria-pressed"),
         )
         .toBe("true");
-      await expect.poll(() => sendShortcutSelect.inputValue()).toBe("enter");
 
       await page.reload();
       await waitForControlUiSettingsTakeover(page);
@@ -334,7 +315,6 @@ suite.define(() => {
       const reloadedThemeSection = page.locator("#settings-appearance-theme");
       const reloadedColorModeRow = settingsRow(page, "Color mode");
       const reloadedTextSizeSection = page.locator("#settings-appearance-text-size");
-      const reloadedSendShortcutRow = settingsRow(page, "Send shortcut");
 
       await expect.poll(() => selectValue(reloadedLanguageRow.locator("wa-select"))).toBe("system");
       await expect
@@ -352,9 +332,6 @@ suite.define(() => {
             .getAttribute("aria-pressed"),
         )
         .toBe("true");
-      await expect
-        .poll(() => reloadedSendShortcutRow.locator("[data-settings-send-shortcut]").inputValue())
-        .toBe("enter");
       await expect.poll(() => reloadedLanguageRow.textContent()).toContain("Using default: System");
       await expect.poll(() => reloadedThemeSection.textContent()).toContain("Using default: Claw");
       await expect
@@ -363,19 +340,11 @@ suite.define(() => {
       await expect
         .poll(() => reloadedTextSizeSection.textContent())
         .toContain("Using default: 100%");
-      await expect
-        .poll(() => reloadedSendShortcutRow.textContent())
-        .toContain("Using default: Enter");
-      await expect
-        .poll(() => page.getByRole("button", { name: "Reset to default" }).count())
-        .toBe(0);
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
 
       await page.evaluate(() => window.scrollTo(0, 0));
       await captureViewport(page, "03-inherited-defaults.png");
-      await reloadedSendShortcutRow.scrollIntoViewIfNeeded();
-      await captureViewport(page, "04-inherited-chat-default.png");
     } finally {
       await context.close();
     }
@@ -637,7 +606,11 @@ suite.define(() => {
           .toContain("Stocké uniquement dans ce navigateur");
 
         await themeSection.locator(".settings-theme-card--claw").click();
-        await languageRow.locator("button.btn--icon").click();
+        await languageSelect.evaluate((element) => {
+          const select = element as HTMLElement & { value: string };
+          select.value = "system";
+          select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        });
         await followUpRow.locator("button.btn--sm").click();
 
         await expect

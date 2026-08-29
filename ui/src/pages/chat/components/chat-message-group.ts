@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
+import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import {
@@ -68,7 +69,7 @@ type ActiveContinuation = {
 type ReplyPreview = MessageReplyTarget & { sourceMessageId: string };
 
 type RenderMessageGroupOptions = {
-  latestBrowserTabs?: ReadonlyMap<string, string>;
+  latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   sessionKey?: string;
@@ -219,7 +220,10 @@ const USER_TURN_ENTRY_FRESH_SUBMIT_MS = 2_000;
 const USER_TURN_ENTRY_SEEN_CAP = 256;
 
 function isPeerSenderGroup(group: MessageGroup, userId: string | null | undefined): boolean {
-  return Boolean(group.sender && !(userId && group.sender.id === userId));
+  const identity = group.sender?.identity;
+  return Boolean(
+    group.sender && !(userId && identity?.type === "profile" && identity.id === userId),
+  );
 }
 
 function shouldAnimateUserTurnEntry(messageKey: string, message: unknown): boolean {
@@ -624,7 +628,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               ${renderPersonName(
                 who,
                 // Only other people's messages: your own name links nowhere useful.
-                isPeerGroup ? personActivityLink(group.sender?.id, opts.personActivity) : null,
+                isPeerGroup && group.sender?.identity?.type === "profile"
+                  ? personActivityLink(group.sender.identity.id, opts.personActivity)
+                  : null,
                 "chat-sender-name",
               )}
               ${sendFailure

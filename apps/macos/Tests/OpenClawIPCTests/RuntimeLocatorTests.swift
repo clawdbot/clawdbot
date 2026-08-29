@@ -3,11 +3,8 @@ import Testing
 @testable import OpenClaw
 
 struct RuntimeLocatorTests {
-    private func makeTempExecutable(contents: String) throws -> URL {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
-        let path = dir.appendingPathComponent("node")
+    private func makeExecutable(in directory: URL, contents: String) throws -> URL {
+        let path = directory.appendingPathComponent("node")
         try contents.write(to: path, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
         return path
@@ -18,7 +15,9 @@ struct RuntimeLocatorTests {
         #!/bin/sh
         echo v22.22.3
         """
-        let node = try self.makeTempExecutable(contents: script)
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let node = try self.makeExecutable(in: root, contents: script)
         let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
         guard case let .success(res) = result else {
             Issue.record("Expected success, got \(result)")
@@ -34,7 +33,9 @@ struct RuntimeLocatorTests {
         /bin/sleep 2.1
         echo v22.22.3
         """
-        let node = try self.makeTempExecutable(contents: script)
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let node = try self.makeExecutable(in: root, contents: script)
         let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
         guard case let .success(resolution) = result else {
             Issue.record("Expected delayed version probe to succeed, got \(result)")
@@ -48,7 +49,9 @@ struct RuntimeLocatorTests {
         #!/bin/sh
         echo v22.22.2
         """
-        let node = try self.makeTempExecutable(contents: script)
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let node = try self.makeExecutable(in: root, contents: script)
         let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
         guard case let .failure(.unsupported(_, found, path, _)) = result else {
             Issue.record("Expected unsupported error, got \(result)")
@@ -63,7 +66,9 @@ struct RuntimeLocatorTests {
         #!/bin/sh
         echo v23.11.0
         """
-        let node = try self.makeTempExecutable(contents: script)
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let node = try self.makeExecutable(in: root, contents: script)
         let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
         guard case let .failure(.unsupported(_, found, path, _)) = result else {
             Issue.record("Expected unsupported error, got \(result)")
@@ -93,7 +98,9 @@ struct RuntimeLocatorTests {
         #!/bin/sh
         echo v18.2.0
         """
-        let node = try self.makeTempExecutable(contents: script)
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let node = try self.makeExecutable(in: root, contents: script)
         let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
         guard case let .failure(.unsupported(_, found, path, _)) = result else {
             Issue.record("Expected unsupported error, got \(result)")
@@ -108,7 +115,9 @@ struct RuntimeLocatorTests {
         #!/bin/sh
         echo node-version:unknown
         """
-        let node = try self.makeTempExecutable(contents: script)
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let node = try self.makeExecutable(in: root, contents: script)
         let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
         guard case let .failure(.versionParse(_, raw, path, _)) = result else {
             Issue.record("Expected versionParse error, got \(result)")
@@ -119,7 +128,9 @@ struct RuntimeLocatorTests {
     }
 
     @Test func `resolve rejects a failing node shim that prints a supported version`() async throws {
-        let node = try self.makeTempExecutable(contents: """
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let node = try self.makeExecutable(in: root, contents: """
         #!/bin/sh
         echo v24.15.0
         exit 1

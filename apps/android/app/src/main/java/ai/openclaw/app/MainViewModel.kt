@@ -650,6 +650,16 @@ class MainViewModel private constructor(
     runtimeState(initial = emptyList()) { it.talkModeConversation }
 
   val chatSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.chatSessionKey }
+  internal val chatSelectionGeneration: StateFlow<Long> = runtimeState(initial = 0L) { it.chatSelectionGeneration }
+  internal val gatewayCatalogRevision: StateFlow<Long> = runtimeState(initial = 0L) { it.gatewayCatalogRevision }
+
+  internal fun prepareFullMessageRead(
+    owner: ChatComposerOwner,
+    selectionGeneration: Long,
+    catalogRevision: Long,
+    message: ChatMessage,
+  ) = runtimeRef.value?.prepareFullMessageRead(owner, selectionGeneration, catalogRevision, message)
+
   val chatSessionOwnerAgentId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionOwnerAgentId }
   val chatSessionId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionId }
   val chatMessages: StateFlow<List<ChatMessage>> = runtimeState(initial = emptyList()) { it.chatMessages }
@@ -1509,10 +1519,9 @@ class MainViewModel private constructor(
 
   fun installClawHubSkill(
     slug: String,
-    acknowledgeClawHubRisk: Boolean = false,
     version: String? = null,
   ) {
-    ensureRuntime().installClawHubSkill(slug, acknowledgeClawHubRisk, version)
+    ensureRuntime().installClawHubSkill(slug, version)
   }
 
   fun clearClawHubSkillMessage() {

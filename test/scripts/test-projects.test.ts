@@ -397,6 +397,22 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(["scripts/pr-lib/worktree.sh"], ["test/vitest/vitest.tooling.config.ts"]);
   });
 
+  it.each(["scripts/pr", "scripts/pr-lib/merge.sh", "scripts/pr-lib/merge-outcome.sh"])(
+    "routes native merge changes through the outcome owner for %s",
+    (scriptPath) => {
+      expectChangedTargets(
+        [scriptPath],
+        [
+          "test/scripts/pr-merge.test.ts",
+          "test/scripts/pr-merge-outcome.test.ts",
+          ...(scriptPath === "scripts/pr"
+            ? ["test/scripts/pr-operation-lock.test.ts", "test/scripts/pr-wrappers.test.ts"]
+            : []),
+        ],
+      );
+    },
+  );
+
   it("routes unmatched script changes to the tooling suite instead of skipping tests", () => {
     const targets = ["scripts/check-no-raw-http2-imports.mts"];
 
@@ -607,7 +623,11 @@ describe("scripts/test-projects changed-target routing", () => {
     );
     expectChangedTargets(
       ["scripts/pr-lib/crabbox-merge-bypass.sh"],
-      ["test/scripts/pr-crabbox-merge-bypass.test.ts", "test/scripts/pr-merge.test.ts"],
+      [
+        "test/scripts/pr-crabbox-merge-bypass.test.ts",
+        "test/scripts/pr-merge.test.ts",
+        "test/scripts/pr-merge-outcome.test.ts",
+      ],
     );
   });
 
@@ -626,6 +646,8 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(
       [".github/workflows/ci.yml"],
       [
+        "test/scripts/ci-platform-checkout.test.ts",
+        "test/scripts/ci-linux-git.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/check-workflows.test.ts",
@@ -641,7 +663,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/pr-crabbox-merge-bypass.test.ts",
-        "test/scripts/pr-merge.test.ts",
         "test/scripts/run-additional-boundary-checks.test.ts",
       ],
     );
@@ -654,6 +675,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/dockerfile.test.ts",
         "test/scripts/full-release-validation-state.test.ts",
         "test/scripts/full-release-validation-at-sha.test.ts",
+        "test/scripts/full-release-candidate-reuse.test.ts",
         "test/scripts/find-reusable-release-validation.test.ts",
         "test/scripts/openclaw-npm-extended-stable-full-validation-workflow.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
@@ -668,6 +690,26 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/openclaw-performance-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
         "test/scripts/validate-full-release-validation-evidence.test.ts",
+      ],
+    );
+  });
+
+  it.each([
+    "scripts/full-release-candidate-reuse.mjs",
+    "scripts/lib/full-release-candidate-reuse.mjs",
+    "scripts/lib/full-release-candidate-reuse.d.mts",
+  ])("routes candidate reuse library changes through the owner test for %s", (changedPath) => {
+    expectChangedTargets([changedPath], ["test/scripts/full-release-candidate-reuse.test.ts"]);
+  });
+
+  it("keeps full release candidate workflow edits on candidate contract tests", () => {
+    expectChangedTargets(
+      [".github/workflows/full-release-candidate.yml"],
+      [
+        "test/scripts/full-release-candidate-reuse.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/check-workflows.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
       ],
     );
   });
@@ -936,14 +978,6 @@ describe("scripts/test-projects changed-target routing", () => {
       [".github/workflows/mantis-discord-status-reactions.yml", packageAcceptanceTargets],
       [".github/workflows/mantis-discord-thread-attachment.yml", packageAcceptanceTargets],
       [".github/workflows/mantis-slack-desktop-smoke.yml", packageAcceptanceTargets],
-      [
-        ".github/workflows/mantis-telegram-desktop-proof.yml",
-        [
-          "test/scripts/mantis-telegram-desktop-proof-workflow.test.ts",
-          "test/scripts/package-acceptance-workflow.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
-        ],
-      ],
       [
         ".github/workflows/mantis-web-ui-chat-proof.yml",
         [

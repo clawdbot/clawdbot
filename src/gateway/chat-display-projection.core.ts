@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty as normalizeErrorSignal } from "@openclaw/normalization-core/string-coerce";
 import { isContextOverflowError } from "../agents/failover/classify.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
+import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
@@ -55,10 +56,11 @@ function projectCurrentUserProfileAvatars(
     if (!metadata) {
       return message;
     }
-    const senderId = metadata.senderId;
-    if (typeof senderId !== "string" || !senderId) {
+    const identity = readTranscriptSenderIdentity(metadata.senderIdentity);
+    if (identity?.type !== "profile") {
       return message;
     }
+    const senderId = identity.id;
     let display = displayBySenderId.get(senderId);
     if (!display) {
       display = resolveDisplay(senderId);
@@ -67,13 +69,20 @@ function projectCurrentUserProfileAvatars(
     if (display.kind === "unresolved") {
       return message;
     }
-    if (metadata.senderProfileAvatarUrl === display.avatarUrl) {
+    if (
+      metadata.senderProfileAvatarUrl === display.avatarUrl &&
+      identity.id === display.profileId
+    ) {
       return message;
     }
     changed = true;
     return {
       ...message,
-      __openclaw: { ...metadata, senderProfileAvatarUrl: display.avatarUrl },
+      __openclaw: {
+        ...metadata,
+        senderIdentity: { type: "profile", id: display.profileId },
+        senderProfileAvatarUrl: display.avatarUrl,
+      },
     };
   });
   return changed ? projected : messages;

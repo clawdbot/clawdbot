@@ -32,6 +32,7 @@ import {
 } from "./lazy-custom-element.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { isDesktopPanelAvailable } from "./panel-availability.ts";
+import { resolveGatewayCredentialsForUrlEdit } from "./settings.ts";
 
 type FocusDashboardRouteState =
   | { kind: "loading" }
@@ -218,6 +219,16 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.loginShowGatewayPassword = false;
   }
 
+  private updateLoginGatewayUrl(value: string) {
+    const credentials = resolveGatewayCredentialsForUrlEdit(this.loginGatewayUrl, value, {
+      token: this.loginToken,
+      password: this.loginPassword,
+    });
+    this.loginGatewayUrl = value;
+    this.loginToken = credentials.token;
+    this.loginPassword = credentials.password;
+  }
+
   private closeDocument(basePath: string): void {
     if (globalThis.history.length > 1) {
       globalThis.history.back();
@@ -310,7 +321,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
       if (controller.signal.aborted || this.focusDashboardAbort !== controller) {
         return;
       }
-      if (isRouteNotFound(result)) {
+      if (isRouteNotFound(result) || result.kind === "missing-session") {
         this.focusDashboardRoute = { kind: "not-found" };
         return;
       }
@@ -498,8 +509,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${desktopAvailable}
           .documentMode=${true}
-          .documentSource=${source}
-          .documentSession=${session}
+          .requestedSource=${source}
+          .sessionKey=${session}
           .documentControl=${focusTarget.control}
           .onDocumentClose=${() => this.closeDocument(context.basePath)}
         ></openclaw-desktop-panel>
@@ -556,7 +567,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
               showGatewayToken: this.loginShowGatewayToken,
               showGatewayPassword: this.loginShowGatewayPassword,
               onGatewayUrlChange: (value: string) => {
-                this.loginGatewayUrl = value;
+                this.updateLoginGatewayUrl(value);
               },
               onTokenChange: (value: string) => {
                 this.loginToken = value;

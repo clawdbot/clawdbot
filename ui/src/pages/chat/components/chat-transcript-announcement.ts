@@ -35,7 +35,7 @@ function assistantMessageAttachmentFailureText(message: unknown): string | null 
 function assistantMessageAnnouncementText(message: unknown): string | null {
   const text = extractTextCached(message)?.trim();
   const failureText = assistantMessageAttachmentFailureText(message);
-  return [text, failureText].filter(Boolean).join(" ") || null;
+  return [failureText, text].filter(Boolean).join(" ") || null;
 }
 
 function assistantGroupAnnouncementSource(

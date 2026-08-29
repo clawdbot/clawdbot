@@ -680,8 +680,8 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - OpenClaw-owned config writes validate the full post-change config before writing.
     - Invalid or destructive OpenClaw-owned writes are rejected and saved as `openclaw.json.rejected.*`.
-    - A direct edit that breaks startup or hot reload makes the Gateway fail closed or skip the reload; it does not rewrite `openclaw.json`.
-    - `openclaw doctor --fix` owns repair, can restore last-known-good, and saves the rejected file as `openclaw.json.clobbered.*`.
+    - Startup can migrate deterministic legacy keys in eligible single-file configs when the whole result validates, keeping the previous config in the `.bak` ring. Other invalid edits make startup fail closed; hot reload skips invalid edits without rewriting `openclaw.json`.
+    - `openclaw doctor --fix` owns repairs beyond that startup migration, can restore last-known-good, and saves the rejected file as `openclaw.json.clobbered.*`.
 
     Recover:
 
@@ -1416,12 +1416,12 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
 <AccordionGroup>
   <Accordion title="Is it safe to expose OpenClaw to inbound DMs?">
-    Treat inbound DMs as untrusted input. Defaults reduce risk:
+    Yes - on channels that default to **pairing** (most DM-capable channels), a stranger who DMs your bot never reaches the model:
 
-    - Default behavior on DM-capable channels is **pairing**: unknown senders receive a pairing code and their message is not processed. Approve with `openclaw pairing approve --channel <channel> [--account <id>] <code>`. Pending requests are capped at **3 per channel**; check `openclaw pairing list --channel <channel> [--account <id>]` if a code did not arrive.
+    - With the pairing default, unknown senders receive a pairing code and their message is not processed. Approve with `openclaw pairing approve --channel <channel> [--account <id>] <code>`. Pending requests are capped at **3 per channel**; check `openclaw pairing list --channel <channel> [--account <id>]` if a code did not arrive.
     - Opening DMs publicly requires explicit opt-in (`dmPolicy: "open"` and allowlist `"*"`).
 
-    Run `openclaw doctor` to surface risky DM policies.
+    A few workspace channels ship different defaults - ClickClack, for example, allows workspace members by default. Check your channel's page, and run `openclaw doctor` to confirm your DM policies look the way you expect.
 
   </Accordion>
 

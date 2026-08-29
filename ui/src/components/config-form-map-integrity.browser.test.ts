@@ -1,5 +1,11 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import {
+  removeConfigFormValue,
+  serializeFormForSubmit,
+  updateConfigFormValue,
+} from "../lib/config/config-draft-model.ts";
+import { createInitialConfigState } from "../lib/config/config-state-model.ts";
 import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
 import { analyzeConfigSchema, renderConfigForm } from "./config-form.ts";
 
@@ -12,6 +18,112 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 describe("config form map integrity", () => {
+  it.each(["defaults", "agent"])(
+    "round-trips the %s model Code Mode field without losing sibling settings",
+    (scope) => {
+      const wrapScope = (value: unknown) =>
+        scope === "defaults" ? { defaults: value } : { entries: { ops: value } };
+      const modelSettings = (codeMode?: boolean) => ({
+        alias: "test",
+        params: { temperature: 0.5 },
+        agentRuntime: { id: "openclaw" },
+        streaming: false,
+        ...(codeMode === undefined ? {} : { codeMode }),
+      });
+      const config = (codeMode?: boolean) => ({
+        agents: wrapScope({
+          models: { "example/model": modelSettings(codeMode), "example/other": { alias: "other" } },
+        }),
+        tools: { codeMode: { enabled: "auto", maxOutputBytes: 4096 } },
+      });
+      const modelSchema = {
+        type: "object",
+        properties: {
+          models: {
+            type: "object",
+            additionalProperties: {
+              type: "object",
+              properties: {
+                alias: { type: "string" },
+                params: { type: "object", properties: { temperature: { type: "number" } } },
+                agentRuntime: { type: "object", properties: { id: { type: "string" } } },
+                streaming: { type: "boolean" },
+                codeMode: { type: "boolean" },
+              },
+            },
+          },
+        },
+      };
+      const analysis = analyzeConfigSchema({
+        type: "object",
+        properties: {
+          agents: {
+            type: "object",
+            properties:
+              scope === "defaults"
+                ? { defaults: modelSchema }
+                : { entries: { type: "object", additionalProperties: modelSchema } },
+          },
+        },
+      });
+      const state = createInitialConfigState();
+      state.configSchema = analysis.schema;
+      state.configForm = config();
+      const container = document.createElement("div");
+      const renderValue = () =>
+        render(
+          renderConfigForm({
+            schema: analysis.schema,
+            uiHints: {
+              "agents.defaults.models.*.codeMode": { label: "Code Mode", placeholder: "Default" },
+              "agents.entries.*.models.*.codeMode": { label: "Code Mode", placeholder: "Default" },
+            },
+            unsupportedPaths: analysis.unsupportedPaths,
+            value: state.configForm,
+            showAdvanced: true,
+            onShowAdvanced: () => {},
+            onPatch: (path, value) => updateConfigFormValue(state, path, value),
+            onRemove: (path) => removeConfigFormValue(state, path),
+          }),
+          container,
+        );
+      const getSelect = () =>
+        expectElement(
+          container.querySelector<HTMLSelectElement>('select[aria-label="Code Mode"]'),
+          "model Code Mode selector",
+        );
+
+      renderValue();
+      expect(Array.from(getSelect().options, (option) => option.textContent?.trim())).toEqual([
+        "Default",
+        "On",
+        "Off",
+      ]);
+      expect(getSelect().selectedOptions[0]?.textContent?.trim()).toBe("Default");
+      const streamingRow = Array.from(container.querySelectorAll(".settings-row--toggle")).find(
+        (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === "Streaming",
+      );
+      expect(streamingRow?.querySelector("wa-switch")).toBeTruthy();
+
+      for (const [label, value] of [
+        ["On", true],
+        ["Off", false],
+        ["Default", undefined],
+      ] as const) {
+        const select = getSelect();
+        const option = expectElement(
+          Array.from(select.options).find((entry) => entry.textContent?.trim() === label),
+          label,
+        );
+        select.value = option.value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        expect(JSON.parse(serializeFormForSubmit(state))).toEqual(config(value));
+        renderValue();
+        expect(getSelect().selectedOptions[0]?.textContent?.trim()).toBe(label);
+      }
+    },
+  );
+
   it("keeps plain-string record keys editable through nested maps", () => {
     const analysis = analyzeConfigSchema({
       type: "object",

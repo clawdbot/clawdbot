@@ -606,7 +606,11 @@ jobs:
       - name: Checkout workflow repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Ref trust needs every branch and tag, but no historical file blobs.
           fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
 
       - name: Validate selected ref
         id: validate
@@ -1602,6 +1606,7 @@ jobs:
     timeout-minutes: ${{ matrix.group.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
+      max-parallel: 32
       matrix:
         group: ${{ fromJson(needs.plan_docker_lane_groups.outputs.groups_json) }}
     env:
@@ -1664,7 +1669,7 @@ jobs:
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_manifest_sha256 }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.group.published_upgrade_survivor_baselines || inputs.published_upgrade_survivor_baselines }}
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ matrix.group.published_upgrade_survivor_scenarios || inputs.published_upgrade_survivor_scenarios }}
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
@@ -2981,9 +2986,13 @@ jobs:
       - name: Restore exact trusted workflow revision
         id: workflow
         env:
+          EXPECTED_WORKFLOW_PATH: .github/workflows/openclaw-live-and-e2e-checks-reusable.yml
           EXPECTED_WORKFLOW_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
           HARNESS_PATH: .release-harness
           JOB_CONTEXT: ${{ toJSON(job) }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2992,16 +3001,55 @@ jobs:
           import { execFileSync } from "node:child_process";
 
           const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+          const expectedWorkflowPath = process.env.EXPECTED_WORKFLOW_PATH ?? "";
           const repository = process.env.EXPECTED_WORKFLOW_REPOSITORY ?? "";
           const harnessPath = process.env.HARNESS_PATH ?? "";
+          const runAttempt = process.env.RUN_ATTEMPT ?? "";
+          const runId = process.env.RUN_ID ?? "";
+          const jobId = String(job.check_run_id ?? "");
+          if (!/^[1-9][0-9]*$/u.test(jobId)) {
+            throw new Error("job.check_run_id must be a positive decimal");
+          }
           if (repository !== "openclaw/openclaw" || job.workflow_repository !== repository) {
             throw new Error("job.workflow_repository must exactly match github.repository");
+          }
+          if (
+            expectedWorkflowPath !==
+              ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml" ||
+            job.workflow_file_path !== expectedWorkflowPath
+          ) {
+            throw new Error("job.workflow_file_path must identify the candidate publisher workflow");
           }
           if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
             throw new Error("job.workflow_sha must be a full lowercase commit SHA");
           }
+          if (!/^[1-9][0-9]*$/u.test(runId) || !/^[1-9][0-9]*$/u.test(runAttempt)) {
+            throw new Error("publisher run identity must contain positive decimals");
+          }
           if (harnessPath !== ".release-harness") {
             throw new Error("trusted harness path is invalid");
+          }
+          const currentJob = JSON.parse(
+            execFileSync("gh", ["api", `repos/${repository}/actions/jobs/${jobId}`], {
+              encoding: "utf8",
+            }),
+          );
+          if (
+            String(currentJob.id ?? "") !== jobId ||
+            String(currentJob.run_id ?? "") !== runId ||
+            String(currentJob.run_attempt ?? "") !== runAttempt ||
+            currentJob.head_sha !== job.workflow_sha ||
+            currentJob.status !== "in_progress" ||
+            currentJob.conclusion !== null
+          ) {
+            throw new Error("candidate publisher job metadata does not match the current job");
+          }
+          if (
+            typeof currentJob.name !== "string" ||
+            currentJob.name.length === 0 ||
+            /[\r\n]/u.test(currentJob.name)
+          ) {
+            throw new Error("candidate publisher job name is invalid");
           }
           const git = (...args) =>
             execFileSync("git", ["-C", harnessPath, ...args], {
@@ -3038,7 +3086,16 @@ jobs:
           }
           appendFileSync(
             outputPath,
-            `repository=${repository}\nsha=${job.workflow_sha}\n`,
+            [
+              `job_id=${jobId}`,
+              `job_name=${currentJob.name}`,
+              `repository=${repository}`,
+              `run_attempt=${runAttempt}`,
+              `run_id=${runId}`,
+              `sha=${job.workflow_sha}`,
+              `workflow_path=${expectedWorkflowPath}`,
+              "",
+            ].join("\n"),
           );
           NODE
 
@@ -3062,6 +3119,13 @@ jobs:
           PRODUCER_WORKFLOW_PATH: ${{ needs.prepare_docker_e2e_image.outputs.producer_workflow_path }}
           PRODUCER_WORKFLOW_REPOSITORY: ${{ needs.prepare_docker_e2e_image.outputs.producer_workflow_repository }}
           PRODUCER_WORKFLOW_SHA: ${{ needs.prepare_docker_e2e_image.outputs.producer_workflow_sha }}
+          PUBLISHER_JOB_ID: ${{ steps.workflow.outputs.job_id }}
+          PUBLISHER_JOB_NAME: ${{ steps.workflow.outputs.job_name }}
+          PUBLISHER_RUN_ATTEMPT: ${{ steps.workflow.outputs.run_attempt }}
+          PUBLISHER_RUN_ID: ${{ steps.workflow.outputs.run_id }}
+          PUBLISHER_WORKFLOW_PATH: ${{ steps.workflow.outputs.workflow_path }}
+          PUBLISHER_WORKFLOW_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          PUBLISHER_WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
           REQUIRED_PACKAGES_JSON: ${{ needs.prepare_docker_e2e_image.outputs.required_prepublish_plugin_packages }}
           TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           TOOLING_REPOSITORY: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -3080,6 +3144,13 @@ jobs:
           [[ "$PRODUCER_WORKFLOW_REPOSITORY" == "$TOOLING_REPOSITORY" &&
             "$PRODUCER_WORKFLOW_SHA" == "$TOOLING_SHA" ]] || {
               echo "Producer workflow identity does not match the trusted release harness." >&2
+              exit 1
+            }
+          [[ "$PUBLISHER_RUN_ID" == "$PRODUCER_RUN_ID" &&
+            "$PUBLISHER_RUN_ATTEMPT" == "$PRODUCER_RUN_ATTEMPT" &&
+            "$PUBLISHER_WORKFLOW_REPOSITORY" == "$TOOLING_REPOSITORY" &&
+            "$PUBLISHER_WORKFLOW_SHA" == "$TOOLING_SHA" ]] || {
+              echo "Publisher workflow identity does not match the producer attempt." >&2
               exit 1
             }
           node .release-harness/scripts/verify-full-release-producer-job.mjs \
@@ -3148,6 +3219,13 @@ jobs:
             --arg runAttempt "$PRODUCER_RUN_ATTEMPT" \
             --arg jobId "$PRODUCER_JOB_ID" \
             --arg jobName "$PRODUCER_JOB_NAME" \
+            --arg publisherRepository "$PUBLISHER_WORKFLOW_REPOSITORY" \
+            --arg publisherWorkflowPath "$PUBLISHER_WORKFLOW_PATH" \
+            --arg publisherWorkflowSha "$PUBLISHER_WORKFLOW_SHA" \
+            --arg publisherRunId "$PUBLISHER_RUN_ID" \
+            --arg publisherRunAttempt "$PUBLISHER_RUN_ATTEMPT" \
+            --arg publisherJobId "$PUBLISHER_JOB_ID" \
+            --arg publisherJobName "$PUBLISHER_JOB_NAME" \
             --arg planSha256 "$PLAN_SHA256" \
             --argjson requiredPackages "$REQUIRED_PACKAGES_JSON" \
             --argjson candidate "$CANDIDATE_ARTIFACT_JSON" \
@@ -3166,6 +3244,15 @@ jobs:
                 runAttempt: $runAttempt,
                 jobId: $jobId,
                 jobName: $jobName
+              },
+              publisher: {
+                repository: $publisherRepository,
+                workflowPath: $publisherWorkflowPath,
+                workflowSha: $publisherWorkflowSha,
+                runId: $publisherRunId,
+                runAttempt: $publisherRunAttempt,
+                jobId: $publisherJobId,
+                jobName: $publisherJobName
               },
               preparation: {
                 planSha256: $planSha256,
@@ -3222,9 +3309,10 @@ jobs:
         id: upload_candidate_evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: full-release-candidate-v1-${{ needs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}
+          name: full-release-candidate-v2-${{ needs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}
           path: ${{ runner.temp }}/full-release-candidate/full-release-candidate.json
           if-no-files-found: error
+          overwrite: false
           retention-days: 7
 
       - name: Bind full release candidate evidence
@@ -3232,7 +3320,7 @@ jobs:
         env:
           ARTIFACT_DIGEST: ${{ steps.upload_candidate_evidence.outputs.artifact-digest }}
           ARTIFACT_ID: ${{ steps.upload_candidate_evidence.outputs.artifact-id }}
-          ARTIFACT_NAME: full-release-candidate-v1-${{ needs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}
+          ARTIFACT_NAME: full-release-candidate-v2-${{ needs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
@@ -4250,7 +4338,7 @@ jobs:
             profiles: stable
           - suite_id: live-gateway-anthropic-docker-full
             suite_group: live-gateway-anthropic-docker
-            label: Docker live gateway Anthropic
+            label: Docker live gateway Anthropic (full advisory)
             command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 40
             profile_env_only: false

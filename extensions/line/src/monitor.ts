@@ -36,7 +36,6 @@ import {
   createFlexMessage,
   createLocationMessage,
   createQuickReplyItems,
-  getUserDisplayName,
   pushMessagesLine,
   replyMessageLine,
   showLoadingAnimation,
@@ -167,10 +166,6 @@ export async function monitorLineProvider(
 
       const shouldShowLoading = Boolean(ctx.userId && !ctx.isGroup);
 
-      const displayNamePromise = ctx.userId
-        ? getUserDisplayName(ctx.userId, { cfg: config, accountId: ctx.accountId })
-        : Promise.resolve(ctxPayload.From);
-
       const stopLoading = shouldShowLoading
         ? startLineLoadingKeepalive({
             cfg: config,
@@ -179,8 +174,11 @@ export async function monitorLineProvider(
           })
         : null;
 
-      const displayName = await displayNamePromise;
-      logVerbose(`line: received message from ${displayName} (${ctxPayload.From})`);
+      // The inbound context already resolved the sender's name for the agent;
+      // reading it back costs nothing instead of asking LINE a second time.
+      logVerbose(
+        `line: received message from ${ctxPayload.SenderName ?? ctx.userId ?? ctxPayload.From} (${ctxPayload.From})`,
+      );
       let replyTokenUsed = false;
       let turnAdopted = false;
       const ingressLifecycle = deliveryControl.turnAdoptionLifecycle;

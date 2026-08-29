@@ -1,3 +1,4 @@
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
@@ -5,28 +6,29 @@ import type { JsonValue } from "./protocol.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-function modelList(model = "gpt-5.4", id = model) {
+function codexModel(model = "gpt-5.4", id = model) {
   return {
-    data: [
-      {
-        id,
-        model,
-        displayName: "GPT-5.4",
-        description: "test model",
-        hidden: false,
-        isDefault: true,
-        inputModalities: ["text"],
-        supportedReasoningEfforts: [],
-        defaultReasoningEffort: "low",
-        supportsPersonality: false,
-        additionalSpeedTiers: [],
-      },
-    ],
-    nextCursor: null,
+    id,
+    model,
+    upgrade: null,
+    upgradeInfo: null,
+    availabilityNux: null,
+    displayName: id,
+    description: "test model",
+    hidden: false,
+    isDefault: true,
+    inputModalities: ["text"],
+    supportedReasoningEfforts: [{ reasoningEffort: "low", description: "fast" }],
+    defaultReasoningEffort: "low",
+    supportsPersonality: false,
+    multiAgentVersion: null,
+    additionalSpeedTiers: [],
+    serviceTiers: [],
+    defaultServiceTier: null,
   };
 }
 
-function threadStartResult() {
+function threadStartResult(model: string) {
   return {
     thread: {
       id: "thread-finalizer",
@@ -46,7 +48,7 @@ function threadStartResult() {
       name: null,
       turns: [],
     },
-    model: "gpt-5.4",
+    model,
     modelProvider: "openai",
     cwd: "/tmp/finalizer",
     approvalPolicy: "on-request",
@@ -107,15 +109,18 @@ function createClientFactory(
     assistantDelta?: string;
     emptyAnswer?: boolean;
     completeTurn?: boolean;
-    model?: string;
-    modelId?: string;
+    models?: ReturnType<typeof codexModel>[];
   } = {},
 ) {
   const methods: string[] = [];
-  const fixture = createFakeCodexAppServerClient(async (method: string, _params?: unknown) => {
+  const fixture = createFakeCodexAppServerClient(async (method: string, params?: unknown) => {
     methods.push(method);
     if (method === "model/list") {
-      return modelList(options.model, options.modelId);
+      const includeHidden = isRecord(params) && params.includeHidden === true;
+      return {
+        data: (options.models ?? [codexModel()]).filter((model) => includeHidden || !model.hidden),
+        nextCursor: null,
+      };
     }
     if (method === "config/read") {
       return {
@@ -126,8 +131,8 @@ function createClientFactory(
     if (method === "configRequirements/read") {
       return { requirements: null };
     }
-    if (method === "thread/start") {
-      return threadStartResult();
+    if (method === "thread/start" && isRecord(params) && typeof params.model === "string") {
+      return threadStartResult(params.model);
     }
     if (method === "mcpServerStatus/list") {
       return {
@@ -581,15 +586,26 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     );
   });
 
-  it("uses the execution model for required logical model ids", async () => {
+  it.each([
+    { label: "visible catalog ID", id: "gpt-5.6-sol", hidden: false, requested: "gpt-5.6-sol" },
+    { label: "hidden catalog ID", id: "umbreon-latest", hidden: true, requested: "umbreon-latest" },
+    {
+      label: "hidden execution ID",
+      id: "umbreon-latest",
+      hidden: true,
+      requested: "codex-execution-model",
+    },
+  ])("uses the execution model for a required $label", async ({ id, hidden, requested }) => {
     const fake = createClientFactory({
-      model: "codex-execution-model",
-      modelId: "gpt-5.6-sol",
+      models: [
+        { ...codexModel("codex-execution-model", id), hidden, isDefault: !hidden },
+        { ...codexModel(), isDefault: hidden },
+      ],
     });
 
     await expect(
       runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.6-sol" },
+        model: { mode: "required", id: requested },
         timeoutMs: 5_000,
         options: { clientFactory: fake.factory },
         taskLabel: "isolated completion",
@@ -598,12 +614,61 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         requiredModalities: ["text"],
         isolation: "configured-transport",
       }),
-    ).resolves.toMatchObject({ model: "gpt-5.6-sol" });
+    ).resolves.toMatchObject({ model: id, text: "The message was sent successfully." });
 
     const threadStart = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
     const turnStart = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
     expect(threadStart).toMatchObject({ model: "codex-execution-model" });
     expect(turnStart).toMatchObject({ model: "codex-execution-model" });
+  });
+
+  it("keeps hidden models out of live-default selection", async () => {
+    const fake = createClientFactory({
+      models: [
+        { ...codexModel("umbreon-latest"), hidden: true, isDefault: false },
+        { ...codexModel("image-only-default"), inputModalities: ["image"] },
+        { ...codexModel("visible-execution-model", "visible-model"), isDefault: false },
+      ],
+    });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "live-default" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find the answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      }),
+    ).resolves.toMatchObject({
+      model: "visible-model",
+      text: "The message was sent successfully.",
+    });
+
+    const threadStart = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+    const turnStart = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+    expect(threadStart).toMatchObject({ model: "visible-execution-model" });
+    expect(turnStart).toMatchObject({ model: "visible-execution-model" });
+  });
+
+  it("rejects a missing required model before starting a thread", async () => {
+    const fake = createClientFactory();
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "missing-model" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "isolated completion",
+        developerInstructions: "Answer only.",
+        input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "configured-transport",
+      }),
+    ).rejects.toThrow("Codex app-server model not found: missing-model");
+    expect(fake.methods).toEqual(["model/list"]);
   });
 
   it("attests ring-zero and injects frozen history before starting the final turn", async () => {

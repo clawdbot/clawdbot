@@ -165,12 +165,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     activeSession,
   });
 
-  // Guard hooks run during prompt submission, after transport setup fills this value.
-  const promptCacheRetentionRef: {
-    current: Awaited<
-      ReturnType<typeof prepareEmbeddedAttemptTransport>
-    >["effectivePromptCacheRetention"];
-  } = { current: undefined };
+  // Guard hooks execute during prompt submission, after transport preparation.
   const contextGuards = installEmbeddedAttemptContextGuards({
     ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
     activeSession,
@@ -184,7 +179,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     getPrePromptMessageCount: () => state.prePromptMessageCount,
     getPromptCache: () => state.promptCache,
     onCurrentTurnImageFailure: recordCurrentTurnImageFailure,
-    getPromptCacheRetention: () => promptCacheRetentionRef.current,
+    getPromptCacheRetention: () => transport.effectivePromptCacheRetention,
+    getCompactionReplayEnabled: () => transport.compactionReplayEnabled,
     getSystemPrompt: () => state.systemPromptText,
     isOpenAIResponsesApi,
     repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
@@ -256,7 +252,6 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       ...(trajectoryRecorder ? { recordEvent: trajectoryRecorder.recordEvent } : {}),
     },
   });
-  promptCacheRetentionRef.current = transport.effectivePromptCacheRetention;
 
   return {
     agentSession: preparedAgentSession,

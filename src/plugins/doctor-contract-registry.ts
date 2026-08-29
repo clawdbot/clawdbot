@@ -54,8 +54,19 @@ type PluginDoctorContractEntry = {
 
 type PluginDoctorStateMigrationEntry = {
   pluginId: string;
+  channelIds: string[];
+  /**
+   * Mirrors the runtime proxy's durable-store gate: only bundled plugins and trusted
+   * official installs may reach channel ingress queues. Doctor must not become a way
+   * around that for an activated workspace plugin.
+   */
+  trustedForDurableStores?: boolean;
   migration: PluginDoctorStateMigration;
 };
+
+function isTrustedForDurableStores(record: PluginManifestRegistryRecord): boolean {
+  return record.origin === "bundled" || record.trustedOfficialInstall === true;
+}
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
 
@@ -482,7 +493,12 @@ export function listPluginDoctorStateMigrationEntries(params?: {
       records: [record],
       surface: "stateMigrations",
     }).flatMap((entry) =>
-      entry.stateMigrations.map((migration) => ({ pluginId: entry.pluginId, migration })),
+      entry.stateMigrations.map((migration) => ({
+        pluginId: entry.pluginId,
+        channelIds: record.channels,
+        trustedForDurableStores: isTrustedForDurableStores(record),
+        migration,
+      })),
     );
     if (modernEntries.length > 0) {
       entries.push(...modernEntries);
@@ -503,6 +519,8 @@ export function listPluginDoctorStateMigrationEntries(params?: {
     }
     entries.push({
       pluginId: record.id,
+      channelIds: record.channels,
+      trustedForDurableStores: isTrustedForDurableStores(record),
       migration: definePluginDoctorMigrationFromPlans({
         id: `${record.id}-legacy-channel-state`,
         label: `${record.id} legacy channel state`,

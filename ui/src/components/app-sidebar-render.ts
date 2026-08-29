@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   serializeSidebarEntry,
@@ -267,7 +268,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
   });
   const users = projectOnlinePresenceViewers(
     host.sessionData.presencePayload,
-    selfUser?.id,
+    selfUser,
     host.sessionData.presenceInstanceId,
   );
   if (users.length === 0) {
@@ -308,35 +309,32 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
       ${collapsed
         ? nothing
         : html`<div class="sidebar-online__list">
-            ${repeat(
-              users,
-              (user) => user.id,
-              (user) => {
-                return html`<div class="sidebar-online__row">
-                  <button
-                    class="sidebar-online__person ${isPresenceViewerIdle(user)
-                      ? "sidebar-online__person--away"
-                      : ""}"
-                    type="button"
-                    data-online-user-id=${user.id}
-                    aria-haspopup="dialog"
-                    aria-expanded="false"
-                    aria-label=${t("presence.card.details", { name: presenceViewerLabel(user) })}
+            ${repeat(users, presenceUserKey, (user) => {
+              return html`<div class="sidebar-online__row">
+                <button
+                  class="sidebar-online__person ${isPresenceViewerIdle(user)
+                    ? "sidebar-online__person--away"
+                    : ""}"
+                  type="button"
+                  data-online-user-id=${user.id}
+                  data-online-user-key=${presenceUserKey(user)}
+                  aria-haspopup="dialog"
+                  aria-expanded="false"
+                  aria-label=${t("presence.card.details", { name: presenceViewerLabel(user) })}
+                >
+                  <openclaw-viewer-avatar
+                    .user=${user}
+                    .markAsViewer=${false}
+                    variant="footer"
+                    aria-hidden="true"
+                  ></openclaw-viewer-avatar>
+                  <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
+                  <span class="sidebar-online__person-action" aria-hidden="true"
+                    >${icons.chevronRight}</span
                   >
-                    <openclaw-viewer-avatar
-                      .user=${user}
-                      .markAsViewer=${false}
-                      variant="footer"
-                      aria-hidden="true"
-                    ></openclaw-viewer-avatar>
-                    <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
-                    <span class="sidebar-online__person-action" aria-hidden="true"
-                      >${icons.chevronRight}</span
-                    >
-                  </button>
-                </div>`;
-              },
-            )}
+                </button>
+              </div>`;
+            })}
           </div>`}
     </section>
   `;

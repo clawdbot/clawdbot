@@ -192,6 +192,8 @@ async function startWatcher(
     state,
     context,
     authenticator,
+    // Exercise real reconnects without waiting through production backoff intervals.
+    reconnectBaseMs: 5,
   });
   activeWatchers.push(watcher);
   watcher.start();

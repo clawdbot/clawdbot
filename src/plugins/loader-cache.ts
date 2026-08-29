@@ -2,6 +2,7 @@ import { PluginLoaderCacheState } from "./loader-cache-state.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { clearPluginRuntimeArtifactResolutionMemo } from "./plugin-runtime-artifact-resolution.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
@@ -15,7 +16,10 @@ export function setCachedPluginRegistry(cacheKey: string, registry: PluginRegist
 }
 
 export function getReusableCachedPluginRegistry(cacheKey: string): PluginRegistry | undefined {
-  return pluginLoaderCacheState.get(cacheKey);
+  const registry = pluginLoaderCacheState.get(cacheKey);
+  // Both replacement and terminal cleanup retire registrations. Never reactivate
+  // their closed resources from a cache hit; the loader must register fresh ones.
+  return registry && !isPluginRegistryRetired(registry) ? registry : undefined;
 }
 
 /** Registry reuse is off for explicit opt-outs and for raw env-substituted config loads. */

@@ -1176,15 +1176,19 @@ function Ensure-Pnpm {
     }
     Write-Host "[*] Installing pnpm..." -ForegroundColor Yellow
     $pnpmInstalled = $false
+    $lifecycleIdentity = if ($pnpmVersion) { $pnpmSpec } else { "pnpm" }
+    $lifecycleArgument = Get-NpmLifecycleAllowArgument -NpmCommand (Get-NpmCommandPath) -InstallSpec $pnpmSpec -NpmCwd (Get-Location).Path -ExactIdentity $lifecycleIdentity
+    $installArgs = @("install", "-g", $pnpmSpec)
+    if ($lifecycleArgument) { $installArgs += $lifecycleArgument }
     try {
-        Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)
+        Invoke-NpmCommand -Arguments $installArgs
         $pnpmInstalled = ($LASTEXITCODE -eq 0)
     } catch {
         $pnpmInstalled = $false
     }
     if (-not $pnpmInstalled) {
         Write-Host "[!] pnpm install hit an existing or broken shim; retrying with --force" -ForegroundColor Yellow
-        Invoke-NpmCommand -Arguments @("install", "-g", "--force", $pnpmSpec)
+        Invoke-NpmCommand -Arguments ($installArgs + @("--force"))
     }
     if (-not (Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir)) {
         throw "pnpm install completed, but $pnpmSpec is not first on PATH."
@@ -1321,9 +1325,19 @@ function Test-NpmConfigFileKey {
 }
 
 function Test-NpmConfigRawKey {
-    param([string]$Key)
+    param(
+        [string]$Key,
+        [string]$ProjectDir
+    )
     $files = New-Object System.Collections.Generic.List[string]
-    $userConfig = if ($env:NPM_CONFIG_USERCONFIG) { $env:NPM_CONFIG_USERCONFIG } else { $env:npm_config_userconfig }
+    if (-not [string]::IsNullOrWhiteSpace($ProjectDir)) {
+        $files.Add((Join-Path $ProjectDir ".npmrc"))
+    }
+    $userConfig = if ($env:NPM_CONFIG_USERCONFIG) {
+        $env:NPM_CONFIG_USERCONFIG
+    } else {
+        $env:npm_config_userconfig
+    }
     if ($userConfig) {
         $resolvedUserConfig = Resolve-NpmConfigPath $userConfig
         if ($resolvedUserConfig) { $files.Add($resolvedUserConfig) }
@@ -1349,6 +1363,34 @@ function Test-NpmConfigRawKey {
         }
     }
     return $false
+}
+
+function Test-ShouldPreferOfflinePnpmInstall {
+    param([string]$ProjectDir)
+    if (
+        (Test-Path -LiteralPath "Env:PNPM_CONFIG_PREFER_OFFLINE") -or
+        (Test-Path -LiteralPath "Env:pnpm_config_prefer_offline")
+    ) {
+        return $false
+    }
+    $pnpmCommand = Get-PnpmCommandPath
+    if (-not $pnpmCommand) {
+        return $false
+    }
+    $pushedLocation = $false
+    try {
+        Push-Location -LiteralPath $ProjectDir
+        $pushedLocation = $true
+        $configured = (& $pnpmCommand config get prefer-offline 2>$null)
+        $configExitCode = $LASTEXITCODE
+    } catch { return $false } finally {
+        if ($pushedLocation) { Pop-Location }
+    }
+    if ($configExitCode -ne 0) {
+        return $false
+    }
+    $value = "$configured".Trim()
+    return [string]::IsNullOrWhiteSpace($value) -or $value -eq "undefined" -or $value -eq "null"
 }
 
 function Add-NpmCacheCandidate {
@@ -1437,7 +1479,8 @@ function Get-NpmLifecycleAllowArgument {
     param(
         [string]$NpmCommand,
         [string]$InstallSpec,
-        [string]$NpmCwd
+        [string]$NpmCwd,
+        [string]$ExactIdentity
     )
     $versionOutput = @(Invoke-NpmCommand -CommandPath $NpmCommand -WorkingDirectory $NpmCwd -Arguments @("--version") 2>$null)
     if ($LASTEXITCODE -ne 0 -or $versionOutput.Count -eq 0) {
@@ -1446,7 +1489,7 @@ function Get-NpmLifecycleAllowArgument {
     $nodeCommand = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $kernel = @'
 const path = require("node:path");
-const [versionOutput, spec, cwd] = process.argv.slice(2);
+const [versionOutput, spec, cwd, exactIdentity] = process.argv.slice(2);
 const version = versionOutput.trim().split(/\r?\n/).at(-1) ?? "";
 const parsed = version.match(/^[vV]?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/);
 const fail = (message) => { process.stderr.write(`${message}\n`); process.exit(1); };
@@ -1459,10 +1502,11 @@ let identity = !normalized || explicit(normalized) || explicit(unaliased) || /^\
 if (/^npm:/i.test(identity)) identity = /^npm:(@[^/]+\/[^@]+|[^@]+?)(?:@.*)?$/i.exec(identity)?.[1] ?? "";
 const relative = cwd && path.isAbsolute(identity) ? path.relative(cwd, identity) || "." : "";
 if (relative) identity = path.isAbsolute(relative) || relative === "." || relative === ".." || relative.startsWith(`..${path.sep}`) ? relative : `.${path.sep}${relative}`;
+if (exactIdentity) identity = exactIdentity;
 if (!identity || identity.includes(",")) fail(`npm cannot allow lifecycle scripts for install target '${spec}'.`);
 process.stdout.write(`--allow-scripts=${identity}\n`);
 '@
-    $kernelOutput = @($kernel | & $nodeCommand - $versionOutput[-1].ToString() $InstallSpec $NpmCwd 2>&1)
+    $kernelOutput = @($kernel | & $nodeCommand - $versionOutput[-1].ToString() $InstallSpec $NpmCwd $ExactIdentity 2>&1)
     if ($LASTEXITCODE -ne 0) {
         throw $kernelOutput[-1].ToString()
     }
@@ -1775,16 +1819,18 @@ function Install-OpenClawFromGit {
     try {
         Push-Location -LiteralPath $RepoDir
         $pushedRepoLocation = $true
-        $sourceInstallArgs = @(
-            "install",
-            "--prefer-offline",
+        $sourceInstallArgs = @("install")
+        if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $RepoDir) {
+            $sourceInstallArgs += "--prefer-offline"
+        }
+        $sourceInstallArgs += @(
             "--config.node-linker=hoisted",
             "--config.engine-strict=false",
             "--config.enable-pre-post-scripts=true",
             "--config.side-effects-cache=false",
             "--no-frozen-lockfile",
-            "--child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY",
-            "--network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY",
+            "--config.child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY",
+            "--config.network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY",
             "--config.workspace-concurrency=$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY"
         )
         & $pnpmCommand @sourceInstallArgs

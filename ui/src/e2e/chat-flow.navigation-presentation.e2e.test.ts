@@ -278,7 +278,14 @@ suite.define(() => {
       const headers = page.locator(".chat-pane__header");
       await expect.poll(() => panes.count()).toBe(2);
       await panes.last().getByText("Split toolbar proof.").waitFor();
-      await expect.poll(() => panes.last().locator(".chat-loading-skeleton").count()).toBe(0);
+      await expect
+        .poll(() =>
+          panes
+            .last()
+            .locator('openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
+            .count(),
+        )
+        .toBe(0);
       await gateway.resolveDeferred("chat.startup");
       await expect
         .poll(() =>

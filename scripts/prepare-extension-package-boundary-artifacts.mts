@@ -714,6 +714,8 @@ export async function runNodeStep(
     env: params.env ? { ...process.env, ...params.env } : process.env,
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
+    // Artifact writers must finish before stamps, dependent readers, or lock release.
+    requireProcessTreeExit: process.platform !== "win32",
     timeoutMs: resolvedTimeoutMs,
     signal: params.abortController?.signal,
     abortKillGraceMs: Math.max(

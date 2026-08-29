@@ -52,7 +52,12 @@ describe("app-tool-stream approval lifecycle", () => {
         phase: "result",
         name: "browser",
         toolCallId: "browser-call",
-        result: { content: [], details: { browserTab: { targetId: "tab-1", title: "Example" } } },
+        result: {
+          content: [],
+          details: {
+            browserTab: { profile: "managed", target: "host", targetId: "tab-1", title: "Example" },
+          },
+        },
       }),
     );
     const entry = [...host.toolStreamById.values()][0];
@@ -60,7 +65,13 @@ describe("app-tool-stream approval lifecycle", () => {
     expect(card).toMatchObject({
       completed: true,
       live: true,
-      preview: { kind: "browser-tab", targetId: "tab-1", title: "Example" },
+      preview: {
+        kind: "browser-tab",
+        profile: "managed",
+        target: "host",
+        targetId: "tab-1",
+        title: "Example",
+      },
     });
     resetToolStream(host);
   });

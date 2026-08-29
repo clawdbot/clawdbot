@@ -1,9 +1,18 @@
 ---
-summary: "Security considerations and threat model for running an AI gateway with shell access"
+summary: "Trust model, safe defaults, and hardening guidance for running OpenClaw"
 read_when:
   - Adding features that widen access or automation
+  - Reviewing OpenClaw security posture or hardening a deployment
 title: "Security"
 ---
+
+OpenClaw ships with conservative defaults. On a regular host install the Gateway binds to loopback; most chat channels answer an unknown DM sender with a pairing code instead of processing the message; and group access is allowlisted, usually behind a mention gate. The exceptions are deliberate and documented: container images default to an exposed bind (pair that with auth - see the [exposure runbook](/gateway/security/exposure-runbook)), and a few workspace channels such as ClickClack trust workspace membership by default - each channel page states its exact defaults. Run on those defaults and you are in good shape, and one command tells you if you have drifted:
+
+```bash
+openclaw security audit
+```
+
+The rest of this page is the deep end: the trust model, what the audit checks, and how to harden further as you expose more surface.
 
 <Note>
   **One trust boundary per gateway.** This guidance assumes one trusted

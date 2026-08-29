@@ -8,7 +8,7 @@ import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import {
-  clearNativeRequireJavaScriptModuleCache,
+  clearPluginModuleRequireCache,
   tryNativeRequireJavaScriptModule,
 } from "./native-module-require.js";
 import {
@@ -133,7 +133,7 @@ function retainModuleLifecycle(cache: ReturnType<typeof getPluginCache>): void {
         path.basename(extensionsDir) === "extensions" && path.basename(distDir) === "dist"
           ? distDir
           : rootDir;
-      clearNativeRequireJavaScriptModuleCache(modulePath, { dependencyRoot });
+      clearPluginModuleRequireCache(modulePath, { dependencyRoot });
     }
   };
 }

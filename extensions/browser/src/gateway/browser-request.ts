@@ -46,6 +46,8 @@ import {
 const logger = createSubsystemLogger("browser");
 
 type BrowserRequestParams = {
+  target?: "host" | "node";
+  node?: string;
   method?: string;
   path?: string;
   query?: Record<string, unknown>;
@@ -65,6 +67,27 @@ export async function handleBrowserGatewayRequest({
   const query = typed.query && typeof typed.query === "object" ? typed.query : undefined;
   const body = typed.body;
   const timeoutMs = clampTimerTimeoutMs(typed.timeoutMs);
+  const explicitNode = typed.target === "node";
+  const requestedNode = normalizeOptionalString(typed.node);
+
+  if (
+    (typed.target !== undefined && typed.target !== "host" && !explicitNode) ||
+    (typed.node !== undefined &&
+      (!explicitNode ||
+        !requestedNode ||
+        typeof typed.node !== "string" ||
+        typed.node.length > 256))
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        'target must be "host" or "node"; node requires target="node" and a nonempty selector of at most 256 characters',
+      ),
+    );
+    return;
+  }
 
   if (!methodRaw || !path) {
     respond(
@@ -88,12 +111,22 @@ export async function handleBrowserGatewayRequest({
   // Chrome profiles live, so they must never route to a browser node. Force
   // host-local dispatch even when gateway.nodes.browser auto-selects a node.
   const forceHostLocal = isBrowserHostLocalRoute(methodRaw, path);
+  if (forceHostLocal && explicitNode) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "this browser route must run on the Gateway host"),
+    );
+    return;
+  }
   let nodeTarget: NodeSession | null = null;
-  if (!forceHostLocal) {
+  if (!forceHostLocal && typed.target !== "host") {
     try {
       nodeTarget = resolveBrowserNodeTarget({
         nodes: context.nodeRegistry.listConnected(),
         policy: cfg.gateway?.nodes?.browser,
+        explicitTarget: explicitNode,
+        requestedNode,
       });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
@@ -121,7 +154,7 @@ export async function handleBrowserGatewayRequest({
       !nodeTarget.commands?.includes(BROWSER_PROXY_UPLOAD_COMMAND)
     ) {
       const message = browserProxyUploadUnavailableMessage(nodeTarget.declaredCommands);
-      if (configuredNode) {
+      if (explicitNode || configuredNode) {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
         return;
       }
@@ -186,7 +219,7 @@ export async function handleBrowserGatewayRequest({
       idempotencyKey: crypto.randomUUID(),
     });
     const allowAutomaticHostFallback =
-      !configuredNode && isBrowserControlHostUnavailableError(res.error);
+      !explicitNode && !configuredNode && isBrowserControlHostUnavailableError(res.error);
     if (allowAutomaticHostFallback && !res.ok) {
       // This node-host error is raised before route dispatch. Other failures
       // stay on the node path because retrying could duplicate an action.

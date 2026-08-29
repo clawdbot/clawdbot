@@ -1,4 +1,4 @@
-import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -297,7 +297,10 @@ export function resolvePageGatewaySettings(settings: UiSettings): UiSettings {
   return {
     ...settings,
     gatewayUrl: effectiveUrl,
-    token: resolveGatewayTokenForUrlEdit(settings.gatewayUrl, effectiveUrl, settings.token),
+    token: resolveGatewayCredentialsForUrlEdit(settings.gatewayUrl, effectiveUrl, {
+      token: settings.token,
+      password: "",
+    }).token,
     sessionKey: session.sessionKey,
     lastActiveSessionKey: session.lastActiveSessionKey,
   };
@@ -405,17 +408,21 @@ function loadSessionToken(gatewayUrl: string): string {
   }
 }
 
-export function resolveGatewayTokenForUrlEdit(
+export function resolveGatewayCredentialsForUrlEdit(
   currentGatewayUrl: string,
   nextGatewayUrl: string,
-  currentToken: string,
-): string {
-  if (gatewayOriginScope(currentGatewayUrl) === gatewayOriginScope(nextGatewayUrl)) {
-    return currentToken;
-  }
-  // Gateway tokens stay session-scoped across endpoint edits.
-  // Durable settings may contain scrubbed legacy tokens, but must not restore them here.
-  return loadSessionToken(nextGatewayUrl);
+  credentials: { token: string; password: string },
+): { token: string; password: string } {
+  const sameTokenScope =
+    gatewayOriginScope(currentGatewayUrl) === gatewayOriginScope(nextGatewayUrl);
+  const sameCredentialScope =
+    gatewayCredentialScope(currentGatewayUrl) === gatewayCredentialScope(nextGatewayUrl);
+  return {
+    // Gateway tokens stay session-scoped across endpoint edits. Durable settings
+    // may contain scrubbed legacy tokens, but must not restore them here.
+    token: sameTokenScope ? credentials.token : loadSessionToken(nextGatewayUrl),
+    password: sameCredentialScope ? credentials.password : "",
+  };
 }
 
 export function persistSessionToken(gatewayUrl: string, token: string) {

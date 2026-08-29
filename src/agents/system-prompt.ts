@@ -629,8 +629,8 @@ function buildMessagingSection(params: {
     ? ""
     : hasSessionsSpawn
       ? hasSubagents
-        ? `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; isolated omits \`context\`, transcript needs \`context:"fork"\`; ${hasSessionsYield ? "wait via `sessions_yield`; " : ""}\`subagents(action=list)\` only status/debug.`
-        : `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; isolated omits \`context\`, transcript needs \`context:"fork"\`${hasSessionsYield ? "; wait via `sessions_yield`" : ""}.`
+        ? `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; clean context needs \`context:"isolated"\`, transcript needs \`context:"fork"\`; ${hasSessionsYield ? "wait via `sessions_yield`; " : ""}\`subagents(action=list)\` only status/debug.`
+        : `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; clean context needs \`context:"isolated"\`, transcript needs \`context:"fork"\`${hasSessionsYield ? "; wait via `sessions_yield`" : ""}.`
       : hasSubagents
         ? "- Subagents: `subagents(action=list)` only for status/debug visibility."
         : "";
@@ -921,8 +921,8 @@ export function buildAgentSystemPrompt(params: {
       : "Search past sessions",
     sessions_send: "Message other session/subagent",
     sessions_spawn: acpSpawnRuntimeEnabled
-      ? `Spawn isolated subagent/ACP. Transcript needed: context="fork". ACP needs agentId unless default; ids from acp.allowedAgents${availableTools.has("agents_list") ? ", not agents_list" : ""}.`
-      : 'Spawn isolated subagent; transcript needed: context="fork"',
+      ? `Spawn subagent/ACP. Native clean context: context="isolated"; transcript: context="fork". ACP needs agentId unless default; ids from acp.allowedAgents${availableTools.has("agents_list") ? ", not agents_list" : ""}.`
+      : 'Spawn subagent; clean context: context="isolated"; transcript: context="fork"',
     sessions_yield: "End turn; await subagent events",
     subagents: "Subagent status; never wait-loop",
     session_status: "Session/model/usage/time/status; model override",
@@ -1255,7 +1255,7 @@ export function buildAgentSystemPrompt(params: {
             ...(hasSessionsSpawn
               ? [
                   "Large work: `sessions_spawn`; completion push-based.",
-                  '`sessions_spawn`: omit `context`; transcript needed => `context:"fork"`.',
+                  '`sessions_spawn`: clean context => `context:"isolated"`; transcript needed => `context:"fork"`.',
                   "`visible:true` for work the user follows or asked for; else hidden.",
                 ]
               : []),

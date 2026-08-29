@@ -23,6 +23,7 @@ import {
   shellEscape,
   withTempWorkspace,
 } from "openclaw/plugin-sdk/sandbox";
+import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 import {
@@ -421,7 +422,8 @@ class OpenShellSandboxBackendImpl {
   private async acquireWorkspaceLease(): Promise<OpenShellWorkspaceLease> {
     const { config, sandboxName } = this.params.execContext;
     const keys = [
-      `host:${path.resolve(this.params.createParams.workspaceDir)}`,
+      // Mirror publication owns the physical directory, so aliases must share its host lease.
+      `host:${await canonicalPathFromExistingAncestor(this.params.createParams.workspaceDir)}`,
       `runtime:${JSON.stringify([
         config.gatewayEndpoint ?? "",
         config.gateway ?? "",

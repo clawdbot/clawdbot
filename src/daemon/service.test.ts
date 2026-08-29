@@ -209,7 +209,7 @@ describe("readGatewayServiceState", () => {
         if (capabilityFails) {
           throw new Error("capability unavailable");
         }
-        return { kind: "sealed", detail: "deployment owned" };
+        return { kind: "sealed", reason: "foreign-owner" };
       });
       const service = createService({
         hasInstalledDefinition,
@@ -241,8 +241,8 @@ describe("readGatewayServiceState", () => {
         });
         expect(state.definitionMutationCapability).toEqual(
           capabilityFails
-            ? { kind: "unknown", detail: "Cannot inspect service definition." }
-            : { kind: "sealed", detail: "deployment owned" },
+            ? { kind: "unknown", reason: "inspection-failed" }
+            : { kind: "sealed", reason: "foreign-owner" },
         );
       } else {
         expect(readDefinitionMutationCapability).not.toHaveBeenCalled();

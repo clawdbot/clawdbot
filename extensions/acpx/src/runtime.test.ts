@@ -1634,7 +1634,8 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       save: vi.fn(async () => {}),
     };
     const { runtime, delegate } = makeRuntime(baseStore);
-    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const accepted = { configOptions: [{ id: "reasoning_effort", currentValue: "medium" }] };
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(accepted);
     const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
       sessionKey: "agent:codex:acp:test",
       backend: "acpx",
@@ -1642,11 +1643,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       acpxRecordId: "agent:codex:acp:test",
     };
 
-    await runtime.setConfigOption({
+    const result = await runtime.setConfigOption({
       handle,
       key: "model",
       value,
     });
+    expect(result).toBe(accepted);
 
     expect(setConfigOption).toHaveBeenCalledOnce();
     expect(setConfigOption).toHaveBeenCalledWith({
@@ -1694,7 +1696,13 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       save: vi.fn(async () => {}),
     };
     const { runtime, delegate } = makeRuntime(baseStore);
-    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const accepted = { configOptions: [{ id: "reasoning_effort", currentValue: "high" }] };
+    const setConfigOption = vi
+      .spyOn(delegate, "setConfigOption")
+      .mockResolvedValueOnce({
+        configOptions: [{ id: "reasoning_effort", currentValue: "medium" }],
+      })
+      .mockResolvedValueOnce(accepted);
     const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
       sessionKey: "agent:codex:acp:test",
       backend: "acpx",
@@ -1702,11 +1710,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       acpxRecordId: "agent:codex:acp:test",
     };
 
-    await runtime.setConfigOption({
+    const result = await runtime.setConfigOption({
       handle,
       key: "model",
       value: "openai/gpt-5.4/high",
     });
+    expect(result).toBe(accepted);
 
     expect(setConfigOption).toHaveBeenNthCalledWith(1, {
       handle,
@@ -1786,7 +1795,10 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       save: vi.fn(async () => {}),
     };
     const { runtime, delegate } = makeRuntime(baseStore);
-    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const accepted = {
+      configOptions: [{ id: "reasoning_effort", currentValue: expected ?? "medium" }],
+    };
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(accepted);
     const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
       sessionKey: "agent:codex:acp:test",
       backend: "acpx",
@@ -1807,7 +1819,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       return;
     }
 
-    await update;
+    await expect(update).resolves.toBe(accepted);
     expect(setConfigOption).toHaveBeenCalledWith({
       handle,
       key: "reasoning_effort",
@@ -1924,7 +1936,8 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       save: vi.fn(async () => {}),
     };
     const { runtime, delegate } = makeRuntime(baseStore);
-    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const accepted = { configOptions: [{ id: "effort", currentValue: "low" }] };
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(accepted);
     const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
       sessionKey: "agent:claude:acp:test",
       backend: "acpx",
@@ -1932,11 +1945,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       acpxRecordId: "agent:claude:acp:test",
     };
 
-    await runtime.setConfigOption({
+    const result = await runtime.setConfigOption({
       handle,
       key: "model",
       value: "anthropic/claude-sonnet-4-6",
     });
+    expect(result).toBe(accepted);
     await runtime.setConfigOption({
       handle,
       key: "model",

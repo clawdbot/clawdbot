@@ -8,6 +8,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getContextWindowCaches } from "../agents/context-cache.js";
+import {
+  applyDiscoveredContextWindows,
+  resetContextWindowCacheForTest,
+} from "../agents/context.js";
 import { findGitCheckoutRoot } from "../agents/worktrees/git.js";
 import {
   findLiveRegistryWorktreeByOwner,
@@ -15,11 +20,13 @@ import {
   listRegistryWorktrees,
 } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
+  replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -32,6 +39,7 @@ import { withTimeout } from "../infra/fs-safe.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
+  beginSessionWorkAdmission,
   getSessionWorkAdmissionRelease,
   isSessionLifecycleMutationActive,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
@@ -159,6 +167,7 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
 let gitWorkspaceTemplateRoot: string;
 let gitWorkspaceTemplate: string;
 
@@ -2612,6 +2621,182 @@ test("sessions.create reset-in-place clears a prior node binding for Gateway exe
   expect(gatewaySession.payload?.entry.execCwd).toBeUndefined();
 });
 
+test("sessions.create reset-in-place applies Fast Mode only for admin callers", async () => {
+  testState.sessionConfig = { dmScope: "main" };
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry("sess-fast-reset", { fastMode: false }) },
+  });
+  const params = {
+    agentId: "main",
+    parentSessionKey: "main",
+    emitCommandHooks: true,
+    fastMode: true,
+  };
+
+  const denied = await directSessionReq("sessions.create", params, {
+    client: { connect: { scopes: ["operator.write"] } } as never,
+  });
+  expect(denied).toMatchObject({
+    ok: false,
+    error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
+  });
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
+  ).toMatchObject({ sessionId: "sess-fast-reset", fastMode: false });
+
+  const changed = await directSessionReq<{ entry: { fastMode?: boolean } }>(
+    "sessions.create",
+    params,
+    { client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
+  expect(changed.ok, JSON.stringify(changed.error)).toBe(true);
+  expect(changed.payload?.entry.fastMode).toBe(true);
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
+  ).toMatchObject({ fastMode: true });
+});
+
+test("sessions.create rechecks Fast Mode before interrupting reset work", async () => {
+  testState.sessionConfig = { dmScope: "main" };
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:main";
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry("sess-fast-race", { fastMode: false }) },
+  });
+  let interrupted = false;
+  let releaseAdmission = () => {};
+  const admission = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: [key, "sess-fast-race"],
+    assertAllowed: () => undefined,
+    onInterrupt: () => {
+      interrupted = true;
+      releaseAdmission();
+    },
+  });
+  releaseAdmission = admission.release;
+  let replaced = false;
+  const commitGuard = () => {
+    if (replaced) {
+      return;
+    }
+    replaced = true;
+    const current = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    if (!current) {
+      throw new Error("expected current main session");
+    }
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key, storePath },
+      { ...current, fastMode: true },
+    );
+  };
+  const { createGatewaySession } = await import("./session-create-service.js");
+
+  try {
+    const denied = await createGatewaySession({
+      cfg: getRuntimeConfig(),
+      agentId: "main",
+      parentSessionKey: "main",
+      emitCommandHooks: true,
+      resetMainWhenUnspecified: true,
+      fastMode: false,
+      requestingOperatorScopes: ["operator.write"],
+      allowExistingModelSelection: false,
+      commandSource: "test",
+      commitGuard,
+    });
+
+    expect(denied).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
+    });
+    expect(interrupted).toBe(false);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      sessionId: "sess-fast-race",
+      fastMode: true,
+    });
+  } finally {
+    admission.release();
+  }
+});
+
+test("sessions.create rejects a Fast Mode change completed by draining work before reset cleanup", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:main";
+  const initialEntry = sessionStoreEntry("sess-fast-drain", { fastMode: false });
+  await writeSessionStore({ entries: { main: initialEntry } });
+  const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+  const claim = placements.claimTurn({
+    agentId: "main",
+    sessionKey: key,
+    sessionId: initialEntry.sessionId,
+    owner: { kind: "local" },
+    claimId: "fast-drain-claim",
+    runId: "fast-drain-run",
+  });
+  const interrupted = createDeferredCore();
+  const admission = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: [key, initialEntry.sessionId],
+    assertAllowed: () => undefined,
+    onInterrupt: () => interrupted.resolve(),
+  });
+  const writerEntered = createDeferredCore();
+  const releaseWriter = createDeferredCore();
+  const heldWriter = runExclusiveSqliteSessionWrite(
+    resolveSqliteStoreScope(storePath, { agentId: "main" }),
+    async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    },
+  );
+  await writerEntered.promise;
+  const persisted = persistReplySessionEntry({
+    storePath,
+    sessionKey: key,
+    initialEntry,
+    entry: { ...initialEntry, fastMode: true },
+    touchedFields: ["fastMode"],
+  });
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  const reset = performGatewaySessionReset({
+    key,
+    reason: "new",
+    commandSource: "test",
+    fastModeSelection: { value: false, allowExistingChange: false },
+    workerPlacementContext: { workerSessionPlacementService: placements },
+  });
+  try {
+    await interrupted.promise;
+    releaseWriter.resolve();
+    await heldWriter;
+    expect(await persisted).toMatchObject({ status: "current", entry: { fastMode: true } });
+    placements.releaseTurn(claim);
+    admission.release();
+    expect(await reset).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
+    });
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+    expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+    expect(embeddedRunMock.abortCalls).toEqual([]);
+    expect(placements.get(initialEntry.sessionId)).toMatchObject({ state: "local" });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      sessionId: initialEntry.sessionId,
+      fastMode: true,
+    });
+  } finally {
+    releaseWriter.resolve();
+    await heldWriter;
+    if (placements.validateTurnClaim(claim)) {
+      placements.releaseTurn(claim);
+    }
+    admission.release();
+    await reset;
+  }
+});
+
 test("sessions.reset preserves the recorded permission boundary", async () => {
   await createSessionStoreDir();
   await writeSessionStore({
@@ -2717,29 +2902,39 @@ test("sessions.create rejects a regular-file Gateway cwd before creating session
   }
 });
 
-test("sessions.create allows a write-scoped cwd inside the configured workspace", async () => {
-  const workspace = tempDirs.make("openclaw-session-cwd-workspace-");
-  const cwd = path.join(workspace, "packages", "app");
-  await fs.mkdir(cwd, { recursive: true });
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
-  const { ws } = await openClient({
-    scopes: ["operator.write"],
-    deviceIdentityPath: path.join(workspace, "write-cwd-device.json"),
-  });
-  try {
-    const created = await rpcReq<{
-      entry?: { sessionRoot?: string; spawnedCwd?: string };
-    }>(ws, "sessions.create", { cwd });
+test.each(["operator.admin", "operator.write"])(
+  "sessions.create canonicalizes sandbox workspace aliases for %s",
+  async (scope) => {
+    const root = tempDirs.make("openclaw-session-cwd-workspace-");
+    const workspace = path.join(root, "workspace");
+    const alias = path.join(root, "alias");
+    const cwd = path.join(workspace, "packages", "app");
+    await fs.mkdir(cwd, { recursive: true });
+    await fs.symlink(workspace, alias, directoryLinkType);
+    testState.agentConfig = { workspace: alias, sandbox: { mode: "all" } };
+    const { storePath } = await createSessionStoreDir();
+    const { ws } = await openClient({
+      scopes: [scope],
+      deviceIdentityPath: path.join(root, "cwd-device.json"),
+    });
+    try {
+      const key = "agent:main:dashboard:canonical-cwd";
+      const created = await rpcReq<{
+        entry?: { sessionRoot?: string; spawnedCwd?: string };
+      }>(ws, "sessions.create", { key, cwd });
 
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.entry?.spawnedCwd).toBe(cwd);
-    expect(created.payload?.entry?.sessionRoot).toBe(cwd);
-  } finally {
-    ws.close();
-    testState.agentConfig = undefined;
-  }
-});
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      expect(created.payload?.entry).toMatchObject({ sessionRoot: cwd, spawnedCwd: cwd });
+      expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+        sessionRoot: cwd,
+        spawnedCwd: cwd,
+      });
+    } finally {
+      ws.close();
+      testState.agentConfig = undefined;
+    }
+  },
+);
 
 test("sessions.create records the selected agent workspace when cwd is omitted", async () => {
   const workspace = tempDirs.make("openclaw-session-default-root-");
@@ -2850,43 +3045,42 @@ test("sessions.create keeps its cwd contract absolute-only", async () => {
   });
 });
 
-test("sessions.create rejects cwd outside a sandboxed agent workspace", async () => {
-  testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
-  try {
-    const created = await directSessionReq(
-      "sessions.create",
-      { cwd: "/tmp/outside" },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
-
-    expect(created.ok).toBe(false);
-    expect(created.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "sessions.create cwd is outside the sandboxed agent workspace",
+test.each(["direct path", "symlink escape"])(
+  "sessions.create rejects sandboxed admin cwd via %s without creating a session",
+  async (kind) => {
+    const root = tempDirs.make("openclaw-session-sandbox-workspace-");
+    const workspace = path.join(root, "workspace");
+    const outside = path.join(root, "outside");
+    await fs.mkdir(workspace);
+    await fs.mkdir(outside);
+    const link = path.join(workspace, "escape");
+    await fs.symlink(outside, link, directoryLinkType);
+    testState.agentConfig = { workspace, sandbox: { mode: "all" } };
+    const { storePath } = await createSessionStoreDir();
+    const { ws } = await openClient({
+      scopes: ["operator.admin"],
+      deviceIdentityPath: path.join(root, "admin-device.json"),
     });
-  } finally {
-    testState.agentConfig = undefined;
-  }
-});
-
-test("sessions.create allows cwd within a sandboxed agent workspace", async () => {
-  const workspace = tempDirs.make("openclaw-session-sandbox-workspace-");
-  testState.agentConfig = { workspace, sandbox: { mode: "all" } };
-  try {
-    const cwd = path.join(workspace, "packages", "app");
-    await fs.mkdir(cwd, { recursive: true });
-    const created = await directSessionReq(
-      "sessions.create",
-      { cwd },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
-
-    expect(created.ok).toBe(true);
-    expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(cwd);
-  } finally {
-    testState.agentConfig = undefined;
-  }
-});
+    try {
+      const key = "agent:main:dashboard:denied-cwd";
+      const created = await rpcReq(ws, "sessions.create", {
+        key,
+        cwd: kind === "direct path" ? outside : link,
+      });
+      expect(created).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "sessions.create cwd is outside the sandboxed agent workspace",
+        },
+      });
+      expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
+    } finally {
+      ws.close();
+      testState.agentConfig = undefined;
+    }
+  },
+);
 
 test("sessions.create skips the worktree setup script for non-admin callers", async () => {
   const openClawState = await createOpenClawTestState({
@@ -3213,7 +3407,7 @@ test("sessions.create rejects worktrees for agent workspaces without a commit", 
   }
 });
 
-test("sessions.create stores dashboard model, thinking, and parent linkage, and creates a transcript", async () => {
+test("sessions.create stores dashboard model, thinking, fast mode, and parent linkage", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops" }] };
   agentDiscoveryMock.enabled = true;
@@ -3231,6 +3425,7 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
       providerOverride?: string;
       modelOverride?: string;
       thinkingLevel?: string;
+      fastMode?: boolean | "auto";
       parentSessionKey?: string;
       sessionFile?: string;
     };
@@ -3239,6 +3434,7 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
     label: "Dashboard Chat",
     model: "openai/gpt-test-a",
     thinkingLevel: "high",
+    fastMode: true,
     parentSessionKey: "main",
   });
 
@@ -3248,6 +3444,7 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
   expect(created.payload?.entry?.providerOverride).toBe("openai");
   expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
   expect(created.payload?.entry?.thinkingLevel).toBe("high");
+  expect(created.payload?.entry?.fastMode).toBe(true);
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
   expect(created.payload?.entry).not.toHaveProperty("sessionFile");
   expect(created.payload?.sessionId).toMatch(
@@ -3261,6 +3458,7 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
   expect(storedEntry?.providerOverride).toBe("openai");
   expect(storedEntry?.modelOverride).toBe("gpt-test-a");
   expect(storedEntry?.thinkingLevel).toBe("high");
+  expect(storedEntry?.fastMode).toBe(true);
   expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
   expect(storedEntry).not.toHaveProperty("sessionFile");
 
@@ -4155,6 +4353,16 @@ test("sessions.create inherits explicit selection without runtime model identity
   expect(storedEntry?.modelProvider).toBeUndefined();
   expect(storedEntry?.model).toBeUndefined();
   expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
+
+  const overridden = await directSessionReq<{
+    entry?: { fastMode?: boolean | "auto" };
+  }>("sessions.create", {
+    agentId: "main",
+    fastMode: false,
+    parentSessionKey: "main",
+  });
+  expect(overridden.ok, JSON.stringify(overridden.error)).toBe(true);
+  expect(overridden.payload?.entry?.fastMode).toBe(false);
 });
 
 test("sessions.create skips inherited active auto fallback model overrides", async () => {
@@ -4279,7 +4487,7 @@ test("sessions.create accepts an explicit key for persistent dashboard sessions"
   );
 });
 
-test("sessions.create preserves write-scoped fresh keyed model selection but gates adopted rows", async () => {
+test("sessions.create preserves write-scoped fresh selection but gates adopted rows", async () => {
   const { storePath } = await createSessionStoreDir();
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = [
@@ -4300,6 +4508,7 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
         providerOverride: "openai",
         modelOverride: "gpt-test-a",
         thinkingLevel: "low",
+        fastMode: false,
       }),
       [existingProfileKey]: sessionStoreEntry("sess-existing-profile", {
         providerOverride: "openai",
@@ -4312,19 +4521,29 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
   });
 
   const fresh = await directSessionReq<{
-    entry?: { providerOverride?: string; modelOverride?: string };
-  }>("sessions.create", { key: freshKey, model: "openai/gpt-test-a" }, { client: writeClient });
+    entry?: { fastMode?: boolean; providerOverride?: string; modelOverride?: string };
+  }>(
+    "sessions.create",
+    { key: freshKey, model: "openai/gpt-test-a", fastMode: true },
+    { client: writeClient },
+  );
   expect(fresh.ok, JSON.stringify(fresh.error)).toBe(true);
   expect(fresh.payload?.entry).toMatchObject({
     providerOverride: "openai",
     modelOverride: "gpt-test-a",
+    fastMode: true,
   });
 
   const sameSelection = await directSessionReq<{
-    entry?: { providerOverride?: string; modelOverride?: string; thinkingLevel?: string };
+    entry?: {
+      fastMode?: boolean;
+      providerOverride?: string;
+      modelOverride?: string;
+      thinkingLevel?: string;
+    };
   }>(
     "sessions.create",
-    { key: existingKey, model: "openai/gpt-test-a", thinkingLevel: "low" },
+    { key: existingKey, model: "openai/gpt-test-a", thinkingLevel: "low", fastMode: false },
     { client: writeClient },
   );
   expect(sameSelection.ok, JSON.stringify(sameSelection.error)).toBe(true);
@@ -4332,6 +4551,7 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     providerOverride: "openai",
     modelOverride: "gpt-test-a",
     thinkingLevel: "low",
+    fastMode: false,
   });
 
   const sameSubagentSelection = await directSessionReq<{
@@ -4434,11 +4654,27 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     message: "missing scope: operator.admin",
   });
 
+  const fastModeDenied = await directSessionReq(
+    "sessions.create",
+    { key: existingKey, fastMode: true },
+    { client: writeClient },
+  );
+  expect(fastModeDenied.ok).toBe(false);
+  expect(fastModeDenied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+
   const admin = await directSessionReq<{
-    entry?: { providerOverride?: string; modelOverride?: string; thinkingLevel?: string };
+    entry?: {
+      fastMode?: boolean;
+      providerOverride?: string;
+      modelOverride?: string;
+      thinkingLevel?: string;
+    };
   }>(
     "sessions.create",
-    { key: existingKey, model: "openai/gpt-test-b", thinkingLevel: "high" },
+    { key: existingKey, model: "openai/gpt-test-b", thinkingLevel: "high", fastMode: true },
     { client: adminClient },
   );
   expect(admin.ok, JSON.stringify(admin.error)).toBe(true);
@@ -4446,6 +4682,7 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     providerOverride: "openai",
     modelOverride: "gpt-test-b",
     thinkingLevel: "high",
+    fastMode: true,
   });
 });
 
@@ -5603,16 +5840,61 @@ test("sessions.create rejects forkFrom without fork", async () => {
   });
 });
 
-test("sessions.create rejects fork when the parent exceeds the fork size cap", async () => {
+test("sessions.create retains the 100K fallback when only another provider has model capacity", async () => {
   const { dir } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };
+  resetContextWindowCacheForTest();
+  applyDiscoveredContextWindows({
+    cache: getContextWindowCaches().discoveredTokenCache,
+    models: [{ id: "unresolved-model", provider: "other-provider", contextTokens: 300_000 }],
+  });
   const parent = await createCheckpointFixture(dir);
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(parent.sessionId, {
         sessionFile: parent.sessionFile,
+        providerOverride: "unresolved-provider",
+        modelOverride: "unresolved-model",
+        modelOverrideSource: "user",
         // Fresh persisted usage above DEFAULT_PARENT_FORK_MAX_TOKENS (100K).
         totalTokens: 200_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      }),
+    },
+  });
+
+  try {
+    const created = await directSessionReq("sessions.create", {
+      agentId: "main",
+      parentSessionKey: "main",
+      fork: true,
+    });
+
+    expect(created.ok).toBe(false);
+    expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
+      "200000/100000 tokens",
+    );
+  } finally {
+    resetContextWindowCacheForTest();
+    testState.sessionConfig = undefined;
+  }
+});
+
+test("sessions.create admits an explicit fork within the child model context window", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.sessionConfig = { scope: "per-sender" };
+  agentDiscoveryMock.models = [
+    { id: "gpt-large", name: "Large", provider: "openai", contextWindow: 922_000 },
+  ];
+  const parent = await createCheckpointFixture(dir);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(parent.sessionId, {
+        sessionFile: parent.sessionFile,
+        providerOverride: "openai",
+        modelOverride: "gpt-large",
+        totalTokens: 391_869,
         totalTokensFresh: true,
         totalTokensVersion: 1,
       }),
@@ -5625,8 +5907,100 @@ test("sessions.create rejects fork when the parent exceeds the fork size cap", a
     fork: true,
   });
 
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  agentDiscoveryMock.models = [];
+  testState.sessionConfig = undefined;
+});
+
+test("sessions.create rejects an explicit fork above the selected child model window", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.sessionConfig = { scope: "per-sender" };
+  agentDiscoveryMock.models = [
+    { id: "gpt-small", name: "Small", provider: "openai", contextWindow: 128_000 },
+  ];
+  const parent = await createCheckpointFixture(dir);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(parent.sessionId, {
+        sessionFile: parent.sessionFile,
+        totalTokens: 150_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      }),
+    },
+  });
+
+  const created = await directSessionReq("sessions.create", {
+    agentId: "main",
+    model: "openai/gpt-small",
+    parentSessionKey: "main",
+    fork: true,
+  });
+
   expect(created.ok).toBe(false);
-  expect((created.error as { message?: string } | undefined)?.message ?? "").toContain("too large");
+  expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
+    "150000/128000 tokens",
+  );
+  agentDiscoveryMock.models = [];
+  testState.sessionConfig = undefined;
+});
+
+test("sessions.create clamps configured capacity to the selected child model window", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.sessionConfig = { scope: "per-sender" };
+  agentDiscoveryMock.models = [
+    {
+      id: "gpt-selectable",
+      name: "Selectable",
+      provider: "openai",
+      contextWindows: [
+        { id: "200k", label: "200K", contextWindow: 200_000 },
+        { id: "1m", label: "1M", contextWindow: 1_000_000 },
+      ],
+      contextWindowDefault: "1m",
+    },
+  ];
+  const parent = await createCheckpointFixture(dir);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(parent.sessionId, {
+        sessionFile: parent.sessionFile,
+        totalTokens: 300_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      }),
+    },
+  });
+  const cfg = getRuntimeConfig();
+
+  const created = await directSessionReq(
+    "sessions.create",
+    {
+      agentId: "main",
+      contextWindow: "200k",
+      fork: true,
+      model: "openai/gpt-selectable",
+      parentSessionKey: "main",
+    },
+    {
+      context: {
+        getRuntimeConfig: () => ({
+          ...cfg,
+          models: {
+            providers: {
+              openai: { models: [{ id: "gpt-selectable", contextTokens: 1_000_000 }] },
+            },
+          },
+        }),
+      },
+    },
+  );
+
+  expect(created.ok).toBe(false);
+  expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
+    "300000/200000 tokens",
+  );
+  agentDiscoveryMock.models = [];
   testState.sessionConfig = undefined;
 });
 

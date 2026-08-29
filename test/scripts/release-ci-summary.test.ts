@@ -41,6 +41,7 @@ import {
   validateRequestedEvidenceReuse,
   validateTrustedProducerIdentity,
 } from "../../scripts/release-ci-summary.mjs";
+import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = "scripts/release-ci-summary.mjs";
@@ -512,6 +513,7 @@ function artifactDigest(bytes: Buffer): string {
 }
 
 function rawManifest({
+  candidateBinding,
   evidenceReuse,
   rerunGroup = "all",
   runId = "29090000000",
@@ -521,6 +523,7 @@ function rawManifest({
   workflowRefType,
   workflowSha,
 }: {
+  candidateBinding?: unknown;
   evidenceReuse?: unknown;
   rerunGroup?: string;
   runId?: string;
@@ -530,6 +533,7 @@ function rawManifest({
   workflowRefType?: "branch" | "tag";
   workflowSha?: string;
 }): {
+  candidateBinding?: unknown;
   childRuns: Record<string, string | { blocking: boolean; conclusion: string; runId: string }>;
   controls: Record<string, unknown>;
   evidenceReuse?: unknown;
@@ -549,6 +553,7 @@ function rawManifest({
   workflowSha?: string;
 } {
   return {
+    ...(candidateBinding === undefined ? {} : { candidateBinding }),
     childRuns: {
       normalCi: "101",
       npmTelegram: "",
@@ -2099,6 +2104,50 @@ describe("release CI summary child correlation", () => {
     ]);
   });
 
+  it("derives distinct titles for every phased release child", () => {
+    expect(
+      expectedChildDispatches("29090000000", 3, "release/2026.7.1", 3)
+        .filter(({ manifestKey }) =>
+          [
+            "releaseChecksIndependent",
+            "releaseChecksCandidate",
+            "pluginPrereleaseIndependent",
+            "pluginPrereleaseCandidate",
+          ].includes(manifestKey),
+        )
+        .map(({ displayTitle, manifestKey, parentJobName }) => ({
+          displayTitle,
+          manifestKey,
+          parentJobName,
+        })),
+    ).toEqual([
+      {
+        displayTitle:
+          "Plugin Prerelease full-release-validation-29090000000-3-plugin-prerelease-independent",
+        manifestKey: "pluginPrereleaseIndependent",
+        parentJobName: "Run plugin prerelease independent validation",
+      },
+      {
+        displayTitle:
+          "Plugin Prerelease full-release-validation-29090000000-3-plugin-prerelease-candidate",
+        manifestKey: "pluginPrereleaseCandidate",
+        parentJobName: "Run plugin prerelease candidate validation",
+      },
+      {
+        displayTitle:
+          "OpenClaw Release Checks full-release-validation-29090000000-3-release-checks-independent",
+        manifestKey: "releaseChecksIndependent",
+        parentJobName: "Run release checks independent validation",
+      },
+      {
+        displayTitle:
+          "OpenClaw Release Checks full-release-validation-29090000000-3-release-checks-candidate",
+        manifestKey: "releaseChecksCandidate",
+        parentJobName: "Run release checks candidate validation",
+      },
+    ]);
+  });
+
   it("ignores same-SHA and nearby-name runs without the exact parent dispatch binding", () => {
     const expected = "OpenClaw Performance full-release-validation-29090000000-3";
     const exact = {
@@ -2338,6 +2387,37 @@ describe("release CI summary child correlation", () => {
         workflowSha: "c".repeat(40),
       }),
     ).toThrow("release validation manifest workflow SHA mismatch");
+  });
+
+  it("binds v3 manifests to the candidate sealed by the execution plan", () => {
+    const workflowSha = "b".repeat(40);
+    const candidateBinding = fullReleaseCandidateBindingFixture({
+      releaseProfile: "beta",
+      releaseSoak: false,
+      targetSha: "a".repeat(40),
+      toolingSha: workflowSha,
+      upgradeSurvivorScenarios: "",
+    });
+    const manifest = validateParentManifest(
+      rawManifest({ candidateBinding, version: 3, workflowSha }),
+      {
+        candidateBinding,
+        repository: "openclaw/openclaw",
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      },
+    );
+    expect(manifest.candidateBinding).toEqual(candidateBinding);
+    expect(() =>
+      validateParentManifest(rawManifest({ candidateBinding: null, version: 3, workflowSha }), {
+        candidateBinding,
+        repository: "openclaw/openclaw",
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      }),
+    ).toThrow("candidate differs from the immutable plan");
   });
 
   it("requires v3 manifests to record artifact-only performance publication", () => {

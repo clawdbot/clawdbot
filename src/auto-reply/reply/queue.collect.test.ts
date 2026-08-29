@@ -439,6 +439,24 @@ describe("followup queue collect routing", () => {
     },
   );
 
+  it("keeps history-policy peers separate when delivery targets coincide", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      "history-route-peers",
+      {},
+      2,
+    );
+    for (const peerId of ["peer", "direct:peer"]) {
+      enqueueSlackRun(key, settings, peerId, { conversationRoutePeerId: peerId });
+    }
+    await drainRecordedQueue(key, runFollowup, done);
+    expect(calls.map((call) => call.run.conversationRoutePeerId)).toEqual(["peer", "direct:peer"]);
+    expect(calls.map((call) => call.prompt)).toEqual(
+      ["peer", "direct:peer"].map(
+        (peerId) => `[Queued messages while agent was busy]\n\n---\nQueued #1\n${peerId}`,
+      ),
+    );
+  });
+
   it("collects distinct messages inside the same routed thread", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
       `test-collect-shared-thread-${Date.now()}`,

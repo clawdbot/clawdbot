@@ -206,6 +206,14 @@ describe("release tooling identity", () => {
           workflowSha: SHA,
         }),
       ).toMatchObject({ route: "main", sha: SHA });
+      expect(runGh).toHaveBeenCalledWith([
+        "api",
+        `repos/openclaw/openclaw/compare/${SHA}...main`,
+        "--method",
+        "GET",
+        "--jq",
+        "{status}",
+      ]);
     },
   );
 

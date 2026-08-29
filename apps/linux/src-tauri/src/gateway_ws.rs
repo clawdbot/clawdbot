@@ -1829,6 +1829,144 @@ fn dispatch_chat_event<R: tauri::Runtime>(app: &AppHandle<R>, frame: &Value) {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    mod dashboard_handoff {
+        use super::*;
+        use crate::{cli::OpenClawCli, gateway, NavigationState};
+        use std::ffi::OsString;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::path::PathBuf;
+        use std::sync::MutexGuard;
+
+        static CLI_ENV: Mutex<()> = Mutex::new(());
+
+        struct CliFixture {
+            directory: PathBuf,
+            previous_cli: Option<OsString>,
+            _environment: MutexGuard<'static, ()>,
+        }
+
+        impl CliFixture {
+            fn new() -> Self {
+                let environment = CLI_ENV.lock().unwrap_or_else(|error| error.into_inner());
+                let directory = std::env::temp_dir()
+                    .join(format!("openclaw-dashboard-handoff-{}", Uuid::new_v4()));
+                fs::create_dir(&directory).expect("create CLI fixture");
+                let executable = directory.join("openclaw");
+                fs::write(
+                    &executable,
+                    r#"#!/bin/sh
+case "$*" in
+  --version) echo '0.0.0-test' ;;
+  'gateway status --json') echo '{"service":{"loaded":true,"runtime":{"status":"running"}},"rpc":{"ok":true}}' ;;
+  'dashboard --json --no-open') cat "$(dirname "$0")/dashboard.json" ;;
+  *) echo 'Unexpected CLI invocation' >&2; exit 1 ;;
+esac
+"#,
+                )
+                .expect("write CLI fixture");
+                fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))
+                    .expect("make CLI fixture executable");
+                let previous_cli = std::env::var_os("OPENCLAW_DESKTOP_CLI");
+                std::env::set_var("OPENCLAW_DESKTOP_CLI", executable);
+                Self {
+                    directory,
+                    previous_cli,
+                    _environment: environment,
+                }
+            }
+
+            fn ready(&self, response: Value) -> Result<gateway::ReadyGateway, String> {
+                fs::write(self.directory.join("dashboard.json"), response.to_string())
+                    .expect("write dashboard response");
+                let cli = OpenClawCli::discover().expect("discover fixture CLI");
+                gateway::ensure_ready(&cli)
+            }
+        }
+
+        impl Drop for CliFixture {
+            fn drop(&mut self) {
+                match self.previous_cli.as_ref() {
+                    Some(value) => std::env::set_var("OPENCLAW_DESKTOP_CLI", value),
+                    None => std::env::remove_var("OPENCLAW_DESKTOP_CLI"),
+                }
+                let _ = fs::remove_dir_all(&self.directory);
+            }
+        }
+
+        #[test]
+        fn browser_pairing_is_separate_from_native_auth_and_survives_first_run_routing() {
+            let fixture = CliFixture::new();
+            let browser_url = "https://127.0.0.1:18789/control/?keep=yes#bootstrapToken=fixture%2Bbrowser%2Fgrant%3D&bootstrapProfile=owner";
+            let ws_url = "wss://127.0.0.1:18789/control";
+            for (mode, fragment, token, password) in [
+                ("password", "", None, Some("fixture-password")),
+                (
+                    "token",
+                    "#token=fixture%2Bshared%2Ftoken%3D",
+                    Some("fixture+shared/token="),
+                    None,
+                ),
+                // The CLI withholds SecretRef-backed shared credentials from JSON.
+                ("SecretRef", "", None, None),
+            ] {
+                let ready = fixture
+                    .ready(json!({
+                        "ok": true,
+                        "url": format!("https://127.0.0.1:18789/control/{fragment}"),
+                        "browserUrl": browser_url,
+                        "wsUrl": ws_url,
+                        "gatewayPassword": password,
+                        "tlsFingerprint": "ab".repeat(32),
+                    }))
+                    .unwrap_or_else(|error| panic!("{mode}: {error}"));
+
+                assert!(ready.snapshot.reachable, "{mode}");
+                assert_eq!(ready.gateway_ws.ws_url, ws_url, "{mode}");
+                assert_eq!(ready.gateway_ws.token.as_deref(), token, "{mode}");
+                assert_eq!(ready.gateway_ws.password.as_deref(), password, "{mode}");
+                assert_eq!(
+                    ready.gateway_ws.tls_fingerprint,
+                    Some("ab".repeat(32)),
+                    "{mode}"
+                );
+                assert_eq!(
+                    ready.dashboard_url, browser_url,
+                    "{mode}: browser pairing URL"
+                );
+
+                let mut navigation = NavigationState::default();
+                navigation.mark_onboarding_pending();
+                let first_run = navigation
+                    .prepare_dashboard_url(&ready.dashboard_url)
+                    .expect("first-run dashboard");
+                assert_eq!(first_run.path(), "/control/settings/model-setup", "{mode}");
+                assert_eq!(first_run.query(), Some("keep=yes&firstRun=1"), "{mode}");
+                assert_eq!(
+                    first_run.fragment(),
+                    Some("bootstrapToken=fixture%2Bbrowser%2Fgrant%3D&bootstrapProfile=owner"),
+                    "{mode}"
+                );
+            }
+        }
+
+        #[test]
+        fn missing_browser_handoff_requires_an_integration_upgrade() {
+            let fixture = CliFixture::new();
+            let result = fixture.ready(json!({
+                "ok": true,
+                "url": "http://127.0.0.1:18789/#token=fixture-shared-token",
+                "wsUrl": "ws://127.0.0.1:18789",
+            }));
+            let error = result
+                .err()
+                .expect("legacy shared URL cannot pair the browser");
+            assert!(error.contains("desktop dashboard integration"), "{error}");
+            assert!(error.contains("Beta or Development"), "{error}");
+        }
+    }
+
     #[test]
     fn sleep_cycle_runs_driver_without_quick_chat() {
         let client = GatewayClient::new();

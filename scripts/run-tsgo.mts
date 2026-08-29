@@ -81,6 +81,8 @@ async function main(): Promise<void> {
       bin: tsgoPath,
       args: finalArgs,
       env,
+      // The compiler owns a nested group that outer preparation cannot verify.
+      requireProcessTreeExit: process.platform !== "win32",
       timeoutMs,
     });
   } catch (error) {

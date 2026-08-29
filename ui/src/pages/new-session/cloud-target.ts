@@ -45,7 +45,6 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
         ? html`<span class="session-menu__icon" aria-hidden="true">${params.icon}</span>`
         : nothing}
       <span class="session-menu__text">${params.label}</span>
-      ${params.sub ? html`<span class="session-menu__sub">${params.sub}</span>` : nothing}
       ${params.facts?.length
         ? html`<span class="new-session-page__menu-facts">
             ${params.facts.map(
@@ -53,6 +52,7 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
             )}
           </span>`
         : nothing}
+      ${params.sub ? html`<span class="session-menu__sub">${params.sub}</span>` : nothing}
       <span class="session-menu__check" aria-hidden="true"
         >${params.checked ? icons.check : nothing}</span
       >

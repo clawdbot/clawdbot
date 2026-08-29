@@ -89,3 +89,50 @@ export function parseUpgradeSurvivorScenarios(raw) {
     ),
   ];
 }
+
+function parsePublishedReleaseVersion(spec) {
+  const match = /^openclaw@([0-9]{4})\.([0-9]+)\.([0-9]+)/u.exec(spec ?? "");
+  if (!match) {
+    return null;
+  }
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    patch: Number(match[3]),
+  };
+}
+
+function comparePublishedReleaseVersion(a, b) {
+  return a.year - b.year || a.month - b.month || a.patch - b.patch;
+}
+
+function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec) {
+  if (!baselineSpec) {
+    return true;
+  }
+  const version = parsePublishedReleaseVersion(baselineSpec);
+  if (!version) {
+    return true;
+  }
+  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 23 }) >= 0;
+}
+
+function supportsUpgradeSurvivorAcpToolsBridge(baselineSpec) {
+  if (!baselineSpec) {
+    return true;
+  }
+  const version = parsePublishedReleaseVersion(baselineSpec);
+  if (!version) {
+    return true;
+  }
+  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 22 }) >= 0;
+}
+
+export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
+  return (
+    (scenario !== "plugin-deps-cleanup" ||
+      supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec)) &&
+    (scenario !== "acpx-openclaw-tools-bridge" ||
+      supportsUpgradeSurvivorAcpToolsBridge(baselineSpec))
+  );
+}

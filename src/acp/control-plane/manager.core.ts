@@ -15,10 +15,7 @@ import { runManagerCloseSession } from "./manager.close-session.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import { runManagerInitializeSession } from "./manager.initialize-session.js";
 import { registerAcpSessionManagerDisposer } from "./manager.lifecycle.js";
-import {
-  applyManagerRuntimeControls,
-  resolveManagerRuntimeCapabilities,
-} from "./manager.runtime-controls.js";
+import { resolveManagerRuntimeCapabilities } from "./manager.runtime-controls.js";
 import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { ensureManagerRuntimeHandle } from "./manager.runtime-handle-ensure.js";
 import {
@@ -316,7 +313,6 @@ export class AcpSessionManager {
           activeTurnBySession: this.activeTurnBySession,
           resolveSession: this.resolveSession.bind(this),
           ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
-          applyRuntimeControls: this.applyRuntimeControls.bind(this),
           setSessionState: this.setSessionState.bind(this),
           recordTurnCompletion: this.recordTurnCompletion.bind(this),
           reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
@@ -423,18 +419,6 @@ export class AcpSessionManager {
     includeStatusConfigOptionKeys?: boolean;
   }): Promise<AcpRuntimeCapabilities> {
     return await resolveManagerRuntimeCapabilities(params);
-  }
-
-  private async applyRuntimeControls(params: {
-    sessionKey: string;
-    runtime: AcpRuntime;
-    handle: AcpRuntimeHandle;
-    meta: SessionAcpMeta;
-  }): Promise<void> {
-    await applyManagerRuntimeControls({
-      ...params,
-      getCachedRuntimeState: (sessionKey) => this.runtimeHandles.get(sessionKey),
-    });
   }
 
   private async setSessionState(params: {

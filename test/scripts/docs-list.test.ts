@@ -56,6 +56,57 @@ read_when: "Read this page when the hint is inline."
     expect(output).toContain("Read when: Read this page when the hint is inline.");
   });
 
+  it("accepts YAML document end markers in front matter", () => {
+    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-list-yaml-end-");
+    mkdirSync(path.join(tempRepoRoot, "docs"), { recursive: true });
+    writeFileSync(
+      path.join(tempRepoRoot, "docs", "page.md"),
+      `---
+summary: "YAML document end page"
+...
+`,
+      "utf8",
+    );
+
+    const output = runDocsList(tempRepoRoot);
+
+    expect(output).toContain("page.md - YAML document end page");
+    expect(output).not.toContain("unterminated front matter");
+  });
+
+  it("preserves suffixes and line endings on front matter terminators", () => {
+    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-list-terminator-suffixes-");
+    mkdirSync(path.join(tempRepoRoot, "docs"), { recursive: true });
+    const cases = [
+      [
+        "annotated.md",
+        '---\r\nsummary: "Annotated closing delimiter"\r\n--- # end\r\n',
+        "Annotated closing delimiter",
+      ],
+      [
+        "whitespace.md",
+        '---\nsummary: "Whitespace closing delimiter"\n---   \n',
+        "Whitespace closing delimiter",
+      ],
+      [
+        "document-end-comment.md",
+        '---\r\nsummary: "Document end comment"\r\n... # end\r\n',
+        "Document end comment",
+      ],
+    ] as const;
+
+    for (const [fileName, content] of cases) {
+      writeFileSync(path.join(tempRepoRoot, "docs", fileName), content, "utf8");
+    }
+
+    const output = runDocsList(tempRepoRoot);
+
+    for (const [fileName, , summary] of cases) {
+      expect(output).toContain(`${fileName} - ${summary}`);
+    }
+    expect(output).not.toContain("unterminated front matter");
+  });
+
   it("renders the publish docs map on demand without creating a mirror", () => {
     const tempRepoRoot = makeTempRepoRoot("openclaw-docs-headings-");
     mkdirSync(path.join(tempRepoRoot, "docs", "nested"), { recursive: true });
@@ -92,6 +143,27 @@ summary: "Page"
     expect(output).not.toContain("Hidden fenced heading");
     expect(output).not.toContain("AGENTS.md");
     expect(existsSync(path.join(tempRepoRoot, "docs", "docs_map.md"))).toBe(false);
+  });
+
+  it("strips annotated front matter terminators from the docs map", () => {
+    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-headings-frontmatter-");
+    const docsDir = path.join(tempRepoRoot, "docs");
+    mkdirSync(docsDir, { recursive: true });
+    writeFileSync(
+      path.join(docsDir, "page.md"),
+      `---
+summary: "Annotated page"
+# This metadata comment must not become a heading
+... # end
+# Visible title
+`,
+      "utf8",
+    );
+
+    const output = runDocsList(tempRepoRoot, ["--headings"]);
+
+    expect(output).toContain("  - H1: Visible title");
+    expect(output).not.toContain("metadata comment must not become a heading");
   });
 
   it("normalizes injected Windows paths for nested page routes", () => {

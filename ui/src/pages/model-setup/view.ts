@@ -1,21 +1,16 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { icons } from "../../components/icons.ts";
-import {
-  hasProviderBrandIcon,
-  renderProviderBrandIcon,
-  renderProviderFallbackIcon,
-} from "../../components/provider-icon.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
+import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/model-setup.css";
-import {
-  failureLabel,
-  renderModelSetupFailure,
-  renderConfiguredModel,
-} from "./configured-model.ts";
+import { renderModelSetupFailure, renderConfiguredModel } from "./configured-model.ts";
+import { renderProviderIcon } from "./model-setup-icon-loader.ts";
 import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import {
   focusSelectedManualProvider,
@@ -33,48 +28,11 @@ import { activationTargetId } from "./state.ts";
 import { renderModelSetupSuccessDialog } from "./success-dialog.ts";
 import { renderModelSetupWizard } from "./wizard-view.ts";
 
+const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
+
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
 type ManualProvider = SystemAgentSetupDetectResult["manualProviders"][number];
-type SetupIconEntry = {
-  brandId?: string;
-  label: string;
-  icon?: string;
-};
-
-export function resolveSetupBrandIcon(entry: SetupIconEntry): string | null {
-  // Only new Gateways provide authoritative local brand identity. Legacy
-  // payloads stay on their remote artwork path instead of guessing from labels.
-  return entry.brandId && hasProviderBrandIcon(entry.brandId) ? entry.brandId : null;
-}
-
-function renderProviderIcon(
-  props: Pick<ModelSetupViewProps, "iconUrls" | "onIconError">,
-  entry: SetupIconEntry,
-  className = "",
-) {
-  const localBrand = resolveSetupBrandIcon(entry);
-  if (localBrand) {
-    return renderProviderBrandIcon(localBrand, {
-      className: `model-setup__icon ${className}`.trim(),
-    });
-  }
-  const blobUrl = entry.icon ? props.iconUrls[entry.icon] : undefined;
-  if (!entry.icon || !blobUrl) {
-    return renderProviderFallbackIcon(entry.label, {
-      className: `model-setup__icon ${className}`.trim(),
-    });
-  }
-  return html`<img
-    class=${`model-setup__icon ${className}`.trim()}
-    src=${blobUrl}
-    alt=${entry.label}
-    width="24"
-    height="24"
-    @error=${() => props.onIconError(entry.icon!)}
-  />`;
-}
-
 type ModelSetupViewProps = {
   page: ModelSetupPageState;
   activation: ModelSetupActivationState;
@@ -88,6 +46,8 @@ type ModelSetupViewProps = {
   modelConfigured?: boolean;
   gatewayTooOld: boolean;
   refreshWarning: string | null;
+  activationUnresolved?: boolean;
+  onUseCurrentModel?: () => void;
   actionsDisabled: boolean;
   manualProviderId: string;
   manualApiKey: string;
@@ -165,12 +125,6 @@ function renderCandidateRows(props: ModelSetupViewProps, result: SystemAgentSetu
                 <div class="muted">
                   ${candidate.modelRef} · ${formatUiExternalText(candidate.detail)}
                 </div>
-                ${testing
-                  ? html`<div class="model-setup__testing" role="status">
-                      ${t("modelSetup.candidates.testing", { modelRef: candidate.modelRef })}
-                    </div>`
-                  : nothing}
-                ${failure ? renderModelSetupFailure(failure.status, failure.error) : nothing}
               </div>
               <div class="model-setup__row-actions">
                 <button
@@ -489,10 +443,6 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
   const provider = result.manualProviders.find((entry) => entry.id === props.manualProviderId);
   const targetId = `manual:${props.manualProviderId}`;
   const testing = props.activation.phase === "testing" && props.activation.targetId === targetId;
-  const failure =
-    props.activation.phase === "failure" && props.activation.targetId === targetId
-      ? props.activation
-      : null;
   return html`
     <section class="settings-section">
       <div class="settings-section__header">
@@ -527,16 +477,6 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
         ${props.manualError
           ? html`<div class="callout danger" role="alert">${props.manualError}</div>`
           : nothing}
-        ${testing
-          ? html`<div class="model-setup__testing" role="status">
-              ${t("modelSetup.candidates.testing", { modelRef: provider?.label ?? targetId })}
-            </div>`
-          : nothing}
-        ${failure
-          ? html`<div class="callout danger" role="alert">
-              <strong>${failureLabel(failure.status)}</strong> ${failure.error}
-            </div>`
-          : nothing}
         <button
           type="button"
           class="btn primary"
@@ -550,6 +490,25 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
       </div>
     </section>
   `;
+}
+
+export function revealModelSetupFeedback(root: ParentNode): void {
+  // Immediate scrolling reveals the current attempt without moving focus or
+  // scheduling work that could outlive this route. Unrelated renders do not call this.
+  root
+    .querySelector(".model-setup > .model-setup__testing, .model-setup > .model-setup__failure")
+    ?.scrollIntoView?.({ block: "nearest", behavior: "auto" });
+}
+
+function renderActivationFeedback(activation: ModelSetupActivationState) {
+  // Preparation can activate an undiscovered model. Feedback belongs to the
+  // attempt, not a candidate row or the current manual-provider selection.
+  if (activation.phase === "testing") {
+    return html`<div class="model-setup__testing" role="status">${t("modelSetup.testing")}</div>`;
+  }
+  return activation.phase === "failure"
+    ? renderModelSetupFailure(activation.status, activation.error)
+    : nothing;
 }
 
 function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
@@ -653,7 +612,10 @@ function renderLoading(modelConfigured: boolean) {
 export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
   let body: unknown;
   if (props.page.phase === "ready") {
-    body = renderReady(props, props.page.result);
+    body = renderReady(
+      { ...props, actionsDisabled: props.actionsDisabled || props.activationUnresolved === true },
+      props.page.result,
+    );
   } else if (!props.canAdmin) {
     body = html`<div class="callout warning" role="note">
       ${t("modelSetup.access.adminRequired")}
@@ -670,7 +632,7 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
       <button type="button" class="btn" @click=${props.onDetect}>${t("modelSetup.retry")}</button>
     `;
   }
-  return html`
+  const content = html`
     <div class="model-setup">
       <div class="model-setup__intro">
         <div>
@@ -692,8 +654,24 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
             </button>`
           : nothing}
       </div>
+      ${props.canAdmin && !props.gatewayTooOld
+        ? renderActivationFeedback(props.activation)
+        : nothing}
       ${props.refreshWarning
         ? html`<div class="callout warning" role="alert">${props.refreshWarning}</div>`
+        : nothing}
+      ${props.activationUnresolved && !props.actionsDisabled && props.activation.phase !== "success"
+        ? html`<div class="model-setup__recovery">
+            <p>${t("modelSetup.recovery.unknown")}</p>
+            ${props.page.phase === "ready" && props.page.result.configuredModel && props.canVerify
+              ? html`<button type="button" class="btn primary" @click=${props.onUseCurrentModel}>
+                  ${t("modelSetup.recovery.useCurrent")}
+                </button>`
+              : nothing}
+            <button type="button" class="btn" @click=${props.onDetect}>
+              ${t("modelSetup.checkAgain")}
+            </button>
+          </div>`
         : nothing}
       ${body}
     </div>
@@ -715,5 +693,16 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
           props.firstRun,
         )
       : nothing}
+  `;
+  return html`
+    <section class="content-header">
+      <div>
+        <div class="page-title">${titleForRoute("model-setup")}</div>
+        <div class="page-subtitle">
+          ${subtitleForRoute("model-setup")} ${renderLearnMoreLink(MODEL_SETUP_DOCS_URL)}
+        </div>
+      </div>
+    </section>
+    ${renderSettingsWorkspace(content)}
   `;
 }

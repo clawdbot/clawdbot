@@ -1,8 +1,12 @@
 import { asPositiveSafeInteger as resolvePositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
-import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type {
+  ModelCatalogProviderOutcome,
+  ModelChoice,
+} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { projectWorkerPlacementAgentRuntime } from "../worker-environments/placement-session-runtime.js";
 
@@ -36,6 +40,16 @@ export function buildPublicModelProjection(entry: ModelCatalogEntry): ModelsList
       ? { supportsTools: entry.compat.supportsTools }
       : {}),
   };
+}
+
+export function projectProviderCatalogOutcomes(
+  outcomes: readonly ProviderCatalogOutcome[] | undefined,
+): readonly ModelCatalogProviderOutcome[] | undefined {
+  return outcomes?.map(({ provider, profileId, status }) => ({
+    provider,
+    ...(profileId ? { profileId } : {}),
+    status,
+  }));
 }
 
 export function resolveModelChoiceAgentRuntime(params: {

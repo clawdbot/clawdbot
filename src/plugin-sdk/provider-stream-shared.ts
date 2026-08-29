@@ -28,7 +28,11 @@ import type { Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { findCodeRegions } from "../shared/text/code-regions.js";
 import { assertProviderStreamEvent } from "./provider-stream-event-normalization.js";
-export { applyAnthropicRefusal } from "@openclaw/ai/internal/anthropic";
+export {
+  applyAnthropicRefusal,
+  isAnthropicOAuthApiKey,
+  resolveAnthropicServerCompactionPlan,
+} from "@openclaw/ai/internal/anthropic";
 export { createDeferredEventBuffer } from "@openclaw/ai/internal/runtime";
 export { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 

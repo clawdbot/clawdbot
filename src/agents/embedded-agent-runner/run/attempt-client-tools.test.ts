@@ -144,20 +144,23 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     ).toEqual([["exec"], []]);
   });
 
-  it("hides client tools behind the code-mode catalog when code mode is engaged", () => {
-    const catalogRef = seedCatalog("code-mode", CODE_MODE_CONFIG);
+  it.each([CODE_MODE_CONFIG, CATALOGS_DISABLED_CONFIG])(
+    "hides client tools when the attempt engages code mode",
+    (config) => {
+      const catalogRef = seedCatalog("code-mode", config);
 
-    const result = prepare({
-      codeModeControlsEnabledForRun: true,
-      attemptConfig: CODE_MODE_CONFIG,
-      // Deliberately catalog-disabled: the code-mode branch must not read this.
-      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
-      catalogRef,
-    });
+      const result = prepare({
+        codeModeControlsEnabledForRun: true,
+        attemptConfig: config,
+        // Deliberately catalog-disabled: the code-mode branch must not read this.
+        toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+        catalogRef,
+      });
 
-    expect(result.clientToolDefs).toEqual([]);
-    expect(result.allCustomTools).toEqual([]);
-  });
+      expect(result.clientToolDefs).toEqual([]);
+      expect(result.allCustomTools).toEqual([]);
+    },
+  );
 
   it("advertises and invokes final callable owners after a normalized client collision", async () => {
     const catalogRef = createToolSearchCatalogRef();

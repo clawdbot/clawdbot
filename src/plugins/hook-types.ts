@@ -1,5 +1,8 @@
 import type { AgentMessage } from "../agents/runtime/index.js";
-import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type {
+  GetReplyOptions,
+  SourceReplyDeliveryMode,
+} from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type {
   ReplyDispatchKind,
@@ -567,6 +570,8 @@ export type PluginHookReplyDispatchContext = {
   dispatcher: ReplyDispatcher;
   abortSignal?: AbortSignal;
   onReplyStart?: () => Promise<void> | void;
+  onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
+  userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
   recordProcessed: (
     outcome: "completed" | "skipped" | "error",
     opts?: {
