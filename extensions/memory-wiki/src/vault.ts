@@ -175,12 +175,16 @@ export async function activateExistingMemoryWikiVault(
   if (!identity.vaultGeneration) {
     throw new Error(`Memory Wiki vault generation is missing: ${rootDir}`);
   }
-  activateMemoryWikiCompiledCacheOwner(
+  const needsReconcile = activateMemoryWikiCompiledCacheOwner(
     config,
     identity.vaultGeneration,
     identity.compiledCachePublicationId,
   );
-  await reconcileMemoryWikiCompiledCacheOwner(config, () =>
-    loadMemoryWikiValidatedVaultIdentity(rootDir),
-  );
+  // Repeated request setup must retain the loaded publication. Reconciliation
+  // runs again only when its path, generation, or publication identity changes.
+  if (needsReconcile) {
+    await reconcileMemoryWikiCompiledCacheOwner(config, () =>
+      loadMemoryWikiValidatedVaultIdentity(rootDir),
+    );
+  }
 }

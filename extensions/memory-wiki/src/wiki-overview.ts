@@ -1,8 +1,8 @@
 // Memory Wiki plugin module implements the memory wiki overview.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { loadMemoryWikiCompiledCache } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { parseWikiMarkdown, type WikiPageKind } from "./markdown.js";
-import { readQueryableWikiPages } from "./query.js";
+import type { WikiPageKind, WikiPageSummary } from "./markdown.js";
 
 const OVERVIEW_KIND_ORDER: WikiPageKind[] = ["synthesis", "entity", "concept", "source", "report"];
 const PRIMARY_OVERVIEW_KINDS = new Set<WikiPageKind>(["synthesis", "entity", "concept"]);
@@ -14,7 +14,7 @@ const OVERVIEW_KIND_LABELS: Record<WikiPageKind, string> = {
   report: "Reports",
 };
 
-type MemoryWikiOverviewItem = {
+export type MemoryWikiOverviewItem = {
   pagePath: string;
   title: string;
   kind: WikiPageKind;
@@ -43,7 +43,7 @@ type MemoryWikiOverviewCluster = {
 
 type MemoryWikiOverviewPageCounts = Record<WikiPageKind, number>;
 
-type MemoryWikiOverviewStatus = {
+export type MemoryWikiOverviewStatus = {
   totalItems: number;
   totalPages: number;
   pageCounts: MemoryWikiOverviewPageCounts;
@@ -53,15 +53,13 @@ type MemoryWikiOverviewStatus = {
   clusters: MemoryWikiOverviewCluster[];
 };
 
-function createEmptyOverviewPageCounts(): MemoryWikiOverviewPageCounts {
-  return {
-    synthesis: 0,
-    entity: 0,
-    concept: 0,
-    source: 0,
-    report: 0,
-  };
-}
+const EMPTY_OVERVIEW_PAGE_COUNTS: MemoryWikiOverviewPageCounts = {
+  synthesis: 0,
+  entity: 0,
+  concept: 0,
+  source: 0,
+  report: 0,
+};
 
 function extractSnippet(body: string): string | undefined {
   for (const rawLine of body.split(/\r?\n/)) {
@@ -96,35 +94,52 @@ function compareOverviewItems(left: MemoryWikiOverviewItem, right: MemoryWikiOve
 export async function listMemoryWikiOverview(
   config: ResolvedMemoryWikiConfig,
 ): Promise<MemoryWikiOverviewStatus> {
-  const pages = await readQueryableWikiPages(config.vault.path);
-  const pageCounts = pages.reduce<MemoryWikiOverviewPageCounts>((counts, page) => {
-    counts[page.kind] += 1;
-    return counts;
-  }, createEmptyOverviewPageCounts());
+  const snapshot = await loadMemoryWikiCompiledCache(config);
+  if (!snapshot) {
+    throw new Error('Memory Wiki has no compiled dashboard snapshot. Run "openclaw wiki compile".');
+  }
+  return snapshot.dashboards.overview;
+}
+
+export function projectMemoryWikiOverviewItem(
+  page: WikiPageSummary,
+  body: string,
+): MemoryWikiOverviewItem {
+  const updatedAt = normalizeOptionalString(page.updatedAt);
+  const sourceType = normalizeOptionalString(page.sourceType);
+  const snippet = extractSnippet(body);
+  return Object.assign(
+    { pagePath: page.relativePath, title: page.title, kind: page.kind },
+    page.id ? { id: page.id } : {},
+    updatedAt ? { updatedAt } : {},
+    sourceType ? { sourceType } : {},
+    {
+      claimCount: page.claims.length,
+      questionCount: page.questions.length,
+      contradictionCount: page.contradictions.length,
+      claims: page.claims.map((claim) => claim.text).slice(0, 3),
+      questions: page.questions.slice(0, 3),
+      contradictions: page.contradictions.slice(0, 3),
+    },
+    snippet ? { snippet } : {},
+  );
+}
+
+export function buildMemoryWikiOverview(
+  pages: WikiPageSummary[],
+  projectedItems: MemoryWikiOverviewItem[],
+): MemoryWikiOverviewStatus {
+  const pageCounts = pages.reduce<MemoryWikiOverviewPageCounts>(
+    (counts, page) => {
+      counts[page.kind] += 1;
+      return counts;
+    },
+    { ...EMPTY_OVERVIEW_PAGE_COUNTS },
+  );
   const totalClaims = pages.reduce((sum, page) => sum + page.claims.length, 0);
   const totalQuestions = pages.reduce((sum, page) => sum + page.questions.length, 0);
   const totalContradictions = pages.reduce((sum, page) => sum + page.contradictions.length, 0);
-  const items = pages
-    .map((page) => {
-      const parsed = parseWikiMarkdown(page.raw);
-      const updatedAt = normalizeOptionalString(page.updatedAt);
-      const sourceType = normalizeOptionalString(page.sourceType);
-      return Object.assign(
-        { pagePath: page.relativePath, title: page.title, kind: page.kind },
-        page.id ? { id: page.id } : {},
-        updatedAt ? { updatedAt } : {},
-        sourceType ? { sourceType } : {},
-        {
-          claimCount: page.claims.length,
-          questionCount: page.questions.length,
-          contradictionCount: page.contradictions.length,
-          claims: page.claims.map((claim) => claim.text).slice(0, 3),
-          questions: page.questions.slice(0, 3),
-          contradictions: page.contradictions.slice(0, 3),
-        },
-        extractSnippet(parsed.body) ? { snippet: extractSnippet(parsed.body) } : {},
-      ) satisfies MemoryWikiOverviewItem;
-    })
+  const items = projectedItems
     .filter(
       (item) =>
         PRIMARY_OVERVIEW_KINDS.has(item.kind) ||

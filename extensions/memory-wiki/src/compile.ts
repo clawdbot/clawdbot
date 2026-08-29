@@ -30,11 +30,17 @@ import {
 } from "./claim-health.js";
 import {
   createMemoryWikiCompiledCachePublicationId,
+  loadMemoryWikiCompiledCache,
   resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
 } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import {
+  buildMemoryWikiImportInsights,
+  projectMemoryWikiImportInsight,
+  type MemoryWikiImportInsightItem,
+} from "./import-insights.js";
 import {
   appendMemoryWikiLog,
   loadMemoryWikiValidatedVaultIdentity,
@@ -59,6 +65,11 @@ import {
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
+import {
+  buildMemoryWikiOverview,
+  projectMemoryWikiOverviewItem,
+  type MemoryWikiOverviewItem,
+} from "./wiki-overview.js";
 
 const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: string }> = [
   { kind: "source", dir: "sources", heading: "Sources" },
@@ -371,7 +382,12 @@ export type CompileMemoryWikiResult = {
 
 export type RefreshMemoryWikiIndexesResult = {
   refreshed: boolean;
-  reason: "auto-compile-disabled" | "no-import-changes" | "missing-indexes" | "import-changed";
+  reason:
+    | "auto-compile-disabled"
+    | "no-import-changes"
+    | "missing-indexes"
+    | "missing-compiled-cache"
+    | "import-changed";
   compile?: CompileMemoryWikiResult;
 };
 
@@ -387,6 +403,8 @@ async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promi
 async function readPageSummaries(rootDir: string): Promise<{
   pages: WikiPageSummary[];
   frontmatterErrors: WikiPageFrontmatterError[];
+  importInsights: MemoryWikiImportInsightItem[];
+  overviewItems: MemoryWikiOverviewItem[];
 }> {
   const filePaths = (
     await Promise.all(COMPILE_PAGE_GROUPS.map((group) => collectMarkdownFiles(rootDir, group.dir)))
@@ -399,7 +417,16 @@ async function readPageSummaries(rootDir: string): Promise<{
         () => fs.readFile(absolutePath, "utf8"),
         `read wiki page ${absolutePath}`,
       );
-      return scanWikiPageSummary({ absolutePath, relativePath, raw });
+      const scan = scanWikiPageSummary({ absolutePath, relativePath, raw });
+      if (scan.status !== "valid") {
+        return { scan, importInsight: null, overviewItem: null };
+      }
+      const parsed = parseWikiMarkdown(raw);
+      return {
+        scan,
+        importInsight: projectMemoryWikiImportInsight(scan.page, parsed),
+        overviewItem: projectMemoryWikiOverviewItem(scan.page, parsed.body),
+      };
     }),
     limit: READ_PAGE_SUMMARIES_CONCURRENCY,
     errorMode: "stop",
@@ -410,21 +437,17 @@ async function readPageSummaries(rootDir: string): Promise<{
 
   return {
     pages: readResult.results
-      .flatMap((result) => (result.status === "valid" ? [result.page] : []))
+      .flatMap(({ scan }) => (scan.status === "valid" ? [scan.page] : []))
       .toSorted((left, right) => left.title.localeCompare(right.title)),
-    frontmatterErrors: readResult.results.flatMap((result) =>
-      result.status === "invalid-frontmatter" ? [result.error] : [],
+    frontmatterErrors: readResult.results.flatMap(({ scan }) =>
+      scan.status === "invalid-frontmatter" ? [scan.error] : [],
     ),
-  };
-}
-
-function buildPageCounts(pages: WikiPageSummary[]): Record<WikiPageKind, number> {
-  return {
-    entity: pages.filter((page) => page.kind === "entity").length,
-    concept: pages.filter((page) => page.kind === "concept").length,
-    source: pages.filter((page) => page.kind === "source").length,
-    synthesis: pages.filter((page) => page.kind === "synthesis").length,
-    report: pages.filter((page) => page.kind === "report").length,
+    importInsights: readResult.results.flatMap(({ importInsight }) =>
+      importInsight ? [importInsight] : [],
+    ),
+    overviewItems: readResult.results.flatMap(({ overviewItem }) =>
+      overviewItem ? [overviewItem] : [],
+    ),
   };
 }
 
@@ -1125,8 +1148,9 @@ function sortClaims(page: WikiPageSummary): WikiClaim[] {
 }
 
 function buildCompiledCacheSnapshot(
-  pagesInput: WikiPageSummary[],
+  scan: Awaited<ReturnType<typeof readPageSummaries>>,
 ): MemoryWikiCompiledCacheSnapshot {
+  const pagesInput = scan.pages;
   const pages = [...pagesInput]
     .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath))
     .map((page) => {
@@ -1218,6 +1242,10 @@ function buildCompiledCacheSnapshot(
       pages,
     },
     claims,
+    dashboards: {
+      importInsights: buildMemoryWikiImportInsights(scan.importInsights),
+      overview: buildMemoryWikiOverview(scan.pages, scan.overviewItems),
+    },
   };
 }
 
@@ -1277,8 +1305,8 @@ async function compileMemoryWikiVaultUnlocked(
     scan = await readPageSummaries(rootDir);
     pages = scan.pages;
   }
-  const counts = buildPageCounts(pages);
-  const compiledSnapshot = buildCompiledCacheSnapshot(pages);
+  const compiledSnapshot = buildCompiledCacheSnapshot(scan);
+  const counts = compiledSnapshot.dashboards.overview.pageCounts;
   const compiledCacheGeneration = resolveMemoryWikiCompiledCacheGeneration(compiledSnapshot);
   const compiledCachePublicationId = createMemoryWikiCompiledCachePublicationId();
   let compiledCacheSourceGeneration: string | undefined;
@@ -1335,7 +1363,7 @@ async function compileMemoryWikiVaultUnlocked(
       const sourceGenerationBeforeScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
       const verifiedScan = await readPageSummaries(rootDir);
       const verifiedGeneration = resolveMemoryWikiCompiledCacheGeneration(
-        buildCompiledCacheSnapshot(verifiedScan.pages),
+        buildCompiledCacheSnapshot(verifiedScan),
       );
       const sourceGenerationAfterScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
       if (
@@ -1433,7 +1461,8 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
     params.syncResult.updatedCount > 0 ||
     params.syncResult.removedCount > 0;
   const missingIndexes = await hasMissingWikiIndexes(params.config.vault.path);
-  if (!importChanged && !missingIndexes) {
+  const missingCompiledCache = (await loadMemoryWikiCompiledCache(params.config)) === null;
+  if (!importChanged && !missingIndexes && !missingCompiledCache) {
     return {
       refreshed: false,
       reason: "no-import-changes",
@@ -1442,7 +1471,11 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
   const compile = await compileMemoryWikiVault(params.config);
   return {
     refreshed: true,
-    reason: missingIndexes && !importChanged ? "missing-indexes" : "import-changed",
+    reason: importChanged
+      ? "import-changed"
+      : missingIndexes
+        ? "missing-indexes"
+        : "missing-compiled-cache",
     compile,
   };
 }

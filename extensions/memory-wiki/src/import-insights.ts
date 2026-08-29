@@ -1,11 +1,11 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 // Memory Wiki plugin module implements import insights behavior.
+import { loadMemoryWikiCompiledCache } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { parseWikiMarkdown } from "./markdown.js";
-import { readQueryableWikiPages } from "./query.js";
+import type { WikiPageSummary } from "./markdown.js";
 
-type MemoryWikiImportInsightItem = {
+export type MemoryWikiImportInsightItem = {
   pagePath: string;
   title: string;
   riskLevel: "low" | "medium" | "high" | "unknown";
@@ -39,7 +39,7 @@ type MemoryWikiImportInsightCluster = {
   items: MemoryWikiImportInsightItem[];
 };
 
-type MemoryWikiImportInsightsStatus = {
+export type MemoryWikiImportInsightsStatus = {
   sourceType: "chatgpt";
   totalItems: number;
   totalClusters: number;
@@ -299,89 +299,89 @@ function compareItemsByUpdated(
 export async function listMemoryWikiImportInsights(
   config: ResolvedMemoryWikiConfig,
 ): Promise<MemoryWikiImportInsightsStatus> {
-  const pages = await readQueryableWikiPages(config.vault.path);
-  const items = pages
-    .flatMap((page) => {
-      if (page.pageType !== "source") {
-        return [];
-      }
-      const parsed = parseWikiMarkdown(page.raw);
-      if (parsed.frontmatter.sourceType !== "chatgpt-export") {
-        return [];
-      }
-      const labels = normalizeStringArray(parsed.frontmatter.labels);
-      const topic = resolveTopic(labels);
-      const triageLines = extractHeadingSection(parsed.body, "Auto Triage");
-      const digestLines = extractHeadingSection(parsed.body, "Auto Digest");
-      const transcriptTurns = parseTranscriptTurns(parsed.body);
-      const digestStatus = digestLines.some((line) =>
-        line.toLowerCase().includes("withheld from durable-candidate generation"),
-      )
-        ? "withheld"
-        : "available";
-      const exposeImportContent = shouldExposeImportContent(digestStatus);
-      const userTurns = transcriptTurns.filter((turn) => turn.role === "user");
-      const assistantTurns = transcriptTurns.filter((turn) => turn.role === "assistant");
-      const assistantOpener = exposeImportContent
-        ? firstParagraph(assistantTurns[0]?.text ?? "")
-        : undefined;
-      const correctionSignals = exposeImportContent
-        ? extractCorrectionSignals(transcriptTurns)
-        : [];
-      const preferenceSignals = exposeImportContent ? extractPreferenceSignals(digestLines) : [];
-      const candidateSignals = exposeImportContent
-        ? deriveCandidateSignals({
-            preferenceSignals,
-            correctionSignals,
-          })
-        : [];
-      const firstUserLine = exposeImportContent
-        ? extractDigestField(digestLines, "First user line")
-        : undefined;
-      const lastUserLine = exposeImportContent
-        ? extractDigestField(digestLines, "Last user line")
-        : undefined;
-      const createdAt = normalizeOptionalString(parsed.frontmatter.createdAt);
-      const updatedAt = normalizeOptionalString(parsed.frontmatter.updatedAt);
-      return [
-        {
-          pagePath: page.relativePath,
-          title: page.title.replace(/^ChatGPT Export:\s*/i, ""),
-          riskLevel: normalizeRiskLevel(parsed.frontmatter.riskLevel),
-          riskReasons: normalizeStringArray(parsed.frontmatter.riskReasons),
-          labels,
-          topicKey: topic.key,
-          topicLabel: topic.label,
-          digestStatus,
-          activeBranchMessages: extractIntegerField(triageLines, "Active-branch messages"),
-          userMessageCount: Math.max(
-            extractIntegerField(digestLines, "User messages"),
-            userTurns.length,
-          ),
-          assistantMessageCount: Math.max(
-            extractIntegerField(digestLines, "Assistant messages"),
-            assistantTurns.length,
-          ),
-          ...(firstUserLine ? { firstUserLine } : {}),
-          ...(lastUserLine ? { lastUserLine } : {}),
-          ...(assistantOpener ? { assistantOpener } : {}),
-          summary: deriveSummary({
-            title: page.title.replace(/^ChatGPT Export:\s*/i, ""),
-            digestStatus,
-            ...(assistantOpener ? { assistantOpener } : {}),
-            ...(firstUserLine ? { firstUserLine } : {}),
-            riskReasons: normalizeStringArray(parsed.frontmatter.riskReasons),
-            topicLabel: topic.label,
-          }),
-          candidateSignals,
-          correctionSignals,
-          preferenceSignals,
-          ...(createdAt ? { createdAt } : {}),
-          ...(updatedAt ? { updatedAt } : {}),
-        } satisfies MemoryWikiImportInsightItem,
-      ];
-    })
-    .toSorted(compareItemsByUpdated);
+  const snapshot = await loadMemoryWikiCompiledCache(config);
+  if (!snapshot) {
+    throw new Error('Memory Wiki has no compiled dashboard snapshot. Run "openclaw wiki compile".');
+  }
+  return snapshot.dashboards.importInsights;
+}
+
+export function projectMemoryWikiImportInsight(
+  page: WikiPageSummary,
+  parsed: { frontmatter: Record<string, unknown>; body: string },
+): MemoryWikiImportInsightItem | null {
+  if (page.pageType !== "source" || parsed.frontmatter.sourceType !== "chatgpt-export") {
+    return null;
+  }
+  const labels = normalizeStringArray(parsed.frontmatter.labels);
+  const topic = resolveTopic(labels);
+  const triageLines = extractHeadingSection(parsed.body, "Auto Triage");
+  const digestLines = extractHeadingSection(parsed.body, "Auto Digest");
+  const transcriptTurns = parseTranscriptTurns(parsed.body);
+  const digestStatus = digestLines.some((line) =>
+    line.toLowerCase().includes("withheld from durable-candidate generation"),
+  )
+    ? "withheld"
+    : "available";
+  const exposeImportContent = shouldExposeImportContent(digestStatus);
+  const userTurns = transcriptTurns.filter((turn) => turn.role === "user");
+  const assistantTurns = transcriptTurns.filter((turn) => turn.role === "assistant");
+  const assistantOpener = exposeImportContent
+    ? firstParagraph(assistantTurns[0]?.text ?? "")
+    : undefined;
+  const correctionSignals = exposeImportContent ? extractCorrectionSignals(transcriptTurns) : [];
+  const preferenceSignals = exposeImportContent ? extractPreferenceSignals(digestLines) : [];
+  const candidateSignals = exposeImportContent
+    ? deriveCandidateSignals({ preferenceSignals, correctionSignals })
+    : [];
+  const firstUserLine = exposeImportContent
+    ? extractDigestField(digestLines, "First user line")
+    : undefined;
+  const lastUserLine = exposeImportContent
+    ? extractDigestField(digestLines, "Last user line")
+    : undefined;
+  const createdAt = normalizeOptionalString(parsed.frontmatter.createdAt);
+  const updatedAt = normalizeOptionalString(parsed.frontmatter.updatedAt);
+  const title = page.title.replace(/^ChatGPT Export:\s*/i, "");
+  const riskReasons = normalizeStringArray(parsed.frontmatter.riskReasons);
+  return {
+    pagePath: page.relativePath,
+    title,
+    riskLevel: normalizeRiskLevel(parsed.frontmatter.riskLevel),
+    riskReasons,
+    labels,
+    topicKey: topic.key,
+    topicLabel: topic.label,
+    digestStatus,
+    activeBranchMessages: extractIntegerField(triageLines, "Active-branch messages"),
+    userMessageCount: Math.max(extractIntegerField(digestLines, "User messages"), userTurns.length),
+    assistantMessageCount: Math.max(
+      extractIntegerField(digestLines, "Assistant messages"),
+      assistantTurns.length,
+    ),
+    ...(firstUserLine ? { firstUserLine } : {}),
+    ...(lastUserLine ? { lastUserLine } : {}),
+    ...(assistantOpener ? { assistantOpener } : {}),
+    summary: deriveSummary({
+      title,
+      digestStatus,
+      ...(assistantOpener ? { assistantOpener } : {}),
+      ...(firstUserLine ? { firstUserLine } : {}),
+      riskReasons,
+      topicLabel: topic.label,
+    }),
+    candidateSignals,
+    correctionSignals,
+    preferenceSignals,
+    ...(createdAt ? { createdAt } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+  };
+}
+
+export function buildMemoryWikiImportInsights(
+  input: MemoryWikiImportInsightItem[],
+): MemoryWikiImportInsightsStatus {
+  const items = [...input].toSorted(compareItemsByUpdated);
 
   const clustersByKey = new Map<string, MemoryWikiImportInsightItem[]>();
   for (const item of items) {
