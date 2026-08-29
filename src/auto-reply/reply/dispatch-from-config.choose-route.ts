@@ -651,6 +651,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   dispatcher: state.dispatchHookDispatcher,
                   abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
                   onReplyStart: params.replyOptions?.onReplyStart,
+                  onAgentRunStart: params.replyOptions?.onAgentRunStart,
+                  userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
                   recordProcessed,
                   markIdle,
                 },

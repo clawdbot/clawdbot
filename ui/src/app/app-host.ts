@@ -1,7 +1,6 @@
 import { property, query, state } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import "../components/app-topbar.ts";
-import "../components/macos-titlebar-controls.ts";
 import "../components/modal-dialog.ts";
 import {
   formatDocumentTitle,
@@ -9,7 +8,6 @@ import {
   titleForRoute,
 } from "../app-navigation.ts";
 import "../components/resizable-divider.ts";
-import "../components/update-banner.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS, type RouteId } from "../app-routes.ts";
 import {

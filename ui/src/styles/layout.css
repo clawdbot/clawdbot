@@ -183,19 +183,6 @@
   display: none;
 }
 
-/* Reserve notice space only while the corresponding in-page chrome remains visible. */
-:is(
-    html:not(.openclaw-native-nav, .openclaw-native-web-chrome)
-      .shell:not(.shell--mobile-nav, .shell--settings),
-    html.openclaw-native-nav:not(.openclaw-native-web-chrome)
-      .shell:not(.shell--mobile-nav, .shell--nav-collapsed, .shell--settings)
-  )
-  .content
-  > openclaw-update-banner
-  .callout {
-  margin-left: var(--shell-chrome-safe-area-left);
-}
-
 html.openclaw-native-macos .shell-chrome-controls {
   top: 52px;
 }

@@ -1,12 +1,9 @@
 // Runs grouped Vitest batches through the repo pnpm wrapper.
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { spawnPnpmRunner } from "../pnpm-runner.mts";
-import {
-  createVitestProcessCompletion,
-  installVitestProcessGroupCleanup,
-  shouldUseDetachedVitestProcessGroup,
-} from "../vitest-process-group.mts";
+import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mts";
+import { installVitestProcessGroupCleanup } from "../vitest-process-group.mts";
+import { spawnOwnedVitestProcess } from "./vitest-process.mts";
 
 export type VitestBatchRunParams = {
   args: string[];
@@ -25,14 +22,14 @@ const repoRoot = path.resolve(scriptDir, "../..");
 export async function runVitestBatch(params: VitestBatchRunParams): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
     let forwardedSignal: NodeJS.Signals | undefined;
-    const detached = shouldUseDetachedVitestProcessGroup();
-    const child = spawnPnpmRunner({
-      cwd: repoRoot,
-      detached,
-      env: params.env,
-      pnpmArgs: buildVitestBatchPnpmArgs(params),
-      stdio: "inherit",
-    });
+    const { child, completion } = spawnOwnedVitestProcess(
+      createPnpmRunnerSpawnSpec({
+        cwd: repoRoot,
+        env: params.env,
+        pnpmArgs: buildVitestBatchPnpmArgs(params),
+        stdio: "inherit",
+      }),
+    );
     const teardownChildCleanup = installVitestProcessGroupCleanup({
       child,
       forceSignal: "SIGKILL",
@@ -41,11 +38,7 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
         forwardedSignal ??= signal;
       },
     });
-    const completion = createVitestProcessCompletion({ child, detached }).finally(
-      teardownChildCleanup,
-    );
-
-    completion.then((result) => {
+    completion.finally(teardownChildCleanup).then((result) => {
       const { code, signal } = result;
       if (forwardedSignal) {
         process.kill(process.pid, forwardedSignal);
