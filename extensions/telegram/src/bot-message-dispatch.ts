@@ -238,10 +238,8 @@ function scheduleDmTopicLabel(params: {
   if (!isDmTopic || !params.isFirstTurnInSession) {
     return;
   }
-  // Captionless media (voice notes, photos, stickers) arrives with `RawBody` set to an
-  // empty string rather than `undefined`, so a `??` chain stops there and never reaches
-  // the fields that do carry text. Fall through on any blank value instead: `BodyForAgent`
-  // holds the audio-preflight transcript for a captionless voice note, `Body` is last resort.
+  // Captionless media keeps RawBody as "", while BodyForAgent may hold its transcript.
+  // Select the first nonblank candidate so one-shot topic naming does not silently vanish.
   const labelSource =
     [context.ctxPayload.RawBody, context.ctxPayload.BodyForAgent, context.ctxPayload.Body].find(
       (candidate) => candidate?.trim(),
