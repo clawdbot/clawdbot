@@ -40,7 +40,12 @@ describe("createLineImageSetBuffer", () => {
     await expect(arrive("m3", 3)).resolves.toBe(true);
 
     expect(flush).toHaveBeenCalledTimes(1);
-    expect(flush).toHaveBeenCalledWith(["image-1", "image-2", "image-3"]);
+    expect(flush).toHaveBeenCalledWith(
+      ["image-1", "image-2", "image-3"],
+      // The completing part is still inside its own request, so only the two that
+      // already returned are owed a settlement.
+      ["image-1", "image-2"],
+    );
   });
 
   it("delivers what arrived when LINE never reports a total", async () => {
@@ -58,7 +63,7 @@ describe("createLineImageSetBuffer", () => {
 
     expect(flush).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(flush).toHaveBeenCalledWith(["only"]);
+    expect(flush).toHaveBeenCalledWith(["only"], ["only"]);
   });
 
   it("replaces a redelivered part instead of adding a second image", async () => {
@@ -94,7 +99,7 @@ describe("createLineImageSetBuffer", () => {
       onDetachedFlushError,
     });
 
-    expect(flush).toHaveBeenCalledWith(["a-again", "b"]);
+    expect(flush).toHaveBeenCalledWith(["a-again", "b"], ["a-again"]);
   });
 
   it("keeps two sets in flight apart", async () => {
@@ -128,12 +133,12 @@ describe("createLineImageSetBuffer", () => {
       onDetachedFlushError,
     });
 
-    expect(first).toHaveBeenCalledWith(["a1", "a2"]);
+    expect(first).toHaveBeenCalledWith(["a1", "a2"], ["a1"]);
     expect(second).not.toHaveBeenCalled();
   });
 
-  // A timed-out set dispatches after its webhook request was answered, so the
-  // ingress drain can no longer retry it. The failure has to reach someone.
+  // A flush that rejects could not settle the claims it was handed, so the
+  // rejection has to reach someone rather than become an unhandled one.
   it("reports a delayed flush that fails instead of swallowing the rejection", async () => {
     const failure = new Error("context build failed");
     const flush = vi.fn(async () => {
@@ -177,6 +182,6 @@ describe("createLineImageSetBuffer", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(flush).toHaveBeenCalledWith(["one", "two"]);
+    expect(flush).toHaveBeenCalledWith(["one", "two"], ["one"]);
   });
 });

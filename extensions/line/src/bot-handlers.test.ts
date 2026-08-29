@@ -255,6 +255,7 @@ function createLineWebhookTestContext(params: {
   requireMention?: boolean;
   groupHistories?: Map<string, HistoryEntry[]>;
   accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
+  turnAdoptionLifecycle?: LineWebhookContext["turnAdoptionLifecycle"];
 }): Parameters<typeof handleLineWebhookEvents>[1] {
   const allowFrom = params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
   const lineConfig = {
@@ -285,6 +286,20 @@ function createLineWebhookTestContext(params: {
     mediaMaxBytes: 1,
     processMessage: params.processMessage,
     ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
+    ...(params.turnAdoptionLifecycle
+      ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+      : {}),
+  };
+}
+
+/** Records how an image-set part's ingress claim was finally settled. */
+function createTurnAdoptionLifecycleSpy() {
+  return {
+    admission: "exclusive" as const,
+    onAdopted: vi.fn(async () => {}),
+    onDeferred: vi.fn(() => {}),
+    onAbandoned: vi.fn(async () => {}),
+    abortSignal: new AbortController().signal,
   };
 }
 
@@ -1565,7 +1580,12 @@ describe("handleLineWebhookEvents", () => {
         size: 10,
       }));
       const processMessage = vi.fn();
-      const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
+      const turnAdoptionLifecycle = createTurnAdoptionLifecycleSpy();
+      const context = createLineWebhookTestContext({
+        processMessage,
+        dmPolicy: "open",
+        turnAdoptionLifecycle,
+      });
 
       await handleLineWebhookEvents(
         [
@@ -1583,11 +1603,63 @@ describe("handleLineWebhookEvents", () => {
         context,
       );
       expect(processMessage).not.toHaveBeenCalled();
+      // The request is answered with the set incomplete, so its claim is held.
+      expect(turnAdoptionLifecycle.onDeferred).toHaveBeenCalledTimes(1);
 
       // The webhook request has been answered; only the timer can still deliver.
       await vi.advanceTimersByTimeAsync(10_000);
 
       expect(processMessage).toHaveBeenCalledTimes(1);
+      expect(turnAdoptionLifecycle.onAdopted).toHaveBeenCalledTimes(1);
+      expect(turnAdoptionLifecycle.onAbandoned).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The delayed turn runs after its webhook request was answered. Completing the
+  // claim there would drop a whole multi-image send on any transient failure.
+  it("returns a failed delayed image-set turn to the durable queue for retry", async () => {
+    vi.useFakeTimers();
+    try {
+      downloadLineMediaMock.mockImplementation(async (messageId: string) => ({
+        path: `/media/${messageId}.png`,
+        contentType: "image/png",
+        size: 10,
+      }));
+      const processMessage = vi.fn(async () => {
+        throw new Error("agent dispatch failed");
+      });
+      const turnAdoptionLifecycle = createTurnAdoptionLifecycleSpy();
+      const context = createLineWebhookTestContext({
+        processMessage,
+        dmPolicy: "open",
+        turnAdoptionLifecycle,
+      });
+
+      await handleLineWebhookEvents(
+        [
+          createTestMessageEvent({
+            message: {
+              id: "doomed",
+              type: "image",
+              contentProvider: { type: "line" },
+              imageSet: { id: "image-set-failing", index: 1, total: 3 },
+            } as MessageEvent["message"],
+            source: { type: "user", userId: "U1" },
+            webhookEventId: "evt-doomed",
+          }),
+        ],
+        context,
+      );
+      expect(turnAdoptionLifecycle.onDeferred).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(processMessage).toHaveBeenCalledTimes(1);
+      // Released for retry rather than completed with the images lost.
+      expect(turnAdoptionLifecycle.onAbandoned).toHaveBeenCalledTimes(1);
+      expect(turnAdoptionLifecycle.onAdopted).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

@@ -70,6 +70,7 @@ type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { p
 const bufferLineImageSetPart = createLineImageSetBuffer<{
   media: readonly MediaRef[];
   mediaUnavailable: boolean;
+  lifecycle?: LineWebhookTurnAdoptionLifecycle;
 }>();
 
 const LINE_DOWNLOADABLE_MESSAGE_TYPES: ReadonlySet<string> = new Set([
@@ -510,17 +511,37 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         messageId: message.id,
         index: imageSet.index,
         total: imageSet.total,
-        part: { media: allMedia, mediaUnavailable },
-        flush: async (parts) => {
-          dispatchedHere = await dispatchTurn({
-            media: parts.flatMap((entry) => entry.media),
-            mediaUnavailable: parts.some((entry) => entry.mediaUnavailable),
-            adopted: !requestReturned,
-            // The reservation is released when this handler returns, so a delayed
-            // dispatch can no longer consume the window it would render. Rendering
-            // it anyway would replay those entries into a later turn as well.
-            withInboundHistory: !requestReturned,
-          });
+        part: {
+          media: allMedia,
+          mediaUnavailable,
+          lifecycle: context.turnAdoptionLifecycle,
+        },
+        flush: async (parts, deferredParts) => {
+          // Claims held open while the set waited are this turn's to settle:
+          // adoption completes them, abandonment returns them to the durable
+          // queue so a failed send is retried instead of lost.
+          const settleDeferred = async (outcome: "adopted" | "abandoned") => {
+            for (const { lifecycle } of deferredParts) {
+              await (outcome === "adopted" ? lifecycle?.onAdopted() : lifecycle?.onAbandoned());
+            }
+          };
+          try {
+            dispatchedHere = await dispatchTurn({
+              media: parts.flatMap((entry) => entry.media),
+              mediaUnavailable: parts.some((entry) => entry.mediaUnavailable),
+              adopted: !requestReturned,
+              // The reservation is released when this handler returns, so a delayed
+              // dispatch can no longer consume the window it would render. Rendering
+              // it anyway would replay those entries into a later turn as well.
+              withInboundHistory: !requestReturned,
+            });
+          } catch (error) {
+            await settleDeferred("abandoned");
+            throw error;
+          }
+          // A skipped empty turn is a terminal non-outcome, not a retryable
+          // failure, so it settles the same way a delivered one does.
+          await settleDeferred("adopted");
         },
         onDetachedFlushError: (error) => {
           runtime.error?.(
@@ -531,6 +552,11 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         },
       });
       requestReturned = true;
+      if (!flushed) {
+        // The set is still incomplete, so this event's claim outlives its request
+        // and the eventual combined turn settles it.
+        context.turnAdoptionLifecycle?.onDeferred();
+      }
       if (flushed && dispatchedHere) {
         historyReservation.commit();
       }
