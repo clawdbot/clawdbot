@@ -13,7 +13,14 @@ import { supportsOllamaCloudFullThinkingEffort } from "./src/model-reasoning.js"
 type OllamaProviderConfigDraft = Partial<ModelProviderConfig>;
 
 const OLLAMA_REASONING_THINKING_PROFILE = {
-  levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
+  levels: [
+    { id: "off" },
+    { id: "low" },
+    { id: "medium" },
+    { id: "high" },
+    { id: "adaptive" },
+    { id: "max" },
+  ],
   defaultLevel: "off",
 } satisfies ProviderThinkingProfile;
 

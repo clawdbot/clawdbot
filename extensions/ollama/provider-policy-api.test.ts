@@ -25,6 +25,17 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
   };
 }
 
+// Reasoning-capable Ollama models expose the same native effort tiers, including
+// the OpenClaw-only `adaptive` tier mapped to Ollama high effort.
+const OLLAMA_FULL_REASONING_LEVELS = [
+  { id: "off" },
+  { id: "low" },
+  { id: "medium" },
+  { id: "high" },
+  { id: "adaptive" },
+  { id: "max" },
+] as const;
+
 describe("ollama provider policy public artifact", () => {
   it("injects defaults so implicit discovery can run before validation", () => {
     expect(
@@ -110,7 +121,7 @@ describe("ollama provider policy public artifact", () => {
     expect(
       resolveThinkingProfile({ provider: "ollama", modelId: "qwen3:32b", reasoning: true }),
     ).toEqual({
-      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
+      levels: [...OLLAMA_FULL_REASONING_LEVELS],
       defaultLevel: "off",
     });
     expect(
@@ -125,11 +136,7 @@ describe("ollama provider policy public artifact", () => {
     "exposes full native effort for cloud model %s when lightweight projections omit metadata",
     (modelId) => {
       expect(resolveThinkingProfile({ provider: "ollama-cloud", modelId }).levels).toEqual([
-        { id: "off" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        { id: "max" },
+        ...OLLAMA_FULL_REASONING_LEVELS,
       ]);
     },
   );

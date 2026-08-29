@@ -99,6 +99,91 @@ describe("acp session UX bridge behavior", () => {
     expectConfigOption(result.configOptions, "elevated_level", { currentValue: "off" });
   });
 
+  it("honors configured thinkingDefault when gateway session has no explicit thinkingLevel", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "agent:main:thinking-default",
+              displayName: "Thinking Default",
+              kind: "direct",
+              updatedAt: 1_710_000_000_000,
+              thinkingDefault: "off",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const result = await agent.loadSession(createLoadSessionRequest("agent:main:thinking-default"));
+
+    // thinkingLevel is absent on the row, so thinkingDefault should be used.
+    expect(result.modes?.currentModeId).toBe("off");
+    expectConfigOption(result.configOptions, "thought_level", {
+      currentValue: "off",
+    });
+  });
+
+  it("prefers explicit thinkingLevel over thinkingDefault", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "agent:main:explicit-thinking",
+              displayName: "Explicit Thinking",
+              kind: "direct",
+              updatedAt: 1_710_000_000_000,
+              thinkingLevel: "high",
+              thinkingDefault: "off",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const result = await agent.loadSession(
+      createLoadSessionRequest("agent:main:explicit-thinking"),
+    );
+
+    // thinkingLevel takes precedence over thinkingDefault.
+    expect(result.modes?.currentModeId).toBe("high");
+    expectConfigOption(result.configOptions, "thought_level", {
+      currentValue: "high",
+    });
+  });
+
   it("replays user text, assistant text, and hidden assistant thinking on loadSession", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();

@@ -1021,7 +1021,9 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     OpenClaw forwards thinking as Ollama expects it: top-level `think`, not
     `options.think`. Auto-discovered models whose `/api/show` reports a
     `thinking` capability expose `/think low`, `/think medium`, `/think high`,
-    and `/think max`; non-thinking models expose only `/think off`.
+    `/think adaptive`, and `/think max`; non-thinking models expose only
+    `/think off`. The `/think adaptive` level is an OpenClaw-only tier that
+    maps to Ollama's native high effort (`think: "high"`).
 
     ```bash
     openclaw agent --model ollama/gemma4 --thinking off

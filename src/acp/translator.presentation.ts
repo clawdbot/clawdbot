@@ -41,6 +41,7 @@ export type GatewaySessionPresentationRow = Pick<
   | "derivedTitle"
   | "updatedAt"
   | "thinkingLevel"
+  | "thinkingDefault"
   | "fastMode"
   | "effectiveFastMode"
   | "modelProvider"
@@ -141,7 +142,13 @@ export function buildSessionPresentation(params: {
   const availableLevelIds: string[] = row.thinkingLevels?.map((level) => level.id) ?? [
     ...BASE_THINKING_LEVELS,
   ];
-  const currentModeId = normalizeOptionalString(row.thinkingLevel) || "adaptive";
+  // Prefer the gateway's recorded thinking level; if absent, honor the
+  // configured thinking default so ACP sessions reflect user-configured
+  // defaults instead of being forced to "adaptive".
+  const currentModeId =
+    normalizeOptionalString(row.thinkingLevel) ||
+    normalizeOptionalString(row.thinkingDefault) ||
+    "adaptive";
   const currentFastMode = normalizeFastMode(row.effectiveFastMode ?? row.fastMode) ?? false;
   if (!availableLevelIds.includes(currentModeId)) {
     availableLevelIds.push(currentModeId);

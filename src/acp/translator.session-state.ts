@@ -234,6 +234,7 @@ export class AcpTranslatorSessionState {
       derivedTitle: session.derivedTitle,
       updatedAt: session.updatedAt,
       thinkingLevel: session.thinkingLevel,
+      thinkingDefault: session.thinkingDefault,
       thinkingLevels: session.thinkingLevels,
       modelProvider: session.modelProvider,
       model: session.model,
