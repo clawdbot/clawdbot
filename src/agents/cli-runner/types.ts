@@ -22,6 +22,7 @@ import type {
   SessionToolOverrides,
 } from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -116,6 +117,7 @@ export type RunCliAgentParams = {
   controlOperation?: "compact";
   /** Persist the successful CLI assistant reply into the OpenClaw session transcript. */
   persistAssistantTranscript?: boolean;
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   /** Session store path used when assistant transcript persistence is enabled. */
   storePath?: string;
   /** Admission-time lifecycle half of the durable transcript writer fence. */

@@ -319,6 +319,7 @@ export async function runCliFallbackCandidate(
             contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
             onUserMessagePersisted: params.notifyUserMessagePersisted,
+            prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
             persistAssistantTranscript:
               turn.followupRun.currentInboundEventKind !== "room_event" &&
               turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence !== true,

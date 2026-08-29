@@ -153,6 +153,9 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   const replyDispatch = createChatSendReplyDispatch({
     accountId,
     isAgentRunStarted: () => agentRunStarted,
+    isRunCurrent: () =>
+      !activeRunAbort.controller.signal.aborted &&
+      context.chatAbortControllers.get(clientRunId) === activeRunAbort.entry,
     getReplyDispatchRun: () => replyDispatchRun,
     logGateway: context.logGateway,
     session,
@@ -276,6 +279,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               onSessionMetadataChanges: (changes) =>
                 changes.forEach((change) => emitSessionsChanged(context, change)),
               replyOptions: {
+                prepareAssistantTranscriptMessage: replyDispatch.prepareAssistantTranscriptMessage,
                 runId: clientRunId,
                 skillWorkshopProposalRevision,
                 ...(cronCreatorAuthority
