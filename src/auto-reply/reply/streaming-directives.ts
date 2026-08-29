@@ -125,6 +125,7 @@ const hasRenderableContent = (parsed: ReplyDirectiveParseResult): boolean =>
 export function createStreamingDirectiveAccumulator() {
   let pendingTail = "";
   let pendingSeparator = "";
+  let pendingSilentPrefix = "";
   let pendingReply: PendingReplyState = { sawCurrent: false, hasTag: false };
   let activeReply: PendingReplyState = { sawCurrent: false, hasTag: false };
   let hasReturnedText = false;
@@ -132,6 +133,7 @@ export function createStreamingDirectiveAccumulator() {
   const reset = () => {
     pendingTail = "";
     pendingSeparator = "";
+    pendingSilentPrefix = "";
     pendingReply = { sawCurrent: false, hasTag: false };
     activeReply = { sawCurrent: false, hasTag: false };
     hasReturnedText = false;
@@ -140,9 +142,17 @@ export function createStreamingDirectiveAccumulator() {
   const consume = (raw: string, options: ConsumeOptions = {}): ReplyDirectiveParseResult | null => {
     const hadPendingTail = pendingTail.length > 0;
     const heldSeparator = pendingSeparator;
-    let combined = `${pendingTail}${raw ?? ""}`;
+    const heldSilentPrefix = pendingSilentPrefix;
+    const heldTail = pendingTail;
+    pendingSilentPrefix = "";
     pendingTail = "";
     pendingSeparator = "";
+    // Terminal flushes re-feed whole assistant text that already opens with the
+    // held fragment; composing it again would duplicate those characters. Only
+    // a continuation delta still needs the held prefix prepended.
+    const composingSilentPrefix =
+      heldSilentPrefix.length > 0 && !(raw ?? "").startsWith(heldSilentPrefix);
+    let combined = `${composingSilentPrefix ? heldSilentPrefix : ""}${heldTail}${raw ?? ""}`;
 
     if (!options.final) {
       const split = splitTrailingDirective(combined);
@@ -194,6 +204,12 @@ export function createStreamingDirectiveAccumulator() {
           sawCurrent,
           hasTag,
         };
+      }
+      // A still-silent fragment (a streamed `N`, `NO`, or exact token) is
+      // pending input, not consumed output: hold it so the next delta continues
+      // the token instead of leaking the remainder as visible text.
+      if (!options.final && parsed.isSilent) {
+        pendingSilentPrefix = combined;
       }
       return null;
     }

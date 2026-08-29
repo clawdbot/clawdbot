@@ -29,6 +29,26 @@ describe("createStreamingDirectiveAccumulator", () => {
     });
   });
 
+  it("keeps a silent prefix silent across streaming deltas", () => {
+    const acc = createStreamingDirectiveAccumulator();
+    expect(acc.consume("N")).toBeNull();
+    // The next delta continues NO_REPLY. It must resume the held prefix instead
+    // of leaking as visible text now that the lone N no longer blocks the run.
+    expect(acc.consume("O_REPLY")).toBeNull();
+    expect(acc.consume("", { final: true })).toBeNull();
+  });
+
+  it("grows a held silent prefix across deltas and releases the remainder at final", () => {
+    const acc = createStreamingDirectiveAccumulator();
+    expect(acc.consume("N")).toBeNull();
+    expect(acc.consume("O_RE")).toBeNull();
+    // Terminal flush sees a non-exact fragment: ordinary output, released.
+    expect(acc.consume("", { final: true })).toMatchObject({
+      text: "NO_RE",
+      isSilent: false,
+    });
+  });
+
   it("renders ordinary visible text", () => {
     const acc = createStreamingDirectiveAccumulator();
     expect(acc.consume("The handoff is complete.")).toMatchObject({
