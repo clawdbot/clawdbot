@@ -103,7 +103,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     },
   });
   private readonly refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () => this.loadClient !== null || this.supplemental.loading,
+    isLoading: () => this.loadClient !== null || this.supplemental.usageLoading,
     reload: () => this.supplemental.load(),
     onIncompleteUsageExhausted: () => this.requestUpdate(),
   });
@@ -283,9 +283,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
-    if (opts.force) {
-      this.refreshPolicy.resetPayload();
-    }
+    // Cancel the old supplemental generation before it can publish during core loading.
+    this.supplemental.beginCoreRefresh(opts.force);
     this.loadClient = client;
     return this.refreshTask.run([client, this.selectedAgentId, opts.force]);
   }

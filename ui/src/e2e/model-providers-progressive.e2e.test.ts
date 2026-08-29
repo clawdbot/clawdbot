@@ -107,8 +107,13 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       }
 
       await gateway.resolveDeferred("usage.status");
-      await gateway.resolveDeferred("sessions.usage");
       await expect.poll(async () => provider.textContent()).toContain("Pro");
+      expect(await provider.textContent()).not.toContain("$1.25");
+      if (recordVisuals) {
+        await page.screenshot({ path: path.join(artifactDir, "usage-ready.png"), fullPage: true });
+      }
+
+      await gateway.resolveDeferred("sessions.usage");
       await expect.poll(async () => provider.textContent()).toContain("$1.25");
       expect(await page.locator('[data-provider-id="unknown-provider"]').count()).toBe(0);
       if (recordVisuals) {

@@ -38,8 +38,6 @@ export type ModelProvidersData = {
   error: string | null;
 };
 
-type ModelProvidersSupplementalData = Pick<ModelProvidersData, "providerUsage" | "costByProvider">;
-
 type RequestResult<T> = { ok: true; result: T } | { ok: false; error: unknown };
 
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
@@ -128,29 +126,32 @@ export async function loadModelProvidersData(
   };
 }
 
-export async function loadModelProvidersSupplementalData(
+export function loadModelProviderUsage(
   client: GatewayBrowserClient,
   signal: AbortSignal,
-): Promise<ModelProvidersSupplementalData> {
-  const [providerUsage, costByProvider] = await Promise.all([
-    requestProviderUsage(client, { signal }),
-    requestSessionUsage(
-      client,
-      {
-        startDate: localDate(MODEL_PROVIDERS_COST_DAYS - 1),
-        endDate: localDate(0),
-        scope: "family",
-        timeZone: "local",
-      },
-      { signal },
-    )
-      .then((result) => result?.aggregates?.byProvider ?? null)
-      .catch((error: unknown) => {
-        if (signal.aborted) {
-          throw error;
-        }
-        return null;
-      }),
-  ]);
-  return { providerUsage, costByProvider };
+): Promise<ProviderUsageRequestResult> {
+  return requestProviderUsage(client, { signal });
+}
+
+export function loadModelProviderCost(
+  client: GatewayBrowserClient,
+  signal: AbortSignal,
+): Promise<SessionModelUsage[] | null> {
+  return requestSessionUsage(
+    client,
+    {
+      startDate: localDate(MODEL_PROVIDERS_COST_DAYS - 1),
+      endDate: localDate(0),
+      scope: "family",
+      timeZone: "local",
+    },
+    { signal },
+  )
+    .then((result) => result?.aggregates?.byProvider ?? null)
+    .catch((error: unknown) => {
+      if (signal.aborted) {
+        throw error;
+      }
+      return null;
+    });
 }

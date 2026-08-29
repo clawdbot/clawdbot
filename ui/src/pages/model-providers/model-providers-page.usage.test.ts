@@ -150,42 +150,65 @@ describe("ModelProvidersPage usage convergence", () => {
     );
   });
 
-  it("cancels and replaces supplemental work on reconnect", async () => {
+  it("cancels and replaces supplemental work on forced refresh", async () => {
     const harness = createHarness("main");
     const oldUsage = deferred<unknown>();
+    const oldCost = deferred<unknown>();
     const originalRequest = harness.request.getMockImplementation()!;
-    let firstSignal: AbortSignal | undefined;
+    let firstUsageSignal: AbortSignal | undefined;
+    let firstCostSignal: AbortSignal | undefined;
     let usageCall = 0;
+    let costCall = 0;
     harness.request.mockImplementation(
       async (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
-        if (method !== "usage.status") {
+        if (method === "sessions.usage") {
+          costCall += 1;
+          if (costCall === 1) {
+            firstCostSignal = options?.signal;
+            return oldCost.promise;
+          }
           return originalRequest(method);
         }
-        usageCall += 1;
-        if (usageCall === 1) {
-          firstSignal = options?.signal;
-          return oldUsage.promise;
+        if (method === "usage.status") {
+          usageCall += 1;
+          if (usageCall === 1) {
+            firstUsageSignal = options?.signal;
+            return oldUsage.promise;
+          }
+          return { updatedAt: 2, providers: [] };
         }
-        return { updatedAt: 2, providers: [] };
+        return originalRequest(method);
       },
     );
     const page = appendPage(harness.context);
     await vi.waitFor(() => expect(requestCount(harness.request, "usage.status")).toBe(1));
+    await vi.waitFor(() => expect(requestCount(harness.request, "sessions.usage")).toBe(1));
 
-    harness.publishPhase("offline");
-    await page.updateComplete;
-    expect(firstSignal?.aborted).toBe(true);
-    harness.publishPhase("connected");
+    const releaseCoreRefresh = harness.deferNextAuthStatus();
+    const refresh = page.refresh({ force: true });
+    expect(firstUsageSignal?.aborted).toBe(true);
+    expect(firstCostSignal?.aborted).toBe(true);
+
+    oldUsage.resolve({ updatedAt: 1, providers: [] });
+    oldCost.resolve({
+      aggregates: { byProvider: [{ provider: "stale", totals: { totalCost: 1 } }] },
+    });
+    await Promise.resolve();
+    expect(page.data?.providerUsage).toBeNull();
+    expect(page.data?.costByProvider).toBeNull();
+
+    releaseCoreRefresh();
+    await refresh;
 
     await vi.waitFor(() => expect(requestCount(harness.request, "usage.status")).toBe(2));
+    await vi.waitFor(() => expect(requestCount(harness.request, "sessions.usage")).toBe(2));
     await vi.waitFor(() =>
       expect(page.data?.providerUsage).toMatchObject({ ok: true, value: { updatedAt: 2 } }),
     );
-    oldUsage.resolve({ updatedAt: 1, providers: [] });
-    await Promise.resolve();
-    await page.updateComplete;
+    await vi.waitFor(() => expect(page.data?.costByProvider).toEqual([]));
 
     expect(requestCount(harness.request, "usage.status")).toBe(2);
+    expect(requestCount(harness.request, "sessions.usage")).toBe(2);
     expect(page.data?.providerUsage).toMatchObject({ ok: true, value: { updatedAt: 2 } });
   });
 });

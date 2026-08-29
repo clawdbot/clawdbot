@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { loadModelProvidersData, loadModelProvidersSupplementalData } from "./load.ts";
+import { loadModelProviderCost, loadModelProvidersData, loadModelProviderUsage } from "./load.ts";
 
 describe("loadModelProvidersData", () => {
   it("keeps full catalog discovery out of the initial page load", async () => {
@@ -191,13 +191,12 @@ describe("loadModelProvidersData", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
 
-    const result = await loadModelProvidersSupplementalData(client, new AbortController().signal);
+    const result = await loadModelProviderUsage(client, new AbortController().signal);
 
-    expect(result.providerUsage).toEqual({
+    expect(result).toEqual({
       ok: false,
       error: { kind: "request-failed" },
     });
-    expect(result.costByProvider).toEqual([]);
   });
 
   it("keeps provider-scoped usage errors as data instead of a global request failure", async () => {
@@ -229,9 +228,9 @@ describe("loadModelProvidersData", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
 
-    const result = await loadModelProvidersSupplementalData(client, new AbortController().signal);
+    const result = await loadModelProviderUsage(client, new AbortController().signal);
 
-    expect(result.providerUsage).toMatchObject({
+    expect(result).toMatchObject({
       ok: true,
       value: { providers: [{ error: "provider API unavailable" }] },
     });
@@ -246,7 +245,10 @@ describe("loadModelProvidersData", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const signal = new AbortController().signal;
 
-    await loadModelProvidersSupplementalData(client, signal);
+    await Promise.all([
+      loadModelProviderUsage(client, signal),
+      loadModelProviderCost(client, signal),
+    ]);
 
     expect(request).toHaveBeenCalledWith("usage.status", undefined, { signal });
     expect(request).toHaveBeenCalledWith(
