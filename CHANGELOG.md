@@ -76,6 +76,7 @@ Docs: https://docs.openclaw.ai
 
 - **WebChat attachments:** keep managed `MEDIA:` directives out of the first assistant transcript event while attachments are prepared, preserving raw transcript references, user text, and attachment failure warnings.
 
+- **Session controls:** preserve native Ultra thinking levels advertised by the model catalog when the provider plugin is inactive.
 - **Control UI tool progress:** keep error-shaped partial output running until the tool returns its result, with consistent status in collapsed rows, expanded cards, and side-panel details.
 
 - MCP Apps: let standalone operations finish across catalog refreshes within per-request server budgets, propagate App cancellation without cancelling shared catalog work, and reload restored history views without replaying interrupted operations. Thanks @tzy-17. (#119388)

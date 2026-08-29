@@ -190,8 +190,9 @@ function appendCatalogAdvancedThinkingLevels(
   for (const effort of compat?.supportedReasoningEfforts ?? []) {
     const level = normalizeThinkLevel(effort);
     if (
-      (level === "adaptive" || level === "xhigh" || level === "max") &&
-      (level === "adaptive" || thinkingLevelMap?.[level] !== null)
+      level === "ultra" ||
+      ((level === "adaptive" || level === "xhigh" || level === "max") &&
+        (level === "adaptive" || thinkingLevelMap?.[level] !== null))
     ) {
       appendProfileLevel(profile, level);
       supportsMax ||= level === "max";
