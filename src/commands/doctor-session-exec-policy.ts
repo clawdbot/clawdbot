@@ -26,20 +26,32 @@ export function repairLegacySessionExecPolicy(params: {
       if (execSecurity === undefined && execAsk === undefined) {
         return entry;
       }
+      const ask = normalizeExecAsk(execAsk);
       if (!next.permissionMode) {
         // Partial legacy pairs inherit conservative policy so removing an ask-only
         // restriction cannot silently grant full access under permissive defaults.
         const mode = resolveExecModeFromPolicy({
           security: normalizeExecSecurity(execSecurity) ?? "allowlist",
-          ask: normalizeExecAsk(execAsk) ?? "on-miss",
+          ask: ask ?? "on-miss",
         });
-        if (mode !== "full") {
-          next.permissionMode = SESSION_PERMISSION_BY_EXEC_MODE[mode];
-        }
+        // No permission mode encodes approval on every command: `guarded` prompts
+        // only on allowlist misses. Migrating ask=always to it would let analyzed
+        // allowlisted commands run unprompted, so retire those rows to read-only
+        // and let the operator widen the session deliberately.
+        next.permissionMode =
+          ask === "always"
+            ? "read-only"
+            : mode === "full"
+              ? undefined
+              : SESSION_PERMISSION_BY_EXEC_MODE[mode];
       }
       if (phase === (params.apply ? "repair" : "scan")) {
         const outcome = next.permissionMode
-          ? `${entry.permissionMode ? "kept" : "set"} permissionMode=${next.permissionMode}`
+          ? `${entry.permissionMode ? "kept" : "set"} permissionMode=${next.permissionMode}${
+              ask === "always" && !entry.permissionMode
+                ? " (ask=always has no mode equivalent; choose guarded or workspace to allow commands again)"
+                : ""
+            }`
           : "config default applies; full permission mode was not granted";
         messages.push(
           `- ${sessionKey}: ${params.apply ? "removed" : "would remove"} legacy exec policy; ${outcome}.`,

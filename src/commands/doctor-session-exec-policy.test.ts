@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import {
   listSessionEntriesCore,
   replaceSessionEntry,
@@ -44,7 +45,20 @@ describe("doctor legacy session exec policy", () => {
         legacy: { execSecurity: "allowlist", execAsk: "on-miss" },
         expected: "guarded",
       },
-      { name: "always", legacy: { execSecurity: "full", execAsk: "always" }, expected: "guarded" },
+      // ask=always required approval for every command; no permission mode encodes
+      // that, so these rows retire to read-only rather than silently allowing
+      // allowlisted commands to run unprompted.
+      {
+        name: "always",
+        legacy: { execSecurity: "full", execAsk: "always" },
+        expected: "read-only",
+      },
+      {
+        name: "allowlist-always",
+        legacy: { execSecurity: "allowlist", execAsk: "always" },
+        expected: "read-only",
+      },
+      { name: "partial-always", legacy: { execAsk: "always" }, expected: "read-only" },
       { name: "full", legacy: { execSecurity: "full", execAsk: "off" }, expected: undefined },
       {
         name: "full-on-miss",
@@ -115,6 +129,24 @@ describe("doctor legacy session exec policy", () => {
     const output = lines.join("\n");
     expect(output).toContain("config default applies");
     expect(output).toContain("full permission mode was not granted");
+    expect(output).toContain("ask=always has no mode equivalent");
+    // The migrated ask=always row must not merely carry a label: resolving its
+    // exec policy has to deny execution, so no allowlisted command can run
+    // without the human approval the legacy value required.
+    for (const name of ["always", "allowlist-always", "partial-always"]) {
+      const migrated = repaired.find(
+        (row) => row.sessionKey === `agent:main:exec-policy-${name}`,
+      )?.entry;
+      // Resolve the migrated mode alone: the fixture's sandbox binding would
+      // deny on its own and make this assertion vacuous.
+      const resolved = resolveExecDefaults({
+        cfg: { tools: { exec: { mode: "full" } } },
+        execApprovals: { version: 1 },
+        sessionEntry: { permissionMode: migrated?.permissionMode },
+      });
+      expect(resolved.security, name).toBe("deny");
+      expect(resolved.mode, name).toBe("deny");
+    }
     note.mockClear();
     await run(true);
     expect(read()).toEqual(repaired);
