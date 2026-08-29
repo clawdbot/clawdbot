@@ -76,6 +76,17 @@ childProcess.fork = (...args) => {
       return emit.call(this, event, ...args);
     };
   }
+  if (scenario === "custom") {
+    const emit = child.emit;
+    child.emit = function(event, ...args) {
+      const result = emit.call(this, event, ...args);
+      if (event === "message" && args[0]?.type === "stopped") {
+        record({ event: "stopped-consumed" });
+        fs.writeFileSync(ready, "stopped");
+      }
+      return result;
+    };
+  }
   return child;
 };
 syncBuiltinESMExports();
@@ -193,13 +204,12 @@ export default class extends Runner {
     fs.writeFileSync(
       entrypoint,
       `
-import fs from "node:fs";
 import { init, runBaseTests, setupEnvironment } from "vitest/worker";
 const exit = process.exit.bind(process);
 init({
   post: (message) => {
     if (message.__vitest_worker_response__ && message.type === "stopped") {
-      ${scenario === "custom-opt-in" ? "process.send({ ...message, willExit: true }, () => exit());" : `process.send(message, () => fs.writeFileSync(${JSON.stringify(ready)}, "stopped"));`}
+      ${scenario === "custom-opt-in" ? "process.send({ ...message, willExit: true }, () => exit());" : "process.send(message);"}
     } else process.send(message);
   },
   on: (callback) => process.on("message", callback),

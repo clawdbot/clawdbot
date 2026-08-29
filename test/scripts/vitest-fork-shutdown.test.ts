@@ -67,6 +67,7 @@ it.each([
     expect(result.output).toContain("Worker exited during graceful shutdown");
   } else if (scenario === "custom") {
     expect(result.output).toContain("1 passed");
+    expect(result.events).toContainEqual({ event: "stopped-consumed" });
     expect(result.events).toContainEqual({ event: "parent-stop" });
     expect(result.events.some((event: { event: string }) => event.event === "deadline")).toBe(
       false,
