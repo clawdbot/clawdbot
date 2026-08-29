@@ -12,7 +12,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createChatRunState } from "../server-chat-state.js";
-import { prepareSessionArchiveLifecycle } from "../server-methods/sessions-archive-lifecycle.js";
+import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -360,7 +360,8 @@ describe("worker turn launcher local placement", () => {
       removeChatRun: vi.fn(),
       workerSessionPlacementService: placements,
     } as unknown as GatewayRequestContext;
-    const archiveDrain = await prepareSessionArchiveLifecycle({
+    const archiveDrain = await prepareSessionLifecycleDrain({
+      action: "archive",
       context,
       storePath: sessionTarget.storePath,
       sessionKeys: [SESSION_KEY],

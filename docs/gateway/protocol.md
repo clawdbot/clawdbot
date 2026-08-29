@@ -807,7 +807,11 @@ count.
 - `sessions.changed`: session index or metadata changed. Active-run fields use the
   same aggregate and complete-exact semantics as `sessions.list`; `activeRunIds: null`
   clears cached exact identities to unavailable, omission leaves the cache unchanged,
-  and an array replaces it.
+  and an array replaces it. Delete notifications from `sessions.delete` and incognito
+  reset carry the removed generation's `sessionId`, without a current-row snapshot.
+  Clients must not delete a replacement with a different ID. A key-only delete event
+  or a rowless global notification invalidates the canonical session list; it does
+  not identify the current generation as deleted.
 - `presence`: system presence snapshot updates.
 - `tick`: periodic keepalive/liveness event.
 - `health`: gateway health snapshot update.

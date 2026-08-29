@@ -85,7 +85,7 @@ Reef lives under `channels.reef`:
 - Relay friendship status controls whether ciphertext may enter either mailbox. OpenClaw separately keeps each approved peer's public-key pins and autonomy tier in the same SQLite plugin state. `channels.reef` has no friendship allowlist to edit.
 - A normal OpenClaw pairing approval becomes an identity-, key-, and revocation-bound one-time handoff. Reef consumes it before accepting the relay edge or writing the verified peer pins, and the relay activates only if that exact peer key snapshot is still current. A stale approval cannot authorize changed keys or undo a local removal. Removing a friend clears local trust first, then blocks the relay edge.
 - `pinnedModel` must be an immutable model id: a dated snapshot, or one of the documented undated ids (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`). Floating aliases are rejected, and every guard response must echo the exact configured id.
-- `apiKeyEnv` names an environment variable visible to the Gateway process. The guard fails closed: a missing key or provider error denies the message.
+- `apiKeyEnv` names an environment variable visible to the Gateway process. The guard fails closed: a missing key or provider error fails the send immediately, and inbound messages wait un-delivered at the relay and retry until the guard is back — a provider outage never rejects a peer's message.
 
 ## Adding a friend
 
@@ -151,6 +151,8 @@ Reef runs a fail-closed classifier at both ends: outbound DLP before encryption,
 
 These review commands use the same explicit owner check described in [Adding a friend](#adding-a-friend). If no chat sender is configured as an owner, add the intended owner to `commands.ownerAllowFrom` before deciding a review.
 
+The recorded verdict owns the message until you decide: a parked inbound message waits at the relay without re-classification, an approval delivers it within about 30 seconds (after one final guard check), and a denial returns a rejection receipt to the peer. Parked outbound sends stay local; after approval, resend the identical message.
+
 Deterministic checks (size, UTF-8, destination pin, secret patterns) run before any model call and cannot be overridden.
 
 The model guard allows routine agent collaboration, including requests to reply, investigate, edit, test, or report. Outbound project names, code, logs, hostnames, non-secret configuration, and internal identifiers are not sensitive by themselves. Ambiguous disclosures or meta-instructions go to owner review; concrete secrets and explicit policy-override, hidden-context, or unauthorized-action attempts are denied.
@@ -162,7 +164,7 @@ When a peer's inbound guard rejects a delivered message, Reef verifies the signe
 ## Troubleshooting
 
 - `channels status` shows `running` but not `connected`: the relay WebSocket is reconnecting; check network reachability of the relay URL.
-- Every inbound message denied with `guard_failure`: the guard provider call is failing — most commonly `apiKeyEnv` is unset in the Gateway environment or the key has no credits.
+- Inbound messages stall while sends fail with `guard_failure`: the guard provider call is failing — most commonly `apiKeyEnv` is unset in the Gateway environment or the key has no credits. Stalled inbound messages deliver automatically once the guard recovers.
 - Pairing request never appears: the recipient's channel reconciles with the relay every 30 seconds; check `openclaw pairing list reef` after that, and confirm the requester used a fresh code (codes expire after 15 minutes).
 - Pairing fails with a Reef protocol compatibility error: update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.
 

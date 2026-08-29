@@ -208,7 +208,7 @@ export function startGatewayConfigReloader(opts: {
     nextConfig: OpenClawConfig,
     ownership: GatewayConfigReloadTransactionOwnership,
     sourceConfig: OpenClawConfig,
-  ) => Promise<void>;
+  ) => Promise<void | GatewayHotReloadApplicationStatus>;
   onHotReload: (
     plan: GatewayReloadPlan,
     nextConfig: OpenClawConfig,
@@ -740,11 +740,22 @@ export function startGatewayConfigReloader(opts: {
       await opts.onConfigChange?.(plan, nextConfig);
       // No-op plans still change the runtime config snapshot. Commit before
       // marking applied so getRuntimeConfig() readers do not stay stale until restart.
-      await opts.onNoopConfigCommit(plan, nextConfig, ownership, nextSourceConfig);
+      let applicationStatus: void | GatewayHotReloadApplicationStatus;
+      try {
+        applicationStatus = await opts.onNoopConfigCommit(
+          plan,
+          nextConfig,
+          ownership,
+          nextSourceConfig,
+        );
+      } catch (error) {
+        ownership.rollbackRuntimeEnv();
+        throw error;
+      }
       assertCurrent();
       await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
       await commitReloadBaseline();
-      settleRuntimeApplication();
+      settleRuntimeApplication(applicationStatus ?? "applied");
       return;
     }
     if (followUp.requiresRestart) {

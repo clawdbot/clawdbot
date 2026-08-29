@@ -2,7 +2,7 @@
 // source-reply sink and embedded-run payload projection.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
 import { mirrorDeliveredReplyToTranscript } from "../../auto-reply/reply/dispatch-from-config.transcript.js";
@@ -19,9 +19,20 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
+import type { SandboxFsBridge } from "../sandbox/fs-bridge.types.js";
+import { createRemoteShellSandboxFsBridge } from "../sandbox/remote-fs-bridge.js";
+import { createLocalRemoteShellScriptRunner } from "../sandbox/remote-fs-bridge.test-helpers.js";
+import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { createMessageTool } from "./message-tool-execution.js";
 
-function createCurrentSourceMessageTool(params: { workspaceDir?: string } = {}) {
+function createCurrentSourceMessageTool(
+  params: {
+    workspaceDir?: string;
+    sandboxFsBridge?: SandboxFsBridge;
+    sandboxContainerWorkdir?: string;
+    sandboxWorkspaceMediaReadAllowed?: boolean;
+  } = {},
+) {
   return createMessageTool({
     config: { agents: { entries: { main: { default: true } } } },
     currentChannelProvider: "webchat",
@@ -29,6 +40,10 @@ function createCurrentSourceMessageTool(params: { workspaceDir?: string } = {}) 
     agentSessionKey: "agent:main:webchat:dm:dashboard",
     runId: "webchat-run",
     workspaceDir: params.workspaceDir,
+    sandboxRoot: params.sandboxFsBridge ? params.workspaceDir : undefined,
+    sandboxContainerWorkdir: params.sandboxContainerWorkdir,
+    sandboxFsBridge: params.sandboxFsBridge,
+    sandboxWorkspaceMediaReadAllowed: params.sandboxWorkspaceMediaReadAllowed,
     getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
     resolveCommandSecretRefsViaGateway: async ({ config }) => ({
       resolvedConfig: config,
@@ -129,6 +144,69 @@ describe("WebChat message tool internal source reply", () => {
         const mediaPath = sourceReply?.mediaUrls?.[0];
         expect(mediaPath).toBeTruthy();
         await expect(fs.readFile(mediaPath as string)).resolves.toEqual(attachment);
+      },
+    );
+  });
+
+  it("uses policy-scoped bridge access for remote-only current-source media", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "message-tool-source-remote-media-" },
+      async (state) => {
+        await fs.mkdir(state.workspaceDir, { recursive: true });
+        const remoteWorkspaceDir = state.path("remote-workspace");
+        await fs.mkdir(remoteWorkspaceDir, { recursive: true });
+        await fs.writeFile(path.join(remoteWorkspaceDir, "proof.txt"), "remote proof");
+        const sandbox = createSandboxTestContext({
+          overrides: {
+            backendId: "test",
+            workspaceDir: state.workspaceDir,
+            agentWorkspaceDir: state.workspaceDir,
+            containerWorkdir: "/sandbox",
+          },
+        });
+        const sandboxFsBridge = createRemoteShellSandboxFsBridge({
+          sandbox,
+          runtime: {
+            remoteWorkspaceDir,
+            remoteAgentWorkspaceDir: remoteWorkspaceDir,
+            runRemoteShellScript: createLocalRemoteShellScriptRunner(),
+          },
+        });
+        const bridgeReadFile = vi.spyOn(sandboxFsBridge, "readFile");
+        const tool = createCurrentSourceMessageTool({
+          workspaceDir: state.workspaceDir,
+          sandboxContainerWorkdir: "/sandbox",
+          sandboxFsBridge,
+          sandboxWorkspaceMediaReadAllowed: true,
+        });
+
+        const toolResult = await tool.execute("message-remote-media-call", {
+          action: "send",
+          message: "Attached proof.",
+          media: "/sandbox/proof.txt",
+        });
+
+        const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
+        expect(sourceReply?.mediaUrls).toHaveLength(1);
+        await expect(fs.readFile(sourceReply?.mediaUrls?.[0] as string, "utf8")).resolves.toBe(
+          "remote proof",
+        );
+
+        bridgeReadFile.mockClear();
+        const deniedTool = createCurrentSourceMessageTool({
+          workspaceDir: state.workspaceDir,
+          sandboxContainerWorkdir: "/sandbox",
+          sandboxFsBridge,
+          sandboxWorkspaceMediaReadAllowed: false,
+        });
+        await expect(
+          deniedTool.execute("message-remote-media-denied", {
+            action: "send",
+            message: "Attached proof.",
+            media: "/sandbox/proof.txt",
+          }),
+        ).rejects.toThrow(/could not be staged|outside workspace root/i);
+        expect(bridgeReadFile).not.toHaveBeenCalled();
       },
     );
   });

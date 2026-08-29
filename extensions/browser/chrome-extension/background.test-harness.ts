@@ -638,7 +638,7 @@ export async function loadRelayCommandHarness(accessMode: "all" | "selected") {
   const command = async (message: Record<string, unknown>) => {
     const id = ++seq;
     socket.receive({ ...message, seq: id });
-    return await vi.waitFor(() => {
+    return await waitForBackgroundState(() => {
       const response = frames().find((frame) => frame.seq === id);
       expect(response).toBeDefined();
       return response;

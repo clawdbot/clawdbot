@@ -33,6 +33,15 @@ if (command === "models") {
   record("auth-cli-completed");
   process.exit(0);
 }
+if (command === "update" && leaderText === "repair") {
+  if (process.argv.includes("--help")) {
+    process.stdout.write("Options: --accept-capabilities --yes --no-restart --json");
+  } else {
+    record("plugin-repair-completed");
+    process.stdout.write(JSON.stringify({ status: "ok" }));
+  }
+  process.exit(0);
+}
 if (command === "descendant") {
   process.on("SIGTERM", () => {});
   setTimeout(() => { record("descendant-failsafe-exit"); process.exit(0); }, 30_000);
@@ -397,6 +406,13 @@ describe.skipIf(process.platform === "win32")(
       async ({ denyGroupSignals }) => {
         const result = await reproduce(denyGroupSignals);
         expect(result.scenarioCalls).toBe(0);
+        const repaired = result.events.findIndex(
+          (event) => event.kind === "plugin-repair-completed",
+        );
+        expect(repaired).toBeGreaterThan(-1);
+        expect(result.events.findIndex((event) => event.kind === "gateway-start")).toBeGreaterThan(
+          repaired,
+        );
         expect(result.events.filter((event) => event.kind === "gateway-start")).toHaveLength(1);
         expect(result.events.find((event) => event.kind === "leader-exit")).toMatchObject({
           exitCode: 17,

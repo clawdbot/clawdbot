@@ -207,9 +207,9 @@ Activation resolves from the first explicit setting in this order:
 In the Control UI, open **Settings → Agents → Agent defaults**, show **Advanced**
 settings, and find **Models** under **Agent Defaults**. Each model has a
 **Code Mode** selector beside its runtime: **Default** removes the override,
-**On** saves `true`, and **Off** saves `false`. Use **Raw** config or the CLI
-for agent-specific model overrides; the **Agent List** form does not yet
-support its constrained map schema.
+**On** saves `true`, and **Off** saves `false`. For agent-specific overrides,
+expand **Agent List**, then the agent's **Agent Model Overrides**. Unsupported fields remain
+marked for **Raw** editing without hiding the supported settings beside them.
 
 Overrides affect the selected model on future runs, including fallback models;
 they do not enable tools on a tool-free run or change runtime selection. The

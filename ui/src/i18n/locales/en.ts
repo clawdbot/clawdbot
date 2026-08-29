@@ -3,6 +3,11 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap = {
+  capacityMeter: {
+    workerSlots: "{used} of {total} slots busy",
+    unavailable: "Slot utilization unavailable",
+    execHost: "Codex exec",
+  },
   common: {
     health: "Health",
     ok: "OK",
@@ -732,7 +737,6 @@ export const en: TranslationMap = {
       versionDriftTitle:
         "Device {nodeVersion}; Gateway {gatewayVersion}. Update the older component to align the fleet.",
       workerVersion: "Worker {version}",
-      workerSlots: "Worker slots {available}/{total}",
       workerMissing: "worker missing",
       workerMissingTitle:
         "The Gateway-managed worker bundle is missing. Start a new session on this device to reinstall it.",
@@ -904,7 +908,6 @@ export const en: TranslationMap = {
     deviceCapacityUnavailable:
       "Worker capacity is unavailable. Restart the device session host and try again.",
     deviceNoSlots: "No worker slots are available. Wait for a slot or pick another device.",
-    workerSlots: "Worker slots {available}/{total}",
     nodeUpdateRequired:
       "Update required: run {updateCommand}, then reconnect. For a headless node, run {restartCommand}.",
     capabilityCamera: "Camera",
@@ -1051,7 +1054,8 @@ export const en: TranslationMap = {
     sessionArchived: "Session archived",
     sessionsArchived: "Archived {count} sessions",
     deleteAllArchived: "Delete all archived…",
-    deleteAllArchivedConfirm: "Delete {count} archived sessions and their transcripts?",
+    deleteAllArchivedConfirm:
+      "Delete {count} archived sessions and their transcripts? Any attached workers will be stopped safely first.",
     activeTooltip: "Loads sessions updated in the last {count} minutes.",
     limitTooltip: "Max sessions to load.",
     globalTooltip: "Include global sessions.",
@@ -1097,7 +1101,7 @@ export const en: TranslationMap = {
     actions: "Actions",
     addToWorkboard: "Add to Workboard",
     openWorkboardCard: "Open Workboard card",
-    dashboardAvailable: "Dashboard available",
+    opensAsDashboard: "Opens as dashboard",
     approvalNeeded: "Approval needed",
     messageNeedsAttention: "{count} message needs attention",
     messagesNeedAttention: "{count} messages need attention",
@@ -1225,15 +1229,17 @@ export const en: TranslationMap = {
       'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
-    deleteSessionConfirm: 'Delete "{session}" and its transcript?',
+    deleteSessionConfirm:
+      'Delete "{session}" and its transcript? Any attached worker will be stopped safely first.',
     deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
-    deleteSessionsConfirm: "Delete {count} sessions and their transcripts?",
+    deleteSessionsConfirm:
+      "Delete {count} sessions and their transcripts? Any attached workers will be stopped safely first.",
     deleteSessionsStale:
       "Gateway connection replaced before {count} sessions were deleted. Try again.",
     deleteSelectedConfirmOne:
-      "Delete 1 session?\n\nThis will delete the session entry and archive its transcript.",
+      "Delete 1 session?\n\nStop any attached worker safely, then delete the session entry and archive its transcript.",
     deleteSelectedConfirm:
-      "Delete {count} sessions?\n\nThis will delete the session entries and archive their transcripts.",
+      "Delete {count} sessions?\n\nStop any attached workers safely, then delete the session entries and archive their transcripts.",
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",

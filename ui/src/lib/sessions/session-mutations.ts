@@ -22,20 +22,11 @@ import type {
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionCreateReconciliation,
-  SessionDeleteBatchResult,
-  SessionDeleteOptions,
-  SessionDeleteOutcome,
-  SessionDeleteTarget,
   SessionResetOptions,
   SessionResetResult,
   SessionState,
 } from "./session-capability.ts";
-import {
-  confirmsSessionDeletion,
-  requestSessionDelete,
-  requestSessionPatch,
-  requestSessionReset,
-} from "./session-requests.ts";
+import { requestSessionPatch, requestSessionReset } from "./session-requests.ts";
 
 /** The Gateway's single pin fact: `pinned` is a projection of `pinnedAt`. */
 type SessionPinFields = { pinned: boolean; pinnedAt: number | undefined };
@@ -441,136 +432,6 @@ export function createSessionMutations(host: SessionMutationsHost) {
     }
   };
 
-  const remove = async (
-    key: string,
-    options: SessionDeleteOptions = {},
-  ): Promise<SessionDeleteOutcome> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return { deleted: false };
-    }
-    try {
-      const response = await requestSessionDelete(scope.client, key, options);
-      if (!confirmsSessionDeletion(response)) {
-        return { deleted: false };
-      }
-      if (!host.connection.isCurrent(scope)) {
-        return (await reconcileConfirmedPreviousConnection(scope, options.agentId))
-          ? {
-              deleted: true,
-              ...(response.worktreePreserved
-                ? { worktreePreserved: response.worktreePreserved }
-                : {}),
-            }
-          : { deleted: false };
-      }
-      const retireBeforeRevision = Date.now();
-      host.retirePullRequestSummary(key);
-      archiveState.clear(key);
-      preparedWorkSessionKeys.delete(key.trim());
-      host.publish({
-        ...host.readState(),
-        deletedSessions: [
-          { key, ...(options.agentId ? { agentId: options.agentId } : {}), retireBeforeRevision },
-        ],
-      });
-      setModelOverride(key, undefined);
-      await host.refreshReplacement(options.agentId);
-      if (!host.connection.isCurrent(scope)) {
-        return (await reconcileConfirmedPreviousConnection(scope, options.agentId))
-          ? {
-              deleted: true,
-              ...(response.worktreePreserved
-                ? { worktreePreserved: response.worktreePreserved }
-                : {}),
-            }
-          : { deleted: false };
-      }
-      return {
-        deleted: true,
-        ...(response.worktreePreserved ? { worktreePreserved: response.worktreePreserved } : {}),
-      };
-    } catch (error) {
-      if (!host.connection.isCurrent(scope)) {
-        return { deleted: false };
-      }
-      host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-      throw error;
-    }
-  };
-
-  const removeMany = async (
-    targets: readonly SessionDeleteTarget[],
-  ): Promise<SessionDeleteBatchResult> => {
-    const scope = host.connection.capture();
-    if (!scope || targets.length === 0) {
-      return { deleted: [], errors: [], preservedWorktrees: [] };
-    }
-    const deleted: string[] = [];
-    const deletionFacts: SessionState["deletedSessions"][number][] = [];
-    const errors: string[] = [];
-    const preservedWorktrees: SessionDeleteBatchResult["preservedWorktrees"] = [];
-    for (const target of targets) {
-      if (!host.connection.isCurrent(scope)) {
-        break;
-      }
-      try {
-        const response = await requestSessionDelete(scope.client, target.key, target);
-        if (!host.connection.isCurrent(scope)) {
-          if (confirmsSessionDeletion(response)) {
-            deleted.push(target.key);
-            if (response.worktreePreserved) {
-              preservedWorktrees.push(response.worktreePreserved);
-            }
-          }
-          return deleted.length > 0 && (await reconcileConfirmedPreviousConnection(scope))
-            ? { deleted, errors, preservedWorktrees }
-            : { deleted: [], errors: [], preservedWorktrees: [] };
-        }
-        if (confirmsSessionDeletion(response)) {
-          const retireBeforeRevision = Date.now();
-          deleted.push(target.key);
-          deletionFacts.push({
-            key: target.key,
-            ...(target.agentId ? { agentId: target.agentId } : {}),
-            retireBeforeRevision,
-          });
-          if (response.worktreePreserved) {
-            preservedWorktrees.push(response.worktreePreserved);
-          }
-        }
-      } catch (error) {
-        errors.push(formatUiError(error));
-      }
-    }
-    if (!host.connection.isCurrent(scope)) {
-      return deleted.length > 0 && (await reconcileConfirmedPreviousConnection(scope))
-        ? { deleted, errors, preservedWorktrees }
-        : { deleted: [], errors: [], preservedWorktrees: [] };
-    }
-    if (deleted.length > 0) {
-      for (const key of deleted) {
-        host.retirePullRequestSummary(key);
-        archiveState.clear(key);
-        preparedWorkSessionKeys.delete(key.trim());
-      }
-      host.publish({
-        ...host.readState(),
-        deletedSessions: deletionFacts,
-      });
-      for (const key of deleted) {
-        setModelOverride(key, undefined);
-      }
-      await host.refreshReplacement();
-      if (!host.connection.isCurrent(scope)) {
-        return (await reconcileConfirmedPreviousConnection(scope))
-          ? { deleted, errors, preservedWorktrees }
-          : { deleted: [], errors: [], preservedWorktrees: [] };
-      }
-    }
-    return { deleted, errors, preservedWorktrees };
-  };
-
   const reset = async (
     key: string,
     options: SessionResetOptions = {},
@@ -622,8 +483,13 @@ export function createSessionMutations(host: SessionMutationsHost) {
   return {
     create,
     createResult,
-    delete: remove,
-    deleteMany: removeMany,
+    reconcileConfirmedPreviousConnection,
+    retireDeletedSession(this: void, key: string) {
+      host.retirePullRequestSummary(key);
+      archiveState.clear(key);
+      preparedWorkSessionKeys.delete(key.trim());
+      setModelOverride(key, undefined);
+    },
     patch,
     assignOwner,
     patchRowLocal,

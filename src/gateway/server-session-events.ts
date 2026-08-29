@@ -404,10 +404,20 @@ export function createLifecycleEventBroadcastHandler(params: {
       agentScope,
     );
     const broadcastOptions = { ...privateBroadcastScope, dropIfSlow: true };
-    if (!routingAgentId || (!eventAgentId && !compatibilityOwnerAgentId)) {
+    // Key-only lifecycle deletes invalidate membership; a later row is not deletion evidence.
+    if (
+      event.reason === "delete" ||
+      !routingAgentId ||
+      (!eventAgentId && !compatibilityOwnerAgentId)
+    ) {
       params.broadcastToConnIds(
         "sessions.changed",
-        { sessionKey: event.sessionKey, reason: event.reason, ts: Date.now() },
+        {
+          sessionKey: event.sessionKey,
+          ...(eventAgentId ? { agentId: eventAgentId } : {}),
+          reason: event.reason,
+          ts: Date.now(),
+        },
         connIds,
         broadcastOptions,
       );

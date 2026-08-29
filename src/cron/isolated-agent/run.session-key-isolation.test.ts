@@ -310,14 +310,13 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
 
   it("uses a run-scoped key for CLI isolated cron execution", async () => {
     isCliProviderMock.mockReturnValue(true);
-    resolveCronSessionMock.mockReturnValue(
-      makeCronSession({
-        sessionEntry: {
-          ...makeCronSession().sessionEntry,
-          sessionId: "isolated-cli-run-1",
-        },
-      }),
-    );
+    const cronSession = makeCronSession({
+      sessionEntry: {
+        ...makeCronSession().sessionEntry,
+        sessionId: "isolated-cli-run-1",
+      },
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
     mockRunCronFallbackPassthrough();
     runCliAgentMock.mockResolvedValue({
       payloads: [{ text: "done" }],
@@ -343,6 +342,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     const runRequest = requireFirstMockArg(runCliAgentMock, "runCliAgentMock") as {
       sessionId?: string;
       sessionKey?: string;
+      sessionTarget?: unknown;
       promptCacheKey?: string;
       bootstrapContextMode?: string;
       bootstrapContextRunKind?: string;
@@ -350,6 +350,12 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     };
     expect(runRequest.sessionId).toBe("isolated-cli-run-1");
     expect(runRequest.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
+    expect(runRequest.sessionTarget).toEqual({
+      agentId: "default",
+      sessionId: "isolated-cli-run-1",
+      sessionKey: "agent:default:cron:cli-monitor:run:isolated-cli-run-1",
+      storePath: cronSession.storePath,
+    });
     expect(runRequest.sessionKey).not.toBe("agent:default:cron:cli-monitor");
     expect(runRequest.promptCacheKey).toBeUndefined();
     expect(runRequest.bootstrapContextMode).toBe("lightweight");

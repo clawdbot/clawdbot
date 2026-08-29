@@ -14,6 +14,7 @@ import {
 } from "../plugins/official-external-plugin-catalog.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { VERSION } from "../version.js";
 import {
   applyExclusiveSlotSelectionMock,
   buildPluginSnapshotReportMock,
@@ -61,6 +62,10 @@ const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const ORIGINAL_STDOUT_TTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const PROFILE_STATE_ROOT = "/tmp/openclaw-ledger-profile";
+
+function expectedNpmInstallSpec(spec: string): string {
+  return VERSION.includes("-beta.") ? `${spec.replace(/@latest$/, "")}@beta` : spec;
+}
 
 const OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY = listOfficialExternalPluginCatalogEntries()
   .map((entry) => {
@@ -2053,9 +2058,16 @@ describe("plugins cli install", () => {
     expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
   });
 
-  it.each(OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY)(
-    "keeps official external npm installs trusted without integrity for $pluginId",
-    async ({ pluginId, npmSpec }) => {
+  it.each([
+    ...OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY.map((entry) => ({
+      ...entry,
+      version: "2026.8.1",
+    })),
+    { ...OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY[0]!, version: "2026.8.1-beta.4" },
+  ])(
+    "keeps official external npm installs trusted without integrity for $pluginId on $version",
+    async ({ pluginId, npmSpec, version }) => {
+      coreVersion.value = version;
       await withTempDir("openclaw-official-plugin-install-", async (cwd) => {
         const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
         try {
@@ -2069,7 +2081,7 @@ describe("plugins cli install", () => {
             lookup: { kind: "pluginId", value: pluginId },
           });
           expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
-          expect(npmInstallCall().spec).toBe(npmSpec);
+          expect(npmInstallCall().spec).toBe(expectedNpmInstallSpec(npmSpec));
           expect(npmInstallCall().expectedPluginId).toBe(pluginId);
           expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
           expect(npmInstallCall().expectedIntegrity).toBeUndefined();

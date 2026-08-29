@@ -14,6 +14,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -724,6 +725,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
         .filter((existing) => !existing || failure !== "second")
         .map((existing) => ({ command: "review-init" as const, failure, existing })),
     ),
+    ...(["review-init", "review-claim"] as const).flatMap((command) =>
+      [false, true].map((existing) => ({ command, failure: "auth" as const, existing })),
+    ),
     ...(["review-validate-artifacts", "review-guard", "review-tests"] as const).flatMap((command) =>
       (["healthy", "first", "auth"] as const).map((failure) => ({
         command,
@@ -834,15 +838,16 @@ describePosix("scripts/pr per-PR operation lock", () => {
           writeFileSync(join(localDir, artifact), `prior ${artifact}\n`);
         }
       }
-      if (command !== "review-init") {
+      if (
+        command === "review-validate-artifacts" ||
+        command === "review-guard" ||
+        command === "review-tests"
+      ) {
         writeReviewArtifacts(worktreeDir, validReview(pullHead), { headSha: pullHead });
       }
-      const priorArtifacts =
-        command === "review-init"
-          ? []
-          : artifactNames.map(
-              (name) => [name, readFileSync(join(localDir, name), "utf8")] as const,
-            );
+      const priorArtifacts = existing
+        ? artifactNames.map((name) => [name, readFileSync(join(localDir, name), "utf8")] as const)
+        : [];
       const metadataPath = join(stateDir, "metadata.json");
       writeFileSync(
         metadataPath,
@@ -872,17 +877,24 @@ describePosix("scripts/pr per-PR operation lock", () => {
           files: [],
         }),
       );
+      const ghEventsPath = join(stateDir, "gh-events");
+      writeFileSync(ghEventsPath, "");
       const gh = writeFixtureFile(binDir, "gh", [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         'case "$*" in',
-        '  "auth token") exit 1 ;;',
+        '  "auth token") printf "token:1\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; exit 1 ;;',
         '  "api graphql -f query=query { viewer { login } } --jq .data.viewer.login")',
-        '    [ "$OPENCLAW_TEST_AUTH_FAILURE" != 1 ] || exit 1',
+        '    if [ "$OPENCLAW_TEST_AUTH_FAILURE" = 1 ]; then',
+        '      printf "viewer:1\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; exit 1',
+        "    fi",
+        '    printf "viewer:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS"',
         '    printf "fixture-user\\n" ;;',
-        '  "pr view 42 --json headRefOid"|"pr view 42 --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,changedFiles,additions,deletions,statusCheckRollup,files")',
-        '    cat "$OPENCLAW_TEST_PR_METADATA" ;;',
-        '  *) echo "unexpected fixture gh request" >&2; exit 99 ;;',
+        '  "pr view 42 --json headRefOid")',
+        '    cat "$OPENCLAW_TEST_PR_METADATA"; printf "head:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS" ;;',
+        '  "pr view 42 --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,changedFiles,additions,deletions,statusCheckRollup,files")',
+        '    cat "$OPENCLAW_TEST_PR_METADATA"; printf "metadata:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS" ;;',
+        '  *) printf "unexpected:99\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; echo "unexpected fixture gh request" >&2; exit 99 ;;',
         "esac",
       ]);
       chmodSync(gh, 0o755);
@@ -922,6 +934,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         ...env,
         OPENCLAW_GH_BIN: gh,
         OPENCLAW_TEST_PR_METADATA: metadataPath,
+        OPENCLAW_TEST_GH_EVENTS: ghEventsPath,
         OPENCLAW_TEST_REAL_GIT: realGit,
         OPENCLAW_TEST_REPO: repoDir,
         OPENCLAW_TEST_ORIGIN: originDir,
@@ -955,6 +968,40 @@ describePosix("scripts/pr per-PR operation lock", () => {
         expect.soft(git("branch", "--show-current")).toBe("main");
         expect.soft(git("write-tree")).toBe(canonicalTree);
         expect.soft(git("diff", "--exit-code")).toBe("");
+        if (failure === "auth" && (command === "review-init" || command === "review-claim")) {
+          // The exact GH trace distinguishes the intended auth failure from an
+          // unexpected fixture command that the auth diagnostic would also hide.
+          const ghEvents = readFileSync(ghEventsPath, "utf8").trim().split("\n");
+          expect
+            .soft(ghEvents, output)
+            .toEqual(
+              command === "review-init"
+                ? ["metadata:0", "head:0", "token:1", "viewer:1"]
+                : ["token:1", "viewer:1"],
+            );
+          expect.soft(controller.exitCode, output).toBe(1);
+          expect.soft(output).toContain("GitHub CLI auth is not usable");
+          expect.soft(events.filter(Boolean), output).toEqual([]);
+          expect.soft(git("rev-parse", "refs/remotes/origin/main")).toBe(cachedMain);
+          expect.soft(git("rev-parse", "refs/heads/pr-42")).toBe(cachedMain);
+          expect.soft(existsSync(worktreeDir)).toBe(existing);
+          if (existing) {
+            expect.soft(git("-C", worktreeDir, "rev-parse", "HEAD")).toBe(pullHead);
+            expect.soft(git("-C", worktreeDir, "branch", "--show-current")).toBe("temp/pr-42");
+            expect.soft(git("-C", worktreeDir, "write-tree")).toBe(canonicalTree);
+            expect.soft(git("-C", worktreeDir, "diff", "--exit-code")).toBe("");
+            expect.soft(readdirSync(localDir).sort()).toEqual([...artifactNames].sort());
+            for (const [name, contents] of priorArtifacts) {
+              expect.soft(readFileSync(join(localDir, name), "utf8"), name).toBe(contents);
+            }
+          }
+          expect.soft(refExists(repoDir, lockRef, childEnv), output).toBe(false);
+          expect.soft(output).not.toContain("Retaining the operation lock");
+          expect.soft(output).not.toContain("scripts/pr lock-recover");
+          expect.soft(output).not.toContain("wrote=.local/pr-meta.json");
+          expect.soft(output).not.toContain("review claim succeeded");
+          return;
+        }
         if (command !== "review-init") {
           const fetches = events.filter((event) => event.startsWith("fetch:"));
           expect

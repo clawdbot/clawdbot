@@ -140,10 +140,12 @@ export type SidebarRecentSession = {
 
 export type SidebarSessionHovercardRow = Pick<
   SidebarRecentSession,
+  | "boardFace"
   | "createdActor"
   | "createdAt"
   | "channelAvatarUrl"
   | "endedAt"
+  | "hasAutomation"
   | "label"
   | "lastMessagePreview"
   | "participantCount"

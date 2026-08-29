@@ -51,19 +51,15 @@ Gateway sharing operations are outside this run-audit boundary.
 
 `sessions_history` fetches the conversation transcript for a specific session. By default, tool results are excluded; pass `includeTools: true` to see them. Use `limit` for the newest bounded tail. Pass `offset: 0` when you need pagination metadata, then pass returned `nextOffset` values to page backward through older OpenClaw transcript windows without reading raw transcript files. Explicit offset pages do not merge external CLI fallback imports; use the default newest-tail view (no `offset`) when you need that merged display history.
 
-The returned view is intentionally bounded and safety-filtered:
+The returned view is intentionally bounded and redacted:
 
-- assistant text is normalized before recall:
-  - thinking tags are stripped
-  - `<relevant-memories>` / `<relevant_memories>` scaffolding blocks are stripped
-  - plain-text tool-call XML payload blocks such as `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, and `<function_calls>...</function_calls>` are stripped, including truncated payloads that never close cleanly
-  - downgraded tool-call/result scaffolding such as `[Tool Call: ...]`, `[Tool Result ...]`, and `[Historical context ...]` is stripped
-  - leaked model control tokens such as `<|assistant|>`, other ASCII `<|...|>` tokens, and full-width `<｜...｜>` variants are stripped
-  - malformed MiniMax tool-call XML such as `<invoke ...>` / `</minimax:tool_call>` is stripped
-- credential/token-like text is redacted before it is returned
-- long text blocks are truncated
-- very large histories can drop older rows or replace an oversized row with `[sessions_history omitted: message too large]`
+- credential/token-like text is redacted even when general-purpose log redaction is disabled
+- thinking signatures, reasoning replay payloads, and inline image data are omitted
+- long text blocks are truncated to 4000 characters, with a truncation marker appended
+- returned messages are capped at 80 KB; older rows can be dropped or an oversized row replaced with `[sessions_history omitted: message too large]`
 - the tool reports summary flags such as `truncated`, `droppedMessages`, `contentTruncated`, `contentRedacted`, `bytes`, and pagination metadata
+
+This is structured history, not the plain-text rendering used by [`/subagents log`](/tools/subagents#slash-command). `sessions_history` does not apply that command's assistant prose sanitizer: reasoning tags, `<relevant-memories>` / `<relevant_memories>` scaffolding, plain-text tool-call XML (including malformed MiniMax XML), downgraded tool markers, and model control tokens can remain in returned message text. `includeTools` controls tool-result messages, not those embedded text forms.
 
 Use the returned **session key** (like `"main"`) with `sessions_history`, `sessions_send`, and `session_status`. Use the durable `sessionId` only as the lifecycle identity described above.
 

@@ -35,6 +35,25 @@ export function readCiCheckoutStep(job: string, name = "Checkout"): Step & { run
   return { ...step, run: step.run };
 }
 
+export function accelerateCiCheckoutFetchClock(run: string): string {
+  // Only fetch deadlines use fixture ticks; startup and cleanup keep real clocks.
+  return run
+    .replace(
+      "def run_git(",
+      `def fetch_clock():
+    return 2 * sum(name.startswith("fetch-tick-") and name.endswith(".json")
+                   for name in os.listdir(os.environ["TMPDIR"]))
+
+
+def run_git(`,
+    )
+    .replace("deadline = time.monotonic() + timeout", "deadline = fetch_clock() + timeout")
+    .replace(
+      "deadline is not None and time.monotonic() >= deadline",
+      "deadline is not None and fetch_clock() >= deadline",
+    );
+}
+
 export function expectCiCheckoutCleanup(report: Report) {
   expect(report.cleanupRemaining, "fixture cleanup left owned processes").toEqual([]);
   expect(report.boundaries.at(-1)?.name).toBe("exit");

@@ -2978,82 +2978,90 @@ describe("server-channels auto restart", () => {
     });
   });
 
-  it("keeps one file-credential account cold and recovers it without restarting siblings", async () => {
-    const credentialPath = path.join(channelTempDirs.make("openclaw-channel-credential-"), "token");
-    const credentialConfigPath = "channels.telegram.accounts.broken.tokenFile";
-    const startAccount = vi.fn(
-      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
-        await new Promise<void>((resolve) => {
-          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+  it.each([false, true])(
+    "reinspects file credentials and recovers only their account (skipUnavailableAccounts=%s)",
+    async (skipUnavailableAccounts) => {
+      const credentialPath = path.join(
+        channelTempDirs.make("openclaw-channel-credential-"),
+        "token",
+      );
+      const credentialConfigPath = "channels.telegram.accounts.broken.tokenFile";
+      const startAccount = vi.fn(
+        async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+          await new Promise<void>((resolve) => {
+            abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          }),
+      );
+      installTestRegistry(
+        createTestPlugin({
+          id: "telegram",
+          listAccountIds: () => ["broken", "healthy"],
+          resolveAccount: (_cfg, accountId) => {
+            const credential =
+              accountId === "broken"
+                ? tryReadSecretFileSync(
+                    credentialPath,
+                    "Telegram bot token",
+                    {},
+                    {
+                      configPath: credentialConfigPath,
+                    },
+                  )
+                : { status: "available" as const, value: "healthy-token" };
+            return {
+              enabled: true,
+              configured: true,
+              ...(credential.status === "configured_unavailable"
+                ? { credentialDiagnostics: [credential.diagnostic] }
+                : {}),
+            };
+          },
+          startAccount,
         }),
-    );
-    installTestRegistry(
-      createTestPlugin({
-        id: "telegram",
-        listAccountIds: () => ["broken", "healthy"],
-        resolveAccount: (_cfg, accountId) => {
-          const credential =
-            accountId === "broken"
-              ? tryReadSecretFileSync(
-                  credentialPath,
-                  "Telegram bot token",
-                  {},
-                  {
-                    configPath: credentialConfigPath,
-                  },
-                )
-              : { status: "available" as const, value: "healthy-token" };
-          return {
-            enabled: true,
-            configured: true,
-            ...(credential.status === "configured_unavailable"
-              ? { credentialDiagnostics: [credential.diagnostic] }
-              : {}),
-          };
-        },
-        startAccount,
-      }),
-    );
-    const manager = createManager({ channelIds: ["telegram"] });
+      );
+      const manager = createManager({ channelIds: ["telegram"] });
 
-    await expect(manager.startChannels()).resolves.toBeUndefined();
+      await expect(manager.startChannels()).resolves.toBeUndefined();
 
-    expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual(["healthy"]);
-    expect(manager.getRuntimeSnapshot().channelAccounts.telegram?.broken).toMatchObject({
-      configured: true,
-      running: false,
-      lastError:
-        "Secret owner account:telegram:broken is configured but unavailable (credential file is unavailable).",
-    });
-    expect(listActiveDegradedSecretOwners()).toContainEqual(
-      expect.objectContaining({
+      expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual(["healthy"]);
+      expect(manager.getRuntimeSnapshot().channelAccounts.telegram?.broken).toMatchObject({
+        configured: true,
+        running: false,
+        lastError:
+          "Secret owner account:telegram:broken is configured but unavailable (credential file is unavailable).",
+      });
+      expect(listActiveDegradedSecretOwners()).toContainEqual(
+        expect.objectContaining({
+          ownerId: "telegram:broken",
+          paths: [credentialConfigPath],
+          refKeys: [],
+        }),
+      );
+
+      await expect(
+        manager.startChannel("telegram", "broken", { skipUnavailableAccounts }),
+      ).rejects.toMatchObject({
+        code: "SECRET_SURFACE_UNAVAILABLE",
         ownerId: "telegram:broken",
-        paths: [credentialConfigPath],
-        refKeys: [],
-      }),
-    );
+      });
+      expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual(["healthy"]);
+      expect(listActiveDegradedSecretOwners()).toContainEqual(
+        expect.objectContaining({ ownerId: "telegram:broken" }),
+      );
 
-    await expect(manager.startChannel("telegram", "broken")).rejects.toMatchObject({
-      code: "SECRET_SURFACE_UNAVAILABLE",
-      ownerId: "telegram:broken",
-    });
-    expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual(["healthy"]);
-    expect(listActiveDegradedSecretOwners()).toContainEqual(
-      expect.objectContaining({ ownerId: "telegram:broken" }),
-    );
+      fs.writeFileSync(credentialPath, "repaired-token", { mode: 0o600 });
+      await manager.startChannel("telegram", "broken", { skipUnavailableAccounts });
 
-    fs.writeFileSync(credentialPath, "repaired-token", { mode: 0o600 });
-    await manager.startChannel("telegram", "broken");
-
-    expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual([
-      "healthy",
-      "broken",
-    ]);
-    expect(listActiveDegradedSecretOwners()).not.toContainEqual(
-      expect.objectContaining({ ownerId: "telegram:broken" }),
-    );
-    await manager.stopChannel("telegram");
-  });
+      expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual([
+        "healthy",
+        "broken",
+      ]);
+      expect(listActiveDegradedSecretOwners()).not.toContainEqual(
+        expect.objectContaining({ ownerId: "telegram:broken" }),
+      );
+      await manager.stopChannel("telegram");
+    },
+  );
 
   it("uses fallback logger and runtime when a channel is missing startup wiring", async () => {
     const startAccount = vi.fn(async () => {

@@ -508,7 +508,10 @@ export async function runEmbeddedAgentAttempt(params: {
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             sessionHasHistory:
               !isNewSession ||
-              (await attemptExecutionRuntime.sessionFileHasContent(attemptSessionFile)),
+              (await attemptExecutionRuntime.sessionTranscriptHasContent(
+                attemptSessionTarget,
+                deferredLifecycle.signal,
+              )),
             fallbackRuntimeState,
             suppressPromptPersistenceOnRetry:
               suppressUserTurnPersistence ||

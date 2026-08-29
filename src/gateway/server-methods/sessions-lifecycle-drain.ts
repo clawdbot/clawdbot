@@ -1,5 +1,5 @@
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
-// Archive-owned cancellation and authoritative lifecycle drains.
+// Session-owned cancellation and authoritative lifecycle drains.
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunInProgress,
@@ -28,7 +28,7 @@ import {
 } from "../worker-environments/inference-control-internal.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
-import { prepareSessionWorkerPlacementForArchive } from "../worker-environments/session-placement-lifecycle.js";
+import { prepareSessionWorkerPlacementStop } from "../worker-environments/session-placement-lifecycle.js";
 import {
   abortChatRunsForSessionKeyWithPartials,
   createChatAbortOps,
@@ -36,24 +36,14 @@ import {
 } from "./chat-abort-runtime.js";
 import type { GatewayRequestContext } from "./types.js";
 
-type ArchivePlacementService = NonNullable<GatewayRequestContext["workerSessionPlacementService"]> &
+type LifecyclePlacementService = NonNullable<
+  GatewayRequestContext["workerSessionPlacementService"]
+> &
   Partial<Pick<WorkerSessionPlacementStore, "waitForTurnClaimRelease">>;
 
-type ArchiveInferenceDrainService = {
-  beginInferenceSessionDrain(sessionId: string): WorkerInferenceSessionDrain;
-};
-
-function asArchiveInferenceDrainService(value: unknown): ArchiveInferenceDrainService | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  return typeof (value as { beginInferenceSessionDrain?: unknown }).beginInferenceSessionDrain ===
-    "function"
-    ? (value as ArchiveInferenceDrainService)
-    : undefined;
-}
-
-type SessionArchiveLifecycleParams = {
+type SessionLifecycleParams = {
+  action: "archive" | "delete";
+  authorize?: () => void;
   context: GatewayRequestContext;
   storePath: string;
   sessionKeys: string[];
@@ -64,13 +54,13 @@ type SessionArchiveLifecycleParams = {
   lifecycleIdentities: string[];
 };
 
-export type SessionArchiveLifecycleDrain = {
+export type SessionLifecycleDrain = {
   release(): void;
   hasAuthoritativeWork(): boolean;
 };
 
 function hasAuthoritativeSessionWork(
-  params: SessionArchiveLifecycleParams,
+  params: SessionLifecycleParams,
   workerDrain: WorkerInferenceSessionDrain | undefined,
   terminalDrain: AgentTerminalSessionDrain | undefined,
   workIdentities: string[],
@@ -102,11 +92,12 @@ function hasAuthoritativeSessionWork(
 }
 
 /** Fence is already active when this starts; retain the returned runtime fence through commit. */
-export async function prepareSessionArchiveLifecycle(
-  params: SessionArchiveLifecycleParams,
-): Promise<SessionArchiveLifecycleDrain> {
-  // Reject transient/live-failed placement before archive cancellation has side effects.
-  await prepareSessionWorkerPlacementForArchive({ ...params, reclaimActive: false });
+export async function prepareSessionLifecycleDrain(
+  params: SessionLifecycleParams,
+): Promise<SessionLifecycleDrain> {
+  // Reject unsafe placement before cancellation, then retain this exact owner across drains.
+  params.authorize?.();
+  const reclaim = prepareSessionWorkerPlacementStop(params);
   const timeoutMs = SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS;
   const workIdentities = Array.from(
     new Set([...params.sessionKeys, ...(params.sessionId ? [params.sessionId] : [])]),
@@ -115,23 +106,27 @@ export async function prepareSessionArchiveLifecycle(
   const workerControl = asWorkerInferenceControl(workerService);
   let workerDrain: WorkerInferenceSessionDrain | undefined;
   let terminalDrain: AgentTerminalSessionDrain | undefined;
-  if (params.sessionId) {
-    // Lightweight contexts may expose the drain directly without widening the public service.
-    workerDrain =
-      beginWorkerInferenceSessionDrain(workerService, params.sessionId) ??
-      asArchiveInferenceDrainService(workerService)?.beginInferenceSessionDrain(params.sessionId);
-    if (!workerDrain && workerControl?.hasInferenceForSession(params.sessionId) === true) {
-      throw new Error("Worker inference drain is unavailable");
+  const release = () => {
+    try {
+      terminalDrain?.release();
+    } finally {
+      workerDrain?.release();
     }
-    terminalDrain = params.context.terminalSessions?.beginAgentSessionDrain({
-      kind: "agent",
-      agentSessionKey: params.sessionKey,
-      agentSessionId: params.sessionId,
-      agentId: params.agentId,
-    });
-  }
-
+  };
   try {
+    if (params.sessionId) {
+      workerDrain = beginWorkerInferenceSessionDrain(workerService, params.sessionId);
+      if (!workerDrain && workerControl?.hasInferenceForSession(params.sessionId) === true) {
+        throw new Error("Worker inference drain is unavailable");
+      }
+      terminalDrain = params.context.terminalSessions?.beginAgentSessionDrain({
+        kind: "agent",
+        agentSessionKey: params.sessionKey,
+        agentSessionId: params.sessionId,
+        agentId: params.agentId,
+      });
+    }
+
     let controllerDrain = Promise.resolve(true);
     const abortResult = await abortChatRunsForSessionKeyWithPartials({
       context: params.context,
@@ -142,7 +137,7 @@ export async function prepareSessionArchiveLifecycle(
       agentId: params.agentId,
       defaultAgentId: params.defaultAgentId,
       abortOrigin: "rpc",
-      stopReason: "archive",
+      stopReason: params.action,
       requester: { isAdmin: true },
       includeProtectedRuns: true,
       onControllerTargets: (targets) => {
@@ -166,9 +161,10 @@ export async function prepareSessionArchiveLifecycle(
       },
     });
     if (abortResult.unauthorized) {
-      throw new Error("Archive cancellation lost session ownership");
+      throw new Error("Session cancellation lost ownership");
     }
 
+    params.authorize?.();
     const admittedWork = interruptSessionWorkAdmissions({
       scope: params.storePath,
       identities: params.lifecycleIdentities,
@@ -181,9 +177,8 @@ export async function prepareSessionArchiveLifecycle(
     const embeddedWork = params.sessionId
       ? waitForEmbeddedAgentRunEnd(params.sessionId, timeoutMs)
       : Promise.resolve(true);
-    const placementService = params.context.workerSessionPlacementService as
-      | ArchivePlacementService
-      | undefined;
+    const placementService: LifecyclePlacementService | undefined =
+      params.context.workerSessionPlacementService;
     const placement = params.sessionId
       ? placementService?.getMany([params.sessionId]).get(params.sessionId)
       : undefined;
@@ -195,12 +190,12 @@ export async function prepareSessionArchiveLifecycle(
         : Promise.resolve(false)
       : Promise.resolve(true);
     const workerWork = workerDrain
-      ? withTimeout(workerDrain.drained, timeoutMs, "worker inference archive drain").then(
+      ? withTimeout(workerDrain.drained, timeoutMs, "worker inference lifecycle drain").then(
           () => true,
         )
       : Promise.resolve(true);
     const terminalWork = terminalDrain
-      ? withTimeout(terminalDrain.drained, timeoutMs, "agent terminal archive drain").then(
+      ? withTimeout(terminalDrain.drained, timeoutMs, "agent terminal lifecycle drain").then(
           () => true,
         )
       : Promise.resolve(true);
@@ -214,21 +209,17 @@ export async function prepareSessionArchiveLifecycle(
       terminalWork,
     ]);
     if (!drains.every(Boolean)) {
-      throw new Error("Session work did not fully drain before archive");
+      throw new Error("Session work is still active after the lifecycle drain");
     }
-    // Fresh exact placement must be reclaimed before archivedAt can commit.
-    await prepareSessionWorkerPlacementForArchive({ ...params, reclaimActive: true });
+    // Safe reclaim must finish before the archive or delete can commit.
+    await reclaim();
     return {
-      release: () => {
-        terminalDrain?.release();
-        workerDrain?.release();
-      },
+      release,
       hasAuthoritativeWork: () =>
         hasAuthoritativeSessionWork(params, workerDrain, terminalDrain, workIdentities),
     };
   } catch (error) {
-    terminalDrain?.release();
-    workerDrain?.release();
+    release();
     throw error;
   }
 }

@@ -703,13 +703,25 @@ wa-popover.new-session-page__picker-popover
   color: var(--muted);
 }
 
-.new-session-page__menu-facts {
+.new-session-page__menu-meta {
   display: inline-flex;
   flex: 0 1 auto;
-  gap: 3px;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   max-width: 62%;
   overflow: hidden;
+}
+
+.new-session-page__menu-facts {
+  display: inline-flex;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.new-session-page__menu-meta > .session-context-meter {
+  flex: 0 0 84px;
 }
 
 .new-session-page__menu-fact {

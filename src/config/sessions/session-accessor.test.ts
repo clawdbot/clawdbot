@@ -36,6 +36,7 @@ import {
   applySessionPatchProjections,
   appendTranscriptEvent,
   appendTranscriptMessage,
+  appendTranscriptMessageSync,
   applySessionEntryLifecycleMutation,
   assignSessionOwner,
   commitReplySessionInitialization,
@@ -3844,6 +3845,70 @@ describe("session accessor seam", () => {
     await withTestTimeout(results, 1_000, "timed out waiting for queued transcript writes");
     await results;
     expect(unrelatedWriteError).toBeUndefined();
+  });
+
+  it("rechecks a turn predicate after a direct transcript commit", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-commit-predicate",
+      sessionKey: "agent:main:commit-predicate",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    let markAdmissionEntered!: () => void;
+    const admissionEntered = new Promise<void>((resolve) => {
+      markAdmissionEntered = resolve;
+    });
+    let resumeAdmission!: () => void;
+    const admissionReleased = new Promise<boolean>((resolve) => {
+      resumeAdmission = () => resolve(true);
+    });
+
+    const turnPromise = persistSessionTranscriptTurn(scope, {
+      cwd: tempDir,
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            content: "committed reply",
+            timestamp: 200,
+          },
+          shouldAppend: async () => {
+            markAdmissionEntered();
+            return await admissionReleased;
+          },
+          shouldAppendInTransaction: (latestAssistantMessage) => {
+            const latest = latestAssistantMessage as { content?: unknown } | undefined;
+            return latest?.content !== "committed reply";
+          },
+        },
+      ],
+      publishWhen: "always",
+      touchSessionEntry: true,
+      updateMode: "file-only",
+    });
+
+    await admissionEntered;
+    appendTranscriptMessageSync(scope, {
+      idempotencyLookup: "caller-checked",
+      message: {
+        role: "assistant",
+        content: "committed reply",
+        stopReason: "stop",
+        timestamp: 100,
+      },
+    });
+    resumeAdmission();
+    await turnPromise;
+
+    const assistantMessages = (await loadTranscriptEvents(scope)).flatMap((event) => {
+      const message = (event as { message?: { role?: unknown } }).message;
+      return message?.role === "assistant" ? [message] : [];
+    });
+    expect(assistantMessages).toHaveLength(1);
   });
 
   it("persists expected-session SQLite transcript turns without reentering the writer queue", async () => {

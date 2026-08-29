@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 344714,
-  "reason": "Revert queued-send transcript bubbles (#131909) per operator live review; fresh pnpm ui:build measures 344714 B. Retain the 512 B growth allowance, 64 B build variance, and 350 KiB baseline ceiling.",
+  "startupJsGzipBytes": 345606,
+  "reason": "Generation-safe optimistic session deletion (#132233, fixing #132057); measured 345606 B after current-main integration, below the maintainer-approved 347323 B baseline; hard cap and allowances unchanged",
   "updatedAt": "2026-08-29"
 }
