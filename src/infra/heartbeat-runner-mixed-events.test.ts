@@ -49,6 +49,7 @@ describe("heartbeat mixed event ownership", () => {
       const sessionKey = resolveMainSessionKey(cfg);
       await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
+        lastProvider: "telegram",
         lastTo: "-100155462274",
       });
       enqueueSystemEvent("Gateway restart ok", { sessionKey });
