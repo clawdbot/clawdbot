@@ -26,7 +26,6 @@ import {
   listWebPushSubscriptions,
   prepareWebPushApprovalDeliveries,
   readPersistedVapidKeyPair,
-  retainSuccessfulWebPushApprovalDeliveries,
   setWebPushSubscriptionPreferences,
 } from "./push-web-store.js";
 import {
@@ -354,6 +353,28 @@ describe("subscription CRUD", () => {
         categories: { agentQuestion: true },
       },
     });
+
+    await registerWebPushSubscription({
+      endpoint,
+      keys: { p256dh: "refreshed-p256dh", auth: "refreshed-auth" },
+      binding: { deviceId: "browser-device", userProfileId: "profile-1" },
+      baseDir: tmpDir,
+    });
+    expect(findBoundWebPushSubscriptionByEndpoint({ endpoint, stateDir: tmpDir })).toMatchObject({
+      devicePreferences: { enabled: true, label: "Slot 1" },
+    });
+
+    await registerWebPushSubscription({
+      endpoint,
+      keys: { p256dh: "rebound-p256dh", auth: "rebound-auth" },
+      binding: { deviceId: "other-device", userProfileId: "profile-2" },
+      baseDir: tmpDir,
+    });
+    expect(findBoundWebPushSubscriptionByEndpoint({ endpoint, stateDir: tmpDir })).toMatchObject({
+      deviceId: "other-device",
+      userProfileId: "profile-2",
+      devicePreferences: defaultDevicePreferences,
+    });
   });
 
   it("preserves unrelated concurrent registrations", async () => {
@@ -504,9 +525,9 @@ describe("approval delivery target persistence", () => {
       ),
     ).toEqual(expectedSubscriptionIds);
 
-    retainSuccessfulWebPushApprovalDeliveries({
+    deleteWebPushApprovalDeliveryTargets({
       approvalId,
-      successfulSubscriptionIds: [first.subscriptionId],
+      subscriptionIds: [second.subscriptionId],
       stateDir: tmpDir,
     });
     closeOpenClawStateDatabase();
@@ -611,6 +632,7 @@ describe("approval delivery target persistence", () => {
     expect(rebound.subscriptionId).toBe(original.subscriptionId);
     expect(listTerminalWebPushApprovalDeliveryIds(tmpDir).approvalIds).toContain(approvalId);
     expect(listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).toEqual([]);
+    expect(listTerminalWebPushApprovalDeliveryIds(tmpDir).approvalIds).not.toContain(approvalId);
   });
 });
 

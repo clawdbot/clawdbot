@@ -19,7 +19,6 @@ import {
   listWebPushApprovalDeliveryTargets,
   prepareWebPushApprovalDeliveries,
   prepareWebPushNotificationSender,
-  retainSuccessfulWebPushApprovalDeliveries,
   type BoundWebPushSubscription,
 } from "../infra/push-web.js";
 import { getUserPreferences } from "../state/user-preferences.js";
@@ -210,15 +209,20 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
       ),
     )
   ).flat();
-  const deliveredSubscriptionIds = new Set(
-    results.filter((result) => result.ok).map((result) => result.subscriptionId),
-  );
-  retainSuccessfulWebPushApprovalDeliveries({
+  const definitelyRejectedSubscriptionIds = results
+    .filter((result) => !result.ok && result.statusCode !== undefined)
+    .map((result) => result.subscriptionId);
+  deleteWebPushApprovalDeliveryTargets({
     approvalId: params.record.id,
-    successfulSubscriptionIds: [...deliveredSubscriptionIds],
+    subscriptionIds: definitelyRejectedSubscriptionIds,
     stateDir: params.stateDir,
   });
-  return deliveredSubscriptionIds.size > 0
+  const possibleDeliverySubscriptionIds = new Set(
+    results
+      .filter((result) => result.ok || result.statusCode === undefined)
+      .map((result) => result.subscriptionId),
+  );
+  return possibleDeliverySubscriptionIds.size > 0
     ? { record: params.record, sender: sendWebPushNotifications }
     : null;
 }

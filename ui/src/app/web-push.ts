@@ -29,11 +29,28 @@ export type WebPushCapability = {
   dispose: () => void;
 };
 
+function resolveWebPushSupport(): Pick<WebPushSnapshot, "supported" | "permission"> {
+  const nav = globalThis.navigator;
+  const ios =
+    /iPad|iPhone|iPod/u.test(nav.userAgent) ||
+    (nav.platform === "MacIntel" && nav.maxTouchPoints > 1);
+  // SAFETY: iOS Safari's non-standard standalone flag is optional and read-only.
+  const iosNavigator = nav as Navigator & { standalone?: boolean };
+  if (ios && iosNavigator.standalone !== true) {
+    return { supported: false, permission: "install-required" };
+  }
+  const supported =
+    "serviceWorker" in nav && "PushManager" in globalThis && "Notification" in globalThis;
+  return {
+    supported,
+    permission: supported ? Notification.permission : "unsupported",
+  };
+}
+
 export function createWebPushCapability(gateway: ApplicationGateway): WebPushCapability {
   const runtime = import("./web-push.runtime.ts");
   let snapshot: WebPushSnapshot = {
-    supported: false,
-    permission: "unsupported",
+    ...resolveWebPushSupport(),
     subscribed: false,
     loading: false,
     error: null,
@@ -55,34 +72,43 @@ export function createWebPushCapability(gateway: ApplicationGateway): WebPushCap
 
   const runAction = (action: WebPushCapabilityAction) => {
     const client = gateway.snapshot.client;
-    if (!snapshot.supported || !client || operation) {
-      return operation ?? Promise.resolve();
+    if (!snapshot.supported || !client) {
+      return Promise.resolve();
     }
-    publish({ loading: true, error: null });
-    operation = runtime
-      .then(({ runWebPushCapabilityAction }) => runWebPushCapabilityAction(client, action))
+    if (!operation) {
+      publish({ loading: true, error: null });
+    }
+    const previous = operation;
+    const actionRun = (previous ?? Promise.resolve())
+      .then(async () => {
+        publish({ error: null });
+        if (gateway.snapshot.client !== client) {
+          throw new Error("Gateway changed before the notification change could be saved.");
+        }
+        const { runWebPushCapabilityAction } = await runtime;
+        return await runWebPushCapabilityAction(client, action);
+      })
       .then(publish)
       .catch((error: unknown) => {
         publish({ error: formatUiError(error) });
-      })
-      .finally(() => {
+      });
+    const next = actionRun.finally(() => {
+      if (operation === next) {
         operation = null;
         publish({
           loading: false,
           permission: "Notification" in window ? Notification.permission : "unsupported",
         });
-      });
-    return operation;
+      }
+    });
+    operation = next;
+    return next;
   };
 
   void runtime.then(
-    ({ resolveWebPushSupport, startWebPushReconciliation }) => {
-      if (!disposed) {
-        const support = resolveWebPushSupport();
-        publish(support);
-        if (support.supported) {
-          stopReconciliation = startWebPushReconciliation({ gateway, publish });
-        }
+    ({ startWebPushReconciliation }) => {
+      if (!disposed && snapshot.supported) {
+        stopReconciliation = startWebPushReconciliation({ gateway, publish });
       }
     },
     (error: unknown) => publish({ error: formatUiError(error) }),

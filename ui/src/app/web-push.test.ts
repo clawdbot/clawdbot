@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WebPushNotificationPreferences } from "../../../packages/gateway-protocol/src/schema/push.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -54,6 +55,7 @@ function gatewayHarness() {
     client: null,
   } as unknown as ApplicationGatewaySnapshot;
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const eventListeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
   const gateway = {
     get snapshot() {
       return snapshot;
@@ -62,15 +64,54 @@ function gatewayHarness() {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    subscribeEvents(listener: Parameters<ApplicationGateway["subscribeEvents"]>[0]) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
   } as unknown as ApplicationGateway;
   return {
     gateway,
-    connect(client: GatewayBrowserClient) {
-      snapshot = { ...snapshot, phase: "connected", client };
+    connect(client: GatewayBrowserClient, profileId = "profile-owner") {
+      snapshot = {
+        ...snapshot,
+        phase: "connected",
+        client,
+        selfUser: { id: profileId },
+      } as unknown as ApplicationGatewaySnapshot;
       for (const listener of listeners) {
         listener(snapshot);
       }
     },
+    emit(event: Parameters<Parameters<ApplicationGateway["subscribeEvents"]>[0]>[0]) {
+      for (const listener of eventListeners) {
+        listener(event);
+      }
+    },
+  };
+}
+
+function notificationPreferences(approvalRequested: boolean): WebPushNotificationPreferences {
+  return {
+    categories: {
+      approvalRequested,
+      approvalResolved: true,
+      agentFinished: false,
+      agentQuestion: false,
+      scheduledTaskFailed: false,
+      backgroundTaskFailed: false,
+    },
+    detailLevel: "private",
+    quietHours: { enabled: false, startMinute: 1_320, endMinute: 420, timeZone: "UTC" },
+    agentIds: [],
+  };
+}
+
+function preferenceResult(user: WebPushNotificationPreferences) {
+  return {
+    durableIdentity: true,
+    user,
+    device: { enabled: true, label: "" },
+    effective: { ...user, enabled: true, label: "" },
   };
 }
 
@@ -113,6 +154,156 @@ describe("web push Gateway reconciliation", () => {
     } else {
       Reflect.deleteProperty(navigator, "serviceWorker");
     }
+  });
+
+  it("publishes ordinary browser support synchronously for the first-send prompt", () => {
+    const capability = createWebPushCapability(gatewayHarness().gateway);
+
+    expect(capability.snapshot).toMatchObject({ supported: true, permission: "granted" });
+    capability.dispose();
+  });
+
+  it("serializes rapid preference edits without dropping the latest full object", async () => {
+    const firstSave = createDeferred();
+    const first = notificationPreferences(true);
+    const second = notificationPreferences(false);
+    let stored = first;
+    let saveCount = 0;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "push.web.vapidPublicKey") {
+        return { vapidPublicKey: encodedVapidKey([4, 1, 2, 3]) };
+      }
+      if (method === "push.web.subscribe") {
+        return { subscriptionId: "subscription-1" };
+      }
+      if (method === "push.web.preferences.get") {
+        return preferenceResult(stored);
+      }
+      if (method === "push.web.preferences.set") {
+        saveCount += 1;
+        if (saveCount === 1) {
+          await firstSave.promise;
+        }
+        stored = (params as { preferences: WebPushNotificationPreferences }).preferences;
+        return { scope: "user", preferences: stored };
+      }
+      return {};
+    });
+    const harness = gatewayHarness();
+    const capability = createWebPushCapability(harness.gateway);
+    harness.connect({ request } as unknown as GatewayBrowserClient);
+    await vi.waitFor(() => expect(capability.snapshot.preferences).toBeTruthy());
+    request.mockClear();
+
+    const firstOperation = capability.setPreferences("user", first);
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "push.web.preferences.set",
+        expect.objectContaining({ preferences: first }),
+      ),
+    );
+    const secondOperation = capability.setPreferences("user", second);
+    firstSave.resolve();
+
+    await Promise.all([firstOperation, secondOperation]);
+    expect(request.mock.calls.filter(([method]) => method === "push.web.preferences.set")).toEqual([
+      ["push.web.preferences.set", expect.objectContaining({ preferences: first })],
+      ["push.web.preferences.set", expect.objectContaining({ preferences: second })],
+    ]);
+    expect(capability.snapshot.preferences?.user).toEqual(second);
+    capability.dispose();
+  });
+
+  it("refreshes matching defaults without publishing a stale invalidation", async () => {
+    const initial = notificationPreferences(true);
+    const stale = { ...notificationPreferences(true), detailLevel: "detailed" as const };
+    const latest = notificationPreferences(false);
+    const firstRefresh = createDeferred<ReturnType<typeof preferenceResult>>();
+    let preferenceRead = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "push.web.vapidPublicKey") {
+        return { vapidPublicKey: encodedVapidKey([4, 1, 2, 3]) };
+      }
+      if (method === "push.web.subscribe") {
+        return { subscriptionId: "subscription-1" };
+      }
+      if (method === "push.web.preferences.get") {
+        preferenceRead += 1;
+        if (preferenceRead === 1) {
+          return preferenceResult(initial);
+        }
+        if (preferenceRead === 2) {
+          return await firstRefresh.promise;
+        }
+        return preferenceResult(latest);
+      }
+      return {};
+    });
+    const harness = gatewayHarness();
+    const capability = createWebPushCapability(harness.gateway);
+    harness.connect({ request } as unknown as GatewayBrowserClient, "profile-owner");
+    await vi.waitFor(() => expect(capability.snapshot.preferences?.user).toEqual(initial));
+
+    harness.emit({
+      type: "event",
+      event: "users.prefs.changed",
+      payload: { profileId: "other-profile", keys: ["notifications.web.v1"] },
+    });
+    expect(preferenceRead).toBe(1);
+
+    const invalidation = {
+      type: "event" as const,
+      event: "users.prefs.changed",
+      payload: { profileId: "profile-owner", keys: ["notifications.web.v1"] },
+    };
+    harness.emit(invalidation);
+    await vi.waitFor(() => expect(preferenceRead).toBe(2));
+    harness.emit(invalidation);
+    await vi.waitFor(() => expect(capability.snapshot.preferences?.user).toEqual(latest));
+    firstRefresh.resolve(preferenceResult(stale));
+    await Promise.resolve();
+
+    expect(capability.snapshot.preferences?.user).toEqual(latest);
+    capability.dispose();
+  });
+
+  it("reruns full reconciliation when preferences change during initial connection", async () => {
+    const firstKey = createDeferred<string>();
+    let vapidRead = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "push.web.vapidPublicKey") {
+        vapidRead += 1;
+        return {
+          vapidPublicKey: vapidRead === 1 ? await firstKey.promise : encodedVapidKey([4, 1, 2, 3]),
+        };
+      }
+      if (method === "push.web.subscribe") {
+        return { subscriptionId: "subscription-1" };
+      }
+      if (method === "push.web.preferences.get") {
+        return preferenceResult(notificationPreferences(false));
+      }
+      return {};
+    });
+    const harness = gatewayHarness();
+    const capability = createWebPushCapability(harness.gateway);
+    harness.connect({ request } as unknown as GatewayBrowserClient, "profile-owner");
+    await vi.waitFor(() => expect(vapidRead).toBe(1));
+
+    harness.emit({
+      type: "event",
+      event: "users.prefs.changed",
+      payload: { profileId: "profile-owner", keys: ["notifications.web.v1"] },
+    });
+
+    await vi.waitFor(() => expect(vapidRead).toBe(2));
+    await vi.waitFor(() =>
+      expect(capability.snapshot.preferences?.user).toEqual(notificationPreferences(false)),
+    );
+    firstKey.resolve(encodedVapidKey([4, 9, 8, 7]));
+    await Promise.resolve();
+    expect(capability.snapshot.error).toBeNull();
+    capability.dispose();
   });
 
   it.each([

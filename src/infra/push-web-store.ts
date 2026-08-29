@@ -352,60 +352,58 @@ export function prepareWebPushApprovalDeliveries(params: {
   }, options);
 }
 
-/** Keep only request sends the push service accepted; unknown crash state stays conservative. */
-export function retainSuccessfulWebPushApprovalDeliveries(params: {
-  approvalId: string;
-  successfulSubscriptionIds: readonly string[];
-  stateDir?: string;
-}): void {
-  ensureWebPushApprovalDeliverySchema(params.stateDir);
-  const successfulSubscriptionIds = [...new Set(params.successfulSubscriptionIds)];
-  runOpenClawStateWriteTransaction(({ db }) => {
-    let query = getNodeSqliteKysely<WebPushDatabase>(db)
-      .deleteFrom("web_push_approval_deliveries")
-      .where("approval_id", "=", params.approvalId);
-    if (successfulSubscriptionIds.length > 0) {
-      query = query.where("subscription_id", "not in", successfulSubscriptionIds);
-    }
-    executeSqliteQuerySync(db, query);
-  }, webPushStateDatabaseOptions(params.stateDir));
-}
-
-/** Load current subscription material for one approval's durable cleanup targets. */
+/** Load current targets and discard rows whose original browser ownership no longer matches. */
 export function listWebPushApprovalDeliveryTargets(params: {
   approvalId: string;
   stateDir?: string;
 }): BoundWebPushSubscription[] {
   ensureWebPushApprovalDeliverySchema(params.stateDir);
-  const database = openOpenClawStateDatabase(webPushStateDatabaseOptions(params.stateDir));
-  const rows = executeSqliteQuerySync(
-    database.db,
-    getNodeSqliteKysely<WebPushDatabase>(database.db)
-      .selectFrom("web_push_approval_deliveries")
-      .innerJoin(
-        "web_push_subscriptions",
-        "web_push_subscriptions.subscription_id",
-        "web_push_approval_deliveries.subscription_id",
-      )
-      .selectAll("web_push_subscriptions")
-      .select([
-        "web_push_approval_deliveries.device_id as delivery_device_id",
-        "web_push_approval_deliveries.user_profile_id as delivery_user_profile_id",
-      ])
-      .where("web_push_approval_deliveries.approval_id", "=", params.approvalId)
-      .orderBy("web_push_subscriptions.created_at_ms", "asc")
-      .orderBy("web_push_subscriptions.subscription_id", "asc"),
-  ).rows;
-  return rows.flatMap((row) => {
-    if (
-      row.device_id !== row.delivery_device_id ||
-      row.user_profile_id !== row.delivery_user_profile_id
-    ) {
-      return [];
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const stateDb = getNodeSqliteKysely<WebPushDatabase>(db);
+    const rows = executeSqliteQuerySync(
+      db,
+      stateDb
+        .selectFrom("web_push_approval_deliveries")
+        .innerJoin(
+          "web_push_subscriptions",
+          "web_push_subscriptions.subscription_id",
+          "web_push_approval_deliveries.subscription_id",
+        )
+        .selectAll("web_push_subscriptions")
+        .select([
+          "web_push_approval_deliveries.device_id as delivery_device_id",
+          "web_push_approval_deliveries.user_profile_id as delivery_user_profile_id",
+        ])
+        .where("web_push_approval_deliveries.approval_id", "=", params.approvalId)
+        .orderBy("web_push_subscriptions.created_at_ms", "asc")
+        .orderBy("web_push_subscriptions.subscription_id", "asc"),
+    ).rows;
+    const staleSubscriptionIds = new Set(
+      rows
+        .filter(
+          (row) =>
+            row.device_id !== row.delivery_device_id ||
+            row.user_profile_id !== row.delivery_user_profile_id,
+        )
+        .map((row) => row.subscription_id),
+    );
+    if (staleSubscriptionIds.size > 0) {
+      executeSqliteQuerySync(
+        db,
+        stateDb
+          .deleteFrom("web_push_approval_deliveries")
+          .where("approval_id", "=", params.approvalId)
+          .where("subscription_id", "in", [...staleSubscriptionIds]),
+      );
     }
-    const subscription = boundWebPushSubscriptionFromRow(row);
-    return subscription ? [subscription] : [];
-  });
+    return rows.flatMap((row) => {
+      if (staleSubscriptionIds.has(row.subscription_id)) {
+        return [];
+      }
+      const subscription = boundWebPushSubscriptionFromRow(row);
+      return subscription ? [subscription] : [];
+    });
+  }, webPushStateDatabaseOptions(params.stateDir));
 }
 
 /** Remove only targets whose terminal replacement was accepted. */
@@ -495,6 +493,13 @@ export function upsertWebPushSubscription(params: {
       subscription,
       binding: params.binding,
     });
+    // Device preferences belong to the exact browser/profile binding. Key refreshes
+    // preserve them; ownership transfer resets them before the new owner can read.
+    const bindingChanged = Boolean(
+      existingRow &&
+      (existingRow.device_id !== row.device_id ||
+        existingRow.user_profile_id !== row.user_profile_id),
+    );
     executeSqliteQuerySync(
       db,
       stateDb
@@ -508,6 +513,7 @@ export function upsertWebPushSubscription(params: {
             auth: row.auth,
             device_id: row.device_id,
             user_profile_id: row.user_profile_id,
+            preferences_json: bindingChanged ? null : (existingRow?.preferences_json ?? null),
             updated_at_ms: row.updated_at_ms,
           }),
         ),

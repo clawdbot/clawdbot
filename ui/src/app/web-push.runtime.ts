@@ -9,6 +9,7 @@ import type { ApplicationGateway } from "./gateway.ts";
 const SW_READY_TIMEOUT = 10_000;
 const VAPID_MISMATCH_MESSAGE =
   "This browser push subscription belongs to another Gateway. Open this Gateway's own Control UI, or configure every mutually trusted Gateway behind this PWA with the same VAPID keypair.";
+const WEB_PUSH_USER_PREFERENCES_KEY = "notifications.web.v1";
 
 type WebPushReconcileResult =
   | { state: "missing" }
@@ -35,27 +36,6 @@ export type WebPushCapabilityPatch = {
   subscribed?: boolean;
   preferences?: WebPushPreferencesResult | null;
 };
-
-export function resolveWebPushSupport(): {
-  supported: boolean;
-  permission: NotificationPermission | "install-required" | "unsupported";
-} {
-  const nav = globalThis.navigator;
-  const ios =
-    /iPad|iPhone|iPod/u.test(nav.userAgent) ||
-    (nav.platform === "MacIntel" && nav.maxTouchPoints > 1);
-  // SAFETY: iOS Safari's non-standard standalone flag is optional and read-only.
-  const iosNavigator = nav as Navigator & { standalone?: boolean };
-  if (ios && iosNavigator.standalone !== true) {
-    return { supported: false, permission: "install-required" };
-  }
-  const supported =
-    "serviceWorker" in nav && "PushManager" in globalThis && "Notification" in globalThis;
-  return {
-    supported,
-    permission: supported ? Notification.permission : "unsupported",
-  };
-}
 
 function swReady(): Promise<ServiceWorkerRegistration> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -226,11 +206,30 @@ export function startWebPushReconciliation(params: {
     }
   };
   const stopGateway = params.gateway.subscribe(handleGateway);
+  const stopEvents = params.gateway.subscribeEvents((event) => {
+    const payload = event.payload;
+    const client = params.gateway.snapshot.client;
+    if (
+      event.event !== "users.prefs.changed" ||
+      !client ||
+      !payload ||
+      typeof payload !== "object" ||
+      !("profileId" in payload) ||
+      payload.profileId !== params.gateway.snapshot.selfUser?.id ||
+      !("keys" in payload) ||
+      !Array.isArray(payload.keys) ||
+      !payload.keys.includes(WEB_PUSH_USER_PREFERENCES_KEY)
+    ) {
+      return;
+    }
+    void reconcile(client, ++generation);
+  });
   handleGateway(params.gateway.snapshot);
   return () => {
     disposed = true;
     generation += 1;
     stopGateway();
+    stopEvents();
   };
 }
 

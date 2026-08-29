@@ -55,7 +55,6 @@ export {
   listTerminalWebPushApprovalDeliveryIds,
   listWebPushApprovalDeliveryTargets,
   prepareWebPushApprovalDeliveries,
-  retainSuccessfulWebPushApprovalDeliveries,
 } from "./push-web-store.js";
 
 const loadWebPushRuntime = createLazyRuntimeModule(() =>

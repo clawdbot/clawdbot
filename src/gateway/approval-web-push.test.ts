@@ -8,7 +8,6 @@ const listBoundWebPushSubscriptionsMock = vi.fn();
 const prepareWebPushNotificationSenderMock = vi.fn();
 const preparedWebPushSendMock = vi.fn();
 const prepareWebPushApprovalDeliveriesMock = vi.fn();
-const retainSuccessfulWebPushApprovalDeliveriesMock = vi.fn();
 const listWebPushApprovalDeliveryTargetsMock = vi.fn();
 const deleteWebPushApprovalDeliveryTargetsMock = vi.fn();
 const listTerminalWebPushApprovalDeliveryIdsMock = vi.fn();
@@ -38,7 +37,6 @@ vi.mock("../infra/push-web.js", () => ({
   listWebPushApprovalDeliveryTargets: listWebPushApprovalDeliveryTargetsMock,
   prepareWebPushApprovalDeliveries: prepareWebPushApprovalDeliveriesMock,
   prepareWebPushNotificationSender: prepareWebPushNotificationSenderMock,
-  retainSuccessfulWebPushApprovalDeliveries: retainSuccessfulWebPushApprovalDeliveriesMock,
 }));
 
 vi.mock("../state/user-profiles.js", () => ({
@@ -125,17 +123,6 @@ describe("approval Web Push delivery", () => {
       );
       return true;
     });
-    retainSuccessfulWebPushApprovalDeliveriesMock.mockImplementation(
-      ({ approvalId, successfulSubscriptionIds }) => {
-        const successfulIds = new Set(successfulSubscriptionIds as string[]);
-        const targets = approvalDeliveryTargets.get(approvalId);
-        for (const subscriptionId of targets?.keys() ?? []) {
-          if (!successfulIds.has(subscriptionId)) {
-            targets?.delete(subscriptionId);
-          }
-        }
-      },
-    );
     listWebPushApprovalDeliveryTargetsMock.mockImplementation(({ approvalId }) => [
       ...(approvalDeliveryTargets.get(approvalId)?.values() ?? []),
     ]);
@@ -424,6 +411,50 @@ describe("approval Web Push delivery", () => {
     );
   });
 
+  it("retains ambiguous request targets for terminal replacement and prunes definite failures", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create({ command: "echo ok" }, 60_000, "exec:ambiguous-request");
+    const ambiguous = boundSubscription("ambiguous-device", "profile-ambiguous");
+    const gone = boundSubscription("gone-device", "profile-gone");
+    const rejected = boundSubscription("rejected-device", "profile-rejected");
+    listBoundWebPushSubscriptionsMock.mockReturnValue([ambiguous, gone, rejected]);
+    listDevicePairingMock.mockReturnValue({
+      pending: [],
+      paired: [
+        pairedOperator("ambiguous-device", ["operator.approvals", "operator.read"]),
+        pairedOperator("gone-device", ["operator.approvals", "operator.read"]),
+        pairedOperator("rejected-device", ["operator.approvals", "operator.read"]),
+      ],
+    });
+    preparedWebPushSendMock
+      .mockResolvedValueOnce([
+        { ok: false, subscriptionId: ambiguous.subscriptionId, error: "timeout" },
+        { ok: false, subscriptionId: gone.subscriptionId, statusCode: 410, error: "gone" },
+        { ok: false, subscriptionId: rejected.subscriptionId, statusCode: 503, error: "busy" },
+      ])
+      .mockResolvedValueOnce([
+        { ok: true, subscriptionId: ambiguous.subscriptionId, statusCode: 201 },
+      ]);
+
+    const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
+    const delivery = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
+
+    await expect(delivery.handleRequested(record)).resolves.toBe(true);
+    await delivery.handleResolved({ id: record.id });
+
+    expect(preparedWebPushSendMock).toHaveBeenCalledTimes(2);
+    expect(preparedWebPushSendMock.mock.calls[1]?.[0]).toMatchObject({
+      subscriptions: [ambiguous],
+      payload: { title: "OpenClaw approval updated" },
+    });
+    expect(deleteWebPushApprovalDeliveryTargetsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: record.id,
+        subscriptionIds: [gone.subscriptionId, rejected.subscriptionId],
+      }),
+    );
+  });
+
   it.each(["resolved", "expired"] as const)(
     "replaces successful request alerts after the approval becomes %s",
     async (terminalState) => {
@@ -446,7 +477,7 @@ describe("approval Web Push delivery", () => {
       preparedWebPushSendMock
         .mockResolvedValueOnce([
           { ok: true, subscriptionId: delivered.subscriptionId, statusCode: 201 },
-          { ok: false, subscriptionId: failed.subscriptionId, statusCode: 503 },
+          { ok: false, subscriptionId: failed.subscriptionId, statusCode: 410 },
         ])
         .mockResolvedValueOnce([
           { ok: true, subscriptionId: delivered.subscriptionId, statusCode: 201 },
