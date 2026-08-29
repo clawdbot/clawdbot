@@ -4649,6 +4649,55 @@ describe("prepareCliRunContext", () => {
     expect(orphanCheck).not.toHaveBeenCalled();
   });
 
+  it("reseeds prior conversation for an uncompacted session-less backend that opted in", async () => {
+    const askedAt = "2020-01-02T03:04:05.000Z";
+    fixture.appendTranscript({
+      id: "msg-none-mode-1",
+      parentId: null,
+      timestamp: askedAt,
+      message: { role: "user", content: "prior session-less ask", timestamp: 1 },
+    });
+    setCliBackendForPrepareTest({
+      sessionMode: "none",
+      reseedFromRawTranscriptWhenUncompacted: true,
+    });
+
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:telegram:direct:peer",
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    // No native session is ever resumed here, so the OpenClaw transcript is the only
+    // place prior conversation can come from - it must reach the fresh CLI run.
+    expect(context.reusableCliSession).toEqual({ mode: "none" });
+    expect(context.openClawHistoryPrompt).toBeDefined();
+    expect(context.openClawHistoryPrompt).toContain(`[${askedAt}] User: prior session-less ask`);
+    expect(context.openClawHistoryPrompt).toContain(
+      "<next_user_message>\nlatest ask\n</next_user_message>",
+    );
+  });
+
+  it("leaves an uncompacted session-less backend without raw reseed when it did not opt in", async () => {
+    fixture.appendTranscript({
+      id: "msg-none-mode-2",
+      parentId: null,
+      timestamp: "2020-01-02T03:04:05.000Z",
+      message: { role: "user", content: "prior session-less ask", timestamp: 1 },
+    });
+    setCliBackendForPrepareTest({ sessionMode: "none" });
+
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:telegram:direct:peer",
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    // The backend opt-in still gates raw reseed; supplying a reason must not bypass it.
+    expect(context.reusableCliSession).toEqual({ mode: "none" });
+    expect(context.openClawHistoryPrompt ?? "").not.toContain("prior session-less ask");
+  });
+
   it("checks claude-cli transcript content under the resolved cwd", async () => {
     const { dir } = fixture.session;
     const taskDir = path.join(dir, "task");

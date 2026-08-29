@@ -1723,7 +1723,12 @@ export async function prepareCliRunContext(
     }
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
-    const rawTranscriptReseedReason = reusableCliSessionId ? "session-expired" : invalidatedReason;
+    // `sessionMode: none` never resumes, so every turn is a fresh CLI session with no native
+    // memory. Without a reason the opt-in reseed below stays inert until the first compaction.
+    const rawTranscriptReseedReason = reusableCliSessionId
+      ? "session-expired"
+      : (invalidatedReason ??
+        (preparedBackendFinal.backend.sessionMode === "none" ? "no-native-session" : undefined));
     // Node placement keeps this: the history prompt is built from the
     // gateway-side OpenClaw transcript, so a fresh remote CLI session still
     // receives prior conversation context via stdin.

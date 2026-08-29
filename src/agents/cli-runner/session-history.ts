@@ -52,6 +52,7 @@ type RawTranscriptReseedReason =
   | "mcp"
   | "missing-transcript"
   | "orphaned-tool-use"
+  | "no-native-session"
   | "session-expired";
 
 const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>([
@@ -61,6 +62,9 @@ const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>
   "system-prompt",
   "cwd",
   "mcp",
+  // A backend that never carries a native session starts every turn empty, so an
+  // uncompacted transcript is the only place its prior conversation can come from.
+  "no-native-session",
   "session-expired",
 ]);
 
