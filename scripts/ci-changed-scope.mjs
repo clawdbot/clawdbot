@@ -5,7 +5,7 @@ import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
-/** @typedef {{ runNode: boolean; runMacos: boolean; runIosBuild: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean; runUiTests: boolean }} ChangedScope */
+/** @typedef {{ runNode: boolean; runMacos: boolean; runMacosNode: boolean; runIosBuild: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean; runUiTests: boolean }} ChangedScope */
 /** @typedef {{ runFastOnly: boolean; runPluginContracts: boolean; runCiRouting: boolean }} NodeFastScope */
 /** @typedef {{ runFastInstallSmoke: boolean; runFullInstallSmoke: boolean }} InstallSmokeScope */
 
@@ -15,6 +15,7 @@ const CHANGED_PATHS_OUTPUT_MAX_BYTES = 64 * 1024;
 const FULL_SCOPE = {
   runNode: true,
   runMacos: true,
+  runMacosNode: true,
   runIosBuild: true,
   runAndroid: true,
   runWindows: true,
@@ -28,6 +29,7 @@ const FULL_SCOPE = {
 const EMPTY_SCOPE = {
   runNode: false,
   runMacos: false,
+  runMacosNode: false,
   runIosBuild: false,
   runAndroid: false,
   runWindows: false,
@@ -45,6 +47,8 @@ const APPLE_SHARED_CONTRACT_FIXTURE_RE =
   /^test\/fixtures\/(?:device-identity-coordinator|talk-config)-contract\.json$/;
 const MACOS_NATIVE_RE =
   /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
+const GIT_OWNER_SCOPE_RE =
+  /^(?:\.github\/actions\/(?:git-owner|ensure-base-commit)\/|scripts\/generate-ci-git-owner\.mts$|test\/scripts\/(?:ci-(?:git-owner|git-clock|linux-git|platform-checkout)\.test(?:-support)?\.ts|fixtures\/ci-platform-checkout\.mjs)$)/;
 const MACOS_SCRIPT_SCOPE_RE =
   /^(?:scripts\/(?:check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|stage-cua-driver-macos)\.sh|scripts\/test-macos-native\.mts|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts)$/;
 const WORKSPACE_RSYNC_RECEIVER_SCOPE_RE =
@@ -141,6 +145,7 @@ export function detectChangedScope(changedPaths) {
 
   let runNode = false;
   let runMacos = false;
+  let hasGitOwnerChanges = false;
   let runIosBuild = false;
   let runAndroid = false;
   let runWindows = false;
@@ -165,6 +170,7 @@ export function detectChangedScope(changedPaths) {
     }
 
     hasNonDocs = true;
+    hasGitOwnerChanges ||= GIT_OWNER_SCOPE_RE.test(path);
 
     if (SKILLS_PYTHON_SCOPE_RE.test(path)) {
       runSkillsPython = true;
@@ -261,9 +267,10 @@ export function detectChangedScope(changedPaths) {
   return {
     runNode,
     runMacos,
+    runMacosNode: runMacos || hasGitOwnerChanges,
     runIosBuild,
     runAndroid,
-    runWindows,
+    runWindows: runWindows || hasGitOwnerChanges,
     runSkillsPython,
     runChangedSmoke,
     runControlUiI18n,
@@ -660,6 +667,7 @@ export function writeGitHubOutput(
   }
   appendFileSync(outputPath, `run_node=${scope.runNode}\n`, "utf8");
   appendFileSync(outputPath, `run_macos=${scope.runMacos}\n`, "utf8");
+  appendFileSync(outputPath, `run_macos_node=${scope.runMacosNode}\n`, "utf8");
   appendFileSync(outputPath, `run_ios_build=${scope.runIosBuild}\n`, "utf8");
   appendFileSync(
     outputPath,

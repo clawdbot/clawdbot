@@ -114,12 +114,14 @@ function evaluateWorkflowExpression(
     headRepository?: string;
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
+    preflightOutputs?: Record<string, string>;
     releaseGate?: boolean;
     repository: string;
     runCheck?: boolean;
     runnerBackend?: "" | "blacksmith" | "github" | "hybrid";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
+    steps?: Record<string, { outputs: Record<string, string> }>;
     targetContextRef?: string;
   },
 ) {
@@ -135,6 +137,8 @@ function evaluateWorkflowExpression(
     throw new Error(`workflow expression has no body: ${expression}`);
   }
   return runInNewContext(source, {
+    always: () => true,
+    cancelled: () => false,
     // GitHub expression builtins the runner-routing clauses use.
     contains: (haystack: unknown, needle: unknown) =>
       Array.isArray(haystack)
@@ -163,6 +167,7 @@ function evaluateWorkflowExpression(
       target_context_ref: context.targetContextRef ?? "",
     },
     matrix: context.matrix ?? {},
+    steps: context.steps ?? {},
     needs: {
       preflight: {
         outputs: {
@@ -170,6 +175,7 @@ function evaluateWorkflowExpression(
           hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
           run_check: String(context.runCheck ?? true),
           runner_profile: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
+          ...context.preflightOutputs,
         },
       },
     },
@@ -239,6 +245,27 @@ function runWorkflowShellScript(
     }
     rmSync(root, { force: true, recursive: true });
   }
+}
+
+function runCiChangedScopeFixture(changedPaths: string[]): Record<string, string> {
+  const outputPath = path.join(tempDirs.make("openclaw-ci-scope-"), "scope.out");
+  writeGitHubOutput(
+    detectChangedScope(changedPaths),
+    outputPath,
+    undefined,
+    detectNodeFastScope(changedPaths),
+    shouldRunNativeI18n(changedPaths),
+    changedPaths,
+  );
+  return Object.fromEntries(
+    readFileSync(outputPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
 }
 
 function runCiManifestFixture(options: {
@@ -6456,7 +6483,7 @@ server.listen(0, "127.0.0.1", () => {
           "-I",
           "-S",
           "-c",
-          'import inspect,json,runpy; owner=runpy.run_path(".github/actions/git-owner/owner.py"); print(json.dumps([owner["fetch_timeout_seconds"], inspect.signature(owner["run_git"]).parameters["cleanup_seconds"].default]))',
+          'import json,runpy; owner=runpy.run_path(".github/actions/git-owner/owner.py"); print(json.dumps([owner["fetch_timeout_seconds"], owner["cleanup_seconds"]]))',
         ],
         { encoding: "utf8", env: { ...process.env, RUNNER_OS: runner } },
       );
@@ -7552,27 +7579,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     "executes standalone changed-path-facts coverage for $label",
     ({ changedPath, taskOverride }) => {
       const root = tempDirs.make("openclaw-fast-ci-routing-");
-      const scopeOutput = path.join(root, "scope.out");
       const changedPaths = [changedPath];
-      writeGitHubOutput(
-        detectChangedScope(changedPaths),
-        scopeOutput,
-        undefined,
-        detectNodeFastScope(changedPaths),
-        shouldRunNativeI18n(changedPaths),
-        changedPaths,
-      );
       const scopeEnv = Object.fromEntries(
-        readFileSync(scopeOutput, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => {
-            const separator = line.indexOf("=");
-            return [
-              `OPENCLAW_CI_${line.slice(0, separator).toUpperCase()}`,
-              line.slice(separator + 1),
-            ];
-          }),
+        Object.entries(runCiChangedScopeFixture(changedPaths)).map(([key, value]) => [
+          `OPENCLAW_CI_${key.toUpperCase()}`,
+          value,
+        ]),
       );
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
@@ -7649,6 +7661,143 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         calls.find(([command]) => command === "test"),
         "executed routing test argv",
       ).toContain("test/scripts/changed-path-facts.test.ts");
+    },
+  );
+
+  it.each<{
+    label: string;
+    changedPath: string;
+    eventName?: "pull_request" | "workflow_dispatch";
+    releaseGate?: boolean;
+    legacyOutput?: boolean;
+    selectedJobs: string[];
+  }>([
+    {
+      label: "Git-owner action",
+      changedPath: ".github/actions/git-owner/owner.py",
+      selectedJobs: ["macos-node", "checks-windows"],
+    },
+    {
+      label: "Git-owner fixture",
+      changedPath: "test/scripts/fixtures/ci-platform-checkout.mjs",
+      selectedJobs: ["macos-node", "checks-windows"],
+    },
+    {
+      label: "Mac app",
+      changedPath: "apps/macos/Sources/Foo.swift",
+      selectedJobs: ["macos-node", "macos-swift"],
+    },
+    {
+      label: "shared native",
+      changedPath: "apps/shared/OpenClawKit/Sources/Foo.swift",
+      selectedJobs: ["macos-node", "macos-swift", "ios-build", "android"],
+    },
+    { label: "docs", changedPath: "docs/ci.md", selectedJobs: [] },
+    {
+      label: "unrelated CI workflow",
+      changedPath: ".github/workflows/ci.yml",
+      selectedJobs: ["checks-windows"],
+    },
+    {
+      label: "ordinary manual",
+      changedPath: ".github/actions/git-owner/owner.py",
+      eventName: "workflow_dispatch",
+      selectedJobs: ["macos-node", "macos-swift", "checks-windows", "ios-build"],
+    },
+    {
+      label: "historical Mac scope without native Node output",
+      changedPath: "apps/macos/Sources/Foo.swift",
+      eventName: "workflow_dispatch",
+      releaseGate: true,
+      legacyOutput: true,
+      selectedJobs: ["macos-node", "macos-swift", "checks-windows", "android"],
+    },
+    {
+      label: "historical non-Mac scope without native Node output",
+      changedPath: "src/config/defaults.ts",
+      eventName: "workflow_dispatch",
+      releaseGate: true,
+      legacyOutput: true,
+      selectedJobs: ["checks-windows", "android"],
+    },
+  ])(
+    "routes native CI jobs through scope output and manifest ($label)",
+    ({
+      changedPath,
+      eventName = "pull_request",
+      releaseGate = false,
+      legacyOutput,
+      selectedJobs,
+    }) => {
+      const workflow = readCiWorkflow();
+      const manifestStep = workflow.jobs.preflight.steps.find(
+        (step: WorkflowStep) => step.name === "Build CI manifest",
+      );
+      const changedPaths = [changedPath];
+      const scopeOutputs = runCiChangedScopeFixture(changedPaths);
+      if (legacyOutput) {
+        delete scopeOutputs.run_macos_node;
+      }
+      const context = {
+        eventName,
+        releaseGate,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        steps: { changed_scope: { outputs: scopeOutputs } },
+      };
+      const scopeEnv = Object.fromEntries(
+        Object.entries(manifestStep.env)
+          .filter(([key]) => key.startsWith("OPENCLAW_CI_RUN_"))
+          .map(([key, expression]) => [
+            key,
+            String(evaluateWorkflowExpression(expression, context)),
+          ]),
+      );
+      const manifest = runCiManifestFixture({
+        bundledPlanner: !legacyOutput,
+        changedPaths,
+        eventName,
+        releaseGate,
+        scopeEnv,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const preflightOutputs = Object.fromEntries(
+        Object.entries(workflow.jobs.preflight.outputs)
+          .filter(([, expression]) => String(expression).includes("steps.manifest.outputs."))
+          .map(([key, expression]) => [
+            key,
+            String(
+              evaluateWorkflowExpression(expression, {
+                ...context,
+                steps: { manifest: { outputs: manifest.outputs } },
+              }),
+            ),
+          ]),
+      );
+      for (const jobName of [
+        "macos-node",
+        "macos-swift",
+        "checks-windows",
+        "ios-build",
+        "android",
+      ]) {
+        const job = workflow.jobs[jobName];
+        const expression = job.if.startsWith("${{") ? job.if : `\${{ ${job.if} }}`;
+        expect(
+          evaluateWorkflowExpression(expression, { ...context, preflightOutputs }),
+          jobName,
+        ).toBe(selectedJobs.includes(jobName));
+      }
+      expect(
+        JSON.parse(expectDefined(manifest.outputs.macos_node_matrix, "Mac Node matrix")).include,
+      ).toEqual(
+        selectedJobs.includes("macos-node")
+          ? [{ check_name: "macos-node", runtime: "node", task: "test" }]
+          : [],
+      );
+      expect(
+        JSON.parse(expectDefined(manifest.outputs.checks_windows_matrix, "Windows matrix")).include,
+      ).toHaveLength(selectedJobs.includes("checks-windows") ? 2 : 0);
     },
   );
 

@@ -221,7 +221,7 @@ linuxIt.each(
 assert "RUNNER_OS" not in os.environ
 assert "GITHUB_WORKSPACE" not in os.environ
 try:
-    run_git(os.getcwd(), "fetch", "origin", "fixture", env={"CI_OWNER_PROBE": "child-only"}, cleanup_seconds=30)
+    run_git(os.getcwd(), "fetch", "origin", "fixture", env={"CI_OWNER_PROBE": "child-only"})
 except GitFailure as error:
     assert error.code == 125
 assert "CI_OWNER_PROBE" not in os.environ

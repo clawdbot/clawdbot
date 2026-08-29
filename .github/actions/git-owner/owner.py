@@ -10,6 +10,7 @@ import time
 
 linux = os.environ.get("RUNNER_OS", sys.platform) in ("Linux", "linux")
 fetch_timeout_seconds = 120 if linux else 90
+cleanup_seconds = 10
 cancelled = 0
 closed = False
 git = shutil.which("git")
@@ -128,7 +129,7 @@ def group_alive(pgid, deadline):
                for group, state in (line.split() for line in result.stdout.splitlines()))
 
 
-def drain(child, job, cleanup_seconds):
+def drain(child, job):
     deadline = time.monotonic() + cleanup_seconds
     if os.name == "nt":
         # Stop/join even a pre-assignment bootstrap before terminating the Job:
@@ -182,8 +183,7 @@ class GitFailure(Exception):
         self.code = code
 
 
-def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=None,
-            cleanup_seconds=10):
+def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=None):
     global closed
     if closed:
         raise RuntimeError("Git owner is closed")
@@ -225,7 +225,7 @@ def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=N
         closed = True
         try:
             if child is not None:
-                drain(child, job, cleanup_seconds)
+                drain(child, job)
         finally:
             if job is not None:
                 close_handle(job)
