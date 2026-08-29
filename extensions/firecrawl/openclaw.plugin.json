@@ -33,6 +33,14 @@
       "help": "Firecrawl Fetch base URL override."
     }
   },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        { "path": "webSearch.apiKey", "expected": "string", "ownerKind": "capability" },
+        { "path": "webFetch.apiKey", "expected": "string", "ownerKind": "capability" }
+      ]
+    }
+  },
   "contracts": {
     "webFetchProviders": ["firecrawl"],
     "webSearchProviders": ["firecrawl", "firecrawl-free"],
