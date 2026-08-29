@@ -6,16 +6,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
+import {
+  resolveSubagentAttachmentRootDir,
+  SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT,
+} from "../subagents/subagent-attachment-paths.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import { normalizeContainerPathCore } from "./path-utils.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
-export const SANDBOX_MOUNT_FORMAT_VERSION = 3;
+export const SANDBOX_MOUNT_FORMAT_VERSION = 4;
 const MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS = [".openclaw", "sandbox-skills"] as const;
 
-/** Read-only skill directory mounted from the agent workspace into the sandbox workspace. */
+/** Host directory mounted read-only at a protected sandbox path. */
 export type ReadOnlyWorkspaceSkillMount = {
   hostPath: string;
   containerPath: string;
@@ -72,36 +76,46 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
   skillsWorkspaceDir?: string;
   workdir: string;
   workspaceAccess: SandboxWorkspaceAccess;
+  agentId?: string;
 }): ReadOnlyWorkspaceSkillMount[] {
-  if (params.workspaceAccess !== "rw") {
-    return [];
-  }
-
   // RW workspaces mount the project as writable, but skill sources remain read-only so agent
   // instructions are visible without letting sandbox commands mutate them.
   const materializedSkillsWorkspaceDir =
     params.skillsWorkspaceDir ??
     resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir);
   const mounts = [
-    {
-      hostPath: path.join(params.agentWorkspaceDir, "skills"),
-      containerPath: containerJoin(params.workdir, "skills"),
-      rootDir: params.agentWorkspaceDir,
-    },
-    {
-      hostPath: path.join(params.agentWorkspaceDir, ".agents", "skills"),
-      containerPath: containerJoin(params.workdir, ".agents", "skills"),
-      rootDir: params.agentWorkspaceDir,
-    },
-    {
-      hostPath: path.join(materializedSkillsWorkspaceDir, "skills"),
-      containerPath: containerJoin(
-        params.workdir,
-        ...MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS,
-        "skills",
-      ),
-      rootDir: materializedSkillsWorkspaceDir,
-    },
+    ...(params.workspaceAccess === "rw"
+      ? [
+          {
+            hostPath: path.join(params.agentWorkspaceDir, "skills"),
+            containerPath: containerJoin(params.workdir, "skills"),
+            rootDir: params.agentWorkspaceDir,
+          },
+          {
+            hostPath: path.join(params.agentWorkspaceDir, ".agents", "skills"),
+            containerPath: containerJoin(params.workdir, ".agents", "skills"),
+            rootDir: params.agentWorkspaceDir,
+          },
+          {
+            hostPath: path.join(materializedSkillsWorkspaceDir, "skills"),
+            containerPath: containerJoin(
+              params.workdir,
+              ...MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS,
+              "skills",
+            ),
+            rootDir: materializedSkillsWorkspaceDir,
+          },
+        ]
+      : []),
+    ...(params.agentId
+      ? [
+          {
+            hostPath: resolveSubagentAttachmentRootDir(params.agentId),
+            containerPath: SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT,
+            rootDir: resolveSubagentAttachmentRootDir(params.agentId),
+          },
+        ]
+      : []),
   ];
 
   return mounts
@@ -114,7 +128,7 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
     .map(({ hostPath, containerPath }) => ({ hostPath, containerPath }));
 }
 
-/** Returns stable mount state for sandbox config hashes. */
+/** Returns stable managed-mount state for sandbox config hashes. */
 export function formatReadOnlyWorkspaceSkillMountHashState(
   mounts: readonly ReadOnlyWorkspaceSkillMount[],
 ): string[] {
@@ -122,7 +136,7 @@ export function formatReadOnlyWorkspaceSkillMountHashState(
 }
 
 /**
- * Returns the set of container paths that are protected by read-only skill mounts.
+ * Returns the set of container paths protected by managed read-only mounts.
  *
  * User-defined binds that target any path in this set must be skipped so the
  * container engine sees one authoritative read-only mount for each destination.

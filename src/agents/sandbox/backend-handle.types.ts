@@ -41,6 +41,7 @@ export type SandboxBackendCommandResult = {
 
 /** Runtime context passed to backend-provided filesystem bridge factories. */
 export type SandboxFsBridgeContext = {
+  agentId?: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;

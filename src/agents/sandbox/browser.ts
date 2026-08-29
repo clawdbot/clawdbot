@@ -286,6 +286,7 @@ async function ensureSandboxBrowserContainer(
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     workdir: params.cfg.docker.workdir,
     workspaceAccess: params.cfg.workspaceAccess,
+    agentId: resolveSandboxAgentId(params.scopeKey),
   });
   const expectedHash = computeSandboxBrowserConfigHash({
     docker: browserDockerCfg,

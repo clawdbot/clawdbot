@@ -3,7 +3,6 @@
  *
  * Validates spawn requests, prepares child sessions, stages attachments, binds delivery context, and registers runs.
  */
-import { promises as fs } from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
@@ -34,6 +33,7 @@ import {
 import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import {
+  cleanupMaterializedSubagentAttachments,
   materializeSubagentAttachments,
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
@@ -307,13 +307,12 @@ export async function spawnSubagentDirect(
           relDir: string;
         }
       | undefined;
-    let attachmentAbsDir: string | undefined;
-    let attachmentRootDir: string | undefined;
+    let attachmentId: string | undefined;
 
     const materializedAttachments = await materializeSubagentAttachments({
       config: cfg,
       targetAgentId,
-      workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
+      sandboxed: childRuntimeSandboxed,
       attachments: params.attachments,
       mountPathHint,
     });
@@ -327,8 +326,7 @@ export async function spawnSubagentDirect(
     if (materializedAttachments?.status === "ok") {
       retainOnSessionKeep = materializedAttachments.retainOnSessionKeep;
       attachmentsReceipt = materializedAttachments.receipt;
-      attachmentAbsDir = materializedAttachments.absDir;
-      attachmentRootDir = materializedAttachments.rootDir;
+      attachmentId = materializedAttachments.attachmentId;
       childSystemPrompt = `${childSystemPrompt}\n\n${materializedAttachments.systemPromptSuffix}`;
     }
 
@@ -419,7 +417,7 @@ export async function spawnSubagentDirect(
     const cleanupFailedSpawn = (waitForSessionDeletion?: boolean) =>
       cleanupFailedSpawnBeforeAgentStart({
         childSessionKey,
-        attachmentAbsDir,
+        attachmentId,
         emitLifecycleHooks: threadBindingReady,
         deleteTranscript: true,
         ...provisionalSessionIdentity,
@@ -480,9 +478,12 @@ export async function spawnSubagentDirect(
           });
         }
         await rollbackPreparedContextEngine(state?.contextEnginePreparation);
-        if (attachmentAbsDir) {
+        if (attachmentId) {
           try {
-            await fs.rm(attachmentAbsDir, { recursive: true, force: true });
+            await cleanupMaterializedSubagentAttachments({
+              childSessionKey,
+              attachmentId,
+            });
           } catch {
             // Best-effort cleanup only.
           }
@@ -567,8 +568,7 @@ export async function spawnSubagentDirect(
           queued: params.collect === true,
           taskRowOwnership,
           ...(gatewayContextResolver ? { gatewayContextResolver } : {}),
-          attachmentsDir: attachmentAbsDir,
-          attachmentsRootDir: attachmentRootDir,
+          attachmentId,
           retainAttachmentsOnKeep: retainOnSessionKeep,
         };
       },

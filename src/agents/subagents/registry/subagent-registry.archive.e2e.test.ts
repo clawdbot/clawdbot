@@ -1030,7 +1030,7 @@ describe("subagent registry archive behavior", () => {
     expect(run?.archiveAtMs).toBeUndefined();
   });
 
-  it("removes attachments for the replaced run after steer restart", async () => {
+  it("does not traverse legacy attachment paths after steer restart", async () => {
     const attachmentsRootDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-replace-attachments-"),
     );
@@ -1055,16 +1055,7 @@ describe("subagent registry archive behavior", () => {
     });
 
     expect(replaced).toBe(true);
-    await vi.waitFor(async () => {
-      let err: unknown;
-      try {
-        await fs.access(attachmentsDir);
-      } catch (caught) {
-        err = caught;
-      }
-      expect(err).toBeInstanceOf(Error);
-      expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
-    });
+    await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
   });
 
   it("treats archiveAfterMinutes=0 as never archive", () => {

@@ -1067,6 +1067,7 @@ export function createImageTool(options?: {
           sandbox: sandboxConfig,
           rootOptions: {
             workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+            additionalRoots: options?.fsPolicy?.readOnlyRoots,
             cfg: options?.config,
             channelId: options?.agentChannel ?? options?.currentChannelId,
             accountId: options?.agentAccountId,

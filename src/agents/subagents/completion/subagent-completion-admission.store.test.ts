@@ -530,7 +530,7 @@ describe("atomic subagent completion admission store", () => {
         databaseOptions: { database },
       });
       expect(discardInsideTransaction).toHaveBeenCalledTimes(2);
-      await expect(fs.stat(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(attachmentsDir)).resolves.toBeDefined();
       expect(dismissed).toMatchObject({
         ok: true,
         task: {

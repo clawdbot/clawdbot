@@ -1,7 +1,7 @@
-import { promises as fs } from "node:fs";
 import type { callGateway } from "../../../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
+import { cleanupMaterializedSubagentAttachments } from "./subagent-attachments.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
@@ -84,19 +84,22 @@ async function waitForProvisionalSessionDeletion(
 
 export async function cleanupFailedSpawnBeforeAgentStart(params: {
   childSessionKey: string;
-  attachmentAbsDir?: string;
+  attachmentId?: string;
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
   waitForSessionDeletion?: boolean;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
 }): Promise<{ attachmentsRemoved: boolean; sessionDeleted: boolean }> {
-  const { childSessionKey, attachmentAbsDir, waitForSessionDeletion, ...sessionCleanupOptions } =
+  const { childSessionKey, attachmentId, waitForSessionDeletion, ...sessionCleanupOptions } =
     params;
   let attachmentsRemoved = true;
-  if (attachmentAbsDir) {
+  if (attachmentId) {
     try {
-      await fs.rm(attachmentAbsDir, { recursive: true, force: true });
+      await cleanupMaterializedSubagentAttachments({
+        childSessionKey,
+        attachmentId,
+      });
     } catch {
       attachmentsRemoved = false;
     }

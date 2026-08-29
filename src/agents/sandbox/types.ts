@@ -96,6 +96,7 @@ export type SandboxBrowserContext = {
 
 export type SandboxContext = {
   enabled: boolean;
+  agentId?: string;
   /** Immutable creator policy: this session may never escape to a host execution target. */
   required?: true;
   backendId: SandboxBackendId;

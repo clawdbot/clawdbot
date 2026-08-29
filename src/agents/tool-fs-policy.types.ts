@@ -9,4 +9,6 @@ export type PreparedSessionPermissionPolicy = Readonly<{
 export type ToolFsPolicy = {
   workspaceOnly: boolean;
   root?: string;
+  /** Host-owned roots that read-only tools may consume outside the workspace. */
+  readOnlyRoots?: string[];
 };
