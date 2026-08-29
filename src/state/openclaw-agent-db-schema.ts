@@ -48,7 +48,9 @@ import {
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
   hasPendingSessionConversationRouteContextColumn,
+  hasPendingSessionTranscriptContextEligibilityColumn,
   migrateConversationDeliveryTargetColumn,
+  migrateSessionCreatorNamespaces,
   migrateSessionEntryStatusProjection,
   readSqliteTableColumns,
 } from "./openclaw-agent-db-session-migrations.js";
@@ -531,6 +533,7 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
       hasPendingSessionKeyContractSchemaMigration(database) ||
       hasRetiredAgentStateLeaseSchema(database) ||
       hasPendingSessionConversationRouteContextColumn(database) ||
+      hasPendingSessionTranscriptContextEligibilityColumn(database) ||
       hasPendingSessionProjectColumn(database));
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
@@ -562,7 +565,7 @@ function ensureAgentSchema(
       : OPENCLAW_AGENT_SCHEMA_SQL;
   const identityMigration =
     targetVersion >= 18 &&
-    readSqliteUserVersion(db) < 18 &&
+    readSqliteUserVersion(db) < targetVersion &&
     (readSqliteUserVersion(db) > 0 || readExistingAgentSchemaMeta(db) !== null);
   if (identityMigration) {
     assertAgentDatabaseMaintenanceAuthority();
@@ -629,8 +632,11 @@ function ensureAgentSchema(
       migrateSessionNodesAndWindows(db, previousVersion);
       ensureSessionAdditiveColumns(db);
       ensureSessionEntryValidityProjection(db);
-      if (targetVersion >= 18) {
+      if (targetVersion >= 18 && previousVersion < 18) {
         migrateSessionParticipantsSchema(db, pathname);
+      }
+      if (targetVersion >= 19) {
+        migrateSessionCreatorNamespaces(db, previousVersion);
       }
       db.exec(schemaSql);
       migrateMemoryChunkMetadataSchema(db);
@@ -689,7 +695,7 @@ function ensureAgentSchema(
       if (identityMigration) {
         if (db.prepare("PRAGMA foreign_key_check").all().length > 0) {
           throw new Error(
-            `Agent participant migration failed foreign key validation for ${pathname}.`,
+            `Agent identity migration failed foreign key validation for ${pathname}.`,
           );
         }
         assertAgentDatabaseMaintenanceAuthority();

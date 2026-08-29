@@ -169,8 +169,9 @@ export function parseNodeWorkerWorkspaceExecInput(
       token.length > 1_024 ||
       token.includes("\0") ||
       (direction === "download"
-        ? !hasExactKeys(value.transfer, ["direction", "token", "manifestRef"]) ||
-          !validRef(manifestRef)
+        ? !hasExactKeys(value.transfer, ["direction", "token", "manifestRef"], ["attachments"]) ||
+          !validRef(manifestRef) ||
+          (value.transfer.attachments !== undefined && value.transfer.attachments !== true)
         : direction === "upload"
           ? !hasExactKeys(value.transfer, ["direction", "token", "baseManifestRef"]) ||
             !validRef(baseManifestRef)
@@ -180,7 +181,12 @@ export function parseNodeWorkerWorkspaceExecInput(
     }
     transfer =
       direction === "download"
-        ? { direction, token, manifestRef: manifestRef as string }
+        ? {
+            direction,
+            token,
+            manifestRef: manifestRef as string,
+            ...(value.transfer.attachments === true ? { attachments: true } : {}),
+          }
         : { direction: "upload", token, baseManifestRef: baseManifestRef as string };
   }
   return {

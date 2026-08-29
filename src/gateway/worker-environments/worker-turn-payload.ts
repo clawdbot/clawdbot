@@ -5,6 +5,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
   resolvePreparedRunAdmission,
+  resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import {
@@ -14,6 +15,8 @@ import {
 } from "../../agents/agent-runtime-id.js";
 import {
   buildUsageAgentMetaFields,
+  resolveFinalAssistantRawText,
+  resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
 } from "../../agents/embedded-agent-runner/run/helpers.js";
 import {
@@ -106,6 +109,14 @@ export async function prepareWorkerAgentRuntimeIdentity(
     admittedRunContext: params.turn.admittedRunContext,
     preparedRunAdmission: params.turn.preparedRunAdmission,
   });
+  const assertActive = resolveAdmittedRunActiveAssertion(
+    admittedRunContext,
+    params.turn.abortSignal,
+  );
+  if (!assertActive) {
+    throw new Error("Worker turn has no active admitted execution authority");
+  }
+  assertActive();
   const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
   // Worker session RPC carries no raw identity token. Bind provenance to the exact
   // host claim before launch so child lineage cannot become bearer authority.
@@ -122,10 +133,12 @@ export async function prepareWorkerAgentRuntimeIdentity(
     params.placements,
     params.turnClaim,
     admittedRunContext.operationalRunInstance,
+    params.turn.prepareAssistantTranscriptMessage,
   );
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,
+    assertActive,
   };
 }
 
@@ -265,9 +278,15 @@ export function assistantText(message: AgentMessage): string {
   return message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
 }
 
-export function buildWorkerAgentMeta(params: {
+export function buildWorkerTurnResult(params: {
   messages: AgentMessage[];
   modelRef: { provider: string; model: string };
+  terminal: Extract<AgentMessage, { role: "assistant" }>;
+  durationMs: number;
+  sessionId: string;
+  sessionFile: SessionPlacementTurnParams["sessionFile"];
+  text: string;
+  workspaceConflictSummary?: string;
 }) {
   const usageAccumulator = createUsageAccumulator();
   const assistants = params.messages.filter(
@@ -292,12 +311,29 @@ export function buildWorkerAgentMeta(params: {
     ...params.modelRef,
     assistant: lastAssistant,
   });
+  const replyText =
+    params.workspaceConflictSummary === undefined
+      ? params.text
+      : params.text
+        ? `${params.text}\n\n${params.workspaceConflictSummary}`
+        : params.workspaceConflictSummary;
   return {
-    provider: reportedModelRef.provider,
-    model: reportedModelRef.model,
-    usage: usageMeta.usage,
-    lastCallUsage: usageMeta.lastCallUsage,
-    promptTokens: usageMeta.promptTokens,
+    ...(replyText ? { payloads: [{ text: replyText }] } : {}),
+    meta: {
+      durationMs: params.durationMs,
+      agentMeta: {
+        sessionId: params.sessionId,
+        sessionFile: params.sessionFile,
+        provider: reportedModelRef.provider,
+        model: reportedModelRef.model,
+        usage: usageMeta.usage,
+        lastCallUsage: usageMeta.lastCallUsage,
+        promptTokens: usageMeta.promptTokens,
+      },
+      stopReason: params.terminal.stopReason,
+      finalAssistantVisibleText: resolveFinalAssistantVisibleText(params.terminal),
+      finalAssistantRawText: resolveFinalAssistantRawText(params.terminal),
+    },
   };
 }
 
@@ -321,9 +357,6 @@ export function assertSupportedTurn(params: SessionPlacementTurnParams): {
   provider: string;
   model: string;
 } {
-  if (params.images?.length || params.imageOrder?.length) {
-    throw new Error("Cloud worker turns do not yet support current-turn image input");
-  }
   if (params.clientTools?.length) {
     throw new Error("Cloud worker turns do not support client-provided tools");
   }

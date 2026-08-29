@@ -55,6 +55,7 @@
   "fetch-runtime",
   "file-access-runtime",
   "file-lock",
+  "gateway-config-runtime",
   "global-singleton",
   "group-activation",
   "heartbeat-runtime",

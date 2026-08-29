@@ -134,43 +134,44 @@ describe("session transcript Markdown title previews", () => {
       );
       const readOlderText = vi.fn(() => olderText);
       let observedRows = 0;
-      const observeOlderContent = (entries: SessionTranscriptMessageEvent[]) =>
-        entries.map((entry) => {
+      const observeOlderContent = (
+        entries: Pick<SessionTranscriptMessageEvent, "event" | "seq">[],
+      ) => {
+        for (const entry of entries) {
           if (entry.seq !== olderSeq) {
-            return entry;
+            continue;
           }
           observedRows += 1;
-          return {
-            ...entry,
-            event: {
-              ...asOptionalRecord(entry.event),
-              message: {
-                role: "assistant",
-                // Nested text survives transcript metadata normalization; only projection reads it.
-                content: [
-                  {
-                    type: "text",
-                    get text() {
-                      return readOlderText();
-                    },
+          entry.event = {
+            ...asOptionalRecord(entry.event),
+            message: {
+              role: "assistant",
+              // Nested text survives transcript metadata normalization; only projection reads it.
+              content: [
+                {
+                  type: "text",
+                  get text() {
+                    return readOlderText();
                   },
-                ],
-              },
+                },
+              ],
             },
           };
-        });
+        }
+      };
       const pageReader = vi.mocked(sessionAccessor.readSessionTranscriptMessageEventPage);
       const batchReader = vi.mocked(sessionAccessor.readSessionTranscriptTitleProbeBatch);
       try {
         pageReader.mockImplementation((readScope, options) => {
           const page = actual.readSessionTranscriptMessageEventPage(readScope, options);
-          return { ...page, events: observeOlderContent(page.events) };
+          observeOlderContent(page.events);
+          return page;
         });
         batchReader.mockImplementation((readScopes) => {
           const probes = actual.readSessionTranscriptTitleProbeBatch(readScopes);
           for (const probe of probes) {
             if (probe) {
-              probe.tail = observeOlderContent(probe.tail);
+              observeOlderContent(probe.tail);
             }
           }
           return probes;

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -20,6 +20,10 @@ vi.mock("./gateway-rpc-client.js", () => ({
 const dirs = createTempDirHarness();
 const owners: ReturnType<typeof createQaGatewayChild>[] = [];
 const groups: number[] = [];
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
+  vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", undefined);
+});
 afterEach(async () => {
   vi.restoreAllMocks();
   boundary.create.mockReset();

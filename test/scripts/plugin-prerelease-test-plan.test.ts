@@ -496,15 +496,29 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         "persist-credentials": false,
         ref: "${{ github.sha }}",
         path: ".plugin-prerelease-trusted",
-        "sparse-checkout": "src/plugins/npm-install-security-scan.release.test.ts",
         "sparse-checkout-cone-mode": false,
       },
     });
-    expect(installInventory?.run).toContain(
-      '"$trusted_checkout/src/plugins/npm-install-security-scan.release.test.ts"',
+    expect(trustedCheckout.with?.["sparse-checkout"]).toBe(
+      [
+        "src/plugins/npm-install-security-scan.release.test.ts",
+        "scripts/lib/npm-json-output.mts",
+        "",
+      ].join("\n"),
     );
     expect(installInventory?.run).toContain(
-      "src/plugins/npm-install-security-scan.release.test.ts",
+      [
+        "install -m 0644 \\",
+        '  "$trusted_checkout/src/plugins/npm-install-security-scan.release.test.ts" \\',
+        "  src/plugins/npm-install-security-scan.release.test.ts",
+      ].join("\n"),
+    );
+    expect(installInventory?.run).toContain(
+      [
+        "install -m 0644 \\",
+        '  "$trusted_checkout/scripts/lib/npm-json-output.mts" \\',
+        "  scripts/lib/npm-json-output.mts",
+      ].join("\n"),
     );
     expect(installInventory?.run).toContain('rm -rf -- "$trusted_checkout"');
     expect(runNodeShard?.env?.NODE_TEST_EXCLUDE_PATTERNS_JSON).toBe(
@@ -603,7 +617,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(buildDistStep.env).toEqual({ NODE_OPTIONS: "--max-old-space-size=8192" });
     expect(staticShard).toEqual({
       if: "needs.preflight.outputs.run_plugin_prerelease_static == 'true'",
-      name: "${{ matrix.check_name }}",
+      name: "${{ matrix.check_name || 'plugin-prerelease-static-shard' }}",
       needs: ["preflight"],
       permissions: {
         contents: "read",

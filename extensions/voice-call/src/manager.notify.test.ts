@@ -140,6 +140,19 @@ function expectFirstPlayTtsText(provider: FakeProvider, text: string) {
   expect(requireFirstPlayTtsCall(provider).text).toBe(text);
 }
 
+async function expectNotifyHangup(manager: HarnessManager, provider: FakeProvider, callId: string) {
+  // Playback schedules a real auto-hangup. Finish it before the shared worker
+  // clears the state runtime, or its persistence/logging leaks into another file.
+  await expect.poll(() => manager.getCall(callId), { timeout: 5_000 }).toBeUndefined();
+  expect(provider.hangupCalls).toEqual([
+    { callId, providerCallId: "call-uuid", reason: "hangup-bot" },
+  ]);
+  expect(await manager.getCallFromMemoryOrStore(callId)).toMatchObject({
+    state: "hangup-bot",
+    endReason: "hangup-bot",
+  });
+}
+
 describe("CallManager notify and mapping", () => {
   it("logs a failed notify auto-hangup and leaves the call active for retry", async () => {
     vi.useFakeTimers();
@@ -210,6 +223,7 @@ describe("CallManager notify and mapping", () => {
       await answerCall(manager, callId, `evt-2-${providerName}`);
 
       expectFirstPlayTtsText(provider, "Hello there");
+      await expectNotifyHangup(manager, provider, callId);
     },
   );
 
@@ -273,6 +287,7 @@ describe("CallManager notify and mapping", () => {
     await answerCall(manager, callId, "evt-notify-twilio-realtime");
 
     expectFirstPlayTtsText(provider, "Notify text");
+    await expectNotifyHangup(manager, provider, callId);
   });
 
   it("waits for stream connect in conversation mode when Twilio streaming is enabled", async () => {
@@ -374,6 +389,7 @@ describe("CallManager notify and mapping", () => {
     const afterSuccess = requireCall(manager, callId);
     expect(provider.playTtsCalls).toHaveLength(2);
     expect(afterSuccess.metadata).not.toHaveProperty("initialMessage");
+    await expectNotifyHangup(manager, provider, callId);
   });
 
   it("speaks initial message only once on repeated stream-connect triggers", async () => {

@@ -3155,48 +3155,61 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.currentTokenCount).toBeGreaterThan(100_000);
   });
 
-  it("combines latest usage with post-usage tail pressure for preflight compaction", async () => {
-    const sessionFile = path.join(rootDir, "combined-tail-pressure-session.jsonl");
-    await writeTestSessionTranscript({
-      rootDir,
-      events: [
-        {
-          type: "message",
-          message: {
-            role: "assistant",
-            content: "small answer",
-            usage: { input: 90_000, output: 2_000 },
+  it.each([0, 513])(
+    "combines latest usage with post-usage tail pressure across %i display-only messages",
+    async (activityCount) => {
+      const sessionFile = path.join(rootDir, "combined-tail-pressure-session.jsonl");
+      await writeTestSessionTranscript({
+        rootDir,
+        events: [
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              content: "small answer",
+              usage: { input: 90_000, output: 2_000 },
+            },
           },
-        },
-        {
-          type: "message",
-          message: {
-            role: "user",
-            content: `moderate follow-up ${"x".repeat(36_000)}`,
+          ...Array.from({ length: activityCount }, () => ({
+            type: "message",
+            message: {
+              role: "custom",
+              customType: "tool-activity",
+              display: true,
+              excludeFromContext: true,
+              content: "completed",
+            },
+          })),
+          {
+            type: "message",
+            message: {
+              role: "user",
+              content: `moderate follow-up ${"x".repeat(36_000)}`,
+            },
           },
-        },
-      ],
-    });
-    registerMemoryFlushPlanResolverForTest(() =>
-      createModifiedMemoryFlushPlan({ reserveTokensFloor: 0 }),
-    );
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokensFresh: false,
-    };
-
-    await runDefaultPreflight(sessionEntry, {
-      followupRun: createTestFollowupRun({
+        ],
+      });
+      registerMemoryFlushPlanResolverForTest(() =>
+        createModifiedMemoryFlushPlan({ reserveTokensFloor: 0 }),
+      );
+      const sessionEntry: SessionEntry = {
         sessionId: "session",
-        sessionFile,
-        sessionKey: "main",
-      }),
-    });
+        updatedAt: Date.now(),
+        totalTokensFresh: false,
+      };
 
-    const compactCall = requireCompactEmbeddedAgentSessionCall();
-    expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
-  });
+      await runDefaultPreflight(sessionEntry, {
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "main",
+        }),
+      });
+
+      const compactCall = requireCompactEmbeddedAgentSessionCall();
+      expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
+    },
+  );
 
   it("does not count bytes from a large latest usage record as post-usage tail pressure", async () => {
     const sessionFile = path.join(rootDir, "large-usage-record-session.jsonl");

@@ -19,7 +19,7 @@ vi.mock("./images.js", () => ({
   detectAndLoadPromptImages: hoisted.detectAndLoadPromptImages,
 }));
 
-import { prepareEmbeddedAttemptPromptExecution } from "./attempt-prompt-submit.js";
+import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
 type PromptExecutionInput = Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0];
 

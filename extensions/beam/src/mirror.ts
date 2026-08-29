@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
@@ -466,7 +466,7 @@ export function createBeamMirrorRunner(params: {
       }
       let agentId: string;
       try {
-        agentId = resolveSessionAgentIds({ config: config as OpenClawConfig }).defaultAgentId;
+        agentId = resolveSessionAgentIdsStrict({ config: config as OpenClawConfig }).defaultAgentId;
       } catch (error) {
         warnThrottled(`beam mirror disabled: ${String(error)}`);
         return;

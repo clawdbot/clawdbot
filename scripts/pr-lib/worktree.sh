@@ -267,6 +267,7 @@ enter_worktree() {
 
   if [ ! -d "$dir" ] || [ -z "$resolved_dir" ] || ! worktree_is_registered "$resolved_dir"; then
     if [ -e "$dir" ] || { [ -n "$resolved_dir" ] && worktree_is_registered "$resolved_dir"; }; then
+      require_worktree_cleanup_evidence "$dir" || return 1
       echo "Pruning stale worktree registration for .worktrees/pr-$pr"
       git -C "$root" worktree prune || return 1
       remove_worktree_if_present "$dir" || return 1
@@ -488,24 +489,16 @@ gc_pr_worktrees() {
     state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null || printf 'UNKNOWN')
     case "$state" in
       MERGED|CLOSED)
-        if [ "$dry_run" = "true" ]; then
+        if ! require_worktree_cleanup_evidence "$dir"; then
+          echo "skipping $dir (merge evidence preserved)"
+        elif [ "$dry_run" = "true" ]; then
           echo "would remove $dir (PR #$pr state=$state)"
           removed=$((removed + 1))
+        elif cleanup_pr_worktree "$dir"; then
+          echo "removed $dir (PR #$pr state=$state)"
+          removed=$((removed + 1))
         else
-          remove_worktree_if_present "$dir"
-          delete_local_branch_if_safe "temp/pr-$pr"
-          delete_local_branch_if_safe "pr-$pr"
-          delete_local_branch_if_safe "pr-$pr-prep"
-          if [ ! -e "$dir" ] &&
-            ! git show-ref --verify --quiet "refs/heads/temp/pr-$pr" &&
-            ! git show-ref --verify --quiet "refs/heads/pr-$pr" &&
-            ! git show-ref --verify --quiet "refs/heads/pr-$pr-prep"
-          then
-            echo "removed $dir (PR #$pr state=$state)"
-            removed=$((removed + 1))
-          else
-            echo "skipping $dir (cleanup incomplete)"
-          fi
+          echo "skipping $dir (cleanup incomplete)"
         fi
         ;;
     esac

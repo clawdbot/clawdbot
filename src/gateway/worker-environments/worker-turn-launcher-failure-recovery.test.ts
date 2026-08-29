@@ -124,11 +124,11 @@ describe("worker turn launcher failure recovery", () => {
       });
     try {
       await launchStarted.promise;
-      await expect(recover()).resolves.toMatchObject({ status: "skipped", action: "keep_lane" });
+      await expect(recover()).resolves.toMatchObject({ status: "skipped", action: "observe_only" });
       finishLaunch.resolve();
       await teardownStarted.promise;
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
-      await expect(recover()).resolves.toMatchObject({ status: "skipped", action: "keep_lane" });
+      await expect(recover()).resolves.toMatchObject({ status: "skipped", action: "observe_only" });
       clock.mockReturnValue(1_030_000);
       await expect(recover()).resolves.toMatchObject({
         status: "failed",

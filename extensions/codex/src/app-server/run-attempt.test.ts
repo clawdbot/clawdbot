@@ -4,6 +4,7 @@ import path from "node:path";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
+  resolveActiveEmbeddedRunSessionId,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
@@ -13,6 +14,7 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
@@ -36,7 +38,7 @@ import {
   prependCodexOpenClawPromptContext,
 } from "./attempt-context.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import { withCodexStartupTimeout } from "./attempt-timeouts.js";
+import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS, withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-bridge.js";
 import {
@@ -1797,6 +1799,7 @@ describe("runCodexAppServerAttempt", () => {
       stream: "tool",
       data: {
         phase: "start",
+        hideFromChannelProgress: true,
         name: "python",
         toolCallId: "call-1",
         args: { code: "print('hi')" },
@@ -1806,6 +1809,7 @@ describe("runCodexAppServerAttempt", () => {
       stream: "tool",
       data: {
         phase: "result",
+        hideFromChannelProgress: true,
         name: "python",
         toolCallId: "call-1",
         isError: true,
@@ -5293,6 +5297,65 @@ describe("runCodexAppServerAttempt", () => {
     const result = await runCodexAppServerAttempt(createRunParams());
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
+  it.each(["terminal timeout", "user stop"] as const)(
+    "clears an active run with blocked terminal delivery after %s",
+    async (termination) => {
+      const harness = createStartedThreadHarness();
+      harness.client.close = () => harness.close();
+      const abortController = new AbortController();
+      const blocked = createDeferred<void>();
+      const onPartialReply = vi.fn(() => blocked.promise);
+      const params = createRunParams();
+      params.abortSignal = abortController.signal;
+      params.onPartialReply = onPartialReply;
+      const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 30 * 60_000 });
+      const settled = vi.fn();
+      void run.then(settled);
+      try {
+        await vi.waitFor(() => {
+          expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBe(params.sessionId);
+        }, fastWait);
+        await harness.notify(
+          itemNotification("item/started", {
+            id: "msg-1",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "",
+          }),
+        );
+        void harness.notify({
+          method: "item/agentMessage/delta",
+          params: { threadId: "thread-1", turnId: "turn-1", itemId: "msg-1", delta: "hello" },
+        });
+        await vi.waitFor(() => expect(onPartialReply).toHaveBeenCalledOnce(), fastWait);
+        vi.useFakeTimers();
+        void harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        if (termination === "user stop") {
+          abortController.abort("cancelled");
+        }
+        await vi.advanceTimersByTimeAsync(2 * 60_000);
+        await vi.advanceTimersByTimeAsync(TURN_FINALIZE_DRAIN_ABORT_GRACE_MS + 1);
+        vi.useRealTimers();
+        await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), { timeout: 1_000 });
+        const result = await run;
+        expect(readAttemptTerminal(result)).toMatchObject({
+          aborted: true,
+          timedOut: termination === "terminal timeout",
+        });
+        if (termination === "terminal timeout") {
+          expect(result.codexAppServerFailure?.turnWatchTimeoutKind).toBe("terminal");
+        }
+        expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBeUndefined();
+      } finally {
+        // Release only for test cleanup; the run must settle while this callback is still blocked.
+        blocked.resolve();
+        vi.useRealTimers();
+        abortController.abort("test_cleanup");
+        await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+      }
+    },
+  );
+
   it("does not fail when a buffered terminal notification is followed by client close", async () => {
     let resolveBufferedTerminal!: () => void;
     const bufferedTerminal = new Promise<void>((resolve) => {

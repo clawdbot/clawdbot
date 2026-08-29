@@ -15,6 +15,7 @@ import {
   classifyReleaseGhTransportError,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
+  MAX_RELEASE_ARTIFACT_BYTES,
   validateReleaseStateArtifact,
 } from "./full-release-validation-policy.mjs";
 import { execGhRead } from "./lib/plain-gh.mjs";
@@ -32,7 +33,6 @@ export const FULL_RELEASE_WAIT_TIMEOUT_MINUTES = 720;
 export const FULL_RELEASE_GITHUB_POLL_INTERVAL_MS = 15 * 60_000;
 const FULL_RELEASE_RUN_DISCOVERY_ATTEMPTS = 2;
 const RELEASE_DECISION_FILE = "full-release-decision.json";
-const MAX_RELEASE_DECISION_BYTES = 128 * 1024;
 const GH_READ_OPTIONS = {
   encoding: "utf8",
   killSignal: "SIGKILL",
@@ -663,7 +663,7 @@ export function tryReadReleaseDecision(
         `Release Decision artifact ${artifactName} omitted ${RELEASE_DECISION_FILE}.`,
       );
     }
-    if (statSync(decisionPath).size > MAX_RELEASE_DECISION_BYTES) {
+    if (statSync(decisionPath).size > MAX_RELEASE_ARTIFACT_BYTES) {
       throw new Error(`Release Decision artifact ${artifactName} exceeds the size limit.`);
     }
     return validateReleaseDecisionPayload(JSON.parse(readFileSync(decisionPath, "utf8")), {

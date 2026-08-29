@@ -4,6 +4,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
+import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
@@ -219,6 +220,11 @@ function createFullModelCatalogAccess(params: {
         });
         pending = build
           .then((catalog) => {
+            prepareModelCatalogThinkingPolicies({
+              catalog,
+              metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+              providers: params.pluginGeneration.pluginRegistry?.providers,
+            });
             fullCatalog = catalog;
             notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
             return catalog;
@@ -244,6 +250,11 @@ function createSnapshot(
     pluginGeneration;
   const { configuredRuntimeModels, inlineProviderModels, modelCatalog, templateModelRegistry } =
     catalogFacts;
+  prepareModelCatalogThinkingPolicies({
+    catalog: modelCatalog,
+    metadataSnapshot: pluginMetadataSnapshot,
+    providers: pluginRegistry?.providers,
+  });
   const createStores = (): PreparedModelRuntimeStores => {
     // Runtime API keys and session extensions mutate these objects. Fork them per run while the
     // credential map and parsed catalog remain owned by the lifecycle snapshot.

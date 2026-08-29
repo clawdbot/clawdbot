@@ -7,6 +7,81 @@ const env = {
   OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
 };
 
+test("uses the authenticated Convex CLI when broker variables are absent", async () => {
+  const cliCalls = [];
+  const brokerCalls = [];
+  const runConvexCliImpl = async (args, options) => {
+    cliCalls.push({ args, options });
+    return "cli-ci-secret\n";
+  };
+  const fetchImpl = async (url, init) => {
+    brokerCalls.push({ url, authorization: init.headers.authorization });
+    if (url.endsWith("/acquire")) {
+      return Response.json({
+        status: "ok",
+        credentialId: "credential-cli",
+        leaseToken: "lease-token-cli",
+        payload: { schemaVersion: 1 },
+      });
+    }
+    return Response.json({ status: "ok" });
+  };
+  const lease = await acquireQaLease({
+    kind: "telegram-test-userbot",
+    env: {},
+    convexProjectDir: "/repo/qa/convex-credential-broker",
+    runConvexCliImpl,
+    fetchImpl,
+  });
+  await lease.release();
+
+  assert.deepEqual(cliCalls, [
+    {
+      args: ["env", "--deployment", "reminiscent-ibex-847", "get", "OPENCLAW_QA_CONVEX_SECRET_CI"],
+      options: { cwd: "/repo/qa/convex-credential-broker" },
+    },
+  ]);
+  assert.ok(
+    brokerCalls.every((call) => call.url.startsWith("https://reminiscent-ibex-847.convex.site/")),
+  );
+  assert.ok(brokerCalls.every((call) => call.authorization === "Bearer cli-ci-secret"));
+});
+
+test("rejects a partial explicit broker configuration instead of mixing sources", async () => {
+  let cliCalls = 0;
+  await assert.rejects(
+    acquireQaLease({
+      kind: "telegram-test-userbot",
+      env: { OPENCLAW_QA_CONVEX_SITE_URL: "https://broker.example.test" },
+      runConvexCliImpl: async () => {
+        cliCalls += 1;
+      },
+    }),
+    /Set both OPENCLAW_QA_CONVEX_SITE_URL and OPENCLAW_QA_CONVEX_SECRET_CI/u,
+  );
+  assert.equal(cliCalls, 0);
+});
+
+test("does not call the broker when Convex CLI access is rejected", async () => {
+  let brokerCalls = 0;
+  await assert.rejects(
+    acquireQaLease({
+      kind: "telegram-test-userbot",
+      env: {},
+      convexProjectDir: "/repo/qa/convex-credential-broker",
+      runConvexCliImpl: async () => {
+        throw new Error("Convex access denied.");
+      },
+      fetchImpl: async () => {
+        brokerCalls += 1;
+        return Response.json({ status: "ok" });
+      },
+    }),
+    /Could not load the QA broker through the Convex CLI/u,
+  );
+  assert.equal(brokerCalls, 0);
+});
+
 test("rejects remote cleartext broker URLs before fetch", async () => {
   let fetchCalls = 0;
   await assert.rejects(

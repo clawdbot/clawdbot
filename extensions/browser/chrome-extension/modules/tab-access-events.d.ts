@@ -1,4 +1,4 @@
-import type { TabAccessEpoch, TabAccessMode } from "./tab-access.js";
+import type { TabAccessEpoch, TabAccessMode, TabAccessPolicy } from "./tab-access.js";
 import type { BrowserTabSnapshot } from "./tab-eligibility.js";
 
 type ChromeEvent<Listener> = {
@@ -25,7 +25,7 @@ export type TabAccessEventsChromeApi = {
   };
   tabGroups: {
     onUpdated: ChromeEvent<(group?: { id: number; title?: string }) => void>;
-    onRemoved: ChromeEvent<() => void>;
+    onRemoved: ChromeEvent<(group?: { id: number; title?: string }) => void>;
   };
 };
 
@@ -37,6 +37,9 @@ export type TabAccessEventPolicy = {
   epochIsCurrent(tabId: number, epoch: TabAccessEpoch): boolean;
   invalidateTab(tabId: number): void;
   retireTab(tabId: number): void;
+  retireTabDocument: TabAccessPolicy["retireTabDocument"];
+  forwardDocumentEvent: TabAccessPolicy["forwardDocumentEvent"];
+  invalidateDocumentGroup: TabAccessPolicy["invalidateDocumentGroup"];
   renewTabAccess(
     tabId: number,
     attachedEpoch: TabAccessEpoch | undefined,

@@ -490,7 +490,7 @@ describe("google prompt cache", () => {
 
   it("propagates writer-claim rebound from cache entry persistence", async () => {
     const now = 2_500_000;
-    const takeoverError = new SessionTranscriptWriterClaimReboundError("agent:main:test");
+    const takeoverError = new SessionTranscriptWriterClaimReboundError();
     const sessionManager = {
       appendCustomEntry: vi.fn(async () => {
         throw takeoverError;

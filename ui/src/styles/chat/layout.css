@@ -756,21 +756,76 @@ openclaw-chat-page {
   border-block-end: 1px solid var(--border);
 }
 
-.chat-history-available {
-  position: absolute;
-  z-index: 10;
-  top: calc(var(--chat-mobile-pane-header-height, 0px) + 10px);
-  left: 50%;
-  max-width: calc(100% - 2 * var(--chat-thread-gutter));
-  border-radius: var(--radius-full);
-  background: var(--panel-strong);
-  box-shadow: var(--shadow-sm);
+/* In-flow boundary above the virtualized transcript. The fixed height is a
+   contract with CHAT_HISTORY_BOUNDARY_HEIGHT_PX (chat-history-boundary.ts):
+   it becomes the virtualizer scrollMargin, so drift misaligns row offsets. */
+.chat-history-boundary {
+  display: flex;
+  overflow: hidden;
+  height: 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 0;
   color: var(--muted);
-  transform: translateX(-50%);
+  font-size: 12px;
+  user-select: none;
 }
 
-.chat-history-available strong {
+.chat-history-boundary__line {
+  position: relative;
+  flex: 1 1 0;
+  height: 1px;
+  overflow: hidden;
+  background: var(--border);
+  opacity: 0.9;
+}
+
+/* Loading "comet": a soft accent sweep converging on the label from both rules. */
+.chat-history-boundary__line::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0;
+  transform: translateX(-100%);
+}
+
+.chat-history-boundary--loading .chat-history-boundary__line::after {
+  opacity: 1;
+  animation: chat-history-comet 1.2s ease-in-out infinite;
+}
+
+.chat-history-boundary--loading .chat-history-boundary__line:last-child::after {
+  animation-direction: reverse;
+}
+
+.chat-history-boundary__action {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border: 0;
+  background: none;
+  color: var(--muted-strong);
+  font: inherit;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.chat-history-boundary__action:not(:disabled):hover {
   color: var(--text);
+}
+
+@keyframes chat-history-comet {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-history-boundary--loading .chat-history-boundary__line::after {
+    animation: none;
+  }
 }
 
 /* The zero-height anchor keeps the affordance out of the flex flow so showing

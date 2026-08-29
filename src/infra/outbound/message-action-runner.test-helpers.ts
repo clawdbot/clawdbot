@@ -110,7 +110,8 @@ vi.mock("./message-action-threading.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../media/web-media.js", () => ({
+vi.mock("../../media/web-media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../media/web-media.js")>()),
   loadWebMedia: messageActionRunnerMocks.loadWebMedia,
 }));
 

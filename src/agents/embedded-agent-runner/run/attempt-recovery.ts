@@ -309,6 +309,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     }),
     prepareCompactedTranscriptRetry: sessionPromptState.prepareCompactedTranscriptRetry,
     armPostCompactionGuard: input.armPostCompactionGuard,
+    usageAccumulator: input.usageAccumulator,
   };
   if (
     await recoverEmbeddedRunTimeout({
@@ -361,6 +362,7 @@ export async function recoverEmbeddedRunAttempt(input: {
   ) {
     runInput.laneController.throwIfAborted();
     recoveryState.transportDropContinuations += 1;
+    sessionPromptState.markOwnedTranscriptRetry();
     sessionPromptState.continueFromCurrentTranscript();
     log.warn(
       `provider transport dropped after a settled tool batch; continuing from the transcript ` +

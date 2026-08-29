@@ -2,8 +2,13 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isPathInside, resolveOpenedFileRealPathForHandle } from "../../infra/fs-safe.js";
+import {
+  isPathInside,
+  resolveOpenedFileRealPathForHandle,
+  root as fsRoot,
+} from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { activeWorkspaceHashContext, workspaceStatIdentity } from "./workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_INVENTORY_ENTRIES,
@@ -114,6 +119,7 @@ export async function readActualWorkspaceManifestImpl(params: {
   includePaths?: ReadonlySet<string>;
 }): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string }> {
   const root = await fs.realpath(params.root);
+  const isStagedInput = createStagedInputPathMatcher(await fsRoot(root));
   const rawEntries: Array<
     WorkerWorkspaceManifestEntry | { path: string; type: "directory"; mode: number }
   > = [];
@@ -171,7 +177,7 @@ export async function readActualWorkspaceManifestImpl(params: {
     includedNodes: ReadonlySet<string>,
     derivedOnlyDirectories: ReadonlySet<string>,
   ): Promise<"included" | "derived-only" | "absent"> => {
-    if (isDerivedWorkspacePath(relative)) {
+    if (isDerivedWorkspacePath(relative, await isStagedInput(relative))) {
       return "derived-only";
     }
     checkTraversal(relative);
@@ -194,7 +200,10 @@ export async function readActualWorkspaceManifestImpl(params: {
       let hasIncludedEntry = false;
       for await (const entry of await fs.opendir(absolute)) {
         const child = `${relative}/${entry.name}`;
-        if (isDerivedWorkspacePath(child) || derivedOnlyDirectories.has(child)) {
+        if (
+          isDerivedWorkspacePath(child, await isStagedInput(child)) ||
+          derivedOnlyDirectories.has(child)
+        ) {
           hasDerivedEntry = true;
         } else if (includedNodes.has(child)) {
           hasIncludedEntry = true;
@@ -236,7 +245,7 @@ export async function readActualWorkspaceManifestImpl(params: {
       if (!relativeDirectory && name === ".git") {
         continue;
       }
-      if (isDerivedWorkspacePath(relative)) {
+      if (isDerivedWorkspacePath(relative, await isStagedInput(relative))) {
         hasDerivedEntry = true;
         continue;
       }

@@ -10,6 +10,7 @@ import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js"
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
 import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyMessageInjectionAttempt } from "../../auto-reply/reply/reply-run-registry.js";
+import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
@@ -153,6 +154,9 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   const replyDispatch = createChatSendReplyDispatch({
     accountId,
     isAgentRunStarted: () => agentRunStarted,
+    isRunCurrent: () =>
+      !activeRunAbort.controller.signal.aborted &&
+      context.chatAbortControllers.get(clientRunId) === activeRunAbort.entry,
     getReplyDispatchRun: () => replyDispatchRun,
     logGateway: context.logGateway,
     session,
@@ -276,6 +280,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               onSessionMetadataChanges: (changes) =>
                 changes.forEach((change) => emitSessionsChanged(context, change)),
               replyOptions: {
+                prepareAssistantTranscriptMessage: replyDispatch.prepareAssistantTranscriptMessage,
                 runId: clientRunId,
                 skillWorkshopProposalRevision,
                 ...(cronCreatorAuthority
@@ -415,7 +420,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
         },
       ),
     )
-    .then(async () => {
+    .then(async (dispatchResult) => {
       if (acceptedMessageInjection) {
         return;
       }
@@ -426,43 +431,44 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
         async () => {
           const replyDispatchResult = replyDispatchRun?.getResult();
           const runtimeOutcome = replyDispatchResult?.terminalOutcome;
-          const runtimeClassification =
-            runtimeOutcome && classifyAgentRunTerminalOutcome(runtimeOutcome);
+          const recordedOutcome = readAgentRunTerminalOutcome(dispatchResult);
+          // ACP owns a rich terminal result; native runs record their outcome on dispatch.
+          // Delivered warnings or source replies cannot replace either authoritative result.
+          const runtimeClassification = runtimeOutcome
+            ? classifyAgentRunTerminalOutcome(runtimeOutcome)
+            : recordedOutcome === "failed"
+              ? "failure"
+              : recordedOutcome === "completed"
+                ? "success"
+                : undefined;
           const runtimeCancelled = runtimeClassification === "cancellation";
           const runtimeFailed =
             runtimeClassification === "failure" || runtimeClassification === "timeout";
           const returnedAgentErrorPayloads = replyDispatch.deliveredReplies
             .map((entryInner) => entryInner.payload)
             .filter((payload) => payload.isError);
-          const hasReturnedAgentError =
-            runtimeFailed ||
-            (!runtimeCancelled &&
-              returnedAgentErrorPayloads.length > 0 &&
-              (agentRunStarted || !isInternalTextSlashCommandTurn));
+          const hasReturnedAgentError = runtimeClassification
+            ? runtimeFailed
+            : returnedAgentErrorPayloads.length > 0 &&
+              (agentRunStarted || !isInternalTextSlashCommandTurn);
           const returnedAgentErrorMessage =
             runtimeOutcome?.error ??
             (returnedAgentErrorPayloads
               .map((payload) => payload.text?.trim())
               .filter((text): text is string => Boolean(text))
               .join(" | ") ||
-              undefined);
+              (runtimeFailed ? "agent run failed" : undefined));
           if (
-            hasReturnedAgentError &&
-            !userTurnRecorder.hasPersisted() &&
-            !userTurnRecorder.isBlocked()
-          ) {
-            await persistGatewayUserTurnTranscriptBestEffort();
-          }
-          if (
-            agentRunStarted &&
-            returnedAgentErrorPayloads.length === 0 &&
             !userTurnRecorder.hasPersisted() &&
             !userTurnRecorder.isBlocked() &&
-            userTurnRecorder.hasRuntimePersistencePending()
+            (hasReturnedAgentError ||
+              (agentRunStarted &&
+                returnedAgentErrorPayloads.length === 0 &&
+                userTurnRecorder.hasRuntimePersistencePending()))
           ) {
             await persistGatewayUserTurnTranscriptBestEffort();
           }
-          let broadcastedSourceReplyFinal = false;
+          let finalizedSourceReply = false;
           // A dispatched runtime owns its persisted turn; this owner projects
           // only settled, post-hook replies. Native runtimes project their own stream.
           if (
@@ -485,31 +491,30 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               stopReason: runtimeOutcome?.stopReason,
             });
           } else if (!context.chatRunState.hasAbortMarker(clientRunId)) {
-            broadcastedSourceReplyFinal = await finalizeChatSendSourceReplies({
+            finalizedSourceReply = await finalizeChatSendSourceReplies({
               accountId,
               context,
               deliveredReplies: replyDispatch.deliveredReplies,
               emitFirstAssistantServerTiming,
               hasReturnedAgentErrorPayloads: hasReturnedAgentError,
               session,
+              suppressFinal: runtimeFailed,
             });
           }
           const shouldBroadcastAgentError =
-            hasReturnedAgentError &&
-            !broadcastedSourceReplyFinal &&
-            !context.chatRunState.hasAbortMarker(clientRunId);
-          if (shouldBroadcastAgentError) {
-            broadcastChatError({
-              context,
-              runId: clientRunId,
-              sessionKey,
-              agentId,
-              errorMessage: returnedAgentErrorMessage,
-              errorKind: runtimeClassification === "timeout" ? "timeout" : undefined,
-              stopReason: runtimeOutcome?.stopReason,
-            });
-          }
+            hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply);
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
+            if (shouldBroadcastAgentError) {
+              broadcastChatError({
+                context,
+                runId: clientRunId,
+                sessionKey,
+                agentId,
+                errorMessage: returnedAgentErrorMessage,
+                errorKind: runtimeClassification === "timeout" ? "timeout" : undefined,
+                stopReason: runtimeOutcome?.stopReason,
+              });
+            }
             const returnedAgentError = shouldBroadcastAgentError
               ? errorShape(
                   ErrorCodes.UNAVAILABLE,

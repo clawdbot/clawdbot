@@ -10,7 +10,8 @@ import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-sta
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { validatePluginSchemaValue } from "../plugins/schema-validator.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { resolveSecretRefProviderSourceMismatch } from "../secrets/ref-contract.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
@@ -72,7 +73,10 @@ type RegistryInfo = {
   overriddenPluginIds?: Set<string>;
   normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
   channelDmAllowFromModes?: Map<string, ChannelDmAllowFromMode>;
-  channelSchemas?: Map<string, { schema?: Record<string, unknown>; pluginId?: string }>;
+  channelSchemas?: Map<
+    string,
+    { schema?: Record<string, unknown>; pluginId?: string; origin: PluginOrigin }
+  >;
 };
 
 function collectSecretRefProviderSourceIssues(params: {
@@ -338,13 +342,13 @@ function validateConfigObjectWithPluginsBase(
 
   const ensureChannelSchemas = (): Map<
     string,
-    { schema?: Record<string, unknown>; pluginId?: string }
+    { schema?: Record<string, unknown>; pluginId?: string; origin: PluginOrigin }
   > => {
     const info = ensureRegistry();
     if (!info.channelSchemas) {
       info.channelSchemas = new Map(
         GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
-          (entry) => [entry.channelId, { schema: entry.schema }] as const,
+          (entry) => [entry.channelId, { schema: entry.schema, origin: "bundled" }] as const,
         ),
       );
       for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry)) {
@@ -353,9 +357,12 @@ function validateConfigObjectWithPluginsBase(
           info.channelSchemas.set(entry.id, {
             schema: entry.configSchema,
             pluginId: entry.schemaPluginOrigin === "bundled" ? undefined : entry.schemaPluginId,
+            origin: entry.schemaPluginOrigin,
           });
         } else if (!current) {
-          info.channelSchemas.set(entry.id, {});
+          info.channelSchemas.set(entry.id, {
+            origin: entry.schemaPluginOrigin,
+          });
         }
       }
     }
@@ -623,7 +630,12 @@ function validateConfigObjectWithPluginsBase(
       if (!channelSchema?.schema) {
         continue;
       }
-      const result = validateJsonSchemaValue({
+      // channelSchema.schema can come from an external plugin's channelConfigs.*.schema
+      // (channel-config-metadata.ts merges every plugin origin, not just bundled), so it
+      // is untrusted manifest input and must use the isolation path instead of the
+      // throwing validator reserved for repo-owned schemas.
+      const result = validatePluginSchemaValue({
+        origin: channelSchema.origin,
         schema: channelSchema.schema,
         cacheKey: `channel:${trimmed}`,
         value: config.channels[trimmed],

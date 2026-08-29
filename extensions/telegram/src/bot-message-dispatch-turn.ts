@@ -224,8 +224,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                       turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
                     } else if (
                       turn.answerLane.hasStreamedMessage &&
-                      !turn.activeAnswerDraftIsToolProgressOnly
+                      !turn.activeAnswerDraftIsToolProgressOnly &&
+                      (turn.activeAnswerBlockDelivery || turn.queuedAnswerBlockRotations.length > 0)
                     ) {
+                      // Only accepted blocks need a new message. A provider retry must
+                      // keep editing its unfinished preview instead of retaining it as final.
                       turn.rotateAnswerLaneWhenQueuedBlocksSettle = true;
                     }
                   });

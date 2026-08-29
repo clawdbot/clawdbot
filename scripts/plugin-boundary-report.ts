@@ -366,11 +366,12 @@ export function isPluginCompatEligibleForRemoval(
 }
 
 function collectCompatDebt(
+  records: readonly PluginCompatRecord[],
   files: readonly WorkspaceTextFile[],
   today = new Date(),
   options: { includeReferenceFiles?: boolean } = {},
 ): CompatDebtRecord[] {
-  return listPluginCompatRecords()
+  return records
     .filter((record) => record.status === "deprecated")
     .map((record) => {
       const tokens = extractCompatTokens(record);
@@ -403,10 +404,11 @@ function collectCompatDebt(
 }
 
 function collectRemovalPendingDebt(
+  records: readonly PluginCompatRecord[],
   files: readonly WorkspaceTextFile[],
   today = new Date(),
 ): RemovalPendingDebtRecord[] {
-  return listPluginCompatRecords()
+  return records
     .filter((record) => record.status === "removal-pending")
     .map((record) => {
       const references = collectReferenceFiles(files, extractCompatSurfaceTokens(record));
@@ -456,10 +458,6 @@ function collectMemoryHostBoundary(
     sourceBridgeFiles: sourceBridgeFiles.toSorted(),
     packageCoreReferenceFiles: [...packageCoreReferenceFiles].toSorted(),
   };
-}
-
-function matchesOwner(owner: string | undefined, value: string | undefined): boolean {
-  return owner === undefined || value === owner;
 }
 
 function countByOwner(records: readonly CompatDebtRecord[]): Record<string, number> {
@@ -533,15 +531,16 @@ function buildSummary(report: BoundaryReport, owner?: string): BoundaryReportSum
 }
 
 function buildReport(options: Partial<Pick<CliOptions, "owner" | "summary">> = {}): BoundaryReport {
+  const records = listPluginCompatRecords().filter(
+    (record) => options.owner === undefined || record.owner === options.owner,
+  );
   const files = options.summary
     ? collectSummaryWorkspaceTextFileSources()
     : collectWorkspaceTextFileSources();
-  const compatRecords = collectCompatDebt(files, new Date(), {
+  const compatRecords = collectCompatDebt(records, files, new Date(), {
     includeReferenceFiles: !options.summary,
-  }).filter((record) => matchesOwner(options.owner, record.owner));
-  const removalPending = collectRemovalPendingDebt(files).filter((record) =>
-    matchesOwner(options.owner, record.owner),
-  );
+  });
+  const removalPending = collectRemovalPendingDebt(records, files);
   return {
     generatedAt: new Date().toISOString(),
     compat: {

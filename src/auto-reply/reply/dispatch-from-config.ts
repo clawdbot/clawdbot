@@ -24,6 +24,20 @@ export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
+  return await dispatchReplyFromConfigWithQueuePolicy(params, false);
+}
+
+/** Low-level plugin dispatch must reach queue policy before waiting on the active reply owner. */
+export async function dispatchLowLevelChannelReplyFromConfig(
+  params: DispatchFromConfigParams,
+): Promise<DispatchFromConfigResult> {
+  return await dispatchReplyFromConfigWithQueuePolicy(params, true);
+}
+
+async function dispatchReplyFromConfigWithQueuePolicy(
+  params: DispatchFromConfigParams,
+  allowActiveQueueResolution: boolean,
+): Promise<DispatchFromConfigResult> {
   const ticket = reserveReplyAdmissionTicket([
     params.ctx.SessionKey,
     params.ctx.CommandTargetSessionKey,
@@ -36,7 +50,11 @@ export async function dispatchReplyFromConfig(
     : params;
   const messageAuditTerminal = createInboundMessageAuditTerminal(params);
   try {
-    const result = await dispatchReplyFromConfigInner(ticketedParams, messageAuditTerminal);
+    const result = await dispatchReplyFromConfigInner(
+      ticketedParams,
+      messageAuditTerminal,
+      allowActiveQueueResolution,
+    );
     messageAuditTerminal?.finishSuccess(result);
     return result;
   } catch (error) {
@@ -50,8 +68,13 @@ export async function dispatchReplyFromConfig(
 async function dispatchReplyFromConfigInner(
   params: DispatchFromConfigParams,
   messageAuditTerminal: ReturnType<typeof createInboundMessageAuditTerminal>,
+  allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
-  const gathered = await gatherDispatchRequest(params, messageAuditTerminal);
+  const gathered = await gatherDispatchRequest(
+    params,
+    messageAuditTerminal,
+    allowActiveQueueResolution,
+  );
   if (gathered.status === "complete") {
     return gathered.result;
   }

@@ -364,19 +364,11 @@ describe("local-check-runtime", () => {
     ({ goEnv, prepGoEnv, lintGoEnv }) => {
       const cwd = createTempDir("openclaw-oxlint-go-limit-");
       const binDir = path.join(cwd, "node_modules", ".bin");
-      const tsxDir = path.join(cwd, "node_modules", "tsx");
       const scriptsDir = path.join(cwd, "scripts");
       const capturePath = path.join(cwd, "children.jsonl");
       const oxlintPath = path.join(binDir, "oxlint");
       fs.mkdirSync(binDir, { recursive: true });
-      fs.mkdirSync(tsxDir, { recursive: true });
       fs.mkdirSync(scriptsDir, { recursive: true });
-      // Prep's raw --import tsx resolves here; the fixture needs only native ESM.
-      fs.writeFileSync(
-        path.join(tsxDir, "package.json"),
-        '{"type":"module","exports":"./index.js"}\n',
-      );
-      fs.writeFileSync(path.join(tsxDir, "index.js"), "export {};\n");
       const captureSource = `
 const goEnv = Object.fromEntries(["GOMAXPROCS", "GOGC", "GOMEMLIMIT"].map(key => [key, process.env[key] ?? null]));
 fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: process.argv.slice(2) }) + "\\n");

@@ -23,7 +23,6 @@ import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-to
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
-import { SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import {
   formatToolExecutionErrorMessage,
   resolveToolExecutionErrorKind,
@@ -37,7 +36,6 @@ import {
   compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   createToolSearchTools as createRunToolSearchTools,
-  projectToolSearchTargetTranscriptMessages,
   registerHeadlessToolSearchCatalog,
   restrictToolSearchCatalog,
   resolveToolSearchConfig,
@@ -3198,81 +3196,6 @@ describe("Tool Search", () => {
     expect(secondExecuteInput.onUpdate).toBe(onUpdate);
   });
 
-  it("projects target tool calls after their Tool Search wrapper result", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "wrapper-call",
-            name: TOOL_CALL_RAW_TOOL_NAME,
-            arguments: { id: "fake_target", args: { value: "ok" } },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "wrapper-call",
-        toolName: TOOL_CALL_RAW_TOOL_NAME,
-        content: [{ type: "text", text: "wrapped" }],
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-      },
-    ];
-
-    const projected = projectToolSearchTargetTranscriptMessages(messages as never, [
-      {
-        parentToolCallId: "wrapper-call",
-        toolCallId: "tool_search_code:wrapper-call:fake_target:1",
-        toolName: "fake_target",
-        input: { value: "ok" },
-        result: jsonResult({ ok: true }),
-        isError: false,
-        timestamp: 123,
-      },
-    ]);
-
-    expect(projected).toHaveLength(5);
-    const projectedToolCall = projected[2] as {
-      role?: string;
-      content?: Array<{
-        type?: string;
-        id?: string;
-        name?: string;
-        arguments?: unknown;
-        input?: unknown;
-      }>;
-    };
-    expect(projectedToolCall.role).toBe("assistant");
-    expect(projectedToolCall.content).toEqual([
-      {
-        type: "toolCall",
-        id: "tool_search_code:wrapper-call:fake_target:1",
-        name: "fake_target",
-        arguments: { value: "ok" },
-        input: { value: "ok" },
-      },
-    ]);
-    const projectedToolResult = projected[3] as {
-      role?: string;
-      toolCallId?: string;
-      toolName?: string;
-      isError?: boolean;
-      content?: unknown;
-    };
-    expect(projectedToolResult.role).toBe("toolResult");
-    expect(projectedToolResult.toolCallId).toBe("tool_search_code:wrapper-call:fake_target:1");
-    expect(projectedToolResult.toolName).toBe("fake_target");
-    expect(projectedToolResult.isError).toBe(false);
-    expect(projectedToolResult.content).toEqual([
-      { type: "text", text: JSON.stringify({ ok: true }, null, 2) },
-    ]);
-    expect(projected[4]).toBe(messages[2]);
-  });
-
   it("does not execute fire-and-forget bridged calls after code returns", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const target = pluginTool("fake_fire_and_forget", "Should not run unless awaited");
@@ -4272,20 +4195,6 @@ describe("Tool Search", () => {
 
     const second = applyToolSearchCatalog({ tools: [codeTool, tool], config, sessionId });
     expect(second.catalogReused).toBe(false);
-  });
-
-  it("bounds tool_search_code stderr accumulation to the session tool tail limit", () => {
-    let stderrTail = "";
-    stderrTail = testing.appendToolSearchCodeStderrTail(
-      stderrTail,
-      `HEAD_OVERFLOW_${"x".repeat(SESSION_TOOL_STDERR_TAIL_BYTES + 10_000)}TAIL`,
-    );
-
-    expect(stderrTail).not.toContain("HEAD_OVERFLOW_");
-    expect(stderrTail.endsWith("TAIL")).toBe(true);
-    expect(Buffer.byteLength(stderrTail, "utf8")).toBeLessThanOrEqual(
-      SESSION_TOOL_STDERR_TAIL_BYTES,
-    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

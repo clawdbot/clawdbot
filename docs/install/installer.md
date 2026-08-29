@@ -108,6 +108,14 @@ If no TTY is available and no install method is set, it defaults to `npm` and wa
 
 The script exits with code `2` for invalid method selection or invalid `--install-method` values.
 
+With `--install-method git`, `install.sh` and `install-cli.sh` accept a full
+40-character commit SHA through `--version`. The installer uses the existing
+object or fetches that exact commit from `origin`, checks it out detached, and
+installs dependencies with a frozen lockfile. A branch with the same name cannot
+replace the requested commit. `--no-git-update` skips branch rebasing; it does not
+prevent fetching a missing requested commit. The install fails if the requested
+object is unavailable or cannot resolve to a commit.
+
 ### Examples (install.sh)
 
 <Tabs>

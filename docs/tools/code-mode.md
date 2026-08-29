@@ -19,6 +19,7 @@ program that searches, describes, and calls the hidden tool catalog.
 OpenClaw Code Mode is off by default. To try it, open **Settings → Agents &
 Tools → Labs** and turn on **Code Mode**. The Labs switch writes the `"auto"`
 tier, which engages only for models marked as preferred Code Mode performers.
+This is the global default; agent and model overrides take precedence.
 </Note>
 
 This page documents OpenClaw code mode, not Codex Code Mode. The two features
@@ -30,7 +31,7 @@ separate implementations:
   prefixed by a `// @exec: {...}` pragma line for execution options), executed
   in Codex's in-process V8 Code Mode runtime.
 - OpenClaw code mode runs in the generic OpenClaw agent runtime and is
-  disabled unless `tools.codeMode.enabled` is `true` or `"auto"`. Its `exec`
+  enabled through global, agent, or model activation settings. Its `exec`
   tool takes a JSON `{ code, language }` payload, executed in a QuickJS-WASI
   worker.
 
@@ -119,7 +120,7 @@ To enable the same tier without the Control UI, set it in config:
 }
 ```
 
-To force code mode on for every tool-capable run, regardless of model:
+To default code mode on for every tool-capable run, regardless of model:
 
 ```json5
 {
@@ -131,8 +132,9 @@ To force code mode on for every tool-capable run, regardless of model:
 
 Object form works too: `tools.codeMode.enabled` accepts the same `false`,
 `true`, and `"auto"` values. Code mode stays off when `tools.codeMode` is
-omitted, `false`, or an object without an explicit `enabled` value. Configuring
-limits or other Code Mode options does not enable it.
+omitted, `false`, or an object without an explicit `enabled` value, unless an
+agent or model override enables it. Configuring limits or other Code Mode
+options does not enable it.
 
 See [Automatic per-model activation](#automatic-per-model-activation) for the
 exact semantics and the shipped model list.
@@ -161,6 +163,60 @@ Set explicit limits for tighter bounds:
   },
 }
 ```
+
+### Override one model
+
+Set `codeMode: true` or `codeMode: false` on an exact `provider/model` entry in
+`agents.defaults.models`. Omit `codeMode` to inherit the parent activation
+setting, including its `"auto"` behavior. The model field accepts only a
+boolean; `"auto"` belongs on the global or per-agent `tools.codeMode` setting.
+Wildcard rows such as `"openai/*"` may configure runtime policy, but cannot set
+`codeMode`; config validation rejects them instead of ignoring the override.
+
+```json5
+{
+  tools: { codeMode: "auto" },
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.6-luna": {
+          agentRuntime: { id: "openclaw" },
+          codeMode: true,
+        },
+      },
+    },
+    entries: {
+      research: {
+        models: {
+          "openai/gpt-5.6-luna": { codeMode: false },
+        },
+      },
+    },
+  },
+}
+```
+
+The example enables Code Mode for this model except on the `research` agent.
+Activation resolves from the first explicit setting in this order:
+
+1. `agents.entries.<agent>.models["provider/model"].codeMode`.
+2. `agents.entries.<agent>.tools.codeMode.enabled` (or its boolean/`"auto"` shorthand).
+3. `agents.defaults.models["provider/model"].codeMode`.
+4. `tools.codeMode.enabled` (or its shorthand), defaulting to `false`.
+
+In the Control UI, open **Settings → Agents → Agent defaults**, show **Advanced**
+settings, and find **Models** under **Agent Defaults**. Each model has a
+**Code Mode** selector beside its runtime: **Default** removes the override,
+**On** saves `true`, and **Off** saves `false`. For agent-specific overrides,
+expand **Agent List**, then the agent's **Agent Model Overrides**. Unsupported fields remain
+marked for **Raw** editing without hiding the supported settings beside them.
+
+Overrides affect the selected model on future runs, including fallback models;
+they do not enable tools on a tool-free run or change runtime selection. The
+example separately selects `agentRuntime.id: "openclaw"` because OpenAI routes
+may otherwise use Codex. These settings do not control Codex native Code Mode.
+Model overrides change activation only; limits still come from the global and
+per-agent `tools.codeMode` options.
 
 ### What the model does
 
@@ -305,9 +361,9 @@ Provider-owned tools such as remote Python sandboxes are separate tools. See
 
 ## Configuration
 
-`tools.codeMode.enabled` is the activation gate. It defaults to `false`,
-including when the Code Mode object configures other fields. Set `true` or
-`"auto"` explicitly to enable it.
+`tools.codeMode.enabled` sets the global activation default. It defaults to
+`false`, including when the Code Mode object configures other fields. Set
+`true` or `"auto"` explicitly, or use an [agent or model override](#override-one-model).
 
 | Field                 | Default                        | Clamp                                           |
 | --------------------- | ------------------------------ | ----------------------------------------------- |
@@ -333,13 +389,14 @@ an engaged run never silently falls back to broad direct tool exposure.
 
 `tools.codeMode.enabled` accepts three values:
 
-- `false` (default): code mode is off for every run.
-- `true`: code mode engages for every tool-capable run, regardless of model.
+- `false` (default): code mode is off unless an agent or model override enables it.
+- `true`: code mode engages for tool-capable runs unless an override disables it.
 - `"auto"`: code mode engages only when the run's model is flagged as a
   preferred code-mode performer in its provider catalog.
 
-`false` and `true` behave exactly as before the `"auto"` tier existed; `"auto"`
-is an explicit per-model opt-in.
+These values supply the default when no agent or model override takes
+precedence. `"auto"` uses catalog capability; an explicit per-model boolean
+bypasses that capability preference.
 
 ### The `compat.codeMode` catalog flag
 
@@ -413,10 +470,9 @@ sometimes regressed, which is why `"auto"` leaves them on direct tools.
 
 Use `"auto"` when agents switch between models: strong models get the compact
 surface, weaker or local ones keep the exposure they handle best. Use `true`
-when you have verified a specific unflagged model performs well with code
-mode; global force-on is most predictable for single-model deployments. For
-open-weight or uncached serving where every prompt token is billed or
-recomputed, prefer enabling per model (via `"auto"` or a per-agent override)
+on an exact model entry when you have verified an unflagged model performs well
+with code mode. For open-weight or uncached serving where every prompt token is billed or
+recomputed, prefer enabling per model (via `"auto"` or an explicit model override)
 rather than globally, since the token savings depend on the model actually
 using the program surface well.
 
@@ -430,8 +486,9 @@ final model request is assembled:
 2. Build the effective OpenClaw tool list, adding eligible plugin, MCP, and
    client tools.
 3. Apply allow/deny policy.
-4. If `tools.codeMode.enabled` is `false`, or is `"auto"` and the run's model
-   is not catalog-preferred, continue with normal tool exposure.
+4. Resolve activation using the [agent and model precedence](#override-one-model).
+   If it is `false`, or `"auto"` and the run's model is not catalog-preferred,
+   continue with normal tool exposure.
 5. If enabled and tools are active for the run, retain required direct-only
    tools and register every catalog-eligible effective tool in the code-mode
    catalog.
@@ -605,10 +662,17 @@ QuickJS-WASI snapshot/restore is the resume mechanism:
 Snapshots are runtime state, not user artifacts: they live only in an
 in-process map (no database or disk write), are size-limited, expire, and are
 scoped to the run and session that created them.
-Canceling the owning run or tool call, or closing its tool catalog at attempt
-teardown, immediately releases parked snapshots and cancels their pending host
-work, even if no `wait` call follows. Catalog description refreshes and client
-tool additions do not close the owner.
+One cell owner spans initial execution, suspension, and every resume. Canceling
+the owning run or current tool call, or closing its tool catalog at attempt
+teardown, cancels active workers and pending host work and releases parked
+snapshots, even if no `wait` call follows. Catalog description refreshes and
+client tool additions do not close the owner. An external operation that ignores
+cancellation may still finish, but cannot resume the closed guest, emit later
+guest output, or start another guest tool call.
+
+The process-wide limit of 64 slots applies to suspended cells and their reserved
+resume slots. A resume keeps its slot until it completes or parks again; an
+initial execution that completes without suspending does not consume a slot.
 
 `wait` fails (as a `failed` result) when:
 
@@ -1038,9 +1102,11 @@ preserving: active agent id, session id and key, sender and channel context,
 sandbox policy, approval policy, plugin `before_tool_call` hooks, abort
 signal, streaming updates where available, and trajectory/audit events.
 
-Nested calls project into the transcript as real tool calls so support
-bundles show what happened, with the projection identifying the parent
-code-mode tool call and the nested tool id.
+Completed nested calls persist as bounded, redacted display-only activity, retaining
+their original parent and invocation ids across history reloads. Provider replay
+contains only the actual model calls; child activity adds no synthetic model turns.
+Starts and partial updates remain transient. Older missing child history cannot be
+reconstructed from source code or outer results.
 
 Nested tool failures cross into the guest as catchable JavaScript errors. If
 guest code does not catch an error, `exec` or `wait` returns a failed tool
@@ -1238,9 +1304,11 @@ does not use a `node:vm` child as the sandbox.
 
 Code mode coverage should prove:
 
-- disabled config leaves existing tool exposure unchanged
+- disabled config without an enabling override leaves existing tool exposure unchanged
 - omitted `enabled`, including object config that sets other fields, stays
-  disabled
+  disabled unless an agent or model override enables it
+- per-model `true`, `false`, and unset values preserve activation precedence,
+  fallback-model selection, and limits from the enclosing options
 - enabled config exposes `exec`, `wait`, and only required direct-only tools to
   the model when tools are active for the run
 - raw no-tool runs, `disableTools`, and empty allowlists do not trigger

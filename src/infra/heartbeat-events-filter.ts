@@ -8,6 +8,7 @@ import {
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
 const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
+export const HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX = "heartbeat-delivery:";
 const STRUCTURED_EXEC_COMPLETION_EVENT_RE =
   /^exec (completed|failed) \(([a-z0-9_-]{1,64}), (code -?\d+|signal [^)]+)\)(?: :: ([\s\S]*))?$/i;
 
@@ -180,6 +181,10 @@ export function isExecCompletionEvent(evt: string): boolean {
     /^exec finished(?::|\s*\()/.test(normalized) ||
     STRUCTURED_EXEC_COMPLETION_EVENT_RE.test(trimmed)
   );
+}
+
+export function isHeartbeatDeliveryAwarenessEvent(event: { contextKey?: string | null }): boolean {
+  return event.contextKey?.startsWith(HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX) ?? false;
 }
 
 // Returns true when a system event should be treated as real cron reminder content.

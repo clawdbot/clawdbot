@@ -26,6 +26,8 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 
 - `agents.entries.*.memory.search.remote.apiKey`
 - `agents.entries.*.tts.providers.*.apiKey`
+- `channels.buzz.accounts.*.authTag`
+- `channels.buzz.accounts.*.privateKey`
 - `channels.buzz.authTag`
 - `channels.buzz.privateKey`
 - `channels.clickclack.accounts.*.token`

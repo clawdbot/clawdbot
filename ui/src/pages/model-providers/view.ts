@@ -45,6 +45,7 @@ type ModelProvidersViewProps = {
   refreshing: boolean;
   error: string | null;
   providerUsageFailed: boolean;
+  supplementalLoading: boolean;
   updatedAt: number | null;
   costDays: number;
   credentialAgentLabel: string;
@@ -451,11 +452,16 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
         </div>
       </div>
       ${renderCredentialSummary(card, props.credentialAgentLabel)}
-      <div class="model-providers__global-metrics">
+      <div
+        class="model-providers__global-metrics"
+        aria-busy=${props.supplementalLoading ? "true" : "false"}
+      >
         <div class="model-providers__global-metrics-title">${t("modelProviders.globalUsage")}</div>
         ${card.usage
           ? renderProviderUsageDetails(card.usage)
-          : html`<div class="model-providers__no-stats">${t("modelProviders.noStats")}</div>`}
+          : html`<div class="model-providers__no-stats">
+              ${t(props.supplementalLoading ? "common.loading" : "modelProviders.noStats")}
+            </div>`}
         ${renderLocalCost(card, props.costDays)}
       </div>
       ${renderProviderActions(card, props)} ${renderKeyEditor(card, props)}

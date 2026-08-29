@@ -85,6 +85,7 @@ function hydrateCanonicalRepairEntry(row: CanonicalRepairRow): SessionEntry {
   const createdActor = row.created_actor_type
     ? {
         type: row.created_actor_type,
+        ...(row.created_actor_type === "human" ? { source: "unknown" as const } : {}),
         ...(row.created_actor_id ? { id: row.created_actor_id } : {}),
       }
     : undefined;

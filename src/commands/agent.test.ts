@@ -303,7 +303,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         onAgentEvent: params.onAgentEvent,
       } as never);
     }),
-    sessionFileHasContent: vi.fn(async () => false),
+    sessionTranscriptHasContent: vi.fn(async () => false),
   };
 });
 
@@ -760,6 +760,30 @@ describe("agentCommand", () => {
       );
     });
   });
+
+  it.each([
+    ["local", undefined, false],
+    ["local", true, false],
+    ["ingress", undefined, true],
+    ["ingress", true, false],
+  ] as const)(
+    "owns skill watching for %s runs with oneShotCliRun=%s",
+    async (entrypoint, oneShotCliRun, watch) => {
+      await withTempHome(async (home) => {
+        mockConfig(home, path.join(home, "sessions.json"));
+        const opts = { message: "inspect skills", agentId: "main", oneShotCliRun };
+        if (entrypoint === "ingress") {
+          await agentCommandFromIngress({ ...opts, allowModelOverride: false }, runtime);
+        } else {
+          await agentCommand(opts, runtime);
+        }
+
+        expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
+          expect.objectContaining({ watch }),
+        );
+      });
+    },
+  );
 
   it("does not scaffold an implicit ACP workspace when the command supplies cwd", async () => {
     await withTempHome(async (home) => {

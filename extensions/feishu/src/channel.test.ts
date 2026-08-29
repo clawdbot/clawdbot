@@ -331,8 +331,14 @@ describe("feishuPlugin actions", () => {
 
   it.each([
     {
-      name: "file-backed default provider",
+      name: "selected env default shadows file provider",
       provider: { source: "file", path: "/unused" },
+      allowed: true,
+    },
+    {
+      name: "non-default file provider",
+      provider: { source: "file", path: "/unused" },
+      defaultEnv: "other-env",
       allowed: false,
     },
     {
@@ -348,34 +354,38 @@ describe("feishuPlugin actions", () => {
   ] satisfies Array<{
     name: string;
     provider: FeishuSecretProviderConfig;
+    defaultEnv?: string;
     allowed: boolean;
-  }>)("enforces root SecretRef policy during discovery: $name", ({ provider, allowed }) => {
-    vi.stubEnv("FEISHU_DISCOVERY_SECRET", "ambient-secret");
-    try {
-      const discovery = describeFeishuMessageTool({
-        secrets: {
-          defaults: { env: "corp-env" },
-          providers: { "corp-env": provider },
-        },
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: "cli_main",
-            appSecret: { source: "env", id: "FEISHU_DISCOVERY_SECRET" },
+  }>)(
+    "enforces root SecretRef policy during discovery: $name",
+    ({ provider, defaultEnv = "corp-env", allowed }) => {
+      vi.stubEnv("FEISHU_DISCOVERY_SECRET", "ambient-secret");
+      try {
+        const discovery = describeFeishuMessageTool({
+          secrets: {
+            defaults: { env: defaultEnv },
+            providers: { "corp-env": provider },
           },
-        },
-      } as OpenClawConfig);
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "cli_main",
+              appSecret: { source: "env", provider: "corp-env", id: "FEISHU_DISCOVERY_SECRET" },
+            },
+          },
+        });
 
-      expect(discovery?.capabilities).toEqual(allowed ? ["presentation"] : []);
-      if (allowed) {
-        expect(discovery?.actions).toContain("send");
-      } else {
-        expect(discovery?.actions).toEqual([]);
+        expect(discovery?.capabilities).toEqual(allowed ? ["presentation"] : []);
+        if (allowed) {
+          expect(discovery?.actions).toContain("send");
+        } else {
+          expect(discovery?.actions).toEqual([]);
+        }
+      } finally {
+        vi.unstubAllEnvs();
       }
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
+    },
+  );
 
   it("declares native chat IDs as delivery targets for guarded message mutations", () => {
     for (const action of ["edit", "pin", "unpin"] as const) {

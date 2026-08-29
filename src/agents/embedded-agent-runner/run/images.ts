@@ -62,10 +62,7 @@ const IMAGE_EXTENSION_NAMES = [
   "heic",
   "heif",
 ] as const;
-const IMAGE_EXTENSIONS = new Set<string>();
-for (const ext of IMAGE_EXTENSION_NAMES) {
-  IMAGE_EXTENSIONS.add(`.${ext}`);
-}
+const IMAGE_EXTENSIONS = new Set<string>(IMAGE_EXTENSION_NAMES.map((ext) => `.${ext}`));
 const IMAGE_EXTENSION_PATTERN = IMAGE_EXTENSION_NAMES.join("|");
 const FILE_URL_REGEX_SOURCE = "file://[^\\s<>\"'`\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
 const WINDOWS_DRIVE_PATH_REGEX_SOURCE =
@@ -79,8 +76,7 @@ const LEGACY_ATTACHMENT_MARKER_PATTERN =
   /\[(?:media attached(?:\s+\d+\/\d+)?:|Image:\s*source:)\s*[^\]]+\]/gi;
 
 function isImageExtension(filePath: string): boolean {
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
-  return IMAGE_EXTENSIONS.has(ext);
+  return IMAGE_EXTENSIONS.has(normalizeLowercaseStringOrEmpty(path.extname(filePath)));
 }
 
 function normalizeRefForDedupe(raw: string): string {
@@ -291,10 +287,6 @@ async function loadImageFromRef(
   };
 }
 
-function modelSupportsImages(model: { input?: string[] }): boolean {
-  return model.input?.includes("image") ?? false;
-}
-
 export async function detectAndLoadPromptImages(params: {
   prompt: string;
   media?: readonly MediaFact[];
@@ -317,7 +309,7 @@ export async function detectAndLoadPromptImages(params: {
   loadedCount: number;
   skippedCount: number;
 }> {
-  if (!modelSupportsImages(params.model)) {
+  if (!params.model.input?.includes("image")) {
     return {
       images: [],
       imageFactIndexes: [],
@@ -328,11 +320,12 @@ export async function detectAndLoadPromptImages(params: {
     };
   }
   const media = normalizeMediaFacts(params.media);
-  const suppressed = new Set(params.mediaImageLayout?.suppressedFactIndexes ?? []);
+  const suppressed = new Set([
+    ...(params.mediaImageLayout?.suppressedFactIndexes ?? []),
+    ...media.flatMap((fact, index) => (fact.hydrationSuppressed === true ? [index] : [])),
+  ]);
   const imageFactIndexes = media.flatMap((fact, factIndex) =>
-    isImageMediaFact(fact) && fact.hydrationSuppressed !== true && !suppressed.has(factIndex)
-      ? [factIndex]
-      : [],
+    isImageMediaFact(fact) && !suppressed.has(factIndex) ? [factIndex] : [],
   );
   const refs = collectMediaImageRefs(media);
   const refsByFact = new Map(refs.flatMap((ref) => (ref ? [[ref.factIndex, ref] as const] : [])));
@@ -368,7 +361,7 @@ export async function detectAndLoadPromptImages(params: {
         (slot) => slot.factIndex === undefined || !suppressed.has(slot.factIndex),
       )
     : inferredSlots;
-  const layoutInlineIndexes = slots.flatMap((slot) =>
+  const layoutInlineIndexes = (params.mediaImageLayout?.slots ?? slots).flatMap((slot) =>
     slot.kind === "inline" ? [slot.factIndex ?? null] : [],
   );
   const existingIndexes =
@@ -376,10 +369,12 @@ export async function detectAndLoadPromptImages(params: {
     (layoutInlineIndexes.length === (params.existingImages?.length ?? 0)
       ? layoutInlineIndexes
       : params.existingImages?.map(() => null));
-  const unusedExisting = (params.existingImages ?? []).map((image, index) => ({
-    image,
-    factIndex: existingIndexes?.[index] ?? null,
-  }));
+  const unusedExisting = (params.existingImages ?? [])
+    .map((image, index) => ({
+      image,
+      factIndex: existingIndexes?.[index] ?? null,
+    }))
+    .filter((entry) => entry.factIndex === null || !suppressed.has(entry.factIndex));
   const takeExisting = (
     factIndex: number | undefined,
     allowUnowned: boolean,
@@ -447,13 +442,11 @@ export async function detectAndLoadPromptImages(params: {
       promptImages.push(existing);
       continue;
     }
-    if (slot.kind === "inline") {
-      failedMediaCount++;
-      continue;
-    }
+    // Gateway-owned transcripts retain managed facts, not necessarily inline bytes.
+    // A missing inline block must hydrate its exact fact on replay, just like an offloaded slot.
     const ref = slot.factIndex === undefined ? undefined : refsByFact.get(slot.factIndex);
     const image = ref?.hydrate ? await loadRef(ref) : null;
-    if (ref?.hydrate && !image) {
+    if ((ref?.hydrate || slot.kind === "inline") && !image) {
       failedMediaCount++;
     }
     if (image) {
@@ -552,6 +545,10 @@ async function projectOrderedPromptMedia(params: {
   const projected: ModelInputContent[] = params.content.filter(
     (block): block is TextContent => block.type === "text" && !generatedMarkers.has(block.text),
   );
+  // Hydration already resolved image order, including inline blocks with no managed fact.
+  if (!params.media.some(isVideoMediaFact)) {
+    return [...projected, ...params.images];
+  }
   const imagesByFact = new Map<number, ImageContent[]>();
   const factlessImages: ImageContent[] = [];
   params.images.forEach((image, index) => {

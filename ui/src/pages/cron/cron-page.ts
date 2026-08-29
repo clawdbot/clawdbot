@@ -433,6 +433,8 @@ class CronPage extends OpenClawLightDomElement {
           basePath: this.context.basePath,
           agentId: fallbackAgentId,
           loading: this.cron.cronLoading,
+          hasLoaded: this.cron.cronJobsSnapshotRevision !== null,
+          listError: this.cron.cronJobsError,
           canManage,
           status: this.cron.cronStatus,
           failingCount: this.cron.cronFailingCount,

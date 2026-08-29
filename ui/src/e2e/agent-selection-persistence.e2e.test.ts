@@ -178,13 +178,11 @@ suite.define(() => {
       const reopened = await openPage(context);
       const reopenedPage = reopened.page;
       await reopened.gateway.waitForRequest("chat.startup");
-      await reopenedPage.waitForTimeout(1_500);
-      await screenshot(reopenedPage, "03-reopened-agent.png");
-
       await waitForControlUiRoute(reopenedPage, {
         pathname: "/chat/openclaw",
         routeId: "chat",
       });
+      await screenshot(reopenedPage, "03-reopened-agent.png");
       await expect.poll(() => hasOpenClawStartup(reopened.gateway)).toBe(true);
       await expect.poll(() => selectedAgentName(reopenedPage)).toBe("OpenClaw");
       await expect

@@ -358,7 +358,7 @@ merge_run() {
   enter_worktree "$pr" false || return 1
   # Earlier wrappers captured output at dispatch without recording intent. Even
   # an empty capture may represent a submitted request; never overwrite that evidence.
-  if [ -e .local/merge-output.log ]; then
+  if [ -e .local/merge-output.log ] || [ -L .local/merge-output.log ]; then
     merge_outcome_stop "prior merge output exists without an outcome record; preserve .local/merge-output.log and reconcile the earlier request manually"
     return 1
   fi
@@ -425,15 +425,40 @@ merge_run() {
   fi
 
   local crabbox_final_main_sha="" route=immediate
-  merge_outcome_observe "$pr" || return 1
-  if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg head "$PREP_HEAD_SHA" '
-    .pr.state == "OPEN" and .pr.headRefOid == $head and .pr.baseRefName == "main" and
-    .pr.isDraft == false and .pr.mergeable != "CONFLICTING" and
-    .pr.autoMergeRequest == null and .pr.isInMergeQueue == false
-  ' >/dev/null; then
-    merge_outcome_stop "require OPEN, exact prepared head, main base, non-draft, no conflicts, and no existing auto/queue request; inspect current PR state"
-    return 1
-  fi
+  local admission_attempt previous_observation=""
+  # Only fresh admission waits for calculation; retained intent reconciles immediately.
+  # Pin all other facts and each projection as soon as it becomes known.
+  for admission_attempt in 1 2 3; do
+    merge_outcome_observe "$pr" || return 1
+    if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg head "$PREP_HEAD_SHA" '
+      .pr.state == "OPEN" and .pr.headRefOid == $head and .pr.baseRefName == "main" and
+      .pr.isDraft == false and .pr.mergeable != "CONFLICTING" and
+      .pr.autoMergeRequest == null and .pr.isInMergeQueue == false
+    ' >/dev/null; then
+      merge_outcome_stop "require OPEN, exact prepared head, main base, non-draft, no conflicts, and no existing auto/queue request; inspect current PR state"
+      return 1
+    fi
+    if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" '
+      del(.pr.mergeable,.pr.mergeStateStatus) == ($previous | del(.pr.mergeable,.pr.mergeStateStatus)) and
+      ($previous.pr.mergeable == "UNKNOWN" or .pr.mergeable == $previous.pr.mergeable) and
+      ($previous.pr.mergeStateStatus == "UNKNOWN" or .pr.mergeStateStatus == $previous.pr.mergeStateStatus)
+    ' >/dev/null; then
+      merge_outcome_stop "PR or main changed while waiting for mergeability; stopped before intent/dispatch"
+      return 1
+    fi
+    if printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.mergeable != "UNKNOWN" and .pr.mergeStateStatus != "UNKNOWN"' >/dev/null; then
+      break
+    fi
+    if [ "$admission_attempt" -eq 3 ]; then
+      merge_outcome_stop "mergeability remained UNKNOWN after 3 observations; stopped before intent/dispatch"
+      return 1
+    fi
+    if [ "$admission_attempt" -eq 1 ]; then
+      echo "Waiting for GitHub mergeability to settle (up to 3 observations, waiting 1 then 2 seconds for UNKNOWN samples)."
+    fi
+    previous_observation="$MERGE_OBSERVATION"
+    sleep "$admission_attempt"
+  done
   if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ]; then
     route="admin"
     merge_args=(--admin "${merge_args[@]}")
@@ -453,6 +478,15 @@ merge_run() {
         ;;
       *) merge_outcome_stop "auto-merge admission requires MERGEABLE with CLEAN or BEHIND status"; return 1 ;;
     esac
+  fi
+  # gh skips local status refusals for queue-enabled PRs; admin bypasses BLOCKED/BEHIND.
+  # Reject known client-side refusals before recording non-retryable intent.
+  if printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg route "$route" '
+    .pr | .isMergeQueueEnabled == false and
+    (.mergeStateStatus == "DIRTY" or ($route == "immediate" and (.mergeStateStatus | IN("BLOCKED", "BEHIND"))))
+  ' >/dev/null; then
+    merge_outcome_stop "selected merge route is blocked by policy, branch drift, or a dirty merge projection; inspect current PR state"
+    return 1
   fi
   local observed_main candidate_tree
   observed_main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)
@@ -561,15 +595,7 @@ merge_run() {
   local root
   root=$(repo_root)
   cd "$root" || return 1
-  remove_worktree_if_present ".worktrees/pr-$pr"
-  delete_local_branch_if_safe "temp/pr-$pr"
-  delete_local_branch_if_safe "pr-$pr"
-  delete_local_branch_if_safe "pr-$pr-prep"
-  [ ! -e ".worktrees/pr-$pr" ] || cleanup_complete=false
-  local branch
-  for branch in "temp/pr-$pr" "pr-$pr" "pr-$pr-prep"; do
-    if git show-ref --verify --quiet "refs/heads/$branch"; then cleanup_complete=false; fi
-  done
+  cleanup_pr_worktree ".worktrees/pr-$pr" || cleanup_complete=false
   if [ "$cleanup_complete" = true ]; then
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="complete"')" || return 1
     echo "merge-run complete for PR #$pr"

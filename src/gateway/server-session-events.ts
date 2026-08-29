@@ -2,7 +2,12 @@
 // Projects transcript and lifecycle updates to websocket subscribers.
 import path from "node:path";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  readTranscriptDisplayPosition,
+  type TranscriptDisplayPosition,
+} from "../chat/transcript-display-position.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -10,6 +15,7 @@ import {
   loadSessionEntryReadOnly as loadAccessorSessionEntryReadOnly,
   resolveTranscriptSessionKeyBySessionId,
 } from "../config/sessions/session-accessor.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -33,7 +39,10 @@ import {
   resolveSessionSubscriptionKeys,
 } from "./session-subscription-keys.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
-import { readSessionMessageCountAsync } from "./session-transcript-readers.js";
+import {
+  readSessionMessageByIdAsync,
+  readSessionMessageCountAsync,
+} from "./session-transcript-readers.js";
 import { loadGatewaySessionRow, loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
@@ -251,8 +260,34 @@ async function handleTranscriptUpdateBroadcast(
     );
     return;
   }
+  let message = update.message;
   let messageSeq = asPositiveSafeInteger(update.messageSeq);
-  if (update.message !== undefined && messageSeq === undefined) {
+  let transcriptPosition: TranscriptDisplayPosition | undefined;
+  if (message !== undefined && update.messageId && completeTarget && targetSessionId) {
+    // A queued append can cross a rewrite. Read content and placement together;
+    // never attach a new generation to the producer's stale queued payload.
+    try {
+      const stored = await readSessionMessageByIdAsync(
+        {
+          agentId: targetAgentId,
+          sessionId: targetSessionId,
+          sessionKey,
+          storePath: targetStorePath,
+        },
+        update.messageId,
+      );
+      message = stored.message;
+      messageSeq = stored.seq;
+      transcriptPosition = readTranscriptDisplayPosition(
+        asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.transcriptPosition,
+      );
+    } catch (error) {
+      if (!isSessionTranscriptProjectionUnavailableError(error)) {
+        throw error;
+      }
+      message = undefined;
+    }
+  } else if (message !== undefined && messageSeq === undefined) {
     // Updates from raw transcript events may not carry seq; fall back to the
     // current transcript line count for cursor-compatible live history.
     const updateStorePath = targetStorePath ?? compatibleLegacyMarker?.storePath;
@@ -321,8 +356,8 @@ async function handleTranscriptUpdateBroadcast(
     activeRunState,
     status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
   });
-  if (update.message === undefined) {
-    // A committed batch without individually proven cursors must invalidate
+  if (message === undefined) {
+    // A committed batch or unavailable selected row must invalidate
     // both session-list and targeted transcript subscribers exactly once.
     params.broadcastToConnIds(
       "sessions.changed",
@@ -340,7 +375,8 @@ async function handleTranscriptUpdateBroadcast(
   const projected = projectSessionMessagePayload({
     sessionKey,
     ...(eventAgentId ? { agentId: eventAgentId } : {}),
-    message: update.message,
+    message,
+    transcriptPosition,
     ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
     ...(messageSeq !== undefined ? { messageSeq } : {}),
     ...(update.runId ? { runId: update.runId } : {}),
@@ -404,10 +440,20 @@ export function createLifecycleEventBroadcastHandler(params: {
       agentScope,
     );
     const broadcastOptions = { ...privateBroadcastScope, dropIfSlow: true };
-    if (!routingAgentId || (!eventAgentId && !compatibilityOwnerAgentId)) {
+    // Key-only lifecycle deletes invalidate membership; a later row is not deletion evidence.
+    if (
+      event.reason === "delete" ||
+      !routingAgentId ||
+      (!eventAgentId && !compatibilityOwnerAgentId)
+    ) {
       params.broadcastToConnIds(
         "sessions.changed",
-        { sessionKey: event.sessionKey, reason: event.reason, ts: Date.now() },
+        {
+          sessionKey: event.sessionKey,
+          ...(eventAgentId ? { agentId: eventAgentId } : {}),
+          reason: event.reason,
+          ts: Date.now(),
+        },
         connIds,
         broadcastOptions,
       );

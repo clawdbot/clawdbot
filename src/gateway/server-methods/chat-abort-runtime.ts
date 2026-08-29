@@ -98,6 +98,9 @@ export async function persistAbortedPartials(params: {
         runId: snapshot.runId,
       },
     });
+    if (appended.skipped) {
+      continue;
+    }
     if (!appended.ok) {
       const error = `chat.abort transcript append failed: ${appended.error ?? "unknown error"}`;
       params.context.logGateway.warn(error);

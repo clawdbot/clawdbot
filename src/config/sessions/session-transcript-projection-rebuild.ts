@@ -51,6 +51,7 @@ export type PreparedSessionTranscriptProjectionMetadata = {
 export type PreparedSessionTranscriptProjection = PreparedSessionTranscriptProjectionMetadata & {
   activeRows: Array<{
     activePosition: number;
+    contextEligible: 0 | 1;
     eventSeq: number;
     messagePosition: number | null;
   }>;
@@ -138,6 +139,31 @@ export function hasTranscriptMessage(event: unknown): boolean {
     !Array.isArray(event) &&
     Object.hasOwn(event, "message") &&
     (event as { message?: unknown }).message !== undefined
+  );
+}
+
+/** Control facts still belong in bounded context acquisition, even without a replay message. */
+export function transcriptEventContextEligibility(event: unknown): 0 | 1 {
+  return isRecord(event) && isRecord(event.message) && event.message.excludeFromContext === true
+    ? 0
+    : 1;
+}
+
+/** Older same-version writers can leave a current watermark over unclassified rows. */
+export function hasUnclassifiedSessionTranscriptEvents(
+  db: DatabaseSync,
+  sessionId: string,
+): boolean {
+  return (
+    executeSqliteQueryTakeFirstSync(
+      db,
+      getProjectionKysely(db)
+        .selectFrom("session_transcript_active_events")
+        .select("session_id")
+        .where("session_id", "=", sessionId)
+        .where("context_eligible", "is", null)
+        .limit(1),
+    ) !== undefined
   );
 }
 
@@ -241,6 +267,7 @@ export function visitSessionTranscriptProjection(
     const projectsMessage = hasTranscriptMessage(event);
     visitor.activeRow({
       activePosition: activeEventCount++,
+      contextEligible: transcriptEventContextEligibility(event),
       eventSeq: row.seq,
       messagePosition: projectsMessage ? activeMessageCount++ : null,
     });
@@ -333,7 +360,11 @@ export function claimPreparedSessionTranscriptProjectionInTransaction(
       .select(["indexed_seq", "needs_rebuild"])
       .where("session_id", "=", plan.sessionId),
   );
-  if (current?.needs_rebuild === 0 && current.indexed_seq === plan.sourceIndexedSeq) {
+  if (
+    current?.needs_rebuild === 0 &&
+    current.indexed_seq === plan.sourceIndexedSeq &&
+    !hasUnclassifiedSessionTranscriptEvents(db, plan.sessionId)
+  ) {
     return false;
   }
   executeSqliteQuerySync(
@@ -432,6 +463,7 @@ export function appendPreparedSessionTranscriptProjectionChunkInTransaction(
       kysely.insertInto("session_transcript_active_events").values(
         params.activeRows.map((row) => ({
           active_position: row.activePosition,
+          context_eligible: row.contextEligible,
           event_seq: row.eventSeq,
           message_position: row.messagePosition,
           session_id: params.sessionId,
@@ -462,7 +494,11 @@ export function finalizePreparedSessionTranscriptProjectionInTransaction(
   plan: PreparedSessionTranscriptProjectionMetadata,
   claimId: number,
 ): boolean {
-  if (!projectionClaimIsOwned(db, plan.sessionId, claimId) || !sourceSnapshotMatches(db, plan)) {
+  if (
+    !projectionClaimIsOwned(db, plan.sessionId, claimId) ||
+    !sourceSnapshotMatches(db, plan) ||
+    hasUnclassifiedSessionTranscriptEvents(db, plan.sessionId)
+  ) {
     return false;
   }
   executeSqliteQuerySync(

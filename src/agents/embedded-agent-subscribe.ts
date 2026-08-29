@@ -14,6 +14,10 @@ import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runn
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
+import {
+  createUsageAccumulator,
+  mergeUsageIntoAccumulator,
+} from "./embedded-agent-runner/usage-accumulator.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import { readPendingToolMediaReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
@@ -38,6 +42,7 @@ import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js"
 import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
+import { setSessionModelUsageSink } from "./sessions/session-model-usage.js";
 import { registerToolEffectReceipt } from "./tool-effect-receipt.js";
 import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
@@ -57,14 +62,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
   const state: EmbeddedAgentSubscribeState = createEmbeddedAgentSubscribeState(params);
-  const usageTotals = {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    reasoningTokens: 0,
-    total: 0,
-  };
+  const usageTotals = createUsageAccumulator();
   let lastAssistantUsage: ReturnType<typeof normalizeUsage>;
   let compactionCount = 0;
   let currentAttemptAssistant: AssistantMessage | undefined;
@@ -233,15 +231,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     const usage = state.pendingAssistantUsage;
-    usageTotals.input += usage.input ?? 0;
-    usageTotals.output += usage.output ?? 0;
-    usageTotals.cacheRead += usage.cacheRead ?? 0;
-    usageTotals.cacheWrite += usage.cacheWrite ?? 0;
-    usageTotals.reasoningTokens += usage.reasoningTokens ?? 0;
-    const usageTotal =
-      usage.total ??
-      (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-    usageTotals.total += usageTotal;
+    mergeUsageIntoAccumulator(usageTotals, usage);
     // A terminal abort may report zeros after several completed model calls.
     // Retain the latest committed nonzero call so context accounting stays exact.
     lastAssistantUsage = { ...usage };
@@ -257,6 +247,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     state.pendingAssistantUsage = usage;
+  };
+  const recordModelUsage = (usageLike: UsageLike) => {
+    const usage = normalizeUsage(usageLike);
+    if (!hasNonzeroUsage(usage)) {
+      return;
+    }
+    mergeUsageIntoAccumulator(usageTotals, usage);
+    emitRunUsage(usage.output ?? 0);
   };
   const getUsageTotals = () => {
     const hasUsage =
@@ -556,6 +554,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   };
 
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedAgentSessionEventHandler(ctx));
+  setSessionModelUsageSink(params.session.sessionManager, recordModelUsage);
 
   const unsubscribe = () => {
     if (state.unsubscribed) {
@@ -589,6 +588,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         log.warn(`unsubscribe: compaction abort failed runId=${params.runId} err=${String(err)}`);
       }
     }
+    setSessionModelUsageSink(params.session.sessionManager, null);
     sessionUnsubscribe();
   };
 

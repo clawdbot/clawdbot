@@ -56,6 +56,38 @@ function createWorkspaceActions(
 }
 
 describe("worker workspace command transport retry", () => {
+  it.each(["never", "idempotent"] as const)(
+    "does not dispatch a %s command after its turn closes during tunnel preparation",
+    async (transportRetry) => {
+      const run = vi.fn(async () => result());
+      let current = true;
+      const actions = createWorkerWorkspaceActions({
+        bundleHash: "a".repeat(64),
+        environmentId: "worker:test",
+        ownerSignal: new AbortController().signal,
+        waitForPrepared: async () => {
+          await Promise.resolve();
+          current = false;
+          return createPreparedSsh();
+        },
+        runner: { run },
+        tasks: new Set(),
+      });
+      await expect(
+        actions.runWorkspaceCommand({
+          argv: ["printf", "stale-attachment"],
+          transportRetry,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("turn claim closed");
+            }
+          },
+        }),
+      ).rejects.toThrow("turn claim closed");
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
   it("runs never commands once without changing the selected port", async () => {
     // Pin the clock: the impl derives the dispatch timeout from a Date.now()
     // deadline, so real elapsed ms between admission and dispatch would turn

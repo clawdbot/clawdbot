@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
@@ -31,7 +31,13 @@ import {
   syncGitHubIdentity,
 } from "./user-profiles.js";
 
-const statePaths: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
+});
 
 it("publishes profile changes only after the owning transaction commits", () => {
   const options = stateOptions();
@@ -61,10 +67,8 @@ it("publishes profile changes only after the owning transaction commits", () => 
 });
 
 function stateOptions() {
-  const directory = mkdtempSync(join(tmpdir(), "openclaw-user-profiles-"));
-  const path = join(directory, "openclaw.sqlite");
-  statePaths.push(path);
-  return { path };
+  const directory = tempDirs.make("openclaw-user-profiles-");
+  return { path: join(directory, "openclaw.sqlite") };
 }
 
 function fixtureImage(path: string): Buffer {
@@ -124,11 +128,6 @@ function syncEmailGitHubProfile(
   );
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
-});
-
 describe("user profiles", () => {
   it.each([false, true])(
     "display lookup leaves absent profile storage absent (database exists: %s)",
@@ -164,7 +163,7 @@ describe("user profiles", () => {
       openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()?.user_version,
     ).toBe(versionBefore);
     expect(versionBefore).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(13);
+    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(14);
     expect(second).toEqual(first);
     expect(ensureProfileForEmail("ADA@example.com", options)).toEqual(first);
     expect(listProfiles(options)).toEqual([

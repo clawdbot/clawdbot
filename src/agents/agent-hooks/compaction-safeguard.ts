@@ -17,7 +17,6 @@ import {
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
-import { isAbortError } from "../../infra/abort-signal.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -43,7 +42,6 @@ import {
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
-import { isTimeoutError } from "../failover-error.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import {
   buildSessionContext as buildCoreSessionContext,
@@ -51,7 +49,9 @@ import {
   type SessionTreeEntry as CoreSessionTreeEntry,
 } from "../runtime/index.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
+import type { SessionModelUsageSink } from "../sessions/compaction/runtime.js";
 import type { ExtensionAPI, ExtensionContext } from "../sessions/index.js";
+import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
@@ -69,7 +69,7 @@ import {
 } from "./compaction-safeguard-quality.js";
 import {
   getCompactionSafeguardRuntime,
-  setCompactionSafeguardCancelReason,
+  setCompactionSafeguardCancellation,
 } from "./compaction-safeguard-runtime.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
@@ -967,7 +967,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       containsRealConversation(
         stripRuntimeContextCustomMessages(collectSessionContextMessages(ctx.sessionManager)),
       );
-    setCompactionSafeguardCancelReason(ctx.sessionManager, undefined);
+    setCompactionSafeguardCancellation(ctx.sessionManager, undefined);
     if (!hasRealConversation) {
       // When there are no summarizable messages AND no real turn-prefix content,
       // cancelling compaction leaves context unchanged but the SDK re-triggers
@@ -1113,8 +1113,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             `Compaction provider "${compactionProvider.id}" returned empty result, falling back to LLM.`,
           );
         } catch (err) {
-          // Caller cancellation and real transport timeouts remain terminal.
-          if (signal?.aborted || (!isAbortError(err) && isTimeoutError(err))) {
+          // Escaped hook errors fall through to raw core compaction. Keep provider-local
+          // failures in the audited fallback unless the caller aborted.
+          if (signal?.aborted) {
             throw err;
           }
           log.warn(
@@ -1138,7 +1139,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "was not called and model was not passed through runtime registry.",
         );
       }
-      setCompactionSafeguardCancelReason(
+      setCompactionSafeguardCancellation(
         ctx.sessionManager,
         "Compaction safeguard could not resolve a summarization model.",
       );
@@ -1147,7 +1148,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
     const authResult = await resolveModelAuth(ctx, model);
     if (!authResult.ok) {
-      setCompactionSafeguardCancelReason(ctx.sessionManager, authResult.reason);
+      setCompactionSafeguardCancellation(ctx.sessionManager, authResult.reason);
       return { cancel: true };
     }
     try {
@@ -1159,6 +1160,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         messages: messagesToSummarize,
         headers: authResult.headers,
       });
+      const usageSink: SessionModelUsageSink = (usage) =>
+        recordSessionModelUsage(ctx.sessionManager, usage);
       const llmSummaryParams = {
         model,
         apiKey: authResult.apiKey ?? "",
@@ -1169,6 +1172,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         summarizationInstructions,
         thinkingLevel,
         streamFn,
+        usageSink,
       };
       const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
 
@@ -1334,7 +1338,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               "Compaction safeguard: corrective generation failed; " +
                 `reasonCode=corrective_generation_failed attempt=${attempt + 1}`,
             );
-            setCompactionSafeguardCancelReason(
+            setCompactionSafeguardCancellation(
               ctx.sessionManager,
               "Compaction safeguard finalized summary failed quality checks and corrective generation failed.",
             );
@@ -1381,7 +1385,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "Compaction safeguard: required quality facts exceed finalized artifact budget; " +
               `requiredChars>${MAX_COMPACTION_SUMMARY_CHARS} identifierCount=${identifiers.length}`,
           );
-          setCompactionSafeguardCancelReason(
+          setCompactionSafeguardCancellation(
             ctx.sessionManager,
             "Compaction safeguard required facts exceed the finalized summary budget.",
           );
@@ -1407,7 +1411,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "Compaction safeguard: finalized summary failed quality checks; " +
               `reasonCodes=${reasonCodes.join(",")} reasonCount=${quality.reasons.length}`,
           );
-          setCompactionSafeguardCancelReason(
+          setCompactionSafeguardCancellation(
             ctx.sessionManager,
             "Compaction safeguard finalized summary failed quality checks.",
           );
@@ -1439,9 +1443,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       log.warn(
         `Compaction summarization failed; cancelling compaction to preserve history: ${message}`,
       );
-      setCompactionSafeguardCancelReason(
+      setCompactionSafeguardCancellation(
         ctx.sessionManager,
         `Compaction safeguard could not summarize the session: ${message}`,
+        error,
       );
       return { cancel: true };
     }

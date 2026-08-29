@@ -105,7 +105,6 @@ function getFacadeManifestRegistry(params: {
 export function resolveRegistryPluginModuleLocation(params: {
   dirName: string;
   artifactBasename: string;
-  resolutionKey: string;
   env?: NodeJS.ProcessEnv;
 }): FacadeModuleLocation | null {
   const registry = getFacadeManifestRegistry(params.env ? { env: params.env } : {});
@@ -206,7 +205,6 @@ function resolveBundledPluginManifestRecord(params: {
   artifactBasename: string;
   location: FacadeModuleLocation | null;
   sourceExtensionsRoot: string;
-  resolutionKey: string;
   env?: NodeJS.ProcessEnv;
 }): FacadePluginManifestLike | null {
   const metadataRecord = resolveBundledMetadataManifestRecord(params);
@@ -239,7 +237,6 @@ export function resolveTrackedFacadePluginId(params: {
   artifactBasename: string;
   location: FacadeModuleLocation | null;
   sourceExtensionsRoot: string;
-  resolutionKey: string;
   env?: NodeJS.ProcessEnv;
 }): string {
   return resolveBundledPluginManifestRecord(params)?.id ?? params.dirName;
@@ -251,7 +248,6 @@ export function resolveBundledPluginPublicSurfaceAccess(params: {
   artifactBasename: string;
   location: FacadeModuleLocation | null;
   sourceExtensionsRoot: string;
-  resolutionKey: string;
   env?: NodeJS.ProcessEnv;
 }): { allowed: boolean; pluginId?: string; reason?: string } {
   if (
@@ -332,7 +328,6 @@ export function resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(params: 
   artifactBasename: string;
   location: FacadeModuleLocation | null;
   sourceExtensionsRoot: string;
-  resolutionKey: string;
   env?: NodeJS.ProcessEnv;
 }) {
   const access = resolveBundledPluginPublicSurfaceAccess(params);

@@ -508,11 +508,11 @@ class OpenClawShell
     this.shellNavigation.selectChatSession(sessionKey, agentId);
   }
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
-    if (event.event === "config.changed") {
+    if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
       const client = this.context?.gateway?.snapshot.client;
       if (client) {
-        invalidateChatMetadataStore(client);
         invalidateModelCatalogCache(client);
+        invalidateChatMetadataStore(client);
       }
     }
     this.shellGateway.handleGatewayEvent(event);
@@ -716,8 +716,8 @@ class OpenClawShell
       // A disconnect can retain the browser client, so object identity alone
       // cannot keep metadata alive across logical Gateway connections.
       if (snapshot.client) {
-        invalidateChatMetadataStore(snapshot.client);
         invalidateModelCatalogCache(snapshot.client);
+        invalidateChatMetadataStore(snapshot.client);
       }
     }
     this.shellGateway.synchronizeGateway(snapshot);

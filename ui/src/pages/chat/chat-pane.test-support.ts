@@ -248,7 +248,7 @@ type SessionCapabilityFixtureOverrides = Omit<Partial<SessionCapability>, "patch
 export function createSessionCapabilityFixture(
   overrides: SessionCapabilityFixtureOverrides = {},
 ): SessionCapability {
-  return overrides as typeof overrides & SessionCapability;
+  return { deletionState: () => undefined, ...overrides } as typeof overrides & SessionCapability;
 }
 
 export function createSessionContext(

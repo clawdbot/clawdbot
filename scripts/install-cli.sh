@@ -823,19 +823,16 @@ EOF
 }
 
 run_pnpm() {
-  if [[ ${#PNPM_CMD[@]} -eq 2 && "${PNPM_CMD[1]}" == "pnpm" ]] && [[ "${1:-}" == "-C" && -n "${2:-}" ]]; then
-    local repo_dir="$2"
+  local repo_dir="$PWD"
+  if [[ "${1:-}" == "-C" && -n "${2:-}" ]]; then
+    repo_dir="$2"
     shift 2
-    if ! (cd "$repo_dir" && "${PNPM_CMD[@]}" --version >/dev/null 2>&1); then
-      ensure_pnpm "$repo_dir"
-    fi
-    (cd "$repo_dir" && "${PNPM_CMD[@]}" "$@")
-    return
   fi
-  if ! pnpm_cmd_is_ready; then
-    ensure_pnpm
+  # Corepack-backed pnpm shims choose a version before pnpm processes -C.
+  if ! (cd "$repo_dir" && pnpm_cmd_is_ready); then
+    ensure_pnpm "$repo_dir"
   fi
-  "${PNPM_CMD[@]}" "$@"
+  (cd "$repo_dir" && "${PNPM_CMD[@]}" "$@")
 }
 
 should_prefer_offline_pnpm_install() {
@@ -1051,6 +1048,20 @@ checkout_git_openclaw_ref() {
   GIT_REF_KIND=""
 
   if [[ -z "$ref" ]]; then
+    return 0
+  fi
+
+  # Full commit IDs pin source bytes, even when a remote ref has the same name.
+  # Bundled/existing checkouts already have the object and need no remote lookup.
+  if [[ "$ref" =~ ^[[:xdigit:]]{40}$ ]]; then
+    if ! git -C "$repo_dir" cat-file -e "$ref" 2>/dev/null; then
+      git -C "$repo_dir" fetch --no-tags origin "$ref" ||
+        fail "Could not fetch requested git commit: ${ref}"
+    fi
+    git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null ||
+      fail "Requested git version is not a commit: ${ref}"
+    git -C "$repo_dir" checkout --detach "$ref"
+    GIT_REF_KIND="immutable"
     return 0
   fi
 

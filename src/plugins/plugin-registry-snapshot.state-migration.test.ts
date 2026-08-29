@@ -15,15 +15,13 @@ import {
   recordSuccessfulStateMigrations,
   type MigrationCheckpointIdentity,
 } from "../infra/startup-migration-checkpoint.js";
-import {
-  autoMigrateLegacyPluginDoctorState,
-  resetAutoMigrateLegacyStateForTest,
-} from "../infra/state-migrations.doctor.js";
+import { autoMigrateLegacyPluginDoctorState } from "../infra/state-migrations.plugin-doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   loadPluginMetadataSnapshot,
@@ -46,7 +44,6 @@ beforeEach(() => {
 afterEach(() => {
   clearPluginDoctorContractRegistryCache();
   clearPluginMetadataLifecycleCaches();
-  resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
@@ -252,30 +249,34 @@ module.exports = {
 `,
       "utf8",
     );
+    // Package changes are visible to an explicit owner refresh, not to retained generations.
+    expect(loadPluginMetadataSnapshot({ config: {}, env, stateDir })).toBe(persisted);
+    expect(needsStateMigrationCheckpoint(checkpoint)).toBe(false);
     clearPluginMetadataLifecycleCaches();
+    await withPluginCache(createPluginCache(), async () => {
+      const refreshed = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
+      const refreshedPlugin = requirePlugin(refreshed, pluginId);
+      const refreshedIdentity = checkpointIdentity(refreshed);
+      expect(refreshed.registrySource).toBe("derived");
+      expect(refreshed.registryDiagnostics.map((diagnostic) => diagnostic.code)).toContain(
+        "persisted-registry-stale-source",
+      );
+      expect(refreshedPlugin.manifestHash).toBe(persistedPlugin.manifestHash);
+      expect(refreshedPlugin.packageJson?.hash).toBe(persistedPlugin.packageJson?.hash);
+      expect(refreshedPlugin.doctorContractHash).not.toBe(persistedPlugin.doctorContractHash);
+      expect(refreshedPlugin.doctorContractFile).not.toEqual(persistedPlugin.doctorContractFile);
+      expect(refreshedIdentity.pluginMigrationFingerprint).not.toBe(
+        checkpoint.identity.pluginMigrationFingerprint,
+      );
+      expect(needsStateMigrationCheckpoint({ ...checkpoint, identity: refreshedIdentity })).toBe(
+        true,
+      );
 
-    const refreshed = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
-    const refreshedPlugin = requirePlugin(refreshed, pluginId);
-    const refreshedIdentity = checkpointIdentity(refreshed);
-    expect(refreshed.registrySource).toBe("derived");
-    expect(refreshed.registryDiagnostics.map((diagnostic) => diagnostic.code)).toContain(
-      "persisted-registry-stale-source",
-    );
-    expect(refreshedPlugin.manifestHash).toBe(persistedPlugin.manifestHash);
-    expect(refreshedPlugin.packageJson?.hash).toBe(persistedPlugin.packageJson?.hash);
-    expect(refreshedPlugin.doctorContractHash).not.toBe(persistedPlugin.doctorContractHash);
-    expect(refreshedPlugin.doctorContractFile).not.toEqual(persistedPlugin.doctorContractFile);
-    expect(refreshedIdentity.pluginMigrationFingerprint).not.toBe(
-      checkpoint.identity.pluginMigrationFingerprint,
-    );
-    expect(needsStateMigrationCheckpoint({ ...checkpoint, identity: refreshedIdentity })).toBe(
-      true,
-    );
+      const migration = await autoMigrateLegacyPluginDoctorState({ config: {}, env });
 
-    const migration = await autoMigrateLegacyPluginDoctorState({ config: {}, env });
-
-    expect(migration.warnings).toEqual([]);
-    expect(migration.changes).toContain("Replayed Doctor contract state migration");
-    expect(fs.existsSync(markerPath)).toBe(false);
+      expect(migration.warnings).toEqual([]);
+      expect(migration.changes).toContain("Replayed Doctor contract state migration");
+      expect(fs.existsSync(markerPath)).toBe(false);
+    });
   });
 });

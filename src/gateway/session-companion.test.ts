@@ -683,7 +683,7 @@ describe("session companion tool scope", () => {
     expect(cfg.tools?.fs?.workspaceOnly).toBe(true);
     expect(cfg.tools?.sessions?.visibility).toBe("self");
     expect(cfg.tools?.toolSearch).toMatchObject({ enabled: false });
-    expect(cfg.tools?.codeMode).toMatchObject({ enabled: false });
+    expect(cfg.tools?.codeMode).toBe(true);
 
     const targetAccess = await resolveSessionToolAccess({
       action: "history",

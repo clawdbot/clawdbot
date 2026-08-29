@@ -108,6 +108,40 @@ do not restrict the [SSH backend's Gateway host](/gateway/sandboxing#ssh-backend
 
 ## Shared test state and process helpers
 
+`build-all`, standalone tsdown builds, tsgo, SDK declaration preparation,
+package-boundary checks, and dependent lint use checkout-local ownership at
+`.artifacts/dist-artifacts.lock`. Ownership spans
+cleanup, generation, cache restoration, and the checks consuming those outputs;
+independent checkouts remain independent. Competing commands print a waiting
+message and wait for a live owner without an acquisition deadline. Compiler and
+build execution timeouts are unchanged. Standalone tsgo runs serialize, including
+source-only checks; the core test shard runner retains its explicit concurrency
+inside one owner. Do not delete `dist` manually while these commands are running.
+An abrupt owner or nested wrapper exit, or unverified child cleanup, retains the
+lock. A missing or unverifiable owner PID, or a recorded child-cleanup failure,
+fails acquisition promptly without reclaiming anything. PID death does not prove
+detached descendants stopped. Before manually removing an abandoned lock directory,
+inspect its `owner.json` and verify all associated build, compiler, and lint
+processes, including detached descendants, have stopped; then retry the command.
+
+Local plugin lint and package-boundary compilation consume native declarations in
+`packages/plugin-sdk/dist` and seven separate plugin API trees in
+`.artifacts/extension-package-boundary/plugins`. Each declaration and compile
+owner validates its consumed source content, inherited config, selected compiler,
+and complete output inventory. Unrelated existing source or test edits retain
+cache hits. Resolution-topology changes invalidate conservatively, including new
+module candidates outside declared roots. Stale declarations get a full native
+emit after clearing only their build-info file; the successful emitted inventory
+then drives obsolete declaration pruning. Missing or tampered outputs invalidate
+the owner. The content records live under
+`.artifacts/extension-package-boundary`, outside packaged build cleanup. A warm run validates the records without emitting declarations.
+
+Packaged declarations belong to the public/private tsdown SDK groups. Full and
+package builds emit them in the canonical build; `ciArtifacts` stages only those
+two groups and publishes after both succeed and their relative declaration closure
+is complete. Local preparation never overwrites packaged declarations or writes
+workspace forwarding bridges.
+
 Plugin SDK declaration preparation and `scripts/run-tsgo.mjs` require child work
 to finish before reporting success. On POSIX, each verifies its own managed
 process group: leftover children are terminated and the command fails instead of

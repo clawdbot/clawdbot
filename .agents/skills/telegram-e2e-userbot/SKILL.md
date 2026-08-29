@@ -1,6 +1,6 @@
 ---
 name: telegram-e2e-userbot
-description: "Run OpenClaw Telegram E2E on Telegram's Test Server with Convex-leased team credentials; drive real-user turns and record messages, edits, deletions, reactions, typing, or rich content."
+description: "Prove user-visible OpenClaw Telegram behavior on Telegram's Test Server with Convex-leased team credentials; drive real-user turns and record messages, edits, deletions, reactions, typing, or rich content."
 metadata:
   short-description: Telegram E2E via real-user driver
   argument-hint: "<message-or-command?>"
@@ -52,8 +52,16 @@ Use two unused ports for every run on a shared host:
 export TELEGRAM_GATEWAY_PORT TELEGRAM_MOCK_PORT
 ```
 
-Team and ClawSweeper runs use Convex. Confirm the CI role is available without
-printing it:
+Team and ClawSweeper runs use Convex. A maintainer with Convex CLI access to the
+OpenClaw broker project needs no local broker settings. The lease helper uses
+`qa/convex-credential-broker` in the checkout, reads the production site and
+CI role through the authenticated CLI, and keeps them in process memory. Run
+the same doctor and runner commands below; no credential export is required.
+Require an authenticated `convex` command on `PATH`. When it is missing or
+cannot access the broker project, stop and ask the user to install and
+authenticate the Convex CLI. Runtime setup must never install or log in.
+
+CI or another non-interactive worker can instead provide the broker pair:
 
 ```bash
 : "${OPENCLAW_QA_CONVEX_SITE_URL:?missing Convex QA site}"
@@ -61,8 +69,9 @@ printing it:
 ```
 
 Done when the checkout contains `scripts/e2e/mock-openai-server.mjs`, the skill
-directory resolves, the exact runtime can start without setup work, and the
-Convex broker settings are present.
+directory resolves, the exact runtime can start without setup work, and either
+the Convex CLI can access the production broker project or the broker pair is
+present.
 
 ## 2. Select the proof
 
@@ -71,9 +80,15 @@ the behavior under test. Prefer a DM for isolation. Use the shared group only
 when group policy, mentions, commands, topics, or reactions are part of the
 claim.
 
-The generic `OPENCLAW_E2E_OK` turn proves only the default message path. A
-channel-visible change needs a recipe whose timeline exposes that change. If the
-diff is not channel-visible, state that boundary and use the generic turn.
+Exercise the exact behavior changed by the diff. The generic `OPENCLAW_E2E_OK`
+turn proves only the default message path. Formatting, commands, media, edits,
+deletions, reactions, topics, and timing each need actions and recorded events
+that expose the specific claim.
+
+Treat the harness as an extension point. When its current actions, recorder
+fields, or recipes cannot expose the claim, extend them in the tested checkout.
+Use the leased TDLib session or any Telegram Test Bot API method needed to cover
+the behavior.
 
 For a non-default backend or timed scenario, read the matching section of the
 [runtime reference](features/runtime-reference.md).

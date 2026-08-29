@@ -137,6 +137,7 @@ function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[])
 function createCodeModeExecDescription(
   ctx: CodeModeToolContext,
   catalog?: readonly ToolSearchCatalogEntry[],
+  config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId),
 ): string {
   const namespacePrompt = describeCodeModeNamespacesForPrompt(catalog);
   // A known run catalog with neither MCP nor swarm has no virtual API files.
@@ -162,10 +163,7 @@ function createCodeModeExecDescription(
   const skillsGuidance = ctx.codeModeSkills?.length
     ? " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)`."
     : "";
-  const maxOutputBytes = resolveCodeModeConfig(
-    ctx.runtimeConfig ?? ctx.config,
-    ctx.agentId,
-  ).maxOutputBytes;
+  const { maxOutputBytes } = config;
   const projection = catalog
     ? createCodeModeCatalogProjection(
         catalog.map((entry) => compactToolSearchCatalogEntry(entry)),
@@ -193,10 +191,13 @@ function createCodeModeExecDescription(
 }
 
 export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
+  // The surface planner owns activation. Capture limits once so an admitted
+  // control remains executable during model overrides and restart recovery.
+  const config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
   const execTool = markCodeModeControlTool({
     name: CODE_MODE_EXEC_TOOL_NAME,
     label: "exec",
-    description: createCodeModeExecDescription(ctx),
+    description: createCodeModeExecDescription(ctx, undefined, config),
     parameters: Type.Object({
       // `command` stays runtime-only for hook compatibility. Requiring the sole
       // model-facing field prevents schema-valid empty calls from constrained models.
@@ -228,6 +229,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         await runCodeModeExec({
           toolCallId,
           ctx,
+          config,
           code: input.code,
           assistantTurnId:
             executionContext?.assistantMessage.responseId?.trim() ||
@@ -293,18 +295,7 @@ export function applyCodeModeCatalog(params: {
   toolHookContext?: HookContext;
   directToolNames?: Iterable<string>;
   codeModeSkills?: CodeModeToolContext["codeModeSkills"];
-  forceEnabled?: boolean;
 }) {
-  const config = resolveCodeModeConfig(params.config, params.agentId);
-  // Engagement (including "auto" per-model resolution) is decided by the run
-  // gates before this is called; only a hard `false` may disable compaction.
-  if (config.enabled === false && params.forceEnabled !== true) {
-    return applyToolCatalogCompaction({
-      ...params,
-      enabled: false,
-      isVisibleControlTool: isCodeModeControlTool,
-    });
-  }
   const tools = params.tools.filter(
     (tool) =>
       isCodeModeControlTool(tool) ||
@@ -357,7 +348,7 @@ export function addClientToolsToCodeModeCatalog(params: {
 }) {
   return addClientToolsToToolCatalog({
     ...params,
-    // Callers gate on run engagement; "auto" counts as enabled here.
-    enabled: resolveCodeModeConfig(params.config, params.agentId).enabled !== false,
+    // The caller selects this catalog only after the run's activation gate.
+    enabled: true,
   });
 }

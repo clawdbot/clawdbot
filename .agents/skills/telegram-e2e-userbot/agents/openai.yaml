@@ -1,4 +1,4 @@
 interface:
   display_name: "Telegram E2E (Userbot)"
   short_description: "Drive leased Telegram Test Server bots as a real QA user."
-  default_prompt: "Use $telegram-e2e-userbot to lease one Telegram Test Server bot and TDLib session, adapt the config or harness freely, preserve the relevant Telegram and provider facts, then release all test resources."
+  default_prompt: "Use $telegram-e2e-userbot to exercise the exact changed Telegram behavior, extend the harness freely when needed, preserve the relevant Telegram and provider facts, then release all test resources."
