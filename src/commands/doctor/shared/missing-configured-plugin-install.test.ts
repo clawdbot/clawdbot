@@ -3160,7 +3160,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       const pluginMetadata = {
         id: "codex",
         packageName: "@openclaw/codex",
-        packageVersion: "2026.5.6",
+        packageVersion: installedVersion,
         providers: ["codex"],
         channels: [],
         origin: "global" as const,
