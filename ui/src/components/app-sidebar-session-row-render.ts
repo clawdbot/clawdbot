@@ -375,6 +375,8 @@ export function renderRecentSession(params: {
                 isChild: session.isChild,
                 incognito: session.incognito,
                 placementState: session.placementState,
+                placementProviderId: session.placementProviderId,
+                placementProfileId: session.placementProfileId,
                 diskSpaceStatus: session.diskSpaceStatus,
                 workspaceConflictCount: session.workspaceConflictCount,
                 outboxAttentionCount: session.outboxAttentionCount,
