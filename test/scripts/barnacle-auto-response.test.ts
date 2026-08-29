@@ -295,11 +295,16 @@ describe("barnacle-auto-response", () => {
       ).not.toContain("r: skill");
     }
 
-    expect(
-      classifyPullRequestCandidateLabels(pr("Add weather helper skill"), [
-        file("skills/weather-helper/SKILL.md", "added"),
-      ]),
-    ).toContain("r: skill");
+    for (const filename of [
+      "skills/weather-helper/SKILL.md",
+      "skills/group/weather-helper/SKILL.md",
+    ]) {
+      expect(
+        classifyPullRequestCandidateLabels(pr("Add weather helper skill"), [
+          file(filename, "added"),
+        ]),
+      ).toContain("r: skill");
+    }
   });
 
   it("removes a stale automated skill close label from a core test-only PR", async () => {

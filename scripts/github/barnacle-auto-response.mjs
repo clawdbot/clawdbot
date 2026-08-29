@@ -552,7 +552,7 @@ export function classifyPullRequestCandidateLabels(pullRequest, files) {
   }
 
   const addsBundledSkill = files.some(
-    (file) => file.status === "added" && /^skills\/[^/]+\/SKILL\.md$/i.test(file.filename),
+    (file) => file.status === "added" && /^skills\/(?:[^/]+\/)+SKILL\.md$/i.test(file.filename),
   );
   if (addsBundledSkill) {
     labelsToAdd.push(skillCloseLabel);
