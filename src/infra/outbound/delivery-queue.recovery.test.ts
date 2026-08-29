@@ -309,6 +309,10 @@ describe("delivery-queue recovery", () => {
       });
       return { summary, log };
     } finally {
+      // Reset modules gives recovery its own SQLite cache; close that handle before discarding it.
+      const { closeOpenClawStateDatabaseForTest: closeRecoveryDatabase } =
+        await import("../../state/openclaw-state-db.js");
+      closeRecoveryDatabase();
       vi.doUnmock("./delivery-queue-storage.js");
       vi.resetModules();
     }
@@ -1522,7 +1526,7 @@ describe("delivery-queue recovery", () => {
   });
   it.each([
     ["marks a recovered send unknown before ack so ack failure cannot make it replayable", "ack"],
-    ["keeps a recovered zero-result delivery retryable when ack fails", "zero-result-ack"],
+    ["recovers an explicit no-send after ack failure and database reopen", "zero-result-ack"],
     ["directly acks a recovered send when its post-send marker fails", "marker"],
     ["retains unknown-after-send when recovered-send marking and ack both fail", "marker-and-ack"],
   ])("%s", async (_, mode) => {
@@ -1530,6 +1534,24 @@ describe("delivery-queue recovery", () => {
     const markerFails = mode === "marker" || mode === "marker-and-ack";
     const ackFails = mode === "ack" || mode === "zero-result-ack" || mode === "marker-and-ack";
     let recoveryStateAtAck: string | undefined;
+    const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+      if (mode !== "zero-result-ack") {
+        return [{ channel: "demo-channel-a", messageId: "m1" }];
+      }
+      await markDeliveryPlatformSendAttemptStarted(
+        id,
+        tmpDir(),
+        undefined,
+        params.deliveryProducerClaimId,
+      );
+      await params.onPlatformSendStart?.({});
+      params.onPayloadDeliveryOutcome?.({
+        index: 0,
+        status: "suppressed",
+        reason: "adapter_returned_no_send",
+      });
+      return [];
+    });
     const { summary, log } = await runRecoveryWithStorageOverrides({
       overrides: (actual) => ({
         ...(markerFails
@@ -1542,20 +1564,14 @@ describe("delivery-queue recovery", () => {
         ...(ackFails
           ? {
               ackDelivery: vi.fn(async (entryId: string, stateDir?: string) => {
-                if (mode === "ack") {
-                  recoveryStateAtAck = (await actual.loadPendingDelivery(entryId, stateDir))
-                    ?.recoveryState;
-                }
+                recoveryStateAtAck = (await actual.loadPendingDelivery(entryId, stateDir))
+                  ?.recoveryState;
                 throw new Error("ack state db locked");
               }),
             }
           : {}),
       }),
-      deliver: vi
-        .fn()
-        .mockResolvedValue(
-          mode === "zero-result-ack" ? [] : [{ channel: "demo-channel-a", messageId: "m1" }],
-        ),
+      deliver,
     });
     if (mode === "marker") {
       expect(summary).toEqual(RECOVERY_SUMMARY.recovered);
@@ -1572,7 +1588,7 @@ describe("delivery-queue recovery", () => {
     }
     const pending = await expectPendingEntry({
       id,
-      recoveryState: mode === "zero-result-ack" ? undefined : "unknown_after_send",
+      ...(mode === "zero-result-ack" ? {} : { recoveryState: "unknown_after_send" }),
       ...(mode === "ack" ? {} : { retryCount: 1 }),
     });
     await runIf(markerFails, () =>
@@ -1581,6 +1597,27 @@ describe("delivery-queue recovery", () => {
     expect(pending?.lastError).toContain(
       mode === "marker-and-ack" ? "ack=ack state db locked" : "ack state db locked",
     );
+    if (mode === "zero-result-ack") {
+      expect(recoveryStateAtAck).toBe("send_attempt_started");
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+      closeOpenClawStateDatabaseForTest();
+      const { auditEvents, unsubscribe } = captureAuditEvents();
+      try {
+        const replay = await runRecovery({ deliver });
+        expect(replay.result).toEqual(RECOVERY_SUMMARY.recovered);
+        expect(pending?.recoveryState).toBeUndefined();
+        expect(pending?.platformSendStartedAt).toBeUndefined();
+        expect(pending?.platformSendAttemptId).toBeUndefined();
+        expect(deliver).toHaveBeenCalledTimes(2);
+        expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
+        expectPayloadAudits(auditEvents, id, [
+          { outcome: "suppressed", reasonCode: "no_visible_payload", resultCount: 0 },
+        ]);
+      } finally {
+        unsubscribe();
+        clock.mockRestore();
+      }
+    }
   });
   it("retains later media until an early recovery ack finishes the batch", async () => {
     const spoolDir = path.join(tmpDir(), "delivery-queue-media");

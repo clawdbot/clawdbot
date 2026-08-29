@@ -359,6 +359,33 @@ describe("outbound", () => {
   });
 
   describe("sendText", () => {
+    it.each([
+      { name: "outbound", send: twitchOutbound.sendText! },
+      { name: "message adapter", send: twitchMessageAdapter.send!.text! },
+    ])("preserves intentional no-send through $name", async ({ send }) => {
+      const { sendMessageTwitchInternal } = await import("./send.js");
+      setupAccountContext();
+      vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
+        ok: true,
+        outcome: "not_sent",
+        messageId: "",
+        receipt: createMessageReceiptFromOutboundResults({ results: [] }),
+      });
+
+      const result = await send({
+        cfg: mockConfig,
+        to: "#testchannel",
+        text: "---",
+        accountId: "default",
+      });
+
+      expect(result).toMatchObject({
+        outcome: "not_sent",
+        receipt: { platformMessageIds: [], parts: [] },
+      });
+      expect(result.messageId ?? "").toBe("");
+    });
+
     it("should send message successfully", async () => {
       const { sendMessageTwitchInternal } = await import("./send.js");
 

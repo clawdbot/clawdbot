@@ -628,7 +628,7 @@ describe("deliverOutboundPayloads", () => {
         };
       },
     );
-    queueMocks.ackDelivery.mockResolvedValue(undefined);
+    queueMocks.ackDelivery.mockReset().mockResolvedValue(undefined);
     queueMocks.failDelivery.mockResolvedValue(undefined);
     queueMocks.failDeliveryAfterPlatformSend.mockResolvedValue(undefined);
     queueMocks.failDeliveryBeforePlatformSend.mockResolvedValue(undefined);
@@ -2500,6 +2500,75 @@ describe("deliverOutboundPayloads", () => {
     );
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
+
+  it.each(["best_effort", "required"] as const)(
+    "clears no-send handoff evidence after a %s queue acknowledgement fails",
+    async (queuePolicy) => {
+      queueMocks.ackDelivery.mockRejectedValueOnce(new Error("ack offline"));
+      const sendText = installTextOutbound({
+        channel: "matrix",
+        messageId: "",
+        outcome: "not_sent",
+      });
+      const onPayloadDeliveryOutcome = vi.fn();
+      const delivery = deliverMatrix({ queuePolicy, onPayloadDeliveryOutcome });
+
+      if (queuePolicy === "required") {
+        await expect(delivery).rejects.toThrow("ack offline");
+      } else {
+        await expect(delivery).resolves.toEqual([]);
+      }
+
+      expect(sendText).toHaveBeenCalledOnce();
+      expect(queueMocks.markDeliveryPlatformSendAttemptStarted).toHaveBeenCalledOnce();
+      expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith({
+        index: 0,
+        status: "suppressed",
+        reason: "adapter_returned_no_send",
+      });
+      expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+        "mock-queue-id",
+        expect.stringContaining("failed to ack unsent delivery: ack offline"),
+      );
+      expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+      expect(queueMocks.failDeliveryAfterPlatformSend).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["unknown", "", false],
+    ["unknown", "", true],
+    ["identified", "sent-message", false],
+    ["identified", "sent-message", true],
+  ] as const)(
+    "retains %s evidence in a mixed no-send batch (message id: %s, no-send first: %s)",
+    async (_label, messageId, noSendFirst) => {
+      if (messageId) {
+        queueMocks.ackDelivery.mockRejectedValueOnce(new Error("ack offline"));
+      }
+      const noSend = { channel: "matrix" as const, messageId: "", outcome: "not_sent" as const };
+      const otherResult = { channel: "matrix" as const, messageId };
+      const sendText = vi
+        .fn()
+        .mockResolvedValueOnce(noSendFirst ? noSend : otherResult)
+        .mockResolvedValueOnce(noSendFirst ? otherResult : noSend);
+      setTestOutbound({ sendText });
+
+      const results = await deliverMatrix({ payloads: [{ text: "first" }, { text: "second" }] });
+
+      expect(sendText).toHaveBeenCalledTimes(2);
+      expect(results).toEqual(messageId ? [otherResult] : []);
+      expect(queueMocks.ackDelivery).toHaveBeenCalledTimes(messageId ? 1 : 0);
+      expect(queueMocks.failDeliveryAfterPlatformSend).toHaveBeenCalledWith(
+        "mock-queue-id",
+        expect.stringContaining(
+          messageId ? "failed to ack sent delivery: ack offline" : "no delivery identity",
+        ),
+      );
+      expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
+      expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+    },
+  );
 
   it("emits bounded delivery diagnostics for successful outbound sends", async () => {
     const events: DiagnosticEventPayload[] = [];

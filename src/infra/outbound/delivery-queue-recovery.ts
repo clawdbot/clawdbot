@@ -996,8 +996,11 @@ async function drainQueuedEntry(opts: {
           );
           postSendState = "failed";
         } else {
+          // Proven omission clears the handoff marker so a restart can safely retry.
           await recordRecoveredFailure(
-            failDelivery,
+            areOutboundPayloadsIntentionallySuppressed(payloadOutcomes)
+              ? failDeliveryBeforePlatformSend
+              : failDelivery,
             entry,
             ackError,
             opts.stateDir,

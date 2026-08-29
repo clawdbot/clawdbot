@@ -454,8 +454,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
                         );
                         queuedPostSendState = "failed";
                       } else {
+                        // Proven omission clears the handoff marker so recovery can safely retry.
                         await recordOwnedQueueFailure(
-                          failDelivery,
+                          allPayloadsSuppressed ? failDeliveryBeforePlatformSend : failDelivery,
                           `failed to ack unsent delivery: ${formatErrorMessage(err)}`,
                         );
                       }
