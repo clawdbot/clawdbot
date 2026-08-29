@@ -4,13 +4,20 @@ import { icons } from "./icons.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { renderSessionOwnerAssignmentOptions } from "./session-owner-menu.ts";
 
-export type CompactSessionMenuView = "root" | "open-in" | "assign-owner" | "icon" | "group";
+export type CompactSessionMenuView =
+  | "root"
+  | "open-in"
+  | "assign-owner"
+  | "icon"
+  | "color"
+  | "group";
 
 const COMPACT_SESSION_MENU_VIEW_BY_VALUE: Record<string, CompactSessionMenuView> = {
   "compact:back": "root",
   "compact:open-assign-owner": "assign-owner",
   "compact:open-group": "group",
   "compact:open-icon": "icon",
+  "compact:open-color": "color",
   "compact:open-open-in": "open-in",
 };
 
@@ -70,6 +77,7 @@ export function renderCompactSessionMenuView(params: {
   assignOwnerDisabledReason?: string;
   renderOpenIn: () => TemplateResult;
   renderIcon: () => TemplateResult;
+  renderColor: () => TemplateResult;
   renderGroup: () => TemplateResult;
 }) {
   if (params.view === "root") {
@@ -90,6 +98,8 @@ export function renderCompactSessionMenuView(params: {
           )
         : params.view === "icon"
           ? params.renderIcon()
-          : params.renderGroup();
+          : params.view === "color"
+            ? params.renderColor()
+            : params.renderGroup();
   return renderCompactSessionMenuFrame(body);
 }

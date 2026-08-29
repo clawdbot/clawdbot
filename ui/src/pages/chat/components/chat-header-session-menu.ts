@@ -134,6 +134,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
         compactView === "open-in" ||
         compactView === "assign-owner" ||
         compactView === "icon" ||
+        compactView === "color" ||
         compactView === "group"
       ) {
         this.managementActions.prepareCompactView(compactView);
@@ -301,6 +302,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       this.compactView === "open-in" ||
       this.compactView === "assign-owner" ||
       this.compactView === "icon" ||
+      this.compactView === "color" ||
       this.compactView === "group"
     ) {
       return this.managementActions.renderCompactView(this.compactView);

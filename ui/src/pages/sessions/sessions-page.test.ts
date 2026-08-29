@@ -456,6 +456,29 @@ describe("sessions page lifecycle", () => {
     expect(page.transcriptSearch).toEqual({ status: "idle" });
   });
 
+  it.each(["green", null])("patches color %s from the sessions page menu", async (color) => {
+    const row = {
+      key: "agent:main:color",
+      sessionId: "color-session",
+      kind: "direct",
+      updatedAt: 1,
+    } satisfies GatewaySessionRow;
+    const result = { count: 1, sessions: [row] } as SessionsListResult;
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const sessions = createSessions();
+    const page = await createRenderedPage(createContext(gateway, sessions), result);
+    page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+    await page.updateComplete;
+    const menu = page.querySelector("openclaw-session-menu");
+    await menu?.updateComplete;
+    const item = menu?.querySelector<HTMLElement>(`[value="set-color:${color ?? ""}"]`);
+    expect(item).not.toBeNull();
+    item?.click();
+    await vi.waitFor(() =>
+      expect(sessions.patch).toHaveBeenCalledWith(row.key, { color }, { agentId: undefined }),
+    );
+  });
+
   it("disables Fork session for model-selection-locked rows", async () => {
     const row = {
       key: "agent:main:locked",

@@ -98,6 +98,7 @@ async function mountMenu(
         archived: false,
         category: null,
         icon: null,
+        color: null,
         categoryClearReturnsToGroups: false,
         ...options.session,
       }}
@@ -228,6 +229,7 @@ describe("chat header session menu", () => {
       "Mark as unread",
       "Rename…",
       "Set icon",
+      "Color",
       "Fork",
       "Copy session ID",
       "Move to group",
@@ -511,6 +513,7 @@ describe("chat header session menu", () => {
       "Rename…",
       "Assign to…",
       "Set icon",
+      "Color",
       "Fork",
       "Copy session ID",
       "Move to group",

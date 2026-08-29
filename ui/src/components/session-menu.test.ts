@@ -3,20 +3,9 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./session-menu.ts";
+import type { SessionMenuData } from "./session-menu-actions.ts";
 import type { SessionMenuAction, SessionMenuActionKind, SessionMenuWork } from "./session-menu.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
-
-type SessionMenuData = {
-  label: string;
-  sessionId: string | null;
-  isChild: boolean;
-  pinned: boolean;
-  unread: boolean;
-  archived: boolean;
-  category: string | null;
-  icon: string | null;
-  categoryClearReturnsToGroups: boolean;
-};
 type SessionMenuElement = HTMLElement & {
   anchor: { x: number; y: number };
   compact: boolean;
@@ -69,6 +58,7 @@ async function mountMenu(
     archived: false,
     category: null,
     icon: null,
+    color: null,
     categoryClearReturnsToGroups: false,
     ...options.session,
   };
@@ -232,6 +222,7 @@ describe("session menu", () => {
       "Mark as unread",
       "Rename…",
       "Set icon",
+      "Color",
       "Fork",
       "Copy session ID",
       "Add to Workboard",
@@ -298,6 +289,7 @@ describe("session menu", () => {
       "Mark as unread",
       "Rename…",
       "Set icon",
+      "Color",
       "Fork",
       "Copy session ID",
       "Archive session",
@@ -454,6 +446,36 @@ describe("session menu", () => {
 
     menuItem(menu, "New group…").click();
     expect(onAction).toHaveBeenCalledWith({ kind: "new-group" });
+  });
+
+  it.each([false, true])("selects and clears named colors (compact=%s)", async (compact) => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({ compact, session: { color: "blue" }, onAction });
+    if (compact) {
+      selectMenuValue(menu, "compact:open-color");
+      await menu.updateComplete;
+    } else {
+      (menuItem(menu, "Color") as SessionMenuItem & { submenuOpen: boolean }).submenuOpen = true;
+    }
+    const blue = menuItem(menu, "Blue");
+    await blue.updateComplete;
+    expect(blue.getAttribute("aria-checked")).toBe("true");
+    expect(menu.querySelectorAll(".session-color-dot")).toHaveLength(8);
+    menuItem(menu, "Purple").click();
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "set-color", color: "purple" });
+    menuItem(menu, "Default").click();
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "set-color", color: null });
+  });
+
+  it.each([
+    { selectionCount: 2 },
+    { actionDisabledReasons: { "set-color": "Write access required" } },
+  ])("does not dispatch a disabled color action: %j", async (options) => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({ ...options, onAction });
+    selectMenuValue(menu, "set-color:red");
+    selectMenuValue(menu, "set-color:");
+    expect(onAction).not.toHaveBeenCalled();
   });
 
   it("renders emoji and glyph sections with a custom entry and remove action", async () => {
