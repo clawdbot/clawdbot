@@ -11,6 +11,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -61,6 +62,44 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
+function resolveSpawnParentWorktreeSource(
+  parentSessionKey: string,
+  agentId: string,
+  assertCallerCurrent: (() => void) | undefined,
+) {
+  const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, { agentId });
+  if (!parent.entry?.worktree) {
+    return undefined;
+  }
+  const worktree = managedWorktrees.findLiveByOwner("session", parent.canonicalKey);
+  if (
+    !worktree ||
+    worktree.id !== parent.entry.worktree.id ||
+    parent.entry.archivedAt !== undefined
+  ) {
+    throw new Error("Spawn parent managed worktree changed; retry from its current session");
+  }
+  const parentSessionId = parent.entry.sessionId;
+  // A copied parent key cannot lend a repository after its exact session or
+  // registered worktree changes, including during awaited preparation.
+  const assertCurrent = () => {
+    assertCallerCurrent?.();
+    const current = loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId });
+    const currentWorktree = managedWorktrees.findLiveByOwner("session", parent.canonicalKey);
+    if (
+      current.entry?.sessionId !== parentSessionId ||
+      current.entry.archivedAt !== undefined ||
+      current.entry.worktree?.id !== worktree.id ||
+      currentWorktree?.id !== worktree.id ||
+      currentWorktree.repoRoot !== worktree.repoRoot ||
+      currentWorktree.path !== worktree.path
+    ) {
+      throw new Error("Spawn parent managed worktree changed; retry from its current session");
+    }
+  };
+  return { workspace: worktree.repoRoot, assertCurrent };
+}
+
 export const sessionCreateHandlers: GatewayRequestHandlers = {
   "sessions.create": async ({
     req,
@@ -77,10 +116,23 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
+    const sessionCreation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
+    const spawnRequesterSessionKey =
+      sessionCreation.via === "spawn"
+        ? normalizeOptionalString(sessionCreation.requesterSessionKey)
+        : undefined;
+    if (sessionCreation.inheritedToolPolicy && parentSessionKey !== spawnRequesterSessionKey) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "spawn parent must match the trusted agent caller"),
+      );
+      return;
+    }
     const requestedModel = normalizeOptionalString(p.model);
     const cfg = context.getRuntimeConfig();
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
-    const commitGuard =
+    let commitGuard =
       authority.commitGuard || sessionMutationCommitGuard || sessionMutationAuthorization
         ? () => {
             sessionMutationCommitGuard?.();
@@ -351,8 +403,23 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       const target = resolveGatewaySessionStoreTarget({ cfg, key: targetKey, agentId });
       sessionKey = preservesUnspecifiedKey ? undefined : targetKey;
       sessionAgentId = target.agentId;
+      const inheritParentWorktree =
+        !projectRoot &&
+        !requestedCwd &&
+        !requestedProjectGitUrl &&
+        spawnRequesterSessionKey &&
+        spawnRequesterSessionKey === parentSessionKey &&
+        sessionCreation.actor?.type === "agent" &&
+        normalizeAgentId(sessionCreation.actor.id) === target.agentId;
+      const inheritedSource = inheritParentWorktree
+        ? resolveSpawnParentWorktreeSource(spawnRequesterSessionKey, target.agentId, commitGuard)
+        : undefined;
+      commitGuard = inheritedSource?.assertCurrent ?? commitGuard;
       const workspace =
-        projectRoot ?? requestedCwd ?? resolveAgentWorkspaceDir(cfg, target.agentId);
+        projectRoot ??
+        requestedCwd ??
+        inheritedSource?.workspace ??
+        resolveAgentWorkspaceDir(cfg, target.agentId);
       // Subdirectory workspaces are valid: the worktree service resolves the repo root
       // via git discovery, so the preflight must accept ancestor .git entries too.
       if (!requestedProjectGitUrl && !insideGitCheckout(workspace)) {
@@ -404,19 +471,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     let messageSeq: number | undefined;
-    const sessionCreation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
-    const spawnRequesterSessionKey =
-      sessionCreation.via === "spawn"
-        ? normalizeOptionalString(sessionCreation.requesterSessionKey)
-        : undefined;
-    if (sessionCreation.inheritedToolPolicy && parentSessionKey !== spawnRequesterSessionKey) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "spawn parent must match the trusted agent caller"),
-      );
-      return;
-    }
     const allowExistingModelSelection = authorizeOperatorScopesForRequiredScope(
       ADMIN_SCOPE,
       clientScopes,

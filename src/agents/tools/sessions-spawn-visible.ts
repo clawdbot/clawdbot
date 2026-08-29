@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
@@ -41,7 +42,7 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+        "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/thinking/lightContext or attachment staging.",
     }),
   ),
   category: Type.Optional(
@@ -167,8 +168,8 @@ export async function maybeSpawnVisibleSession(params: {
     ],
     [
       "attachAs",
-      params.raw.attachAs && typeof params.raw.attachAs === "object"
-        ? readToolStringParam(params.raw.attachAs as Record<string, unknown>, "mountPath")
+      isRecord(params.raw.attachAs)
+        ? readToolStringParam(params.raw.attachAs, "mountPath")
         : params.raw.attachAs,
       "attachment staging is not wired to the sessions.create path",
     ],
