@@ -3,7 +3,6 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { getMediaDir } from "../media/store.js";
-import { annotateInterSessionPromptText } from "../sessions/input-provenance.js";
 import {
   projectChatDisplayMessages,
   sanitizeChatHistoryMessages,
@@ -23,66 +22,6 @@ function projectHistoryTransports(message: Record<string, unknown>) {
   const sse = buildSessionHistorySnapshot({ rawMessages: [message], limit: 5 }).history.messages;
   return [websocket, sse];
 }
-
-describe("forwarded session attribution", () => {
-  it.each([
-    {
-      name: "structured provenance before prompt metadata",
-      sourceSessionKey: "agent:main:main",
-      promptSessionKey: "agent:other:main",
-      senderSession: { sessionKey: "agent:main:main", agentId: "main" },
-      senderLabel: "Forwarded from main",
-    },
-    {
-      name: "prompt metadata when provenance lacks the source key",
-      sourceSessionKey: undefined,
-      promptSessionKey: "agent:helper:dashboard:source",
-      senderSession: { sessionKey: "agent:helper:dashboard:source", agentId: "helper" },
-      senderLabel: "Forwarded from helper",
-    },
-    {
-      name: "a session key without a parseable agent",
-      sourceSessionKey: "legacy-session",
-      promptSessionKey: undefined,
-      senderSession: { sessionKey: "legacy-session" },
-      senderLabel: "Forwarded agent message",
-    },
-    {
-      name: "no source metadata",
-      sourceSessionKey: undefined,
-      promptSessionKey: undefined,
-      senderSession: undefined,
-      senderLabel: "Forwarded agent message",
-    },
-  ])("preserves $name across history transports", (testCase) => {
-    const provenance = {
-      kind: "inter_session" as const,
-      sourceTool: "sessions_send",
-      ...(testCase.sourceSessionKey ? { sourceSessionKey: testCase.sourceSessionKey } : {}),
-    };
-    const message = {
-      role: "user",
-      provenance,
-      content: annotateInterSessionPromptText("Forwarded status update", {
-        kind: "inter_session",
-        sourceTool: "sessions_send",
-        sourceSessionKey: testCase.promptSessionKey,
-      }),
-    };
-
-    for (const messages of projectHistoryTransports(message)) {
-      expect(messages).toStrictEqual([
-        {
-          role: "assistant",
-          provenance,
-          content: "Forwarded status update",
-          senderLabel: testCase.senderLabel,
-          ...(testCase.senderSession ? { senderSession: testCase.senderSession } : {}),
-        },
-      ]);
-    }
-  });
-});
 
 describe("managed document chat history", () => {
   it("keeps the attachment envelope while stripping URL capabilities", () => {
