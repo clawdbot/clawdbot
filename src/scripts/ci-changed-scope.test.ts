@@ -400,6 +400,7 @@ describe("detectChangedScope", () => {
 
   it.each([
     ".github/actions/git-owner/action.yml",
+    ".github/workflows/workflow-sanity.yml",
     ".github/actions/git-owner/owner.py",
     ".github/actions/ensure-base-commit/action.yml",
     ".github/actions/ensure-base-commit/policy.py",

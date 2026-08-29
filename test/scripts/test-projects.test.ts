@@ -667,6 +667,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ".github/actions/ensure-base-commit/policy.py",
     ".github/actions/ensure-base-commit/action.yml",
     "scripts/generate-ci-git-owner.mts",
+    ".github/workflows/workflow-sanity.yml",
   ])("selects executable Git boundary proof for %s", (source) => {
     expect(resolveChangedTestTargetPlan([source])).toEqual({
       mode: "targets",

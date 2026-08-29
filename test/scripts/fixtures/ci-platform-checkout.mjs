@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { getProcessStartTime } from "../../../src/shared/pid-alive.ts";
+import { getFileLockProcessStartTime } from "../../../src/shared/pid-alive.ts";
 
 const [mode, root, policyScenario, ...args] = process.argv.slice(2);
 const linux = policyScenario.startsWith("linux:");
@@ -215,6 +215,9 @@ async function command() {
       if (options.cancelDuringCleanup) {
         publish("cleanup-started.json", attempt);
       }
+      if (options.cooperativeTrees) {
+        process.exit(0);
+      }
     });
     record(process.pid, mode, attempt);
     if (mode === "child") {
@@ -331,7 +334,7 @@ async function command() {
     }
     if (options.cancelDuringCleanup) {
       const pid = process.ppid;
-      publish("owner.json", { pid, startTime: getProcessStartTime(pid) });
+      publish("owner.json", { pid, startTime: getFileLockProcessStartTime(pid) });
       record(pid, "owner");
     }
     const child = launch("child", attempt);
@@ -432,6 +435,17 @@ async function command() {
       fs.mkdirSync(path.dirname(gradlew), { recursive: true });
       fs.writeFileSync(gradlew, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     }
+  } else if (operation === "cat-file" || (operation === "show" && options.objects)) {
+    boundary(`${operation}:${args.at(-1)}`);
+    const spec = args.at(-1);
+    if (spec.endsWith("^{commit}")) {
+      process.exit(options.baseAvailableAfter === 0 ? 0 : 1);
+    }
+    const object = options.objects?.[spec];
+    if (operation === "show" && object) {
+      fs.writeSync(1, object.text);
+    }
+    process.exit(object ? ((operation === "cat-file" ? object.probe : object.code) ?? 0) : 1);
   } else if (operation === "rev-parse") {
     boundary("rev-parse");
     if (args[0] === "--verify") {
@@ -641,6 +655,13 @@ async function supervise() {
         throw new Error(`Fixture setup: mock command resolution failed: ${detail}`);
       }
     }
+    if (["git", "python"].includes(options.setupFailure)) {
+      fs.writeFileSync(
+        path.join(bin, options.setupFailure === "git" ? "git" : "python3"),
+        "#!/fixture-missing-interpreter\n",
+        { mode: 0o755 },
+      );
+    }
     sentinel = spawn(process.execPath, [fixture, "sentinel", root, policyScenario], {
       // Parent teardown owns this group even before sentinel self-registration.
       stdio: "ignore",
@@ -709,14 +730,15 @@ async function supervise() {
       );
     if (options.cancelDuringCleanup && (await ready("cleanup-started.json"))) {
       const owner = JSON.parse(fs.readFileSync(path.join(root, "owner.json"), "utf8"));
-      const ownerStatus = fs.readFileSync(`/proc/${owner.pid}/status`, "utf8");
-      const parentPid = Number(ownerStatus.match(/^PPid:\s+(\d+)$/mu)?.[1]);
       // File policies exec into Bash's PID; raw Git owners are its direct children.
       // Revalidate the observed birth and exact placement after awaited readiness.
       if (
-        (owner.pid !== shell.pid && parentPid !== shell.pid) ||
+        (owner.pid !== shell.pid &&
+          Number(
+            fs.readFileSync(`/proc/${owner.pid}/status`, "utf8").match(/^PPid:\s+(\d+)$/mu)?.[1],
+          ) !== shell.pid) ||
         owner.startTime === null ||
-        getProcessStartTime(owner.pid) !== owner.startTime ||
+        getFileLockProcessStartTime(owner.pid) !== owner.startTime ||
         stopping ||
         shell.exitCode !== null ||
         shell.signalCode !== null
@@ -726,11 +748,29 @@ async function supervise() {
       process.kill(owner.pid, "SIGTERM");
       report.cancelledDuringCleanup = true;
     }
+    if (
+      options.cancelDuringBackoff &&
+      (await waitForReady(
+        () => fs.readFileSync(path.join(root, "workflow.log"), "utf8").includes("; retrying"),
+        shell,
+        () => Boolean(stopping),
+      ))
+    ) {
+      boundary("backoff-cancel");
+      shell.kill("SIGTERM");
+    }
     const code = await closed;
     if (stopping) {
       return;
     }
     report.code = code;
+    if (
+      options.objects &&
+      fs.existsSync(path.join(root, "github-env")) &&
+      fs.readFileSync(path.join(root, "github-env"), "utf8").includes("PRE_COMMIT_CONFIG_PATH=")
+    ) {
+      boundary("config-publication");
+    }
     boundary("exit");
     await stop();
   } catch (error) {

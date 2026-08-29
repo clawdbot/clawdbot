@@ -61,7 +61,19 @@ function stepEnvironment(step: Step, supplied: Record<string, string>) {
   return resolved;
 }
 
+function readWorkflowStep(workflow: string, job: string, name: string): Step & { run: string } {
+  const parsed = parse(readFileSync(`.github/workflows/${workflow}.yml`, "utf8")) as {
+    jobs: Record<string, { steps: Step[] }>;
+  };
+  const step = parsed.jobs[job]?.steps.find((entry) => entry.name === name);
+  if (!step?.run) {
+    throw new Error(`Missing executable workflow step ${workflow}/${job}/${name}`);
+  }
+  return { ...step, run: step.run };
+}
+
 export async function runCiGitStep(options: {
+  workflow?: "workflow-sanity";
   job?: string;
   action?: "ensure-base-commit" | "git-owner";
   policy?: string;
@@ -82,6 +94,10 @@ export async function runCiGitStep(options: {
   lsRemoteResults?: { output: string; code: number | "hang" | "cleanup-failure" }[];
   realClock?: boolean;
   realDrain?: boolean;
+  objects?: Record<string, { probe?: number; code?: number; text: string }>;
+  cooperativeTrees?: boolean;
+  cancelDuringBackoff?: boolean;
+  setupFailure?: "owner" | "python" | "git";
 }) {
   const clock = {
     ...options,
@@ -94,10 +110,12 @@ export async function runCiGitStep(options: {
           runs: { steps: (Step & { run: string })[] };
         }
       ).runs.steps[0]
-    : readCiCheckoutStep(
-        options.job ?? "security-fast",
-        options.step ?? (options.job ? "Checkout" : "Prepare Git owner"),
-      );
+    : options.workflow
+      ? readWorkflowStep(options.workflow, "actionlint", "Prepare trusted workflow audit configs")
+      : readCiCheckoutStep(
+          options.job ?? "security-fast",
+          options.step ?? (options.job ? "Checkout" : "Prepare Git owner"),
+        );
   if (!step) {
     throw new Error("Missing executable action step");
   }
@@ -108,6 +126,7 @@ export async function runCiGitStep(options: {
       const actions = path.join(root, "trusted-actions");
       env = stepEnvironment(step, {
         BASE_SHA: base,
+        BASE_REF: "main",
         FETCH_REF: "fixture-base",
         BASE_ACTION_PATH: path.join(actions, "ensure-base-commit"),
         OWNER_ACTION_PATH: path.join(actions, "git-owner"),
@@ -168,9 +187,30 @@ export async function runCiGitStep(options: {
           baseAvailableAfter: options.baseAvailableAfter,
           invalidRef: options.invalidRef,
           lsRemoteResults: options.lsRemoteResults,
+          objects: options.objects,
+          cooperativeTrees: options.cooperativeTrees,
+          cancelDuringBackoff: options.cancelDuringBackoff,
+          setupFailure: options.setupFailure,
         }),
       );
       let run = renderGitTestClock(step.run, clock);
+      if (options.workflow) {
+        const prepare = parse(readFileSync(".github/actions/git-owner/action.yml", "utf8")) as {
+          runs: { steps: { run?: string }[] };
+        };
+        const prepareRun = prepare.runs.steps[0]?.run;
+        if (!prepareRun) {
+          throw new Error("Missing Git owner preparation body");
+        }
+        writeFileSync(path.join(root, "prepare.sh"), prepareRun);
+        // Model the runner's environment handoff, not shell evaluation of paths with spaces.
+        run = `bash --noprofile --norc -eo pipefail "$TMPDIR/prepare.sh"
+export CI_GIT_OWNER
+CI_GIT_OWNER="$(sed -n 's/^CI_GIT_OWNER=//p' "$GITHUB_ENV")"
+: > "$GITHUB_ENV"
+${options.setupFailure === "owner" ? 'rm "$CI_GIT_OWNER"' : ""}
+${run}`;
+      }
       if (options.policy) {
         const policy = path.join(root, "policy.py");
         writeFileSync(policy, options.policy);
@@ -195,7 +235,7 @@ export async function runCiGitStep(options: {
       );
       const actions = path.join(root, "trusted-actions");
       console.log(
-        `${options.action ?? options.job}/${options.step ?? "Checkout"}: ${JSON.stringify(report)}`,
+        `${options.workflow ?? options.action ?? options.job}/${options.step ?? "Checkout"}: ${JSON.stringify(report)}`,
       );
       expect(result, stderr).toEqual({ code: 0, signal: null });
       expect(report.error, stderr).toBeUndefined();
@@ -225,6 +265,9 @@ export async function runCiGitStep(options: {
         workspace,
         githubOutput: readOutput("github-output"),
         githubEnv: readOutput("github-env"),
+        trustedConfig: readOutput("temp/pre-commit-base.yaml"),
+        trustedZizmor: readOutput("temp/zizmor-base.yml"),
+        runnerTemp: path.join(root, "temp"),
         fetches: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "fetch"),
         checkouts: report.commands.filter(
           ({ tool, args }) => tool === "git" && args[0] === "checkout",
