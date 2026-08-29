@@ -16,9 +16,6 @@ type PendingImageSetEntry<T> = {
   index?: number;
   arrivedAt: number;
   part: T;
-  // Set once this part's webhook request has returned with its ingress claim
-  // deferred, so the combined turn still owes that claim a terminal outcome.
-  deferred: boolean;
 };
 
 type PendingLineImageSet<T> = {
@@ -26,32 +23,30 @@ type PendingLineImageSet<T> = {
   // adding a duplicate image to the turn.
   parts: Map<string, PendingImageSetEntry<T>>;
   total?: number;
-  flush: (parts: readonly T[], deferredParts: readonly T[]) => Promise<void>;
-  onDetachedFlushError: (error: unknown) => void;
+  /** Wakes the holder once the set is whole or its wait has expired. */
+  release: () => void;
   timer: ReturnType<typeof setTimeout>;
 };
 
-function orderedEntries<T>(pending: PendingLineImageSet<T>): readonly PendingImageSetEntry<T>[] {
-  return [...pending.parts.values()].toSorted((left, right) =>
-    left.index !== undefined && right.index !== undefined
-      ? left.index - right.index
-      : left.arrivedAt - right.arrivedAt,
-  );
-}
-
-// Parts whose request already returned are handed over separately: the combined
-// turn owns settling their still-held ingress claims.
-function flushPendingImageSet<T>(pending: PendingLineImageSet<T>): Promise<void> {
-  const entries = orderedEntries(pending);
-  return pending.flush(
-    entries.map((entry) => entry.part),
-    entries.filter((entry) => entry.deferred).map((entry) => entry.part),
-  );
+function orderedParts<T>(pending: PendingLineImageSet<T>): readonly T[] {
+  return [...pending.parts.values()]
+    .toSorted((left, right) =>
+      left.index !== undefined && right.index !== undefined
+        ? left.index - right.index
+        : left.arrivedAt - right.arrivedAt,
+    )
+    .map((entry) => entry.part);
 }
 
 /**
  * Creates the buffer that holds LINE image-set parts until the set is whole. The
  * pending map lives in the returned closure so the part type stays concrete.
+ *
+ * The first part of a set becomes its holder and does not resolve until the set
+ * completes or its wait expires; every later part resolves immediately. Keeping
+ * the holder's dispatch open is what lets the combined turn run under a live
+ * ingress adoption: a turn dispatched after every part had returned would be
+ * refused by admission, so a set that never completes would never be delivered.
  */
 export function createLineImageSetBuffer<T>(): (params: {
   key: string;
@@ -59,60 +54,50 @@ export function createLineImageSetBuffer<T>(): (params: {
   index?: number;
   total?: number;
   part: T;
-  /**
-   * Delivers the whole set. `deferredParts` are the parts whose webhook request
-   * already returned, so the flush owes each of their ingress claims a terminal
-   * outcome; rejecting hands them all back to the durable queue.
-   */
-  flush: (parts: readonly T[], deferredParts: readonly T[]) => Promise<void>;
-  /** Reports a delayed flush that failed after its webhook request was answered. */
-  onDetachedFlushError: (error: unknown) => void;
   flushDelayMs?: number;
-}) => Promise<boolean> {
+}) => Promise<readonly T[] | null> {
   const pendingImageSets = new Map<string, PendingLineImageSet<T>>();
 
-  /** Resolves true when this call delivered the whole set, false while it waits. */
-  return async function bufferLineImageSetPart(params): Promise<boolean> {
-    const pending: PendingLineImageSet<T> = pendingImageSets.get(params.key) ?? {
-      parts: new Map(),
-      total: params.total,
-      flush: params.flush,
-      onDetachedFlushError: params.onDetachedFlushError,
-      timer: setTimeout(() => {}, 0),
-    };
-    clearTimeout(pending.timer);
+  /** Resolves the whole set for the holder, or null for a part that only joins it. */
+  return async function bufferLineImageSetPart(params): Promise<readonly T[] | null> {
+    const existing = pendingImageSets.get(params.key);
     const entry: PendingImageSetEntry<T> = {
       index: params.index,
       arrivedAt: Date.now(),
       part: params.part,
-      deferred: false,
     };
-    pending.parts.set(params.messageId, entry);
-    // A later part may carry the total an earlier one omitted, and the newest part
-    // owns the flush so a timeout dispatches through the freshest reply token.
-    pending.total ??= params.total;
-    pending.flush = params.flush;
-    pending.onDetachedFlushError = params.onDetachedFlushError;
+
+    if (existing) {
+      existing.parts.set(params.messageId, entry);
+      // A later part may carry the total an earlier one omitted.
+      existing.total ??= params.total;
+      if (existing.total !== undefined && existing.parts.size >= existing.total) {
+        existing.release();
+      }
+      return null;
+    }
+
+    let release = () => {};
+    const whole = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const pending: PendingLineImageSet<T> = {
+      parts: new Map([[params.messageId, entry]]),
+      total: params.total,
+      release: () => {
+        clearTimeout(pending.timer);
+        release();
+      },
+      timer: setTimeout(release, params.flushDelayMs ?? IMAGE_SET_FLUSH_DELAY_MS),
+    };
+    pending.timer.unref?.();
     pendingImageSets.set(params.key, pending);
 
     if (pending.total !== undefined && pending.parts.size >= pending.total) {
-      pendingImageSets.delete(params.key);
-      await flushPendingImageSet(pending);
-      return true;
+      pending.release();
     }
-
-    // This part's request is about to return while the set is still incomplete.
-    // Its ingress claim stays deferred so a combined turn that later fails is
-    // retried from the durable queue instead of losing the user's send.
-    entry.deferred = true;
-    pending.timer = setTimeout(() => {
-      pendingImageSets.delete(params.key);
-      // Every part here is deferred, so the flush settles their claims. A
-      // rejection means it could not, and the drain's pre-adoption watchdog
-      // releases them; report it rather than leave an unhandled rejection.
-      void flushPendingImageSet(pending).catch(pending.onDetachedFlushError);
-    }, params.flushDelayMs ?? IMAGE_SET_FLUSH_DELAY_MS);
-    pending.timer.unref?.();
-    return false;
+    await whole;
+    pendingImageSets.delete(params.key);
+    return orderedParts(pending);
   };
 }

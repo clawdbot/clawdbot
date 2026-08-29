@@ -423,10 +423,6 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   try {
     const allMedia: MediaRef[] = [];
     let mediaUnavailable = false;
-    // Flips once this call returns, so a later timer flush knows it is running
-    // outside the webhook request that the drain has already settled.
-    let requestReturned = false;
-
     if (isDownloadableLineMessageType(message.type)) {
       const abortSignal = context.turnAdoptionLifecycle?.abortSignal;
       try {
@@ -470,11 +466,8 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     const dispatchTurn = async (params: {
       media: readonly MediaRef[];
       mediaUnavailable: boolean;
-      // A set completed by a timeout dispatches after its webhook request already
-      // returned, so the drain has settled that event and there is no adoption
-      // left to hand over.
-      adopted: boolean;
-      withInboundHistory?: boolean;
+      /** The lifecycle this turn adopts; an image set hands over a composite one. */
+      lifecycle?: LineWebhookTurnAdoptionLifecycle;
     }): Promise<boolean> => {
       const messageContext = await buildLineMessageContext({
         event,
@@ -484,8 +477,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         account,
         commandAuthorized: decision.access.commandAccess.authorized,
         resolveChannelIngress: decision.resolveBoundAccess,
-        inboundHistory:
-          params.withInboundHistory === false ? undefined : historyReservation.inboundHistory,
+        inboundHistory: historyReservation.inboundHistory,
         buildContext: context.buildContext,
       });
 
@@ -496,17 +488,20 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
 
       await processMessage(
         messageContext,
-        params.adopted && context.turnAdoptionLifecycle
-          ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle }
-          : {},
+        params.lifecycle ? { turnAdoptionLifecycle: params.lifecycle } : {},
       );
       return true;
     };
 
     const imageSet = message.type === "image" ? message.imageSet : undefined;
     if (imageSet) {
-      let dispatchedHere = false;
-      const flushed = await bufferLineImageSetPart({
+      // Release this event's ingress lane before waiting. LINE lanes are per
+      // sender, group or room, so the rest of the set would queue behind this
+      // part and the set could never form. The claim itself stays held, and this
+      // dispatch stays open until the set is whole, so the combined turn runs
+      // under a live adoption rather than after every part has been answered.
+      context.turnAdoptionLifecycle?.onDeferred();
+      const parts = await bufferLineImageSetPart({
         key: `${account.accountId}:${imageSet.id}`,
         messageId: message.id,
         index: imageSet.index,
@@ -516,54 +511,55 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
           mediaUnavailable,
           lifecycle: context.turnAdoptionLifecycle,
         },
-        flush: async (parts, deferredParts) => {
-          // Claims held open while the set waited are this turn's to settle:
-          // adoption completes them, abandonment returns them to the durable
-          // queue so a failed send is retried instead of lost.
-          const settleDeferred = async (outcome: "adopted" | "abandoned") => {
-            for (const { lifecycle } of deferredParts) {
-              await (outcome === "adopted" ? lifecycle?.onAdopted() : lifecycle?.onAbandoned());
-            }
-          };
-          try {
-            dispatchedHere = await dispatchTurn({
-              media: parts.flatMap((entry) => entry.media),
-              mediaUnavailable: parts.some((entry) => entry.mediaUnavailable),
-              adopted: !requestReturned,
-              // The reservation is released when this handler returns, so a delayed
-              // dispatch can no longer consume the window it would render. Rendering
-              // it anyway would replay those entries into a later turn as well.
-              withInboundHistory: !requestReturned,
-            });
-          } catch (error) {
-            await settleDeferred("abandoned");
-            throw error;
-          }
-          // A skipped empty turn is a terminal non-outcome, not a retryable
-          // failure, so it settles the same way a delivered one does.
-          await settleDeferred("adopted");
-        },
-        onDetachedFlushError: (error) => {
-          runtime.error?.(
-            danger(
-              `line: image set ${imageSet.id} failed after its webhook returned: ${String(error)}`,
-            ),
-          );
-        },
       });
-      requestReturned = true;
-      if (!flushed) {
-        // The set is still incomplete, so this event's claim outlives its request
-        // and the eventual combined turn settles it.
-        context.turnAdoptionLifecycle?.onDeferred();
+      if (!parts) {
+        // Another part holds this set and will deliver it and settle this claim.
+        return;
       }
-      if (flushed && dispatchedHere) {
+      // One lifecycle standing for every buffered part, so core's real adoption
+      // or abandonment settles them all. Settling them here instead would adopt
+      // each source the moment processMessage returns - which happens while a
+      // combined turn is still queued behind an active reply - and would abandon
+      // them after a terminal partial reply, replaying what the user already saw.
+      const sources = parts.map((entry) => entry.lifecycle).filter((l) => l !== undefined);
+      const combinedLifecycle: LineWebhookTurnAdoptionLifecycle | undefined =
+        context.turnAdoptionLifecycle && {
+          ...context.turnAdoptionLifecycle,
+          onAdopted: async () => {
+            for (const source of sources) {
+              await source.onAdopted();
+            }
+          },
+          onDeferred: () => {
+            for (const source of sources) {
+              source.onDeferred();
+            }
+          },
+          onAbandoned: async () => {
+            for (const source of sources) {
+              await source.onAbandoned();
+            }
+          },
+        };
+      if (
+        await dispatchTurn({
+          media: parts.flatMap((entry) => entry.media),
+          mediaUnavailable: parts.some((entry) => entry.mediaUnavailable),
+          lifecycle: combinedLifecycle,
+        })
+      ) {
         historyReservation.commit();
       }
       return;
     }
 
-    if (await dispatchTurn({ media: allMedia, mediaUnavailable, adopted: true })) {
+    if (
+      await dispatchTurn({
+        media: allMedia,
+        mediaUnavailable,
+        ...(context.turnAdoptionLifecycle ? { lifecycle: context.turnAdoptionLifecycle } : {}),
+      })
+    ) {
       historyReservation.commit();
     }
   } finally {
