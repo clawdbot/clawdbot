@@ -10,9 +10,17 @@ const resolveOutboundAttachmentFromUrlMock = vi.hoisted(() =>
     contentType: "image/png",
   })),
 );
+const filesToBase64DataUrisMock = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => ["data:image/png;filename=image.png;base64,aGVsbG8="]),
+);
 
 vi.mock("./client-adapter.js", () => ({
   signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
+}));
+
+vi.mock("./client-container.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client-container.js")>()),
+  filesToBase64DataUris: (...args: unknown[]) => filesToBase64DataUrisMock(...args),
 }));
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
@@ -50,6 +58,7 @@ describe("sendMessageSignal receipts", () => {
     clearSignalApprovalReactionTargetsForTest();
     signalRpcRequestMock.mockReset();
     resolveOutboundAttachmentFromUrlMock.mockClear();
+    filesToBase64DataUrisMock.mockClear();
   });
 
   it("routes a named container account across send, typing, and receipt RPCs", async () => {
@@ -205,9 +214,13 @@ describe("sendMessageSignal receipts", () => {
       maxBytes,
       expect.objectContaining({ localRoots: ["/tmp"] }),
     );
+    expect(filesToBase64DataUrisMock).toHaveBeenCalledWith(["/tmp/image.png"], maxBytes);
     expect(signalRpcRequestMock).toHaveBeenCalledWith(
       "send",
-      expect.objectContaining({ attachments: ["/tmp/image.png"], message: "" }),
+      expect.objectContaining({
+        attachments: ["data:image/png;filename=image.png;base64,aGVsbG8="],
+        message: "",
+      }),
       expect.objectContaining({ maxAttachmentBytes: maxBytes }),
     );
     expect(result.messageId).toBe("1234567891");
@@ -545,17 +558,18 @@ describe("sendMessageSignal receipts", () => {
     });
 
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalled();
+    expect(filesToBase64DataUrisMock).toHaveBeenCalledWith(["/tmp/image.png"], expect.any(Number));
     expect(signalRpcRequestMock).toHaveBeenCalledTimes(2);
     expect(signalRpcRequestMock.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
-        attachments: ["/tmp/image.png"],
+        attachments: ["data:image/png;filename=image.png;base64,aGVsbG8="],
         quoteTimestamp: 1700000000001,
         quoteAuthor: "+15550002222",
       }),
     );
     expect(signalRpcRequestMock.mock.calls[1]?.[1]).toEqual(
       expect.objectContaining({
-        attachments: ["/tmp/image.png"],
+        attachments: ["data:image/png;filename=image.png;base64,aGVsbG8="],
         message: "caption",
       }),
     );

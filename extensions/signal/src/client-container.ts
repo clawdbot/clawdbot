@@ -555,10 +555,13 @@ export async function streamContainerEvents(params: {
 }
 
 /**
- * Convert local file paths to base64 data URIs for the container REST API.
- * The bbernhard container /v2/send only accepts `base64_attachments` (not file paths).
+ * Convert local file paths to base64 data URIs for transports that accept
+ * inline bytes (bbernhard container REST and native signal-cli JSON-RPC).
+ * The bbernhard container /v2/send only accepts `base64_attachments` (not file
+ * paths); native signal-cli accepts data URIs per RFC 2397, which removes the
+ * shared-filesystem assumption when the daemon runs under a different uid.
  */
-async function filesToBase64DataUris(
+export async function filesToBase64DataUris(
   filePaths: string[],
   maxAttachmentBytes: number,
 ): Promise<string[]> {

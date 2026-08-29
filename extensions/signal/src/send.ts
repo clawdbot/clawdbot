@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest, type SignalTransportKind } from "./client-adapter.js";
+import { filesToBase64DataUris } from "./client-container.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { registerSignalReplyContext } from "./reply-authors.js";
@@ -324,7 +325,14 @@ export async function sendMessageSignal(
       localRoots: opts.mediaLocalRoots,
       readFile: opts.mediaReadFile,
     });
-    attachments = [resolved.path];
+    const transportKind = opts.transportKind ?? accountInfo.transport.kind;
+    // External-native signal-cli may run as a separate service user and cannot
+    // traverse the gateway-owned 0700 outbound media directory. Carry the
+    // already-authorized bytes over JSON-RPC instead of exposing a local path.
+    attachments =
+      transportKind === "external-native"
+        ? await filesToBase64DataUris([resolved.path], maxBytes)
+        : [resolved.path];
     outboundMedia = {
       contentType: resolved.contentType,
       kind: kindFromMime(resolved.contentType ?? undefined) ?? "unknown",

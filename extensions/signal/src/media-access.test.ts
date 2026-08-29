@@ -15,6 +15,14 @@ const SIGNAL_IMAGE = Buffer.from(
   "base64",
 );
 
+function resolveTestOutboundAttachment(attachment: string): Promise<Buffer> {
+  const base64Marker = ";base64,";
+  if (attachment.startsWith("data:") && attachment.includes(base64Marker)) {
+    return Promise.resolve(Buffer.from(attachment.split(base64Marker)[1] ?? "", "base64"));
+  }
+  return fs.readFile(attachment);
+}
+
 type SignalMediaContext = {
   cfg: OpenClawConfig;
   to: string;
@@ -94,10 +102,10 @@ describe("Signal host-owned outbound media access", () => {
       request.on("end", () => {
         void (async () => {
           const envelope = JSON.parse(Buffer.concat(chunks).toString("utf8")) as SignalRpcEnvelope;
-          const attachmentPath = envelope.params?.attachments?.[0];
+          const attachment = envelope.params?.attachments?.[0];
           requests.push({
             envelope,
-            attachment: attachmentPath ? await fs.readFile(attachmentPath) : undefined,
+            attachment: attachment ? await resolveTestOutboundAttachment(attachment) : undefined,
           });
           response.writeHead(200, { "content-type": "application/json" });
           response.end(
