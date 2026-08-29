@@ -260,14 +260,15 @@ describe("gateway presence audience", () => {
             (frame) => frame.type === "event" && frame.event === "presence",
           ),
         );
-        expect(
-          await rpcReq(watcher.ws, "session.typing", {
+        // Own event rejections before the typing request can fail or time out.
+        const [events] = await Promise.all([
+          Promise.all(eventPromises),
+          rpcReq(watcher.ws, "session.typing", {
             sessionKey: sharedKey,
             sessionId: sharedSessionId,
             typing: true,
-          }),
-        ).toMatchObject({ ok: true });
-        const events = await Promise.all(eventPromises);
+          }).then((response) => expect(response).toMatchObject({ ok: true })),
+        ]);
         const activeWatcher = listSystemPresence().find(
           (entry) => entry.instanceId === watcherInstanceId,
         )!;
