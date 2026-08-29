@@ -50,6 +50,25 @@ function safeAvatarDataUrl(value: unknown): string | undefined {
     : undefined;
 }
 
+/** Gateway data is untrusted here: keep only well-formed logins and inlined avatars. */
+function parseCoAuthors(value: unknown): { login: string; avatarDataUrl?: string }[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const parsed = value.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+    const login = readNonBlankString(entry.login);
+    if (!login) {
+      return [];
+    }
+    const avatarDataUrl = safeAvatarDataUrl(entry.avatarDataUrl);
+    return [avatarDataUrl ? { login, avatarDataUrl } : { login }];
+  });
+  return parsed.length > 0 ? parsed : undefined;
+}
+
 function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): GitHubPreview {
   if (!isRecord(value)) {
     throw new Error("GitHub response was not an object");
@@ -70,6 +89,8 @@ function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): GitHubP
     avatarDataUrl: safeAvatarDataUrl(value.avatarDataUrl),
     changedFiles: asFiniteNumber(value.changedFiles),
     closedAt: readNonBlankString(value.closedAt),
+    coAuthorCount: asFiniteNumber(value.coAuthorCount),
+    coAuthors: parseCoAuthors(value.coAuthors),
     comments: asFiniteNumber(value.comments),
     createdAt: requiredString(value, "createdAt"),
     deletions: asFiniteNumber(value.deletions),
@@ -118,6 +139,49 @@ function appendTextElement(
   element.textContent = text;
   parent.append(element);
   return element;
+}
+
+function coAuthorAvatarElement(dataUrl: string): HTMLImageElement {
+  const avatar = document.createElement("img");
+  avatar.className = "github-link-hovercard__avatar";
+  avatar.alt = "";
+  avatar.decoding = "async";
+  avatar.referrerPolicy = "no-referrer";
+  avatar.src = dataUrl;
+  return avatar;
+}
+
+/**
+ * Overlapping faces after the author, plus "+N" for anyone past the fetched
+ * three. Names live in the title so the row never competes with the metrics.
+ */
+function appendCoAuthors(author: HTMLElement, preview: GitHubPreview): void {
+  const coAuthors = preview.coAuthors ?? [];
+  const total = preview.coAuthorCount ?? coAuthors.length;
+  if (coAuthors.length === 0) {
+    return;
+  }
+  const stack = document.createElement("span");
+  stack.className = "github-link-hovercard__coauthors";
+  for (const coAuthor of coAuthors) {
+    if (coAuthor.avatarDataUrl) {
+      stack.append(coAuthorAvatarElement(coAuthor.avatarDataUrl));
+    }
+  }
+  const hidden = Math.max(0, total - coAuthors.length);
+  if (hidden > 0) {
+    const more = document.createElement("span");
+    more.className = "github-link-hovercard__coauthors-more";
+    more.textContent = `+${hidden}`;
+    stack.append(more);
+  }
+  if (stack.childElementCount === 0) {
+    return;
+  }
+  stack.title = t("githubPreview.coAuthors", {
+    logins: coAuthors.map((coAuthor) => coAuthor.login).join(", "),
+  });
+  author.after(stack);
 }
 
 function appendMetric(parent: HTMLElement, className: string, text: string): void {
@@ -199,14 +263,9 @@ function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
     preview.login,
   );
   if (preview.avatarDataUrl) {
-    const avatar = document.createElement("img");
-    avatar.className = "github-link-hovercard__avatar";
-    avatar.alt = "";
-    avatar.decoding = "async";
-    avatar.referrerPolicy = "no-referrer";
-    avatar.src = preview.avatarDataUrl;
-    author.prepend(avatar);
+    author.prepend(coAuthorAvatarElement(preview.avatarDataUrl));
   }
+  appendCoAuthors(author, preview);
 
   const metrics = document.createElement("span");
   metrics.className = "github-link-hovercard__metrics";

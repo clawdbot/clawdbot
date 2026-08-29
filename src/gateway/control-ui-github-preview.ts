@@ -19,6 +19,15 @@ import {
 
 const GITHUB_AVATAR_HOST = "avatars.githubusercontent.com";
 const GITHUB_AVATAR_MAX_BYTES = 256 * 1024;
+// One commits page bounds the extra request; the card only renders three faces,
+// so deeper paging would spend quota on people it can never show.
+const GITHUB_COMMITS_PAGE_SIZE = 100;
+const GITHUB_COMMITS_MAX_BYTES = 1024 * 1024;
+const CO_AUTHOR_FACE_LIMIT = 3;
+// GitHub's noreply form is the only trailer that yields a login and an avatar
+// without a lookup per person: `<accountId>+<login>@users.noreply.github.com`.
+const CO_AUTHOR_TRAILER =
+  /^co-authored-by:\s*[^<]*<(?<id>\d{1,12})\+(?<login>[a-z\d](?:[a-z\d-]{0,38}))@users\.noreply\.github\.com>\s*$/gimu;
 const AUTHENTICATED_SUCCESS_CACHE_MS = 5 * 60_000;
 const ANONYMOUS_SUCCESS_CACHE_MS = 60 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
@@ -79,6 +88,12 @@ export function parseControlUiGitHubPreviewTarget(
     return null;
   }
   return { kind, number, owner, repo };
+}
+
+function commitsApiUrl(target: ControlUiGitHubPreviewTarget): string {
+  const owner = encodeURIComponent(target.owner);
+  const repo = encodeURIComponent(target.repo);
+  return `${GITHUB_API_ORIGIN}/repos/${owner}/${repo}/pulls/${target.number}/commits?per_page=${GITHUB_COMMITS_PAGE_SIZE}`;
 }
 
 function previewApiUrl(target: ControlUiGitHubPreviewTarget): string {
@@ -205,6 +220,68 @@ function safeAvatarUrl(raw: string | undefined): URL | null {
   }
 }
 
+/**
+ * Distinct co-author logins from a PR's commit trailers, author excluded, in
+ * first-seen order. Returns the true total alongside the bounded face list so
+ * the card can render "+N" without another request.
+ */
+async function fetchCoAuthors(
+  target: ControlUiGitHubPreviewTarget,
+  authorLogin: string,
+  fetchImpl: typeof fetch,
+  token: string | undefined,
+): Promise<{ coAuthors: { login: string; avatarDataUrl?: string }[]; coAuthorCount: number }> {
+  const empty = { coAuthors: [], coAuthorCount: 0 };
+  let commits: unknown;
+  try {
+    const response = await fetchGitHubApi(commitsApiUrl(target), fetchImpl, token);
+    if (!response.ok) {
+      await discardResponse(response);
+      return empty;
+    }
+    commits = JSON.parse(
+      (await readBoundedResponse(response, GITHUB_COMMITS_MAX_BYTES)).toString("utf8"),
+    );
+  } catch {
+    // Co-authors are decoration on an already-useful card, so a failed or
+    // oversized commits page degrades to no faces instead of failing the card.
+    return empty;
+  }
+  if (!Array.isArray(commits)) {
+    return empty;
+  }
+  const byLogin = new Map<string, { login: string; accountId: string }>();
+  for (const entry of commits) {
+    const commit = isRecord(entry) && isRecord(entry.commit) ? entry.commit : undefined;
+    const message = commit ? readOptionalGitHubString(commit, "message") : undefined;
+    if (!message) {
+      continue;
+    }
+    for (const match of message.matchAll(CO_AUTHOR_TRAILER)) {
+      const login = match.groups?.login;
+      const accountId = match.groups?.id;
+      if (!login || !accountId || login.toLowerCase() === authorLogin.toLowerCase()) {
+        continue;
+      }
+      const key = login.toLowerCase();
+      if (!byLogin.has(key)) {
+        byLogin.set(key, { login, accountId });
+      }
+    }
+  }
+  const faces = [...byLogin.values()].slice(0, CO_AUTHOR_FACE_LIMIT);
+  const coAuthors = await Promise.all(
+    faces.map(async (face) => {
+      const avatarDataUrl = await fetchAvatarDataUrl(
+        `https://${GITHUB_AVATAR_HOST}/u/${face.accountId}`,
+        fetchImpl,
+      );
+      return avatarDataUrl ? { login: face.login, avatarDataUrl } : { login: face.login };
+    }),
+  );
+  return { coAuthors, coAuthorCount: byLogin.size };
+}
+
 async function fetchAvatarDataUrl(
   rawUrl: string | undefined,
   fetchImpl: typeof fetch,
@@ -266,8 +343,21 @@ async function fetchPreview(
     await assertPublicRepositoryUrl(previewRepositoryApiUrl(target, parsed), fetchImpl, token);
   }
   const { preview, avatarUrl } = parseGitHubResponse(target, parsed);
-  const avatarDataUrl = await fetchAvatarDataUrl(avatarUrl, fetchImpl);
-  return avatarDataUrl ? { ...preview, avatarDataUrl } : preview;
+  // Both extra fetches run only after the public-repository assertions above,
+  // so neither can widen what this token is allowed to read.
+  const [avatarDataUrl, coAuthorFacts] = await Promise.all([
+    fetchAvatarDataUrl(avatarUrl, fetchImpl),
+    target.kind === "pull"
+      ? fetchCoAuthors(target, preview.login, fetchImpl, token)
+      : Promise.resolve({ coAuthors: [], coAuthorCount: 0 }),
+  ]);
+  return {
+    ...preview,
+    ...(avatarDataUrl ? { avatarDataUrl } : {}),
+    ...(coAuthorFacts.coAuthorCount > 0
+      ? { coAuthors: coAuthorFacts.coAuthors, coAuthorCount: coAuthorFacts.coAuthorCount }
+      : {}),
+  };
 }
 
 function cacheKey(target: ControlUiGitHubPreviewTarget, credentialScope: string): string {
