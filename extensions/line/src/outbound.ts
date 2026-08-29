@@ -34,6 +34,7 @@ import {
 import { getLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 import { resolveLineNonDispatchRetryable } from "./send-retry.js";
+import { LINE_TEXT_CHUNK_LIMIT, resolveLineTextChunkLimit } from "./text-chunk-limit.js";
 import type { LineChannelData, LineSendResult, ResolvedLineAccount } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
@@ -41,7 +42,12 @@ const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound
 export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["outbound"]> = {
   deliveryMode: "direct",
   chunker: (text, limit) => getLineRuntime().channel.text.chunkMarkdownText(text, limit),
-  textChunkLimit: 5000,
+  textChunkLimit: LINE_TEXT_CHUNK_LIMIT,
+  // Core plans its own chunk boundaries before the payload reaches this adapter;
+  // without this it would plan at the unbounded configured value and this
+  // adapter would split those pieces again, leaving messages short of the limit.
+  resolveEffectiveTextChunkLimit: ({ cfg, accountId }) =>
+    resolveLineTextChunkLimit({ cfg, accountId }),
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   presentationCapabilities: LINE_PRESENTATION_CAPABILITIES,
   renderPresentation: ({ payload, presentation }) => renderLinePresentation(payload, presentation),
@@ -140,10 +146,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       ? outboundRuntime.processLineMessage(payload.text)
       : { text: "", flexMessages: [] };
 
-    const chunkLimit =
-      runtime.channel.text.resolveTextChunkLimit?.(cfg, "line", accountId ?? undefined, {
-        fallbackLimit: 5000,
-      }) ?? 5000;
+    const chunkLimit = resolveLineTextChunkLimit({ cfg, accountId });
 
     const orderedMessages = processed.segments?.flatMap<
       messagingApi.FlexMessage | messagingApi.TextMessage

@@ -250,7 +250,10 @@ as untrusted.
 
 ## Message behavior
 
-- Text is chunked at 5000 characters.
+- Text is chunked at 5000 characters, which is the longest text message LINE
+  accepts. Set `channels.line.textChunkLimit` (or
+  `channels.line.accounts.<id>.textChunkLimit`) for shorter bubbles; a larger
+  value stays bounded by what LINE accepts.
 - Markdown formatting is stripped; code blocks and tables are converted into Flex
   cards when possible.
 - Streaming responses are buffered; LINE receives full chunks with a loading

@@ -58,7 +58,6 @@ describe("line outbound sendPayload", () => {
   ])("sends oversized tables in their source position $name", async ({ quickReplies }) => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
-    mocks.resolveTextChunkLimit.mockReturnValue(5000);
     mocks.chunkMarkdownText.mockImplementation((text: string) =>
       chunkMarkdownTextForLine(text, 5000),
     );
@@ -674,6 +673,18 @@ describe("line outbound sendPayload", () => {
     });
   });
 
+  it("bounds the chunk limit core plans with", () => {
+    const cfg = { channels: { line: { textChunkLimit: 9000 } } } as OpenClawConfig;
+
+    expect(
+      lineOutboundAdapter.resolveEffectiveTextChunkLimit?.({
+        cfg,
+        accountId: "primary",
+        fallbackLimit: 9000,
+      }),
+    ).toBe(5000);
+  });
+
   it("uses configured text chunk limit for payloads", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
@@ -699,9 +710,6 @@ describe("line outbound sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.resolveTextChunkLimit).toHaveBeenCalledWith(cfg, "line", "primary", {
-      fallbackLimit: 5000,
-    });
     expect(mocks.chunkMarkdownText).toHaveBeenCalledWith("Hello world", 123);
   });
 

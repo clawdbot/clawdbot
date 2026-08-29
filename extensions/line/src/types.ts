@@ -31,6 +31,7 @@ interface LineAccountBaseConfig {
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
   groupPolicy?: "open" | "allowlist" | "disabled";
   responsePrefix?: string;
+  textChunkLimit?: number;
   mediaMaxMb?: number;
   historyLimit?: number;
   webhookPath?: string;
