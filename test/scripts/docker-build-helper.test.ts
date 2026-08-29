@@ -5029,6 +5029,7 @@ if (starts === 1) {
       "phase doctor run_doctor",
       "phase assert-survival assert_survival",
       "phase fixture-plugin-consent repair_fixture_plugin_consent",
+      "phase transcript-export node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-meeting-transcript-export",
       "phase gateway-start ensure_gateway_started",
     ]);
     expect(publishedRunner).not.toContain("systemctl --user restart openclaw-gateway.service");

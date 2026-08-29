@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
@@ -470,7 +470,10 @@ function writeLegacySessionEntriesState(stateDir: string): void {
   }
 }
 
-function runSessionStateAssertion(setup: (stateDir: string) => void): void {
+function runSessionStateAssertion(
+  setup: (stateDir: string) => void | NodeJS.ProcessEnv,
+  options: { scenario?: string; commands?: string[] } = {},
+): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-session-state-"));
   try {
     const stateDir = join(root, "state");
@@ -481,17 +484,19 @@ function runSessionStateAssertion(setup: (stateDir: string) => void): void {
     writeJson(join(stateDir, "agents", "main", "sessions", "legacy-session.json"), {
       id: "legacy-session",
     });
-    setup(stateDir);
-
-    execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-state"], {
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
-      },
-      stdio: "pipe",
-    });
+    const fixtureEnv = setup(stateDir);
+    for (const command of options.commands ?? ["assert-state"]) {
+      execFileSync(process.execPath, [ASSERTIONS_PATH, command], {
+        env: {
+          ...process.env,
+          ...(fixtureEnv ?? {}),
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: options.scenario ?? "base",
+        },
+        stdio: "pipe",
+      });
+    }
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -814,6 +819,67 @@ function assertUpdateRunSelfUpgrade(summary: ReturnType<typeof createUpdateRunSe
 }
 
 describe("upgrade survivor assertions", () => {
+  it.runIf(process.platform !== "win32")(
+    "rechecks migrated meeting state before materializing transcript exports",
+    () => {
+      expect(() =>
+        runSessionStateAssertion(
+          (stateDir) => {
+            writeMigratedSessionState(stateDir);
+            const archive = join(
+              stateDir,
+              "transcripts.migrated-fixture",
+              "2026-07-01",
+              "design-review",
+            );
+            mkdirSync(archive, { recursive: true });
+            writeFileSync(
+              join(archive, "transcript.jsonl"),
+              ["legacy-u-1", "legacy-u-2"].map((id) => JSON.stringify({ id })).join("\n") + "\n",
+            );
+            writeFileSync(join(archive, "summary.md"), "Shipped transcript summary\n");
+            mkdirSync(join(stateDir, "state"), { recursive: true });
+            const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
+            try {
+              db.exec(`
+              CREATE TABLE meeting_transcript_sessions (session_id, started_at, next_utterance_seq);
+              INSERT INTO meeting_transcript_sessions VALUES ('design-review', '2026-07-01T10:00:00.000Z', 2);
+              CREATE TABLE meeting_transcript_utterances (session_id, sequence, utterance_id, text);
+              INSERT INTO meeting_transcript_utterances VALUES ('design-review', 0, 'legacy-u-1', 'First shipped transcript line');
+              INSERT INTO meeting_transcript_utterances VALUES ('design-review', 1, 'legacy-u-2', 'Second shipped transcript line');
+              CREATE TABLE migration_sources (migration_kind, status, removed_source, source_record_count);
+              INSERT INTO migration_sources VALUES ('meeting-transcripts-files-v1', 'archived', 1, 2);
+            `);
+            } finally {
+              db.close();
+            }
+            const binDir = join(stateDir, "bin");
+            mkdirSync(binDir);
+            writeFileSync(
+              join(binDir, "openclaw"),
+              `#!/usr/bin/env node
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+assert.deepEqual(process.argv.slice(2), ["transcripts", "path", "2026-07-01/design-review", "--dir"]);
+const root = process.env.OPENCLAW_STATE_DIR;
+const sessionDir = path.join(root, "transcripts", "2026-07-01", "design-review");
+fs.cpSync(path.join(root, "transcripts.migrated-fixture", "2026-07-01", "design-review"), sessionDir, { recursive: true });
+process.stdout.write(sessionDir + "\\n");
+`,
+              { mode: 0o755 },
+            );
+            return { PATH: `${binDir}${delimiter}${process.env.PATH}` };
+          },
+          {
+            scenario: "meeting-transcripts-sqlite",
+            commands: ["assert-state", "assert-state", "assert-meeting-transcript-export"],
+          },
+        ),
+      ).not.toThrow();
+    },
+  );
+
   it("lists the dependency-free scenario contract", () => {
     const scenarios = JSON.parse(
       execFileSync(process.execPath, [ASSERTIONS_PATH, "list-scenarios"], {
