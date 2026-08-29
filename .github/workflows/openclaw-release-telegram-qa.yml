@@ -326,6 +326,8 @@ jobs:
           set -euo pipefail
           candidate_home="${RUNNER_TEMP}/openclaw-telegram-candidate-home"
           mkdir -p "$candidate_home"
+          # Native pnpm reads this policy from env; the config flag also covers older targets.
+          # Copies keep the candidate independent of the external package store.
           env -i \
             CI=true \
             COREPACK_HOME="${candidate_home}/.cache/corepack" \
@@ -333,6 +335,7 @@ jobs:
             LANG=C.UTF-8 \
             NPM_CONFIG_USERCONFIG=/dev/null \
             PATH="$PATH" \
+            PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy \
             RUNNER_TEMP="$RUNNER_TEMP" \
             pnpm install \
               --store-dir "$RUNNER_TEMP/openclaw-telegram-candidate-pnpm-store" \
