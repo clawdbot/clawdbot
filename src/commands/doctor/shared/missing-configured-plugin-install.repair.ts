@@ -326,14 +326,18 @@ async function repairMissingPluginInstallsWithLease(
             : undefined;
           const activePackageName =
             installedPluginIdsWithMissingRequiredDependencies.get(pluginId)?.activePackageName;
+          const originalRecord = records[pluginId];
+          const selectorPackageName =
+            originalRecord?.source === "npm" && originalRecord.spec
+              ? parseRegistryNpmSpec(originalRecord.spec)?.name
+              : undefined;
+          // `spec` is the updater's durable selector; resolved fields only describe
+          // the prior resolution and cannot authorize overriding changed intent.
           if (
             !candidate?.npmSpec ||
             !candidatePackageName ||
             activePackageName !== candidatePackageName ||
-            !isTrustedOfficialInstallRecordForCandidate({
-              record: records[pluginId],
-              candidate,
-            })
+            selectorPackageName !== candidatePackageName
           ) {
             return [];
           }
