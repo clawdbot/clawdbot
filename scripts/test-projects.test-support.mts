@@ -2110,8 +2110,12 @@ const pluginSdkEntryOwners = [
 // Keep only genuinely ambiguous paths explicit; conventional discovery owns
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
-  [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git"]],
-  ["test/scripts/fixtures/ci-platform-checkout.mjs", ["ci-platform-checkout", "ci-linux-git"]],
+  [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"]],
+  [
+    "test/scripts/fixtures/ci-platform-checkout.mjs",
+    ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"],
+  ],
+  ["scripts/generate-ci-git-owner.mts", ["ci-git-owner"]],
   [
     ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
     [packageAcceptance, workflowGuards, "release-workflow-matrix-plan", installDocker],
@@ -2376,7 +2380,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["mantis-web-ui-chat-proof-workflow", packageAcceptance, workflowGuards],
   ],
   [/^\.github\/workflows\/android-release\.yml$/u, [packageAcceptance, workflowGuards]],
-  [/^\.github\/actions\/ensure-base-commit\/action\.yml$/u, [workflowGuards]],
+  [
+    /^\.github\/actions\/(?:ensure-base-commit|git-owner)\//u,
+    ["ci-git-owner", "ci-linux-git", "ci-platform-checkout"],
+  ],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],
   [/^scripts\/test-projects\.test-support\.mts$/u, ["test-projects"]],
   [/^scripts\/ci-changed-scope\.mjs$/u, [...changedScopeTests, "control-ui-i18n"]],

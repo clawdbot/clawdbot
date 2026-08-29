@@ -556,11 +556,16 @@ function runTargetContextValidation(
   const binPath = path.join(root, "bin");
   const branchSha = "b".repeat(40);
   mkdirSync(binPath);
+  writeFileSync(
+    path.join(root, "ci-git-owner.py"),
+    readFileSync(".github/actions/git-owner/owner.py"),
+  );
   writeFileSync(outputPath, "", "utf8");
   writeFileSync(
     path.join(binPath, "git"),
     `#!/usr/bin/env bash
 set -euo pipefail
+[[ "$1" == "-C" ]]; shift 2
 if [[ "$1" == "ls-remote" && "$2" == "--heads" && "$3" == "origin" ]]; then
   printf '%s\\t%s\\n' "$MOCK_BRANCH_SHA" "$4"
   exit 0
@@ -599,6 +604,7 @@ printf '%s\\n' "$MOCK_COMPARE_STATUS"
         GITHUB_OUTPUT: outputPath,
         MOCK_BRANCH_SHA: branchSha,
         MOCK_COMPARE_STATUS: comparisonStatus,
+        RUNNER_TEMP: root,
         PATH: `${binPath}:${process.env.PATH ?? ""}`,
         TARGET_CONTEXT_REF: targetContextRef,
         TARGET_REF: targetRef,
@@ -629,11 +635,16 @@ function runCandidateTrustClassification(options: {
   const binPath = path.join(root, "bin");
   const defaultRevision = options.defaultRevision ?? "b".repeat(40);
   mkdirSync(binPath);
+  writeFileSync(
+    path.join(root, "ci-git-owner.py"),
+    readFileSync(".github/actions/git-owner/owner.py"),
+  );
   writeFileSync(outputPath, "", "utf8");
   writeFileSync(
     path.join(binPath, "git"),
     `#!/usr/bin/env bash
 set -euo pipefail
+[[ "$1" == "-C" ]]; shift 2
 [[ "$1" == "ls-remote" && "$2" == "origin" && "$3" == "refs/heads/main" ]]
 printf '%s\\trefs/heads/main\\n' "$MOCK_DEFAULT_SHA"
 `,
@@ -658,6 +669,7 @@ printf '%s\\trefs/heads/main\\n' "$MOCK_DEFAULT_SHA"
       GITHUB_REF: options.ref ?? "",
       HISTORICAL_TARGET: String(options.historicalTarget ?? false),
       MOCK_DEFAULT_SHA: defaultRevision,
+      RUNNER_TEMP: root,
       PATH: `${binPath}:${process.env.PATH ?? ""}`,
       RELEASE_CANDIDATE_TARGET: String(options.releaseCandidateTarget ?? false),
       RELEASE_GATE: String(options.releaseGate ?? false),
@@ -3287,7 +3299,7 @@ NODE
       type: "string",
     });
     expect(step.if).toBe("inputs.target_context_ref != ''");
-    expect(step.run).toContain("git ls-remote --heads origin");
+    expect(step.run).toContain("--git 0 ls-remote --heads origin");
     expect(step.run).toContain(
       'gh api "repos/${GITHUB_REPOSITORY}/compare/${TARGET_REF}...${branch_sha}"',
     );
@@ -6098,18 +6110,11 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
-  it("bounds shared base commit fetches", () => {
-    const action = readFileSync(".github/actions/ensure-base-commit/action.yml", "utf8");
-    const exactFetch = action.indexOf('fetch_base_ref --no-tags --depth=1 origin "$BASE_SHA"');
-    const branchDeepening = action.indexOf("for deepen_by in 25 100 300");
-
-    expect(action).toContain("fetch_base_ref()");
-    expect(action).toContain("timeout --signal=TERM --kill-after=10s 30s git");
-    expect(action).toContain("-c protocol.version=2");
-    expect(action).not.toContain("if ! git fetch --no-tags");
-    expect(exactFetch).toBeGreaterThan(-1);
-    expect(branchDeepening).toBeGreaterThan(exactFetch);
-    expect(action).toContain("::error title=ensure-base-commit missing base::");
+  it("checks the generated Git owner in the workflow guard lane", () => {
+    const check = spawnSync(process.execPath, ["scripts/generate-ci-git-owner.mts", "--check"], {
+      encoding: "utf8",
+    });
+    expect(check.status, check.stderr).toBe(0);
   });
 
   it("uses the maintained authenticated checkout for security-fast", () => {
@@ -6444,9 +6449,20 @@ server.listen(0, "127.0.0.1", () => {
     const linuxCheckout = workflow.jobs["checks-fast-core"].steps.find(
       (step: WorkflowStep) => step.name === "Checkout",
     );
-    expect(linuxCheckout.run).toContain('linux = os.environ["RUNNER_OS"] == "Linux"');
-    expect(linuxCheckout.run).toContain("fetch_timeout_seconds = 120 if linux else 90");
-    expect(linuxCheckout.run).toContain("cleanup_seconds = 10");
+    for (const runner of ["Linux", "macOS", "Windows"]) {
+      const defaults = spawnSync(
+        process.platform === "win32" ? "python" : "python3",
+        [
+          "-I",
+          "-S",
+          "-c",
+          'import inspect,json,runpy; owner=runpy.run_path(".github/actions/git-owner/owner.py"); print(json.dumps([owner["fetch_timeout_seconds"], inspect.signature(owner["run_git"]).parameters["cleanup_seconds"].default]))',
+        ],
+        { encoding: "utf8", env: { ...process.env, RUNNER_OS: runner } },
+      );
+      expect(defaults.status, defaults.stderr).toBe(0);
+      expect(JSON.parse(defaults.stdout)).toEqual([runner === "Linux" ? 120 : 90, 10]);
+    }
 
     for (const jobName of [
       "checks-windows",
@@ -7999,13 +8015,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: { name?: string }) => step.name === "Validate historical release target",
     );
     expect(historicalTargetStep.if).toBe("inputs.historical_target_tag != ''");
-    expect(historicalTargetStep.run).toContain('git ls-remote --tags "$remote"');
+    expect(historicalTargetStep.run).toContain('--git 0 ls-remote --tags "$remote"');
     expect(historicalTargetStep.run).toContain('[[ "$tag_sha" != "$EXPECTED_SHA" ]]');
     const releaseCandidateStep = workflow.jobs.preflight.steps.find(
       (step: { name?: string }) => step.name === "Validate release candidate target",
     );
     expect(releaseCandidateStep.if).toBe("inputs.release_candidate_ref != ''");
-    expect(releaseCandidateStep.run).toContain('git ls-remote --heads "$remote"');
+    expect(releaseCandidateStep.run).toContain('--git 0 ls-remote --heads "$remote"');
     expect(releaseCandidateStep.run).toContain('[[ "$branch_sha" != "$EXPECTED_SHA" ]]');
     expect(workflow.jobs["qa-smoke-ci-profile"].if).toBe(
       "needs.preflight.outputs.run_qa_smoke_ci == 'true'",

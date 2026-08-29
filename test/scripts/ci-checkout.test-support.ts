@@ -28,7 +28,15 @@ const reportSchema = z.object({
   readyAttempts: z.array(z.number()),
   cleanupRemaining: z.array(processRecord).length(0),
   ownedProcesses: z.array(processRecord),
-  commands: z.array(z.object({ tool: z.string(), cwd: z.string(), args: z.array(z.string()) })),
+  commands: z.array(
+    z.object({
+      tool: z.string(),
+      cwd: z.string(),
+      args: z.array(z.string()),
+      configuration: z.array(z.string()).optional(),
+      envProbe: z.string().optional(),
+    }),
+  ),
   output: z.string(),
 });
 type Report = z.infer<typeof reportSchema>;

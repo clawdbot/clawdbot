@@ -206,8 +206,10 @@ jobs:
             exec "$python_command" -I -S -
           }
           run_owner <<'PYTHON'
+          # Generated from .github/actions/git-owner/owner.py; do not edit here.
           import os
           import re
+          import runpy
           import shutil
           import signal
           import subprocess
@@ -215,10 +217,11 @@ jobs:
           import tempfile
           import time
 
-          linux = os.environ["RUNNER_OS"] == "Linux"
+          linux = os.environ.get("RUNNER_OS", sys.platform) in ("Linux", "linux")
           fetch_timeout_seconds = 120 if linux else 90
-          cleanup_seconds = 10
           cancelled = 0
+          closed = False
+          git = shutil.which("git")
 
 
           def cancel(signum, _frame):
@@ -334,7 +337,7 @@ jobs:
                          for group, state in (line.split() for line in result.stdout.splitlines()))
 
 
-          def drain(child, job):
+          def drain(child, job, cleanup_seconds):
               deadline = time.monotonic() + cleanup_seconds
               if os.name == "nt":
                   # Stop/join even a pre-assignment bootstrap before terminating the Job:
@@ -388,14 +391,21 @@ jobs:
                   self.code = code
 
 
-          def run_git(directory, *arguments, timeout=None, stdout=None):
+          def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=None,
+                      cleanup_seconds=10):
+              global closed
+              if closed:
+                  raise RuntimeError("Git owner is closed")
               check_cancelled()
+              if git is None:
+                  raise RuntimeError("Git unavailable")
               command = [git, "-C", directory, *arguments]
               job = None
               child = None
               deadline = time.monotonic() + timeout if timeout is not None else None
               try:
-                  options = {"stdin": subprocess.DEVNULL, "stdout": stdout}
+                  options = {"stdin": subprocess.DEVNULL, "stdout": stdout, "stderr": stderr,
+                             "env": {**os.environ, **env} if env is not None else None}
                   if os.name == "nt":
                       job = create_job(None, None)
                       limits = ExtendedLimits()
@@ -419,13 +429,18 @@ jobs:
                           raise FetchTimeout()
                       time.sleep(0.05)
               finally:
+                  # Failed inspection/cleanup permanently fences this policy process. Only
+                  # verified extinction permits another command, even after a caught error.
+                  closed = True
                   try:
                       if child is not None:
-                          drain(child, job)
+                          drain(child, job, cleanup_seconds)
                   finally:
                       if job is not None:
                           close_handle(job)
-                  # After verified cleanup, cancellation must supersede a pending timeout.
+                  closed = False
+                  # Run even while a timeout is unwinding: cancellation received during
+                  # draining outranks it, but failed cleanup above still outranks both.
                   check_cancelled()
               if child.returncode:
                   raise GitFailure(child.returncode if child.returncode > 0 else 128 - child.returncode)
@@ -456,11 +471,15 @@ jobs:
                       backoff(5)
 
 
-          def resolve_ref(ref):
-              with tempfile.TemporaryFile(mode="w+") as output:
-                  run_git(workspace, "rev-parse", ref, stdout=output)
+          def git_output(directory, *arguments, timeout=None, env=None):
+              with tempfile.TemporaryFile() as output:
+                  run_git(directory, *arguments, timeout=timeout, env=env, stdout=output)
                   output.seek(0)
-                  return output.read().strip()
+                  return output.read().decode("utf-8", errors="surrogateescape")
+
+
+          def resolve_ref(ref):
+              return git_output(workspace, "rev-parse", ref).strip()
 
 
           def checkout_selected_ref():
@@ -548,20 +567,29 @@ jobs:
               check_cancelled()
 
 
-          try:
-              git = shutil.which("git")
-              if git is None:
-                  raise RuntimeError("Git unavailable")
+          def main():
+              global kind, workspace, remote, reset
               if len(sys.argv) > 1:
+                  if sys.argv[1] == "--policy":
+                      # The caller supplies trusted policy bytes; imports share this exact
+                      # owner and its terminal lifecycle state, never a second supervisor.
+                      sys.modules["ci_git_owner"] = sys.modules[__name__]
+                      try:
+                          if sys.argv[2] == "-":
+                              exec(compile(sys.stdin.read(), "<git-policy>", "exec"), {"__name__": "__main__"})
+                          else:
+                              runpy.run_path(sys.argv[2], run_name="__main__")
+                      finally:
+                          if closed:
+                              raise RuntimeError("Git owner is closed")
+                          check_cancelled()
+                      return
                   if sys.argv[1] != "--git":
                       raise ValueError("Unknown Git owner command")
-                  try:
-                      run_git(os.getcwd(), *sys.argv[3:], timeout=float(sys.argv[2]) or None)
-                  except FetchTimeout:
-                      raise SystemExit(124)
-                  except GitFailure as error:
-                      raise SystemExit(error.code)
-                  raise SystemExit(0)
+                  run_git(os.getcwd(), *sys.argv[3:], timeout=float(sys.argv[2]) or None)
+                  return
+              if git is None:
+                  raise RuntimeError("Git unavailable")
               kind = os.environ.get("CHECKOUT_KIND", "linux-node" if linux else "platform")
               if kind == "prepare":
                   raise SystemExit(0)
@@ -590,10 +618,19 @@ jobs:
                       backoff(attempt * 5)
               print(f"{label} failed after 5 attempts", file=sys.stderr)
               raise SystemExit(1)
-          except Exception as error:
-              # Do not print command arguments or environment: Git may carry credentials.
-              print(f"::error::checkout ownership/setup failed ({type(error).__name__}); refusing reuse or retry", file=sys.stderr)
-              raise SystemExit(125)
+
+
+          if __name__ == "__main__":
+              try:
+                  main()
+              except FetchTimeout:
+                  raise SystemExit(124)
+              except GitFailure as error:
+                  raise SystemExit(error.code)
+              except Exception as error:
+                  # Do not print command arguments or environment: Git may carry credentials.
+                  print(f"::error::Git ownership/setup failed ({type(error).__name__}); refusing reuse or retry", file=sys.stderr)
+                  raise SystemExit(125)
           PYTHON
 
       - name: Resolve checkout SHA
@@ -660,7 +697,7 @@ jobs:
               --base "$base_sha" --head HEAD --prefer-first-parent)"
           fi
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$RELEASE_GATE" != "true" ]; then
-            default_sha="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1}')"
+            default_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1}')"
             if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
               echo "Could not resolve the default branch head for the manual target." >&2
               exit 1
@@ -706,9 +743,9 @@ jobs:
           fi
           tag_ref="refs/tags/${HISTORICAL_TARGET_TAG}"
           remote="$(git remote get-url origin)"
-          tag_sha="$(git ls-remote --tags "$remote" "${tag_ref}^{}" | awk 'NR == 1 { print $1 }')"
+          tag_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote --tags "$remote" "${tag_ref}^{}" | awk 'NR == 1 { print $1 }')"
           if [[ -z "$tag_sha" ]]; then
-            tag_sha="$(git ls-remote --tags "$remote" "$tag_ref" | awk 'NR == 1 { print $1 }')"
+            tag_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote --tags "$remote" "$tag_ref" | awk 'NR == 1 { print $1 }')"
           fi
           if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
             echo "Historical release tag ${HISTORICAL_TARGET_TAG} does not resolve to ${EXPECTED_SHA}." >&2
@@ -729,7 +766,7 @@ jobs:
             exit 1
           fi
           remote="$(git remote get-url origin)"
-          branch_sha="$(git ls-remote --heads "$remote" "refs/heads/${RELEASE_CANDIDATE_REF}" | awk 'NR == 1 { print $1 }')"
+          branch_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote --heads "$remote" "refs/heads/${RELEASE_CANDIDATE_REF}" | awk 'NR == 1 { print $1 }')"
           if [[ "$branch_sha" != "$EXPECTED_SHA" ]]; then
             echo "Release candidate branch ${RELEASE_CANDIDATE_REF} does not resolve to ${EXPECTED_SHA}." >&2
             exit 1
@@ -753,7 +790,7 @@ jobs:
             echo "target_context_ref requires target_ref to be a full commit SHA." >&2
             exit 1
           fi
-          branch_sha="$(git ls-remote --heads origin "refs/heads/${TARGET_CONTEXT_REF}" | awk 'NR == 1 { print $1 }')"
+          branch_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote --heads origin "refs/heads/${TARGET_CONTEXT_REF}" | awk 'NR == 1 { print $1 }')"
           if [[ ! "$branch_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "target_context_ref branch ${TARGET_CONTEXT_REF} does not exist." >&2
             exit 1
@@ -793,7 +830,7 @@ jobs:
             trust=pull-request
             cache_mode=restore
           elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            default_sha="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1 }')"
+            default_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1 }')"
             if [[ "$RELEASE_GATE" == "true" ]]; then
               trust=pull-request
               cache_mode=restore
@@ -2351,6 +2388,20 @@ jobs:
       CHECKOUT_BASE_SHA: ${{ (matrix.task == 'baseline-ratchets' || startsWith(matrix.task, 'release-lint-')) && needs.preflight.outputs.diff_base_revision || '' }}
     steps:
       - *linux_node_checkout_step
+      - name: Smoke test trusted Git owner action
+        id: git_owner_smoke
+        if: matrix.task == 'bundled-protocol' || matrix.task == 'ci-routing' || matrix.task == 'contracts-plugins-ci-routing'
+        uses: ./.ci-harness/.github/actions/git-owner
+      - name: Verify trusted Git owner bootstrap
+        if: matrix.task == 'bundled-protocol' || matrix.task == 'ci-routing' || matrix.task == 'contracts-plugins-ci-routing'
+        env:
+          OWNER_PATH: ${{ steps.git_owner_smoke.outputs.owner-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$OWNER_PATH" = "$CI_GIT_OWNER"
+          cmp "$OWNER_PATH" .ci-harness/.github/actions/git-owner/owner.py
+          python3 -I -S "$OWNER_PATH" --git 0 --version
       - name: Prepare release-gate ratchet merge tree
         if: (matrix.task == 'baseline-ratchets' || startsWith(matrix.task, 'release-lint-')) && github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
