@@ -303,17 +303,51 @@ export function isEmbeddedRunAbandoned(params: {
   sessionFile?: string;
 }): boolean {
   const normalizedSessionId = params.sessionId?.trim();
-  if (normalizedSessionId && ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.has(normalizedSessionId)) {
-    return true;
+  if (normalizedSessionId) {
+    const abandoned = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(normalizedSessionId);
+    if (abandoned?.reason === "timeout") {
+      return true;
+    }
   }
   const normalizedSessionKey = params.sessionKey?.trim();
-  if (normalizedSessionKey && ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.has(normalizedSessionKey)) {
-    return true;
+  if (normalizedSessionKey) {
+    const sessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey);
+    const abandoned = sessionId ? ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId) : undefined;
+    if (abandoned?.reason === "timeout") {
+      return true;
+    }
   }
   const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
+  if (!normalizedSessionFile) {
+    return false;
+  }
+  const sessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile);
   return Boolean(
-    normalizedSessionFile && ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.has(normalizedSessionFile),
+    sessionId && ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId)?.reason === "timeout",
   );
+}
+
+/**
+ * Temporarily releases terminal-timeout delivery suppression while a timed-out
+ * attempt is performing an eligible compaction-and-retry recovery.
+ */
+export function markEmbeddedRunRecoveringTimeout(sessionId: string): boolean {
+  const abandoned = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId.trim());
+  if (!abandoned || abandoned.reason !== "timeout") {
+    return false;
+  }
+  abandoned.reason = "recovering_timeout";
+  return true;
+}
+
+/** Restores terminal-timeout suppression when recovery cannot continue. */
+export function restoreEmbeddedRunTimeoutAbandonment(sessionId: string): boolean {
+  const abandoned = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId.trim());
+  if (!abandoned || abandoned.reason !== "recovering_timeout") {
+    return false;
+  }
+  abandoned.reason = "timeout";
+  return true;
 }
 
 function clearActiveRunSessionFiles(sessionId: string, sessionFile?: string): void {

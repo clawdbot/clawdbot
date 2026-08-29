@@ -97,7 +97,7 @@ export type AbandonedEmbeddedRun = {
   sessionKey?: string;
   sessionFile?: string;
   abandonedAtMs: number;
-  reason: "timeout";
+  reason: "timeout" | "recovering_timeout";
 };
 
 const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");

@@ -14,9 +14,11 @@ import {
   getActiveEmbeddedRunSnapshot,
   isEmbeddedAgentRunHandleActive,
   isEmbeddedRunAbandoned,
+  markEmbeddedRunRecoveringTimeout,
   markActiveEmbeddedRunAbandoned,
   resolveActiveEmbeddedRunOwner,
   resolveActiveEmbeddedRunOwnerByRunId,
+  restoreEmbeddedRunTimeoutAbandonment,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
@@ -274,6 +276,24 @@ describe("embedded-agent runner run lifecycle", () => {
     setActiveEmbeddedRun("session-third", createRunHandle(), "agent:main:main");
 
     expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
+  });
+
+  it("does not reject completions while a timeout is recovering", () => {
+    const handle = createRunHandle();
+    setActiveEmbeddedRun("session-recovering", handle, "agent:main:recovering");
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-recovering",
+        handle,
+        sessionKey: "agent:main:recovering",
+        reason: "timeout",
+      }),
+    ).toBe(true);
+
+    expect(markEmbeddedRunRecoveringTimeout("session-recovering")).toBe(true);
+    expect(isEmbeddedRunAbandoned({ sessionId: "session-recovering" })).toBe(false);
+    expect(restoreEmbeddedRunTimeoutAbandonment("session-recovering")).toBe(true);
+    expect(isEmbeddedRunAbandoned({ sessionId: "session-recovering" })).toBe(true);
   });
 
   it("ignores timeout abandonment from a stale replaced handle", () => {

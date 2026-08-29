@@ -1,6 +1,7 @@
 import { deriveContextPromptTokens, normalizeUsage } from "../../usage.js";
 import { runPostCompactionSideEffects } from "../compaction-hooks.js";
 import { log } from "../logger.js";
+import { markEmbeddedRunRecoveringTimeout, restoreEmbeddedRunTimeoutAbandonment } from "../runs.js";
 import {
   compactEmbeddedRunForRecovery,
   type EmbeddedRunCompactionRecoveryInput,
@@ -51,6 +52,10 @@ export async function recoverEmbeddedRunTimeout(
   }
 
   input.assertRecoveryActive();
+  // A recoverable timeout is a non-terminal lifecycle phase. Release the
+  // terminal abandonment gate for the duration of compaction so completions
+  // arriving in this window are not discarded as requester_abandoned.
+  const recoveryMarker = markEmbeddedRunRecoveringTimeout(input.runParams.sessionId);
   const timeoutDiagId = createRunRecoveryDiagId();
   input.state.timeoutCompactionAttempts += 1;
   log.warn(
@@ -75,6 +80,9 @@ export async function recoverEmbeddedRunTimeout(
   );
   input.assertRecoveryActive();
   if (!timeoutCompactResult.compacted) {
+    if (recoveryMarker) {
+      restoreEmbeddedRunTimeoutAbandonment(input.runParams.sessionId);
+    }
     log.warn(
       `[timeout-compaction] compaction did not reduce context for ${input.provider}/${input.modelId}; falling through to normal handling`,
     );
