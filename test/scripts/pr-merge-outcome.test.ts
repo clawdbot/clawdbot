@@ -289,7 +289,8 @@ merge_run 123 "\${1:-false}"
   };
   const advance = (owner = "after\n", sibling = "advanced\n") => {
     const parent = git(["--git-dir=" + remote, "rev-parse", "main"]);
-    const next = commit(tree(owner, sibling), [parent]);
+    // Same-tree main advances must not become source commits within one clock second.
+    const next = commit(tree(owner, sibling), [parent], "Main advance\n");
     git(["push", "-q", "origin", next + ":refs/heads/main"]);
     return next;
   };
@@ -368,6 +369,8 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   it("checks the source fork base even when recorded main contains a cherry-picked prefix", () => {
     const f = fixture(undefined, [["after\n"], ["after\n", "reviewed\n"]]);
     const main = f.advance("after\n", "stable\n");
+    expect(main).not.toBe(f.sourceCommits[0]);
+    expect(f.git(["merge-base", main, f.head])).toBe(f.base);
     f.save({ ...f.state(), mode: "unapplied" });
     expect(f.run(false, f.repo, "rebase").status).toBe(1);
     f.recover();
