@@ -11,6 +11,7 @@ import { writeJsonTarget } from "../infra/json-file.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
 import {
+  clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
   removePluginInstallRecordFromRecords,
@@ -605,6 +606,11 @@ function assertNeverPluginRegistryIssue(issue: never): never {
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<PluginRegistryDoctorRepairResult> {
+  if (params.prompter.shouldRepair) {
+    // Registry repair is a write boundary. An earlier Doctor contribution may have committed a
+    // newer install ledger while this snapshot-owned cache still holds the previous generation.
+    clearLoadInstalledPluginIndexInstallRecordsCache();
+  }
   let preflight: ReturnType<typeof preflightPluginRegistryInstallMigration>;
   try {
     preflight = preflightPluginRegistryInstallMigration(params);
