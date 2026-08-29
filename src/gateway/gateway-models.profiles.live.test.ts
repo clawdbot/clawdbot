@@ -53,6 +53,7 @@ import { getApiKeyForModelCore, type ResolvedProviderAuth } from "../agents/mode
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModelCore } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   appendPrioritizedDynamicLiveModels,
@@ -2840,7 +2841,7 @@ function buildLiveGatewayAuthProfileStore(params: {
   const materializedProfiles: AuthProfileStore["profiles"] = {};
 
   for (const { model, auth } of params.candidates) {
-    const provider = normalizeProviderId(model.provider);
+    const provider = resolveProviderIdForAuth(model.provider);
     const modelRef = `${model.provider}/${model.id}`;
     if (auth.source.startsWith("profile:") && !auth.profileId) {
       throw new Error(`Prepared live auth for ${modelRef} is missing its selected profile id.`);
@@ -2857,7 +2858,7 @@ function buildLiveGatewayAuthProfileStore(params: {
           `Prepared live auth profile "${selectedProfileId}" for ${modelRef} is missing from its source store.`,
         );
       }
-      if (normalizeProviderId(selectedProfile.provider) !== provider) {
+      if (resolveProviderIdForAuth(selectedProfile.provider) !== provider) {
         throw new Error(
           `Prepared live auth profile "${selectedProfileId}" does not belong to ${modelRef}.`,
         );
@@ -2913,7 +2914,7 @@ function buildLiveGatewayAuthProfileStore(params: {
   const profiles = {
     ...Object.fromEntries(
       Object.entries(params.store.profiles).filter(([, profile]) => {
-        return !directCredentialProviders.has(normalizeProviderId(profile.provider));
+        return !directCredentialProviders.has(resolveProviderIdForAuth(profile.provider));
       }),
     ),
     ...materializedProfiles,
@@ -2922,7 +2923,7 @@ function buildLiveGatewayAuthProfileStore(params: {
 
   const order: NonNullable<AuthProfileStore["order"]> = Object.fromEntries(
     Object.entries(params.store.order ?? {})
-      .filter(([provider]) => !directCredentialProviders.has(normalizeProviderId(provider)))
+      .filter(([provider]) => !directCredentialProviders.has(resolveProviderIdForAuth(provider)))
       .map(([provider, ids]) => [provider, ids.filter((id) => keepProfileIds.has(id))])
       .filter(([, ids]) => expectDefined(ids, "ids test invariant").length > 0),
   );
@@ -2934,7 +2935,8 @@ function buildLiveGatewayAuthProfileStore(params: {
     ? Object.fromEntries(
         Object.entries(params.store.lastGood).filter(([provider, id]) => {
           return (
-            !directCredentialProviders.has(normalizeProviderId(provider)) && keepProfileIds.has(id)
+            !directCredentialProviders.has(resolveProviderIdForAuth(provider)) &&
+            keepProfileIds.has(id)
           );
         }),
       )
@@ -3317,91 +3319,108 @@ describe("buildLiveGatewayAuthProfileStore", () => {
     }
   });
 
-  it("keeps an env-first provider on its prepared direct credential", () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        anthropicProfile: {
-          type: "api_key",
-          provider: "anthropic",
-          key: "stored-anthropic-test-key",
-        },
-      },
-      order: {
-        anthropic: ["anthropicProfile"],
-      },
-      lastGood: {
-        anthropic: "anthropicProfile",
-      },
-      usageStats: {
-        anthropicProfile: { lastUsed: 1 },
-      },
-    };
-
-    const isolated = buildLiveGatewayAuthProfileStore({
-      store,
-      requireProfileKeys: false,
-      candidates: [
-        {
-          model: createGatewayLiveTestModel("anthropic", "claude-sonnet-4-6"),
-          auth: {
-            apiKey: "prepared-anthropic-test-key",
-            mode: "api-key",
-            source: "env: ANTHROPIC_API_KEY",
+  it.each(["anthropic", "claude-cli"])(
+    "keeps env-first %s on its prepared direct credential",
+    (modelProvider) => {
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          anthropicProfile: {
+            type: "api_key",
+            provider: "anthropic",
+            key: "stored-anthropic-test-key",
           },
         },
-      ],
-    });
-
-    expect(isolated.profiles.anthropicProfile).toBeUndefined();
-    expect(isolated.order).toBeUndefined();
-    expect(isolated.lastGood).toBeUndefined();
-    expect(isolated.usageStats).toBeUndefined();
-  });
-
-  it("preserves the exact selected source profile and prioritizes it in isolated order", () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:other": {
-          type: "api_key",
-          provider: "openai",
-          key: "other-openai-test-key",
+        order: {
+          anthropic: ["anthropicProfile"],
         },
-        "openai:selected": {
-          type: "api_key",
-          provider: "openai",
-          key: "selected-openai-test-key",
+        lastGood: {
+          anthropic: "anthropicProfile",
         },
-      },
-      order: { openai: ["openai:other", "openai:selected"] },
-      usageStats: { "openai:selected": { lastUsed: 3 } },
-    };
+        usageStats: {
+          anthropicProfile: { lastUsed: 1 },
+        },
+      };
 
-    const isolated = buildLiveGatewayAuthProfileStore({
-      store,
-      candidates: [
-        {
-          model: createGatewayLiveTestModel("openai", "gpt-5.6-luna"),
-          auth: {
-            apiKey: "selected-openai-test-key",
-            profileId: "openai:selected",
-            mode: "api-key",
-            source: "profile:openai:selected",
+      const isolated = buildLiveGatewayAuthProfileStore({
+        store,
+        requireProfileKeys: false,
+        candidates: [
+          {
+            model: createGatewayLiveTestModel(modelProvider, "claude-sonnet-4-6"),
+            auth: {
+              apiKey: "prepared-anthropic-test-key",
+              mode: "api-key",
+              source: "env: ANTHROPIC_API_KEY",
+            },
+          },
+        ],
+      });
+
+      expect(isolated.profiles.anthropicProfile).toBeUndefined();
+      expect(isolated.order).toBeUndefined();
+      expect(isolated.lastGood).toBeUndefined();
+      expect(isolated.usageStats).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { modelProvider: "openai", provider: "openai", modelId: "gpt-5.6-luna" },
+    { modelProvider: "claude-cli", provider: "anthropic", modelId: "claude-sonnet-4-6" },
+  ])(
+    "preserves the selected profile for $modelProvider in canonical auth order",
+    ({ modelProvider, provider, modelId }) => {
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          other: {
+            type: "api_key",
+            provider,
+            key: "other-test-key",
+          },
+          selected: {
+            type: "api_key",
+            provider,
+            key: "selected-test-key",
           },
         },
-      ],
-    });
+        order: { [provider]: ["other", "selected"] },
+        usageStats: { selected: { lastUsed: 3 } },
+      };
 
-    expect(isolated.profiles["openai:selected"]).toEqual(store.profiles["openai:selected"]);
-    expect(isolated.order?.openai).toEqual(["openai:selected", "openai:other"]);
-    expect(isolated.usageStats?.["openai:selected"]).toEqual({ lastUsed: 3 });
-  });
+      const isolated = buildLiveGatewayAuthProfileStore({
+        store,
+        candidates: [
+          {
+            model: createGatewayLiveTestModel(modelProvider, modelId),
+            auth: {
+              apiKey: "selected-test-key",
+              profileId: "selected",
+              mode: "api-key",
+              source: "profile:selected",
+            },
+          },
+        ],
+      });
 
-  it("rejects selected profiles absent from the authoritative source store", () => {
+      expect(isolated.profiles["selected"]).toEqual(store.profiles["selected"]);
+      expect(isolated.order?.[provider]).toEqual(["selected", "other"]);
+      expect(isolated.usageStats?.["selected"]).toEqual({ lastUsed: 3 });
+    },
+  );
+
+  it.each([
+    { provider: undefined, error: /openai:missing.*missing from its source store/ },
+    { provider: "unrelated", error: /openai:missing.*does not belong to openai/ },
+  ])("rejects missing or unrelated selected profiles ($provider)", ({ provider, error }) => {
     expect(() =>
       buildLiveGatewayAuthProfileStore({
-        store: { version: 1, profiles: {} },
+        store: {
+          version: 1,
+          profiles: provider
+            ? { "openai:missing": { type: "api_key", provider, key: "unrelated-test-key" } }
+            : {},
+        },
         candidates: [
           {
             model: createGatewayLiveTestModel("openai", "gpt-5.6-luna"),
@@ -3414,7 +3433,7 @@ describe("buildLiveGatewayAuthProfileStore", () => {
           },
         ],
       }),
-    ).toThrow(/openai:missing.*missing from its source store/);
+    ).toThrow(error);
   });
 });
 function extractTranscriptMessageText(message: unknown): string {
