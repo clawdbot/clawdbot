@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { copyInternalToolResultAcknowledgement } from "../../packages/agent-core/src/internal-hooks.js";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import {
@@ -10,7 +10,7 @@ import {
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import type { AgentToolResult } from "./runtime/index.js";
+import type { AgentMessage, AgentToolResult } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { SessionManager } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
@@ -40,9 +40,14 @@ async function poll(
   sessionId: string,
   toolCallId: string,
   turn = processTurn(toolCallId, sessionId),
+  timeout?: number,
 ) {
   return await runWithAgentToolExecutionContext(turn, () =>
-    processTool.execute(toolCallId, { action: "poll", sessionId }),
+    processTool.execute(toolCallId, {
+      action: "poll",
+      sessionId,
+      ...(timeout === undefined ? {} : { timeout }),
+    }),
   );
 }
 
@@ -50,12 +55,11 @@ function resultText(result: AgentToolResult<unknown>): string {
   return result.content.find((part) => part.type === "text")?.text ?? "";
 }
 
-function persistResult(
-  manager: ReturnType<typeof SessionManager.inMemory>,
+function toolResultMessage(
   toolCallId: string,
   result: AgentToolResult<unknown>,
-): void {
-  const message = copyInternalToolResultAcknowledgement(result, {
+): Extract<AgentMessage, { role: "toolResult" }> {
+  return copyInternalToolResultAcknowledgement(result, {
     role: "toolResult" as const,
     toolCallId,
     toolName: "process",
@@ -64,7 +68,14 @@ function persistResult(
     isError: false,
     timestamp: Date.now(),
   });
-  manager.appendMessage(message);
+}
+
+function persistResult(
+  manager: ReturnType<typeof SessionManager.inMemory>,
+  toolCallId: string,
+  result: AgentToolResult<unknown>,
+): void {
+  manager.appendMessage(toolResultMessage(toolCallId, result));
 }
 
 test.each(["running", "completed"] as const)(
@@ -116,4 +127,49 @@ test("does not duplicate staged output across parallel polls from one assistant 
 
   expect(resultText(first)).toContain("one-copy");
   expect(resultText(second)).not.toContain("one-copy");
+});
+
+test("replays blocked poll output immediately when the retry has a timeout", async () => {
+  const session = createProcessSessionFixture({
+    id: "blocked-delivery",
+    backgrounded: true,
+  });
+  addSession(session);
+  appendOutput(session, "stdout", "blocked-output\n");
+  const processTool = createProcessTool();
+  const droppedTurn = processTurn("blocked-result", session.id);
+  const dropped = await poll(processTool, session.id, droppedTurn.toolCall.id, droppedTurn);
+  const manager = SessionManager.inMemory();
+  installSessionToolResultGuard(manager, {
+    beforeMessageWriteHook(event) {
+      return event.message.role === "toolResult" && event.message.toolCallId === "blocked-result"
+        ? { block: true }
+        : undefined;
+    },
+  });
+  manager.appendMessage(droppedTurn.assistantMessage);
+  expect(
+    manager.appendMessage(toolResultMessage(droppedTurn.toolCall.id, dropped)),
+  ).toBeUndefined();
+
+  vi.useFakeTimers();
+  try {
+    const retryTurn = processTurn("blocked-retry", session.id);
+    let settled = false;
+    const retryPromise = poll(
+      processTool,
+      session.id,
+      retryTurn.toolCall.id,
+      retryTurn,
+      30_000,
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
+    expect(resultText(await retryPromise)).toContain("blocked-output");
+  } finally {
+    vi.useRealTimers();
+  }
 });

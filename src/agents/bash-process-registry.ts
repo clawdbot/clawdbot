@@ -286,6 +286,11 @@ export function prepareSessionPoll(session: ProcessSession, scope: object | unde
   };
 }
 
+/** Returns whether a prior poll has output ready for immediate replay. */
+export function hasPendingPollDelivery(session: ProcessSession): boolean {
+  return session.pendingPollDelivery !== undefined;
+}
+
 /** Moves a session to finished state and records exit metadata. */
 export function markExited(
   session: ProcessSession,

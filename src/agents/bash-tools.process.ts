@@ -16,6 +16,7 @@ import {
   deleteSession,
   getFinishedSession,
   getSession,
+  hasPendingPollDelivery,
   listFinishedSessions,
   listRunningSessions,
   markTerminalPollObserved,
@@ -463,6 +464,7 @@ export function createProcessTool(
             // Interactive children cannot progress until their pending prompt reaches the model.
             while (
               !scopedSession.exited &&
+              !hasPendingPollDelivery(scopedSession) &&
               scopedSession.pendingOutput.length === 0 &&
               !scopedSession.pendingOutputDropped &&
               Date.now() < deadline

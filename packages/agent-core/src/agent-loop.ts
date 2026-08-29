@@ -15,7 +15,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
 import {
-  acknowledgeInternalToolResult,
   copyInternalToolResultAcknowledgement,
   getInternalToolExecutionPreparer,
   getInternalSyncSteeringGetter,
@@ -1902,7 +1901,5 @@ async function emitToolResultMessage(
 ): Promise<void> {
   await emit({ type: "message_start", message: toolResultMessage });
   await emit({ type: "message_end", message: toolResultMessage });
-  // Guarded sessions acknowledge at persistence; this covers unguarded Agent consumers.
-  acknowledgeInternalToolResult(toolResultMessage);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

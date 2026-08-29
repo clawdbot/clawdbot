@@ -7,6 +7,7 @@ import { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from
 import { Agent } from "./agent.js";
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE, TranscriptNotContinuableError } from "./errors.js";
 import {
+  acknowledgeInternalToolResult,
   attachInternalSyncSteeringGetter,
   attachInternalToolBatchLifecycle,
   attachInternalToolExecutionPreparer,
@@ -2619,6 +2620,13 @@ describe("agentLoop tool termination", () => {
         afterToolOutcome: async () => ({ details: { phase: "after-outcome" } }),
       },
       async (event) => {
+        if (
+          !testCase.failAttachment &&
+          event.type === "message_end" &&
+          event.message.role === "toolResult"
+        ) {
+          acknowledgeInternalToolResult(event.message);
+        }
         if (
           testCase.failAttachment &&
           event.type === "message_end" &&
