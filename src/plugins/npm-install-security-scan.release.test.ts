@@ -23,8 +23,15 @@ type PublishablePluginPackage = {
   packageName: string;
 };
 
+type PluginSecurityInventoryPolicy = {
+  requiredSourceFindingCounts: ReadonlyMap<string, number>;
+  optionalPackedFindingCounts: ReadonlyMap<string, number>;
+  codexSourceLayouts: ReadonlyArray<ReadonlyMap<string, number>>;
+  requiredReviewedPackageNames: ReadonlySet<string>;
+};
+
 const execFileAsync = promisify(execFile);
-const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS = new Map<string, number>([
+const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
   ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts", 1],
@@ -38,25 +45,18 @@ const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS = new Map<string, nu
   ["@openclaw/voice-call:dangerous-exec:src/tunnel.ts", 1],
 ]);
 
-const REVIEWED_CODEX_LEGACY_SOURCE_CRITICAL_FINDING_COUNTS = new Map<string, number>([
+const CODEX_LEGACY_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts", 1],
 ]);
-const REVIEWED_CODEX_CURRENT_SOURCE_CRITICAL_FINDING_COUNTS = new Map<string, number>([
+const CODEX_CURRENT_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/sandbox-child.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-process-containment.ts", 1],
 ]);
-const REVIEWED_CODEX_SOURCE_LAYOUTS: ReadonlyArray<ReadonlyMap<string, number>> = [
-  REVIEWED_CODEX_LEGACY_SOURCE_CRITICAL_FINDING_COUNTS,
-  REVIEWED_CODEX_CURRENT_SOURCE_CRITICAL_FINDING_COUNTS,
-];
-const REVIEWED_CODEX_SOURCE_CRITICAL_FINDING_COUNTS = new Map<string, number>(
-  REVIEWED_CODEX_SOURCE_LAYOUTS.flatMap((layout) => [...layout]),
-);
 
 // Generated chunks can contain multiple reviewed execution sites. Counts are
 // part of the contract so an added or missing site fails the release scan.
-const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS = new Map<string, number>([
+const CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs", 1],
   ["@openclaw/acpx:dangerous-exec:dist/service-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:dist/api.js", 1],
@@ -67,6 +67,71 @@ const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS = new Map<strin
   ["@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js", 1],
   ["@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
 ]);
+
+const FROZEN_TARGET_REVISION = "fdc1c2e6c1b5f41d00edb2eb55244fa7c51f87dd";
+const FROZEN_TARGET_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+  ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
+  ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs", 1],
+  ["@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts", 1],
+  ["@openclaw/discord:dangerous-exec:src/voice/audio.ts", 1],
+  ["@openclaw/google-meet:dangerous-exec:src/node-host.ts", 1],
+  ["@openclaw/google-meet:dangerous-exec:src/realtime.ts", 1],
+  ["@openclaw/matrix:dangerous-exec:src/matrix/deps.ts", 1],
+  ["@openclaw/raft:dangerous-exec:src/gateway.ts", 1],
+  ["@openclaw/signal:dangerous-exec:src/daemon.ts", 1],
+  ["@openclaw/voice-call:dangerous-exec:src/tunnel.ts", 1],
+  ["@openclaw/voice-call:dangerous-exec:src/webhook/tailscale.ts", 1],
+]);
+const FROZEN_TARGET_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, number>([
+  ["@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs", 1],
+  ["@openclaw/acpx:dangerous-exec:dist/service-<hash>.js", 1],
+  ["@openclaw/codex:dangerous-exec:dist/client-<hash>.js", 1],
+  ["@openclaw/google-meet:dangerous-exec:dist/index.js", 1],
+  ["@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js", 1],
+  ["@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
+]);
+
+function packageNameForFinding(key: string): string {
+  return key.slice(0, key.indexOf(":"));
+}
+
+function createPluginSecurityInventoryPolicy(params: {
+  requiredSourceFindingCounts: ReadonlyMap<string, number>;
+  optionalPackedFindingCounts: ReadonlyMap<string, number>;
+  codexSourceLayouts: ReadonlyArray<ReadonlyMap<string, number>>;
+}): PluginSecurityInventoryPolicy {
+  const requiredReviewedPackageNames = new Set(
+    [
+      ...params.requiredSourceFindingCounts.keys(),
+      ...params.codexSourceLayouts.flatMap((layout) => [...layout.keys()]),
+    ].map(packageNameForFinding),
+  );
+  return { ...params, requiredReviewedPackageNames };
+}
+
+const CURRENT_SECURITY_INVENTORY_POLICY = createPluginSecurityInventoryPolicy({
+  requiredSourceFindingCounts: CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  optionalPackedFindingCounts: CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+  codexSourceLayouts: [CODEX_LEGACY_SOURCE_FINDING_COUNTS, CODEX_CURRENT_SOURCE_FINDING_COUNTS],
+});
+
+// This exact candidate predates the current plugin and finding inventory.
+// Keep its complete reviewed policy isolated so every other revision fails closed.
+const FROZEN_TARGET_SECURITY_INVENTORY_POLICY = createPluginSecurityInventoryPolicy({
+  requiredSourceFindingCounts: FROZEN_TARGET_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  optionalPackedFindingCounts: FROZEN_TARGET_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+  codexSourceLayouts: [CODEX_LEGACY_SOURCE_FINDING_COUNTS],
+});
+
+function selectPluginSecurityInventoryPolicy(
+  candidateRevision: string,
+): PluginSecurityInventoryPolicy {
+  return candidateRevision === FROZEN_TARGET_REVISION
+    ? FROZEN_TARGET_SECURITY_INVENTORY_POLICY
+    : CURRENT_SECURITY_INVENTORY_POLICY;
+}
+
 function parseNpmPackFiles(raw: string, packageName: string): string[] {
   const parsed = JSON.parse(raw) as unknown;
   const entries = resolveNpmJsonEntries(parsed);
@@ -109,6 +174,7 @@ function isScannerWalkedPackedPath(packedPath: string): boolean {
 
 function normalizePackedFindingPath(packedPath: string): string {
   for (const prefix of [
+    "client",
     "dynamic-tools",
     "outbound-payload.test-harness",
     "run-attempt",
@@ -172,12 +238,13 @@ function expandReviewedFindingCounts(counts: ReadonlyMap<string, number>): strin
 }
 
 function resolveReviewedCodexSourceLayout(
+  policy: PluginSecurityInventoryPolicy,
   reviewedCriticalFindings: readonly string[],
 ): string[] | undefined {
   const observedSourceFindings = reviewedCriticalFindings
-    .filter((key) => REVIEWED_CODEX_SOURCE_CRITICAL_FINDING_COUNTS.has(key))
+    .filter((key) => policy.codexSourceLayouts.some((layout) => layout.has(key)))
     .toSorted();
-  return REVIEWED_CODEX_SOURCE_LAYOUTS.map(expandReviewedFindingCounts).find((layout) => {
+  return policy.codexSourceLayouts.map(expandReviewedFindingCounts).find((layout) => {
     const expectedSourceFindings = layout.toSorted();
     return (
       expectedSourceFindings.length === observedSourceFindings.length &&
@@ -187,17 +254,17 @@ function resolveReviewedCodexSourceLayout(
 }
 
 function requiredReviewedFindingsForPackage(
+  policy: PluginSecurityInventoryPolicy,
   packageName: string,
   reviewedCriticalFindings: readonly string[],
 ): string[] {
-  const commonFindings = [...REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS].flatMap(
-    ([key, count]) =>
-      key.startsWith(`${packageName}:`) ? Array.from({ length: count }, () => key) : [],
+  const commonFindings = [...policy.requiredSourceFindingCounts].flatMap(([key, count]) =>
+    key.startsWith(`${packageName}:`) ? Array.from({ length: count }, () => key) : [],
   );
   if (packageName !== "@openclaw/codex") {
     return commonFindings;
   }
-  const sourceLayout = resolveReviewedCodexSourceLayout(reviewedCriticalFindings);
+  const sourceLayout = resolveReviewedCodexSourceLayout(policy, reviewedCriticalFindings);
   if (!sourceLayout) {
     throw new Error(
       "@openclaw/codex: reviewed source findings must match exactly one complete known layout.",
@@ -206,22 +273,26 @@ function requiredReviewedFindingsForPackage(
   return [...commonFindings, ...sourceLayout];
 }
 
-function isReviewedPublishableCriticalFinding(key: string): boolean {
+function isReviewedPublishableCriticalFinding(
+  policy: PluginSecurityInventoryPolicy,
+  key: string,
+): boolean {
   return (
-    REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS.has(key) ||
-    REVIEWED_CODEX_SOURCE_CRITICAL_FINDING_COUNTS.has(key) ||
-    OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS.has(key)
+    policy.requiredSourceFindingCounts.has(key) ||
+    policy.codexSourceLayouts.some((layout) => layout.has(key)) ||
+    policy.optionalPackedFindingCounts.has(key)
   );
 }
 
 function expectedOptionalReviewedFindingsForPackedPath(
+  policy: PluginSecurityInventoryPolicy,
   packageName: string,
   packedPath: string,
 ): string[] {
   const normalizedPath = normalizePackedFindingPath(packedPath);
   const keyPrefix = `${packageName}:`;
   const keySuffix = `:${normalizedPath}`;
-  return [...OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS].flatMap(([key, count]) =>
+  return [...policy.optionalPackedFindingCounts].flatMap(([key, count]) =>
     key.startsWith(keyPrefix) && key.endsWith(keySuffix)
       ? Array.from({ length: count }, () => key)
       : [],
@@ -299,6 +370,20 @@ function listFindExtensionPackageFiles(): string[] | null {
     .toSorted();
 }
 
+function resolveCandidateRevision(): string {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const revision = result.stdout.trim();
+  if (result.status !== 0 || !/^[0-9a-f]{40}$/u.test(revision)) {
+    throw new Error("Could not resolve the exact candidate Git revision.");
+  }
+  return revision;
+}
+
 function collectPublishablePluginPackages(): PublishablePluginPackage[] {
   return listPublishablePluginPackageDirs()
     .flatMap((packageDir) => {
@@ -328,7 +413,10 @@ function collectPublishablePluginPackages(): PublishablePluginPackage[] {
     .toSorted((left, right) => left.packageName.localeCompare(right.packageName));
 }
 
-async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): Promise<{
+async function scanPublishablePluginPackage(
+  policy: PluginSecurityInventoryPolicy,
+  plugin: PublishablePluginPackage,
+): Promise<{
   reviewedCriticalFindings: string[];
   expectedReviewedCriticalFindings: string[];
   unexpectedCriticalFindings: string[];
@@ -357,6 +445,7 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
       continue;
     }
     for (const key of expectedOptionalReviewedFindingsForPackedPath(
+      policy,
       plugin.packageName,
       packedFile,
     )) {
@@ -398,7 +487,7 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
           continue;
         }
       }
-      if (isReviewedPublishableCriticalFinding(key)) {
+      if (isReviewedPublishableCriticalFinding(policy, key)) {
         reviewedCriticalFindings.push(key);
         continue;
       }
@@ -408,7 +497,7 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
     const reviewedSourceFindings = new Set(reviewedCriticalFindings);
     for (const generated of generatedCodexFindings) {
       if (
-        isReviewedPublishableCriticalFinding(generated.sourceKey) &&
+        isReviewedPublishableCriticalFinding(policy, generated.sourceKey) &&
         reviewedSourceFindings.has(generated.sourceKey)
       ) {
         continue;
@@ -434,6 +523,8 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
 }
 
 describe("publishable plugin npm package install security scan", () => {
+  const candidateRevision = resolveCandidateRevision();
+  const securityInventoryPolicy = selectPluginSecurityInventoryPolicy(candidateRevision);
   const publishablePluginPackages = collectPublishablePluginPackages();
   const scanResultsByPackageName = new Map<
     string,
@@ -444,7 +535,7 @@ describe("publishable plugin npm package install security scan", () => {
     const results = await Promise.all(
       publishablePluginPackages.map(async (plugin) => ({
         packageName: plugin.packageName,
-        result: await scanPublishablePluginPackage(plugin),
+        result: await scanPublishablePluginPackage(securityInventoryPolicy, plugin),
       })),
     );
     for (const { packageName, result } of results) {
@@ -456,13 +547,9 @@ describe("publishable plugin npm package install security scan", () => {
     const publishablePackageNames = new Set(
       publishablePluginPackages.map((plugin) => plugin.packageName),
     );
-    const missingPackages = [
-      ...new Set(
-        [...REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS.keys()].map((key) =>
-          key.slice(0, key.indexOf(":")),
-        ),
-      ),
-    ].filter((packageName) => !publishablePackageNames.has(packageName));
+    const missingPackages = [...securityInventoryPolicy.requiredReviewedPackageNames].filter(
+      (packageName) => !publishablePackageNames.has(packageName),
+    );
 
     expect(missingPackages.toSorted()).toStrictEqual([]);
   });
@@ -482,9 +569,13 @@ describe("publishable plugin npm package install security scan", () => {
     const packedPath = "dist/future-exec-unknown.js";
 
     expect(normalizePackedFindingPath(packedPath)).toBe(packedPath);
-    expect(expectedOptionalReviewedFindingsForPackedPath("@openclaw/codex", packedPath)).toEqual(
-      [],
-    );
+    expect(
+      expectedOptionalReviewedFindingsForPackedPath(
+        CURRENT_SECURITY_INVENTORY_POLICY,
+        "@openclaw/codex",
+        packedPath,
+      ),
+    ).toEqual([]);
   });
 
   it("requires exact occurrence counts for reviewed Codex dist chunks", () => {
@@ -492,30 +583,52 @@ describe("publishable plugin npm package install security scan", () => {
 
     expect(
       expectedOptionalReviewedFindingsForPackedPath(
+        CURRENT_SECURITY_INVENTORY_POLICY,
         "@openclaw/codex",
         "dist/dynamic-tools-current.js",
       ),
     ).toEqual([dynamicToolsKey]);
     expect(
       expectedOptionalReviewedFindingsForPackedPath(
+        CURRENT_SECURITY_INVENTORY_POLICY,
         "@openclaw/codex",
         "dist/run-attempt-current.js",
       ),
     ).toEqual([]);
     expect(
       expectedOptionalReviewedFindingsForPackedPath(
+        CURRENT_SECURITY_INVENTORY_POLICY,
         "@openclaw/codex",
         "dist/session-catalog-current.js",
       ),
     ).toEqual([]);
     expect(
       expectedOptionalReviewedFindingsForPackedPath(
+        CURRENT_SECURITY_INVENTORY_POLICY,
         "@openclaw/codex",
         "dist/shared-client-current.js",
       ),
     ).toEqual(["@openclaw/codex:dangerous-exec:dist/shared-client-<hash>.js"]);
     expect(
-      expectedOptionalReviewedFindingsForPackedPath("@openclaw/codex", "dist/client-retired.js"),
+      expectedOptionalReviewedFindingsForPackedPath(
+        CURRENT_SECURITY_INVENTORY_POLICY,
+        "@openclaw/codex",
+        "dist/client-retired.js",
+      ),
+    ).toEqual([]);
+    expect(
+      expectedOptionalReviewedFindingsForPackedPath(
+        FROZEN_TARGET_SECURITY_INVENTORY_POLICY,
+        "@openclaw/codex",
+        "dist/client-frozen.js",
+      ),
+    ).toEqual(["@openclaw/codex:dangerous-exec:dist/client-<hash>.js"]);
+    expect(
+      expectedOptionalReviewedFindingsForPackedPath(
+        FROZEN_TARGET_SECURITY_INVENTORY_POLICY,
+        "@openclaw/codex",
+        "dist/dynamic-tools-current.js",
+      ),
     ).toEqual([]);
   });
 
@@ -557,15 +670,50 @@ describe("publishable plugin npm package install security scan", () => {
   });
 
   it("accepts either complete reviewed Codex source layout", () => {
-    const legacyLayout = expandReviewedFindingCounts(
-      REVIEWED_CODEX_LEGACY_SOURCE_CRITICAL_FINDING_COUNTS,
-    );
-    const currentLayout = expandReviewedFindingCounts(
-      REVIEWED_CODEX_CURRENT_SOURCE_CRITICAL_FINDING_COUNTS,
-    );
+    const legacyLayout = expandReviewedFindingCounts(CODEX_LEGACY_SOURCE_FINDING_COUNTS);
+    const currentLayout = expandReviewedFindingCounts(CODEX_CURRENT_SOURCE_FINDING_COUNTS);
 
-    expect(resolveReviewedCodexSourceLayout(legacyLayout)).toEqual(legacyLayout);
-    expect(resolveReviewedCodexSourceLayout(currentLayout)).toEqual(currentLayout);
+    expect(
+      resolveReviewedCodexSourceLayout(CURRENT_SECURITY_INVENTORY_POLICY, legacyLayout),
+    ).toEqual(legacyLayout);
+    expect(
+      resolveReviewedCodexSourceLayout(CURRENT_SECURITY_INVENTORY_POLICY, currentLayout),
+    ).toEqual(currentLayout);
+    expect(
+      resolveReviewedCodexSourceLayout(FROZEN_TARGET_SECURITY_INVENTORY_POLICY, legacyLayout),
+    ).toEqual(legacyLayout);
+    expect(
+      resolveReviewedCodexSourceLayout(FROZEN_TARGET_SECURITY_INVENTORY_POLICY, currentLayout),
+    ).toBeUndefined();
+    expect(
+      resolveReviewedCodexSourceLayout(FROZEN_TARGET_SECURITY_INVENTORY_POLICY, [
+        ...legacyLayout,
+        legacyLayout[0],
+      ]),
+    ).toBeUndefined();
+    expect(selectPluginSecurityInventoryPolicy(FROZEN_TARGET_REVISION)).toBe(
+      FROZEN_TARGET_SECURITY_INVENTORY_POLICY,
+    );
+    expect(selectPluginSecurityInventoryPolicy(`0${FROZEN_TARGET_REVISION.slice(1)}`)).toBe(
+      CURRENT_SECURITY_INVENTORY_POLICY,
+    );
+    const historicalFinding = "@openclaw/matrix:dangerous-exec:src/matrix/deps.ts";
+    const currentFinding = "@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts";
+    expect(
+      isReviewedPublishableCriticalFinding(
+        FROZEN_TARGET_SECURITY_INVENTORY_POLICY,
+        historicalFinding,
+      ),
+    ).toBe(true);
+    expect(
+      isReviewedPublishableCriticalFinding(CURRENT_SECURITY_INVENTORY_POLICY, historicalFinding),
+    ).toBe(false);
+    expect(
+      isReviewedPublishableCriticalFinding(CURRENT_SECURITY_INVENTORY_POLICY, currentFinding),
+    ).toBe(true);
+    expect(
+      isReviewedPublishableCriticalFinding(FROZEN_TARGET_SECURITY_INVENTORY_POLICY, currentFinding),
+    ).toBe(false);
   });
 
   const invalidCodexSourceLayouts: Array<[name: string, findings: string[]]> = [
@@ -588,29 +736,41 @@ describe("publishable plugin npm package install security scan", () => {
     [
       "both complete",
       [
-        ...expandReviewedFindingCounts(REVIEWED_CODEX_LEGACY_SOURCE_CRITICAL_FINDING_COUNTS),
-        ...expandReviewedFindingCounts(REVIEWED_CODEX_CURRENT_SOURCE_CRITICAL_FINDING_COUNTS),
+        ...expandReviewedFindingCounts(CODEX_LEGACY_SOURCE_FINDING_COUNTS),
+        ...expandReviewedFindingCounts(CODEX_CURRENT_SOURCE_FINDING_COUNTS),
       ],
     ],
     [
       "duplicate occurrence",
       [
-        ...expandReviewedFindingCounts(REVIEWED_CODEX_CURRENT_SOURCE_CRITICAL_FINDING_COUNTS),
+        ...expandReviewedFindingCounts(CODEX_CURRENT_SOURCE_FINDING_COUNTS),
         "@openclaw/codex:dangerous-exec:src/app-server/transport-process-containment.ts",
       ],
     ],
   ];
 
   test.each(invalidCodexSourceLayouts)("rejects a %s Codex source layout", (_name, findings) => {
-    expect(resolveReviewedCodexSourceLayout(findings)).toBeUndefined();
+    expect(
+      resolveReviewedCodexSourceLayout(CURRENT_SECURITY_INVENTORY_POLICY, findings),
+    ).toBeUndefined();
   });
 
   it("does not review an unknown relocated Codex source finding", () => {
     const relocatedFinding =
       "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/relocated.ts";
 
-    expect(isReviewedPublishableCriticalFinding(relocatedFinding)).toBe(false);
-    expect(resolveReviewedCodexSourceLayout([relocatedFinding])).toBeUndefined();
+    expect(
+      isReviewedPublishableCriticalFinding(CURRENT_SECURITY_INVENTORY_POLICY, relocatedFinding),
+    ).toBe(false);
+    expect(
+      isReviewedPublishableCriticalFinding(
+        FROZEN_TARGET_SECURITY_INVENTORY_POLICY,
+        relocatedFinding,
+      ),
+    ).toBe(false);
+    expect(
+      resolveReviewedCodexSourceLayout(CURRENT_SECURITY_INVENTORY_POLICY, [relocatedFinding]),
+    ).toBeUndefined();
   });
 
   test.concurrent.each(publishablePluginPackages)(
@@ -622,7 +782,11 @@ describe("publishable plugin npm package install security scan", () => {
       }
       expect(result.unexpectedCriticalFindings.toSorted()).toStrictEqual([]);
       const expectedReviewedCriticalFindings = [
-        ...requiredReviewedFindingsForPackage(plugin.packageName, result.reviewedCriticalFindings),
+        ...requiredReviewedFindingsForPackage(
+          securityInventoryPolicy,
+          plugin.packageName,
+          result.reviewedCriticalFindings,
+        ),
         ...result.expectedReviewedCriticalFindings,
       ];
 
