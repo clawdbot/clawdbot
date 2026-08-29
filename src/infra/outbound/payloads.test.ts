@@ -699,6 +699,30 @@ describe("OutboundPayloadPlan projections", () => {
     ]);
   });
 
+  it("keeps status-notice flags on the transport projection", () => {
+    const plan = createOutboundPayloadPlan([
+      { text: "✅ New session started.", isStatusNotice: true },
+      { text: "hello" },
+    ]);
+    expect(projectOutboundPayloadPlanForOutbound(plan)).toEqual([
+      expect.objectContaining({
+        text: "✅ New session started.",
+        mediaUrls: [],
+        isStatusNotice: true,
+      }),
+      expect.objectContaining({ text: "hello", mediaUrls: [] }),
+    ]);
+    expect(
+      summarizeOutboundPayloadForTransport({
+        text: "✅ Session reset.",
+        isStatusNotice: true,
+      }),
+    ).toMatchObject({
+      text: "✅ Session reset.",
+      isStatusNotice: true,
+    });
+  });
+
   it("matches normalizeOutboundPayloadsForJson", () => {
     const plan = createOutboundPayloadPlan(matrix);
     expect(projectOutboundPayloadPlanForJson(plan)).toEqual(

@@ -40,6 +40,9 @@ export type NormalizedOutboundPayload = {
   location?: ReplyPayload["location"];
   /** Hook-only content for audio-only TTS payloads. Never used as channel text/caption. */
   hookContent?: string;
+  // Agent-command delivery hands this shape to reply_payload_sending.
+  // Dropping the flag lets banner plugins treat Gateway reset acks as model text.
+  isStatusNotice?: boolean;
 };
 
 /** JSON-safe outbound payload projection used for envelopes and diagnostics. */
@@ -319,6 +322,7 @@ export function projectOutboundPayloadPlanForOutbound(
       ...(entry.hasInteractive ? { interactive: payload.interactive } : {}),
       ...(entry.hasChannelData ? { channelData: payload.channelData } : {}),
       ...(payload.location ? { location: payload.location } : {}),
+      ...(payload.isStatusNotice === true ? { isStatusNotice: true } : {}),
     });
   }
   return normalizedPayloads;
@@ -384,6 +388,7 @@ export function summarizeOutboundPayloadForTransport(
     channelData: payload.channelData,
     ...(payload.location ? { location: payload.location } : {}),
     ...(text || !spokenText ? {} : { hookContent: spokenText }),
+    ...(payload.isStatusNotice === true ? { isStatusNotice: true } : {}),
   };
 }
 
