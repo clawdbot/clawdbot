@@ -446,6 +446,7 @@ const subagentRunManager = createSubagentRunManager({
       // retained owner binding when one resolves — a replacement Gateway does
       // not know the old runIds — and on the registry-owning instance
       // otherwise; standalone processes authenticate normally.
+      // SAFETY: agent.wait params are only consulted for the optional runId lookup; any other shape falls back to the registry-global resolver.
       const runId = (request.params as { runId?: string } | undefined)?.runId;
       const runEntry = runId ? subagentRuns.get(runId) : undefined;
       const boundResolver = runEntry ? getGatewayContextResolver(runEntry) : undefined;

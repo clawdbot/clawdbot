@@ -116,12 +116,14 @@ function resolveSubagentRunGatewayCaller(entry: SubagentRunRecord): GatewayCalle
     }
     if (request.method === "agent") {
       return await boundRuntime.dispatchAgent(
+        // SAFETY: control requests are built by this module with the gateway agent-dispatch param shape.
         request.params as Parameters<typeof boundRuntime.dispatchAgent>[0],
         request.timeoutMs ?? undefined,
       );
     }
     if (request.method === "agent.wait") {
       return await boundRuntime.waitForAgent(
+        // SAFETY: control requests are built by this module with the gateway agent-wait param shape.
         request.params as Parameters<typeof boundRuntime.waitForAgent>[0],
         request.timeoutMs ?? undefined,
       );
