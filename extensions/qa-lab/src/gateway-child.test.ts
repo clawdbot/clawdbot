@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
+import { inspect } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -170,6 +171,11 @@ if (!recordPath || !configPath || !stateDir) {
   throw new Error("missing fixture environment");
 }
 const record = (value) => fs.appendFileSync(recordPath, JSON.stringify(value) + "\\n");
+const fail = async (code, message) => {
+  await new Promise((resolve) => process.stderr.write(
+    message + "\\ncontext retained\\n" + "diagnostic ".repeat(400), resolve));
+  process.exit(code);
+};
 const authDbPath = path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite");
 if (args[0] === "models") {
   let stdin = "";
@@ -197,8 +203,7 @@ if (args[0] === "models") {
   fs.mkdirSync(path.dirname(authDbPath), { recursive: true });
   fs.writeFileSync(authDbPath, "fixture auth");
   if (process.env.QA_FAIL_PROVIDER === provider) {
-    process.stderr.write("Authorization: Bearer " + stdin.trim());
-    process.exit(9);
+    await fail(9, "Authorization: Bearer " + stdin.trim());
   }
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   config.fixtureProfiles = [...(config.fixtureProfiles ?? []), provider];
@@ -206,6 +211,11 @@ if (args[0] === "models") {
   process.exit(0);
 }
 if (args[0] === "update") {
+  const phase = args.includes("--help") ? "help" : "repair";
+  if (process.env.QA_FAIL_PLUGIN_SETUP === phase) {
+    record({ kind: "plugins", args, authDbPath, configPath, stateDir });
+    await fail(8, "plugin fixture rejected: Authorization: Bearer " + "fixture-plugin-secret".repeat(200));
+  }
   if (args.includes("--help")) {
     process.stdout.write(process.env.QA_LEGACY_PLUGIN_SETUP === "1" ? "Options: --yes" : "Options: --accept-capabilities --yes");
     process.exit(0);
@@ -215,10 +225,6 @@ if (args[0] === "update") {
     process.exit(2);
   }
   record({ kind: "plugins", args, authDbPath, configPath, stateDir });
-  if (process.env.QA_FAIL_PLUGIN_SETUP === "1") {
-    process.stderr.write("plugin fixture rejected: Authorization: Bearer fixture-plugin-secret");
-    process.exit(8);
-  }
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   delete config.plugins.entries["qa-lab"];
   config.plugins.allow = config.plugins.allow.filter((id) => id !== "qa-lab");
@@ -1663,86 +1669,81 @@ describe("buildQaRuntimeEnv", () => {
     },
   );
 
-  it("blocks packaged gateway spawn when candidate plugin setup fails", async () => {
-    const fixtureRoot = await tempDirs.makeTempDir("qa-packaged-plugins-fail-");
-    const tempParentDir = path.join(fixtureRoot, "gateway-temp");
-    const recordPath = path.join(fixtureRoot, "commands.jsonl");
-    const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
-    await mkdir(tempParentDir);
-    const owner = ownGateway();
-    const error = await owner
-      .start({
-        repoRoot: process.cwd(),
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: [fixturePath],
-          tempParentDir,
-          usePackagedPlugins: true,
-        },
-        providerMode: "mock-openai",
-        transportBaseUrl: "http://127.0.0.1:43123",
-        runtimeEnvPatch: { QA_RECORD_PATH: recordPath, QA_FAIL_PLUGIN_SETUP: "1" },
-      })
-      .catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(Error);
-    if (!(error instanceof Error)) {
-      throw new Error("expected package plugin setup error");
-    }
-    expect(error.message).toContain("installed package plugin setup failed: OpenClaw CLI exited 8");
-    expect(error.message).not.toContain("fixture-plugin-secret");
-    expect(String(error.cause)).not.toContain("fixture-plugin-secret");
-    const records = await readJsonLines(recordPath);
-    expect(records.map((record) => record.kind)).toEqual(["auth", "auth", "plugins"]);
-  });
-
-  it("blocks packaged gateway spawn when candidate auth bootstrap fails", async () => {
-    const fixtureRoot = await tempDirs.makeTempDir("qa-packaged-auth-fail-");
-    const tempParentDir = path.join(fixtureRoot, "gateway-temp");
-    const recordPath = path.join(fixtureRoot, "commands.jsonl");
-    const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
-    await mkdir(tempParentDir);
-
-    const owner = ownGateway();
-    const result = owner.start({
-      repoRoot: process.cwd(),
-      command: {
-        executablePath: process.execPath,
-        argsPrefix: [fixturePath],
-        tempParentDir,
-        usePackagedPlugins: true,
-      },
-      providerMode: "mock-openai",
-      transportBaseUrl: "http://127.0.0.1:43123",
-      runtimeEnvPatch: {
-        QA_FAIL_PROVIDER: "openai",
-        QA_RECORD_PATH: recordPath,
-      },
-    });
-
-    const error = await result.catch((caught: unknown) => caught);
-    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
-    expect(error).toBeInstanceOf(Error);
-    if (!(error instanceof Error)) {
-      throw new Error("expected package auth bootstrap error");
-    }
-    expect(error.message).toContain(
-      "installed package mock auth bootstrap failed for openai: OpenClaw CLI exited 9: Authorization: Bearer <redacted>",
-    );
-    const records = await readJsonLines(recordPath);
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      kind: "auth",
-      dbExists: false,
-      configMode: 0o600,
-      configRegular: true,
-      configSymlink: false,
-    });
-    const submittedKey = String(records[0]?.stdin).trim();
-    expect(submittedKey).toMatch(/^sk-qa-mock-[a-f0-9]{32}$/u);
-    expect(error.message).not.toContain(submittedKey);
-    expect(String(error.cause)).not.toContain(submittedKey);
-    expect(records.some((record) => record.kind === "gateway")).toBe(false);
-  });
+  it.each(["openai", "anthropic", "help", "repair"] as const)(
+    "blocks packaged gateway spawn with bounded redacted diagnostics when %s fails",
+    async (phase) => {
+      const fixtureRoot = await tempDirs.makeTempDir("qa-packaged-command-fail-");
+      const tempParentDir = path.join(fixtureRoot, "gateway-temp");
+      const recordPath = path.join(fixtureRoot, "commands.jsonl");
+      const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
+      await mkdir(tempParentDir);
+      const provider = phase === "openai" || phase === "anthropic" ? phase : undefined;
+      const owner = ownGateway();
+      const error = await owner
+        .start({
+          repoRoot: process.cwd(),
+          command: {
+            executablePath: process.execPath,
+            argsPrefix: [fixturePath],
+            tempParentDir,
+            usePackagedPlugins: true,
+          },
+          providerMode: "mock-openai",
+          transportBaseUrl: "http://127.0.0.1:43123",
+          runtimeEnvPatch: {
+            QA_RECORD_PATH: recordPath,
+            QA_FAIL_PROVIDER: provider,
+            QA_FAIL_PLUGIN_SETUP: provider ? undefined : phase,
+          },
+        })
+        .catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error) || !(error.cause instanceof Error)) {
+        throw new Error("expected package command failure retained by lifecycle");
+      }
+      const prefix = provider
+        ? `installed package mock auth bootstrap failed for ${provider}: `
+        : "installed package plugin setup failed: ";
+      const detail = provider
+        ? "OpenClaw CLI exited 9: Authorization: Bearer <redacted>"
+        : "OpenClaw CLI exited 8: plugin fixture rejected: Authorization: Bearer <redacted>";
+      expect(error.message).toContain(`${prefix}${detail}\ncontext retained\n`);
+      expect(error.cause.message.length).toBeLessThanOrEqual(prefix.length + 2_048);
+      expect(error.cause.message).not.toContain("diagnostic ".repeat(400));
+      expect(error.cause).not.toHaveProperty("cause");
+      const records = await readJsonLines(recordPath);
+      expect(records.map((record) => record.kind)).toEqual(
+        provider
+          ? provider === "openai"
+            ? ["auth"]
+            : ["auth", "auth"]
+          : ["auth", "auth", "plugins"],
+      );
+      expect(records[0]).toMatchObject({
+        kind: "auth",
+        dbExists: false,
+        configMode: 0o600,
+        configRegular: true,
+        configSymlink: false,
+      });
+      const diagnostic = inspect(error, { depth: null });
+      for (const authRecord of records.filter((record) => record.kind === "auth")) {
+        const submittedKey = String(authRecord.stdin).trim();
+        expect(submittedKey).toMatch(/^sk-qa-mock-[a-f0-9]{32}$/u);
+        expect(diagnostic).not.toContain(submittedKey);
+      }
+      expect(diagnostic).not.toContain("fixture-plugin-secret");
+      const tempRoots = await readdir(tempParentDir);
+      expect(tempRoots).toHaveLength(1);
+      for (const stream of ["stdout", "stderr"]) {
+        await expect(
+          readFile(path.join(tempParentDir, tempRoots[0]!, `gateway.${stream}.log`), "utf8"),
+        ).resolves.toBe("");
+      }
+      await expect(owner.stop()).resolves.toEqual({ process: "never-spawned", errors: [] });
+      await expect(readdir(tempParentDir)).resolves.toEqual([]);
+    },
+  );
 
   it("stages mock profiles only for the requested agents and providers when callers override the defaults", async () => {
     const stateDir = await tempDirs.makeTempDir("qa-mock-auth-override-");
