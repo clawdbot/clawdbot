@@ -466,6 +466,8 @@ prefix. Explicit `message` tool and CLI text sends also apply literal and
 identity prefixes; see [shared prefix behavior](/concepts/messages#prefixes-threading-and-replies)
 for model-dependent templates. A named account can override the root prefix
 with `channels.buzz.accounts.<id>.responsePrefix`.
+CLI sends that omit `--account` use the selected default account's prefix too;
+an account-level `""` suppresses the inherited root prefix.
 
 ### Multiple bot identities
 
