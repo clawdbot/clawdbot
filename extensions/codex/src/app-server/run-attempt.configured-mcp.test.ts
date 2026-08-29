@@ -28,6 +28,7 @@ const mcpMocks = vi.hoisted(() => ({
   staticFailureGate: undefined as Promise<void> | undefined,
   staticCalls: [] as Array<Record<string, unknown>>,
   staticToolExecutes: [] as ReturnType<typeof vi.fn>[],
+  suppressThreadConfig: false,
   threadConfigCalls: [] as Array<Record<string, unknown>>,
 }));
 
@@ -48,6 +49,16 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
       const params = args[0] as Record<string, unknown>;
       mcpMocks.threadConfigCalls.push(params);
       mcpMocks.threadConfigFacade(params);
+      if (mcpMocks.suppressThreadConfig) {
+        return {
+          configPatch: undefined,
+          diagnostics: [],
+          evaluated: true,
+          fingerprint: undefined,
+          staticServerNames: [],
+          userStaticServerNames: [],
+        };
+      }
       const cfg = params.cfg as
         | { mcp?: { servers?: Record<string, Record<string, unknown>> } }
         | undefined;
@@ -158,6 +169,7 @@ import {
   tempDir,
   userMessage,
 } from "./run-attempt-test-harness.js";
+import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import {
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
@@ -178,6 +190,7 @@ beforeEach(() => {
   mcpMocks.staticDiagnosticNotice = undefined;
   mcpMocks.staticFailure = undefined;
   mcpMocks.staticFailureGate = undefined;
+  mcpMocks.suppressThreadConfig = false;
   mcpMocks.dispose.mockClear();
   mcpMocks.captureFacade.mockClear();
   mcpMocks.staticFacade.mockClear();
@@ -432,15 +445,19 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
   });
 
-  it("captures a restricted ordinary turn without inventing intentionally disabled native MCP", async () => {
+  it("keeps ordinary configured MCP when dynamic native tools are restricted", async () => {
     const sessionFile = path.join(tempDir, "session-native-mcp-restricted.jsonl");
     const params = createParams(sessionFile, path.join(tempDir, "workspace-native-mcp-restricted"));
     configureFakeMcp(params);
     params.toolsAllow = ["cron", "fake__show"];
+    mcpMocks.suppressThreadConfig = true;
 
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
+    const threadStart = harness.requests.find((request) => request.method === "thread/start")
+      ?.params as { config?: { mcp_servers?: Record<string, unknown> } } | undefined;
+    expect(threadStart?.config?.mcp_servers).toHaveProperty("fake");
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await expect(run).resolves.toBeDefined();
 
@@ -452,6 +469,23 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       version: 1,
       source: "final-executable-surface",
     });
+  });
+
+  it("does not project host MCP into a sandbox without the native tool surface", async () => {
+    const sessionFile = path.join(tempDir, "session-native-mcp-sandboxed.jsonl");
+    const params = createParams(sessionFile, path.join(tempDir, "workspace-native-mcp-sandboxed"));
+    configureFakeMcp(params);
+    params.sandbox = createSandboxContext({});
+    mcpMocks.suppressThreadConfig = true;
+
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const threadStart = harness.requests.find((request) => request.method === "thread/start")
+      ?.params as { config?: { mcp_servers?: Record<string, unknown> } } | undefined;
+    expect(threadStart?.config?.mcp_servers).toBeUndefined();
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toBeDefined();
   });
 
   it("withholds final provenance when a sender-attributed turn cannot snapshot native MCP", async () => {

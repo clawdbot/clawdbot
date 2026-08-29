@@ -485,9 +485,8 @@ export async function startCodexAttemptThread(params: {
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
                 userMcpServersEnabled:
-                  params.configuredMcpOwnershipVersion === 1
-                    ? false
-                    : params.nativeToolSurfaceEnabled,
+                  params.configuredMcpOwnershipVersion !== 1 &&
+                  (!params.sandbox?.enabled || params.nativeToolSurfaceEnabled),
                 mcpServersFingerprint:
                   params.configuredMcpOwnershipVersion === 1
                     ? undefined
