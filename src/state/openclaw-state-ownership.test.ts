@@ -391,9 +391,6 @@ describe("external shared-state ownership", () => {
       baselineOwnership.claimedAt,
     );
     const insertPressure = writer.prepare("INSERT INTO rollback_race_pressure VALUES (?)");
-    for (let index = 0; index < 256; index += 1) {
-      insertPressure.run(payload);
-    }
     writer.exec("COMMIT;");
     const originalGet = Object.getOwnPropertyDescriptor(StatementSync.prototype, "get")?.value as
       | ((
@@ -418,11 +415,11 @@ describe("external shared-state ownership", () => {
           JSON.stringify(transientOwnership),
           transientOwnership.claimedAt,
         );
-        // A same-table sweep can leave the ownership leaf pinned or last dirtied.
-        // Pressure another B-tree after releasing the ownership cursor so its page spills.
-        writer
-          .prepare("UPDATE rollback_race_pressure SET payload = ?")
-          .run(JSON.stringify("y".repeat(8192)));
+        // Fresh pages force cache misses even when SQLite's global cache retains existing rows.
+        // Use another B-tree after releasing the ownership cursor; rollback discards these pages.
+        for (let index = 0; index < 256; index += 1) {
+          insertPressure.run(payload);
+        }
         const racedReader = new DatabaseSync(resolveImmutableSqliteFileUri(databasePath), {
           readOnly: true,
         });
