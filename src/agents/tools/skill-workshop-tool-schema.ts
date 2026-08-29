@@ -59,7 +59,7 @@ export function buildSkillWorkshopToolSchema(collectionOnly: boolean, proposalRe
             ? "inspect = read the exact operator-reviewed proposal; revise = update only that proposal with the run-bound expected revision hash."
             : collectionOnly
               ? SKILL_COLLECTION_ACTION_DESCRIPTION
-              : "create = new skill; read = existing live skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context, with only one prepared span active per skill; patch = targeted find-and-replace after read or prepare_patch; update = full-body rewrite; history = show up to 20 recent collection review outcomes and drop reasons; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions; complete = finish an internal review when available.",
+              : "create = new skill; read = writable workspace skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context, with only one prepared span active per skill; patch = targeted find-and-replace after read or prepare_patch; update = full-body rewrite; history = show up to 20 recent collection review outcomes and drop reasons; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions; complete = finish an internal review when available.",
         },
       ),
       proposal_id: Type.Optional(
@@ -102,7 +102,7 @@ export function buildSkillWorkshopToolSchema(collectionOnly: boolean, proposalRe
       skill_name: Type.Optional(
         Type.String({
           description:
-            "Existing skill name or key for action=update, action=prepare_patch, action=patch, or action=read.",
+            "Existing writable workspace skill name or key for action=update, action=prepare_patch, action=patch, or action=read.",
         }),
       ),
       old_string: Type.Optional(

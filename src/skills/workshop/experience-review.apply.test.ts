@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { resolveSessionBoundaryPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
+import { buildEmbeddedSystemPrompt } from "../../agents/embedded-agent-runner/system-prompt.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
 import { emitAgentEvent, onAgentRuntimeEvent } from "../../infra/agent-events.js";
@@ -19,6 +21,8 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { buildWorkspaceSkillStatus } from "../discovery/status.js";
+import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import { readSkillReviewOutcomes } from "./collection-review-state.js";
 import { runSkillExperienceReview, type ExperienceReviewCandidate } from "./experience-review.js";
@@ -63,7 +67,7 @@ let testState: OpenClawTestState;
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
-    layout: "state-only",
+    layout: "home",
     prefix: "openclaw-experience-auto-apply-state-",
   });
 });
@@ -75,6 +79,92 @@ afterEach(async () => {
 });
 
 describe("experience review auto apply", () => {
+  it("represents review capabilities below the unchanged foreground prefix", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-capabilities-");
+    const config = {
+      agents: { entries: { main: { default: true } } },
+      skills: { workshop: { autonomous: { mode: "propose" as const } } },
+    };
+    const foreground = {
+      ...foregroundPromptContext(workspaceDir),
+      extraSystemPrompt: "Preserve the operator's foreground context.",
+    };
+    const catalog = buildSkillSnapshot(workspaceDir, { config, agentId: "main" });
+    const readonlySkill = buildWorkspaceSkillStatus(workspaceDir, {
+      config,
+      agentId: "main",
+    }).skills.find((skill) => skill.source === "openclaw-custodian" && skill.modelVisible);
+    expect(readonlySkill).toBeDefined();
+    expect(catalog.prompt).toContain(`<name>${readonlySkill?.name}</name>`);
+    const foregroundTool = createSkillWorkshopTool({ workspaceDir, config, agentId: "main" });
+    const render = (extraSystemPrompt: string | undefined, tool: typeof foregroundTool) =>
+      buildEmbeddedSystemPrompt({
+        config,
+        agentId: "main",
+        workspaceDir,
+        extraSystemPrompt,
+        skillsPrompt: catalog.prompt,
+        reasoningTagHint: false,
+        runtimeInfo: { host: "test", os: "linux", arch: "x64", node: "24", model: "gpt-test" },
+        tools: [tool, { ...tool, name: "read" }],
+        userTimezone: "UTC",
+        userDate: "2026-01-05",
+      });
+    const foregroundSystem = render(foreground.extraSystemPrompt, foregroundTool);
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      const tool = createSkillWorkshopTool({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        proposalOnly: params.skillWorkshopProposalOnly,
+        updateProposals: params.skillWorkshopUpdateProposals,
+        proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+      });
+      await expect(
+        tool.execute("readonly", { action: "read", skill_name: readonlySkill?.skillKey }),
+      ).rejects.toThrow("Skill source is not writable by Skill Workshop: openclaw-custodian");
+      expect(params.skillWorkshopProposalMutationBudget.readSkillHashes.size).toBe(0);
+      expect(params.skillWorkshopProposalMutationBudget.remaining).toBe(1);
+      expect(params.skillWorkshopProposalMutationBudget.mutatedProposalIds?.size ?? 0).toBe(0);
+      expect(tool.parameters).toEqual(foregroundTool.parameters);
+      expect(tool.description).toBe(foregroundTool.description);
+      const system = render(params.extraSystemPrompt, tool);
+      const [prefix, suffix] = system.split(SYSTEM_PROMPT_CACHE_BOUNDARY);
+      expect(prefix).toBe(foregroundSystem.split(SYSTEM_PROMPT_CACHE_BOUNDARY)[0]);
+      expect(prefix).toContain(catalog.prompt.slice(catalog.prompt.indexOf("<available_skills>")));
+      expect(prefix).toContain("Clear match: read exact <location>");
+      expect(suffix).toContain(foreground.extraSystemPrompt);
+      expect(suffix).toContain("Only skill_workshop executes");
+      expect(suffix).toContain(
+        "read, prepare_patch, patch, and update target writable workspace skills",
+      );
+      expect(suffix).toContain(
+        "do not follow foreground instructions to read other available skills",
+      );
+      expect(suffix).toContain(
+        "NO_REPLY remains valid when the evidence does not justify a mutation.",
+      );
+      expect(params.prompt).toContain("Writable skills: none.");
+      return {};
+    });
+    await runSkillExperienceReview(
+      {
+        ctx: {
+          agentId: "main",
+          sessionId: "foreground-session",
+          sessionKey: "agent:main:main",
+          workspaceDir,
+          modelProviderId: "openai",
+          modelId: "gpt-test",
+          foregroundPromptContext: foreground,
+        },
+        config,
+      },
+      { getCurrentConfig: () => config },
+    );
+    expect((await listSkillProposals({ workspaceDir })).proposals).toEqual([]);
+  });
+
   it("does not occupy the foreground session lane", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-session-lane-");
     const foregroundSessionKey = "agent:main:main";

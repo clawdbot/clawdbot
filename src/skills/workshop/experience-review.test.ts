@@ -512,6 +512,11 @@ describe("skill experience review prompt", () => {
     expect(prompt).not.toContain("Trajectory:");
   });
 
+  it("distinguishes a known empty writable set from a capped nonempty list", () => {
+    const prompt = buildSkillExperienceReviewPrompt({ ctx: {}, existingSkills: [] });
+    expect(prompt).toContain("Writable skills: none.");
+  });
+
   it("caps used and writable skill lists", () => {
     const skills = Array.from({ length: 120 }, (_, index) => ({
       name: `skill-${String(index).padStart(3, "0")}-${"x".repeat(180)}`,
@@ -525,6 +530,7 @@ describe("skill experience review prompt", () => {
     });
     expect(prompt).toContain("more used skills omitted");
     expect(prompt).toContain("(+70 more not shown)");
+    expect(prompt).not.toContain("Writable skills: none.");
     expect(Math.max(...prompt.split("\n").map((line) => line.length))).toBeLessThanOrEqual(2_000);
   });
 
@@ -535,11 +541,18 @@ describe("skill experience review prompt", () => {
       activation: index % 3 === 0 ? ("command" as const) : ("read" as const),
     }));
     const build = (skills: typeof usedSkills) =>
-      buildSkillExperienceReviewPrompt({ ctx: { runId: "run-1" }, usedSkills: skills });
+      buildSkillExperienceReviewPrompt({
+        ctx: { runId: "run-1" },
+        usedSkills: skills,
+        existingSkills: [],
+      });
     const prompt = build(usedSkills.toReversed());
 
     expect(prompt).toBe(build(usedSkills));
-    const receipt = prompt.slice(prompt.indexOf("Skills actually used in this trajectory"));
+    const receipt = prompt.slice(
+      prompt.indexOf("Skills actually used in this trajectory"),
+      prompt.indexOf("\nWritable skills:"),
+    );
     expect(receipt).toContain(
       "Skills actually used in this trajectory (authoritative runtime receipt):",
     );
@@ -569,7 +582,11 @@ describe("skill experience review prompt", () => {
   });
 
   it("adds the interrupted-run instruction", () => {
-    const prompt = buildSkillExperienceReviewPrompt({ ctx: { runId: "run-1" }, turnAborted: true });
+    const prompt = buildSkillExperienceReviewPrompt({
+      ctx: { runId: "run-1" },
+      turnAborted: true,
+      existingSkills: [],
+    });
     expect(prompt).toContain("Interrupted run (stopped before completion): run-1");
     expect(prompt).toContain("Only capture procedures that visibly worked");
   });

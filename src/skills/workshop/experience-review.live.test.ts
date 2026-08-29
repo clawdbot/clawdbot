@@ -200,12 +200,18 @@ describeLive("skill experience review live OpenAI eval", () => {
         content:
           "Deploy this repository from its checked-in manifest. Do not ask for values already present there.",
       }),
-      ...toolRound("deploy-project", "deploy", {}, "project required", true),
-      ...toolRound("deploy-region", "deploy", { project: "app" }, "region required", true),
+      ...toolRound("deploy-project", "exec", { command: "deploy" }, "project required", true),
+      ...toolRound(
+        "deploy-region",
+        "exec",
+        { command: "deploy --project app" },
+        "region required",
+        true,
+      ),
       ...toolRound(
         "deploy-service",
-        "deploy",
-        { project: "app", region: "us" },
+        "exec",
+        { command: "deploy --project app --region us" },
         "service required",
         true,
       ),
@@ -219,11 +225,11 @@ describeLive("skill experience review live OpenAI eval", () => {
       assistantText("The manifest contains all required deployment inputs."),
       ...toolRound(
         "deploy-complete",
-        "deploy",
-        { project: "app", region: "us", service: "api" },
+        "exec",
+        { command: "deploy --project app --region us --service api" },
         "deployed",
       ),
-      ...toolRound("fetch-health", "fetch", { path: "/ready" }, "200 ok"),
+      ...toolRound("fetch-health", "exec", { command: "fetch /ready" }, "200 ok"),
       assistantText("Deployment verified."),
       assistantText("Next time the manifest should be read before the first deploy call."),
       assistantText("That preflight would remove three failed tool rounds."),
@@ -244,7 +250,12 @@ describeLive("skill experience review live OpenAI eval", () => {
           "One-time audit: check these ten unrelated opaque receipts. Policy requires one signed lookup per receipt; no batching or reuse is possible.",
       }),
       ...Array.from({ length: 10 }, (_, index) =>
-        toolRound(`receipt-${index + 1}`, "signed_receipt_lookup", { id: index + 1 }, "valid"),
+        toolRound(
+          `receipt-${index + 1}`,
+          "exec",
+          { command: `signed_receipt_lookup --id ${index + 1}` },
+          "valid",
+        ),
       ).flat(),
       assistantText("All ten one-time receipts are valid."),
     ];
@@ -260,8 +271,14 @@ describeLive("skill experience review live OpenAI eval", () => {
       makeAgentUserMessage({
         content: "Publish the package. The registry keeps rejecting the token.",
       }),
-      ...toolRound("publish-token", "publish", {}, "401 invalid token", true),
-      ...toolRound("publish-retry", "publish", { retry: true }, "401 invalid token", true),
+      ...toolRound("publish-token", "exec", { command: "publish" }, "401 invalid token", true),
+      ...toolRound(
+        "publish-retry",
+        "exec",
+        { command: "publish --retry" },
+        "401 invalid token",
+        true,
+      ),
       assistantText("Retrying does not help; the stored scope must be wrong."),
       ...toolRound(
         "registry-whoami",
@@ -275,7 +292,7 @@ describeLive("skill experience review live OpenAI eval", () => {
         { command: "registry login --host registry.example" },
         "login ok",
       ),
-      ...toolRound("publish-complete", "publish", {}, "published 1.2.3"),
+      ...toolRound("publish-complete", "exec", { command: "publish" }, "published 1.2.3"),
       assistantText("Publish verified. Moving on to the release notes."),
       makeAgentAssistantMessage({
         model: modelId,

@@ -24,6 +24,7 @@ import {
   buildSkillExperienceReviewPrompt,
   countSkillModelIterations,
   selectCurrentSkillTurnMessages,
+  SKILL_EXPERIENCE_REVIEW_SYSTEM_PROMPT,
 } from "./experience-review-prompt.js";
 import type { SkillWorkshopProposalMutationBudget } from "./types.js";
 
@@ -465,6 +466,13 @@ async function runSkillExperienceReviewInner(
           workspaceDir,
           config,
           prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }),
+          // Review capabilities belong in the volatile suffix, preserving the foreground prefix.
+          extraSystemPrompt: [
+            foregroundPromptContext.extraSystemPrompt,
+            SKILL_EXPERIENCE_REVIEW_SYSTEM_PROMPT,
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
           provider: modelProviderId,
           model: modelId,
           modelSelectionLocked: true,

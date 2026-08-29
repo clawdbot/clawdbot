@@ -22,6 +22,7 @@ describe("skill authoring standards", () => {
   it("keeps review instructions in the tool description instead of the review prompt", () => {
     const learnPrompt = buildLearnPrompt("Capture the recovery procedure");
     const experienceReviewPrompt = buildSkillExperienceReviewPrompt({
+      existingSkills: [],
       ctx: { runId: "run-1" },
     });
     const historyScanPrompt = buildSkillHistoryScanPrompt({ sessions: [] });

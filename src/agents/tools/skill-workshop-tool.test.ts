@@ -196,7 +196,7 @@ describe("skill_workshop tool", () => {
 
     expect(schema).toContain("create = new skill");
     expect(schema).toContain("patch = targeted");
-    expect(schema).toContain("read = existing live skill");
+    expect(schema).toContain("read = writable workspace skill");
     expect(schema).toContain("update = full-body rewrite");
     expect(schema).toContain("revise = existing pending proposal");
     expect(schema).toContain("evaluate runs plugin evaluators");
