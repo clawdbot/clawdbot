@@ -3375,14 +3375,15 @@ fi
         openclaw: `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s %s\n' "$OPENCLAW_CONFIG_PATH" "$*" >>"$CAPTURE_DIR/openclaw-calls"
-if [ "$FAILURE_STAGE" = doctor ] && [ "\${1:-}" = doctor ]; then
-  exit 41
+if [ "\${1:-}" = doctor ]; then
+  [ "$FAILURE_STAGE" != doctor ] || exit 41
+  exit 0
 fi
 if [ "\${1:-}" = gateway ] && [ "\${2:-}" = install ]; then
   [ "$FAILURE_STAGE" != install ] || exit 44
   exit 0
 fi
-sleep 30
+exec sleep 30
 `,
       });
 
