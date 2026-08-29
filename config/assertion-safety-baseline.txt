@@ -3069,7 +3069,7 @@ src/gateway/worker-environments/workspace-result-staging.ts	2
 src/gateway/worker-workspace-conflict-transcript.ts	4
 src/gateway/ws-log.ts	3
 src/hooks/bundled/bootstrap-extra-files/handler.ts	1
-src/hooks/bundled/session-memory/handler.ts	11
+src/hooks/bundled/session-memory/handler.ts	9
 src/hooks/bundled/session-memory/transcript.ts	2
 src/hooks/frontmatter.ts	1
 src/hooks/gmail-setup-utils.ts	4

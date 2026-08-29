@@ -5,6 +5,7 @@ import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunk
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.js";
 import type { PluginCommandContext } from "../../plugins/types.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import type { MsgContext } from "../templating.js";
@@ -63,6 +64,8 @@ export type HandleCommandsParams = {
   /** True only when the current command owns first creation of this session row. */
   allowCreateSessionEntry?: boolean;
   previousSessionEntry?: SessionEntry;
+  previousSessionMemory?: SessionMemoryTranscript;
+  previousSessionResetMessages?: unknown[];
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;

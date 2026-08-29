@@ -58,6 +58,11 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "../../gateway/active-sessions-shutdown-tracker.js";
+import {
+  captureSessionMemoryTranscript,
+  type SessionMemoryTranscript,
+} from "../../hooks/bundled/session-memory/capture.js";
+import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { emitSessionAutoResetHook } from "../../hooks/session-auto-reset.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -105,6 +110,7 @@ import type {
   MsgContext,
 } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
+import { readBeforeResetMessages } from "./commands-reset-hooks.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
@@ -187,6 +193,8 @@ export type SessionInitResult = {
   sessionEntry: SessionEntry;
   initialSessionEntry?: SessionEntry;
   previousSessionEntry?: SessionEntry;
+  previousSessionMemory?: SessionMemoryTranscript;
+  previousSessionResetMessages?: unknown[];
   sessionEntryHandle: ReplySessionEntryHandle;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
@@ -999,6 +1007,8 @@ async function initSessionStateAttemptLocked(
       : { context: "preserve-tail", reason: continuityReason }
     : undefined;
   const resetBoundaryAppended = resetBoundary !== undefined;
+  let previousSessionMemory: SessionMemoryTranscript | undefined;
+  let previousSessionResetMessages: unknown[] | undefined;
   const committed = await commitReplySessionInitialization({
     activeSessionKey: sessionKey,
     agentId,
@@ -1035,9 +1045,34 @@ async function initSessionStateAttemptLocked(
       });
     },
     ...(resetBoundary ? { resetBoundary } : {}),
-    beforeEntryMutation: ({ currentEntry, sessionEntry: entryToCommit }) => {
+    beforeEntryMutation: async ({ currentEntry, sessionEntry: entryToCommit }) => {
       if (!previousSessionEntry || !currentEntry) {
         return;
+      }
+      const memoryEvent = resetTriggered ? "command" : "session";
+      const memoryAction = resetTriggered ? (previousSessionEndReason ?? "new") : "auto-reset";
+      if (hasInternalHookListeners(memoryEvent, memoryAction)) {
+        // Capture before the same-identity reset changes the visible window.
+        // Only the successful lifecycle commit publishes this bounded snapshot.
+        previousSessionMemory = captureSessionMemoryTranscript(
+          {
+            agentId,
+            sessionId: currentEntry.sessionId,
+            sessionKey,
+            storePath,
+          },
+          cfg,
+        );
+      }
+      if (resetTriggered && getGlobalHookRunner()?.hasHooks("before_reset")) {
+        // Plugin observers retain their full-message contract independently of
+        // the bounded memory excerpt. This preparation runs outside the commit.
+        previousSessionResetMessages = await readBeforeResetMessages({
+          agentId,
+          sessionId: currentEntry.sessionId,
+          sessionKey,
+          storePath,
+        });
       }
       if (resetBoundaryAppended) {
         clearAllCliSessions(entryToCommit);
@@ -1131,6 +1166,7 @@ async function initSessionStateAttemptLocked(
       agentId,
       workspaceDir: previousSessionEntry.spawnedWorkspaceDir,
       storePath,
+      previousSessionMemory,
     });
   }
 
@@ -1242,6 +1278,8 @@ async function initSessionStateAttemptLocked(
       sessionEntryHandle,
       previousSessionEntry,
       sessionStore,
+      previousSessionMemory,
+      previousSessionResetMessages,
       sessionKey,
       sessionId: sessionId ?? crypto.randomUUID(),
       isNewSession: isFirstSessionTurn,
