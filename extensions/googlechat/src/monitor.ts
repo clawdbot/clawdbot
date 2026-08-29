@@ -16,7 +16,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveWebhookPath } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
+import { deleteGoogleChatMessage, downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
 import type { GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
@@ -425,66 +425,83 @@ async function processMessageWithPipeline(params: {
     }
   }
 
-  await core.channel.inbound.run({
-    channel: "googlechat",
-    accountId: route.accountId,
-    raw: message,
-    ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
-    adapter: {
-      ingest: () => ({
-        id: message.name ?? spaceId,
-        timestamp: timestampMs,
-        rawText: rawBody,
-        textForAgent: rawBody,
-        textForCommands: rawBody,
-        raw: message,
-      }),
-      resolveTurn: () => ({
-        cfg: config,
-        channel: "googlechat",
-        accountId: route.accountId,
-        route: { agentId: route.agentId, sessionKey: route.sessionKey },
-        ctxPayload,
-        delivery: {
-          durable: (payload, info) =>
-            resolveGoogleChatDurableReplyOptions({
-              payload,
-              infoKind: info.kind,
-              spaceId,
-              hasTypingMessage: Boolean(typingMessage),
-            }),
-          deliver: async (payload) => {
-            await deliverGoogleChatReply({
-              payload,
-              account,
-              spaceId,
-              runtime,
-              core,
-              config,
-              statusSink,
-              typingMessage,
-            });
-            // Only use typing message for first delivery
-            typingMessage = undefined;
+  try {
+    await core.channel.inbound.run({
+      channel: "googlechat",
+      accountId: route.accountId,
+      raw: message,
+      ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+      adapter: {
+        ingest: () => ({
+          id: message.name ?? spaceId,
+          timestamp: timestampMs,
+          rawText: rawBody,
+          textForAgent: rawBody,
+          textForCommands: rawBody,
+          raw: message,
+        }),
+        resolveTurn: () => ({
+          cfg: config,
+          channel: "googlechat",
+          accountId: route.accountId,
+          route: { agentId: route.agentId, sessionKey: route.sessionKey },
+          ctxPayload,
+          delivery: {
+            durable: (payload, info) =>
+              resolveGoogleChatDurableReplyOptions({
+                payload,
+                infoKind: info.kind,
+                spaceId,
+                hasTypingMessage: Boolean(typingMessage),
+              }),
+            deliver: async (payload) => {
+              // Only use typing message for first delivery. Claim it before awaiting so
+              // a failed delivery (which owns its own placeholder cleanup) doesn't leave
+              // it behind for the run-level finally below to double-delete.
+              const claimedTypingMessage = typingMessage;
+              typingMessage = undefined;
+              await deliverGoogleChatReply({
+                payload,
+                account,
+                spaceId,
+                runtime,
+                core,
+                config,
+                statusSink,
+                typingMessage: claimedTypingMessage,
+              });
+            },
+            onDelivered: () => {
+              statusSink?.({ lastOutboundAt: Date.now() });
+            },
+            onError: (err, info) => {
+              runtime.error?.(
+                `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
+              );
+            },
           },
-          onDelivered: () => {
-            statusSink?.({ lastOutboundAt: Date.now() });
+          replyPipeline: {},
+          record: {
+            onRecordError: (err) => {
+              runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
+            },
           },
-          onError: (err, info) => {
-            runtime.error?.(
-              `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
-            );
-          },
-        },
-        replyPipeline: {},
-        record: {
-          onRecordError: (err) => {
-            runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
-          },
-        },
-      }),
-    },
-  });
+        }),
+      },
+    });
+  } finally {
+    // No delivery ever claimed the placeholder (silent/no-op resolution, cancellation,
+    // or a throw before the first delivery attempt): it would otherwise persist forever.
+    if (typingMessage) {
+      const unclaimedTypingMessage = typingMessage;
+      typingMessage = undefined;
+      try {
+        await deleteGoogleChatMessage({ account, messageName: unclaimedTypingMessage.name });
+      } catch (err) {
+        runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
+      }
+    }
+  }
 }
 
 async function downloadAttachment(
