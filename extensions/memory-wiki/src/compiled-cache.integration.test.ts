@@ -282,6 +282,14 @@ describe("Memory Wiki compiled cache lifecycle", () => {
         config,
         syncResult: { importedCount: 0, updatedCount: 0, removedCount: 0 },
       }),
+    ).resolves.toMatchObject({ refreshed: false, reason: "compiled-cache-invalid" });
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+    await expect(
+      refreshMemoryWikiIndexesAfterImport({
+        config,
+        syncResult: { importedCount: 0, updatedCount: 0, removedCount: 0 },
+        rebuildInvalidCache: true,
+      }),
     ).resolves.toMatchObject({ refreshed: true, reason: "compiled-cache-invalid" });
     await expect(loadMemoryWikiCompiledCache(config)).resolves.not.toBeNull();
   });

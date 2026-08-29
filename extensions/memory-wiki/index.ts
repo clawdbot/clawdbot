@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { definePluginEntry, type OpenClawConfig } from "./api.js";
 import { registerWikiCli } from "./src/cli.js";
+import { refreshMemoryWikiIndexesAfterImport } from "./src/compile.js";
 import {
   activateMemoryWikiCompiledCacheOwner,
   configureMemoryWikiCompiledCacheStore,
@@ -146,6 +147,13 @@ export default definePluginEntry({
             await reconcileMemoryWikiCompiledCacheOwner(activeConfig, () =>
               loadMemoryWikiValidatedVaultIdentity(activeConfig.vault.path),
             );
+            if (activeConfig.ingest.autoCompile) {
+              await refreshMemoryWikiIndexesAfterImport({
+                config: activeConfig,
+                syncResult: { importedCount: 0, updatedCount: 0, removedCount: 0 },
+                rebuildInvalidCache: true,
+              });
+            }
             activeOwnerIds.add(resolveMemoryWikiCompiledCacheOwnerId(activeConfig));
           }
         } catch (error) {

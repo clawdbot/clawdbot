@@ -1452,6 +1452,7 @@ async function hasMissingWikiIndexes(rootDir: string): Promise<boolean> {
 export async function refreshMemoryWikiIndexesAfterImport(params: {
   config: ResolvedMemoryWikiConfig;
   syncResult: { importedCount: number; updatedCount: number; removedCount: number };
+  rebuildInvalidCache?: boolean;
 }): Promise<RefreshMemoryWikiIndexesResult> {
   await initializeMemoryWikiVault(params.config);
   if (!params.config.ingest.autoCompile) {
@@ -1466,10 +1467,11 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
     params.syncResult.removedCount > 0;
   const missingIndexes = await hasMissingWikiIndexes(params.config.vault.path);
   const compiledCacheValid = await loadMemoryWikiCompiledCache(params.config).catch(() => null);
-  if (!importChanged && !missingIndexes && compiledCacheValid) {
+  const rebuildInvalidCache = params.rebuildInvalidCache === true;
+  if (!importChanged && !missingIndexes && (compiledCacheValid || !rebuildInvalidCache)) {
     return {
       refreshed: false,
-      reason: "no-import-changes",
+      reason: compiledCacheValid ? "no-import-changes" : "compiled-cache-invalid",
     };
   }
   const compile = await compileMemoryWikiVault(params.config);
