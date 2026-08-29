@@ -45,6 +45,11 @@ it.each([
     expect(result.output).toContain("intentional fixture failure");
   }
   expect(result.workerStopped).toBe(true);
+  if (scenario === "threads") {
+    expect(result.worker.threadId).toBeGreaterThan(0);
+  } else {
+    expect(result.worker.threadId).toBe(0);
+  }
   if (setup !== "raw") {
     // Windows has no wrapper-owned group cleanup after a forced termination.
     // Its unfinished home remains inside this test's auto-cleaned fixture root.

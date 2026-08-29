@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -244,37 +245,35 @@ export default {
     `
 import fs from "node:fs";
 import { it, expect } from "vitest";
+import { threadId } from "node:worker_threads";
 ${scenario === "hung-exit" ? `process.once("exit", () => { fs.writeFileSync(${JSON.stringify(ready)}, "exit"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); });` : ""}
 ${scenario === "bad-exit" ? 'process.once("exit", () => { process.exitCode = 23; });' : ""}
 it("completes the test before worker shutdown", () => {
-  fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ pid: process.pid, home: process.env.HOME }));
+  fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ pid: process.pid, threadId, home: process.env.HOME }));
   ${fail ? 'expect.fail("intentional fixture failure");' : "expect(true).toBe(true);"}
 });
 `,
   );
-  const args =
-    scenario === "plain" || scenario === "custom"
-      ? [
-          path.join(repo, "scripts/run-vitest.mjs"),
-          "run",
-          "--config",
-          config,
-          "--root",
-          root,
-          "--configLoader",
-          "native",
-        ]
-      : [
-          path.join(repo, "scripts/run-vitest-profile.mts"),
-          "runner",
-          "--output-dir",
-          profiles,
-          "--",
-          "--root",
-          root,
-          "--configLoader",
-          "native",
-        ];
+  const args = [
+    path.join(repo, "scripts/run-vitest.mjs"),
+    "run",
+    "--config",
+    config,
+    "--root",
+    root,
+    "--configLoader",
+    "native",
+  ];
+  if (scenario !== "plain" && scenario !== "custom") {
+    // This shutdown contract covers Node's exit-time writes, not the Inspector
+    // profiler's awaited cleanup. Pass native flags only to the actual worker.
+    args.push(
+      "--execArgv=--cpu-prof",
+      `--execArgv=--cpu-prof-dir=${profiles}`,
+      "--execArgv=--heap-prof",
+      `--execArgv=--heap-prof-dir=${profiles}`,
+    );
+  }
   const { child, completion } = spawnOwnedVitestProcess({
     command: process.execPath,
     args,
@@ -289,6 +288,10 @@ it("completes the test before worker shutdown", () => {
     output += chunk;
   });
   const { code } = await completion.finally(detachCleanup);
+  assert.ok(
+    fs.existsSync(receipt),
+    `Vitest exited before the fixture test (code ${code}):\n${output}`,
+  );
   const state = JSON.parse(fs.readFileSync(receipt, "utf8"));
   let workerStopped = false;
   try {
@@ -302,6 +305,12 @@ it("completes the test before worker shutdown", () => {
   }
   const counts = { cpu: 0, heap: 0 };
   for (const file of fs.readdirSync(profiles)) {
+    // Native profile names contain PID/thread ID. A launcher profile cannot
+    // establish that the worker's exit-time writes completed.
+    const [, , , pid, workerThreadId] = file.split(".");
+    if (pid !== String(state.pid) || workerThreadId !== String(state.threadId)) {
+      continue;
+    }
     const profile = JSON.parse(fs.readFileSync(path.join(profiles, file), "utf8"));
     if (file.endsWith(".cpuprofile") && profile.nodes?.length) {
       counts.cpu++;
@@ -314,6 +323,7 @@ it("completes the test before worker shutdown", () => {
     JSON.stringify({
       code,
       output,
+      worker: { pid: state.pid, threadId: state.threadId },
       workerStopped,
       profiles: counts,
       homeRemoved: !fs.existsSync(state.home),
