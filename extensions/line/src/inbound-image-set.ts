@@ -24,6 +24,13 @@ type PendingImageSetPart<TEvent, TLifecycle> = {
 
 type PendingImageSet<TEvent, TLifecycle> = {
   setId: string;
+  /**
+   * Set once the holder has taken the parts. The entry stays on the lane until
+   * delivery finishes, so without this a late matching part would still join a
+   * set whose contents were already snapshotted: it would defer, be left out of
+   * the fanned-in ownership, and then be discarded with the entry.
+   */
+  sealed: boolean;
   // Keyed by message id so a redelivered event replaces its part instead of
   // adding a duplicate image to the turn.
   parts: Map<string, PendingImageSetPart<TEvent, TLifecycle>>;
@@ -104,12 +111,6 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     lifecycle: TLifecycle;
     flushDelayMs?: number;
   }): Promise<LineImageSetDelivery<TEvent, TLifecycle> | null> => {
-    const existing = pendingByLane.get(input.laneKey);
-    if (existing && existing.setId !== input.setId) {
-      // A different set is still forming on this lane; keep the sends in order.
-      await awaitLane(input.laneKey);
-    }
-    const joined = pendingByLane.get(input.laneKey);
     const part: PendingImageSetPart<TEvent, TLifecycle> = {
       index: input.index,
       arrivedAt: Date.now(),
@@ -117,14 +118,23 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
       lifecycle: input.lifecycle,
     };
 
-    if (joined && joined.setId === input.setId) {
-      joined.parts.set(input.messageId, part);
-      // A later part may carry the total an earlier one omitted.
-      joined.total ??= input.total;
-      if (joined.total !== undefined && joined.parts.size >= joined.total) {
-        joined.release();
+    // Join the set still forming on this lane, or wait out one that cannot take
+    // this part - a different set, or this one after its parts were taken.
+    for (;;) {
+      const current = pendingByLane.get(input.laneKey);
+      if (!current) {
+        break;
       }
-      return null;
+      if (current.setId === input.setId && !current.sealed) {
+        current.parts.set(input.messageId, part);
+        // A later part may carry the total an earlier one omitted.
+        current.total ??= input.total;
+        if (current.total !== undefined && current.parts.size >= current.total) {
+          current.release();
+        }
+        return null;
+      }
+      await current.taken;
     }
 
     let release = () => {};
@@ -137,6 +147,7 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     });
     const pending: PendingImageSet<TEvent, TLifecycle> = {
       setId: input.setId,
+      sealed: false,
       parts: new Map([[input.messageId, part]]),
       total: input.total,
       release: () => {
@@ -154,6 +165,8 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
       pending.release();
     }
     await whole;
+    // Nothing may join from here: these parts are the turn.
+    pending.sealed = true;
     const ordered = orderedParts(pending);
     return {
       events: ordered.map((entry) => entry.event),

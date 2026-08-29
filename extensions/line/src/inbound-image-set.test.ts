@@ -111,6 +111,36 @@ describe("createLineImageSetIngressBuffer", () => {
     await expect(held).resolves.toMatchObject({ events: ["image-1", "image-2"] });
   });
 
+  // Between the holder taking its parts and finishing delivery, the entry is still
+  // on the lane. A late part matching that set must not join it - those parts are
+  // already the turn, so it would be dropped and its claim left unsettled.
+  it("starts a new set for a part arriving after the holder took the last one", async () => {
+    const held = arrive({ index: 1, total: 2, flushDelayMs: 1_000 });
+    await expect(arrive({ index: 2, total: 2 })).resolves.toBeNull();
+    const set = await held;
+    if (!set) {
+      throw new Error("the first part should hold the set");
+    }
+    expect(set.events).toEqual(["image-1", "image-2"]);
+
+    // Same set id, arriving while the holder is still delivering.
+    const late = arrive({ index: 3, flushDelayMs: 1_000 });
+    let lateResolved = false;
+    void late.then(() => {
+      lateResolved = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lateResolved).toBe(false);
+
+    set.finish();
+    await vi.advanceTimersByTimeAsync(1_000);
+    // It becomes its own delivery rather than vanishing into the sealed set.
+    await expect(late).resolves.toMatchObject({
+      events: ["image-3"],
+      lifecycles: ["claim-3"],
+    });
+  });
+
   // The lane is released so the rest of a set can be claimed at all. Anything else
   // the sender sent afterwards has to wait, or it overtakes the images.
   it("keeps a later unrelated event behind an incomplete set", async () => {
