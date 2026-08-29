@@ -15,6 +15,7 @@ import {
   stableChromeExtensionDir,
 } from "../src/browser/extension-install-layout.js";
 import { installChromeExtensionBootstrap } from "../src/browser/extension-install.js";
+import { useNativeHostLaunchFixture } from "../src/browser/extension-install.test-support.js";
 import { handleGatewayExtensionUpgrade } from "../src/browser/extension-relay/gateway-relay-route.js";
 import { getPageForTargetId } from "../src/browser/pw-session.js";
 import { createBrowserRouteDispatcher } from "../src/browser/routes/dispatcher.js";
@@ -37,6 +38,7 @@ const runE2E =
   (process.platform === "linux" || process.platform === "darwin");
 const cleanups: Array<() => Promise<void>> = [];
 const STORE_ORIGIN = "chrome-extension://kcdjddhmeafeomebliikmbpblkmkfoig/";
+const nativeHostFixture = useNativeHostLaunchFixture();
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).toReversed()) {
@@ -201,7 +203,8 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         const extensionSource = path.dirname(fileURLToPath(import.meta.url));
         // Match installation: Chrome launches the built host, not a fresh tsx
         // compilation of the source graph inside each bounded native request.
-        const nativeHostPath = await fs.realpath(
+        const launchFixture = await nativeHostFixture(
+          root,
           path.resolve("dist/extensions/browser/native-host-entry.js"),
         );
         const deps = {
@@ -215,8 +218,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
             OPENCLAW_CONFIG_PATH: configPath,
             OPENCLAW_GATEWAY_PORT: String(gatewayPort),
           },
-          nodePath: process.execPath,
-          nativeHostPath,
+          ...launchFixture,
         };
         const gatewayServer = http.createServer((req, res) => {
           if (req.url === "/browser-owner-proof") {
@@ -309,14 +311,35 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           waitMs: 15_000,
           deps,
         });
-        await expect
-          .poll(
-            async () => await exactOwnedManifestsExist(relevantManifestPaths, expectedOrigins),
-            {
-              timeout: 15_000,
-            },
-          )
-          .toBe(true);
+        try {
+          await expect
+            .poll(
+              async () => await exactOwnedManifestsExist(relevantManifestPaths, expectedOrigins),
+              {
+                timeout: 15_000,
+              },
+            )
+            .toBe(true);
+        } catch (error) {
+          const status = await installPromise;
+          const modes = await Promise.all(
+            Object.entries(launchFixture).map(async ([kind, target]) => [
+              kind,
+              ((await fs.stat(target)).mode & 0o777).toString(8),
+            ]),
+          );
+          const issues = status.issues.map((issue) =>
+            issue
+              .replaceAll(launchFixture.nativeHostPath, "<native-host>")
+              .replaceAll(launchFixture.nodePath, "<node>")
+              .replaceAll(root, "<fixture>")
+              .replaceAll(extensionSource, "<bundled-extension>"),
+          );
+          throw new Error(
+            `Native host pre-registration failed: ${JSON.stringify({ modes: Object.fromEntries(modes), issues })}`,
+            { cause: error },
+          );
+        }
         process.stderr.write("[browser-extension-e2e] deterministic native host pre-registered\n");
         await loadUnpackedExtension(context, installed);
         const extensionId = await waitForExtensionId(context, installed);
