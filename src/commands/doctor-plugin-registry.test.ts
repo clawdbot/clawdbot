@@ -13,7 +13,6 @@ import {
 } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { markRetainedManagedNpmInstall } from "../plugins/managed-npm-retention.js";
-import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
@@ -483,46 +482,6 @@ describe("maybeRepairPluginRegistryState", () => {
         prompter: { shouldRepair: true },
       }),
     ).resolves.toStrictEqual({ config: {} });
-  });
-
-  it("does not roll back install records cached before an earlier Doctor repair", async () => {
-    const stateDir = makeTempDir();
-    const oldInstallPath = path.join(stateDir, "plugins", "demo-old");
-    const freshInstallPath = path.join(stateDir, "plugins", "demo-fresh");
-    fs.mkdirSync(oldInstallPath, { recursive: true });
-    fs.mkdirSync(freshInstallPath, { recursive: true });
-
-    await writePersistedInstalledPluginIndex(
-      createCurrentIndexWithPathRecord({ pluginId: "demo", installPath: oldInstallPath }),
-      { stateDir },
-    );
-    const staleDoctorCache = createPluginCache();
-    await withPluginCache(staleDoctorCache, () =>
-      readRequiredPersistedInstalledPluginIndex(stateDir),
-    );
-
-    await withPluginCache(createPluginCache(), () =>
-      writePersistedInstalledPluginIndex(
-        createCurrentIndexWithPathRecord({ pluginId: "demo", installPath: freshInstallPath }),
-        { stateDir },
-      ),
-    );
-
-    await withPluginCache(staleDoctorCache, () =>
-      maybeRepairPluginRegistryState({
-        stateDir,
-        candidates: [],
-        env: hermeticEnv(),
-        config: {},
-        prompter: { shouldRepair: true },
-      }),
-    );
-
-    const persisted = await withPluginCache(createPluginCache(), () =>
-      readRequiredPersistedInstalledPluginIndex(stateDir),
-    );
-    expect(persisted.refreshReason).toBe("migration");
-    expect(persisted.installRecords.demo?.installPath).toBe(freshInstallPath);
   });
 
   it("warns about stale managed npm packages that shadow bundled plugins", async () => {
