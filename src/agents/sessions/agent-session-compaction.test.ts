@@ -237,6 +237,99 @@ describe("AgentSession compaction", () => {
     },
   );
 
+  it.each([
+    {
+      name: "long untrusted focus",
+      instructions: `\nKeep <API>\r\n\u0000\u202E${"😀".repeat(900)}  `,
+      expectedFocus: `Keep &lt;API&gt;\n${"😀".repeat(786)}`,
+    },
+    { name: "blank focus", instructions: " \n\t ", expectedFocus: undefined },
+    { name: "absent focus", instructions: undefined, expectedFocus: undefined },
+  ])(
+    "prepares $name for core without changing the extension input",
+    async ({ instructions, expectedFocus }) => {
+      const sessionManager = SessionManager.inMemory();
+      sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
+      sessionManager.appendMessage({
+        ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
+        timestamp: 2,
+      });
+      sessionManager.appendMessage({ role: "user", content: "split prompt", timestamp: 3 });
+      sessionManager.appendMessage({
+        ...createAssistant(testModel, [{ type: "text", text: "retained answer" }]),
+        timestamp: 4,
+      });
+      const observedInstructions: Array<string | undefined> = [];
+      const prompts: string[] = [];
+      const eventBus = createEventBus();
+      const network = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("Unexpected network request in compaction test"));
+      try {
+        const resourceLoader = createResourceLoader();
+        const extensions = resourceLoader.getExtensions();
+        extensions.extensions.push(
+          await loadExtensionFromFactory(
+            (api) => {
+              api.on("session_before_compact", (event) => {
+                observedInstructions.push(event.customInstructions);
+              });
+            },
+            sessionManager.getCwd(),
+            eventBus,
+            extensions.runtime,
+          ),
+        );
+        streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+          const message = context.messages[0];
+          if (message?.role !== "user") {
+            throw new Error("expected a user summary prompt");
+          }
+          prompts.push(
+            typeof message.content === "string"
+              ? message.content
+              : message.content.map((block) => (block.type === "text" ? block.text : "")).join(""),
+          );
+          return createAssistantResultStream(
+            createAssistant(model, [{ type: "text", text: "compacted summary" }]),
+          );
+        });
+        const { session } = await createTestSession({
+          sessionManager,
+          resourceLoader,
+          settingsManager: SettingsManager.inMemory({
+            compaction: { enabled: false, reserveTokens: 1_000, keepRecentTokens: 1 },
+            retry: { enabled: false },
+          }),
+        });
+
+        await session.compact(instructions);
+
+        expect(observedInstructions).toEqual([instructions]);
+        expect(prompts).toHaveLength(2);
+        for (const prompt of prompts) {
+          if (expectedFocus) {
+            expect.soft(prompt).toContain(`<untrusted-text>\n${expectedFocus}\n</untrusted-text>`);
+            expect.soft(prompt).not.toContain("\u0000");
+            expect.soft(prompt).not.toContain("\u202E");
+          } else {
+            expect.soft(prompt).not.toContain("Additional focus:");
+          }
+        }
+        expect(
+          sessionManager
+            .getEntries()
+            .filter((entry) => entry.type === "compaction")
+            .map((entry) => entry.fromHook),
+        ).toEqual([false]);
+        expect(network.mock.calls.length).toBe(0);
+      } finally {
+        eventBus.clear();
+        network.mockRestore();
+      }
+    },
+  );
+
   it("preserves the automatic authentication failure as a reasoned skip", async () => {
     const { session, modelRegistry } = await createTestSession({
       settingsManager: createAutoCompactionSettings(),
