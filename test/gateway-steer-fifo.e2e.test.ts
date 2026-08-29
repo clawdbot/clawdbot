@@ -60,6 +60,13 @@ const clients: GatewayChatClient[] = [];
 const diagnosticsClients: GatewayClient[] = [];
 const cleanupDirs: string[] = [];
 const modelServers: MockModelServer[] = [];
+const proofTraceEnabled = process.env.OPENCLAW_E2E_PROOF_TRACE === "1";
+
+function emitProofTrace(event: Record<string, unknown>): void {
+  if (proofTraceEnabled) {
+    process.stdout.write(`PROOF_TRACE ${JSON.stringify(event)}\n`);
+  }
+}
 
 async function collectCleanupFailures(
   tasks: Array<Promise<unknown>>,
@@ -850,6 +857,17 @@ describe("Gateway steer FIFO", () => {
         if (!historyBeforeAbort) {
           throw new Error("history was not captured before abort");
         }
+        emitProofTrace({
+          phase: "held-after-turn-commit",
+          assistantMessages: (historyBeforeAbort.messages ?? []).filter(
+            (message) => message.role === "assistant",
+          ).length,
+          assistantText: contentText(
+            (historyBeforeAbort.messages ?? []).find((message) => message.role === "assistant")
+              ?.content,
+          ),
+          hasActiveRun: historyBeforeAbort.sessionInfo?.hasActiveRun ?? null,
+        });
 
         const abort = await fixture.client.abortChat({
           sessionKey: fixture.sessionKey,
@@ -860,6 +878,7 @@ describe("Gateway steer FIFO", () => {
           aborted: false,
           runIds: [],
         });
+        emitProofTrace({ phase: "late-abort", ...abort });
 
         const historyAfterAbort = await fixture.diagnosticsClient.request<{
           messages?: Array<{ abortMeta?: unknown; content?: unknown; role?: unknown }>;
@@ -880,8 +899,14 @@ describe("Gateway steer FIFO", () => {
         expect(terminal.status).toBe("ok");
         await waitForRunTerminal(fixture, first.runId);
 
+        let finalHistory:
+          | {
+              messages?: Array<{ abortMeta?: unknown; content?: unknown; role?: unknown }>;
+              sessionInfo?: { activeRunIds?: string[]; hasActiveRun?: boolean };
+            }
+          | undefined;
         await vi.waitFor(async () => {
-          const finalHistory = await fixture.diagnosticsClient.request<{
+          finalHistory = await fixture.diagnosticsClient.request<{
             messages?: Array<{ abortMeta?: unknown; content?: unknown; role?: unknown }>;
             sessionInfo?: { activeRunIds?: string[]; hasActiveRun?: boolean };
           }>("chat.history", { sessionKey: fixture.sessionKey, limit: 20 });
@@ -896,6 +921,18 @@ describe("Gateway steer FIFO", () => {
             hasActiveRun: false,
           });
         }, WAIT_OPTS);
+        emitProofTrace({
+          phase: "settled",
+          terminalStatus: terminal.status ?? null,
+          assistantMessages: (finalHistory?.messages ?? []).filter(
+            (message) => message.role === "assistant",
+          ).length,
+          hasAbortMeta: (finalHistory?.messages ?? []).some((message) =>
+            Object.hasOwn(message, "abortMeta"),
+          ),
+          activeRunIds: finalHistory?.sessionInfo?.activeRunIds ?? null,
+          hasActiveRun: finalHistory?.sessionInfo?.hasActiveRun ?? null,
+        });
       } finally {
         fixture.modelServer.releaseAfterTurn();
       }
