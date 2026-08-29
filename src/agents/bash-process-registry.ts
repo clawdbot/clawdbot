@@ -256,10 +256,12 @@ export function prepareSessionPoll(session: ProcessSession, scope: object | unde
   }
   const pending = session.pendingPollDelivery;
   if (pending) {
-    // Parallel polls from one assistant turn must not receive the same staged bytes.
+    // The first retry claims the staged bytes for its turn. Parallel siblings then
+    // observe that scope and cannot duplicate the recovery result.
     if (pending.scope === scope) {
       return { output: "", outputDropped: false, acknowledge() {} };
     }
+    pending.scope = scope;
     return {
       output: pending.output,
       outputDropped: pending.outputDropped,

@@ -112,21 +112,53 @@ test.each(["running", "completed"] as const)(
   },
 );
 
-test("does not duplicate staged output across parallel polls from one assistant turn", async () => {
-  const session: ProcessSession = createProcessSessionFixture({
-    id: "parallel-delivery",
+test.each(["initial", "retry"] as const)(
+  "does not duplicate $phase output across parallel polls from one assistant turn",
+  async (phase) => {
+    const session: ProcessSession = createProcessSessionFixture({
+      id: `parallel-${phase}-delivery`,
+      backgrounded: true,
+    });
+    addSession(session);
+    appendOutput(session, "stdout", "one-copy\n");
+    const processTool = createProcessTool();
+    if (phase === "retry") {
+      await poll(processTool, session.id, "parallel-dropped");
+    }
+    const turn = processTurn("parallel-first", session.id);
+
+    const first = await poll(processTool, session.id, "parallel-first", turn);
+    const second = await poll(processTool, session.id, "parallel-second", turn);
+
+    expect(resultText(first)).toContain("one-copy");
+    expect(resultText(second)).not.toContain("one-copy");
+  },
+);
+
+test("consumes staged output after transformed transcript persistence", async () => {
+  const session = createProcessSessionFixture({
+    id: "transformed-delivery",
     backgrounded: true,
   });
   addSession(session);
-  appendOutput(session, "stdout", "one-copy\n");
+  appendOutput(session, "stdout", "transformed-output\n");
   const processTool = createProcessTool();
-  const turn = processTurn("parallel-first", session.id);
+  const turn = processTurn("transformed-result", session.id);
+  const result = await poll(processTool, session.id, turn.toolCall.id, turn);
+  const manager = SessionManager.inMemory();
+  installSessionToolResultGuard(manager, {
+    runId: "transformed-run",
+    maxToolResultChars: 16,
+    transformMessageForPersistence: (message) => ({ ...message }),
+    transformToolResultForPersistence: (message) => ({ ...message }),
+    beforeMessageWriteHook: ({ message }) => ({ message: { ...message } }),
+  });
 
-  const first = await poll(processTool, session.id, "parallel-first", turn);
-  const second = await poll(processTool, session.id, "parallel-second", turn);
+  manager.appendMessage(turn.assistantMessage);
+  persistResult(manager, turn.toolCall.id, result);
 
-  expect(resultText(first)).toContain("one-copy");
-  expect(resultText(second)).not.toContain("one-copy");
+  const observed = await poll(processTool, session.id, "transformed-observed");
+  expect(resultText(observed)).not.toContain("transformed-output");
 });
 
 test("replays blocked poll output immediately when the retry has a timeout", async () => {

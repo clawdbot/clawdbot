@@ -701,6 +701,7 @@ export function installSessionToolResultGuard(
     message: AgentMessage,
     options?: AppendMessageOptions,
     sourceAppend?: CodeModeSourceAppend,
+    acknowledgementSource: AgentMessage = message,
   ): {
     anchor?: TranscriptEntryAnchor;
     entryId: string;
@@ -724,7 +725,7 @@ export function installSessionToolResultGuard(
     }
     const persistedMessage = entry.message;
     // Destructive tool-side state commits only after this exact result is durable.
-    acknowledgeInternalToolResult(message);
+    acknowledgeInternalToolResult(acknowledgementSource);
     const persistedId =
       persistedMessage.role === "toolResult" ? extractToolResultId(persistedMessage) : null;
     // Update only committed state, before callbacks can re-enter or throw.
@@ -890,6 +891,8 @@ export function installSessionToolResultGuard(
             toolResultTransformerMayMutate ||
             persisted.changed,
         },
+        undefined,
+        message,
       ).entryId;
     }
 
