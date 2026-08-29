@@ -1721,6 +1721,19 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it("routes the shared MCP scenario through its Docker and client owners", () => {
+    expectChangedTargets(
+      ["scripts/e2e/lib/mcp-code-mode/scenario.sh"],
+      [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/scripts/mcp-code-mode-gateway-client.test.ts",
+        "test/scripts/session-log-mentions.test.ts",
+      ],
+    );
+  });
+
   it("routes MCP and cron Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
       "scripts/e2e/mcp-channels-docker.sh",

@@ -2619,7 +2619,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [dockerBuild, "docker-e2e-observability", dockerE2e, pluginPrerelease],
   ],
   [
-    /^scripts\/e2e\/mcp-code-mode-gateway-(?:live-)?docker\.sh$/u,
+    /^scripts\/e2e\/(?:mcp-code-mode-gateway-(?:live-)?docker|lib\/mcp-code-mode\/scenario)\.sh$/u,
     [
       dockerBuild,
       dockerE2e,
