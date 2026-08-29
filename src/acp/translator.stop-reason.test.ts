@@ -144,6 +144,55 @@ describe("acp translator stop reason mapping", () => {
     await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
   });
 
+  it("aborted state with errorMessage surfaces the cause before resolving as cancelled", async () => {
+    let runId: string | undefined;
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        runId = params?.idempotencyKey as string | undefined;
+        return new Promise<never>(() => {});
+      }
+      return {};
+    }) as GatewayClient["request"];
+    const connection = createAcpConnection();
+    const sessionStore = createInMemorySessionStore();
+    sessionStore.createSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      cwd: "/tmp",
+    });
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), { sessionStore });
+    const promptPromise = promptAgent(agent, "session-1");
+    await vi.waitFor(() => {
+      expect(runId).toBeDefined();
+    });
+
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "aborted",
+        errorMessage: "Tool validation failed: command contains unsupported flag",
+      }),
+    );
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
+    const chunkTexts = connection.__sessionUpdateMock.mock.calls
+      .map(
+        ([params]) =>
+          (
+            params as {
+              update?: { sessionUpdate?: string; content?: { text?: string } };
+            }
+          ).update,
+      )
+      .filter((update) => update?.sessionUpdate === "agent_message_chunk")
+      .map((update) => update?.content?.text);
+    expect(chunkTexts).toContain(
+      "[OpenClaw interruption] Tool validation failed: command contains unsupported flag",
+    );
+  });
+
   it("reconciles provisional ACP session keys to canonical Gateway keys by run id", async () => {
     const sentRunIds: string[] = [];
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {

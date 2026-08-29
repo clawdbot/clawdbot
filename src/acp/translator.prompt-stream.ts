@@ -518,6 +518,17 @@ export class AcpTranslatorPromptStream {
       return;
     }
     if (state === "aborted") {
+      const errorMessage = payload.errorMessage as string | undefined;
+      if (errorMessage?.trim()) {
+        // The Gateway attaches the abort cause (e.g. tool validation failure)
+        // to the event; surface it or the IDE shows a bare "cancelled" for a
+        // run that actually died from an error.
+        await this.emitPromptChunk(
+          pending,
+          "agent_message_chunk",
+          `[OpenClaw interruption] ${errorMessage.trim()}`,
+        );
+      }
       await this.finishPrompt(pending.sessionId, pending, "cancelled");
       return;
     }
