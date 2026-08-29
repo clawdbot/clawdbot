@@ -8999,9 +8999,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const buildRuntimeStep = nodeTestJob.steps.find(
       (step: WorkflowStep) => step.name === "Build Node test runtime",
     );
+    const installRipgrepStep = nodeTestJob.steps.find(
+      (step: WorkflowStep) => step.name === "Install ripgrep for native grep tests",
+    );
 
     expect(JSON.stringify(preflightJob.steps)).toContain("timeout_minutes: shard.timeoutMinutes");
     expect(manifestStep.run).toContain("pretest_build_mode: shard.pretestBuildMode");
+    expect(manifestStep.run).toContain("requires_ripgrep:");
+    expect(manifestStep.run).toContain("src/agents/sessions/tools/index.test.ts");
     expect(manifestStep.run).toContain(
       'shard.groups?.some((group) => group.shard_name.startsWith("core-tooling"))',
     );
@@ -9023,7 +9028,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       },
       run: "pnpm build:ci-artifacts",
     });
+    expect(installRipgrepStep).toMatchObject({
+      if: "matrix.requires_ripgrep == true && runner.os == 'Linux'",
+      run: expect.stringContaining("apt-get install -y --no-install-recommends ripgrep"),
+    });
     expect(nodeTestJob.steps.indexOf(buildRuntimeStep)).toBeLessThan(
+      nodeTestJob.steps.indexOf(runStep),
+    );
+    expect(nodeTestJob.steps.indexOf(installRipgrepStep)).toBeLessThan(
       nodeTestJob.steps.indexOf(runStep),
     );
     const trustedRunnerStep = nodeTestJob.steps.find(

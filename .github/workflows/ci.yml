@@ -1252,6 +1252,18 @@ jobs:
                 requires_go:
                   shard.shardName.startsWith("core-tooling") ||
                   shard.groups?.some((group) => group.shard_name.startsWith("core-tooling")),
+                requires_ripgrep:
+                  shard.targets?.includes("src/agents/sessions/tools/index.test.ts") ||
+                  shard.includePatterns?.includes("src/agents/sessions/tools/index.test.ts") ||
+                  (shard.shardName === "agentic-agents-support" && !shard.includePatterns) ||
+                  shard.groups?.some(
+                    (group) =>
+                      group.includePatterns?.includes(
+                        "src/agents/sessions/tools/index.test.ts",
+                      ) ||
+                      (group.shard_name === "agentic-agents-support" &&
+                        !group.includePatterns),
+                  ),
               }));
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
@@ -2901,6 +2913,16 @@ jobs:
           OPENCLAW_BUILD_PRIVATE_QA: ${{ matrix.pretest_build_mode == 'private-qa' && '1' || '0' }}
           VITEST: "1"
         run: pnpm build:ci-artifacts
+
+      - name: Install ripgrep for native grep tests
+        if: matrix.requires_ripgrep == true && runner.os == 'Linux'
+        shell: bash
+        run: |
+          if command -v rg >/dev/null 2>&1; then
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ripgrep
 
       - name: Run Node test shard
         env:
