@@ -1,4 +1,5 @@
 import { ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,13 +41,14 @@ const parent = { pid: process.pid + 1, pgid: process.pid + 1, startedAt: observe
 const child = { pid: process.pid + 2, pgid: process.pid + 2, startedAt: observer.startedAt };
 const liveChild: PosixProcess = { ...child, ppid: 1, state: "S" };
 const command = "/opt/codex app-server --listen stdio://";
+const commandFingerprint = createHash("sha256").update(command).digest("hex");
 
 async function openStore() {
   const { createPluginStateSyncKeyedStore } =
     await import("openclaw/plugin-sdk/plugin-state-store-runtime");
   return createPluginStateSyncKeyedStore<{
     parent: typeof parent;
-    child: typeof child & { command?: string };
+    child: typeof child & { commandFingerprint?: string };
   }>("codex", {
     namespace: "app-server-processes",
     maxEntries: 512,
@@ -81,7 +83,7 @@ describe("Codex process registration", () => {
   });
 
   it("never kills a same-second replacement process running a different command", async () => {
-    store.register("orphan", { parent, child: { ...child, command } });
+    store.register("orphan", { parent, child: { ...child, commandFingerprint } });
     vi.mocked(readCodexAppServerProcessCommand).mockResolvedValue("/usr/bin/unrelated-worker");
 
     await expect(prepareCodexAppServerProcessRegistration()).resolves.toBeTypeOf("function");
@@ -91,7 +93,7 @@ describe("Codex process registration", () => {
   });
 
   it.for(["legacy", "matching command"])("reaps a %s registration", async (mode) => {
-    const registeredChild = mode === "legacy" ? child : { ...child, command };
+    const registeredChild = mode === "legacy" ? child : { ...child, commandFingerprint };
     store.register("orphan", { parent, child: registeredChild });
 
     await expect(prepareCodexAppServerProcessRegistration()).resolves.toBeTypeOf("function");
@@ -104,7 +106,7 @@ describe("Codex process registration", () => {
   it.for(["gone", "replaced"])(
     "lets containment settle a %s child after command inspection fails",
     async (mode) => {
-      store.register("orphan", { parent, child: { ...child, command } });
+      store.register("orphan", { parent, child: { ...child, commandFingerprint } });
       vi.mocked(readCodexAppServerProcessCommand).mockResolvedValue(undefined);
       vi.mocked(readCodexAppServerProcess).mockResolvedValue(
         mode === "gone" ? undefined : { ...liveChild, startedAt: "a later start" },
@@ -112,13 +114,16 @@ describe("Codex process registration", () => {
 
       await expect(prepareCodexAppServerProcessRegistration()).resolves.toBeTypeOf("function");
 
-      expect(terminateCodexAppServerOrphan).toHaveBeenCalledExactlyOnceWith({ ...child, command });
+      expect(terminateCodexAppServerOrphan).toHaveBeenCalledExactlyOnceWith({
+        ...child,
+        commandFingerprint,
+      });
       expect(store.lookup("orphan")).toBeUndefined();
     },
   );
 
   it("refuses a spawn and retains the row when the matching child's command is unreadable", async () => {
-    const registration = { parent, child: { ...child, command } };
+    const registration = { parent, child: { ...child, commandFingerprint } };
     store.register("orphan", registration);
     vi.mocked(readCodexAppServerProcessCommand).mockResolvedValue(undefined);
     vi.mocked(readCodexAppServerProcess).mockResolvedValue(liveChild);
@@ -134,7 +139,7 @@ describe("Codex process registration", () => {
   it.for(["gone", "zombie", "replaced"])(
     "skips command inspection when the snapshot child is %s",
     async (mode) => {
-      store.register("orphan", { parent, child: { ...child, command } });
+      store.register("orphan", { parent, child: { ...child, commandFingerprint } });
       vi.mocked(readCodexAppServerProcessSnapshot).mockResolvedValue([
         observer,
         ...(mode === "gone"
@@ -151,7 +156,7 @@ describe("Codex process registration", () => {
   );
 
   it("leaves a live parent's child registered without inspecting its command", async () => {
-    const registration = { parent, child: { ...child, command } };
+    const registration = { parent, child: { ...child, commandFingerprint } };
     store.register("owned", registration);
     vi.mocked(readCodexAppServerProcessSnapshot).mockResolvedValue([
       observer,
@@ -214,9 +219,11 @@ describe("Codex process registration", () => {
         expect(store.entries().map((entry) => entry.value)).toEqual([
           {
             parent: { pid: observer.pid, pgid: observer.pgid, startedAt: observer.startedAt },
-            child: { ...child, command },
+            child: { ...child, commandFingerprint },
           },
         ]);
+        // Durable rows must never expose the raw argv (appServer.args can carry secrets).
+        expect(JSON.stringify(store.entries())).not.toContain(command);
         expect(kill).not.toHaveBeenCalled();
         spawned.emit("exit", 0, null);
         expect(store.entries()).toEqual([]);
@@ -234,7 +241,7 @@ describe("Codex process registration", () => {
   it.for(["success", "failure", "win32"])(
     "starts a nonblocking best-effort boot sweep: %s",
     async (mode) => {
-      store.register("orphan", { parent, child: { ...child, command } });
+      store.register("orphan", { parent, child: { ...child, commandFingerprint } });
       const warn = vi.fn();
       const service = createCodexAppServerProcessReaperService();
       const sweep = createDeferred<boolean>();

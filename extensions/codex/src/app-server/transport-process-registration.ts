@@ -1,5 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
@@ -16,12 +16,21 @@ const processIdentity = z.object({
   startedAt: z.string().min(1).max(64),
 });
 const childIdentity = processIdentity.extend({
+  // Durable rows hold only a digest: appServer.args is operator-configurable and
+  // may carry secrets, matching the spawn-identity argsFingerprint precedent.
   // Unreleased dev/nightly rows stay reapable with identity-only authority instead
-  // of blocking spawns. Require command at the next natural schema touch.
-  command: z.string().min(1).max(4096).optional(),
+  // of blocking spawns. Require the fingerprint at the next natural schema touch.
+  commandFingerprint: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
 });
 const registrationSchema = z.object({ parent: processIdentity, child: childIdentity }).strict();
 type ProcessRegistration = z.infer<typeof registrationSchema>;
+
+function fingerprintProcessCommand(command: string): string {
+  return createHash("sha256").update(command).digest("hex");
+}
 
 async function openProcessRegistrationStore() {
   const { createPluginStateSyncKeyedStore } =
@@ -54,7 +63,7 @@ async function reapRegisteredCodexAppServerOrphans(requestedDeadline?: number): 
     }
     const child = snapshot.find((row) => row.pid === registration.child.pid);
     if (
-      registration.child.command !== undefined &&
+      registration.child.commandFingerprint !== undefined &&
       child?.startedAt === registration.child.startedAt &&
       !child.state.startsWith("Z")
     ) {
@@ -66,7 +75,7 @@ async function reapRegisteredCodexAppServerOrphans(requestedDeadline?: number): 
             `Cannot inspect registered Codex process ${registration.child.pid} command. Check process command inspection permissions (/proc on Linux, ps on macOS), then retry.`,
           );
         }
-      } else if (command !== registration.child.command) {
+      } else if (fingerprintProcessCommand(command) !== registration.child.commandFingerprint) {
         // macOS lstart has second granularity: a replacement can inherit pid +
         // startedAt. A different command revokes kill authority; Linux already
         // uses tick-granular start identities.
@@ -136,7 +145,10 @@ export async function prepareCodexAppServerProcessRegistration(): Promise<
       // this synchronous commit. A failed commit closes the uninitialized child.
       store.register(key, {
         parent: processIdentity.parse(parent),
-        child: childIdentity.parse({ ...spawned, command }),
+        child: childIdentity.parse({
+          ...spawned,
+          commandFingerprint: fingerprintProcessCommand(command),
+        }),
       });
       child.once("exit", () => {
         try {

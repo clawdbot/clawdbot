@@ -81,8 +81,10 @@ its registration is durable.
 
 Cleanup only targets a registered child whose original OpenClaw parent is no
 longer running. It checks process IDs, start times, and process groups before
-terminating the orphan and its discoverable descendants. When recorded, the child
-command line must also match the live process before signaling. Another live
+terminating the orphan and its discoverable descendants. When recorded, a
+fingerprint of the child command line must also match the live process before
+signaling; the durable registration stores only that digest, never the raw
+arguments. Another live
 OpenClaw instance, processes registered under another state directory, and externally
 managed WebSocket or Unix-socket app-servers are left alone. These portable
 process checks do not provide an atomic operating-system ownership guarantee
