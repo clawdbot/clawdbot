@@ -421,7 +421,6 @@ describe("gateway agent handler", () => {
       entry: {
         pendingWorktree: {
           workspace: "/tmp/project",
-          titleSource: "Prepare workspace",
         },
       },
       reason: "workspace is not ready. Wait for setup to finish or retry in chat.",

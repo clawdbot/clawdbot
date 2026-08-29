@@ -6,7 +6,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { maybeGenerateDashboardSessionTitle } from "./dashboard-session-title.js";
+import { maybeGenerateChatSessionTitle } from "./dashboard-session-title.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 
 const provider = "title-proof";
@@ -164,7 +164,7 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
         const scope = { agentId: "main", sessionKey, storePath };
         await replaceSessionEntry(scope, entry);
         await expect(
-          maybeGenerateDashboardSessionTitle({
+          maybeGenerateChatSessionTitle({
             ...scope,
             cfg,
             entry,

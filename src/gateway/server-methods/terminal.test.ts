@@ -211,7 +211,6 @@ describe("terminal gateway policy", () => {
         sessionId: "ui-session-id",
         pendingWorktree: {
           workspace: "/tmp/project",
-          titleSource: "Prepare workspace",
         },
       },
       error: {

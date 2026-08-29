@@ -2,6 +2,10 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  assertSqliteSchemaContains,
+  getCanonicalSqliteNamedIndexContracts,
+} from "../infra/sqlite-schema-contract.js";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
@@ -16,6 +20,7 @@ import {
 import { resolveDatabasePath } from "./openclaw-state-db-maintenance.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import {
+  rebuildCanonicalStateTable,
   tableExists,
   tableHasColumn,
   tablePrimaryKeyColumns,
@@ -130,6 +135,61 @@ export function migrateWorkerPlacementExecutionModeSchema(
   );
   db.exec("DROP TABLE worker_session_placements;");
   db.exec(`ALTER TABLE ${migrationTable} RENAME TO worker_session_placements;`);
+  return true;
+}
+
+export function migrateGitHubPublicationBranches(
+  db: DatabaseSync,
+  previousVersion: number,
+  pathname: string,
+): boolean {
+  if (
+    previousVersion >= 14 ||
+    !tableExists(db, "github_publication_requests") ||
+    tableHasColumn(db, "github_publication_requests", "source_branch")
+  ) {
+    return false;
+  }
+  // Derive the predecessor in an isolated reference. Validate before the target
+  // ALTER/backfill can fire or discard unknown operator-owned schema objects.
+  const reference = openNodeSqliteDatabase(":memory:");
+  let legacySchema: string;
+  try {
+    reference.exec(OPENCLAW_STATE_SCHEMA_SQL);
+    reference.exec("ALTER TABLE github_publication_requests DROP COLUMN source_branch;");
+    legacySchema = reference
+      .prepare(
+        `SELECT sql FROM sqlite_schema
+       WHERE tbl_name = 'github_publication_requests' AND sql IS NOT NULL
+       ORDER BY type = 'table' DESC, name`,
+      )
+      .all()
+      .map((row) => row.sql)
+      .join(";\n");
+  } finally {
+    reference.close();
+  }
+  assertSqliteSchemaContains(db, pathname, legacySchema);
+  const canonicalIndexes = new Set(
+    getCanonicalSqliteNamedIndexContracts(legacySchema).map((index) => index.name),
+  );
+  const unsupportedIndex = db
+    .prepare(
+      `SELECT name FROM sqlite_schema
+     WHERE tbl_name = 'github_publication_requests' AND type = 'index' AND sql IS NOT NULL`,
+    )
+    .all()
+    .some(({ name }) => typeof name !== "string" || !canonicalIndexes.has(name));
+  if (unsupportedIndex) {
+    throw new Error(
+      `OpenClaw state database ${pathname} has unsupported additional indexes on github_publication_requests; refusing destructive migration. Back up and review the schema before retrying.`,
+    );
+  }
+  // Older records used one branch for both identities. Backfill before rebuilding
+  // NOT NULL so queued work and already-published destinations survive unchanged.
+  db.exec("ALTER TABLE github_publication_requests ADD COLUMN source_branch TEXT;");
+  db.exec("UPDATE github_publication_requests SET source_branch = branch;");
+  rebuildCanonicalStateTable(db, "github_publication_requests", 14, OPENCLAW_STATE_SCHEMA_SQL);
   return true;
 }
 
@@ -398,6 +458,13 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
       tableExists(db, "auth_profile_stores"))
   ) {
     migrations.push({ kind: "state-consolidation-v13", path: pathname });
+  }
+  if (
+    userVersion < 14 &&
+    tableExists(db, "github_publication_requests") &&
+    !tableHasColumn(db, "github_publication_requests", "source_branch")
+  ) {
+    migrations.push({ kind: "github-publication-branches-v14", path: pathname });
   }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });

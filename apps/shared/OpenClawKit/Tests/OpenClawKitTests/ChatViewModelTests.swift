@@ -6593,17 +6593,48 @@ struct ChatViewModelTests {
 
     @Test func `late correlated user echo replaces optimistic row after final`() async throws {
         let history = historyPayload()
+        let bootstrapRequested = AsyncGate()
+        let releaseBootstrap = AsyncGate()
+        let releaseSend = AsyncGate()
+        defer {
+            Task {
+                await releaseBootstrap.open()
+                await releaseSend.open()
+            }
+        }
         let (transport, vm) = await makeViewModel(
             historyResponses: [history, history],
-            sendMessageStatus: "pending")
+            historyResponseHook: { _, index, _ in
+                if index == 0 {
+                    await bootstrapRequested.open()
+                    await releaseBootstrap.wait()
+                }
+                return nil
+            },
+            sendMessageHook: { runId in
+                await releaseSend.wait()
+                return OpenClawChatSendResponse(runId: runId, status: "pending")
+            })
 
         await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
-
+        await bootstrapRequested.wait()
         await sendUserMessage(vm, text: "sensitive draft")
         let runId = try await waitForLastSentRunId(transport)
         let optimisticID = try await MainActor.run {
             try #require(vm.messages.last(where: { $0.role == "user" })?.id)
+        }
+
+        await releaseBootstrap.open()
+        try await waitUntil("stale bootstrap history applied before send acknowledgement") {
+            await MainActor.run { !vm.isLoading && vm.sessionId == "sess-main" }
+        }
+        try await MainActor.run {
+            try #require(vm.messages.last(where: { $0.role == "user" })?.id == optimisticID)
+            #expect(vm.pendingRunCount == 1)
+        }
+        await releaseSend.open()
+        try await waitUntil("send acknowledged with the local run pending") {
+            await MainActor.run { !vm.isSending && vm.pendingRunCount == 1 }
         }
 
         transport.emit(

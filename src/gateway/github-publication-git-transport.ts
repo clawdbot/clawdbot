@@ -291,6 +291,7 @@ export function githubPublicationPushArgs(
   remote: string,
   headCommit: string,
   branch: string,
+  expectedRemoteHead?: string,
 ): string[] {
   return [
     ...GITHUB_CREDENTIAL_ARGS,
@@ -300,6 +301,11 @@ export function githubPublicationPushArgs(
     "--porcelain",
     "--no-follow-tags",
     "--recurse-submodules=no",
+    // Named destinations are compare-and-swap writes; an empty expected head
+    // means create-only. The caller verifies ownership and ancestry for updates.
+    ...(expectedRemoteHead !== undefined
+      ? [`--force-with-lease=refs/heads/${branch}:${expectedRemoteHead}`]
+      : []),
     "--",
     remote,
     `${headCommit}:refs/heads/${branch}`,

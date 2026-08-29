@@ -144,7 +144,6 @@ describe("SQLite session row persistence", () => {
       pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
       pendingWorktree: {
         name: "session-startup",
-        titleSource: "Start work",
       },
       skillsSnapshot: {
         prompt: "compact skill prompt",

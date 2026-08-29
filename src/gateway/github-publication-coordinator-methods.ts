@@ -241,6 +241,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
                   status: "requested",
                   gateway_instance_id: null,
                   repository: null,
+                  source_branch: worktree.branch,
                   branch: worktree.branch,
                   base_branch: null,
                   source_head_commit: snapshot?.sourceHeadCommit ?? null,

@@ -5,8 +5,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   buildDashboardSessionTitleSource,
-  isDashboardSessionTitleCandidate,
-  maybeGenerateDashboardSessionTitle,
+  maybeGenerateChatSessionTitle,
 } from "../dashboard-session-title.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -36,7 +35,7 @@ export function resolveWebchatPromptCacheKey(params: {
   return `openclaw-webchat-${digest}`;
 }
 
-export function scheduleChatDashboardSessionTitle(params: {
+export function scheduleChatSessionTitle(params: {
   admittedSessionId: string;
   agentId: string;
   cfg: OpenClawConfig;
@@ -50,27 +49,25 @@ export function scheduleChatDashboardSessionTitle(params: {
     message: params.request.rawMessage,
     attachments: params.request.normalizedAttachments,
   });
-  if (
-    !isDashboardSessionTitleCandidate({ sessionKey: params.sessionKey, userMessage: titleSource })
-  ) {
+  if (!titleSource || titleSource.startsWith("/")) {
     return;
   }
+  const controller = new AbortController();
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     const admission = await beginSessionWorkAdmission({
       scope: params.storePath,
       identities: [params.sessionKey, params.admittedSessionId],
       assertAllowed: () => {},
+      onInterrupt: () => controller.abort(),
     });
     try {
       await admission.run(async () => {
         const titleEntry = loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
-        if (
-          titleEntry?.sessionId !== params.admittedSessionId ||
-          (titleEntry.pendingWorktree && !titleEntry.pendingWorktree.name)
-        ) {
+        if (titleEntry?.sessionId !== params.admittedSessionId) {
           return;
         }
-        const updated = await maybeGenerateDashboardSessionTitle({
+        const updated = await maybeGenerateChatSessionTitle({
+          abortSignal: controller.signal,
           cfg: params.cfg,
           agentId: params.agentId,
           entry: titleEntry,
@@ -92,6 +89,9 @@ export function scheduleChatDashboardSessionTitle(params: {
       admission.release();
     }
   }).catch((err: unknown) => {
+    if (controller.signal.aborted) {
+      return;
+    }
     params.context.logGateway.warn(
       `dashboard session title generation failed: ${formatForLog(err)}`,
     );

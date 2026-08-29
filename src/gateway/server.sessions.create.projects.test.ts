@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { waitForFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runWithCanonicalSkillWorkspace } from "../agents/skill-workshop-workspace-context.js";
@@ -33,6 +33,11 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const projectCloneMocks = vi.hoisted(() => ({ materialize: vi.fn() }));
+const titleGenerationMocks = vi.hoisted(() => ({ generate: vi.fn() }));
+
+vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
+  generateConversationLabelWithFallback: titleGenerationMocks.generate,
+}));
 
 vi.mock("../projects/project-clone.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../projects/project-clone.js")>();
@@ -57,8 +62,13 @@ const controlUiClient = {
   } as never,
 };
 
+beforeEach(() => {
+  titleGenerationMocks.generate.mockResolvedValue("Project workspace");
+});
+
 afterEach(() => {
   projectCloneMocks.materialize.mockReset();
+  titleGenerationMocks.generate.mockReset();
   dispatchInboundMessageMock.mockReset();
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
@@ -202,6 +212,7 @@ test.each([
             }),
       });
       if (worktree) {
+        expect(prepared?.worktree?.naming).toBeUndefined();
         expect(prepared?.spawnedCwd).not.toBe(projectRoot);
         expect(await fs.readFile(path.join(prepared!.spawnedCwd!, "README.md"), "utf8")).toBe(
           "project\n",
@@ -626,6 +637,7 @@ test.each([false, true])(
       const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
       expect(entry).not.toHaveProperty("pendingWorktree");
       expect(entry?.worktree?.canonicalWorkspaceDir).toBe(workspace);
+      expect(entry?.worktree?.naming).toBe("automatic");
       const owned = managedWorktrees.findLiveByOwner("session", key!);
       expect(owned?.id).toBe(entry?.worktree?.id);
       await expect(fs.readFile(path.join(entry!.spawnedCwd!, "README.md"), "utf8")).resolves.toBe(

@@ -21,6 +21,7 @@ type ConversationLabelAttempt = {
 
 /** Inputs for generating a short conversation label from the configured utility model. */
 export type ConversationLabelParams = {
+  abortSignal?: AbortSignal;
   userMessage: string;
   prompt: string;
   cfg: OpenClawConfig;
@@ -80,6 +81,7 @@ async function runLabelAttempts(
   const seen = new Set<string>();
   const failures: LabelModelPhase[] = [];
   for (const [index, attempt] of params.attempts.entries()) {
+    params.abortSignal?.throwIfAborted();
     const selection = resolveAttemptSelection(params, attempt);
     const rawRef = splitTrailingAuthProfile(attempt.modelRef?.trim() ?? "");
     const key = selection
@@ -117,9 +119,11 @@ async function runLabelAttempts(
         ].join(" "),
         prompt: params.userMessage,
         timeoutMs: params.timeoutMs,
+        ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
         outputTextPolicy: "strict-visible",
         streamParams: { maxTokens: CONVERSATION_LABEL_MAX_TOKENS },
       });
+      params.abortSignal?.throwIfAborted();
       const partitioner = createReasoningTagTextPartitioner();
       partitioner.markStrict();
       const visibleText = [...partitioner.push(completion.text), ...partitioner.flush()]
@@ -132,6 +136,7 @@ async function runLabelAttempts(
         return normalized;
       }
     } catch {
+      params.abortSignal?.throwIfAborted();
       failures.push(index === params.attempts.length - 1 ? "primary fallback" : "utility");
     }
   }

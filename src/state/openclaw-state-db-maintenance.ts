@@ -20,7 +20,7 @@ import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-stat
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const STATE_V6_ADDITIVE_TABLES = [
-  // v6-v12 databases may predate this former same-version lazy table.
+  // v6-v13 databases may predate this former same-version lazy table.
   "gateway_origin_device_tokens",
   ...LAZY_ADDITIVE_STATE_TABLES,
   "worker_session_tool_operations",
@@ -54,6 +54,7 @@ const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
   10: STATE_V6_ADDITIVE_TABLES,
   11: STATE_V6_ADDITIVE_TABLES,
   12: STATE_V6_ADDITIVE_TABLES,
+  13: STATE_V6_ADDITIVE_TABLES,
 } as const satisfies Record<number, readonly string[]>;
 type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
@@ -235,6 +236,14 @@ function assertOpenClawStateDatabaseV12ForMigration(
   assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 12 });
 }
 
+/** Require every v13 table before publication branch identities separate. */
+function assertOpenClawStateDatabaseV13ForMigration(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 13 });
+}
+
 /** Keep historical migration gates beside their version-specific ownership assertions. */
 export const openClawStateMigrationAssertions = new Map([
   [5, assertOpenClawStateDatabaseV5ForMigration],
@@ -245,6 +254,7 @@ export const openClawStateMigrationAssertions = new Map([
   [10, assertOpenClawStateDatabaseV10ForMigration],
   [11, assertOpenClawStateDatabaseV11ForMigration],
   [12, assertOpenClawStateDatabaseV12ForMigration],
+  [13, assertOpenClawStateDatabaseV13ForMigration],
 ]);
 
 export function markCurrentStateSchemaVersion(

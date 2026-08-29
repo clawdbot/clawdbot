@@ -13,12 +13,12 @@ vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
 vi.mock("../config/sessions/session-accessor.js", () => ({ updateSessionEntry }));
 vi.mock("./session-transcript-title-reader.js", () => ({ readSessionTitleFieldsFromTranscript }));
 
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ChatAttachment } from "./chat-attachments.js";
 import {
   buildDashboardSessionTitleSource,
-  maybeGenerateDashboardSessionTitle,
+  maybeGenerateChatSessionTitle,
 } from "./dashboard-session-title.js";
 
 const cfg = {
@@ -48,7 +48,7 @@ function mockSessionUpdate(current: SessionEntry): void {
   });
 }
 
-describe("maybeGenerateDashboardSessionTitle", () => {
+describe("maybeGenerateChatSessionTitle", () => {
   beforeEach(() => {
     generateConversationLabelWithFallback.mockReset();
     resolveUtilityModelRefForAgent.mockReset();
@@ -64,7 +64,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   });
 
   it("generates and persists a dashboard display name", async () => {
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    await expect(maybeGenerateChatSessionTitle(titleParams())).resolves.toBe(true);
 
     expect(resolveUtilityModelRefForAgent).toHaveBeenCalledWith({
       cfg,
@@ -96,6 +96,33 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(await update?.({ ...baseEntry })).toEqual({ displayName: "Release Planning" });
   });
 
+  it.each(["bound", "pending"] as const)(
+    "titles a non-dashboard session with a %s worktree",
+    async (state) => {
+      const entry: InternalSessionEntry = {
+        ...baseEntry,
+        ...(state === "pending"
+          ? { pendingWorktree: { workspace: "/repo" } }
+          : {
+              worktree: {
+                id: "worktree-title",
+                branch: "openclaw/brisk-lobster",
+                repoRoot: "/repo",
+              },
+            }),
+      };
+      mockSessionUpdate(entry);
+
+      await expect(
+        maybeGenerateChatSessionTitle({
+          ...titleParams(entry),
+          sessionKey: "agent:main:subagent:worktree-title",
+        }),
+      ).resolves.toBe(true);
+      expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
+    },
+  );
+
   it("routes both attempts through the effective session model and auth profile", async () => {
     const entry = {
       ...baseEntry,
@@ -106,7 +133,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     resolveUtilityModelRefForAgent.mockReturnValue("anthropic/claude-haiku-4-5@work");
     mockSessionUpdate(entry);
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams(entry))).resolves.toBe(true);
+    await expect(maybeGenerateChatSessionTitle(titleParams(entry))).resolves.toBe(true);
 
     expect(resolveUtilityModelRefForAgent).toHaveBeenCalledWith({
       cfg,
@@ -132,7 +159,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     };
     mockSessionUpdate(entry);
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams(entry))).resolves.toBe(true);
+    await expect(maybeGenerateChatSessionTitle(titleParams(entry))).resolves.toBe(true);
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
       expect.objectContaining({ agentHarnessRuntimeOverride: "codex" }),
@@ -148,7 +175,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     };
     mockSessionUpdate(entry);
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams(entry))).resolves.toBe(true);
+    await expect(maybeGenerateChatSessionTitle(titleParams(entry))).resolves.toBe(true);
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
       expect.objectContaining({ agentHarnessRuntimeOverride: "claude-cli" }),
@@ -167,7 +194,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
 
     await expect(
-      maybeGenerateDashboardSessionTitle({ ...titleParams(), cfg: profiledCfg }),
+      maybeGenerateChatSessionTitle({ ...titleParams(), cfg: profiledCfg }),
     ).resolves.toBe(true);
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
@@ -182,7 +209,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   it("goes directly to the regular model when utility routing is disabled", async () => {
     resolveUtilityModelRefForAgent.mockReturnValue(undefined);
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    await expect(maybeGenerateChatSessionTitle(titleParams())).resolves.toBe(true);
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
       expect.not.objectContaining({ utilityModelRef: expect.anything() }),
@@ -193,14 +220,14 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     const entry = { ...baseEntry, origin: { label: "Peter" } };
     mockSessionUpdate(entry);
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams(entry))).resolves.toBe(true);
+    await expect(maybeGenerateChatSessionTitle(titleParams(entry))).resolves.toBe(true);
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
   });
 
   it("keeps utility title prompt input on a UTF-16 boundary", async () => {
     await expect(
-      maybeGenerateDashboardSessionTitle({
+      maybeGenerateChatSessionTitle({
         ...titleParams(),
         userMessage: `${"m".repeat(999)}🚀tail`,
       }),
@@ -217,7 +244,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   ])("normalizes generated title wrappers", async (generated, expected) => {
     generateConversationLabelWithFallback.mockResolvedValue(generated);
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    await expect(maybeGenerateChatSessionTitle(titleParams())).resolves.toBe(true);
 
     const update = updateSessionEntry.mock.calls[0]?.[1];
     expect(await update?.({ ...baseEntry })).toEqual({ displayName: expected });
@@ -226,7 +253,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   it("keeps persisted titles on a UTF-16 boundary", async () => {
     generateConversationLabelWithFallback.mockResolvedValue(`${"a".repeat(59)}🚀tail`);
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    await expect(maybeGenerateChatSessionTitle(titleParams())).resolves.toBe(true);
 
     const update = updateSessionEntry.mock.calls[0]?.[1];
     expect(await update?.({ ...baseEntry })).toEqual({ displayName: "a".repeat(59) });
@@ -241,9 +268,9 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     ["channel name", { entry: { ...baseEntry, groupChannel: "releases" } }],
     ["space name", { entry: { ...baseEntry, space: "Engineering" } }],
   ])("skips %s", async (_name, override) => {
-    await expect(
-      maybeGenerateDashboardSessionTitle({ ...titleParams(), ...override }),
-    ).resolves.toBe(false);
+    await expect(maybeGenerateChatSessionTitle({ ...titleParams(), ...override })).resolves.toBe(
+      false,
+    );
 
     expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
     expect(updateSessionEntry).not.toHaveBeenCalled();
@@ -258,7 +285,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     mockSessionUpdate(entry);
 
     await expect(
-      maybeGenerateDashboardSessionTitle({
+      maybeGenerateChatSessionTitle({
         ...titleParams(entry),
         currentUserMessage: "Latest follow-up",
         userMessage: "Latest follow-up",
@@ -270,6 +297,33 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     );
   });
 
+  it.each(["Fix the child deployment", ""])(
+    "titles a forked chat from child input %j instead of copied parent history",
+    async (currentUserMessage) => {
+      const entry = {
+        ...baseEntry,
+        forkSource: { sessionKey: "agent:main:dashboard:parent", sessionId: "parent-session" },
+      };
+      readSessionTitleFieldsFromTranscript.mockReturnValue({
+        firstUserMessage: "Plan the parent release",
+        lastMessagePreview: "Fix the child deployment",
+      });
+      mockSessionUpdate(entry);
+
+      await expect(
+        maybeGenerateChatSessionTitle({
+          ...titleParams(entry),
+          currentUserMessage,
+          userMessage: "Fix the child deployment\nAttached deployment details",
+        }),
+      ).resolves.toBe(true);
+
+      expect(generateConversationLabelWithFallback.mock.calls[0]?.[0]?.userMessage).toBe(
+        "Fix the child deployment\nAttached deployment details",
+      );
+    },
+  );
+
   it("preserves attachment-aware input when the first turn is already in the transcript", async () => {
     readSessionTitleFieldsFromTranscript.mockReturnValue({
       firstUserMessage: "[Mon 2026-08-10 12:00 UTC] Review this rollout",
@@ -277,7 +331,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     });
 
     await expect(
-      maybeGenerateDashboardSessionTitle({
+      maybeGenerateChatSessionTitle({
         ...titleParams(),
         currentUserMessage: "Review this rollout",
         userMessage: "Review this rollout\nDeployment context",
@@ -294,17 +348,15 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       .mockRejectedValueOnce(new Error("route unavailable"))
       .mockResolvedValueOnce("Release Planning");
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).rejects.toThrow(
-      "route unavailable",
-    );
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    await expect(maybeGenerateChatSessionTitle(titleParams())).rejects.toThrow("route unavailable");
+    await expect(maybeGenerateChatSessionTitle(titleParams())).resolves.toBe(true);
     expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(2);
   });
 
   it("does not overwrite a name added while the model request is running", async () => {
     mockSessionUpdate({ ...baseEntry, label: "Manual title" });
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(false);
+    await expect(maybeGenerateChatSessionTitle(titleParams())).resolves.toBe(false);
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
   });
@@ -312,7 +364,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   it("does not write into a reset session generation", async () => {
     mockSessionUpdate({ ...baseEntry, sessionId: "session-2" });
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(false);
+    await expect(maybeGenerateChatSessionTitle(titleParams())).resolves.toBe(false);
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
   });
@@ -325,8 +377,8 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       }),
     );
 
-    const first = maybeGenerateDashboardSessionTitle(titleParams());
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(false);
+    const first = maybeGenerateChatSessionTitle(titleParams());
+    await expect(maybeGenerateChatSessionTitle(titleParams())).resolves.toBe(false);
     resolveLabel("Release Planning");
     await expect(first).resolves.toBe(true);
 

@@ -106,9 +106,10 @@ export function seedLocalPublication(
   database: OpenClawStateDatabase,
   params: {
     requestId: string;
-    status: "requested" | "publishing";
+    status: "requested" | "publishing" | "published";
     repositoryFingerprint?: string;
     headCommit?: string;
+    branch?: string;
   },
 ): void {
   database.db
@@ -117,12 +118,12 @@ export function seedLocalPublication(
         request_id, idempotency_key, request_digest, session_id, session_key, agent_id,
         worktree_id, repository_fingerprint, claim_id, run_id, environment_id, owner_epoch,
         placement_generation, identity_source, identity_profile_id, identity_account_id,
-        identity_login, title, body, status, gateway_instance_id, repository, branch,
+        identity_login, title, body, status, gateway_instance_id, repository, source_branch, branch,
         base_branch, source_head_commit, source_index_tree, workspace_tree, head_commit,
         pull_request_url,
         error_code, next_action, created_at_ms, updated_at_ms, reported_at_ms
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)`,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL)`,
     )
     .run(
       params.requestId,
@@ -143,11 +144,13 @@ export function seedLocalPublication(
       "previous-gateway-instance",
       "openclaw/openclaw",
       BRANCH,
+      params.branch ?? BRANCH,
       "main",
       OLD_HEAD,
       WORKSPACE_TREE,
       WORKSPACE_TREE,
       params.headCommit ?? NEW_HEAD,
+      params.status === "published" ? "https://github.com/openclaw/openclaw/pull/125200" : null,
       1_000,
       1_001,
     );
@@ -162,6 +165,30 @@ export function publicationTranscriptMessages(events: unknown[], requestId: stri
       event.message.role === "assistant" &&
       event.message.responseId === `github-publication:${requestId}`,
   );
+}
+
+export function setPublicationSessionTitle(params: {
+  label?: string;
+  displayName?: string;
+  automatic?: boolean;
+}): void {
+  mocks.loadSession.mockImplementation((sessionKey: string) => ({
+    canonicalKey: sessionKey,
+    agentId: "main",
+    storePath: "/state/sessions.json",
+    entry: {
+      sessionId: sessionKey === REQUEST.sessionKey ? REQUEST.sessionId : SESSION_ID,
+      label: params.label,
+      displayName: params.displayName,
+      firstUserMessage: "The opening prompt must never name the publication branch",
+      worktree: {
+        id: "worktree-1",
+        branch: BRANCH,
+        repoRoot: "/repo",
+        ...(params.automatic ? { naming: "automatic" } : {}),
+      },
+    },
+  }));
 }
 
 export let root: string;
@@ -334,7 +361,7 @@ export function installGitHubPublicationTestHarness(): void {
           )
         ) {
           remoteLookup += 1;
-          return commandResult(remoteLookup === 1 ? "" : `${NEW_HEAD}\trefs/heads/${BRANCH}\n`);
+          return commandResult(remoteLookup === 1 ? "" : `${NEW_HEAD}\t${argv.at(-1)}\n`);
         }
         if (command.includes(" repos/openclaw/openclaw/pulls ") && command.includes("state=all")) {
           return commandResult("[]\n");

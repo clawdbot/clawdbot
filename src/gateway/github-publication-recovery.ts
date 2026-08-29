@@ -13,7 +13,7 @@ export async function recoverGitHubPublicationWorkspace(
   const worktree = managedWorktrees.findLiveById(row.worktree_id);
   if (
     worktree?.repoFingerprint !== row.repository_fingerprint ||
-    worktree.branch !== row.branch ||
+    worktree.branch !== row.source_branch ||
     !row.source_head_commit ||
     !row.workspace_tree
   ) {
@@ -22,7 +22,7 @@ export async function recoverGitHubPublicationWorkspace(
   await recoverGitHubPublicationBranchAndIndex({
     cwd: worktree.path,
     requestId: row.request_id,
-    branch: row.branch,
+    branch: row.source_branch,
     sourceHeadCommit: row.source_head_commit,
     workspaceTree: row.workspace_tree,
     assertCurrent,

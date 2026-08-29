@@ -12,7 +12,6 @@ import { materializeProjectClone } from "../../projects/project-clone.js";
 import { parseProjectGitUrl } from "../../projects/project-git-url.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
 import { githubApiToken } from "../control-ui-github-api.js";
-import { prepareWorktreeSessionTitle } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
 import { prepareSessionWorktree } from "../session-worktree-preparation.js";
@@ -161,19 +160,6 @@ export async function prepareSessionWorkspace(params: {
       assertRunOwnership();
       emitAgentRunStatusEvent({ runId: clientRunId, sessionKey, agentId, phase });
     };
-    const needsTitle = pending && !pending.name && !saved.label && !saved.displayName;
-    if (needsTitle) {
-      status("naming_worktree");
-    }
-    const title = needsTitle
-      ? prepareWorktreeSessionTitle({
-          cfg,
-          agentId,
-          entry: saved,
-          userMessage: pending.titleSource,
-          onError: (error) => context.logGateway.warn(`worktree title failed: ${String(error)}`),
-        })
-      : undefined;
     let prepared: PreparedGatewaySessionLifecycle = {
       spawnedCwd: root.value.sessionCwd,
       sessionRoot: root.value.sessionRoot,
@@ -186,7 +172,6 @@ export async function prepareSessionWorkspace(params: {
         name: pending.name,
         baseRef: pending.baseRef,
         label: saved.label ?? saved.displayName,
-        title,
         runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
         signal,
         commitGuard: assertRunOwnership,
@@ -240,9 +225,6 @@ export async function prepareSessionWorkspace(params: {
     delete entry.pendingWorktree;
     assertRunOwnership();
     emitSessionsChanged(context, { sessionKey, agentId, reason: "project" });
-    if (await title?.persist(agentId, entry, sessionKey, storePath)) {
-      emitSessionsChanged(context, { sessionKey, agentId, reason: "chat.title" });
-    }
   });
   assertRunOwnership();
   return assertRunOwnership;

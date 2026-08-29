@@ -21,7 +21,10 @@ import {
   parseGitHubPublicationBaseBranch,
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
-import { resolveGitHubPublicationFailure } from "./github-publication-failure.js";
+import {
+  GitHubPublicationDestinationOccupiedError,
+  resolveGitHubPublicationFailure,
+} from "./github-publication-failure.js";
 import {
   GitHubPublicationRecoveryPendingError,
   assertGitHubPublicationRefCasCompleted,
@@ -45,6 +48,10 @@ import {
   resolveGitHubPublicationPullRequestUrl,
 } from "./github-publication-pull-requests.js";
 import { recoverGitHubPublicationWorkspace } from "./github-publication-recovery.js";
+import {
+  bindGitHubPublicationDestination,
+  ownsGitHubPublicationDestination,
+} from "./github-publication-store.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
@@ -92,11 +99,7 @@ export async function executeGitHubPublication(params: {
   }) => PublicationRow;
   updatePublishingFacts: (input: {
     row: PublicationRow;
-    repository: string;
-    branch: string;
     baseBranch: string;
-    sourceHeadCommit: string;
-    workspaceTree: string;
     headCommit: string;
   }) => PublicationRow;
   complete: (row: PublicationRow, result: SessionGitHubPublicationResult) => PublicationRow;
@@ -115,7 +118,7 @@ export async function executeGitHubPublication(params: {
       expected: {
         worktreeId: initial.worktree_id,
         repositoryFingerprint: initial.repository_fingerprint,
-        branch: initial.branch,
+        branch: initial.source_branch,
       },
     });
   const assertAuthority = () => {
@@ -166,13 +169,13 @@ export async function executeGitHubPublication(params: {
       throw new Error("GitHub publication requires a GitHub remote.");
     }
     const pushRepository = `${remote.owner}/${remote.repo}`;
-    const branch = await step(
+    const sourceBranch = await step(
       async () =>
         await requireCommand(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], {
           cwd: worktree.path,
         }),
     );
-    if (branch !== worktree.branch) {
+    if (sourceBranch !== worktree.branch) {
       throw new Error("GitHub publication branch changed.");
     }
     let row = initial;
@@ -238,9 +241,6 @@ export async function executeGitHubPublication(params: {
           worktree.baseRef,
           repositoryTarget.pullRequest.defaultBranch,
         );
-    if (!repositoryTarget.fork && branch === baseBranch) {
-      throw new Error("GitHub publication branch changed to its pull request base.");
-    }
     const remoteBaseResult = await step(
       async () =>
         await runCommand(githubPublicationBaseLookupArgs(repository, baseBranch), {
@@ -273,7 +273,7 @@ export async function executeGitHubPublication(params: {
     }
     const creation = await step(
       async () =>
-        await runCommand(githubPublicationBranchCreationArgs(branch), {
+        await runCommand(githubPublicationBranchCreationArgs(sourceBranch), {
           cwd: worktree.path,
         }),
     );
@@ -306,6 +306,16 @@ export async function executeGitHubPublication(params: {
     if (baseTree === workspaceTree) {
       throw new Error("GitHub publication has no changes to publish.");
     }
+    assertAuthority();
+    row = bindGitHubPublicationDestination({
+      row,
+      repository,
+      entry: currentWorktree().loaded.entry,
+    });
+    const branch = row.branch;
+    if (!repositoryTarget.fork && (sourceBranch === baseBranch || branch === baseBranch)) {
+      throw new Error("GitHub publication branch changed to its pull request base.");
+    }
     const marker = `${PUBLICATION_MARKER}: ${row.request_id}`;
     const pullRequestMarker = `<!-- openclaw-publication:${row.request_id} -->`;
     const loadOpenPullRequests = async () => {
@@ -335,16 +345,6 @@ export async function executeGitHubPublication(params: {
     if (occupiedPullRequest && occupiedPullRequest.userId !== initialPullRequests.accountId) {
       throw new Error("GitHub pull request is owned by another account.");
     }
-    row = params.updatePublishingFacts({
-      row,
-      repository,
-      branch,
-      baseBranch,
-      sourceHeadCommit,
-      workspaceTree,
-      headCommit,
-    });
-
     const currentMessage = await step(
       async () =>
         await requireCommand(["git", "show", "-s", "--format=%B", "HEAD"], {
@@ -412,13 +412,13 @@ export async function executeGitHubPublication(params: {
             },
           ),
       );
-      await assertGitHubPublicationBranchRef(branch, async (argv) => {
+      await assertGitHubPublicationBranchRef(sourceBranch, async (argv) => {
         return (await step(async () => await runCommand(argv, { cwd: worktree.path }))).code ?? -1;
       });
       const previousHead = headCommit;
       updateBranchRef = async () => {
         const result = await runCommand(
-          githubPublicationUpdateRefArgs(branch, commit, previousHead),
+          githubPublicationUpdateRefArgs(sourceBranch, commit, previousHead),
           { cwd: worktree.path },
         );
         assertGitHubPublicationRefCasCompleted(result);
@@ -428,7 +428,7 @@ export async function executeGitHubPublication(params: {
     await updateGitHubPublicationBranchAndIndex({
       cwd: worktree.path,
       requestId: row.request_id,
-      branch,
+      branch: sourceBranch,
       previousHead: previousBranchHead,
       sourceIndexTree,
       workspaceTree,
@@ -438,13 +438,11 @@ export async function executeGitHubPublication(params: {
       run: async (argv, options) => await step(async () => await requireCommand(argv, options)),
       ...(updateBranchRef ? { updateRef: updateBranchRef } : {}),
     });
+    // Only the validated publication commit proves a recoverable remote candidate;
+    // recording the source HEAD earlier would claim an unrelated occupied branch.
     row = params.updatePublishingFacts({
       row,
-      repository,
-      branch,
       baseBranch,
-      sourceHeadCommit,
-      workspaceTree,
       headCommit,
     });
 
@@ -456,7 +454,6 @@ export async function executeGitHubPublication(params: {
       GIT_CONFIG_GLOBAL: os.devNull,
       GIT_CONFIG_SYSTEM: os.devNull,
     };
-    const pushArgs = githubPublicationPushArgs(httpsRemote, headCommit, branch);
     const observeRemoteHead = async () => {
       const observed = await requireCommand(githubPublicationRemoteHeadArgs(httpsRemote, branch), {
         cwd: worktree.path,
@@ -466,6 +463,29 @@ export async function executeGitHubPublication(params: {
     };
     let remoteHead = await step(observeRemoteHead);
     if (remoteHead !== headCommit) {
+      const namedDestination = branch !== sourceBranch;
+      if (namedDestination && remoteHead) {
+        if (!ownsGitHubPublicationDestination(row, remoteHead)) {
+          throw new GitHubPublicationDestinationOccupiedError(
+            "GitHub push destination is occupied by another publication.",
+          );
+        }
+        const ancestry = await step(
+          async () =>
+            await runCommand(githubPublicationBaseLineageArgs(remoteHead, headCommit), {
+              cwd: worktree.path,
+            }),
+        );
+        if (ancestry.code !== 0) {
+          throw new Error("GitHub push destination has diverged.");
+        }
+      }
+      const pushArgs = githubPublicationPushArgs(
+        httpsRemote,
+        headCommit,
+        branch,
+        namedDestination ? remoteHead : undefined,
+      );
       const pushed = await step(
         async () => await runCommand(pushArgs, { cwd: worktree.path, env: transportEnv }),
       );

@@ -7,7 +7,6 @@ import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
 import { managedWorktrees, WorktreeRepositoryError } from "../agents/worktrees/service.js";
 import type { CreateManagedWorktreeParams } from "../agents/worktrees/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { prepareWorktreeSessionTitle } from "./dashboard-session-title.js";
 import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
 
 /** One worktree preparation owner for synchronous creation and admitted first turns. */
@@ -17,13 +16,12 @@ export async function prepareSessionWorktree(params: {
   name?: string;
   baseRef?: string;
   label?: string;
-  title?: ReturnType<typeof prepareWorktreeSessionTitle>;
   runSetupScript: boolean;
   signal?: AbortSignal;
   commitGuard?: () => void;
   onProgress?: CreateManagedWorktreeParams["onProgress"];
 }): ReturnType<PrepareGatewaySessionLifecycle> {
-  const { target, workspace, title, commitGuard } = params;
+  const { target, workspace, commitGuard } = params;
   try {
     const repository = await managedWorktrees.resolveRepositoryPaths(workspace);
     commitGuard?.();
@@ -61,7 +59,6 @@ export async function prepareSessionWorktree(params: {
         );
       }
     }
-    const generatedTitle = existingDirectory ? undefined : await title?.generated;
     commitGuard?.();
     const worktree =
       existing && existingDirectory
@@ -72,7 +69,7 @@ export async function prepareSessionWorktree(params: {
             ownerId: target.key,
             name: params.name,
             suggestedName: slugifyWorktreeTitle(
-              params.label ?? generatedTitle ?? title?.source ?? "",
+              params.label ?? target.entry?.label ?? target.entry?.displayName ?? "",
             ),
             baseRef: params.baseRef,
             runSetupScript: params.runSetupScript,
@@ -106,6 +103,10 @@ export async function prepareSessionWorktree(params: {
           branch: worktree.branch,
           repoRoot: worktree.repoRoot,
           canonicalWorkspaceDir: workspace,
+          // Only new automatic allocations opt in; reused bindings retain their naming policy.
+          ...(!params.name && (!existingDirectory || target.entry?.worktree?.naming === "automatic")
+            ? { naming: "automatic" as const }
+            : {}),
         },
         ...(rollback ? { rollback } : {}),
       });

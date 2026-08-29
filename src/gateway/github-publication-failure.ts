@@ -1,9 +1,17 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 
+export class GitHubPublicationDestinationOccupiedError extends Error {}
+
 export function resolveGitHubPublicationFailure(error: unknown): {
   code: Extract<SessionGitHubPublicationResult, { status: "failed" }>["code"];
   nextAction: string;
 } {
+  if (error instanceof GitHubPublicationDestinationOccupiedError) {
+    return {
+      code: "push_rejected",
+      nextAction: "Create a new worktree to publish without changing the unrelated remote branch.",
+    };
+  }
   const message = error instanceof Error ? error.message : "";
   if (message.includes("identity")) {
     return {
@@ -45,7 +53,7 @@ export function resolveGitHubPublicationFailure(error: unknown): {
     return {
       code: "push_rejected",
       nextAction:
-        "Check repository write access and branch drift, then retry without force-pushing.",
+        "Reconcile remote branch changes locally and check repository write access, then retry without force-pushing.",
     };
   }
   if (message.includes("pull request was closed")) {

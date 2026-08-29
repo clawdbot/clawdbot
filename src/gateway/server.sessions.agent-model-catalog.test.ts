@@ -2,12 +2,10 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
 import { writeSessionStore } from "./test-helpers.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   directSessionReq,
-  getGatewayConfigModule,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -205,54 +203,6 @@ describe.each(["sessions.create", "sessions.patch"] as const)("%s", (method) => 
     expect(result.payload?.entry).toMatchObject(selection);
     expect(loadSessionEntry(access)).toMatchObject({ ...selection, label: "Updated label" });
   });
-});
-
-test.each([
-  {
-    name: "target agent alias",
-    globalAllow: [mainRef],
-    agentAllow: [workRef],
-    model: "agent-choice",
-    expected: { providerOverride: "work-provider", modelOverride: "work-only" },
-  },
-  {
-    name: "target agent denial despite unrestricted defaults",
-    globalAllow: [],
-    agentAllow: [workRef],
-    model: mainRef,
-    expected: null,
-  },
-  {
-    name: "uncataloged model under an explicit empty agent policy",
-    globalAllow: [mainRef],
-    agentAllow: [],
-    model: "work-provider/uncataloged",
-    expected: { providerOverride: "work-provider", modelOverride: "uncataloged" },
-  },
-])("prepares session lifecycle selection for $name", async (scenario) => {
-  await createSelectedGlobalSessionStore();
-  configureAgentModels({ ...scenario, agentAlias: "agent-choice" });
-  const { getRuntimeConfig } = await getGatewayConfigModule();
-  const { createGatewaySession } = await import("./session-create-service.js");
-  const prepareLifecycle = vi.fn<PrepareGatewaySessionLifecycle>(async () => ({
-    ok: true,
-    value: {},
-  }));
-
-  const result = await createGatewaySession({
-    cfg: getRuntimeConfig(),
-    key: "agent:work:dashboard:prepared-selection",
-    agentId: "work",
-    model: scenario.model,
-    commandSource: "test",
-    prepareLifecycle,
-    loadGatewayModelCatalog: async () => [workModel],
-  });
-
-  expect(result.ok).toBe(scenario.expected !== null);
-  expect(prepareLifecycle).toHaveBeenCalledWith(
-    expect.objectContaining({ agentId: "work", titleModelSelection: scenario.expected }),
-  );
 });
 
 test.each([

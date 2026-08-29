@@ -95,6 +95,40 @@ function publicationIndexParams(fixture: Awaited<ReturnType<typeof createFixture
 }
 
 describe("GitHub publication index update", () => {
+  it("creates named destinations atomically and rejects a concurrent ancestor branch", async () => {
+    const fixture = await createFixture();
+    const remote = await makeDirectory("named-remote");
+    await git(remote, ["init", "--bare"]);
+    await git(
+      fixture.cwd,
+      githubPublicationPushArgs(remote, fixture.previousHead, "named-publication", "").slice(1),
+    );
+
+    await expect(
+      git(
+        fixture.cwd,
+        githubPublicationPushArgs(remote, fixture.headCommit, "named-publication", "").slice(1),
+      ),
+    ).rejects.toThrow();
+    expect(await git(remote, ["rev-parse", "refs/heads/named-publication"])).toBe(
+      fixture.previousHead,
+    );
+
+    await git(
+      fixture.cwd,
+      githubPublicationPushArgs(
+        remote,
+        fixture.headCommit,
+        "named-publication",
+        fixture.previousHead,
+      ).slice(1),
+    );
+    expect(await git(remote, ["rev-parse", "refs/heads/named-publication"])).toBe(
+      fixture.headCommit,
+    );
+    expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.previousHead);
+  });
+
   it("accepts a linked worktree without a worktree config scope", async () => {
     const repository = await makeDirectory("worktree-config");
     await git(repository, ["init", "--initial-branch=main"]);

@@ -204,6 +204,8 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
       return "singleton state tables → shared configuration state";
     case "state-consolidation-v13":
       return "cron jobs and subagent runs → canonical JSON storage";
+    case "github-publication-branches-v14":
+      return "GitHub publication requests → separate source and destination branches";
     case "operator-approvals-system-agent":
       return "operator approvals → OpenClaw system changes";
     case "session-watch-cursor-provenance-v4":

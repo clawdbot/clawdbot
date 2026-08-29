@@ -22,16 +22,8 @@ import {
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import {
-  buildDashboardSessionTitleSource,
-  prepareWorktreeSessionTitle,
-} from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
-import {
-  buildDashboardSessionKey,
-  createGatewaySession,
-  resolveSessionCreateModelSelection as resolveCreateTitleEntry,
-} from "../session-create-service.js";
+import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
@@ -232,34 +224,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const explicitSessionLabel = normalizeOptionalString(p.label);
-    const titleAgentId = explicitlyRequestedAgent.agentId;
     const existingWorktreeTarget =
       p.worktree === true && explicitlyRequestedKey
-        ? loadGatewaySessionEntryReadOnly(explicitlyRequestedKey, { agentId: titleAgentId }).entry
+        ? loadGatewaySessionEntryReadOnly(explicitlyRequestedKey, {
+            agentId: explicitlyRequestedAgent.agentId,
+          }).entry
         : undefined;
     const deferWorktree = p.worktree === true && hasInitialTurn && !existingWorktreeTarget;
-    const shouldPrepareWorktreeTitle =
-      !deferWorktree && p.worktree === true && !requestedWorktreeName && !explicitSessionLabel;
-    const deferWorktreeTitle =
-      shouldPrepareWorktreeTitle && Boolean(parentSessionKey) && !catalogTarget && !requestedModel;
-    const worktreeTitleParams = shouldPrepareWorktreeTitle
-      ? {
-          cfg,
-          agentId: titleAgentId,
-          userMessage: initialMessage ?? "",
-          attachments: initialAttachments,
-          onError: (error: unknown) =>
-            sessionLog.warn(`worktree title failed: ${formatErrorMessage(error)}`),
-        }
-      : undefined;
-    // Known routes start before repository resolution; inherited routes wait for parent validation.
-    let worktreeTitle =
-      worktreeTitleParams && !deferWorktreeTitle
-        ? prepareWorktreeSessionTitle({
-            ...worktreeTitleParams,
-            entry: resolveCreateTitleEntry(cfg, titleAgentId, catalogTarget?.target ?? p.model),
-          })
-        : undefined;
     let projectRoot: string | undefined;
     if (requestedProjectId) {
       const project = resolveProjectRegistry(cfg, requestedProjectId);
@@ -364,32 +335,21 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         return;
       }
       if (deferWorktree) {
-        // Persist intent before slow naming/Git/setup. The admitted turn binds the
+        // Persist intent before slow Git/setup. The admitted turn binds the
         // checkout, so failed or interrupted preparation can retry in this session.
         pendingWorktree = {
           ...(requestedProjectGitUrl ? {} : { workspace }),
           name: requestedWorktreeName,
           baseRef: requestedWorktreeBaseRef,
-          titleSource: buildDashboardSessionTitleSource({
-            message: initialMessage ?? "",
-            attachments: initialAttachments,
-          }),
         };
       } else {
         prepareLifecycle = async (lifecycleTarget) => {
-          if (deferWorktreeTitle && worktreeTitleParams) {
-            worktreeTitle = prepareWorktreeSessionTitle({
-              ...worktreeTitleParams,
-              entry: lifecycleTarget.titleModelSelection,
-            });
-          }
           const prepared = await prepareSessionWorktree({
             target: lifecycleTarget,
             workspace,
             name: requestedWorktreeName,
             baseRef: requestedWorktreeBaseRef,
             label: explicitSessionLabel,
-            title: worktreeTitle,
             runSetupScript: clientScopes.includes(ADMIN_SCOPE),
             commitGuard,
           });
@@ -490,13 +450,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         if (!authority.hasActive()) {
           return;
         }
-        if (await worktreeTitle?.persist(agentId, entry, key, storePath)) {
-          emitSessionsChanged(context, { sessionKey: key, agentId, reason: "chat.title" });
-        }
         if (hasInitialTurn) {
-          if (!authority.hasActive()) {
-            return;
-          }
           messageSeq =
             (await readSessionMessageCountAsync({
               agentId,

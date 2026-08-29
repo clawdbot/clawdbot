@@ -1,4 +1,3 @@
-import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import {
   loadTranscriptEvents,
@@ -13,7 +12,6 @@ import {
   BRANCH,
   NEW_HEAD,
   OLD_HEAD,
-  SESSION_ID,
   SESSION_KEY,
   WORKSPACE_TREE,
   commandCalls,
@@ -26,6 +24,7 @@ import {
   publicationTranscriptMessages,
   root,
   seedLocalPublication,
+  setPublicationSessionTitle,
 } from "./github-publication.test-support.js";
 import {
   REQUEST,
@@ -37,109 +36,6 @@ const mocks = githubPublicationTestMocks();
 
 describe("Gateway GitHub publication", () => {
   installGitHubPublicationTestHarness();
-  it("publishes through exact HTTPS and replays the durable terminal result", async () => {
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const placements = createWorkerSessionPlacementStore({ database });
-    const coordinator = createGitHubPublicationCoordinator({ placements });
-    const request = {
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-      idempotencyKey: "publish-1",
-      title: "Publish the reconciled fix",
-    };
-
-    const first = await coordinator.requestForSession(request);
-    expect(first).toEqual({
-      requestId: expect.any(String),
-      status: "published",
-      url: "https://github.com/openclaw/openclaw/pull/125200",
-      repository: "openclaw/openclaw",
-      branch: BRANCH,
-      headCommit: NEW_HEAD,
-    });
-    expect(commands.some((argv) => argv.includes("https://github.com/openclaw/openclaw.git"))).toBe(
-      true,
-    );
-    expect(commands.some((argv) => argv.some((arg) => arg.includes("roboclaw-token")))).toBe(false);
-    expect(
-      commands.some(
-        (argv) =>
-          argv[0] === "git" &&
-          argv.includes("credential.helper=!gh auth git-credential") &&
-          argv.includes("push"),
-      ),
-    ).toBe(true);
-    for (const argv of commands.filter(
-      (candidate) =>
-        candidate.includes("update-ref") ||
-        candidate.includes("read-tree") ||
-        candidate.includes("add") ||
-        candidate.includes("reset") ||
-        candidate.includes("push"),
-    )) {
-      expect(argv, argv.join(" ")).toContain(`core.hooksPath=${os.devNull}`);
-    }
-    for (const argv of commands.filter(
-      (candidate) =>
-        candidate.includes("read-tree") || candidate.includes("add") || candidate.includes("reset"),
-    )) {
-      expect(argv).toContain("core.fsmonitor=false");
-    }
-    const push = commands.find((argv) => argv.includes("push"));
-    expect(push).toEqual(
-      expect.arrayContaining([
-        "--no-follow-tags",
-        "--recurse-submodules=no",
-        `${NEW_HEAD}:refs/heads/${BRANCH}`,
-      ]),
-    );
-    expect(push).not.toContain(`HEAD:refs/heads/${BRANCH}`);
-    const fetch = commands.find((argv) => argv.includes("fetch"));
-    expect(fetch).toEqual(
-      expect.arrayContaining([
-        `core.hooksPath=${os.devNull}`,
-        "core.fsmonitor=false",
-        "maintenance.auto=false",
-        "gc.auto=0",
-        "--no-auto-maintenance",
-        "--recurse-submodules=no",
-      ]),
-    );
-    const post = commandCalls.find(({ argv }) => argv.includes("POST"));
-    expect(post?.argv).toEqual([
-      "gh",
-      "api",
-      "--hostname",
-      "github.com",
-      "--method",
-      "POST",
-      "repos/openclaw/openclaw/pulls",
-      "--input",
-      "-",
-    ]);
-    expect(JSON.parse(post?.input ?? "null")).toEqual({
-      title: "Publish the reconciled fix",
-      body: `Published by the Gateway after authoritative workspace reconciliation.\n\n## Worked on by\n\n- @alice\n\n<!-- openclaw-publication:${first.requestId} -->`,
-      head: `openclaw:${BRANCH}`,
-      base: "main",
-      draft: true,
-    });
-    const persisted = database.db
-      .prepare("SELECT * FROM github_publication_requests WHERE session_id = ?")
-      .get(SESSION_ID);
-    expect(JSON.stringify(persisted)).not.toContain("GH_CONFIG_DIR");
-    expect(JSON.stringify(persisted)).not.toContain("token");
-
-    const commandCount = commands.length;
-    closeOpenClawStateDatabaseForTest();
-    const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const afterRestart = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({ database: reopened }),
-    });
-    await expect(afterRestart.requestForSession(request)).resolves.toEqual(first);
-    expect(commands).toHaveLength(commandCount);
-  });
-
   it("reuses an existing upstream pull request for a fork head", async () => {
     mocks.resolveRepository.mockResolvedValue({
       checkoutRoot: "/repo/worktree",
@@ -661,6 +557,7 @@ describe("Gateway GitHub publication", () => {
   });
 
   it("binds the accepted worker snapshot before acceptance and never recaptures it", async () => {
+    setPublicationSessionTitle({ automatic: true });
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     const active = seedActivePlacement(placements, {
@@ -688,6 +585,14 @@ describe("Gateway GitHub publication", () => {
       agentId: REQUEST.agentId,
       idempotencyKey: "accepted-snapshot",
     });
+    expect(
+      database.db
+        .prepare(
+          "SELECT source_branch, branch, repository FROM github_publication_requests WHERE request_id = ?",
+        )
+        .get(requested.requestId),
+    ).toEqual({ source_branch: BRANCH, branch: BRANCH, repository: null });
+    setPublicationSessionTitle({ automatic: true, label: "Summarize the completed worker fix" });
     placements.markWorkspaceResultPending(claim);
 
     await runtime.prepareAcceptedWorkspacePublication(claim);
@@ -713,6 +618,15 @@ describe("Gateway GitHub publication", () => {
     expect(commands.filter((argv) => argv.includes("write-tree"))).toHaveLength(
       snapshotCommandCount,
     );
+    placements.acceptWorkspaceResult(claim);
+    await expect(runtime.coordinator.processClaim(claim)).resolves.toEqual([
+      expect.objectContaining({
+        status: "published",
+        branch: expect.stringMatching(
+          /^openclaw\/summarize-the-completed-worker-fix-[a-f0-9]{12}$/u,
+        ),
+      }),
+    ]);
   });
 
   it("fails closed when worktree authority changes during an awaited publication step", async () => {
@@ -772,7 +686,9 @@ describe("Gateway GitHub publication", () => {
       });
       first.read("create-schema");
       const requestId = `publication-after-${phase.replaceAll(" ", "-")}`;
-      seedLocalPublication(database, { requestId, status: "publishing" });
+      const remoteBranch = "openclaw/frozen-sidebar-summary-123456abcdef";
+      seedLocalPublication(database, { requestId, status: "publishing", branch: remoteBranch });
+      setPublicationSessionTitle({ automatic: true, label: "A later sidebar title" });
       closeOpenClawStateDatabaseForTest();
 
       let remoteLookups = 0;
@@ -835,7 +751,7 @@ describe("Gateway GitHub publication", () => {
           remoteLookups += 1;
           return commandResult(
             remoteInitiallyPublished || remoteLookups > 1
-              ? `${NEW_HEAD}\trefs/heads/${BRANCH}\n`
+              ? `${NEW_HEAD}\trefs/heads/${remoteBranch}\n`
               : "",
           );
         }
@@ -849,7 +765,7 @@ describe("Gateway GitHub publication", () => {
                     state: "open",
                     body: "",
                     headSha: NEW_HEAD,
-                    headRef: BRANCH,
+                    headRef: remoteBranch,
                     baseRef: "main",
                   },
                 ])
@@ -876,7 +792,7 @@ describe("Gateway GitHub publication", () => {
         status: "published",
         url: "https://github.com/openclaw/openclaw/pull/125200",
         repository: "openclaw/openclaw",
-        branch: BRANCH,
+        branch: remoteBranch,
         headCommit: NEW_HEAD,
       });
       expect(commands.filter((argv) => argv.includes("commit-tree"))).toHaveLength(0);

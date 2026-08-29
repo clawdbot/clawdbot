@@ -330,8 +330,15 @@ describe("node worker launch store container identity", () => {
       nowMs: NOW_MS,
     });
     expect(hasContainerIdentityTable(database)).toBe(true);
-    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(13);
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 13 });
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+    // Isolate this same-version companion contract from later publication schema changes.
+    database.exec(`
+      ALTER TABLE github_publication_requests DROP COLUMN source_branch;
+      PRAGMA user_version = 13;
+      UPDATE schema_meta SET schema_version = 13 WHERE meta_key = 'primary';
+    `);
     closeOpenClawStateDatabaseForTest();
 
     const companionStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
@@ -344,7 +351,10 @@ describe("node worker launch store container identity", () => {
     const predecessorSchema = `${OPENCLAW_STATE_SCHEMA_SQL.slice(
       0,
       companionStart,
-    )}${OPENCLAW_STATE_SCHEMA_SQL.slice(companionEnd + companionEndMarker.length)}`;
+    )}${OPENCLAW_STATE_SCHEMA_SQL.slice(companionEnd + companionEndMarker.length)}`.replace(
+      "  source_branch TEXT NOT NULL,\n",
+      "",
+    );
     const predecessorCompatibility = {
       ...OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
       allowedMissingTables:

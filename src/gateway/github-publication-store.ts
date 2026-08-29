@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { ensureGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -43,6 +45,115 @@ export function ensureGitHubPublicationStore(): void {
 
 export function hasGitHubPublicationStore(): boolean {
   return tableExists(openOpenClawStateDatabase().db, "github_publication_requests");
+}
+
+export function readGitHubPublicationBranch(
+  worktree: NonNullable<SessionEntry["worktree"]>,
+): string | undefined {
+  if (!hasGitHubPublicationStore()) {
+    return undefined;
+  }
+  const db = openOpenClawStateDatabase().db;
+  return executeSqliteQuerySync(
+    db,
+    githubPublicationDatabase(db)
+      .selectFrom("github_publication_requests")
+      .select("branch")
+      .where("worktree_id", "=", worktree.id)
+      .where("source_branch", "=", worktree.branch)
+      .where("repository", "is not", null)
+      .orderBy("created_at_ms")
+      .orderBy("request_id")
+      .limit(1),
+  ).rows[0]?.branch;
+}
+
+export function bindGitHubPublicationDestination(params: {
+  row: GitHubPublicationRow;
+  repository: string;
+  entry: SessionEntry | undefined;
+}): GitHubPublicationRow {
+  const { row, repository, entry } = params;
+  const slug =
+    entry?.worktree?.naming === "automatic"
+      ? slugifyWorktreeTitle(entry.label ?? entry.displayName ?? "")
+      : undefined;
+  const suffix = createHash("sha256").update(row.worktree_id).digest("hex").slice(0, 12);
+  const suggestedBranch = slug ? `openclaw/${slug}-${suffix}` : row.source_branch;
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const query = githubPublicationDatabase(db);
+      const current = executeSqliteQuerySync(
+        db,
+        query
+          .selectFrom("github_publication_requests")
+          .selectAll()
+          .where("request_id", "=", row.request_id),
+      ).rows[0];
+      if (
+        current?.status !== "publishing" ||
+        current.gateway_instance_id !== row.gateway_instance_id
+      ) {
+        throw new Error("GitHub publication execution ownership changed.");
+      }
+      // Repository binding precedes every push. Once bound, retries and later
+      // requests reuse the destination even if the sidebar title changes.
+      if (current.repository !== null) {
+        if (current.repository !== repository) {
+          throw new Error("GitHub publication workspace repository changed.");
+        }
+        return current;
+      }
+      const previous = executeSqliteQuerySync(
+        db,
+        query
+          .selectFrom("github_publication_requests")
+          .select("branch")
+          .where("worktree_id", "=", row.worktree_id)
+          .where("repository_fingerprint", "=", row.repository_fingerprint)
+          .where("source_branch", "=", row.source_branch)
+          .where("repository", "=", repository)
+          .orderBy("created_at_ms")
+          .orderBy("request_id")
+          .limit(1),
+      ).rows[0];
+      const branch = previous?.branch ?? suggestedBranch;
+      executeSqliteQuerySync(
+        db,
+        query
+          .updateTable("github_publication_requests")
+          .set({ repository, branch, updated_at_ms: Date.now() })
+          .where("request_id", "=", row.request_id),
+      );
+      return { ...current, repository, branch };
+    },
+    undefined,
+    { operationLabel: "github-publication.bind-destination" },
+  );
+}
+
+export function ownsGitHubPublicationDestination(
+  row: GitHubPublicationRow,
+  headCommit: string,
+): boolean {
+  const db = openOpenClawStateDatabase().db;
+  return (
+    executeSqliteQuerySync(
+      db,
+      githubPublicationDatabase(db)
+        .selectFrom("github_publication_requests")
+        .select("request_id")
+        .where("worktree_id", "=", row.worktree_id)
+        .where("repository_fingerprint", "=", row.repository_fingerprint)
+        .where("source_branch", "=", row.source_branch)
+        .where("repository", "=", row.repository)
+        .where("branch", "=", row.branch)
+        // A published destination may advance through collaborator commits. Before
+        // first success, only an exact recorded candidate proves an ambiguous push.
+        .where((eb) => eb.or([eb("status", "=", "published"), eb("head_commit", "=", headCommit)]))
+        .limit(1),
+    ).rows.length > 0
+  );
 }
 
 export function claimGitHubPublicationExecution(

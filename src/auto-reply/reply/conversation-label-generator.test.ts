@@ -118,6 +118,31 @@ describe("generateConversationLabel", () => {
     expect(runIsolatedCompletion.mock.calls[1]?.[0]?.model).toBe("gpt-main");
   });
 
+  it.each(["resolve", "reject"])(
+    "cancels the utility attempt without primary fallback when it later %ss",
+    async (outcome) => {
+      const controller = new AbortController();
+      runIsolatedCompletion.mockImplementationOnce(async ({ abortSignal }) => {
+        expect(abortSignal).toBe(controller.signal);
+        controller.abort();
+        if (outcome === "reject") {
+          throw new Error("interrupted");
+        }
+        return { text: "Late title" };
+      });
+
+      await expect(
+        generateConversationLabel({
+          userMessage: "Message",
+          prompt: "Prompt",
+          cfg: {},
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(runIsolatedCompletion).toHaveBeenCalledOnce();
+    },
+  );
+
   it("throws a sanitized error after every configured attempt fails", async () => {
     runIsolatedCompletion.mockRejectedValue(new Error("secret-bearing provider failure"));
 

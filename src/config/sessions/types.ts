@@ -359,6 +359,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
       id: string;
       branch: string;
       repoRoot: string;
+      /** Only new automatically named worktrees may select a summary-derived PR branch. */
+      naming?: "automatic";
       /** Durable skill workspace prepared when this session runs from a managed worktree. */
       canonicalWorkspaceDir?: string;
     };
@@ -622,7 +624,6 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     workspace?: string;
     name?: string;
     baseRef?: string;
-    titleSource: string;
   };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;

@@ -39,7 +39,7 @@ function sameWorktree(
   return (
     row.worktree_id === worktree.id &&
     row.repository_fingerprint === worktree.repoFingerprint &&
-    row.branch === worktree.branch
+    row.source_branch === worktree.branch
   );
 }
 
@@ -196,6 +196,7 @@ export function createGitHubPublicationCoordinator(params: {
               status: "requested",
               gateway_instance_id: null,
               repository: null,
+              source_branch: worktree.branch,
               branch: worktree.branch,
               base_branch: null,
               source_head_commit: null,
@@ -351,11 +352,7 @@ export function createGitHubPublicationCoordinator(params: {
 
   const updatePublishingFacts = (input: {
     row: PublicationRow;
-    repository: string;
-    branch: string;
     baseBranch: string;
-    sourceHeadCommit: string;
-    workspaceTree: string;
     headCommit: string;
   }): PublicationRow =>
     runOpenClawStateWriteTransaction(
@@ -365,11 +362,7 @@ export function createGitHubPublicationCoordinator(params: {
           publicationDb(db)
             .updateTable("github_publication_requests")
             .set({
-              repository: input.repository,
-              branch: input.branch,
               base_branch: input.baseBranch,
-              source_head_commit: input.sourceHeadCommit,
-              workspace_tree: input.workspaceTree,
               head_commit: input.headCommit,
               updated_at_ms: Date.now(),
             })
@@ -400,8 +393,6 @@ export function createGitHubPublicationCoordinator(params: {
             ? {
                 status: "published",
                 pull_request_url: result.url,
-                repository: result.repository,
-                branch: result.branch,
                 head_commit: result.headCommit,
                 error_code: null,
                 next_action: null,
@@ -512,7 +503,7 @@ export function createGitHubPublicationCoordinator(params: {
       expected: {
         worktreeId: first.worktree_id,
         repositoryFingerprint: first.repository_fingerprint,
-        branch: first.branch,
+        branch: first.source_branch,
       },
     });
     for (const row of rows) {

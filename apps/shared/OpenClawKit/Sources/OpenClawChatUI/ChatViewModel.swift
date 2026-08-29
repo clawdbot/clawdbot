@@ -770,6 +770,8 @@ extension OpenClawChatViewModel {
     }
 
     func appendMessage(_ message: OpenClawChatMessage) {
+        // A send can overtake bootstrap history; keep its local row when that older snapshot arrives.
+        self.invalidateHistorySnapshots()
         self.messages.append(message)
         self.markTimelineChanged()
     }

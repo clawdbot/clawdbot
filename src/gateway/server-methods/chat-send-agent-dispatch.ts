@@ -24,10 +24,7 @@ import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
-import {
-  resolveWebchatPromptCacheKey,
-  scheduleChatDashboardSessionTitle,
-} from "./chat-send-background.js";
+import { resolveWebchatPromptCacheKey, scheduleChatSessionTitle } from "./chat-send-background.js";
 import { createChatSendDispatchErrorLifecycle } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import { finalizeAcceptedChatSendMessageInjection } from "./chat-send-message-injection.js";
@@ -594,7 +591,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   // Title work starts at turn admission, concurrently with the launched run. It must never run
   // serially before dispatch (a cold utility runtime can starve the turn) or wait for completion
   // (long or interrupted first turns would silently remain untitled, and restart loses the chain).
-  scheduleChatDashboardSessionTitle({
+  scheduleChatSessionTitle({
     admittedSessionId,
     agentId,
     cfg,

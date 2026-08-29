@@ -65,6 +65,7 @@ import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommandMock,
   cronIsolatedRun,
+  dispatchInboundMessageMock,
   embeddedRunMock,
   gatewayReplyMock,
   agentDiscoveryMock,
@@ -389,6 +390,7 @@ function resetGatewayMutableTestFixtures(): void {
   cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
   agentCommandMock.mockReset();
   agentCommandMock.mockResolvedValue(undefined);
+  dispatchInboundMessageMock.mockReset();
   gatewayReplyMock.mockReset();
   gatewayReplyMock.mockResolvedValue(undefined);
   sendWhatsAppMock.mockReset();

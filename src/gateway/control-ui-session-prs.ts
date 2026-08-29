@@ -32,6 +32,7 @@ import {
   type SessionPullRequestGitContext,
   type SessionPullRequestLocalGitDeps,
 } from "./control-ui-session-prs-local-git.js";
+import { readGitHubPublicationBranch } from "./github-publication-store.js";
 import { resolveGitHubForkParent } from "./github-repository-target.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
@@ -138,7 +139,17 @@ async function resolveSessionPullRequestGitContext(
   if (!root) {
     return null;
   }
-  return resolveCachedGitContext(root, deps, params.refresh === true);
+  const context = await resolveCachedGitContext(root, deps, params.refresh === true);
+  const { entry } = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  if (
+    context &&
+    entry?.worktree?.naming === "automatic" &&
+    entry.worktree.branch === context.branch
+  ) {
+    const branch = readGitHubPublicationBranch(entry.worktree);
+    return branch ? { ...context, branch } : context;
+  }
+  return context;
 }
 
 // git push's own "create a pull request" hint URL; GitHub resolves the base

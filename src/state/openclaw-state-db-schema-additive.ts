@@ -265,6 +265,7 @@ export function ensureGitHubPublicationSchema(db: DatabaseSync): void {
       gateway_instance_id TEXT,
       repository TEXT,
       branch TEXT NOT NULL,
+      source_branch TEXT NOT NULL,
       base_branch TEXT,
       source_head_commit TEXT,
       source_index_tree TEXT,
