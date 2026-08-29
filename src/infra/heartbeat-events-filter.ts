@@ -187,7 +187,9 @@ export function buildHeartbeatEventPrompt(params: {
   }
   if (sections.length === 1) {
     const [onlySection] = sections;
-    if (!onlySection) return buildSystemEventPrompt([], opts);
+    if (!onlySection) {
+      return buildSystemEventPrompt([], opts);
+    }
     return truncateHeartbeatEventPromptSection(onlySection, MAX_HEARTBEAT_EVENT_PROMPT_CHARS);
   }
   const header =
