@@ -71,17 +71,6 @@ export function nativeObjectFixture(root: string, format: "thin" | "fat32" | "fa
   return readFileSync(filename);
 }
 
-export function writeFat64Fixture(filename: string): Buffer {
-  runNativeFixtureTool("/usr/bin/lipo", [
-    "-create",
-    "-fat64",
-    "/usr/bin/true",
-    "-output",
-    filename,
-  ]);
-  return readFileSync(filename);
-}
-
 export function universalArchiveFixture(root: string, fat64: boolean, mixed: boolean): Buffer {
   mkdirSync(root);
   const inputs: string[] = [];

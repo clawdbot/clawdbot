@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { machoFixture } from "./mac-native.js";
@@ -117,6 +117,11 @@ exit 0
 `,
   );
   chmodSync(fakeCodesign, 0o755);
+}
+
+export function writeFat64Fixture(filename: string): Buffer {
+  execFileSync("/usr/bin/lipo", ["-create", "-fat64", "/usr/bin/true", "-output", filename]);
+  return readFileSync(filename);
 }
 
 type SigningEvent = {
