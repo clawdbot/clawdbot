@@ -746,7 +746,7 @@ describe("gateway agent handler", () => {
 
   it.each(
     (["channel", "replyChannel"] as const).flatMap((field) =>
-      (["heartbeat", "cron", "webhook", "voice"] as const).map(
+      (["heartbeat", "cron", "cron-event", "exec-event", "webhook", "voice"] as const).map(
         (channel) => [field, channel] as const,
       ),
     ),
