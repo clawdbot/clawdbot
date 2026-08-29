@@ -1119,6 +1119,13 @@ or staging directory. The caller retains the lifecycle owner and always calls
 caller's artifact policy, so failure reports can preserve sanitized Gateway logs
 before temporary runtime state is removed.
 
+After confirmed shutdown, a successful export (or choosing no export) finalizes
+the artifact policy before temporary state removal. Cleanup retries retain that
+export without rewriting it or using a later destination, while RPC and staging
+cleanup still retry. Failed exports remain retryable. Unconfirmed stops refresh
+requested snapshots, and the final confirmed snapshot includes later output.
+Keeping temporary state leaves its logs available for a later cleanup retry.
+
 If termination cannot be confirmed, the suite reports a cleanup failure, keeps
 the runtime directory, and leaves the adapter's lease and heartbeat owned.
 Inspect the reported process group and retained runtime before reusing those
