@@ -998,6 +998,10 @@ Common forms:
 - `/codex stop` stops the active turn; `/codex steer <text>` steers it.
 - `/codex model <model>`, `/codex fast [on|off|status]`, and
   `/codex permissions [default|yolo|status]` change per-conversation state.
+  The permissions argument `default` (also `guardian`, `guarded`, or `approve`)
+  selects `guarded`; it does not clear the session permission mode. `yolo`
+  selects full access and requires `operator.admin`, even for an owner sender.
+  Status displays `default` only when no session permission mode is set.
 - `/codex compact` runs the same completion and session-accounting pipeline as
   `/compact`, then reports whether Codex compacted the session and the resulting
   token count. If compaction is skipped or fails, the reply includes the reason.
