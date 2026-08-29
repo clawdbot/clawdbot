@@ -12,9 +12,9 @@ import type {
   BrowserProfileConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { resolveGatewayPort } from "openclaw/plugin-sdk/core";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-policy";
 import { isLoopbackHost, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/state-paths";
 import {
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,

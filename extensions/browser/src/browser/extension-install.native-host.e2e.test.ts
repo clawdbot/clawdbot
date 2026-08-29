@@ -101,7 +101,7 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
     requestBody.copy(requestFrame, 4);
     const host = spawnSync(manifest.path, [`chrome-extension://${extensionId}/`], {
       input: requestFrame,
-      env: { HOME: value.homeDir },
+      env: { HOME: value.homeDir, TMPDIR: os.tmpdir() },
       timeout: 10_000,
     });
     expect(host.status, host.stderr.toString("utf8")).toBe(0);

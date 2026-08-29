@@ -1,6 +1,7 @@
 /** Build the authenticated application-command dispatcher for the relay socket. */
 export function createRelayCommandHandler({
   send,
+  isCurrent,
   attachDebugger,
   detachDebugger,
   createTab,
@@ -11,7 +12,7 @@ export function createRelayCommandHandler({
   requireNavigatedTab,
   navigateTab,
 }) {
-  return async (message, isCurrent) => {
+  return async (message) => {
     const { seq } = message;
     const assertCurrent = () => {
       if (!isCurrent()) {
@@ -80,8 +81,8 @@ export function createRelayCommandHandler({
         case "closeTab": {
           const epoch = captureAccess(message.tabId);
           await requireTab(message.tabId, epoch);
-          await detachDebugger(message.tabId);
-          await requireTab(message.tabId, epoch);
+          // Chrome closes the debugger with the tab. Detaching first would retire
+          // the controlled document's authority before its explicit close can run.
           await chrome.tabs.remove(message.tabId);
           reply({ type: "result", seq, result: {} });
           return;

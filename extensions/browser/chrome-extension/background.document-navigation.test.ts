@@ -46,7 +46,7 @@ async function setup(mode: "all" | "selected") {
     });
     emit("Page.lifecycleEvent", { frameId: "root", loaderId: "blank-loader", name: "load" });
   };
-  const native = (navigate: () => Promise<object>) => {
+  const native = (navigate: () => Promise<Record<string, unknown>>) => {
     h.debuggerSendCommand.mockImplementation(async (...args: unknown[]) => {
       if (args[1] === "Page.getFrameTree") {
         return { frameTree: { frame: { id: "root", loaderId: "original", url: originalUrl } } };
@@ -162,6 +162,20 @@ describe("commanded existing document navigation", () => {
         type: "result",
       });
       expect(h.tabsRemove).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["all", "selected"] as const)(
+    "honors an explicit close of the controlled blank in %s mode",
+    async (mode) => {
+      const h = await setup(mode);
+      h.native(async () => {
+        h.commitBlank();
+        return blankResult;
+      });
+      expect(await h.navigate()).toMatchObject({ type: "result" });
+      expect(await h.request({ type: "closeTab", tabId: 7 })).toMatchObject({ type: "result" });
+      expect(h.tabsRemove).toHaveBeenCalledExactlyOnceWith(7);
     },
   );
 
@@ -341,7 +355,7 @@ describe("commanded existing document navigation", () => {
     "fences $mode $reason $phase without deleting the existing tab",
     async ({ mode, phase, reason }) => {
       const h = await setup(mode);
-      const result = createDeferred<object>();
+      const result = createDeferred<Record<string, unknown>>();
       releases.push(() => result.resolve(blankResult));
       h.native(async () => {
         h.commitBlank();
@@ -465,7 +479,7 @@ describe("commanded existing document navigation", () => {
     "rejects a preflight overtaken by %s",
     async (change) => {
       const h = await setup("all");
-      const tree = createDeferred<object>();
+      const tree = createDeferred<Record<string, unknown>>();
       releases.push(() => tree.resolve({}));
       h.debuggerSendCommand.mockImplementationOnce(async () => await tree.promise);
       const navigating = h.navigate();

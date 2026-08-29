@@ -90,7 +90,6 @@ export function createTabDocumentProvenance({ access }) {
       return await sendCommand("Page.navigate", params);
     }
     const document = {
-      kind: "navigation",
       controlledBlank: true,
       groupId: tab.groupId,
       windowId: tab.windowId,
@@ -131,9 +130,9 @@ export function createTabDocumentProvenance({ access }) {
     const frameUrl = root ? frameDocumentUrl(event.params.frame) : undefined;
     if (root) {
       lifecycle(event.tabId).root += 1;
-      access.recordRootCommit(event.tabId);
+      access.recordRootCommit(event.tabId, frameUrl);
     }
-    if (document?.kind === "navigation") {
+    if (document) {
       if (
         root &&
         document.navigation.confirmed &&

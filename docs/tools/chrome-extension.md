@@ -132,21 +132,6 @@ Open the extension's Settings page to change the access mode. Switching to
 Selected tabs immediately detaches ungrouped tabs, including attaches already
 in flight. Agent-created tabs stay in the OpenClaw group in either mode.
 
-An agent-created tab can initialize at `about:blank` on its creating relay
-connection until its first nonblank document commits. An explicitly commanded
-main-frame navigation of an already authorized tab can also temporarily use
-exact `about:blank`, for example during a performance trace reset. This requires
-Chrome to confirm that navigation on the same attachment; an iframe navigation
-or a blank URL alone cannot grant access.
-
-Each exception ends on the next nonblank document commit, access-mode change,
-revocation, tab closure or replacement, reconnect, or extension restart.
-A commanded blank navigation also ends on debugger detachment or when its
-original group or window changes. Pausing a blank tab still revokes access.
-Ordinary blank tabs and other internal pages remain excluded; an uncommanded return to `about:blank`
-does not restore access. Failed navigation never closes an existing tab or
-restores a URL over user navigation.
-
 The extension excludes incognito tabs, internal pages such as `chrome://` and
 `chrome-extension://`, and tabs without a usable current URL. `file://` access
 also requires Chrome's **Allow access to file URLs** setting.
@@ -164,9 +149,19 @@ the tab only while it still owns it. Tabs you paused, moved, or navigated during
 creation are left alone. A redirect, lost connection, or worker shutdown can
 leave a tab behind; close it manually if needed.
 
+An explicitly commanded main-frame navigation of an authorized tab can also
+use exact `about:blank`, for example during a performance trace reset. Chrome
+must confirm the root frame and loader on the same attachment. An iframe
+navigation or a blank URL alone does not grant access.
+
+That temporary admission ends on the next nonblank document, debugger detach,
+access-mode change, pause, group or window change, tab closure or replacement,
+reconnect, or extension restart. Failed navigation never closes an existing
+tab or restores a URL over your navigation.
+
 ## Automatic setup controls
 
-Settings shows redacted relay/native bootstrap status and an **Use automatic
+Settings shows redacted relay/native bootstrap status and the **Use automatic
 local setup** switch.
 
 - Turning automatic setup off preserves a valid existing pairing but prevents
@@ -258,6 +253,15 @@ path without a path-rewriting proxy prefix.
 ## External CDP clients
 
 The relay supports Browser Relay Authentication v2 clients such as mcporter.
+OpenClaw and an external client can stay connected together; a newly connected
+client receives the current execution contexts without resetting the first
+client's Runtime session. They still share the underlying tabs, so navigation
+or page changes can invalidate another client's snapshot refs.
+
+If the extension connection drops, its debugger attachments retire before the
+replacement connection reattaches. This does not change the access mode or
+paused tabs. Take a fresh snapshot after reconnecting before using element refs.
+
 Print non-secret endpoint metadata:
 
 ```bash

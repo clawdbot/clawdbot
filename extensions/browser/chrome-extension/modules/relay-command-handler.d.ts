@@ -2,6 +2,7 @@ import type { CreatedTabOperation, TabAccessEpoch, TabAccessPolicy } from "./tab
 import type { AccessibleBrowserTabSnapshot, BrowserTabSnapshot } from "./tab-eligibility.js";
 
 export function createRelayCommandHandler(params: {
+  isCurrent: () => boolean;
   send: (message: Record<string, unknown>) => void;
   attachDebugger: CreatedTabOperation["attachDebugger"];
   detachDebugger: (tabId: number) => Promise<void>;
@@ -21,4 +22,4 @@ export function createRelayCommandHandler(params: {
     tabId: number,
     epoch: TabAccessEpoch,
   ) => Promise<AccessibleBrowserTabSnapshot>;
-}): (message: Record<string, unknown>, isCurrent: () => boolean) => Promise<void>;
+}): (message: Record<string, unknown>) => Promise<void>;

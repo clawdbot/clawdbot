@@ -218,13 +218,19 @@ export async function loadBackground({
           },
         ),
       },
-      attach: vi.fn(async () => undefined),
+      attach: vi.fn(async (_source: { tabId: number }, _version: string) => undefined),
       detach: vi.fn(async (_source: { tabId: number }) => undefined),
       getTargets: vi.fn(
         async (): Promise<Array<{ id?: string; tabId?: number; attached?: boolean }>> =>
           inheritedDebuggerTabIds.map((tabId) => ({ id: `tab-${tabId}`, tabId, attached: true })),
       ),
-      sendCommand: vi.fn(async () => ({})),
+      sendCommand: vi.fn(
+        async (
+          _source: { tabId: number; sessionId?: string },
+          _method: string,
+          _params?: Record<string, unknown>,
+        ): Promise<Record<string, unknown>> => ({}),
+      ),
     },
     runtime: {
       get lastError() {

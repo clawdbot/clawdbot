@@ -7,7 +7,6 @@ import {
   sendRuntimeMessage,
   TEST_RELAY_KEY,
 } from "./background.test-harness.js";
-import type { BrowserTabSnapshot } from "./modules/tab-eligibility.js";
 
 const config = (accessMode: "all" | "selected") => ({
   relayUrl: "ws://127.0.0.1:18797/extension",
