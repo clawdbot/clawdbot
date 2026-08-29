@@ -1,10 +1,12 @@
 // Exercise discovery and embeddings over real sockets, including request
 // cancellation and redaction without relying on fetch or SSRF mocks.
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import type { DiagnosticsChannel } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFirstGithubTokenMock = vi.hoisted(() => vi.fn());
@@ -132,6 +134,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
   it.each(["headers", "trickling body"])(
     "aborts model discovery with stalled %s within its operation deadline",
     async (phase) => {
+      let bodyReceived = false;
       let connectionClosed = false;
       const server = await startCopilotServer({
         models: (response) => {
@@ -147,18 +150,44 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
           });
         },
       });
+      const bodyChannel = channel("undici:request:bodyChunkReceived");
+      const onBody = (message: unknown) => {
+        const { request } = message as DiagnosticsChannel.RequestBodyChunkReceivedMessage;
+        if (String(request.origin) === server.baseUrl && request.path === "/models") {
+          bodyReceived = true;
+        }
+      };
+      bodyChannel.subscribe(onBody);
+      const realSetTimeout = globalThis.setTimeout;
+      // Scale long deadlines together, leaving Undici's retained sub-second
+      // timer pump and the real body trickle untouched across later requests.
+      const timeoutSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((callback, delay, ...args) =>
+          realSetTimeout(
+            callback,
+            delay !== undefined && delay >= 1_000 ? Math.ceil(delay / 10) : delay,
+            ...args,
+          ),
+        );
       const startedAt = performance.now();
 
-      await expect(
-        githubCopilotMemoryEmbeddingProviderAdapter.create({
-          ...defaultCreateOptions(),
-          remote: { baseUrl: server.baseUrl, apiKey: "copilot-test-only" },
-        }),
-      ).rejects.toThrow("request timed out");
+      try {
+        await expect(
+          githubCopilotMemoryEmbeddingProviderAdapter.create({
+            ...defaultCreateOptions(),
+            remote: { baseUrl: server.baseUrl, apiKey: "copilot-test-only" },
+          }),
+        ).rejects.toThrow("request timed out");
 
-      expect(performance.now() - startedAt).toBeLessThan(15_000);
-      await vi.waitFor(() => expect(connectionClosed).toBe(true));
-      expect(server.requests).toEqual([{ method: "GET", url: "/models" }]);
+        expect(performance.now() - startedAt).toBeLessThan(1_500);
+        expect(bodyReceived).toBe(phase === "trickling body");
+        await vi.waitFor(() => expect(connectionClosed).toBe(true));
+        expect(server.requests).toEqual([{ method: "GET", url: "/models" }]);
+      } finally {
+        bodyChannel.unsubscribe(onBody);
+        timeoutSpy.mockRestore();
+      }
     },
     20_000,
   );
