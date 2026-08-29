@@ -182,6 +182,17 @@ export async function monitorLineProvider(
       let replyTokenUsed = false;
       let turnAdopted = false;
       const ingressLifecycle = deliveryControl.turnAdoptionLifecycle;
+      const turnAbortSignal = ingressLifecycle?.abortSignal;
+      // A group's configured skill scope only applies if the turn answering it carries it.
+      // An empty filter is a real scope ("no skills"), so presence decides, not length.
+      const skillFilter = ctx.skillFilter;
+      const replyOptions =
+        turnAbortSignal || skillFilter
+          ? {
+              ...(turnAbortSignal ? { abortSignal: turnAbortSignal } : {}),
+              ...(skillFilter ? { skillFilter } : {}),
+            }
+          : undefined;
 
       try {
         const textLimit = 5000;
@@ -211,9 +222,7 @@ export async function monitorLineProvider(
               ctxPayload,
               record: ctx.turn.record,
               replyPipeline: {},
-              ...(ingressLifecycle?.abortSignal
-                ? { replyOptions: { abortSignal: ingressLifecycle.abortSignal } }
-                : {}),
+              ...(replyOptions ? { replyOptions } : {}),
               delivery: {
                 durable: (payload, info) =>
                   resolveLineDurableReplyOptions({
