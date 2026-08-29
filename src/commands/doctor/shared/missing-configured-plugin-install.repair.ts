@@ -319,8 +319,17 @@ async function repairMissingPluginInstallsWithLease(
           ) {
             return [];
           }
-          const npmSpec = resolveConfiguredRuntimePluginInstallCandidate(pluginId)?.npmSpec;
-          return npmSpec ? [[pluginId, npmSpec] as const] : [];
+          const candidate = resolveConfiguredRuntimePluginInstallCandidate(pluginId);
+          if (
+            !candidate?.npmSpec ||
+            !isTrustedOfficialInstallRecordForCandidate({
+              record: records[pluginId],
+              candidate,
+            })
+          ) {
+            return [];
+          }
+          return [[pluginId, candidate.npmSpec] as const];
         }),
       );
       let updateResult: Awaited<ReturnType<typeof updateNpmInstalledPlugins>>;
