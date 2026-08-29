@@ -2911,7 +2911,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     );
     fs.mkdirSync(installDir, { recursive: true });
     const stagedArtifactDir = tempDirs.make("openclaw-plugin-staged-repair-");
-    for (const rootDir of [installDir, stagedArtifactDir]) {
+    const targetDir = tempDirs.make("openclaw-plugin-repaired-target-");
+    for (const rootDir of [installDir, stagedArtifactDir, targetDir]) {
       createColdPluginFixture({
         rootDir,
         pluginId: "codex",
@@ -2970,6 +2971,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         pluginId: "codex",
         npmSpec: "@openclaw/codex",
         version: VERSION,
+        targetDir,
         resolution: { integrity: "sha512-new-codex" },
       });
     });
@@ -3002,7 +3004,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expectRecordFields(result.records.codex, {
       source: "npm",
       spec: "@openclaw/codex",
-      installPath: "/tmp/openclaw-plugins/codex",
+      installPath: targetDir,
       version: VERSION,
       resolvedName: "@openclaw/codex",
       resolvedVersion: VERSION,
