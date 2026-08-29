@@ -1,5 +1,5 @@
 // Tests for gateway runtime subscription wiring.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -87,7 +87,7 @@ const agentEventHandlerMocks = vi.hoisted(() => ({
 }));
 const transcriptBroadcastMocks = vi.hoisted(() => ({
   useActualHandler: false,
-  readMessageCount: vi.fn(),
+  readMessageById: vi.fn(),
 }));
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 
@@ -137,7 +137,7 @@ vi.mock("./session-transcript-readers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-transcript-readers.js")>();
   return {
     ...actual,
-    readSessionMessageCountAsync: transcriptBroadcastMocks.readMessageCount,
+    readSessionMessageByIdAsync: transcriptBroadcastMocks.readMessageById,
   };
 });
 
@@ -163,6 +163,16 @@ vi.mock("./server-session-events.js", async (importOriginal) => {
 
 const { startGatewayEventSubscriptions } = await import("./server-runtime-subscriptions.js");
 type SubscriptionParams = Parameters<typeof startGatewayEventSubscriptions>[0];
+
+function readTaskUpserts(broadcast: Mock<SubscriptionParams["broadcast"]>) {
+  return broadcast.mock.calls.flatMap(([event, payload]) => {
+    if (event !== "task") {
+      return [];
+    }
+    const taskEvent = payload as TaskEventPayload;
+    return taskEvent.action === "upserted" ? [taskEvent] : [];
+  });
+}
 
 type LifecycleOwnerCallbacks = Required<
   Pick<
@@ -252,7 +262,7 @@ describe("startGatewayEventSubscriptions", () => {
     auditTestState.executionIdentityEnabled = false;
     auditTestState.stopped = 0;
     transcriptBroadcastMocks.useActualHandler = false;
-    transcriptBroadcastMocks.readMessageCount.mockReset();
+    transcriptBroadcastMocks.readMessageById.mockReset();
     runtimeConfigState.value = {};
     agentEventHandlerMocks.create.mockReset().mockImplementation(() => {
       throw new Error("server-chat lazy load failure");
@@ -619,9 +629,15 @@ describe("startGatewayEventSubscriptions", () => {
   it("logs real asynchronous transcript failures and recovers the broadcast queue", async () => {
     transcriptBroadcastMocks.useActualHandler = true;
     const persistenceFailure = new Error("session transcript read failed");
-    transcriptBroadcastMocks.readMessageCount
+    const transcriptPosition = { source: "recovered-generation", rawSeq: 7 };
+    const storedMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "visible answer" }],
+      __openclaw: { transcriptPosition },
+    };
+    transcriptBroadcastMocks.readMessageById
       .mockRejectedValueOnce(persistenceFailure)
-      .mockResolvedValueOnce(2);
+      .mockResolvedValueOnce({ found: true, oversized: false, seq: 2, message: storedMessage });
 
     const params = createParams();
     params.sessionEventSubscribers.subscribe("conn-transcript");
@@ -631,7 +647,7 @@ describe("startGatewayEventSubscriptions", () => {
       emitSessionTranscriptUpdate({
         sessionFile: "/tmp/openclaw-transcript-dispatch.sqlite",
         sessionKey: "agent:main:main",
-        message: { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+        message: { role: "assistant", content: [{ type: "text", text: "stale queued answer" }] },
         messageId,
         target: {
           agentId: "main",
@@ -643,7 +659,7 @@ describe("startGatewayEventSubscriptions", () => {
 
     emitMessage("failed-message");
     await waitForFast(() =>
-      expect(transcriptBroadcastMocks.readMessageCount).toHaveBeenCalledOnce(),
+      expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledOnce(),
     );
     await waitForFast(() =>
       expect(warn).toHaveBeenCalledWith("Transcript update dispatch failed", {
@@ -661,10 +677,14 @@ describe("startGatewayEventSubscriptions", () => {
         sessionKey: "agent:main:main",
         messageId: "recovered-message",
         messageSeq: 2,
+        message: expect.objectContaining({
+          content: storedMessage.content,
+          __openclaw: expect.objectContaining({ transcriptPosition }),
+        }),
       }),
       new Set(["conn-transcript"]),
     );
-    expect(transcriptBroadcastMocks.readMessageCount).toHaveBeenCalledTimes(2);
+    expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledOnce();
   });
 
@@ -710,16 +730,7 @@ describe("startGatewayEventSubscriptions", () => {
     if (!completed || !lost) {
       throw new Error("expected task records to be created");
     }
-    const taskUpsertsById = new Map(
-      broadcast.mock.calls
-        .filter(([event]) => event === "task")
-        .map(([, payload]) => payload as TaskEventPayload)
-        .filter(
-          (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
-            payload.action === "upserted",
-        )
-        .map((payload) => [payload.task.id, payload.task]),
-    );
+    const taskUpsertsById = new Map(readTaskUpserts(broadcast).map(({ task }) => [task.id, task]));
     expect(broadcast).toHaveBeenCalledWith("task", expect.anything(), {
       dropIfSlow: true,
       sessionKeys: ["agent:main:main"],
@@ -801,13 +812,7 @@ describe("startGatewayEventSubscriptions", () => {
     await vi.advanceTimersByTimeAsync(999);
     expect(broadcast).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    const firstFlush = broadcast.mock.calls
-      .filter(([event]) => event === "task")
-      .map(([, payload]) => payload as TaskEventPayload)
-      .filter(
-        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
-          payload.action === "upserted",
-      );
+    const firstFlush = readTaskUpserts(broadcast);
     expect(firstFlush).toHaveLength(2);
     expect(firstFlush.find((event) => event.task.id === primary.taskId)?.task.lastActivity).toBe(
       "third",
@@ -823,12 +828,9 @@ describe("startGatewayEventSubscriptions", () => {
       data: { text: "OpenClaw runtime context (internal): Keep internal details private." },
     });
     await vi.advanceTimersByTimeAsync(1_000);
-    const sanitizedActivity = broadcast.mock.calls.find(
-      ([event, payload]) =>
-        event === "task" &&
-        (payload as TaskEventPayload).action === "upserted" &&
-        (payload as Extract<TaskEventPayload, { action: "upserted" }>).task.id === secondary.taskId,
-    )?.[1] as Extract<TaskEventPayload, { action: "upserted" }> | undefined;
+    const sanitizedActivity = readTaskUpserts(broadcast).find(
+      ({ task }) => task.id === secondary.taskId,
+    );
     expect(sanitizedActivity?.task).not.toHaveProperty("lastActivity");
     expect(JSON.stringify(sanitizedActivity)).not.toContain("OpenClaw runtime context");
 
@@ -847,13 +849,9 @@ describe("startGatewayEventSubscriptions", () => {
       data: { text: "final activity" },
     });
     markTaskTerminalById({ taskId: primary.taskId, status: "succeeded", endedAt: Date.now() });
-    const terminalFlush = broadcast.mock.calls
-      .filter(([event]) => event === "task")
-      .map(([, payload]) => payload as TaskEventPayload)
-      .filter(
-        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
-          payload.action === "upserted" && payload.task.id === primary.taskId,
-      );
+    const terminalFlush = readTaskUpserts(broadcast).filter(
+      ({ task }) => task.id === primary.taskId,
+    );
     expect(terminalFlush.map((event) => event.task.status)).toEqual(["running", "completed"]);
     expect(terminalFlush[0]?.task.lastActivity).toBe("final activity");
     expect(terminalFlush[1]?.task).not.toHaveProperty("lastActivity");
@@ -897,13 +895,7 @@ describe("startGatewayEventSubscriptions", () => {
     }
     markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 300 });
 
-    const taskEvents = broadcast.mock.calls
-      .filter(([event]) => event === "task")
-      .map(([, payload]) => payload as TaskEventPayload)
-      .filter(
-        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
-          payload.action === "upserted",
-      );
+    const taskEvents = readTaskUpserts(broadcast);
     expect(taskEvents.map((event) => event.task.status)).toEqual(["running", "completed"]);
   });
 

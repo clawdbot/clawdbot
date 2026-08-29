@@ -10,10 +10,7 @@ import {
   waitForSessionTranscriptProjection,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
-import {
-  limitAgentHookHistoryMessages,
-  MAX_AGENT_HOOK_HISTORY_MESSAGES,
-} from "../harness/hook-history.js";
+import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
 import {
   buildSessionContext,
   SessionManager,
@@ -339,11 +336,7 @@ export async function loadCliSessionReseedMessages(
       entry.message.timestamp = Date.parse(entry.timestamp);
     }
   }
-  // oxlint-disable-next-line oxc/no-map-spread -- ISO display timestamps require separate records from numeric replay messages.
-  const historyMessages = buildSessionContext(entries).messages.map((message) => ({
-    ...message,
-    timestamp: timestampMsToIsoString(message.timestamp),
-  }));
+  const historyMessages = buildSessionContext(entries).messages;
   const summary = historyMessages[0];
   const hasSummary = summary?.role === "compactionSummary" && summary.summary.trim().length > 0;
   if (
@@ -358,10 +351,14 @@ export async function loadCliSessionReseedMessages(
     (message) =>
       message.role === "user" || message.role === "assistant" || message.role === "toolResult",
   );
-  return hasSummary
-    ? [
-        { ...summary, summary: summary.summary.trim() },
-        ...limitAgentHookHistoryMessages(history, MAX_CLI_SESSION_HISTORY_MESSAGES - 1),
-      ]
-    : limitAgentHookHistoryMessages(history, MAX_CLI_SESSION_HISTORY_MESSAGES);
+  const selected = hasSummary
+    ? [summary, ...history.slice(-(MAX_CLI_SESSION_HISTORY_MESSAGES - 1))]
+    : history.slice(-MAX_CLI_SESSION_HISTORY_MESSAGES);
+  // Bound the tail before projecting renderer fields; full replay records are unnecessary.
+  return selected.map((message) => {
+    const timestamp = timestampMsToIsoString(message.timestamp);
+    return message.role === "compactionSummary"
+      ? { role: message.role, summary: message.summary.trim(), timestamp }
+      : { role: message.role, content: message.content, timestamp };
+  });
 }
