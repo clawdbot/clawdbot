@@ -17,7 +17,10 @@ import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-leas
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
-import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "./configured-runtime-plugin-installs.js";
+import {
+  resolveConfiguredRuntimePluginInstallCandidate,
+  VERSION_BOUND_RUNTIME_PLUGIN_IDS,
+} from "./configured-runtime-plugin-installs.js";
 import {
   collectDownloadableInstallCandidates,
   collectUpdateDeferredPluginIds,
@@ -308,6 +311,18 @@ async function repairMissingPluginInstallsWithLease(
     }
 
     if (preparedMissingRecordedPluginIds.length > 0) {
+      const versionBoundToCoreSpecOverrides = Object.fromEntries(
+        preparedMissingRecordedPluginIds.flatMap((pluginId) => {
+          if (
+            !installedPluginIdsWithMissingRequiredDependencies.has(pluginId) ||
+            !VERSION_BOUND_RUNTIME_PLUGIN_IDS.has(pluginId)
+          ) {
+            return [];
+          }
+          const npmSpec = resolveConfiguredRuntimePluginInstallCandidate(pluginId)?.npmSpec;
+          return npmSpec ? [[pluginId, npmSpec] as const] : [];
+        }),
+      );
       let updateResult: Awaited<ReturnType<typeof updateNpmInstalledPlugins>>;
       try {
         updateResult = await updateNpmInstalledPlugins({
@@ -322,13 +337,8 @@ async function repairMissingPluginInstallsWithLease(
           skipDisabledPlugins: true,
           updateChannel,
           coreVersion: resolveCompatibilityHostVersion(env),
-          versionBoundToCorePluginIds: new Set(
-            preparedMissingRecordedPluginIds.filter(
-              (pluginId) =>
-                installedPluginIdsWithMissingRequiredDependencies.has(pluginId) &&
-                VERSION_BOUND_RUNTIME_PLUGIN_IDS.has(pluginId),
-            ),
-          ),
+          specOverrides: versionBoundToCoreSpecOverrides,
+          versionBoundToCorePluginIds: new Set(Object.keys(versionBoundToCoreSpecOverrides)),
           logger: {
             terminalLinks: false,
             warn: (message) => {
