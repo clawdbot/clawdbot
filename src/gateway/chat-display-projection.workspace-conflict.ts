@@ -11,27 +11,27 @@ export function projectWorkspaceConflictDetails(
     return undefined;
   }
   const details = readRecord(entry.details);
+  const paths = details?.paths;
+  const stagedResultRef = details?.stagedResultRef;
+  const totalCount = details?.totalCount;
   if (
     !details ||
-    !Array.isArray(details.paths) ||
-    details.paths.length === 0 ||
-    !details.paths.every(
+    !Array.isArray(paths) ||
+    paths.length === 0 ||
+    !paths.every(
       (entryPath): entryPath is string => typeof entryPath === "string" && entryPath.length > 0,
     ) ||
-    typeof details.stagedResultRef !== "string" ||
-    !/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(details.stagedResultRef) ||
-    (details.totalCount !== undefined &&
-      (!Number.isSafeInteger(details.totalCount) ||
-        (details.totalCount as number) < details.paths.length))
+    typeof stagedResultRef !== "string" ||
+    !/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(stagedResultRef) ||
+    (totalCount !== undefined &&
+      (typeof totalCount !== "number" ||
+        !Number.isSafeInteger(totalCount) ||
+        totalCount < paths.length))
   ) {
     return undefined;
   }
   try {
-    return projectWorkspaceResultConflict(
-      details.paths,
-      details.stagedResultRef,
-      details.totalCount as number | undefined,
-    );
+    return projectWorkspaceResultConflict(paths, stagedResultRef, totalCount);
   } catch {
     return undefined;
   }
