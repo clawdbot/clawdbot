@@ -429,6 +429,7 @@ describe("detectChangedScope", () => {
     ".github/actions/ensure-base-commit/action.yml",
     ".github/actions/ensure-base-commit/policy.py",
     "scripts/generate-ci-git-owner.mts",
+    "test/scripts/ci-checkout.test-support.ts",
     "test/scripts/ci-git-owner.test.ts",
     "test/scripts/ci-git-owner.test-support.ts",
     "test/scripts/ci-git-clock.test-support.ts",
