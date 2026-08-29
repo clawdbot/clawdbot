@@ -1,3 +1,4 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
@@ -72,6 +73,7 @@ import { readTerminalReplyRecoveryState } from "./terminal-reply-recovery.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
 
 const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
+const PENDING_INPUT_REASONS = new Set(["send", "agent.run.started", "agent.input.settled"]);
 const MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS = [100, 400, 1_500, 3_000] as const;
 const MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS = 64;
 type ChatPanePresentation = () => boolean;
@@ -154,6 +156,8 @@ function handleSessionMessageEvent(
     return;
   }
   const matchesChat = sessionMessageMatchesChat(state, event);
+  const isUserMessage =
+    readSessionMessageIdentity(asNullableRecord(payload)?.message)?.role === "user";
   if (matchesChat) {
     // A previous run can persist its final after the next local run starts.
     // Admit that sequenced row now so the later unsequenced chat.final replay
@@ -173,6 +177,13 @@ function handleSessionMessageEvent(
     const runId = event.clientRunId ?? event.runId ?? runIdBeforeApply;
     state.pendingSessionMessageReloadSessionKey = event.key;
     if (event.hasActiveRun === true) {
+      if (isUserMessage) {
+        // Promotion changes pending custody even while the next turn is active.
+        void loadChatHistory(state, {
+          deferBranches: !presentation(),
+          supersedeInFlight: true,
+        }).finally(() => state.requestUpdate?.());
+      }
       return;
     }
     if (finishSessionMessageRunReconcile(state, event.key, runId, result.row, presentation)) {
@@ -199,9 +210,10 @@ function handleSessionMessageEvent(
   }
   if (matchesChat) {
     state.pendingSessionMessageReloadSessionKey = null;
-    void loadChatHistory(state, { deferBranches: !presentation() }).finally(() =>
-      state.requestUpdate?.(),
-    );
+    void loadChatHistory(state, {
+      deferBranches: !presentation(),
+      supersedeInFlight: isUserMessage && event.hasActiveRun === true,
+    }).finally(() => state.requestUpdate?.());
   }
 }
 
@@ -415,6 +427,18 @@ function handleSessionsChangedEvent(
       state.requestUpdate?.(),
     );
     return;
+  }
+  if (
+    matchesChat &&
+    typeof source?.reason === "string" &&
+    PENDING_INPUT_REASONS.has(source.reason)
+  ) {
+    // Custody can change without a transcript append. A read begun before this
+    // event must not hide accepted input until the active run ends.
+    void loadChatHistory(state, {
+      deferBranches: !presented,
+      supersedeInFlight: true,
+    }).finally(() => state.requestUpdate?.());
   }
   if (
     result.applied &&

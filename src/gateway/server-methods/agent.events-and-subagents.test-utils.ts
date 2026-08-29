@@ -1099,13 +1099,13 @@ describe("gateway agent handler", () => {
       lastChannel: "telegram",
       lastTo: "123",
     });
-    const persistTranscriptTurn = mocks.persistSessionTranscriptTurn.getMockImplementation();
-    if (!persistTranscriptTurn) {
-      throw new Error("expected transcript persistence implementation");
+    const stagePendingInput = mocks.stageSessionPendingInput.getMockImplementation();
+    if (!stagePendingInput) {
+      throw new Error("expected pending input staging implementation");
     }
-    mocks.persistSessionTranscriptTurn.mockImplementationOnce(async (...args) => {
+    mocks.stageSessionPendingInput.mockImplementationOnce(async (...args) => {
       await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
-      return await persistTranscriptTurn(...args);
+      return await stagePendingInput(...args);
     });
     mocks.agentCommand.mockResolvedValue({
       payloads: [{ text: "must not dispatch" }],

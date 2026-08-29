@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { loadChatHistory } from "./chat-history.ts";
+import { getChatHistoryLoadState, loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import {
   applyChatPendingInputs,
@@ -10,6 +11,8 @@ import {
   loadChatPendingInputs,
 } from "./chat-pending-inputs.ts";
 import { admitQueuedMessageForSession, readChatQueueForScope } from "./chat-queue.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
 
@@ -36,6 +39,134 @@ afterEach(() => {
 });
 
 describe("server-owned pending input display", () => {
+  it.each(["send", "agent.run.started", "agent.input.settled"])(
+    "refreshes accepted inputs on %s while a retained pane is running",
+    async (reason) => {
+      const host = makeChatHost({
+        sessionKey,
+        currentSessionId: sessionId,
+        chatRunId: "active-run",
+        chatStream: "Live output",
+        requestHandlers: {
+          "chat.history": {
+            sessionId,
+            messages: [],
+            pendingInputs: page,
+            sessionInfo: { key: sessionKey, sessionId, hasActiveRun: true, status: "running" },
+          },
+        },
+      });
+      applyChatPendingInputs(host, { items: [], total: 0 });
+      // SAFETY: This event path uses the chat/session owners supplied by makeChatHost.
+      const state = host as ChatPageHost;
+      handlePageGatewayEvent(
+        state,
+        {
+          type: "event",
+          event: "sessions.changed",
+          payload: { sessionKey, agentId: "main", reason, hasActiveRun: true },
+        },
+        () => false,
+      );
+      await vi.waitFor(() => expect(getChatPendingInputs(host)?.page).toEqual(page));
+      expect(host.chatRunId).toBe("active-run");
+      expect(host.chatStream).toBe("Live output");
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(
+        1,
+      );
+    },
+  );
+
+  it.each(["active-run", null])(
+    "supersedes a stale custody read when a user input promotes with local run %s",
+    async (runId) => {
+      const stale = createDeferred<unknown>();
+      const initialUser = {
+        role: "user",
+        content: "First turn",
+        __openclaw: { id: "first", seq: 1 },
+      };
+      const promoted = {
+        role: "user",
+        content: "Keep my accepted input",
+        __openclaw: { id: input.id, seq: 2 },
+      };
+      const toolMessage = { role: "assistant", runId: "active-run", toolCallId: "live-tool" };
+      let historyReads = 0;
+      const host = makeChatHost({
+        sessionKey,
+        currentSessionId: sessionId,
+        chatRunId: runId,
+        chatStream: runId ? "Live output" : null,
+        chatMessages: [initialUser],
+        chatHistoryPagination: { hasMore: false, totalMessages: 1 },
+        chatToolMessages: [toolMessage],
+        toolStreamOrder: ["live-tool"],
+        toolStreamById: new Map([
+          [
+            "live-tool",
+            {
+              toolCallId: "live-tool",
+              runId: "active-run",
+              name: "exec",
+              startedAt: 1,
+              receivedAt: 1,
+              message: toolMessage,
+            },
+          ],
+        ]),
+        requestHandlers: {
+          "chat.history": () =>
+            ++historyReads === 1
+              ? stale.promise
+              : {
+                  sessionId,
+                  messages: [initialUser, promoted],
+                  pendingInputs: { items: [], total: 0 },
+                  sessionInfo: {
+                    key: sessionKey,
+                    sessionId,
+                    hasActiveRun: true,
+                    status: "running",
+                  },
+                },
+        },
+      });
+      applyChatPendingInputs(host, page);
+      const loading = loadChatHistory(host);
+      // SAFETY: This event path uses the chat/session owners supplied by makeChatHost.
+      const state = host as ChatPageHost;
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey,
+          agentId: "main",
+          sessionId,
+          hasActiveRun: true,
+          messageId: input.id,
+          messageSeq: 2,
+          message: promoted,
+        },
+      });
+      expect(historyReads).toBe(2);
+      const refreshed = await loadChatHistory(host);
+      expect(host.lastError).toBeNull();
+      expect(getChatHistoryLoadState(host).phase).toBe("committed");
+      expect(refreshed).toMatchObject({ pendingInputs: { items: [], total: 0 } });
+      expect(getChatPendingInputs(host)?.page.total).toBe(0);
+      stale.resolve({ sessionId, messages: [initialUser], pendingInputs: page });
+      await loading;
+      expect(getChatPendingInputs(host)?.page.total).toBe(0);
+      expect(host.chatMessages).toEqual([initialUser, promoted]);
+      expect(host.chatRunId).toBe(runId);
+      expect(host.chatStream).toBe(runId ? "Live output" : null);
+      expect(host.chatToolMessages).toEqual([toolMessage]);
+      expect(host.toolStreamById.has("live-tool")).toBe(true);
+      expect(historyReads).toBe(2);
+    },
+  );
+
   it("retires browser retry custody while keeping accepted input separate from history", async () => {
     const history = [
       { role: "assistant", content: "Still working", __openclaw: { id: "reply-1", seq: 1 } },
