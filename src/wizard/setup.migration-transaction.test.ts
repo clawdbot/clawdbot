@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStoreAtDatabasePath } from "../agents/auth-profiles/persisted.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { assertAgentHarnessRunAdmission } from "../agents/embedded-agent-runner/run/session-bootstrap.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
@@ -377,7 +378,7 @@ describe("transactional setup migration import", () => {
   });
 
   it.each([true, false])(
-    "verifies a pre-roster import before promotion (provider succeeds: %s)",
+    "verifies a pre-roster import without durable session admission (provider succeeds: %s)",
     async (providerSucceeds) => {
       const root = await fs.realpath(tempRoots.make("openclaw-migration-transaction-"));
       const source = path.join(root, "source-memory.md");
@@ -434,6 +435,9 @@ describe("transactional setup migration import", () => {
             "agent",
           )?.profiles["openai:imported"],
         ).toEqual(credential);
+        // Exercise the real first runner boundary: an in-memory transcript alone must not
+        // let admission create a final agent database before staged promotion.
+        assertAgentHarnessRunAdmission(params);
         admitted = true;
         if (!providerSucceeds) {
           throw new Error("provider unavailable");

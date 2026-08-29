@@ -29,7 +29,7 @@ import {
 } from "../../config/sessions/reset-policy.js";
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
 import {
-  listSessionEntriesCore,
+  listSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly,
   type SessionEntrySummary,
 } from "../../config/sessions/session-accessor.js";
@@ -159,7 +159,7 @@ function loadCommandSessionEntries(params: {
   agentId?: string;
   storePath: string;
 }): SessionEntrySummary[] {
-  return listSessionEntriesCore({
+  return listSessionEntriesReadOnly({
     storePath: params.storePath,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     clone: false,

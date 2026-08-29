@@ -50,6 +50,7 @@ import {
   suspendSession,
   type SessionSuspensionParams,
 } from "../session-suspension.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
@@ -139,6 +140,12 @@ async function runEmbeddedAgentInternal(
   });
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,
+    // Establish one detached transcript owner for CLI dispatch and every retry.
+    sessionManager:
+      paramsBase.sessionManager ??
+      (paramsBase.sessionPersistence === "detached"
+        ? SessionManager.inMemory(paramsBase.cwd ?? paramsBase.workspaceDir)
+        : undefined),
     agentId: runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
     sessionKey: runSessionTarget.sessionKey,
@@ -150,8 +157,13 @@ async function runEmbeddedAgentInternal(
   const globalLane = resolveGlobalLane(params.lane);
   // Outer fallback attempts defer session suspension only while another
   // candidate remains. Direct and final-candidate runs suspend normally.
-  const failureSuspension = resolveSessionSuspensionTarget();
+  // Detached runs neither write durable metadata nor claim the outer deferral.
+  const failureSuspension =
+    params.sessionPersistence === "detached" ? undefined : resolveSessionSuspensionTarget();
   const suspendForFailure = (suspensionParams: SessionSuspensionParams) => {
+    if (!failureSuspension) {
+      return;
+    }
     const suspension = buildEmbeddedFailureSuspension({
       suspension: suspensionParams,
       runAgentId: params.agentId,
