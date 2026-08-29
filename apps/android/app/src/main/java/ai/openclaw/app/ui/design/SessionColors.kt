@@ -25,8 +25,10 @@ private val sessionColorPalette =
 
 internal val sessionColorNames: Set<String> = sessionColorPalette.keys
 
-internal fun ClawColors.sessionColor(name: String?): Color? =
-  sessionColorPalette[name]?.let { (light, dark) -> if (canvas.luminance() < 0.5f) dark else light }
+internal fun ClawColors.sessionColor(name: String?): Color? {
+  val (light, dark) = sessionColorPalette[name] ?: return null
+  return if (canvas.luminance() < 0.5f) dark else light
+}
 
 // Drawing inside the row keeps its layout unchanged when a color is set or cleared.
 internal fun Modifier.sessionColorStripe(color: Color?): Modifier =

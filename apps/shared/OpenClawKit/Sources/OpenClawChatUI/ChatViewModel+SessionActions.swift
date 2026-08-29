@@ -362,6 +362,7 @@ extension OpenClawChatViewModel {
                     expectedSessionID: nil,
                     label: .some(nextLabel),
                     category: nil,
+                    color: nil,
                     pinned: nil,
                     archived: nil,
                     unread: nil)
@@ -758,6 +759,7 @@ extension OpenClawChatViewModel {
                     expectedSessionID: nil,
                     label: nil,
                     category: nil,
+                    color: nil,
                     pinned: pinned,
                     archived: nil,
                     unread: nil)
@@ -793,6 +795,7 @@ extension OpenClawChatViewModel {
                     expectedSessionID: expectedSessionID,
                     label: nil,
                     category: nil,
+                    color: nil,
                     pinned: nil,
                     archived: true,
                     unread: nil)
@@ -828,6 +831,7 @@ extension OpenClawChatViewModel {
                 expectedSessionID: expectedSessionID,
                 label: nil,
                 category: nil,
+                color: nil,
                 pinned: nil,
                 archived: false,
                 unread: nil)
