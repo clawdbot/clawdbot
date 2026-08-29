@@ -10,7 +10,6 @@ import {
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginOrigin } from "../plugins/types.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { resolvePersistentApplyInference } from "./setup-inference.js";
 import {
@@ -23,6 +22,13 @@ import {
   resolveSystemAgentVerifiedInferenceRoute,
   type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
+import {
+  cliRuntimeArtifactAuth,
+  cliRuntimeArtifactDeps,
+  codexRuntimeArtifactAuth,
+  pluginArtifactDeps,
+  pluginRecord,
+} from "./verified-inference.test-support.js";
 
 const pluginRegistryState = vi.hoisted(() => ({
   providerOwnerIds: ["provider-owner"],
@@ -94,39 +100,6 @@ afterAll(() => {
   pluginMetadataSnapshot?.restore();
 });
 
-type TestPluginRecord = {
-  pluginId: string;
-  origin: PluginOrigin;
-  rootDir: string;
-  manifestPath: string;
-  manifestHash: string;
-  source: string;
-  packageName: string;
-  packageVersion: string;
-  installRecordHash?: string;
-  packageJson: { path: string; hash: string };
-};
-
-function pluginRecord(
-  pluginId: string,
-  overrides: Partial<TestPluginRecord> = {},
-): TestPluginRecord {
-  const rootDir = `/plugins/${pluginId}`;
-  return {
-    pluginId,
-    origin: "global",
-    rootDir,
-    manifestPath: `${rootDir}/openclaw.plugin.json`,
-    manifestHash: `${pluginId}-manifest-v1`,
-    source: `${rootDir}/index.js`,
-    packageName: `@openclaw/${pluginId}`,
-    packageVersion: "1.0.0",
-    installRecordHash: `${pluginId}-install-v1`,
-    packageJson: { path: `${rootDir}/package.json`, hash: `${pluginId}-package-v1` },
-    ...overrides,
-  };
-}
-
 beforeEach(() => {
   pluginMetadataSnapshot?.rebindForCurrentEnv();
   pluginRegistryState.providerOwnerIds = ["provider-owner"];
@@ -160,29 +133,6 @@ function authDeps(apiKey = "verified-key") {
     ),
   };
 }
-
-function pluginArtifactDeps() {
-  return {
-    fingerprintPluginRuntimeArtifact: (record: { pluginId: string }) =>
-      `${record.pluginId}-runtime-v1`,
-  };
-}
-
-function cliRuntimeArtifactDeps(fingerprint = "claude-cli-artifact-v1") {
-  return {
-    resolveCliRuntimeArtifactFingerprint: vi.fn(async () => fingerprint),
-  };
-}
-
-const cliRuntimeArtifactAuth = {
-  runtimeArtifactFingerprint: "claude-cli-artifact-v1",
-  runtimeArtifactId: "claude-cli",
-} as const;
-
-const codexRuntimeArtifactAuth = {
-  runtimeArtifactFingerprint: "codex-runtime-v1",
-  runtimeArtifactId: "codex-app-server",
-} as const;
 
 function config(model = "openai/gpt-5.5@openai:verified"): OpenClawConfig {
   return {
@@ -573,17 +523,24 @@ describe("verified OpenClaw inference binding", () => {
               deps,
             )
           : await bindingFor(baseConfig, deps);
-      const materialized = structuredClone(baseConfig);
-      materialized.agents!.entries!.main = {
-        name: "main",
-        workspace: "/tmp/first-run-workspace",
-        agentDir: binding.execution.agentDir,
-      };
+      const materialized = {
+        ...baseConfig,
+        agents: {
+          ...baseConfig.agents,
+          entries: {
+            main: {
+              name: "main",
+              workspace: "/tmp/first-run-workspace",
+              agentDir: binding.execution.agentDir,
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
 
       await expect(revalidate(binding, materialized, deps)).resolves.toBe(binding.execution);
 
       const moved = structuredClone(materialized);
-      moved.agents!.entries!.main.agentDir = path.join(binding.execution.agentDir, "replacement");
+      moved.agents.entries.main.agentDir = path.join(binding.execution.agentDir, "replacement");
       await expect(revalidate(binding, moved, deps)).resolves.toBeNull();
 
       deps.resolveCliRuntimeArtifactFingerprint.mockResolvedValue("replacement-cli-artifact");
