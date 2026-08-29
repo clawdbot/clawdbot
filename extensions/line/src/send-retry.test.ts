@@ -3,7 +3,7 @@ import { HTTPFetchError } from "@line/bot-sdk";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { isLineDefinitiveRejection, runLinePushWithRetries } from "./send-retry.js";
+import { resolveLineNonDispatchRetryable, runLinePushWithRetries } from "./send-retry.js";
 
 const {
   requireRuntimeConfigMock,
@@ -202,7 +202,7 @@ describe("LINE push retries", () => {
   });
 });
 
-describe("isLineDefinitiveRejection", () => {
+describe("resolveLineNonDispatchRetryable", () => {
   const httpError = (status: number) =>
     new HTTPFetchError(`${status} - provider answered`, {
       status,
@@ -212,24 +212,24 @@ describe("isLineDefinitiveRejection", () => {
     });
 
   it.each([
-    { label: "a rejected payload", error: httpError(400), definitive: true },
-    { label: "a forbidden recipient", error: httpError(403), definitive: true },
-    { label: "an unknown recipient", error: httpError(404), definitive: true },
-    { label: "a request timeout", error: httpError(408), definitive: false },
-    { label: "a rate limit", error: httpError(429), definitive: false },
-    { label: "an upstream failure", error: httpError(503), definitive: false },
+    { label: "a rejected payload", error: httpError(400), retryable: false },
+    { label: "a forbidden recipient", error: httpError(403), retryable: false },
+    { label: "an unknown recipient", error: httpError(404), retryable: false },
+    { label: "a request timeout", error: httpError(408), retryable: undefined },
+    { label: "a rate limit", error: httpError(429), retryable: true },
+    { label: "an upstream failure", error: httpError(503), retryable: undefined },
     {
       label: "a transport failure that never reached LINE",
       error: new Error("fetch failed"),
-      definitive: false,
+      retryable: undefined,
     },
     {
       label: "a rejected payload behind an SDK wrapper",
       error: new Error("send failed", { cause: httpError(400) }),
-      definitive: true,
+      retryable: false,
     },
-  ])("treats $label as definitive=$definitive", ({ error, definitive }) => {
-    expect(isLineDefinitiveRejection(error)).toBe(definitive);
+  ])("classifies $label with retryable=$retryable", ({ error, retryable }) => {
+    expect(resolveLineNonDispatchRetryable(error)).toBe(retryable);
   });
 
   it("keeps a push ambiguous when an earlier attempt never reached LINE", async () => {
@@ -245,7 +245,7 @@ describe("isLineDefinitiveRejection", () => {
     }, "line:push").catch((error: unknown) => error);
 
     expect(attempt).toBeGreaterThan(1);
-    expect(isLineDefinitiveRejection(failure)).toBe(false);
+    expect(resolveLineNonDispatchRetryable(failure)).toBeUndefined();
   });
 
   it("still proves a push was refused when LINE rejected the only attempt", async () => {
@@ -256,6 +256,6 @@ describe("isLineDefinitiveRejection", () => {
     }, "line:push").catch((error: unknown) => error);
 
     expect(attempt).toBe(1);
-    expect(isLineDefinitiveRejection(failure)).toBe(true);
+    expect(resolveLineNonDispatchRetryable(failure)).toBe(false);
   });
 });

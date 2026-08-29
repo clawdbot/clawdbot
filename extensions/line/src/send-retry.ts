@@ -17,13 +17,17 @@ export function findLineHttpError(error: unknown): HTTPFetchError | undefined {
  * LINE answered this attempt with a client error, so it rejected the request and
  * sent nothing.
  *
- * Narrower than the in-request policy below: a rate limit or a request timeout
- * can still succeed on a later delivery attempt, so they stay ambiguous even
- * though neither is worth replaying inside the same send.
+ * A 429 proves this attempt was refused but remains retryable by durable
+ * delivery. A 408 stays ambiguous because the request may have reached LINE.
  */
-function isDefinitiveAttemptRejection(error: unknown): boolean {
+function resolveAttemptNonDispatchRetryable(error: unknown): boolean | undefined {
   const status = findLineHttpError(error)?.status;
-  return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429;
+  if (status === 429) {
+    return true;
+  }
+  return status !== undefined && status >= 400 && status < 500 && status !== 408
+    ? false
+    : undefined;
 }
 
 // A push that was retried can only prove "nothing was sent" when LINE itself
@@ -32,12 +36,12 @@ function isDefinitiveAttemptRejection(error: unknown): boolean {
 // means, because this module cannot tell the two apart from the error alone.
 const pushErrorsWithAmbiguousAttempt = new WeakSet<object>();
 
-/** True when LINE refused every attempt of this push, so none of them was sent. */
-export function isLineDefinitiveRejection(error: unknown): boolean {
+/** Retryability when LINE refused every attempt, or undefined when delivery is ambiguous. */
+export function resolveLineNonDispatchRetryable(error: unknown): boolean | undefined {
   if (typeof error === "object" && error !== null && pushErrorsWithAmbiguousAttempt.has(error)) {
-    return false;
+    return undefined;
   }
-  return isDefinitiveAttemptRejection(error);
+  return resolveAttemptNonDispatchRetryable(error);
 }
 
 function isRetryableLinePushError(error: unknown): boolean {
@@ -70,7 +74,7 @@ export const runLinePushWithRetries: typeof runLinePushAttempts = (fn, label) =>
     try {
       return await fn();
     } catch (error) {
-      sawAmbiguousAttempt ||= !isDefinitiveAttemptRejection(error);
+      sawAmbiguousAttempt ||= resolveAttemptNonDispatchRetryable(error) === undefined;
       throw error;
     }
   }, label).catch((error: unknown) => {

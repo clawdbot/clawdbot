@@ -30,7 +30,7 @@ import {
 } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-import { isLineDefinitiveRejection } from "./send-retry.js";
+import { resolveLineNonDispatchRetryable } from "./send-retry.js";
 import type { LineChannelData, LineSendResult, ResolvedLineAccount } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
@@ -73,13 +73,14 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       try {
         result = await resultPromise;
       } catch (error) {
+        const retryable = resolveLineNonDispatchRetryable(error);
         // Nothing has been accepted yet for this payload, so a LINE client error
         // proves the whole delivery was rejected rather than left ambiguous.
         // Once a send has landed the failure is partial and keeps its own shape.
-        throw lastResult === null && isLineDefinitiveRejection(error)
+        throw lastResult === null && retryable !== undefined
           ? new PlatformMessageNotDispatchedError(
               error instanceof Error ? error.message : "LINE rejected the message",
-              { cause: error, retryable: false },
+              { cause: error, retryable },
             )
           : error;
       }

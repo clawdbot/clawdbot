@@ -16,7 +16,7 @@ import type { FlexContainer } from "./flex-templates/types.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import { hasLineSpecificMediaOptions } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
-import { findLineHttpError } from "./send-retry.js";
+import { findLineHttpError, resolveLineNonDispatchRetryable } from "./send-retry.js";
 import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
 
 type LineAutoReplyDeps = {
@@ -362,7 +362,8 @@ export async function deliverLineAutoReply(params: {
     const canRetryTextOnly =
       retryMessages.length > 0 &&
       failedSegment?.failedBatch.some((message) => message.type !== "text") &&
-      httpError?.status === 400;
+      httpError?.status === 400 &&
+      resolveLineNonDispatchRetryable(err) !== undefined;
     if (canRetryTextOnly) {
       // HTTPFetchError 400 is an actual LINE response: that request was rejected
       // atomically. Retry its text/actions plus the tail that was never attempted.

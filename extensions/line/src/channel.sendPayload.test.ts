@@ -867,16 +867,18 @@ describe("line outbound sendPayload", () => {
     });
   });
 
-  it("reports a LINE rejection of the first send as a definitive non-dispatch", async () => {
+  it.each([
+    { status: 400, retryable: false },
+    { status: 429, retryable: true },
+  ])("reports an initial LINE $status as a non-dispatch", async ({ status, retryable }) => {
     const { runtime, mocks } = createRuntime();
-    mocks.pushMessageLine.mockRejectedValueOnce(
-      new HTTPFetchError("400 - Bad Request", {
-        status: 400,
-        statusText: "Bad Request",
-        headers: new Headers(),
-        body: "invalid message",
-      }),
-    );
+    const rejection = new HTTPFetchError(`${status} - provider rejection`, {
+      status,
+      statusText: "provider rejection",
+      headers: new Headers(),
+      body: "provider rejection",
+    });
+    mocks.pushMessageLine.mockRejectedValueOnce(rejection);
     setLineRuntime(runtime);
 
     await expect(
@@ -887,7 +889,11 @@ describe("line outbound sendPayload", () => {
         accountId: "default",
         cfg: { channels: { line: {} } } as OpenClawConfig,
       }),
-    ).rejects.toMatchObject({ name: "PlatformMessageNotDispatchedError", retryable: false });
+    ).rejects.toMatchObject({
+      name: "PlatformMessageNotDispatchedError",
+      retryable,
+      cause: rejection,
+    });
   });
 
   it("rejects insecure generic media before quick-reply batch sends", async () => {
