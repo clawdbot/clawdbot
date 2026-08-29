@@ -68,16 +68,18 @@ export function buildRoomKeyBackupUnavailableFaultRule(
   return {
     id: MATRIX_QA_ROOM_KEY_BACKUP_FAULT_RULE_ID,
     match: (request) =>
-      request.method === "GET" &&
+      (request.method === "GET" || request.method === "POST") &&
       request.path === MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT &&
       request.bearerToken === accessToken,
-    response: () => ({
-      body: {
-        errcode: "M_NOT_FOUND",
-        error: "No current key backup",
-      },
-      status: 404,
-    }),
+    // A missing backup alone is recoverable: the SDK creates and activates one.
+    // Reject creation too so both bootstrap paths exercise an unavailable backup.
+    response: (request) =>
+      request.method === "POST"
+        ? {
+            body: { errcode: "M_UNKNOWN", error: "Room key backup creation unavailable" },
+            status: 503,
+          }
+        : { body: { errcode: "M_NOT_FOUND", error: "No current key backup" }, status: 404 },
   };
 }
 
