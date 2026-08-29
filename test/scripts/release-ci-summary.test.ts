@@ -6,8 +6,10 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   buildReleaseExecutionPlanArtifact,
+  composeReleaseAttemptJobs,
   releaseCompositeJobsSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
@@ -39,6 +41,7 @@ import {
   validateRequestedEvidenceReuse,
   validateTrustedProducerIdentity,
 } from "../../scripts/release-ci-summary.mjs";
+import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = "scripts/release-ci-summary.mjs";
@@ -510,6 +513,7 @@ function artifactDigest(bytes: Buffer): string {
 }
 
 function rawManifest({
+  candidateBinding,
   evidenceReuse,
   rerunGroup = "all",
   runId = "29090000000",
@@ -519,6 +523,7 @@ function rawManifest({
   workflowRefType,
   workflowSha,
 }: {
+  candidateBinding?: unknown;
   evidenceReuse?: unknown;
   rerunGroup?: string;
   runId?: string;
@@ -528,6 +533,7 @@ function rawManifest({
   workflowRefType?: "branch" | "tag";
   workflowSha?: string;
 }): {
+  candidateBinding?: unknown;
   childRuns: Record<string, string | { blocking: boolean; conclusion: string; runId: string }>;
   controls: Record<string, unknown>;
   evidenceReuse?: unknown;
@@ -547,6 +553,7 @@ function rawManifest({
   workflowSha?: string;
 } {
   return {
+    ...(candidateBinding === undefined ? {} : { candidateBinding }),
     childRuns: {
       normalCi: "101",
       npmTelegram: "",
@@ -1197,7 +1204,7 @@ describe("release CI summary child correlation", () => {
     });
   });
 
-  it("recomputes mixed-attempt child evidence and binds the original dispatch attempt", () => {
+  it("recomputes mixed-attempt evidence and binds the original dispatch attempt", () => {
     const fixture = trustedMainPackageFixture({
       manifestVersion: 3,
       workflowSha: "a".repeat(40),
@@ -1245,12 +1252,27 @@ describe("release CI summary child correlation", () => {
       workflowSha: fixture.childRun.head_sha,
     };
     const executionPlan = buildReleaseExecutionPlanArtifact({
-      attemptEvidenceVersion: 1,
+      attemptEvidenceVersion: 2,
+      candidate: null,
       children: [plannedChild],
       evidenceReuse: { requested: false },
       expected: {
+        candidateRequest: buildFullReleaseCandidateRequest({
+          repository: "openclaw/openclaw",
+          targetSha: fixture.targetSha,
+          toolingSha: fixture.workflowSha,
+          releaseProfile: "full",
+          releaseSoak: true,
+          upgradeSurvivorBaseline: "openclaw@latest",
+          upgradeSurvivorBaselines: "",
+          upgradeSurvivorScenarios: "reported-issues",
+          allowFrozenTargetScenarioOmissions: false,
+          allowUnreleasedChangelog: false,
+          sharedImagePolicy: "no-push-artifact",
+        }),
         parentRunAttempt: 1,
         parentRunId: fixture.runId,
+        repository: "openclaw/openclaw",
         targetSha: fixture.targetSha,
         workflowRef: fixture.parentRun.head_branch,
         workflowSha: fixture.workflowSha,
@@ -1264,6 +1286,7 @@ describe("release CI summary child correlation", () => {
         sha: fixture.workflowSha,
       },
     });
+    expect(executionPlan.candidate).toBeNull();
     fixture.childRun.run_attempt = 2;
     fixture.childRun.triggering_actor = { login: "release-operator" };
     const firstAttemptJob = {
@@ -2081,6 +2104,50 @@ describe("release CI summary child correlation", () => {
     ]);
   });
 
+  it("derives distinct titles for every phased release child", () => {
+    expect(
+      expectedChildDispatches("29090000000", 3, "release/2026.7.1", 3)
+        .filter(({ manifestKey }) =>
+          [
+            "releaseChecksIndependent",
+            "releaseChecksCandidate",
+            "pluginPrereleaseIndependent",
+            "pluginPrereleaseCandidate",
+          ].includes(manifestKey),
+        )
+        .map(({ displayTitle, manifestKey, parentJobName }) => ({
+          displayTitle,
+          manifestKey,
+          parentJobName,
+        })),
+    ).toEqual([
+      {
+        displayTitle:
+          "Plugin Prerelease full-release-validation-29090000000-3-plugin-prerelease-independent",
+        manifestKey: "pluginPrereleaseIndependent",
+        parentJobName: "Run plugin prerelease independent validation",
+      },
+      {
+        displayTitle:
+          "Plugin Prerelease full-release-validation-29090000000-3-plugin-prerelease-candidate",
+        manifestKey: "pluginPrereleaseCandidate",
+        parentJobName: "Run plugin prerelease candidate validation",
+      },
+      {
+        displayTitle:
+          "OpenClaw Release Checks full-release-validation-29090000000-3-release-checks-independent",
+        manifestKey: "releaseChecksIndependent",
+        parentJobName: "Run release checks independent validation",
+      },
+      {
+        displayTitle:
+          "OpenClaw Release Checks full-release-validation-29090000000-3-release-checks-candidate",
+        manifestKey: "releaseChecksCandidate",
+        parentJobName: "Run release checks candidate validation",
+      },
+    ]);
+  });
+
   it("ignores same-SHA and nearby-name runs without the exact parent dispatch binding", () => {
     const expected = "OpenClaw Performance full-release-validation-29090000000-3";
     const exact = {
@@ -2188,6 +2255,60 @@ describe("release CI summary child correlation", () => {
     );
   });
 
+  it("validates mixed-case composite job ordering using the producer contract", () => {
+    const composite = composeReleaseAttemptJobs(
+      [
+        {
+          jobs: [
+            { conclusion: "success", name: "qa smoke ci", status: "completed" },
+            { conclusion: "success", name: "QA Smoke CI", status: "completed" },
+          ],
+          runAttempt: 1,
+        },
+      ],
+      { effectiveRunAttempt: 1, plannedRunAttempt: 1 },
+    );
+    const releaseChecksEvidence = {
+      compositeJobsSha256: composite.sha256,
+      dispatchActor: "github-actions[bot]",
+      effectiveRunAttempt: composite.effectiveRunAttempt,
+      jobs: composite.jobs,
+      observedRunAttempts: [1],
+      plannedRunAttempt: composite.plannedRunAttempt,
+      repository: "openclaw/openclaw",
+      runId: "404",
+      triggeringActor: "github-actions[bot]",
+    };
+    const raw = Object.assign(rawManifest({}), {
+      childEvidence: {
+        releaseChecks: releaseChecksEvidence,
+      },
+    });
+
+    expect(() =>
+      validateParentManifest(raw, {
+        runAttempt: 2,
+        runId: "29090000000",
+      }),
+    ).not.toThrow();
+
+    const reversedJobs = composite.jobs.toReversed();
+    const reversedCompositeJobsSha256 = releaseCompositeJobsSha256({
+      effectiveRunAttempt: composite.effectiveRunAttempt,
+      jobs: reversedJobs,
+      plannedRunAttempt: composite.plannedRunAttempt,
+    });
+    releaseChecksEvidence.compositeJobsSha256 = reversedCompositeJobsSha256;
+    releaseChecksEvidence.jobs = reversedJobs;
+
+    expect(() =>
+      validateParentManifest(raw, {
+        runAttempt: 2,
+        runId: "29090000000",
+      }),
+    ).toThrow("release validation child job identity is duplicated: releaseChecks");
+  });
+
   it("requires the npm Telegram child for all-validation with an effective package spec", () => {
     const raw = rawManifest({});
     raw.childRuns.npmTelegram = "505";
@@ -2266,6 +2387,37 @@ describe("release CI summary child correlation", () => {
         workflowSha: "c".repeat(40),
       }),
     ).toThrow("release validation manifest workflow SHA mismatch");
+  });
+
+  it("binds v3 manifests to the candidate sealed by the execution plan", () => {
+    const workflowSha = "b".repeat(40);
+    const candidateBinding = fullReleaseCandidateBindingFixture({
+      releaseProfile: "beta",
+      releaseSoak: false,
+      targetSha: "a".repeat(40),
+      toolingSha: workflowSha,
+      upgradeSurvivorScenarios: "",
+    });
+    const manifest = validateParentManifest(
+      rawManifest({ candidateBinding, version: 3, workflowSha }),
+      {
+        candidateBinding,
+        repository: "openclaw/openclaw",
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      },
+    );
+    expect(manifest.candidateBinding).toEqual(candidateBinding);
+    expect(() =>
+      validateParentManifest(rawManifest({ candidateBinding: null, version: 3, workflowSha }), {
+        candidateBinding,
+        repository: "openclaw/openclaw",
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      }),
+    ).toThrow("candidate differs from the immutable plan");
   });
 
   it("requires v3 manifests to record artifact-only performance publication", () => {

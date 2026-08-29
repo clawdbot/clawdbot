@@ -442,7 +442,8 @@ export async function executeBraveSearch(
         ],
   );
   const diagnostics: BraveHttpDiagnostics = { enabled: options?.diagnosticsEnabled === true };
-  const cached = readCachedSearchPayload(cacheKey);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     logBraveHttp(diagnostics, "cache hit", { mode: braveMode, query, cacheKey });
     return cached;
@@ -451,7 +452,6 @@ export async function executeBraveSearch(
 
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
-  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
   const request = {
     baseUrl: braveBaseUrl,
     endpointMode: braveEndpointMode,

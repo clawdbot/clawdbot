@@ -29,10 +29,12 @@ import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-p
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
+import type { ToolEffectReceipt } from "../../tool-effect-receipt.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
+import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
@@ -67,6 +69,8 @@ type EmbeddedRunAttemptToolTerminalObservation = {
   arguments?: unknown;
   meta?: string;
   executionStarted?: boolean;
+  /** Exact-instance replay classification resolved by the host tool catalog. */
+  replaySafe?: boolean;
   outcome: "success" | "failure";
   failure?: Omit<ToolErrorSummary, "toolName" | "meta" | "mutatingAction">;
   /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
@@ -85,6 +89,7 @@ type EmbeddedRunAttemptToolTerminalResolution = {
   executionStarted: boolean;
   executedArguments?: Record<string, unknown>;
   sideEffectEvidence: boolean;
+  effectReceipt: ToolEffectReceipt;
 };
 
 type EmbeddedRunAttemptToolTerminalObserver = (
@@ -171,6 +176,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onAttemptTimeout?: (reason: Error) => void;
   /** Signals an explicit cancellation through the active native run handle. */
   onAttemptAbort?: () => void;
+  onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
+  onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   model: Model;

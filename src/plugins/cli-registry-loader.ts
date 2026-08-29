@@ -13,9 +13,9 @@ import type { PluginRegistry } from "./registry.js";
 import {
   buildPluginRuntimeLoadOptions,
   createPluginRuntimeLoaderLogger,
-  resolvePluginRuntimeLoadContext,
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import type {
   OpenClawPluginCliContext,
   OpenClawPluginCliRootCommandDescriptor,

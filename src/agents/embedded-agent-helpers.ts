@@ -46,6 +46,7 @@ export {
   isFailoverErrorMessage,
   isGenericUnknownStreamErrorMessage,
   isLikelyContextOverflowError,
+  isProviderRequestSizeCeilingError,
   isTransientHttpError,
   isTimeoutErrorMessage,
 } from "./failover/classify.js";

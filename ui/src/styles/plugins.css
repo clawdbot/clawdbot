@@ -10,7 +10,7 @@
   width: 100%;
   max-width: 1120px;
   margin-inline: auto;
-  padding-inline: var(--space-4);
+  padding-inline: var(--settings-header-inline-padding, var(--space-4));
   display: flex;
   flex-direction: column;
   align-items: flex-start;

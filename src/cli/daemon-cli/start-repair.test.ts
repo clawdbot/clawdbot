@@ -1,6 +1,6 @@
 // Start repair tests cover stale service repair install-plan wiring.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayService, GatewayServiceState } from "../../daemon/service.js";
+import type { GatewayServiceState } from "../../daemon/service.js";
 
 const buildGatewayInstallPlanMock = vi.hoisted(() =>
   vi.fn(
@@ -126,7 +126,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     defaultRuntimeLogMock.mockClear();
     assertGatewayServiceMutationAllowedMock.mockReset();
     resolveBunRuntimeInfoMock.mockReset();
-    resolveBunRuntimeInfoMock.mockResolvedValue({ supported: true });
+    resolveBunRuntimeInfoMock.mockResolvedValue({ status: "supported" });
 
     resolveGatewayInstallTokenMock.mockResolvedValue({
       tokenRefConfigured: false,
@@ -146,13 +146,47 @@ describe("repairLoadedGatewayServiceForStart", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each(["sealed", "unknown"] as const)(
+    "denies definition repair before config or token work when authority is %s",
+    async (kind) => {
+      const install = vi.fn();
+      const service = {
+        install,
+        isLoaded: vi.fn(async () => true),
+        readDefinitionMutationCapability: vi.fn(async () => ({ kind, detail: "protected" })),
+      };
+      const state: GatewayServiceState = {
+        installed: true,
+        loadState: { status: "loaded" },
+        running: false,
+        env: { HOME: "/home/openclaw" },
+        command: {
+          programArguments: ["/usr/bin/openclaw", "gateway"],
+          environment: { HOME: "/home/openclaw" },
+        },
+      };
+      await expect(
+        repairLoadedGatewayServiceForStart({
+          service,
+          state,
+          issues: [{ code: "missing-program", message: "missing" }],
+          json: true,
+          stdout: process.stdout,
+        }),
+      ).rejects.toThrow(`SERVICE_DEFINITION_${kind.toUpperCase()}`);
+      expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
+      expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
+      expect(install).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves the managed base environment when an environment-only drop-in overrides it", async () => {
     const installMock = vi.fn(async () => {});
     const isLoadedMock = vi.fn(async () => true);
     const service = {
       install: installMock,
       isLoaded: isLoadedMock,
-    } as unknown as GatewayService;
+    };
     const existingEnvironment = {
       HOME: "/home/openclaw",
       OPENCLAW_SERVICE_VERSION: "2026.4.24",
@@ -220,16 +254,18 @@ describe("repairLoadedGatewayServiceForStart", () => {
   });
 
   it.each([
-    { supported: true, expectedRuntime: "bun" },
-    { supported: false, expectedRuntime: "node" },
+    { status: "supported", expectedRuntime: "bun" },
+    { status: "unsupported", expectedRuntime: "node" },
+    { status: "probe-failed", expectedRuntime: null },
   ])(
-    "$expectedRuntime is selected when repairing an installed Bun Gateway with supported=$supported",
-    async ({ supported, expectedRuntime }) => {
-      resolveBunRuntimeInfoMock.mockResolvedValue({ supported });
+    "repairs an installed Bun Gateway only when its probe result is known ($status)",
+    async ({ status, expectedRuntime }) => {
+      const error = new Error("Bun runtime probe failed (cwd /root): EACCES");
+      resolveBunRuntimeInfoMock.mockResolvedValue({ status, error });
       const service = {
         install: vi.fn(async () => {}),
         isLoaded: vi.fn(async () => true),
-      } as unknown as GatewayService;
+      };
       const state: GatewayServiceState = {
         installed: true,
         loadState: { status: "loaded" },
@@ -247,13 +283,20 @@ describe("repairLoadedGatewayServiceForStart", () => {
         },
       };
 
-      await repairLoadedGatewayServiceForStart({
+      const repair = repairLoadedGatewayServiceForStart({
         service,
         state,
         issues: [{ code: "port-mismatch", message: "old port" }],
         json: true,
         stdout: process.stdout,
       });
+      if (status === "probe-failed") {
+        await expect(repair).rejects.toBe(error);
+        expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
+        expect(service.install).not.toHaveBeenCalled();
+        return;
+      }
+      await repair;
 
       const plan = readFirstInstallPlanArg();
       expect(plan.runtime).toBe(expectedRuntime);
@@ -275,7 +318,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     "refuses an ineffective stopped-service repair for a %s drop-in",
     async (_, overrides, effectiveEnvironment) => {
       const installMock = vi.fn(async () => {});
-      const service = { install: installMock } as unknown as GatewayService;
+      const service = { install: installMock, isLoaded: vi.fn(async () => true) };
       const managedDefinition = {
         programArguments: ["/usr/bin/openclaw", "gateway", "run"],
         workingDirectory: "/srv/openclaw",
@@ -339,7 +382,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       const service = {
         install: installMock,
         isLoaded: vi.fn(async () => true),
-      } as unknown as GatewayService;
+      };
       const state: GatewayServiceState = {
         installed: true,
         loadState: { status: "loaded" },
@@ -407,7 +450,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     const service = {
       install: installMock,
       isLoaded: vi.fn(async () => true),
-    } as unknown as GatewayService;
+    };
     const state: GatewayServiceState = {
       installed: true,
       loadState: { status: "loaded" },
@@ -438,7 +481,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     const service = {
       install: installMock,
       isLoaded: vi.fn(async () => true),
-    } as unknown as GatewayService;
+    };
     const state: GatewayServiceState = {
       installed: true,
       loadState: { status: "loaded" },
@@ -473,7 +516,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     const service = {
       install: installMock,
       isLoaded: vi.fn(async () => true),
-    } as unknown as GatewayService;
+    };
     const state: GatewayServiceState = {
       installed: true,
       loadState: { status: "loaded" },

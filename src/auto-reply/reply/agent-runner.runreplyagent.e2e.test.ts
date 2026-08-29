@@ -1195,7 +1195,7 @@ describe("runReplyAgent active steering", () => {
     expect(parkedSteer.consume).not.toHaveBeenCalled();
   });
 
-  it("adopts and consumes unconfirmed steering without replay", async () => {
+  it("adopts and consumes non-handoff unconfirmed steering without replay", async () => {
     const runState: ReplyOperationRunState = {};
     const active = createReplyOperation({
       sessionKey: "main",

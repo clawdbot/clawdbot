@@ -27,7 +27,7 @@ const bootstrapSha256 = createHash("sha256")
   .digest("hex");
 const runId = "run_abc123";
 const leaseId = "cbx_def456";
-const serviceOwner = "github-actions:crabbox-gate";
+const serviceOwner = "unknown";
 const proofEndedAt = Date.parse("2026-08-28T01:30:00Z");
 
 type PublisherWorkflow = {
@@ -301,7 +301,7 @@ describe("Crabbox gate request and broker proof", () => {
     expect(() => validatePublisherRequest(inputEvent, inputEnv)).toThrow();
   });
 
-  it("accepts exact service-owned AWS/Linux released proof", () => {
+  it("accepts matching opaque owner, including unknown", () => {
     expect(() =>
       validateBrokerProof({
         bootstrapSha256,
@@ -613,7 +613,13 @@ describe("Crabbox gate publisher boundary", () => {
   });
 
   it("requires the exact bearer service principal and same-owner broker run", async () => {
-    for (const overrides of [{ principal: { auth: "session" } }, { run: { owner: "github:42" } }]) {
+    for (const overrides of [
+      { principal: { auth: "session" } },
+      { principal: { org: "other" } },
+      { principal: { admin: true } },
+      { run: { owner: "github:42" } },
+      { run: { org: "other" } },
+    ]) {
       const values = harness(overrides);
       await expect(
         runPublisher({

@@ -1,6 +1,6 @@
 // Retains bounded, manifest-verified Control UI generations for already-open documents.
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants, type Dirent } from "node:fs";
+import { constants as fsConstants, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -26,8 +26,7 @@ type RetainedGeneration = {
   bytes: number;
   directory: string;
   generation: string;
-  manifest: ControlUiAssetManifest;
-  modifiedAtMs: number;
+  stats: Stats;
   realPath: string;
 };
 
@@ -58,62 +57,33 @@ function throwIfCancelled(operation?: RetentionOperation): void {
   }
 }
 
-async function readManifestFile(
-  manifestPath: string,
-  operation?: RetentionOperation,
-): Promise<ControlUiAssetManifest | null> {
-  try {
-    throwIfCancelled(operation);
-    const stats = await fs.lstat(manifestPath);
-    if (stats.isSymbolicLink() || !stats.isFile() || stats.size > CONTROL_UI_MANIFEST_MAX_BYTES) {
-      return null;
-    }
-    const contents = await fs.readFile(manifestPath, {
-      encoding: "utf8",
-      signal: operation?.signal,
-    });
-    throwIfCancelled(operation);
-    return parseControlUiAssetManifest(JSON.parse(contents));
-  } catch {
-    throwIfCancelled(operation);
-    return null;
-  }
-}
-
 async function readCachedGeneration(
-  cacheRealPath: string,
-  entry: Dirent,
+  directory: string,
   operation?: RetentionOperation,
 ): Promise<RetainedGeneration | null> {
-  if (
-    !entry.isDirectory() ||
-    entry.isSymbolicLink() ||
-    !CONTROL_UI_GENERATION_PATTERN.test(entry.name)
-  ) {
-    return null;
-  }
-  const directory = path.join(cacheRealPath, entry.name);
   try {
     throwIfCancelled(operation);
-    const realPath = await fs.realpath(directory);
-    if (!isWithinDir(cacheRealPath, realPath)) {
+    const stats = await fs.lstat(directory);
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
       return null;
     }
-    const manifest = await readManifestFile(
-      path.join(realPath, CONTROL_UI_ASSET_MANIFEST_FILENAME),
-      operation,
-    );
-    if (!manifest || manifest.generation !== entry.name) {
+    const realPath = await fs.realpath(directory);
+    if (!isWithinDir(path.dirname(directory), realPath)) {
+      return null;
+    }
+    const manifest = await readAssetManifest(realPath, operation);
+    if (manifest.generation !== path.basename(directory)) {
       return null;
     }
     for (const asset of manifest.assets) {
       throwIfCancelled(operation);
       const assetPath = path.join(realPath, asset.path);
-      const stats = await fs.lstat(assetPath);
+      const assetStats = await fs.lstat(assetPath);
+      throwIfCancelled(operation);
       if (
-        stats.isSymbolicLink() ||
-        !stats.isFile() ||
-        stats.size !== asset.size ||
+        assetStats.isSymbolicLink() ||
+        !assetStats.isFile() ||
+        assetStats.size !== asset.size ||
         createHash("sha256")
           .update(await fs.readFile(assetPath, { signal: operation?.signal }))
           .digest("hex") !== asset.sha256
@@ -121,13 +91,17 @@ async function readCachedGeneration(
         return null;
       }
     }
+    const currentStats = await fs.lstat(directory);
+    throwIfCancelled(operation);
+    if (!sameDirectory(stats, currentStats)) {
+      return null;
+    }
     return {
       assetPaths: new Set(manifest.assets.map((asset) => asset.path)),
       bytes: manifest.assets.reduce((total, asset) => total + asset.size, 0),
       directory,
       generation: manifest.generation,
-      manifest,
-      modifiedAtMs: (await fs.stat(realPath)).mtimeMs,
+      stats: currentStats,
       realPath,
     };
   } catch {
@@ -136,10 +110,28 @@ async function readCachedGeneration(
   }
 }
 
-async function loadCachedGenerations(
+function sameDirectory(left: Stats, right: Stats): boolean {
+  return (
+    right.isDirectory() &&
+    !right.isSymbolicLink() &&
+    left.dev === right.dev &&
+    left.ino === right.ino
+  );
+}
+
+function compareGenerations(left: RetainedGeneration, right: RetainedGeneration): number {
+  return (
+    right.stats.mtimeMs - left.stats.mtimeMs || left.generation.localeCompare(right.generation)
+  );
+}
+
+async function readCacheInventory(
   cacheDir: string,
   operation?: RetentionOperation,
-): Promise<RetainedGeneration[]> {
+  verified: RetainedGeneration[] = [],
+) {
+  const generations: RetainedGeneration[] = [];
+  const directories = new Map<string, Stats>();
   let cacheRealPath: string;
   let entries: Dirent[];
   try {
@@ -148,35 +140,53 @@ async function loadCachedGenerations(
     entries = await fs.readdir(cacheRealPath, { withFileTypes: true });
   } catch {
     throwIfCancelled(operation);
-    return [];
+    return { generations, directories };
   }
-  const generations: RetainedGeneration[] = [];
+  const known = new Map(verified.map((generation) => [generation.generation, generation]));
   for (const entry of entries) {
     throwIfCancelled(operation);
-    const generation = await readCachedGeneration(cacheRealPath, entry, operation);
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      continue;
+    }
+    const directory = path.join(cacheRealPath, entry.name);
+    const stats = await fs.lstat(directory).catch(() => null);
+    if (!stats || !stats.isDirectory() || stats.isSymbolicLink()) {
+      continue;
+    }
+    directories.set(directory, stats);
+    if (!CONTROL_UI_GENERATION_PATTERN.test(entry.name)) {
+      continue;
+    }
+    const previous = known.get(entry.name);
+    // Published directories are immutable. Refresh membership/mtime, but only
+    // verify bytes for a new directory identity during this preparation.
+    const generation =
+      previous && sameDirectory(previous.stats, stats)
+        ? { ...previous, stats }
+        : await readCachedGeneration(directory, operation);
     if (generation) {
       generations.push(generation);
     }
   }
-  return generations.toSorted(
-    (left, right) =>
-      right.modifiedAtMs - left.modifiedAtMs || left.generation.localeCompare(right.generation),
-  );
+  throwIfCancelled(operation);
+  return { generations: generations.toSorted(compareGenerations), directories };
 }
 
-async function readCurrentManifest(
+async function readAssetManifest(
   root: string,
   operation?: RetentionOperation,
 ): Promise<ControlUiAssetManifest> {
   const manifestPath = path.join(root, CONTROL_UI_ASSET_MANIFEST_FILENAME);
   throwIfCancelled(operation);
   const stats = await fs.lstat(manifestPath);
+  throwIfCancelled(operation);
   if (stats.isSymbolicLink() || !stats.isFile() || stats.size > CONTROL_UI_MANIFEST_MAX_BYTES) {
     throw new Error(`Invalid Control UI asset manifest: ${manifestPath}`);
   }
   const manifest = parseControlUiAssetManifest(
     JSON.parse(await fs.readFile(manifestPath, { encoding: "utf8", signal: operation?.signal })),
   );
+  throwIfCancelled(operation);
   if (!manifest) {
     throw new Error(`Invalid Control UI asset manifest: ${manifestPath}`);
   }
@@ -230,17 +240,27 @@ async function readVerifiedAsset(params: {
 async function publishGeneration(params: {
   cacheDir: string;
   manifest: ControlUiAssetManifest;
+  verified?: RetainedGeneration;
   operation?: RetentionOperation;
   root: string;
-}): Promise<void> {
-  const target = path.join(params.cacheDir, params.manifest.generation);
-  if (
-    (await loadCachedGenerations(params.cacheDir, params.operation)).some(
-      (entry) => entry.generation === params.manifest.generation,
-    )
-  ) {
+}): Promise<RetainedGeneration> {
+  const target = path.join(await fs.realpath(params.cacheDir), params.manifest.generation);
+  // Another preparer may prune or replace the target after the initial inventory.
+  const stats = await fs.lstat(target).catch((error: unknown) => {
+    if (!isErrno(error) || error.code !== "ENOENT") {
+      throw error;
+    }
+    return null;
+  });
+  const verified =
+    stats &&
+    (params.verified && sameDirectory(params.verified.stats, stats)
+      ? params.verified
+      : await readCachedGeneration(target, params.operation));
+  if (verified) {
+    throwIfCancelled(params.operation);
     await fs.utimes(target, new Date(), new Date());
-    return;
+    return verified;
   }
 
   const staging = path.join(params.cacheDir, `.staging-${process.pid}-${randomUUID()}`);
@@ -257,7 +277,9 @@ async function publishGeneration(params: {
         rootRealPath,
       });
       const destination = path.join(staging, entry.path);
+      throwIfCancelled(params.operation);
       await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+      throwIfCancelled(params.operation);
       await fs.writeFile(destination, contents, {
         mode: 0o600,
         signal: params.operation?.signal,
@@ -269,21 +291,25 @@ async function publishGeneration(params: {
       `${JSON.stringify(params.manifest)}\n`,
       { mode: 0o600, signal: params.operation?.signal },
     );
+    throwIfCancelled(params.operation);
+    let collision: NodeJS.ErrnoException | undefined;
     try {
       await fs.rename(staging, target);
     } catch (error) {
-      if (!isErrno(error) || error.code !== "EEXIST") {
+      // Node forwards native rename errno; nonempty directory collisions are
+      // ENOTEMPTY on macOS and may be EEXIST on other filesystems.
+      if (!isErrno(error) || (error.code !== "EEXIST" && error.code !== "ENOTEMPTY")) {
         throw error;
       }
-      if (
-        !(await loadCachedGenerations(params.cacheDir, params.operation)).some(
-          (entry) => entry.generation === params.manifest.generation,
-        )
-      ) {
-        throw error;
-      }
+      collision = error;
     }
+    const published = await readCachedGeneration(target, params.operation);
+    if (!published) {
+      throw collision ?? new Error(`Invalid retained Control UI generation: ${target}`);
+    }
+    throwIfCancelled(params.operation);
     await fs.utimes(target, new Date(), new Date());
+    return published;
   } finally {
     await fs.rm(staging, { recursive: true, force: true });
   }
@@ -292,59 +318,67 @@ async function publishGeneration(params: {
 async function pruneRetainedGenerations(params: {
   cacheDir: string;
   currentGeneration?: string;
-  maxBytes: number;
-  maxGenerations: number;
+  verified: RetainedGeneration[];
   now: number;
   operation?: RetentionOperation;
-}): Promise<void> {
-  const generations = (await loadCachedGenerations(params.cacheDir, params.operation)).toSorted(
-    (left, right) => {
-      if (left.generation === params.currentGeneration) {
-        return -1;
-      }
-      if (right.generation === params.currentGeneration) {
-        return 1;
-      }
-      return (
-        right.modifiedAtMs - left.modifiedAtMs || left.generation.localeCompare(right.generation)
-      );
-    },
-  );
+}): Promise<RetainedGeneration[]> {
+  const inventory = await readCacheInventory(params.cacheDir, params.operation, params.verified);
+  const generations = inventory.generations.toSorted((left, right) => {
+    if (left.generation === params.currentGeneration) {
+      return -1;
+    }
+    if (right.generation === params.currentGeneration) {
+      return 1;
+    }
+    return compareGenerations(left, right);
+  });
   const retained = new Set<string>();
   let retainedBytes = 0;
   for (const generation of generations) {
     if (
-      retained.size < params.maxGenerations &&
-      retainedBytes + generation.bytes <= params.maxBytes
+      retained.size < CONTROL_UI_RETAINED_GENERATION_LIMIT &&
+      retainedBytes + generation.bytes <= CONTROL_UI_RETAINED_ASSET_MAX_BYTES
     ) {
       retained.add(generation.generation);
       retainedBytes += generation.bytes;
     }
   }
 
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(params.cacheDir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
+  for (const [target, stats] of inventory.directories) {
     throwIfCancelled(params.operation);
-    const generation = CONTROL_UI_GENERATION_PATTERN.test(entry.name);
+    const name = path.basename(target);
+    const generation = CONTROL_UI_GENERATION_PATTERN.test(name);
     const staleStaging =
-      CONTROL_UI_STAGING_PATTERN.test(entry.name) &&
-      params.now - (await fs.lstat(path.join(params.cacheDir, entry.name))).mtimeMs >=
-        CONTROL_UI_STAGING_MAX_AGE_MS;
-    if ((!generation || retained.has(entry.name)) && !staleStaging) {
+      CONTROL_UI_STAGING_PATTERN.test(name) &&
+      params.now - stats.mtimeMs >= CONTROL_UI_STAGING_MAX_AGE_MS;
+    if ((!generation || retained.has(name)) && !staleStaging) {
       continue;
     }
-    const target = path.join(params.cacheDir, entry.name);
-    const stats = await fs.lstat(target).catch(() => null);
-    if (!stats || stats.isSymbolicLink() || !stats.isDirectory()) {
+    const currentStats = await fs.lstat(target).catch(() => null);
+    throwIfCancelled(params.operation);
+    // Never remove a replacement or a generation refreshed by another preparer.
+    // Publications after this inventory belong to a later pruning pass.
+    if (
+      !currentStats ||
+      !sameDirectory(stats, currentStats) ||
+      stats.mtimeMs !== currentStats.mtimeMs
+    ) {
       continue;
     }
     await fs.rm(target, { recursive: true, force: true });
   }
+  const survivors: RetainedGeneration[] = [];
+  for (const generation of inventory.generations) {
+    if (!retained.has(generation.generation)) {
+      continue;
+    }
+    const stats = await fs.lstat(generation.directory).catch(() => null);
+    throwIfCancelled(params.operation);
+    if (stats && sameDirectory(generation.stats, stats)) {
+      survivors.push({ ...generation, stats });
+    }
+  }
+  return survivors.toSorted(compareGenerations);
 }
 
 export function createControlUiAssetRetention(root: string): ControlUiAssetRetention {
@@ -358,22 +392,32 @@ export function createControlUiAssetRetention(root: string): ControlUiAssetReten
         throwIfCancelled(operation);
         await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
         await fs.chmod(cacheDir, 0o700);
-        generations = await loadCachedGenerations(cacheDir, operation);
-        const manifest = await readCurrentManifest(root, operation);
+        const inventory = await readCacheInventory(cacheDir, operation);
+        throwIfCancelled(operation);
+        generations = inventory.generations;
+        const verified = [...generations];
+        const manifest = await readAssetManifest(root, operation);
         const manifestBytes = manifest.assets.reduce((total, asset) => total + asset.size, 0);
         if (manifestBytes <= CONTROL_UI_RETAINED_ASSET_MAX_BYTES) {
-          await publishGeneration({ cacheDir, manifest, operation, root });
+          const published = await publishGeneration({
+            cacheDir,
+            manifest,
+            operation,
+            root,
+            verified: verified.find((entry) => entry.generation === manifest.generation),
+          });
+          verified.push(published);
         }
-        await pruneRetainedGenerations({
+        const survivors = await pruneRetainedGenerations({
           cacheDir,
+          verified,
           currentGeneration:
             manifestBytes <= CONTROL_UI_RETAINED_ASSET_MAX_BYTES ? manifest.generation : undefined,
-          maxBytes: CONTROL_UI_RETAINED_ASSET_MAX_BYTES,
-          maxGenerations: CONTROL_UI_RETAINED_GENERATION_LIMIT,
           now: Date.now(),
           operation,
         });
-        generations = await loadCachedGenerations(cacheDir, operation);
+        throwIfCancelled(operation);
+        generations = survivors;
       })().catch((error: unknown) => {
         preparing = undefined;
         throw error;

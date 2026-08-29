@@ -3,9 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { resolveDirectBundledProviderPolicySurface } from "./provider-policy-surface.js";
 import {
   listTrustedExternalProviderPolicyOwners,
@@ -55,6 +56,10 @@ describe("provider public artifacts", () => {
       process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
     }
   }
+
+  beforeEach(() => {
+    clearPluginMetadataLifecycleCaches();
+  });
 
   afterEach(() => {
     restoreBundledPluginEnv();
@@ -597,7 +602,7 @@ describe("provider public artifacts", () => {
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
-  it("does not cache manifest-owned provider policy aliases across bundled metadata changes", async () => {
+  it("refreshes manifest-owned provider policy aliases in a new lifecycle generation", async () => {
     const bundledPluginsDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-provider-policy-refresh-"),
     );
@@ -650,6 +655,7 @@ describe("provider public artifacts", () => {
 
       writePlugin("first", [], 2);
       writePlugin("second", ["fixture-provider"], 2);
+      clearPluginMetadataLifecycleCaches();
 
       expect(
         resolvePolicySurface("fixture-provider")

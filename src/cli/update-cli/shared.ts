@@ -30,6 +30,7 @@ import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
 
 export type UpdateCommandOptions = {
+  acceptCapabilities?: boolean;
   json?: boolean;
   restart?: boolean;
   dryRun?: boolean;
@@ -45,6 +46,7 @@ export type UpdateStatusOptions = {
 };
 
 export type UpdateFinalizeOptions = {
+  acceptCapabilities?: boolean;
   json?: boolean;
   channel?: string;
   timeout?: string;
@@ -55,6 +57,7 @@ export type UpdateFinalizeOptions = {
 };
 
 export type UpdateWizardOptions = {
+  acceptCapabilities?: boolean;
   timeout?: string;
 };
 

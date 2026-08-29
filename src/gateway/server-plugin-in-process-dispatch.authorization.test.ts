@@ -159,82 +159,97 @@ describe("typed in-process agent authorization", () => {
     });
   });
 
-  it("does not fall back to ambient scope when an explicit Gateway binding is retired", async () => {
-    const ambient = createContext();
-    ambient.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "sessions.list",
-          scope: "operator.read",
-          owner: { kind: "core", area: "sessions" },
-          handler: ({ respond }: GatewayRequestHandlerOptions) => {
-            respond(true, { sessions: [] });
+  it.each(["explicit", "scoped"])(
+    "does not fall back to ambient scope when a %s Gateway binding is retired",
+    async (binding) => {
+      const ambient = createContext();
+      ambient.getGatewayMethodRegistry = () =>
+        createGatewayMethodRegistry([
+          {
+            name: "sessions.list",
+            scope: "operator.read",
+            owner: { kind: "core", area: "sessions" },
+            handler: ({ respond }: GatewayRequestHandlerOptions) => {
+              respond(true, { sessions: [] });
+            },
           },
-        },
-      ]);
+        ]);
 
-    await withPluginRuntimeGatewayRequestScope(
-      {
-        context: ambient,
-        isWebchatConnect: () => false,
-      },
-      async () =>
-        await expect(
+      await withPluginRuntimeGatewayRequestScope(
+        {
+          context: ambient,
+          ...(binding === "scoped" ? { resolveGatewayContext: () => undefined } : {}),
+          isWebchatConnect: () => false,
+        },
+        async () =>
+          await expect(
+            dispatchGatewayMethodInProcess(
+              "sessions.list",
+              {},
+              {
+                forceSyntheticClient: true,
+                ...(binding === "explicit" ? { resolveGatewayContext: () => undefined } : {}),
+                syntheticScopes: ["operator.read"],
+              },
+            ),
+          ).rejects.toThrow("instance binding"),
+      );
+    },
+  );
+
+  it.each(["explicit", "scoped"])(
+    "carries a %s Gateway binding into the session mutation commit guard",
+    async (binding) => {
+      const admitted = createContext();
+      const replacement = createContext();
+      let current = admitted;
+      let committed = false;
+      const setupStarted = createDeferredCore();
+      const releaseSetup = createDeferredCore();
+      admitted.getGatewayMethodRegistry = () =>
+        createGatewayMethodRegistry([
+          {
+            name: "sessions.create",
+            scope: "operator.write",
+            owner: { kind: "core", area: "sessions" },
+            handler: async ({
+              respond,
+              sessionMutationCommitGuard,
+            }: GatewayRequestHandlerOptions) => {
+              setupStarted.resolve();
+              await releaseSetup.promise;
+              sessionMutationCommitGuard?.();
+              committed = true;
+              respond(true, { key: "agent:main:dashboard:child" });
+            },
+          },
+        ]);
+
+      const dispatch = withPluginRuntimeGatewayRequestScope(
+        {
+          context: admitted,
+          isWebchatConnect: () => false,
+          ...(binding === "scoped" ? { resolveGatewayContext: () => current } : {}),
+        },
+        () =>
           dispatchGatewayMethodInProcess(
-            "sessions.list",
-            {},
+            "sessions.create",
+            { agentId: "main" },
             {
               forceSyntheticClient: true,
-              resolveGatewayContext: () => undefined,
-              syntheticScopes: ["operator.read"],
+              ...(binding === "explicit" ? { resolveGatewayContext: () => current } : {}),
+              syntheticScopes: ["operator.write"],
             },
           ),
-        ).rejects.toThrow("instance binding"),
-    );
-  });
+      );
+      await setupStarted.promise;
+      current = replacement;
+      releaseSetup.resolve();
 
-  it("carries an explicit Gateway binding into the session mutation commit guard", async () => {
-    const admitted = createContext();
-    const replacement = createContext();
-    let current = admitted;
-    let committed = false;
-    const setupStarted = createDeferredCore();
-    const releaseSetup = createDeferredCore();
-    admitted.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "sessions.create",
-          scope: "operator.write",
-          owner: { kind: "core", area: "sessions" },
-          handler: async ({
-            respond,
-            sessionMutationCommitGuard,
-          }: GatewayRequestHandlerOptions) => {
-            setupStarted.resolve();
-            await releaseSetup.promise;
-            sessionMutationCommitGuard?.();
-            committed = true;
-            respond(true, { key: "agent:main:dashboard:child" });
-          },
-        },
-      ]);
-
-    const dispatch = dispatchGatewayMethodInProcess(
-      "sessions.create",
-      { agentId: "main" },
-      {
-        forceSyntheticClient: true,
-        resolveGatewayContext: () => current,
-        syntheticScopes: ["operator.write"],
-      },
-    );
-    await setupStarted.promise;
-    current = replacement;
-    releaseSetup.resolve();
-
-    await expect(dispatch).rejects.toThrow("current gateway instance binding");
-    expect(committed).toBe(false);
-  });
+      await expect(dispatch).rejects.toThrow("current gateway instance binding");
+      expect(committed).toBe(false);
+    },
+  );
 
   it("composes caller authority into the session mutation commit guard", async () => {
     const admitted = createContext();

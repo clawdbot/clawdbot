@@ -781,18 +781,14 @@ export function createModelAuthAvailabilityResolver(
         evidence: "profile",
       };
     }
+    // Direct policy adds retry times only for unavailable inline keys; unknown reasons stay hidden.
+    const { unavailableReason, ...evaluation } = directEvaluation;
     return {
-      availability: fromProviderModelAuthReadiness(source.readiness),
+      ...evaluation,
       ...(source.readiness === "unavailable"
-        ? {
-            unavailableReason: directEvaluation.unavailableReason ?? "auth-failed",
-            ...(directEvaluation.unavailableUntil !== undefined
-              ? { unavailableUntil: directEvaluation.unavailableUntil }
-              : {}),
-          }
+        ? { unavailableReason: unavailableReason ?? "auth-failed" }
         : {}),
       selectedAuthMode: source.mode,
-      ...(source.evidence === "none" ? {} : { evidence: source.evidence }),
     };
   };
   const directPolicy = (provider: string, target: AuthTarget) => {
@@ -840,7 +836,7 @@ export function createModelAuthAvailabilityResolver(
     provider: string,
     ref: ModelAuthAvailabilityRef,
     target: AuthTarget,
-  ) => {
+  ): AuthSourceEvaluation | undefined => {
     if (ref.lockedProfileId?.trim()) {
       return undefined;
     }
@@ -868,7 +864,16 @@ export function createModelAuthAvailabilityResolver(
     });
     const decision = selectProviderModelAuthSources({ provider, plan });
     return decision.kind === "rejected"
-      ? { ...decision, ...rejectedSourceEvaluation(decision.reason, plan, target) }
+      ? {
+          ...rejectedSourceEvaluation(decision.reason, plan, target),
+          evidence: "profile",
+          ...(decision.source
+            ? {
+                selectedAuthMode: decision.source.mode,
+                selectedProfileId: decision.source.profileId,
+              }
+            : {}),
+        }
       : undefined;
   };
   const resolveProviderEvaluation = (
@@ -954,24 +959,7 @@ export function createModelAuthAvailabilityResolver(
     }
     if (routeResolution.kind === "indeterminate") {
       const rejection = automaticSourceRejection(provider, ref, prepareAuthTarget(provider, ref));
-      if (rejection) {
-        return {
-          availability: false,
-          unavailableReason: rejection.unavailableReason,
-          ...(rejection.unavailableUntil !== undefined
-            ? { unavailableUntil: rejection.unavailableUntil }
-            : {}),
-          routeResolution,
-          ...(rejection.source
-            ? {
-                evidence: "profile" as const,
-                selectedAuthMode: rejection.source.mode,
-                selectedProfileId: rejection.source.profileId,
-              }
-            : { evidence: "profile" as const }),
-        };
-      }
-      return { availability: undefined, routeResolution };
+      return { ...(rejection ?? { availability: undefined }), routeResolution };
     }
     const modelLock = ref.lockedProfileId?.trim();
     const configuredAuthMode = resolveConfiguredOpenAIAuthMode(params.cfg);

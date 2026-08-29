@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
@@ -18,6 +18,10 @@ import {
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
+
+beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
+});
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -128,6 +132,7 @@ describe("plugin registry inspection", () => {
       }),
       "utf8",
     );
+    clearPluginMetadataLifecycleCaches();
     const manifest = await inspectPluginRegistry({
       stateDir,
       candidates: [candidate],

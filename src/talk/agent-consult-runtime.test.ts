@@ -42,14 +42,11 @@ type ForkSessionEntryFromParentParams = Parameters<ForkSessionEntryFromParent>[0
 type ForkSessionEntryFromParentResult = Awaited<ReturnType<ForkSessionEntryFromParent>>;
 
 const sessionForkMocks = vi.hoisted(() => ({
-  defaultForkSessionEntryFromParent: undefined as ForkSessionEntryFromParent | undefined,
-  forkSessionEntryFromParent: vi.fn(),
+  forkSessionEntryFromParent: vi.fn<ForkSessionEntryFromParent>(),
 }));
 
 vi.mock("../auto-reply/reply/session-fork.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../auto-reply/reply/session-fork.js")>();
-  sessionForkMocks.defaultForkSessionEntryFromParent = actual.forkSessionEntryFromParent;
-  sessionForkMocks.forkSessionEntryFromParent.mockImplementation(actual.forkSessionEntryFromParent);
   return {
     ...actual,
     forkSessionEntryFromParent: sessionForkMocks.forkSessionEntryFromParent,
@@ -179,6 +176,12 @@ function expectNonEmptyString(value: unknown) {
 
 describe("realtime voice agent consult runtime", () => {
   beforeEach(async () => {
+    sessionForkMocks.forkSessionEntryFromParent.mockImplementation(async (params) => {
+      const actual = await vi.importActual<typeof import("../auto-reply/reply/session-fork.js")>(
+        "../auto-reply/reply/session-fork.js",
+      );
+      return await actual.forkSessionEntryFromParent(params);
+    });
     // macOS aliases its temp directory through /var; canonical paths keep the
     // SQLite cache key and cleanup target aligned.
     testTempDir = await fs.realpath(
@@ -189,13 +192,6 @@ describe("realtime voice agent consult runtime", () => {
 
   afterEach(async () => {
     sessionForkMocks.forkSessionEntryFromParent.mockReset();
-    const defaultForkSessionEntryFromParent = sessionForkMocks.defaultForkSessionEntryFromParent;
-    if (!defaultForkSessionEntryFromParent) {
-      throw new Error("Expected the realtime voice session fork implementation");
-    }
-    sessionForkMocks.forkSessionEntryFromParent.mockImplementation(
-      defaultForkSessionEntryFromParent,
-    );
     const tempDir = testTempDir;
     testTempDir = undefined;
     if (tempDir) {

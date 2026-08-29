@@ -32,6 +32,7 @@ type ProviderFault =
   | { status: 200; text: string }
   | { status: 401 }
   | { status: 402 }
+  | { status: 413 }
   | { status: 429; window: "short" | "long" }
   | { status: 500 }
   | { status: "context_overflow" };
@@ -208,11 +209,17 @@ function makeAttemptForFault(
       ? "401 Unauthorized: invalid API key"
       : fault.status === 402
         ? "402 Payment Required: insufficient credits"
-        : fault.status === 429
-          ? fault.window === "short"
-            ? "429 Too Many Requests: rate limit exceeded"
-            : "429 Too Many Requests: subscription usage limit reached"
-          : "Prompt is too long for this model's context window";
+        : fault.status === 413
+          ? // Groq's verbatim refusal for a single request larger than the whole per-minute
+            // token limit: a size ceiling wearing rate-limit clothes.
+            "413 Request too large for model `mock-1` in organization `org_x` service tier " +
+            "`on_demand` on tokens per minute (TPM): Limit 8000, Requested 8098, please reduce " +
+            "your message size and try again."
+          : fault.status === 429
+            ? fault.window === "short"
+              ? "429 Too Many Requests: rate limit exceeded"
+              : "429 Too Many Requests: subscription usage limit reached"
+            : "Prompt is too long for this model's context window";
   return makeEmbeddedRunnerAttempt({
     lastAssistant: buildEmbeddedRunnerAssistant({
       provider: ref.provider,
@@ -550,6 +557,40 @@ describe("runEmbeddedAgent provider fault sequences", () => {
         text: expect.stringContaining("Context overflow: prompt too large for the model"),
       });
       expect(outcome.attempts).toEqual([]);
+      const usageStats = await readUsageStats(agentDir);
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+    });
+  });
+
+  it("stops on a provider request-size ceiling without spending a fallback candidate", async () => {
+    await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
+      writeProfiles(agentDir, { openai: 1, groq: true });
+      const observations: AttemptObservation[] = [];
+      installFaultScript([{ status: 413 }], observations);
+
+      const outcome = expectResult(
+        await runScenario({
+          agentDir,
+          workspaceDir,
+          config: makeProviderConfig(["groq/mock-2"]),
+          runId: "request-size-ceiling",
+        }),
+      );
+
+      // The ceiling is not reachable by compaction, and inside an embedded run the only thing
+      // downstream of declining it is the same request again, so the turn ends here. A configured
+      // candidate stays unspent: `groq/mock-2` is eligible and never attempted. Rotation for this
+      // class is decided at the fallback boundary, which a transport-owning harness reaches -- see
+      // model-fallback.test.ts.
+      expect(observations).toHaveLength(1);
+      expect(outcome.result.meta.livenessState).toBe("blocked");
+      expect(outcome.result.meta.error).toMatchObject({ kind: "context_overflow" });
+      expect(outcome.result.payloads?.[0]).toMatchObject({
+        isError: true,
+        text: expect.stringContaining("Try /reset (or /new)"),
+      });
+      expect(outcome.attempts).toEqual([]);
+      // Waiting cannot admit this request, so the profile must not be put in rate-limit cooldown.
       const usageStats = await readUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
     });

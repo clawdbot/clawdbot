@@ -1,4 +1,5 @@
 // Covers legacy state migration detection and repair behavior.
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { AgentSelectionRequiredError, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import {
@@ -112,6 +114,8 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
     ({
       entries: [] as Array<{
         pluginId: string;
+        channelIds?: string[];
+        trustedForDurableStores?: boolean;
         migration: {
           id: string;
           label: string;
@@ -122,14 +126,14 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
             env: NodeJS.ProcessEnv;
             stateDir: string;
             oauthDir: string;
-            context: unknown;
+            context: PluginDoctorStateMigrationContext;
           }) => Promise<{ preview: string[] } | null> | { preview: string[] } | null;
           migrateLegacyState: (params: {
             config: OpenClawConfig;
             env: NodeJS.ProcessEnv;
             stateDir: string;
             oauthDir: string;
-            context: unknown;
+            context: PluginDoctorStateMigrationContext;
           }) =>
             | Promise<{ changes: string[]; warnings: string[] }>
             | {
@@ -141,6 +145,8 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
     }) satisfies {
       entries: Array<{
         pluginId: string;
+        channelIds?: string[];
+        trustedForDurableStores?: boolean;
         migration: {
           id: string;
           label: string;
@@ -149,14 +155,14 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
             env: NodeJS.ProcessEnv;
             stateDir: string;
             oauthDir: string;
-            context: unknown;
+            context: PluginDoctorStateMigrationContext;
           }) => Promise<{ preview: string[] } | null> | { preview: string[] } | null;
           migrateLegacyState: (params: {
             config: OpenClawConfig;
             env: NodeJS.ProcessEnv;
             stateDir: string;
             oauthDir: string;
-            context: unknown;
+            context: PluginDoctorStateMigrationContext;
           }) =>
             | Promise<{ changes: string[]; warnings: string[] }>
             | {
@@ -1324,6 +1330,338 @@ describe("state migrations", () => {
       `migrate:${customHome}`,
     ]);
     expect(result.changes).toContain("Migrated fixture environment");
+  });
+
+  it("scopes doctor channel ingress queue access to the plugin's own channels", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const discovered: string[] = [];
+    const offeredChannelIds: string[][] = [];
+    const detectionMutableLanes: unknown[] = [];
+    const detectionPending: number[] = [];
+    const detectionMutatorsReachable: string[] = [];
+    const detectionWriteOutcomes: string[] = [];
+    // Detection is now read-only, so the account has to already exist. Seeding it
+    // directly is also what makes the inspection assertion meaningful.
+    await createChannelIngressQueue<{ note: string }>({
+      channelId: "line",
+      accountId: "default",
+      stateDir,
+    }).enqueue("ingress-scope-seed", { note: "seeded" });
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "line",
+        channelIds: ["line"],
+        migration: {
+          id: "line-ingress-scope-test",
+          label: "LINE ingress scope test",
+          async detectLegacyState({ context }) {
+            const queues = context.channelIngressQueues ?? [];
+            // The host hands out only owner-bound lanes; a foreign channel has no entry.
+            offeredChannelIds.push(queues.map((entry) => entry.channelId));
+            const line = queues.find((entry) => entry.channelId === "line");
+            // Detection runs before exclusive state ownership, so the mutable lane is
+            // absent entirely - there is no handle to write through, not merely a
+            // handle that refuses.
+            detectionMutableLanes.push(line?.openChannelIngressQueue);
+            const inspection = line?.openChannelIngressQueueForInspection<{ note: string }>({
+              accountId: "default",
+            });
+            // A narrowed return type still hands over every method at runtime, so the
+            // projection is checked as a value: detection must not be able to reach a
+            // mutator even by casting the type away.
+            for (const method of [
+              "enqueue",
+              "claimNext",
+              "claim",
+              "complete",
+              "release",
+              "fail",
+              "delete",
+              "recoverStaleClaims",
+              "prune",
+              "resubmit",
+              "refreshClaim",
+            ]) {
+              detectionMutatorsReachable.push(
+                typeof (inspection as Record<string, unknown> | undefined)?.[method],
+              );
+            }
+            detectionPending.push((await inspection?.listPending({ limit: "all" }))?.length ?? -1);
+            // Direct mutation attempt: cast the projection back and actually call a
+            // writer. There is no method to call, so the attempt cannot reach SQLite.
+            try {
+              const forced = inspection as unknown as {
+                enqueue?: (id: string, payload: unknown) => Promise<unknown>;
+              };
+              await forced.enqueue?.("detection-write", { note: "leaked" });
+              detectionWriteOutcomes.push("no-throw");
+            } catch (error) {
+              detectionWriteOutcomes.push(
+                error instanceof TypeError ? "type-error" : `other:${String(error)}`,
+              );
+            }
+            discovered.push(...((await line?.listChannelIngressQueueAccountIds()) ?? []));
+            return null;
+          },
+          migrateLegacyState: () => ({ changes: [], warnings: [] }),
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: createConfig(),
+      env,
+      homedir: () => root,
+    });
+
+    expect(
+      detected.warnings.filter((warning) => warning.includes("LINE ingress scope test")),
+    ).toStrictEqual([]);
+    // Detection can run more than once per pass; every run must see the same
+    // owner-bound lane set and the seeded account.
+    expect(offeredChannelIds.length).toBeGreaterThan(0);
+    for (const channelIds of offeredChannelIds) {
+      expect(channelIds).toStrictEqual(["line"]);
+    }
+    expect(discovered.length).toBeGreaterThan(0);
+    expect([...new Set(discovered)]).toStrictEqual(["default"]);
+    // The authority chain: no detection run was ever handed a mutable lane, while the
+    // inspection projection still answered on the same access entry.
+    expect(detectionMutableLanes.length).toBeGreaterThan(0);
+    expect(detectionMutableLanes.every((lane) => lane === undefined)).toBe(true);
+    expect(detectionPending.every((count) => count >= 0)).toBe(true);
+    // Not one mutating method is present on the inspection object at runtime.
+    expect(detectionMutatorsReachable.length).toBeGreaterThan(0);
+    expect([...new Set(detectionMutatorsReachable)]).toStrictEqual(["undefined"]);
+    // The forced call is optional-chained past a missing method, so it never runs.
+    expect([...new Set(detectionWriteOutcomes)]).toStrictEqual(["no-throw"]);
+    // And nothing detection did reached durable state: the seeded row is still the
+    // only row, so no detection-time write landed.
+    const afterDetection = await createChannelIngressQueue<{ note: string }>({
+      channelId: "line",
+      accountId: "default",
+      stateDir,
+    }).listPending({ limit: "all", orderBy: "received" });
+    expect(afterDetection.map((row) => row.id)).toStrictEqual(["ingress-scope-seed"]);
+  });
+
+  it("revokes migration ingress queue access once the repair section returns", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    let retainedOpen:
+      | ((options?: { accountId?: string }) => { enqueue: (...args: never[]) => unknown })
+      | undefined;
+    let retainedQueue: { enqueue: (id: string, payload: unknown) => Promise<unknown> } | undefined;
+    let mutableLanePresentDuringMigration = false;
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "line",
+        channelIds: ["line"],
+        migration: {
+          id: "line-ingress-revocation-test",
+          label: "LINE ingress revocation test",
+          detectLegacyState: () => ({ preview: ["ingress revocation preview"] }),
+          async migrateLegacyState({ context }) {
+            const line = (context.channelIngressQueues ?? []).find(
+              (entry) => entry.channelId === "line",
+            );
+            const open = line?.openChannelIngressQueue;
+            mutableLanePresentDuringMigration = open !== undefined;
+            if (open) {
+              // Inside the locked section the lane works, and both handles are kept so
+              // the same objects can be driven again after the section returns.
+              const queue = open<{ note: string }>({ accountId: "default" });
+              await queue.enqueue("inside-section", { note: "owned" });
+              retainedOpen = open as unknown as typeof retainedOpen;
+              retainedQueue = queue as unknown as typeof retainedQueue;
+            }
+            return { changes: ["ingress revocation test migrated"], warnings: [] };
+          },
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: createConfig(),
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: createConfig(), env });
+
+    expect(mutableLanePresentDuringMigration).toBe(true);
+    expect(result.changes).toContain("ingress revocation test migrated");
+
+    // Durable-state evidence: the throw alone does not prove the write never reached
+    // SQLite. Hash the real database file and re-read the rows through a fresh queue,
+    // so a post-section mutation would have to surface as a changed digest.
+    const sqlitePath = resolveOpenClawStateSqlitePath(env);
+    // Hash the write-ahead log alongside the main file: committed rows can sit in the
+    // WAL, so hashing only the .sqlite file would be vacuously stable and prove nothing.
+    const digest = () => {
+      const hash = createHash("sha256");
+      for (const suffix of ["", "-wal", "-shm"]) {
+        const file = `${sqlitePath}${suffix}`;
+        hash.update(suffix);
+        hash.update(fsSync.existsSync(file) ? fsSync.readFileSync(file) : Buffer.alloc(0));
+      }
+      return hash.digest("hex");
+    };
+    const readPendingIds = async () =>
+      (
+        await createChannelIngressQueue<{ note: string }>({
+          channelId: "line",
+          accountId: "default",
+          stateDir,
+        }).listPending({ limit: "all", orderBy: "received" })
+      ).map((row) => row.id);
+
+    const beforeDigest = digest();
+    const beforeIds = await readPendingIds();
+    // The write the locked section DID make is on disk, so the file is a live witness.
+    expect(beforeIds).toContain("inside-section");
+
+    // Both retained handles are now outside the section that owned the state, and the
+    // guard refuses before any promise is created, so no write ever starts.
+    expect(() => retainedOpen?.({ accountId: "default" })).toThrow(
+      /ingress queue access has expired/i,
+    );
+    expect(() => retainedQueue?.enqueue("after-section", { note: "leaked" })).toThrow(
+      /ingress queue access has expired/i,
+    );
+
+    expect(digest()).toBe(beforeDigest);
+    expect(await readPendingIds()).toStrictEqual(beforeIds);
+  });
+
+  it("withholds ingress queue access from an untrusted plugin owner", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const detectionLanes: unknown[] = [];
+    const migrationLanes: unknown[] = [];
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "line",
+        channelIds: ["line"],
+        // Same decision the runtime proxy makes for openChannelIngressQueue: an
+        // activated workspace plugin is neither bundled nor a trusted official install.
+        trustedForDurableStores: false,
+        migration: {
+          id: "line-ingress-trust-test",
+          label: "LINE ingress trust test",
+          detectLegacyState({ context }) {
+            detectionLanes.push(context.channelIngressQueues);
+            return { preview: ["ingress trust preview"] };
+          },
+          migrateLegacyState({ context }) {
+            migrationLanes.push(context.channelIngressQueues);
+            return { changes: ["ingress trust test ran"], warnings: [] };
+          },
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: createConfig(),
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: createConfig(), env });
+
+    expect(result.changes).toContain("ingress trust test ran");
+    // Neither phase is handed a lane at all - not an empty list, and not a lane that
+    // refuses on use. There is nothing to reach the durable queue through.
+    expect(detectionLanes.length).toBeGreaterThan(0);
+    expect(migrationLanes.length).toBeGreaterThan(0);
+    expect(detectionLanes.every((lanes) => lanes === undefined)).toBe(true);
+    expect(migrationLanes.every((lanes) => lanes === undefined)).toBe(true);
+  });
+
+  it("rejects a recovery predicate that resolves after the repair section returns", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    // The latch keeps the predicate pending until the migration has returned and the
+    // section has closed, which is the exact window the guard has to cover.
+    let releasePredicate!: () => void;
+    const predicateGate = new Promise<void>((resolve) => {
+      releasePredicate = resolve;
+    });
+    let recoveryOutcome: string | undefined;
+    let recoverySettled!: () => void;
+    const recoveryDone = new Promise<void>((resolve) => {
+      recoverySettled = resolve;
+    });
+
+    const seeded = createChannelIngressQueue<{ note: string }>({
+      channelId: "line",
+      accountId: "default",
+      stateDir,
+    });
+    await seeded.enqueue("latch-evt", { note: "seeded" });
+    const claimed = await seeded.claimNext({ ownerId: "retired-owner" });
+    expect(claimed?.id).toBe("latch-evt");
+
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "line",
+        channelIds: ["line"],
+        migration: {
+          id: "line-ingress-latch-test",
+          label: "LINE ingress latch test",
+          detectLegacyState: () => ({ preview: ["ingress latch preview"] }),
+          migrateLegacyState({ context }) {
+            const line = (context.channelIngressQueues ?? []).find(
+              (entry) => entry.channelId === "line",
+            );
+            const open = line?.openChannelIngressQueue;
+            if (open) {
+              const queue = open<{ note: string }>({ accountId: "default" });
+              // Started but deliberately not awaited: the migration returns first.
+              void queue
+                .recoverStaleClaims({
+                  staleMs: 0,
+                  shouldRecover: async () => {
+                    await predicateGate;
+                    return true;
+                  },
+                })
+                .then(() => {
+                  recoveryOutcome = "completed";
+                })
+                .catch((error: unknown) => {
+                  recoveryOutcome = String(error);
+                })
+                .finally(() => recoverySettled());
+            }
+            return { changes: ["ingress latch test migrated"], warnings: [] };
+          },
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: createConfig(),
+      env,
+      homedir: () => root,
+    });
+    await runLegacyStateMigrations({ detected, config: createConfig(), env });
+
+    // Only now, with the section closed, does the predicate resolve.
+    releasePredicate();
+    await recoveryDone;
+
+    expect(recoveryOutcome).toMatch(/ingress queue access has expired/i);
+    // The claim is still held: the post-await write never reached SQLite.
+    const claims = await createChannelIngressQueue<{ note: string }>({
+      channelId: "line",
+      accountId: "default",
+      stateDir,
+    }).listClaims();
+    expect(claims.map((claim) => claim.id)).toStrictEqual(["latch-evt"]);
   });
 
   it("runs doctor-only plugin file imports only during explicit Doctor repair", async () => {

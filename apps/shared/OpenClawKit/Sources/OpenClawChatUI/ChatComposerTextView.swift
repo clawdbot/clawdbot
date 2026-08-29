@@ -54,6 +54,8 @@ struct ChatComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var shouldFocus: Bool
     var isEnabled: Bool
+    var minHeight: CGFloat = 28
+    var maxHeight: CGFloat = 88
     var onSend: () -> Void
     var onPasteImageAttachment: (_ data: Data, _ fileName: String, _ mimeType: String) -> Void
     var onKeyCommand: (
@@ -92,6 +94,7 @@ struct ChatComposerTextView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? ChatComposerNSTextView else { return }
+        context.coordinator.parent = self
         textView.onPasteImageAttachment = self.onPasteImageAttachment
         textView.onKeyCommand = self.onKeyCommand
         textView.isEditable = self.isEnabled
@@ -125,6 +128,22 @@ struct ChatComposerTextView: NSViewRepresentable {
         context.coordinator.lastReportedText = self.text
     }
 
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView: NSScrollView,
+        context _: Context) -> CGSize?
+    {
+        guard let width = proposal.width, width > 0,
+              let textView = nsView.documentView as? NSTextView
+        else { return nil }
+        return CGSize(
+            width: width,
+            height: min(self.maxHeight, max(self.minHeight, ChatComposerTextViewFactory.fittingHeight(
+                text: self.text,
+                width: width,
+                textView: textView))))
+    }
+
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ChatComposerTextView
         var isProgrammaticUpdate = false
@@ -145,6 +164,24 @@ struct ChatComposerTextView: NSViewRepresentable {
 }
 
 enum ChatComposerTextViewFactory {
+    @MainActor
+    static func fittingHeight(text: String, width: CGFloat, textView: NSTextView) -> CGFloat {
+        // Measure separately from the live editor so SwiftUI's layout proposals
+        // never move the insertion point or change the editor's scroll position.
+        let storage = NSTextStorage(string: text.isEmpty ? " " : text, attributes: [
+            .font: textView.font ?? NSFont.systemFont(ofSize: 14),
+        ])
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(containerSize: NSSize(
+            width: max(1, width - textView.textContainerInset.width * 2),
+            height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = textView.textContainer?.lineFragmentPadding ?? 0
+        storage.addLayoutManager(layout)
+        layout.addTextContainer(container)
+        layout.ensureLayout(for: container)
+        return ceil(layout.usedRect(for: container).height + textView.textContainerInset.height * 2)
+    }
+
     /// Internal for @testable import coverage of composer text view defaults.
     @MainActor
     static func makeConfiguredTextView() -> NSTextView {
@@ -160,6 +197,8 @@ enum ChatComposerTextViewFactory {
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainerInset = NSSize(width: 2, height: 4)
         textView.focusRingType = .none
+        textView.setAccessibilityIdentifier("chat-message-input")
+        textView.setAccessibilityLabel(String(localized: "Message"))
         textView.allowsUndo = true
         textView.minSize = .zero
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)

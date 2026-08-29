@@ -1,5 +1,7 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
+import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import {
@@ -9,6 +11,7 @@ import {
 } from "../../../components/person-activity-link.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
+import { isMovableChatQueueItem } from "../../../lib/chat/chat-queue-order.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
@@ -33,6 +36,7 @@ import {
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { renderQueuedSendControls, type ChatQueueProps } from "./chat-composer-queue.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderRewindButton } from "./chat-message-confirmation.ts";
 import {
@@ -53,6 +57,7 @@ import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
+  renderBrowserTabPreviews,
   resolveToolRowText,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
@@ -67,6 +72,7 @@ type ActiveContinuation = {
 type ReplyPreview = MessageReplyTarget & { sourceMessageId: string };
 
 type RenderMessageGroupOptions = {
+  latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   sessionKey?: string;
@@ -110,6 +116,8 @@ type RenderMessageGroupOptions = {
   contextWindow?: number | null;
   onReply?: (target: MessageReplyTarget) => void;
   onRetryQueuedMessage?: (id: string) => void;
+  queuedMessageAction?: { id: string; label?: string; onAction?: () => void };
+  queueControls?: ChatQueueProps;
   resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
   onResolveReply?: (replyToId: string) => void;
   onOpenReply?: (replyToId: string) => void;
@@ -120,6 +128,7 @@ type RenderMessageGroupOptions = {
   turnRecap?: TurnRecap;
   frameContent?: unknown;
   frameActionOwner?: MessageGroup["messages"][number] | null;
+  latestAssistant?: boolean;
 };
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
@@ -215,7 +224,10 @@ const USER_TURN_ENTRY_FRESH_SUBMIT_MS = 2_000;
 const USER_TURN_ENTRY_SEEN_CAP = 256;
 
 function isPeerSenderGroup(group: MessageGroup, userId: string | null | undefined): boolean {
-  return Boolean(group.sender && !(userId && group.sender.id === userId));
+  const identity = group.sender?.identity;
+  return Boolean(
+    group.sender && !(userId && identity?.type === "profile" && identity.id === userId),
+  );
 }
 
 function shouldAnimateUserTurnEntry(messageKey: string, message: unknown): boolean {
@@ -332,6 +344,7 @@ export function renderActivityGroup(
             )
           : nothing}
       </div>
+      ${renderBrowserTabPreviews(groups, opts)}
     </div>
   `;
   return presentation === "continuation"
@@ -386,7 +399,7 @@ export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessa
     }
   }
   const who = resolveMessageGroupSenderLabel(group, opts);
-  return group.messages.map((item, index) => {
+  const messages = group.messages.map((item, index) => {
     const actionDetails = resolveMessageActionDetails({
       message: item.message,
       messageId: item.key,
@@ -416,6 +429,9 @@ export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessa
       opts.onOpenSidebar,
     );
   });
+  return html`${messages}${opts.showToolCalls === false
+    ? nothing
+    : renderBrowserTabPreviews([group], opts)}`;
 }
 
 export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
@@ -524,17 +540,37 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const senderHue =
     normalizedRole === "user" && group.sender ? resolveIdentityHue(group.sender) : null;
   const sendFailure = readPendingSendFailure(group.messages.at(-1)?.message);
+  const sendAction =
+    opts.queuedMessageAction?.id === sendFailure?.id ? opts.queuedMessageAction : undefined;
   const replyToLabel =
     normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
   const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
 
   return html`
     <div
-      class="chat-group ${roleClass} chat-group--with-footer${isPeerGroup
-        ? " chat-group--peer"
-        : ""}${senderHue === null ? "" : " chat-group--sender-tint"}"
+      class="chat-group ${roleClass} chat-group--with-footer${opts.latestAssistant
+        ? " chat-group--latest-assistant"
+        : ""}${isPeerGroup ? " chat-group--peer" : ""}${senderHue === null
+        ? ""
+        : " chat-group--sender-tint"}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
+      @dblclick=${(event: MouseEvent) => {
+        const target = event.target;
+        if (
+          !(target instanceof Element) ||
+          !target.closest(".chat-bubble") ||
+          target.closest("a, button, input, select, textarea") ||
+          !isPendingSendMessage(group.messages[0]?.message)
+        ) {
+          return;
+        }
+        const pendingId = asRecord(asRecord(group.messages[0]?.message)?.["__openclaw"])?.id;
+        const queued = opts.queueControls?.queue.find((entry) => entry.id === pendingId);
+        if (queued && isMovableChatQueueItem(queued) && !opts.queueControls?.editingId) {
+          opts.queueControls?.onQueueEdit?.(queued.id);
+        }
+      }}
     >
       ${normalizedRole !== "tool" &&
       showAvatarGutter &&
@@ -568,6 +604,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         ${opts.frameContent ??
         group.messages.map((item, index) => {
           const actionDetails = messageActionDetails[index];
+          const queued = isPendingSendMessage(item.message)
+            ? opts.queueControls?.queue.find(
+                (entry) => entry.id === asRecord(asRecord(item.message)?.["__openclaw"])?.id,
+              )
+            : undefined;
           return html`
             ${renderGroupedMessage(
               item.message,
@@ -575,6 +616,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               buildGroupedMessageRenderOptions(group, item, index, opts, actionDetails),
               opts.onOpenSidebar,
             )}
+            ${queued && opts.queueControls
+              ? renderQueuedSendControls(queued, opts.queueControls)
+              : nothing}
             ${actionDetails && index < lastMessageIndex && !ownsRunFrame
               ? html`
                   <div class="chat-message-actions-row" data-message-actions-for=${item.key}>
@@ -584,6 +628,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               : nothing}
           `;
         })}
+        ${ownsRunFrame || opts.showToolCalls === false
+          ? nothing
+          : renderBrowserTabPreviews([group], opts)}
         ${opts.activeContinuation
           ? renderStreamGroupParts(
               opts.activeContinuation.parts,
@@ -609,7 +656,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               ${renderPersonName(
                 who,
                 // Only other people's messages: your own name links nowhere useful.
-                isPeerGroup ? personActivityLink(group.sender?.id, opts.personActivity) : null,
+                isPeerGroup && group.sender?.identity?.type === "profile"
+                  ? personActivityLink(group.sender.identity.id, opts.personActivity)
+                  : null,
                 "chat-sender-name",
               )}
               ${sendFailure
@@ -626,16 +675,19 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                           : "chat.queue.notSent",
                       )}</span
                     >
-                    ${opts.onRetryQueuedMessage
+                    ${sendAction?.onAction || opts.onRetryQueuedMessage
                       ? html`
                           <span aria-hidden="true">·</span>
                           <button
                             class="chat-send-status__retry"
                             type="button"
-                            aria-label=${t("chat.queue.retryQueuedMessage")}
-                            @click=${() => opts.onRetryQueuedMessage?.(sendFailure.id)}
+                            aria-label=${sendAction?.label ?? t("chat.queue.retryQueuedMessage")}
+                            @click=${() =>
+                              sendAction?.onAction
+                                ? sendAction.onAction()
+                                : opts.onRetryQueuedMessage?.(sendFailure.id)}
                           >
-                            ${t("chat.queue.retry")}
+                            ${sendAction?.label ?? t("chat.queue.retry")}
                           </button>
                         `
                       : nothing}

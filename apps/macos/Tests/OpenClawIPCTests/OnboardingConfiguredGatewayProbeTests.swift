@@ -423,7 +423,7 @@ struct OnboardingConfiguredGatewayProbeTests {
         let currentURL = try #require(URL(string: "ws://current.example.invalid"))
         let endpoints = OnboardingEndpointRevisionGate(staleURL: staleURL, currentURL: currentURL)
         let gateway = GatewayConnection(
-            endpointProvider: { await endpoints.snapshot() },
+            testEndpointProvider: { await endpoints.snapshot() },
             sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
                 GatewayTestWebSocketTask()
             })))

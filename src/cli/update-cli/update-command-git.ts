@@ -31,7 +31,11 @@ import {
   runUpdateStep,
   type UpdateCommandOptions,
 } from "./shared.js";
-import { UpdateCommandAbort, type PreManagedServiceStop } from "./update-command-service.js";
+import {
+  resolvePreparedGatewayUpdatePolicy,
+  UpdateCommandAbort,
+  type PreManagedServiceStop,
+} from "./update-command-service.js";
 
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
@@ -186,15 +190,7 @@ export function createBeforeGitMutation(params: {
       defaultRuntime.error(formatSchemaRefusalLines(postStopSchemas).join("\n"));
       throw new UpdateCommandAbort();
     }
-    return {
-      // Only a positively owned service may be rewritten. Activation
-      // additionally requires this update to have stopped it.
-      allowGatewayServiceRepair: preManagedServiceStop?.serviceMatchesMutationRoot === true,
-      allowGatewayActivation:
-        params.shouldRestart &&
-        preManagedServiceStop?.stopped === true &&
-        preManagedServiceStop.serviceMatchesMutationRoot === true,
-    };
+    return resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart);
   };
 }
 
@@ -309,6 +305,9 @@ export async function updateGitInstall(params: {
       timeoutMs: effectiveTimeout,
       env: installEnv,
       installCwd: updateRoot,
+      // ensureGitCheckout already resolved the root; only the successful Git
+      // build/doctor flow can authorize exposing that exact checkout globally.
+      expectedGitCheckout: { root: updateRoot, sha: updateResult.after?.sha ?? null },
     });
     steps.push(...packageUpdate.steps);
 

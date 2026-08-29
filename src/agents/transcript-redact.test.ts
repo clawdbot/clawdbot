@@ -73,6 +73,73 @@ const OPENAI_REASONING_REPLAY_METADATA = {
 } as const;
 
 describe("redactTranscriptMessage", () => {
+  it.each([
+    { type: "profile", id: "person" },
+    { type: "remote", pluginId: "chat", domain: "workspace", idKind: "user", id: "person" },
+    {
+      type: "observation",
+      pluginId: "chat",
+      accountId: "account",
+      senderKind: "human",
+      id: "person",
+    },
+  ])("sender provenance survives label redaction but not identity redaction: $type", (identity) => {
+    const message = castAgentMessage({
+      role: "user",
+      content: "private-label",
+      timestamp: 1,
+      __openclaw: { senderId: identity.id, senderIdentity: identity, senderName: "private-label" },
+    });
+    expect(redactTranscriptMessage(message, cfg("tools", []))).toBe(message);
+    const labelOnly = redactTranscriptMessage(message, cfg("tools", ["private-label"]));
+    expect(labelOnly).toMatchObject({
+      __openclaw: { senderIdentity: identity, senderId: "person" },
+    });
+    expect(JSON.stringify(labelOnly)).not.toContain("private-label");
+    const redacted = redactTranscriptMessage(message, cfg("tools", ["person"]));
+    expect(Reflect.get(redacted, "__openclaw")).not.toHaveProperty("senderIdentity");
+    expect(JSON.stringify(redacted)).not.toContain('"person"');
+    expect(Reflect.get(message, "__openclaw").senderIdentity).toBe(identity);
+  });
+
+  it.each([
+    { senderId: "private-raw-id", senderIdentity: { type: "profile", id: "person" } },
+    {
+      senderId: "person",
+      senderIdentity: {
+        type: "remote",
+        pluginId: "chat",
+        domain: "private-domain",
+        idKind: "user",
+        id: "person",
+      },
+    },
+    {
+      senderId: "person",
+      senderIdentity: {
+        type: "observation",
+        pluginId: "chat",
+        accountId: "private-account",
+        senderKind: "human",
+        id: "person",
+      },
+    },
+  ])(
+    "drops sender provenance when any qualified source fact or paired ID is redacted: %j",
+    (metadata) => {
+      const message = castAgentMessage({
+        role: "user",
+        content: "visible",
+        timestamp: 1,
+        __openclaw: metadata,
+      });
+      const redacted = redactTranscriptMessage(message, cfg("tools", ["private-[a-z-]+"]));
+      expect(Reflect.get(redacted, "__openclaw")).not.toHaveProperty("senderIdentity");
+      expect(JSON.stringify(redacted)).not.toContain("private-");
+      expect(Reflect.get(message, "__openclaw")).toBe(metadata);
+    },
+  );
+
   it.each(["default", "custom", "registered"] as const)(
     "preserves canonical tool correlation IDs while applying %s redaction to payloads",
     (policy) => {

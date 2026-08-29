@@ -226,28 +226,103 @@ suite.define(() => {
                   (button as HTMLElement).click();
                 });
               }, controlUiE2eWaitTimeoutMs);
+          } else if (interruption === "native-pointer") {
+            const track = await thread.boundingBox();
+            expect(track).not.toBeNull();
+            const pointer = await thread.evaluateHandle((scroller, waitTimeout) => {
+              const pendingAboveReader = () => {
+                const viewportTop = scroller.getBoundingClientRect().top;
+                const bubble = Array.from(
+                  scroller.querySelectorAll<HTMLElement>(
+                    '.chat-bubble[data-entry-id^="sizing-message-"]',
+                  ),
+                ).findLast(
+                  (candidate) =>
+                    Number(candidate.dataset.entryId!.slice("sizing-message-".length)) % 2 === 1 &&
+                    candidate.closest(".chat-virtual-row")!.getBoundingClientRect().bottom <=
+                      viewportTop,
+                );
+                return bubble
+                  ? {
+                      messageId: bubble.dataset.entryId!,
+                      bottom: bubble.closest(".chat-virtual-row")!.getBoundingClientRect().bottom,
+                      viewportTop,
+                    }
+                  : null;
+              };
+              let eligible = false;
+              let arrival: {
+                top: number;
+                max: number;
+                trusted: boolean;
+                scroller: boolean;
+                pending: ReturnType<typeof pendingAboveReader>;
+              } | null = null;
+              let resolveReady!: () => void;
+              let rejectReady!: (error: Error) => void;
+              const ready = new Promise<void>((resolve, reject) => {
+                resolveReady = resolve;
+                rejectReady = reject;
+              });
+              const onScroll = (event: Event) => {
+                if (!event.isTrusted || scroller.scrollTop <= 0 || !pendingAboveReader()) {
+                  return;
+                }
+                eligible = true;
+                clearTimeout(timer);
+                scroller.removeEventListener("scroll", onScroll);
+                resolveReady();
+              };
+              const onPointer = (event: PointerEvent) => {
+                if (!eligible) {
+                  return;
+                }
+                // Sample the real input before the scroller's takeover handler cancels motion.
+                arrival = {
+                  top: scroller.scrollTop,
+                  max: scroller.scrollHeight - scroller.clientHeight,
+                  trusted: event.isTrusted,
+                  scroller: event.target === scroller,
+                  pending: pendingAboveReader(),
+                };
+                document.removeEventListener("pointerdown", onPointer, true);
+              };
+              const dispose = () => {
+                clearTimeout(timer);
+                scroller.removeEventListener("scroll", onScroll);
+                document.removeEventListener("pointerdown", onPointer, true);
+                rejectReady(new Error("Native pointer observation ended before scrolling"));
+              };
+              const timer = setTimeout(dispose, waitTimeout);
+              scroller.addEventListener("scroll", onScroll);
+              document.addEventListener("pointerdown", onPointer, true);
+              return { ready, read: () => arrival, dispose };
+            }, controlUiE2eWaitTimeoutMs);
+            try {
+              // Arm before START; its post-click bookkeeping must not delay native input.
+              const interrupt = pointer
+                .evaluate((observation) => observation.ready)
+                .then(() => page.mouse.click(track!.x + track!.width - 3, track!.y + 20));
+              await Promise.all([interrupt, page.locator(".chat-scroll-to-bottom").click()]);
+              const arrival = await pointer.evaluate((observation) => observation.read());
+              expect(arrival).not.toBeNull();
+              expect(arrival).toMatchObject({ trusted: true, scroller: true });
+              expect(arrival!.top).toBeGreaterThan(0);
+              expect(arrival!.pending).not.toBeNull();
+              expect(arrival!.pending!.bottom).toBeLessThanOrEqual(arrival!.pending!.viewportTop);
+              during = arrival!;
+            } finally {
+              await pointer.evaluate((observation) => observation.dispose());
+              await pointer.dispose();
+            }
           } else {
             await page.locator(".chat-scroll-to-bottom").click();
-            await page.waitForFunction((pointerInterruption) => {
+            await page.waitForFunction(() => {
               const scroller = document.querySelector<HTMLElement>(
                 ".chat-pane-cache__pane--active .chat-thread",
               );
-              return (
-                scroller &&
-                scroller.scrollTop > 0 &&
-                (!pointerInterruption ||
-                  Array.from(
-                    scroller.querySelectorAll<HTMLElement>(
-                      '.chat-bubble[data-entry-id^="sizing-message-"]',
-                    ),
-                  ).some(
-                    (bubble) =>
-                      Number(bubble.dataset.entryId!.slice("sizing-message-".length)) % 2 === 1 &&
-                      bubble.closest(".chat-virtual-row")!.getBoundingClientRect().bottom <=
-                        scroller.getBoundingClientRect().top,
-                  ))
-              );
-            }, interruption === "native-pointer");
+              return scroller && scroller.scrollTop > 0;
+            });
             during = await thread.evaluate((element) => ({
               top: element.scrollTop,
               max: element.scrollHeight - element.clientHeight,
@@ -260,13 +335,6 @@ suite.define(() => {
             await thread.hover();
             await page.mouse.wheel(0, -100_000);
           } else {
-            if (interruption === "native-pointer") {
-              const track = await thread.boundingBox();
-              expect(track).not.toBeNull();
-              // A real pointer press in the scroll gutter can take over without
-              // a wheel event or a changed offset.
-              await page.mouse.click(track!.x + track!.width - 3, track!.y + 20);
-            }
             await page.locator(".chat-scroll-to-bottom").waitFor({ state: "visible" });
             // Chromium can commit its last canceled animation offset after the
             // pointer action returns. Capture the reader before releasing text.

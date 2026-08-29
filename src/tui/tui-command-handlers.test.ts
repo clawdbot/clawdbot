@@ -191,7 +191,11 @@ function createHarness(params?: {
   const runAuthFlow: RunAuthFlow | undefined =
     params?.runAuthFlow ??
     (params?.opts?.local
-      ? (vi.fn().mockResolvedValue({ exitCode: 0, signal: null }) as unknown as RunAuthFlow)
+      ? (vi.fn().mockResolvedValue({
+          exitCode: 0,
+          signal: null,
+          commandArgv: '["codex","login"]',
+        }) as unknown as RunAuthFlow)
       : undefined);
   const state = {
     agentDefaultId: params?.agentDefaultId ?? "main",
@@ -3130,7 +3134,11 @@ describe("tui command handlers", () => {
 
   it("runs /auth through the local auth flow and refreshes session info", async () => {
     const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
-    const runAuthFlow = vi.fn().mockResolvedValue({ exitCode: 0, signal: null });
+    const runAuthFlow = vi.fn().mockResolvedValue({
+      exitCode: 0,
+      signal: null,
+      commandArgv: '["codex","login"]',
+    });
     const { handleCommand, addSystem, setActivityStatus } = createHarness({
       opts: { local: true },
       refreshSessionInfo,
@@ -3148,6 +3156,25 @@ describe("tui command handlers", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
   });
 
+  it("shows the failed auth command and a safe terminal retry", async () => {
+    const runAuthFlow = vi.fn().mockResolvedValue({
+      exitCode: 1,
+      signal: null,
+      commandArgv: '["codex","login"]',
+    });
+    const { handleCommand, addSystem, setActivityStatus } = createHarness({
+      opts: { local: true },
+      runAuthFlow,
+    });
+
+    await handleCommand("/auth openai");
+
+    expect(addSystem).toHaveBeenCalledWith(
+      'auth flow failed (exit 1) — command argv: ["codex","login"]; retry provider login in a regular terminal to see its output',
+    );
+    expect(setActivityStatus).toHaveBeenLastCalledWith("error");
+  });
+
   it("rejects /auth in non-local mode", async () => {
     const { handleCommand, addSystem } = createHarness();
 
@@ -3157,7 +3184,11 @@ describe("tui command handlers", () => {
   });
 
   it("blocks /auth while an optimistic run is still pending", async () => {
-    const runAuthFlow = vi.fn().mockResolvedValue({ exitCode: 0, signal: null });
+    const runAuthFlow = vi.fn().mockResolvedValue({
+      exitCode: 0,
+      signal: null,
+      commandArgv: '["codex","login"]',
+    });
     const { handleCommand, addSystem } = createHarness({
       opts: { local: true },
       pendingSubmit: {

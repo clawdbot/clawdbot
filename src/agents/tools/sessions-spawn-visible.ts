@@ -108,6 +108,7 @@ export async function maybeSpawnVisibleSession(params: {
   sandbox: "inherit" | "require";
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
+  const promptedAt = Date.now();
   const worktree = params.raw.worktree === true;
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
@@ -440,10 +441,10 @@ export async function maybeSpawnVisibleSession(params: {
       };
     }
     recordSessionParticipantBestEffort({
-      actor: { type: "agent", id: requesterAgentId },
+      promptedAt,
+      identity: { type: "agent", id: requesterAgentId },
       agentId: targetAgentId,
       sessionKey: childSessionKey,
-      source: "agent",
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
     });
     const ownerLabel = normalizeOptionalString(resolveAgentIdentity(cfg, requesterAgentId)?.name);

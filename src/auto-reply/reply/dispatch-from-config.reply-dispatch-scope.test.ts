@@ -1,4 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import type { ReplyDispatchRun } from "../get-reply-options.types.js";
 import {
   createDispatcher,
   emptyConfig,
@@ -69,6 +72,15 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       expectedKind: "acp",
     },
   ])("scopes reply hooks to the prepared $name", async (scenario) => {
+    const onAgentRunStart = vi.fn(() => "reply-dispatch");
+    const dispatchRun: ReplyDispatchRun = {
+      completionSource: "reply-dispatch",
+      getResult: () => ({}),
+    };
+    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: { text: "source user turn" },
+      target: () => undefined,
+    });
     const sourceKey = scenario.sourceKey ?? scenario.targetKey;
     const sourceEntry = { sessionId: "source-session", updatedAt: Date.now() };
     const targetEntry = scenario.missing
@@ -107,6 +119,13 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       expect(eventValue).toMatchObject({ sessionKey: scenario.targetKey });
       expect(contextValue).toMatchObject({ dispatchKind: "acp" });
       const event = eventValue as { isTailDispatch?: boolean };
+      if (!scenario.tail || event.isTailDispatch) {
+        const context = contextValue as PluginHookReplyDispatchContext;
+        expect(context.onAgentRunStart?.("dispatched-run", undefined, dispatchRun)).toBe(
+          "reply-dispatch",
+        );
+        context.userTurnTranscriptRecorder?.replaceTextBeforePersistence?.("accepted user turn");
+      }
       return scenario.tail && !event.isTailDispatch
         ? undefined
         : {
@@ -115,11 +134,14 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
             counts: { tool: 0, block: 0, final: 1 },
           };
     });
-    const replyResolver = vi.fn<InternalGetReplyFromConfig>(async (ctx) => {
+    const replyResolver = vi.fn<InternalGetReplyFromConfig>(async (ctx, options) => {
       if (scenario.tail) {
         ctx.AcpDispatchTailAfterReset = true;
         return undefined;
       }
+      expect(options?.onAgentRunStart?.("dispatched-run", undefined, dispatchRun)).toBe(
+        "reply-dispatch",
+      );
       return { text: "local reply" };
     });
     const ctx = buildTestCtx({
@@ -139,6 +161,7 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       cfg: emptyConfig,
       dispatcher: createDispatcher(),
       replyResolver,
+      replyOptions: { onAgentRunStart, userTurnTranscriptRecorder },
     });
     expect(result.queuedFinal).toBe(true);
     expect(hookMocks.runner.hasHooks).toHaveBeenCalledWith("reply_dispatch", {
@@ -149,6 +172,14 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     );
     expect(replyResolver).toHaveBeenCalledTimes(
       scenario.expectedKind === "agent" || scenario.tail ? 1 : 0,
+    );
+    expect(onAgentRunStart).toHaveBeenCalledExactlyOnceWith(
+      "dispatched-run",
+      undefined,
+      dispatchRun,
+    );
+    expect(userTurnTranscriptRecorder.message?.content).toBe(
+      scenario.expectedKind === "acp" ? "accepted user turn" : "source user turn",
     );
   });
 });

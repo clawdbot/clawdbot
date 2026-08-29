@@ -6,11 +6,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type { ReplyPayload } from "../types.js";
 import { parseExportCommandOutputPath } from "./commands-export-common.js";
-import {
-  buildCurrentOpenClawCliArgv,
-  buildCurrentOpenClawCliCommand,
-  buildCurrentOpenClawCliExecEnv,
-} from "./commands-openclaw-cli.js";
+import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
@@ -200,7 +196,7 @@ async function requestTrajectoryExportApproval(
     });
     const result = await execTool.execute("chat-export-trajectory", {
       command: request.command,
-      env: buildCurrentOpenClawCliExecEnv(),
+      env: request.env,
       security: "allowlist",
       ask: "always",
       background: true,
@@ -267,6 +263,7 @@ type TrajectoryExportCliRequest = {
 type TrajectoryExportExecRequest = {
   argv: string[];
   command: string;
+  env: Record<string, string> | undefined;
   displayCommand: string;
   encodedRequest: string;
   request: TrajectoryExportCliRequest;
@@ -295,8 +292,7 @@ function buildTrajectoryExportExecRequest(
   }
   const args = ["sessions", "export-trajectory", "--request-json-base64", encodedRequest, "--json"];
   return {
-    argv: buildCurrentOpenClawCliArgv(args),
-    command: buildCurrentOpenClawCliCommand(args),
+    ...buildCurrentOpenClawCliExecRequest(args),
     displayCommand: ["openclaw", ...args].join(" "),
     encodedRequest,
     request,

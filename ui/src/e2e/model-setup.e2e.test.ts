@@ -146,7 +146,7 @@ suite.define(() => {
     );
   });
 
-  it("completes device-code sign-in and re-detects the configured model", async () => {
+  it("completes device-code sign-in from its verified activation result", async () => {
     await suite.withPage(
       {
         ...(artifactDir
@@ -215,7 +215,11 @@ suite.define(() => {
                     deviceCode: { code: "ABCD-1234", expiresInMinutes: 14 },
                   },
                 },
-                { done: true, status: "done" },
+                {
+                  done: true,
+                  status: "done",
+                  modelActivation: { modelRef: "provider/verified-model" },
+                },
               ],
             },
           },
@@ -269,12 +273,6 @@ suite.define(() => {
         await page.getByRole("button", { name: "Continue" }).waitFor();
         await page.getByRole("button", { name: "Cancel" }).waitFor();
 
-        await gateway.setMethodResponse("openclaw.setup.detect", {
-          ...initialDetection,
-          authOptions: [],
-          configuredModel: "provider/verified-model",
-          setupComplete: true,
-        });
         const detectCountBeforeCompletion = (await gateway.getRequests("openclaw.setup.detect"))
           .length;
         await page.getByRole("button", { name: "Continue" }).click();
@@ -285,10 +283,10 @@ suite.define(() => {
           sessionId: expect.any(String),
           answer: { stepId: "device-code" },
         });
-        await expect
-          .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
-          .toBe(detectCountBeforeCompletion + 1);
         await page.getByRole("heading", { name: "Connection verified" }).waitFor();
+        expect(await gateway.getRequests("openclaw.setup.detect")).toHaveLength(
+          detectCountBeforeCompletion,
+        );
         await expect
           .poll(async () => page.locator(".model-setup-success").textContent())
           .toContain("provider/verified-model");

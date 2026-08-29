@@ -153,7 +153,10 @@ describe("agent act hook current URL guard", () => {
       });
 
       expect(response.statusCode).toBe(400);
-      expect(response.body).toEqual({ error: expect.stringMatching(/blocked|private/i) });
+      expect(response.body).toEqual({
+        error: "browser navigation blocked by policy",
+        reason: "navigation_blocked",
+      });
       expect(profileCtx.ensureTabAvailable).toHaveBeenCalledOnce();
       for (const sideEffect of sideEffects) {
         expect(sideEffect).not.toHaveBeenCalled();

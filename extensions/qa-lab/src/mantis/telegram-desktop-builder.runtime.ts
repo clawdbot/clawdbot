@@ -363,7 +363,13 @@ qa_status=0
 {
   set -e
   echo "remote pwd: $(pwd)"
-  sudo corepack enable || sudo npm install -g pnpm@11
+  pnpm_spec="$(node -p 'require("./package.json").packageManager')"
+  pnpm_version="\${pnpm_spec#pnpm@}"
+  pnpm_version="\${pnpm_version%%+*}"
+  if ! (sudo corepack enable && corepack "$pnpm_spec" --version); then
+    sudo npm install -g "pnpm@$pnpm_version" "--allow-scripts=pnpm@$pnpm_version"
+  fi
+  test "$(pnpm --version)" = "$pnpm_version"
   if [ "$hydrate_mode" = "source" ]; then
     if ! command -v make >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
       sudo apt-get update -y >>"$out/apt.log" 2>&1 || true

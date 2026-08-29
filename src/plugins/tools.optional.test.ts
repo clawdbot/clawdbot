@@ -24,7 +24,7 @@ const resolveCompatibleRuntimePluginRegistryMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 const loadContextMocks = vi.hoisted(() => ({
   actualResolve: undefined as
-    | typeof import("./runtime/load-context.js").resolvePluginRuntimeLoadContext
+    | typeof import("./runtime/load-context.resolve.js").resolvePluginRuntimeLoadContext
     | undefined,
   resolve: vi.fn(),
 }));
@@ -43,8 +43,8 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (params: unknown) => applyPluginAutoEnableMock(params),
 }));
 
-vi.mock("./runtime/load-context.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime/load-context.js")>();
+vi.mock("./runtime/load-context.resolve.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime/load-context.resolve.js")>();
   loadContextMocks.actualResolve = actual.resolvePluginRuntimeLoadContext;
   return {
     ...actual,

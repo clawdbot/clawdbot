@@ -235,8 +235,10 @@ describe("dispatchAgentHook trust handling", () => {
       },
     });
 
-    dispatchWakeHook({ text: "Mapped wake", mode: "now" }, "molty");
+    enqueueSystemEventMock.mockReturnValue(false);
+    const result = dispatchWakeHook({ text: "Mapped wake", mode: "now" }, "molty");
 
+    expect(result).toEqual({ eventOutcome: "coalesced" });
     expect(resolveAgentMainSessionKeyMock).toHaveBeenCalledWith({
       cfg: expect.any(Object),
       agentId: "molty",

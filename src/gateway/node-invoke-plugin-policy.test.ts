@@ -103,7 +103,34 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(invoke.mock.calls[0]?.[0]?.isDispatchAuthorized?.()).toBe(false);
   });
 
-  it("preserves session identity through approved dangerous streaming transport", async () => {
+  it("recovers a preexecution node-not-ready rejection without rerunning plugin policy", async () => {
+    const policy = vi.fn((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode());
+    setDangerousDemoCommandRegistry([createDemoPolicy(policy)]);
+    const { context, invoke } = createContext();
+    const execute = vi.fn(() => ({ completed: true }));
+    invoke
+      .mockImplementationOnce(async (params) => {
+        params?.onDispatchReady?.("not-ready-attempt");
+        return {
+          ok: false,
+          error: { code: "NODE_NOT_READY", message: "Node lifecycle transition in progress" },
+        };
+      })
+      .mockImplementationOnce(async (params) => {
+        params?.onDispatchReady?.("ready-attempt");
+        return { ok: true, payload: execute() };
+      });
+
+    await expect(invokeDemoPolicy(context)).resolves.toMatchObject({
+      ok: true,
+      payload: { completed: true },
+    });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(policy).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves one approval and session identity through streaming readiness recovery", async () => {
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
     const nodeSession = createNodeSession();
     nodeSession.pairingGeneration = "paired-generation-1";
@@ -134,6 +161,13 @@ describe("applyPluginNodeInvokePolicy", () => {
       isRuntimeCurrent: () => runtimeCurrent,
     };
     invoke.mockImplementationOnce(async (params) => {
+      params?.onDispatchReady?.("rejected-duplex-invoke");
+      return {
+        ok: false,
+        error: { code: "NODE_NOT_READY", message: "Node lifecycle transition in progress" },
+      };
+    });
+    invoke.mockImplementationOnce(async (params) => {
       params?.onDispatchReady?.("approved-duplex-invoke");
       params?.onProgress?.("approved-duplex-progress");
       return { ok: true, payload: { approved: true }, payloadJSON: null, error: null };
@@ -160,8 +194,14 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(manager.resolve(approval.id, "allow-once")).toBe(true);
 
     await expect(resultPromise).resolves.toMatchObject({ ok: true });
-    expect(stream.onDispatchReady).toHaveBeenCalledWith("approved-duplex-invoke");
-    expect(stream.onProgress).toHaveBeenCalledWith("approved-duplex-progress");
+    expect(stream.onDispatchReady.mock.calls).toEqual([
+      ["rejected-duplex-invoke"],
+      ["approved-duplex-invoke"],
+    ]);
+    expect(stream.onProgress.mock.calls).toEqual([["approved-duplex-progress"]]);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(manager.listPendingRecords()).toHaveLength(0);
+    expect(manager.getSnapshot(approval.id)?.consumedDecision).toBe("allow-once");
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedConnId: "conn-1",

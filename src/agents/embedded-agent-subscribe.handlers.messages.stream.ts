@@ -417,6 +417,7 @@ export function buildAssistantStreamData(params: {
   replace?: boolean;
   mediaUrls?: string[];
   mediaUrl?: string;
+  managedMediaUrls?: string[];
   phase?: AssistantPhase;
   itemId?: string;
 }): {
@@ -424,6 +425,7 @@ export function buildAssistantStreamData(params: {
   delta: string;
   replace?: true;
   mediaUrls?: string[];
+  managedMediaUrls?: string[];
   phase?: AssistantPhase;
   itemId?: string;
 } {
@@ -433,6 +435,7 @@ export function buildAssistantStreamData(params: {
     delta: params.delta ?? "",
     replace: params.replace ? true : undefined,
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+    managedMediaUrls: params.managedMediaUrls?.length ? params.managedMediaUrls : undefined,
     phase: params.phase,
     itemId: params.itemId,
   };

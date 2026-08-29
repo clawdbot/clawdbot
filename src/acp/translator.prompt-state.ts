@@ -1,4 +1,5 @@
 import type { PromptResponse, ToolCallLocation, ToolKind } from "@agentclientprotocol/sdk";
+import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 
 export type AcpDisconnectContext = {
   generation: number;
@@ -14,9 +15,7 @@ export type AcpPendingPrompt = {
   disconnectContext?: AcpDisconnectContext;
   resolve: (response: PromptResponse) => void;
   reject: (err: Error) => void;
-  sentTextLength?: number;
   sentText?: string;
-  sentThoughtLength?: number;
   sentThought?: string;
   toolCalls?: Map<string, AcpPendingToolCall>;
 };
@@ -39,4 +38,5 @@ type AcpPendingToolCall = {
 export type AcpAgentWaitResult = {
   status?: "ok" | "error" | "timeout";
   error?: string;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };

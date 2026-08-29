@@ -170,9 +170,16 @@ describe("buildSystemPromptParams", () => {
 
   it("carries session identity into runtime info", () => {
     const { runtimeInfo } = buildSystemPromptParams({
-      agentId: "main",
+      config: {
+        agents: {
+          entries: {
+            "Team Ops": { identity: { name: "\nOps\u200b Navigator\r" } },
+          },
+        },
+      },
+      agentId: "team-ops",
       runtime: {
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:team-ops:main",
         sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
         host: "host",
         os: "os",
@@ -182,8 +189,37 @@ describe("buildSystemPromptParams", () => {
       },
     });
 
-    expect(runtimeInfo.sessionKey).toBe("agent:main:main");
+    expect(runtimeInfo.agentName).toBe("Ops Navigator");
+    expect(runtimeInfo.sessionKey).toBe("agent:team-ops:main");
     expect(runtimeInfo.sessionId).toBe("23ae7fce-3c27-4a51-b58e-d800d8ca091f");
+  });
+
+  it.each([
+    { name: "control-only names", identityName: "\n\u200b\r", expected: undefined },
+    {
+      name: "oversized names",
+      identityName: `${"x".repeat(128)}tail`,
+      expected: "x".repeat(128),
+    },
+    { name: "the technical agent id", identityName: "main", expected: undefined },
+  ])("omits or bounds $name before model context", ({ identityName, expected }) => {
+    const { runtimeInfo } = buildSystemPromptParams({
+      config: {
+        agents: {
+          list: [{ id: "main", identity: { name: identityName } }],
+        },
+      },
+      agentId: "main",
+      runtime: {
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(runtimeInfo.agentName).toBe(expected);
   });
 
   it.each([

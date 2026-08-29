@@ -7,14 +7,9 @@ const CONFIRMATION_TTL_MS = 2 * 60_000;
 
 type PendingVoiceConfirmation = {
   confirmationId: string;
-  agentId: string;
-  voiceSessionId: string;
   runId?: string;
   fingerprint: string;
-  toolName: string;
   createdAt: number;
-  /** Monotonic tiebreaker: same-millisecond challenges must still have one newest. */
-  seq: number;
   expiresAt: number;
 };
 
@@ -31,13 +26,106 @@ export type ClientVoiceConfirmationGrant = {
   expiresAt: number;
 };
 
-const pendingConfirmations = new Map<string, PendingVoiceConfirmation>();
-let confirmationSeq = 0;
-const approvedFingerprints = new Map<string, Map<string, Map<string, number>>>();
-const recentUserUtterances = new Map<string, RecentVoiceUserUtterance>();
+type ConfirmationScopeState = {
+  pending?: PendingVoiceConfirmation;
+  recentUtterance?: RecentVoiceUserUtterance;
+  approvedByRun: Map<string, Map<string, number>>;
+  pendingExpiryTimer?: ReturnType<typeof setTimeout>;
+};
+
+const confirmationScopes = new Map<string, ConfirmationScopeState>();
 
 function confirmationScopeKey(agentId: string, voiceSessionId: string): string {
   return `${agentId}\0${voiceSessionId}`;
+}
+
+function clearPendingExpiryTimer(state: ConfirmationScopeState): void {
+  if (!state.pendingExpiryTimer) {
+    return;
+  }
+  clearTimeout(state.pendingExpiryTimer);
+  delete state.pendingExpiryTimer;
+}
+
+function clearPendingConfirmation(state: ConfirmationScopeState): void {
+  clearPendingExpiryTimer(state);
+  delete state.pending;
+  delete state.recentUtterance;
+}
+
+function cleanupConfirmationScope(scopeKey: string, state: ConfirmationScopeState): void {
+  if (state.pending || state.recentUtterance || state.approvedByRun.size > 0) {
+    return;
+  }
+  if (confirmationScopes.get(scopeKey) === state) {
+    confirmationScopes.delete(scopeKey);
+  }
+}
+
+function pruneExpiredPendingConfirmation(
+  scopeKey: string,
+  state: ConfirmationScopeState,
+  now: number,
+): void {
+  if (state.pending && state.pending.expiresAt < now) {
+    clearPendingConfirmation(state);
+  }
+  cleanupConfirmationScope(scopeKey, state);
+}
+
+function schedulePendingConfirmationExpiry(
+  scopeKey: string,
+  state: ConfirmationScopeState,
+  now: number,
+): void {
+  const pending = state.pending;
+  if (!pending) {
+    clearPendingExpiryTimer(state);
+    cleanupConfirmationScope(scopeKey, state);
+    return;
+  }
+  clearPendingExpiryTimer(state);
+  // The scope owns one current challenge and one timer. Supersession cancels
+  // both together, while expiry remains inclusive at expiresAt.
+  state.pendingExpiryTimer = setTimeout(
+    () => {
+      delete state.pendingExpiryTimer;
+      if (confirmationScopes.get(scopeKey) !== state || state.pending !== pending) {
+        return;
+      }
+      const current = Date.now();
+      if (pending.expiresAt < current) {
+        clearPendingConfirmation(state);
+        cleanupConfirmationScope(scopeKey, state);
+      } else {
+        schedulePendingConfirmationExpiry(scopeKey, state, current);
+      }
+    },
+    Math.max(1, pending.expiresAt - now + 1),
+  );
+  state.pendingExpiryTimer.unref?.();
+}
+
+function getPrunedConfirmationScope(
+  scopeKey: string,
+  now: number,
+): ConfirmationScopeState | undefined {
+  const state = confirmationScopes.get(scopeKey);
+  if (!state) {
+    return undefined;
+  }
+  pruneExpiredPendingConfirmation(scopeKey, state, now);
+  return confirmationScopes.get(scopeKey);
+}
+
+function getOrCreateConfirmationScope(scopeKey: string): ConfirmationScopeState {
+  const existing = confirmationScopes.get(scopeKey);
+  if (existing) {
+    return existing;
+  }
+  const state: ConfirmationScopeState = { approvedByRun: new Map() };
+  confirmationScopes.set(scopeKey, state);
+  return state;
 }
 
 function stableToolFingerprint(toolName: string, params: unknown): string {
@@ -92,7 +180,7 @@ function requiresHighImpactVoiceConfirmation(toolName: string, params: unknown):
 }
 
 function resolveApprovedFingerprint(
-  voiceSessionId: string,
+  scopeKey: string,
   runId: string | undefined,
   fingerprint: string,
   now: number,
@@ -101,15 +189,27 @@ function resolveApprovedFingerprint(
   if (!runId) {
     return false;
   }
-  const approvedByRun = approvedFingerprints.get(voiceSessionId);
-  const approved = approvedByRun?.get(runId);
+  const state = confirmationScopes.get(scopeKey);
+  const approved = state?.approvedByRun.get(runId);
   const expiresAt = approved?.get(fingerprint);
   if (!expiresAt || expiresAt < now) {
     approved?.delete(fingerprint);
+    if (approved?.size === 0) {
+      state?.approvedByRun.delete(runId);
+    }
+    if (state) {
+      cleanupConfirmationScope(scopeKey, state);
+    }
     return false;
   }
   if (consume) {
     approved?.delete(fingerprint);
+    if (approved?.size === 0) {
+      state?.approvedByRun.delete(runId);
+    }
+    if (state) {
+      cleanupConfirmationScope(scopeKey, state);
+    }
   }
   return true;
 }
@@ -121,23 +221,22 @@ export function noteClientVoiceConfirmationUtterance(params: {
   text: string;
   timestamp: number;
 }): void {
-  recentUserUtterances.set(confirmationScopeKey(params.agentId, params.voiceSessionId), {
-    text: params.text,
-    timestamp: params.timestamp,
-  });
+  const scopeKey = confirmationScopeKey(params.agentId, params.voiceSessionId);
+  const state = getPrunedConfirmationScope(scopeKey, params.timestamp);
+  if (!state?.pending) {
+    return;
+  }
   // A spoken refusal kills the outstanding challenge: a later unrelated "yes"
   // must not resurrect an action the user already declined.
-  if (REFUSAL_PATTERN.test(normalizeUtterance(params.text))) {
-    for (const [confirmationId, confirmation] of pendingConfirmations) {
-      if (
-        confirmation.agentId === params.agentId &&
-        confirmation.voiceSessionId === params.voiceSessionId &&
-        confirmation.createdAt < params.timestamp
-      ) {
-        pendingConfirmations.delete(confirmationId);
-      }
-    }
+  if (
+    REFUSAL_PATTERN.test(normalizeUtterance(params.text)) &&
+    state.pending.createdAt < params.timestamp
+  ) {
+    clearPendingConfirmation(state);
+    cleanupConfirmationScope(scopeKey, state);
+    return;
   }
+  state.recentUtterance = { text: params.text, timestamp: params.timestamp };
 }
 
 type ClientVoiceToolConfirmationPolicyParams = {
@@ -177,28 +276,26 @@ function resolveClientVoiceToolConfirmationPolicy(
   if (resolveApprovedFingerprint(scopeKey, params.runId, fingerprint, now, consume)) {
     return { allowed: true };
   }
-  const existing = [...pendingConfirmations.values()].find(
-    (entry) =>
-      entry.voiceSessionId === params.voiceSessionId &&
-      entry.agentId === params.agentId &&
-      entry.runId === params.runId &&
-      entry.fingerprint === fingerprint &&
-      entry.expiresAt >= now,
-  );
+  const state = getPrunedConfirmationScope(scopeKey, now) ?? getOrCreateConfirmationScope(scopeKey);
+  const pending = state.pending;
+  const existing =
+    pending && pending.runId === params.runId && pending.fingerprint === fingerprint
+      ? pending
+      : undefined;
+  if (!existing) {
+    clearPendingConfirmation(state);
+  }
   const confirmation =
     existing ??
     ({
       confirmationId: randomUUID(),
-      agentId: params.agentId,
-      voiceSessionId: params.voiceSessionId,
       ...(params.runId ? { runId: params.runId } : {}),
       fingerprint,
-      toolName: params.toolName,
       createdAt: now,
-      seq: ++confirmationSeq,
       expiresAt: now + CONFIRMATION_TTL_MS,
     } satisfies PendingVoiceConfirmation);
-  pendingConfirmations.set(confirmation.confirmationId, confirmation);
+  state.pending = confirmation;
+  schedulePendingConfirmationExpiry(scopeKey, state, now);
   return {
     allowed: false,
     reason:
@@ -255,29 +352,19 @@ export function authorizeClientVoiceConfirmation(params: {
   confirmationId: string;
   now?: number;
 }): ClientVoiceConfirmationGrant {
-  const confirmation = pendingConfirmations.get(params.confirmationId);
   const now = params.now ?? Date.now();
-  if (
-    !confirmation ||
-    confirmation.agentId !== params.agentId ||
-    confirmation.voiceSessionId !== params.voiceSessionId ||
-    confirmation.expiresAt < now
-  ) {
+  const scopeKey = confirmationScopeKey(params.agentId, params.voiceSessionId);
+  const state = getPrunedConfirmationScope(scopeKey, now);
+  const confirmation = state?.pending;
+  if (!confirmation) {
     throw new Error("voice confirmation is missing, expired, or belongs to another action");
   }
   // A bare "yes" can only answer the question the model asked last; authorizing an
   // older challenge would let the model swap in a different pending action.
-  for (const entry of pendingConfirmations.values()) {
-    if (
-      entry.agentId === params.agentId &&
-      entry.voiceSessionId === params.voiceSessionId &&
-      entry.seq > confirmation.seq
-    ) {
-      throw new Error("a newer confirmation request supersedes this one; ask again");
-    }
+  if (confirmation.confirmationId !== params.confirmationId) {
+    throw new Error("a newer confirmation request supersedes this one; ask again");
   }
-  const scopeKey = confirmationScopeKey(params.agentId, params.voiceSessionId);
-  const affirmation = recentUserUtterances.get(scopeKey);
+  const affirmation = state.recentUtterance;
   if (
     !affirmation ||
     affirmation.timestamp <= confirmation.createdAt ||
@@ -297,20 +384,37 @@ export function authorizeClientVoiceConfirmation(params: {
   };
 }
 
-/** Bind a validated spoken grant to the one follow-up run and consume the challenge. */
+/**
+ * Bind a validated spoken grant to the one follow-up run and consume the
+ * challenge. Invalidated detached grants return false without disrupting the
+ * admitted run; final tool policy then blocks because no approval was created.
+ */
 export function bindAuthorizedClientVoiceConfirmation(params: {
   grant: ClientVoiceConfirmationGrant;
   runId: string;
-}): void {
+  now?: number;
+}): boolean {
+  const now = params.now ?? Date.now();
   const scopeKey = confirmationScopeKey(params.grant.agentId, params.grant.voiceSessionId);
-  const approvedByRun = approvedFingerprints.get(scopeKey) ?? new Map();
-  const approved = approvedByRun.get(params.runId) ?? new Map<string, number>();
-  approved.set(params.grant.fingerprint, params.grant.expiresAt);
-  approvedByRun.set(params.runId, approved);
-  approvedFingerprints.set(scopeKey, approvedByRun);
+  const state = confirmationScopes.get(scopeKey);
+  const pending = state?.pending;
+  if (
+    !state ||
+    !pending ||
+    pending.expiresAt < now ||
+    pending.confirmationId !== params.grant.confirmationId ||
+    pending.fingerprint !== params.grant.fingerprint ||
+    pending.expiresAt !== params.grant.expiresAt
+  ) {
+    return false;
+  }
+  const approved = state.approvedByRun.get(params.runId) ?? new Map<string, number>();
+  approved.set(pending.fingerprint, pending.expiresAt);
+  state.approvedByRun.set(params.runId, approved);
   // Consume now that the run exists: one spoken affirmation authorizes one action.
-  pendingConfirmations.delete(params.grant.confirmationId);
-  recentUserUtterances.delete(scopeKey);
+  clearPendingConfirmation(state);
+  cleanupConfirmationScope(scopeKey, state);
+  return true;
 }
 
 /**
@@ -324,24 +428,18 @@ export function deactivateClientVoiceConfirmationSession(
   liveRunIds: readonly string[] = [],
 ): void {
   const scopeKey = confirmationScopeKey(agentId, voiceSessionId);
-  recentUserUtterances.delete(scopeKey);
-  const approvedByRun = approvedFingerprints.get(scopeKey);
-  if (approvedByRun) {
-    const live = new Set(liveRunIds);
-    for (const runId of approvedByRun.keys()) {
-      if (!live.has(runId)) {
-        approvedByRun.delete(runId);
-      }
-    }
-    if (approvedByRun.size === 0) {
-      approvedFingerprints.delete(scopeKey);
+  const state = confirmationScopes.get(scopeKey);
+  if (!state) {
+    return;
+  }
+  clearPendingConfirmation(state);
+  const live = new Set(liveRunIds);
+  for (const runId of state.approvedByRun.keys()) {
+    if (!live.has(runId)) {
+      state.approvedByRun.delete(runId);
     }
   }
-  for (const [confirmationId, confirmation] of pendingConfirmations) {
-    if (confirmation.agentId === agentId && confirmation.voiceSessionId === voiceSessionId) {
-      pendingConfirmations.delete(confirmationId);
-    }
-  }
+  cleanupConfirmationScope(scopeKey, state);
 }
 
 /** Drop a completed run's surviving grants once its lifecycle ends. */
@@ -351,25 +449,48 @@ export function releaseClientVoiceConfirmationRun(
   runId: string,
 ): void {
   const scopeKey = confirmationScopeKey(agentId, voiceSessionId);
-  const approvedByRun = approvedFingerprints.get(scopeKey);
-  if (!approvedByRun) {
+  const state = confirmationScopes.get(scopeKey);
+  if (!state) {
     return;
   }
-  approvedByRun.delete(runId);
-  if (approvedByRun.size === 0) {
-    approvedFingerprints.delete(scopeKey);
-  }
+  state.approvedByRun.delete(runId);
+  cleanupConfirmationScope(scopeKey, state);
 }
 
 /** Test-only reset for process-global state. */
 function resetClientVoiceConfirmationStateForTest(): void {
-  pendingConfirmations.clear();
-  approvedFingerprints.clear();
-  recentUserUtterances.clear();
+  for (const state of confirmationScopes.values()) {
+    clearPendingExpiryTimer(state);
+  }
+  confirmationScopes.clear();
+}
+
+function snapshotClientVoiceConfirmationStateForTest() {
+  const snapshot = {
+    scopeOwners: confirmationScopes.size,
+    pendingChallenges: 0,
+    recentUtterances: 0,
+    approvedRuns: 0,
+    approvedGrants: 0,
+    expiryOwners: 0,
+  };
+  for (const state of confirmationScopes.values()) {
+    snapshot.pendingChallenges += state.pending ? 1 : 0;
+    snapshot.recentUtterances += state.recentUtterance ? 1 : 0;
+    snapshot.approvedRuns += state.approvedByRun.size;
+    for (const approved of state.approvedByRun.values()) {
+      snapshot.approvedGrants += approved.size;
+    }
+    snapshot.expiryOwners += state.pendingExpiryTimer ? 1 : 0;
+  }
+  return snapshot;
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.clientVoiceConfirmationTestApi")
-  ] = { resetClientVoiceConfirmationStateForTest };
+  ] = {
+    resetClientVoiceConfirmationStateForTest,
+    snapshotClientVoiceConfirmationStateForTest,
+  };
 }

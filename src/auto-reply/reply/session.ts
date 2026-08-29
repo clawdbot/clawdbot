@@ -36,11 +36,7 @@ import {
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
-import {
-  buildSessionCreationStamp,
-  resolveProfileParticipantIdFromSessionCreation,
-  type SessionCreatedActor,
-} from "../../config/sessions/session-entry-provenance.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import type { SessionResetBoundaryRequest } from "../../config/sessions/session-reset-boundary-event.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -88,7 +84,8 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
+import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import {
   recordSessionCreated,
   classifySessionStateActor,
@@ -438,6 +435,7 @@ function resolveReplySessionRolloverState(
 }
 
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
+  prepareChannelParticipantObservation(params.ctx);
   return await runWithSessionInitConflictRetry(
     async () => await initSessionStateAttempt(params, false),
     { signal: params.signal },
@@ -1088,33 +1086,12 @@ async function initSessionStateAttemptLocked(
     !previousSessionEntry;
   const isFirstSessionTurn = isNewSession || createdByAdmission;
   if (!isSystemEvent && !isInterSession) {
-    const creation = ctx.SessionCreation;
-    const creationActor = creation?.actor;
-    const profileParticipantId = resolveProfileParticipantIdFromSessionCreation(creation);
-    const senderId = normalizeOptionalString(ctx.SenderId);
-    const participant:
-      | { actor: SessionCreatedActor & { id: string }; source: "profile" | "channel" | "agent" }
-      | undefined = profileParticipantId
-      ? { actor: { type: "human", id: profileParticipantId }, source: "profile" }
-      : creationActor?.type === "agent" && creationActor.id
-        ? {
-            actor: { ...creationActor, id: creationActor.id },
-            source: "agent",
-          }
-        : senderId
-          ? { actor: { type: "human", id: senderId }, source: "channel" }
-          : undefined;
-    if (participant) {
-      recordSessionParticipantBestEffort({
-        actor: participant.actor,
-        agentId,
-        sessionKey,
-        source: participant.source,
-        storePath,
-        promptedAt: now,
-        onError: (error) => log.warn("failed to record session participant", { error }),
-      });
-    }
+    recordAcceptedSessionParticipantInput(ctx, {
+      agentId,
+      sessionKey,
+      storePath,
+      onError: (error) => log.warn("failed to record session participant", { error }),
+    });
   }
   clearBootstrapSnapshotOnSessionBoundary({
     boundaryAppended: resetBoundaryAppended,

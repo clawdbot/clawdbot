@@ -72,7 +72,7 @@ import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
-  resolveMemoryFlushThreshold,
+  resolveCompactionThreshold,
   resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
@@ -813,9 +813,6 @@ export async function runSessionCompactionIfNeeded(params: {
       contextTokenBudget: contextWindowTokens,
       reserveTokens: 20_000,
     });
-  const softThresholdTokens =
-    memoryFlushPlan?.softThresholdTokens ??
-    Math.min(4_000, Math.floor((contextWindowTokens - reserveTokensFloor) / 2));
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
@@ -825,10 +822,9 @@ export async function runSessionCompactionIfNeeded(params: {
     provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model ?? params.defaultModel,
   });
-  const threshold = resolveMemoryFlushThreshold({
+  const threshold = resolveCompactionThreshold({
     contextWindowTokens,
     reserveTokensFloor,
-    softThresholdTokens,
     minimumThresholdTokens: responsesServerCompactionThreshold,
   });
   const freshNeedsOutputRead =
@@ -924,10 +920,7 @@ export async function runSessionCompactionIfNeeded(params: {
   const shouldCompactByTokens = shouldRunPreflightCompaction({
     entry,
     tokenCount: tokenCountForCompaction,
-    contextWindowTokens,
-    reserveTokensFloor,
-    softThresholdTokens,
-    minimumThresholdTokens: responsesServerCompactionThreshold,
+    threshold,
   });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
@@ -1220,11 +1213,14 @@ export async function runMemoryFlushIfNeeded(params: {
       : undefined;
   const hasFreshPersistedPromptTokens = resolveFreshSessionTotalTokens(entry) !== undefined;
 
-  const flushThreshold = resolveMemoryFlushThreshold({
-    contextWindowTokens,
-    reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
-    softThresholdTokens: memoryFlushPlan.softThresholdTokens,
-  });
+  // The soft margin belongs only to early flushing, leaving room before blocking compaction.
+  const flushThreshold = Math.max(
+    0,
+    resolveCompactionThreshold({
+      contextWindowTokens,
+      reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
+    }) - Math.max(0, Math.floor(memoryFlushPlan.softThresholdTokens)),
+  );
 
   // When totals are stale/unknown, derive prompt + last output from transcript so memory
   // flush can still be evaluated against projected next-input size.
@@ -1357,9 +1353,7 @@ export async function runMemoryFlushIfNeeded(params: {
     shouldRunMemoryFlush({
       entry,
       tokenCount: tokenCountForFlush,
-      contextWindowTokens,
-      reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
-      softThresholdTokens: memoryFlushPlan.softThresholdTokens,
+      threshold: flushThreshold,
     }) ||
     (shouldForceFlushByTranscriptSize &&
       entry != null &&

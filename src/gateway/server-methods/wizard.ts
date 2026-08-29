@@ -22,7 +22,7 @@ import {
 import { formatForLog } from "../ws-log.js";
 import {
   createAdmittedWizardSession,
-  SETUP_ADMISSION_BUSY_MESSAGE,
+  respondSetupAdmissionBusy,
   whenAdmittedWizardSessionSettled,
 } from "./setup-admission.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -138,11 +138,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
           );
     const session = await createAdmittedWizardSession(createSession, flow === "setup");
     if (!session) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, SETUP_ADMISSION_BUSY_MESSAGE, { retryable: true }),
-      );
+      respondSetupAdmissionBusy(respond);
       return;
     }
     context.wizardSessions.set(sessionId, session);

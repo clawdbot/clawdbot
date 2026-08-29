@@ -248,9 +248,13 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     name: CODE_MODE_WAIT_TOOL_NAME,
     label: "wait",
     hideFromChannelProgress: true,
-    description: "Resume a suspended OpenClaw code mode run returned by exec.",
+    description:
+      'Resume only when the outer exec result has status "waiting", using its top-level runId. A completed exec may return a still-running tool operation inside value; manage that operation through its enabled tool in a new exec. Never pass a nested sessionId or process ID to wait.',
     parameters: Type.Object({
-      runId: Type.String({ description: "Code mode run id returned by exec." }),
+      runId: Type.String({
+        description:
+          'Top-level runId from an exec result with status "waiting", never a nested tool sessionId.',
+      }),
     }),
     execute: async (
       toolCallId: string,

@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/ip-location.ts";
@@ -35,8 +35,10 @@ type SessionActivityViewProps = {
   expandedAutomationDays: ReadonlySet<string>;
   filters: SessionActivityFilters;
   presenceViewers: readonly PresenceViewer[];
-  retainedIdentity: PresenceViewer | null;
-  rows: readonly GatewaySessionRow[];
+  result?: SessionsListResult;
+  loading: boolean;
+  error?: string;
+  onRetry: () => void;
   onAutomationDayToggle: (dayKey: string) => void;
   onFiltersChange: (filters: SessionActivityFilters) => void;
 };
@@ -48,7 +50,7 @@ const TIME_LABELS: Record<ActivityTimeFilter, string> = {
   all: "activityFeed.timeAll",
 };
 
-type ActivityPerson = PresenceViewer & { count: number; lastActiveAt: number };
+type ActivityPerson = PresenceViewer & { count: number };
 
 function isUnresolvedPerson(person: PresenceViewer): boolean {
   return !person.name && !person.email && presenceViewerLabel(person) === person.id;
@@ -70,6 +72,7 @@ function renderPersonAvatar(person: PresenceViewer, showPresence = false) {
   }
   return html`<span class="activity-feed__person-avatar">
     <openclaw-viewer-avatar
+      .identity=${{ type: "profile", id: person.id }}
       .user=${person}
       .markAsViewer=${false}
       variant="footer"
@@ -99,7 +102,6 @@ function setPeopleExpanded(event: Event, expanded: boolean) {
 }
 
 function renderPersonRow(person: ActivityPerson, props: SessionActivityViewProps) {
-  const online = (person.entries?.length ?? 0) > 0;
   return html`<button
     type="button"
     class="session-menu__item activity-feed__people-row"
@@ -110,13 +112,6 @@ function renderPersonRow(person: ActivityPerson, props: SessionActivityViewProps
     ${renderPersonAvatar(person, true)}
     <span class="activity-feed__people-copy">
       <span class="activity-feed__people-name">${compactPersonLabel(person)}</span>
-      ${online
-        ? nothing
-        : html`<span class="activity-feed__last-active">
-            ${t("activityFeed.lastActive", {
-              time: formatRelativeTimestamp(person.lastActiveAt, { fallback: "" }),
-            })}
-          </span>`}
     </span>
     <span class="activity-feed__people-count">${person.count}</span>
   </button>`;
@@ -278,6 +273,7 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
             ></span>`
           : nothing}
         <openclaw-viewer-avatar
+          .identity=${row.owner?.actor.identity ?? row.createdActor?.identity}
           .user=${owner}
           .markAsViewer=${false}
           variant="footer"
@@ -371,6 +367,7 @@ function renderIdentityHeader(
     <section class="activity-feed__identity" data-activity-identity=${identity.id}>
       <div class="activity-feed__identity-main">
         <openclaw-viewer-avatar
+          .identity=${{ type: "profile", id: identity.id }}
           .user=${identity}
           .markAsViewer=${false}
           variant="profile"
@@ -419,14 +416,16 @@ function renderIdentityHeader(
 }
 
 export function renderSessionActivityView(props: SessionActivityViewProps) {
-  const projection = projectSessionActivity(props.rows, props.filters);
-  const identity = props.retainedIdentity;
+  const projection = projectSessionActivity(props.result);
   const onlineById = new Map(props.presenceViewers.map((person) => [person.id, person]));
+  const identity = props.filters.personId
+    ? (onlineById.get(props.filters.personId) ??
+      projection.people.find((person) => person.id === props.filters.personId) ??
+      null)
+    : null;
   const people = projection.people.map((person) => {
     const online = onlineById.get(person.id);
-    return online
-      ? { ...person, ...online, count: person.count, lastActiveAt: person.lastActiveAt }
-      : person;
+    return online ? { ...person, ...online, count: person.count } : person;
   });
   const selectedPerson = props.filters.personId
     ? (people.find((person) => person.id === props.filters.personId) ?? identity)
@@ -470,15 +469,25 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         ${renderPeopleControl(props, people, selectedPerson, projection.timeCount)}
       </div>
       <div class="activity-feed__main">
-        ${props.filters.personId
+        ${props.loading ? html`<p role="status">${t("common.loading")}</p>` : nothing}
+        ${props.error
+          ? html`<p role="alert">
+              ${props.error}
+              <button class="btn" @click=${props.onRetry}>${t("common.retry")}</button>
+            </p>`
+          : nothing}
+        ${props.result?.peopleIncomplete
+          ? html`<p role="status">${t("activityFeed.partialHistory")}</p>`
+          : nothing}
+        ${props.result && props.filters.personId
           ? identity
-            ? renderIdentityHeader(props.context, identity, props.rows)
+            ? renderIdentityHeader(props.context, identity, projection.sessions)
             : html`<section class="activity-feed__not-found" role="status">
                 <h2>${t("activityFeed.notFoundTitle")}</h2>
                 <p>${t("activityFeed.notFoundDescription")}</p>
               </section>`
           : nothing}
-        ${!props.filters.personId || identity
+        ${props.result && (!props.filters.personId || identity)
           ? html`
               <div class="activity-feed__summary">
                 <h2>${t("activityFeed.sessions")}</h2>

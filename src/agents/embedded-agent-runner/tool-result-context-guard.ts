@@ -163,7 +163,6 @@ function truncateToolResultToChars(
   if (estimatedChars <= maxChars) {
     return msg;
   }
-  let rawText = getToolResultText(msg);
   const content = (msg as { content?: unknown }).content;
   if (Array.isArray(content)) {
     const isImage = (block: unknown) =>
@@ -174,88 +173,78 @@ function truncateToolResultToChars(
       (block as { type?: unknown }).type === "text" &&
       typeof (block as { text?: unknown }).text === "string";
     const imageCount = content.filter(isImage).length;
-    if (imageCount > 0) {
-      const omissionNotice = (retainedImages: number) => {
-        const omittedImages = imageCount - retainedImages;
-        return (
-          `[${omittedImages} image${omittedImages === 1 ? "" : "s"} omitted from context` +
-          `${retainedImages === 0 ? "; no images fit the context limit" : ""}; rerun with fewer images]`
-        );
-      };
+    const omissionNotice = (retainedImages: number) => {
+      const omittedImages = imageCount - retainedImages;
+      return (
+        `[${omittedImages} image${omittedImages === 1 ? "" : "s"} omitted from context` +
+        `${retainedImages === 0 ? "; no images fit the context limit" : ""}; rerun with fewer images]`
+      );
+    };
+    const projectContent = (retainedContent: unknown[], noticeText?: string) => {
+      const notice = noticeText ? [{ type: "text", text: noticeText }] : [];
+      const reservedChars = estimateMessageCharsCached(
+        replaceToolResultContent(msg, [
+          ...retainedContent.filter((block) => !isText(block)),
+          ...notice,
+        ]),
+        cache,
+      );
+      const bounded = truncateToolResultMessage(
+        replaceToolResultContent(msg, retainedContent),
+        Math.max(0, maxChars - reservedChars),
+        { minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE },
+      );
+      return replaceToolResultContent(msg, [
+        // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
+        ...(bounded as { content: unknown[] }).content,
+        ...notice,
+      ]);
+    };
 
-      // Reserve images first; shared multi-block truncation preserves later text
-      // while the existing weighted estimator enforces the unchanged hard cap.
-      for (let retainedImages = imageCount; retainedImages >= 0; retainedImages -= 1) {
-        let seenImages = 0;
-        const retainedContent = content.filter(
-          (block) => !isImage(block) || ++seenImages <= retainedImages,
-        );
-        const notice =
-          retainedImages < imageCount
-            ? [{ type: "text", text: omissionNotice(retainedImages) }]
-            : [];
-        const reservedChars = estimateMessageCharsCached(
-          replaceToolResultContent(msg, [
-            ...retainedContent.filter((block) => !isText(block)),
-            ...notice,
-          ]),
-          cache,
-        );
-        const availableTextChars = maxChars - reservedChars;
-        if (availableTextChars < 0 || (availableTextChars === 0 && retainedContent.some(isText))) {
-          continue;
-        }
-        let textBudget = availableTextChars;
-        while (true) {
-          const bounded = truncateToolResultMessage(
-            replaceToolResultContent(msg, retainedContent),
-            textBudget,
-          );
-          const projectedContent = (bounded as { content: unknown[] }).content;
-          if (
-            retainedContent.some((block, index) => {
-              const projectedBlock = projectedContent[index];
-              return (
-                isText(block) && block.text && (!isText(projectedBlock) || !projectedBlock.text)
-              );
-            })
-          ) {
-            break;
-          }
-          const projected = replaceToolResultContent(msg, [...projectedContent, ...notice]);
-          const projectedChars = estimateMessageCharsCached(projected, cache);
-          if (projectedChars <= maxChars) {
-            return projected;
-          }
-          const adjustedTextBudget = Math.floor(
-            (textBudget * availableTextChars) / (projectedChars - reservedChars),
-          );
-          if (adjustedTextBudget <= 0 || adjustedTextBudget >= textBudget) {
-            break;
-          }
-          textBudget = adjustedTextBudget;
-        }
+    // Reserve non-text content first. The shared allocator keeps diagnostic tails
+    // and short text blocks within the same weighted cap, with or without images.
+    for (let retainedImages = imageCount; retainedImages >= 0; retainedImages -= 1) {
+      let seenImages = 0;
+      const retainedContent = content.filter(
+        (block) => !isImage(block) || ++seenImages <= retainedImages,
+      );
+      const projected = projectContent(
+        retainedContent,
+        retainedImages < imageCount ? omissionNotice(retainedImages) : undefined,
+      );
+      const projectedContent = (projected as { content: unknown[] }).content;
+      if (
+        retainedContent.some((block, index) => {
+          const projectedBlock = projectedContent[index];
+          return isText(block) && block.text && (!isText(projectedBlock) || !projectedBlock.text);
+        })
+      ) {
+        continue;
       }
-      rawText = omissionNotice(0) + (rawText ? `\n\n${rawText}` : "");
+      if (estimateMessageCharsCached(projected, cache) <= maxChars) {
+        return projected;
+      }
     }
-  }
-
-  if (!rawText) {
-    const omittedChars = Math.max(
-      1,
-      estimateBudgetToRawChars(Math.max(estimatedChars - maxChars, 1)),
+    // Dropping unfit non-text content must not flatten away surviving semantic
+    // blocks. Reserve a visible notice even when only omission markers can fit.
+    const omittedChars = estimateMessageCharsCached(
+      replaceToolResultContent(
+        msg,
+        content.filter((block) => !isText(block)),
+      ),
+      cache,
     );
-    return replaceToolResultContent(msg, formatContextLimitTruncationNotice(omittedChars));
+    return projectContent(
+      content.filter(isText),
+      imageCount > 0
+        ? omissionNotice(0)
+        : formatContextLimitTruncationNotice(Math.max(1, estimateBudgetToRawChars(omittedChars))),
+    );
   }
 
-  if (maxChars <= 0) {
-    return replaceToolResultContent(msg, formatContextLimitTruncationNotice(rawText.length));
-  }
-
-  const truncatedText = truncateToolResultText(rawText, maxChars, {
+  const truncatedText = truncateToolResultText(getToolResultText(msg), maxChars, {
     minKeepChars: 0,
     minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
-    preserveImportantTail: false,
   });
   return replaceToolResultContent(msg, truncatedText);
 }

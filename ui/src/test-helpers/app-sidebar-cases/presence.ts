@@ -127,7 +127,7 @@ describe("AppSidebar viewer presence", () => {
       row.label = row.key === "global" ? "Research global" : `Visible ${index}`;
       row.updatedAt = Date.now() - index * 60_000;
       if (index === 2) {
-        row.participants = [{ type: "human", id: "alice", label: "Alice" }];
+        row.participants = [{ identity: { type: "profile", id: "alice" }, label: "Alice" }];
       }
       if (index === 3) {
         row.createdActor = { type: "agent", id: "alice" };
@@ -167,21 +167,22 @@ describe("AppSidebar viewer presence", () => {
       expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
     );
     const card = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
-    expect(card.querySelectorAll("dt")).toHaveLength(3);
+    expect(card.querySelectorAll("dt")).toHaveLength(2);
+    expect(card.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe("Online");
     const facts = card.querySelectorAll("dd");
-    expect(facts[0]?.textContent?.trim()).toBe("Not observed yet");
-    expect([...facts[1]!.querySelectorAll("span")].map((node) => node.textContent)).toEqual([
+    expect([...facts[0]!.querySelectorAll("span")].map((node) => node.textContent)).toEqual([
       "Mac · macOS · Control UI",
       "iPhone · iOS · Control UI",
     ]);
-    expect(facts[1]?.querySelector("small")?.textContent).toBe("Reported time zone: Europe/Paris");
-    expect(facts[2]?.textContent?.trim()).toBe("Not observed yet");
+    expect(facts[0]?.querySelector("small")?.textContent).toBe("Reported time zone: Europe/Paris");
+    expect(facts[1]?.textContent?.trim()).toBe("Not observed yet");
     const sections = card.querySelectorAll("section");
     expect(sections[0]?.querySelectorAll("a")).toHaveLength(1);
     expect(sections[0]?.textContent).toContain("Visible 0");
     expect(sections[0]?.querySelector("a")?.getAttribute("href")).toBe("/chat/research/watched");
     expect(sections[1]?.querySelectorAll("a")).toHaveLength(3);
-    expect(sections[1]?.textContent).toContain("Session updated");
+    expect(sections[1]?.textContent).not.toContain("Session updated");
+    expect(sections[1]?.querySelectorAll(".person-activity-card__session-age")).toHaveLength(3);
     for (const hidden of [
       "secret-title",
       "private-tab",
@@ -231,6 +232,11 @@ describe("AppSidebar viewer presence", () => {
       expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
     );
     const card = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
+    await vi.waitFor(() =>
+      expect(card.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe(
+        "Online for 1m",
+      ),
+    );
     const sessionLink = card.querySelector<HTMLAnchorElement>(".person-activity-card__session")!;
     sessionLink.focus();
     gateway.publishEvent("presence", {
@@ -248,6 +254,9 @@ describe("AppSidebar viewer presence", () => {
     );
     gateway.publishEvent("presence", { presence: [{ ...alice, watchedSessions: [] }, bob] });
     await sidebar.updateComplete;
+    expect([...card.querySelectorAll("h3")].map((heading) => heading.textContent)).toEqual([
+      "Recent sessions",
+    ]);
     expect(document.activeElement?.getAttribute("href")).toBe(sessionLink.getAttribute("href"));
     expect(document.activeElement?.closest("section")?.querySelector("h3")?.textContent).toBe(
       "Recent sessions",

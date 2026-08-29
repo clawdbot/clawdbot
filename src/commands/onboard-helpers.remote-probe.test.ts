@@ -2,7 +2,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { probeGatewayConfiguredModel, probeGatewayReachable } from "./onboard-helpers.js";
+import {
+  probeGatewayConfiguredModel,
+  probeGatewayReachable,
+  waitForGatewayReachable,
+} from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({ probeGateway: vi.fn() }));
 
@@ -44,7 +48,10 @@ describe("probeGatewayReachable", () => {
     });
   });
 
-  it("forwards configured remote edge auth to the gateway probe", async () => {
+  it.each([
+    ["single probe", probeGatewayReachable],
+    ["polling", waitForGatewayReachable],
+  ] as const)("forwards remote trust through %s", async (_name, probe) => {
     mocks.probeGateway.mockResolvedValueOnce({ ok: true, configSnapshot: null });
     const config: OpenClawConfig = {
       gateway: {
@@ -52,11 +59,12 @@ describe("probeGatewayReachable", () => {
         remote: {
           url: "wss://gateway.example",
           edgeAuth: { "X-Edge-Auth": "test-secret" },
+          tlsFingerprint: "ab".repeat(32),
         },
       },
     };
 
-    await expect(probeGatewayReachable({ url: "wss://gateway.example", config })).resolves.toEqual({
+    await expect(probe({ url: "wss://gateway.example", config })).resolves.toEqual({
       ok: true,
     });
     expect(mocks.probeGateway).toHaveBeenCalledWith(

@@ -5,43 +5,9 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
-import { createVoiceCaptureState } from "./capture-state.js";
-import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
 
 export type MockCallSource = {
   mock: { calls: ArrayLike<ReadonlyArray<unknown>> };
-};
-
-type TestRealtimeSpeakerTurn = {
-  close: () => void;
-  sendInputAudio: (audio: Buffer) => void;
-};
-
-export type TestRealtimeSessionEntry = {
-  capture: Omit<ReturnType<typeof createVoiceCaptureState>, "activeCaptureStreams"> & {
-    activeCaptureStreams: Map<string, { generation: number; stream: unknown }>;
-  };
-  guildName?: string;
-  pendingRealtime?: unknown;
-  player: {
-    on: ReturnType<typeof vi.fn>;
-    play: ReturnType<typeof vi.fn>;
-    state: { status: string };
-    stop: ReturnType<typeof vi.fn>;
-  };
-  playbackQueue: Promise<void>;
-  processingQueue: Promise<void>;
-  realtime?: {
-    beginSpeakerTurn: (
-      context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
-      userId: string,
-    ) => TestRealtimeSpeakerTurn;
-  };
-  receiveRecovery: ReturnType<typeof createVoiceReceiveRecoveryState>;
-  route?: { agentId?: string; sessionKey?: string };
-  stop: () => void;
-  transcripts?: { onUtterance?: (...args: unknown[]) => unknown; sessionId: string };
-  voiceSessionKey: string;
 };
 
 export type TestRealtimeBridgeParams = {

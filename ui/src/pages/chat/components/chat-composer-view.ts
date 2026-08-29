@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
+import { guard } from "lit/directives/guard.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
@@ -408,7 +409,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               <div class="agent-chat__composer-combobox">
                 <textarea
                   ${ref(state.textareaRef ?? undefined)}
-                  .value=${dictationPreviewDraft}
+                  .value=${guard([dictationPreviewDraft], () => live(dictationPreviewDraft))}
                   dir=${draftDirection}
                   ?disabled=${!canCompose}
                   ?readonly=${dictation?.locksComposer === true || goalComposer.pending}
