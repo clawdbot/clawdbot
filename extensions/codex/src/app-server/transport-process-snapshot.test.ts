@@ -4,8 +4,72 @@ import os from "node:os";
 import path from "node:path";
 import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readCodexAppServerProcessSnapshot } from "./transport-process-snapshot.js";
+
+const procfs = vi.hoisted(() => ({
+  readFile: vi.fn<(file: string) => Promise<string>>(),
+  readdir: vi.fn<() => Promise<string[]>>(),
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...original,
+    readFile: (...args: Parameters<typeof original.readFile>) =>
+      typeof args[0] === "string" &&
+      args[0].startsWith("/proc/") &&
+      procfs.readFile.getMockImplementation()
+        ? procfs.readFile(args[0])
+        : original.readFile(...args),
+    readdir: (...args: Parameters<typeof original.readdir>) =>
+      args[0] === "/proc" && procfs.readdir.getMockImplementation()
+        ? procfs.readdir()
+        : original.readdir(...args),
+  };
+});
+
+describe.skipIf(process.platform !== "linux")("Codex procfs process inspector", () => {
+  it.for(["ENOENT", "ESRCH", "EACCES"] as const)(
+    "distinguishes a vanished neighbor from unreadable state: %s",
+    async (code, ctx) => {
+      ctx.onTestFinished(() => {
+        procfs.readFile.mockReset();
+        procfs.readdir.mockReset();
+      });
+      const bootId = "00000000-0000-0000-0000-000000000001";
+      const neighborPid = process.pid + 1;
+      procfs.readdir.mockResolvedValue([String(process.pid), String(neighborPid)]);
+      procfs.readFile.mockImplementation(async (file) => {
+        if (file === "/proc/sys/kernel/random/boot_id") {
+          return bootId;
+        }
+        if (file === `/proc/${process.pid}/stat`) {
+          // Fields 3..22 follow the final ')', even when comm contains ')' and spaces.
+          return `${process.pid} (codex ) worker) S ${process.ppid} ${process.pid}${" 0".repeat(16)} 12345${" 0".repeat(30)}\n`;
+        }
+        if (file === `/proc/${neighborPid}/stat`) {
+          throw Object.assign(new Error("neighbor process read failed"), { code });
+        }
+        throw new Error(`Unexpected procfs read: ${file}`);
+      });
+      const snapshot = await readCodexAppServerProcessSnapshot();
+      expect(snapshot).toEqual(
+        code === "EACCES"
+          ? undefined
+          : [
+              {
+                pid: process.pid,
+                ppid: process.ppid,
+                pgid: process.pid,
+                state: "S",
+                startedAt: `${bootId}:12345`,
+              },
+            ],
+      );
+    },
+  );
+});
 
 describe.skipIf(process.platform === "win32" || process.platform === "linux")(
   "Codex POSIX process inspector",

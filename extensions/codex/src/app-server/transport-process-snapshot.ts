@@ -130,7 +130,12 @@ async function readLinuxProcesses(
       const stat = await readFile(`/proc/${entry}/stat`, options).catch((error: unknown) => {
         // A process may exit between enumeration and read. Other failures must
         // not turn an unreadable process into proof that an orphan is gone.
-        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          (error.code === "ENOENT" || error.code === "ESRCH")
+        ) {
           return undefined;
         }
         throw error;
