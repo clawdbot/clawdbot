@@ -476,6 +476,15 @@ merge_run() {
       *) merge_outcome_stop "auto-merge admission requires MERGEABLE with CLEAN or BEHIND status"; return 1 ;;
     esac
   fi
+  # gh skips local status refusals for queue-enabled PRs; admin bypasses BLOCKED/BEHIND.
+  # Reject known client-side refusals before recording non-retryable intent.
+  if printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg route "$route" '
+    .pr | .isMergeQueueEnabled == false and
+    (.mergeStateStatus == "DIRTY" or ($route == "immediate" and (.mergeStateStatus | IN("BLOCKED", "BEHIND"))))
+  ' >/dev/null; then
+    merge_outcome_stop "selected merge route is blocked by policy, branch drift, or a dirty merge projection; inspect current PR state"
+    return 1
+  fi
   local observed_main candidate_tree
   observed_main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)
   if [ "$merge_method" = squash ] && [ "$route" != queue ]; then

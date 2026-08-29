@@ -85,7 +85,7 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
       isInMergeQueue: false,
       isMergeQueueEnabled: false,
       mergeable: "MERGEABLE",
-      mergeStateStatus: "BEHIND",
+      mergeStateStatus: "CLEAN",
     },
     mode: "success",
     landing: "requested",
@@ -430,6 +430,37 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.state().mutations).toBe(1);
     expect(f.state().posts).toBe(1);
   });
+  it.each(
+    [
+      { mergeStateStatus: "BLOCKED", admin: false },
+      { mergeStateStatus: "BEHIND", admin: false },
+      { mergeStateStatus: "DIRTY", admin: false },
+      { mergeStateStatus: "DIRTY", admin: true },
+    ].flatMap((entry) => [false, true].map((settles) => ({ ...entry, settles }))),
+  )(
+    "refuses merge before intent when gh would reject: %j",
+    ({ mergeStateStatus, admin, settles }) => {
+      const f = fixture();
+      f.save({
+        ...f.state(),
+        admin,
+        gates: admin ? "fail" : "pass",
+        observations: [
+          ...(settles ? [{ pr: unknownProjection }] : []),
+          { pr: { mergeable: "MERGEABLE", mergeStateStatus } },
+        ],
+      });
+      const run = f.run();
+      expect(f.state().mutations, run.output).toBe(0);
+      expect(run.status, run.output).toBe(1);
+      expect(f.state().posts).toBe(0);
+      expect(f.state().settlementSleeps).toBe(settles ? 1 : 0);
+      expect(() => f.record()).toThrow();
+      expect(existsSync(join(f.worktree, ".local/merge-output.log"))).toBe(false);
+      expect(existsSync(f.worktree)).toBe(true);
+      expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
+    },
+  );
   it.each([
     { auto: false, mergeStateStatus: "CLEAN", route: "immediate" },
     { auto: true, mergeStateStatus: "CLEAN", route: "immediate" },
@@ -461,6 +492,19 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(f.git(["show", `${f.record().landed}:owner.txt`])).toBe("after");
     },
   );
+  it("preserves gh queue eligibility when the verified admin route is selected", () => {
+    const f = fixture();
+    f.save({
+      ...f.state(),
+      admin: true,
+      gates: "fail",
+      pr: { ...f.state().pr, isMergeQueueEnabled: true, mergeStateStatus: "DIRTY" },
+    });
+    const run = f.run();
+    expect(run.status, run.output).toBe(0);
+    expect(f.state().mutations).toBe(1);
+    expect(f.record()).toMatchObject({ route: "admin", phase: "complete", head: f.head });
+  });
   it.each([
     "persistent UNKNOWN",
     "persistent UNKNOWN mergeable",
@@ -741,7 +785,11 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   );
   it.each([
     { auto: false, admin: false, mergeState: "CLEAN", route: "immediate" },
+    { auto: false, admin: false, mergeState: "HAS_HOOKS", route: "immediate" },
+    { auto: false, admin: false, mergeState: "UNSTABLE", route: "immediate" },
     { auto: false, admin: true, mergeState: "CLEAN", route: "admin" },
+    { auto: false, admin: true, mergeState: "BLOCKED", route: "admin" },
+    { auto: false, admin: true, mergeState: "BEHIND", route: "admin" },
     { auto: true, admin: false, mergeState: "BEHIND", route: "auto" },
     { auto: true, admin: false, mergeState: "CLEAN", route: "immediate" },
   ])(
@@ -959,7 +1007,11 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     f.save({
       ...f.state(),
       mode: "pending",
-      pr: { ...f.state().pr, isMergeQueueEnabled: !auto },
+      pr: {
+        ...f.state().pr,
+        isMergeQueueEnabled: !auto,
+        mergeStateStatus: auto ? "BEHIND" : "BLOCKED",
+      },
     });
     const first = f.run(auto, f.repo, method);
     expect(first.status, first.output).toBe(0);
@@ -988,7 +1040,11 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       f.save({
         ...f.state(),
         mode: "pending-error",
-        pr: { ...f.state().pr, isMergeQueueEnabled: !auto },
+        pr: {
+          ...f.state().pr,
+          isMergeQueueEnabled: !auto,
+          mergeStateStatus: auto ? "BEHIND" : "BLOCKED",
+        },
       });
       expect(f.run(auto).status).toBe(1);
       f.recover();
