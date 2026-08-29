@@ -48,7 +48,7 @@ import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import type { RuntimeId } from "./runtime-parity.js";
-const QA_PACKAGE_AUTH_FAILURE_MAX_CHARS = 2_048;
+const QA_PACKAGE_BOOTSTRAP_FAILURE_MAX_CHARS = 2_048;
 export type QaGatewayChildStateMutationContext = {
   configPath: string;
   runtimeEnv: NodeJS.ProcessEnv;
@@ -143,7 +143,7 @@ async function stageQaPackagedMockAuthProfiles(params: {
       const details = sliceUtf16Safe(
         redactQaGatewayDebugText(errorMessage),
         0,
-        QA_PACKAGE_AUTH_FAILURE_MAX_CHARS,
+        QA_PACKAGE_BOOTSTRAP_FAILURE_MAX_CHARS,
       );
       // oxlint-disable-next-line preserve-caught-error -- Candidate CLI errors can contain the submitted API key; only the redacted message crosses this boundary.
       throw new Error(`installed package mock auth bootstrap failed for ${provider}: ${details}`);
@@ -424,6 +424,39 @@ export async function prepareQaGatewayChild(
             throw new Error("installed package mock auth bootstrap mutated canonical config");
           }
           packagedMockAuthStaged = true;
+        }
+        if (usesPackagedCandidate && gatewayCommand) {
+          try {
+            // The separate onboarding smoke cannot prepare this child's state.
+            // Converge every freshly written config; a new-port retry can otherwise
+            // restore plugin entries the candidate removed before verify-only startup.
+            const command = {
+              executablePath: gatewayCommand.executablePath,
+              argsPrefix: gatewayCommand.argsPrefix ?? [],
+              cwd: gatewayCwd,
+              env,
+            };
+            // Published candidates such as 2026.7.1-2 predate capability consent.
+            const help = await runQaGatewayCliCommand({
+              ...command,
+              args: ["update", "repair", "--help"],
+            });
+            const consentArgs = help.includes("--accept-capabilities")
+              ? ["--accept-capabilities"]
+              : [];
+            await runQaGatewayCliCommand({
+              ...command,
+              args: ["update", "repair", ...consentArgs, "--yes", "--no-restart", "--json"],
+            });
+          } catch (error) {
+            const details = sliceUtf16Safe(
+              redactQaGatewayDebugText(toErrorObject(error, "plugin setup failed").message),
+              0,
+              QA_PACKAGE_BOOTSTRAP_FAILURE_MAX_CHARS,
+            );
+            // oxlint-disable-next-line preserve-caught-error -- Candidate output can include credentials; retain only the bounded redacted diagnostic.
+            throw new Error(`installed package plugin setup failed: ${details}`);
+          }
         }
       }
       if (!env) {
