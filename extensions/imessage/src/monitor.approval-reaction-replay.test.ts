@@ -4,13 +4,11 @@
 // Everything here is real (SQLite queue, monitor, drain, approval-reaction
 // resolution) except the one true external boundary: the Gateway
 // approval-resolution call.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearIMessageApprovalReactionTargetsForTest,
@@ -58,10 +56,10 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function withQueue<T>(fn: (queue: IMessageIngressQueue) => Promise<T>): Promise<T> {
-  const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-ingress-replay-"));
-  const stateDir = await fs.realpath(created);
+  const stateDir = tempDirs.make("openclaw-imessage-ingress-replay-");
   const queue = createChannelIngressQueueForTests<IMessageIngressPayload>({
     channelId: "imessage",
     accountId: "default",
@@ -71,7 +69,6 @@ async function withQueue<T>(fn: (queue: IMessageIngressQueue) => Promise<T>): Pr
     return await fn(queue);
   } finally {
     closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 

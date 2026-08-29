@@ -593,10 +593,8 @@ export async function handleIMessageApprovalReaction(params: {
     params.logVerboseMessage?.(
       `imessage: approval reaction failed id=${target.approvalId} sender=${event.actorHandle}: ${String(error)}`,
     );
-    // A transient Gateway 5xx/network/auth error is not terminal: propagate it
-    // so the durable ingress drain releases the claim and replays the reaction
-    // under its retry policy, as the signal (#130134) and matrix (#129879)
-    // owners do. Returning any result here would commit or drop the claim.
+    // Non-terminal resolver errors must reach the durable ingress drain.
+    // Returning here would commit the claim and lose the operator's reaction.
     throw error;
   }
 }
