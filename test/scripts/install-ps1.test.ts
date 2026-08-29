@@ -863,7 +863,9 @@ function Refresh-GatewayServiceIfLoaded { throw 'unexpected gateway refresh' }
 function Invoke-OpenClawCommand { throw 'unexpected live CLI' }
 function Publish-TextFileAtomically {
     param([string]$Path, [string]$Contents)
-    if ($Path -ne (Join-Path $env:USERPROFILE '.local\bin\openclaw.cmd')) { throw 'publication escaped fixture' }
+    $expectedPath = Join-Path $env:USERPROFILE '.local\bin\openclaw.cmd'
+    # Duplicate separators can name the same Windows wrapper; require the exact normalized path.
+    if ([IO.Path]::GetFullPath($Path) -ne [IO.Path]::GetFullPath($expectedPath)) { throw 'publication escaped fixture' }
     $script:Published += 1
 }
 function Add-ToUserPath { param([string]$Path); $script:PathPublished += 1; return $false }
@@ -1015,6 +1017,14 @@ try {
         Set-Location -LiteralPath $foreign
         $script:Published = 0
         $script:PathPublished = 0
+        $outsideRejected = try {
+            Publish-TextFileAtomically -Path (Join-Path $caseRoot '..\openclaw.cmd') -Contents ''
+            $false
+        } catch {
+            if ($_.Exception.Message -ne 'publication escaped fixture') { throw }
+            $true
+        }
+        if (-not $outsideRejected -or $script:Published -ne 0) { throw 'outside publication was accepted' }
         $caught = $null
         $ownerOutput = @()
         try { $ownerOutput = @(Install-OpenClawFromGit -RepoDir $target -SkipUpdate) } catch { $caught = $_ }
