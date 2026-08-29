@@ -222,6 +222,7 @@ export async function runWorkerDescriptor(
         sessionKey: `worker:${descriptor.admission.sessionId}`,
         runId: descriptor.assignment.runId,
         prompt: descriptor.assignment.prompt,
+        images: descriptor.assignment.images,
         suppressPromptTranscript: descriptor.assignment.suppressPromptTranscript,
         modelRef: descriptor.assignment.modelRef,
         initialMessages: descriptor.assignment.initialMessages,

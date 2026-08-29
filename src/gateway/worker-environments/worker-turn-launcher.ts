@@ -38,6 +38,7 @@ import {
   resolvePlacementIdentity,
   waitForTurnOperation,
 } from "./worker-turn-admission.js";
+import { prepareWorkerTurnAttachments } from "./worker-turn-attachments.js";
 import {
   failHandedOffTurn,
   WorkerTurnExecutionError,
@@ -52,6 +53,7 @@ import {
   fitLaunchDescriptorWithRuntimeIdentity,
   parseRuntimeResult,
   prepareWorkerAgentRuntimeIdentity,
+  prepareWorkerTurnImages,
   windowInitialMessages,
 } from "./worker-turn-payload.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
@@ -183,6 +185,8 @@ async function executeWorkerTurn(params: {
     model: modelRef.model,
   });
 
+  const images = await prepareWorkerTurnImages(turn, placement.agentId, params.localWorkspaceDir);
+
   const credential = await params.environments.acquireTurnCredential(params.turnClaim);
   const tunnel = await waitForTurnOperation({
     operation: params.environments.startTunnel({
@@ -192,6 +196,17 @@ async function executeWorkerTurn(params: {
     ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
     timeoutMs: turn.timeoutMs,
   });
+  const attachmentNote = await prepareWorkerTurnAttachments({
+    turn,
+    tunnel,
+    remoteWorkspaceDir: placement.remoteWorkspaceDir,
+    assertCurrent: () => {
+      if (!params.placements.validateTurnClaim(params.turnClaim)) {
+        throw new Error("Cloud attachment transfer lost its turn claim");
+      }
+    },
+  });
+  const prompt = attachmentNote ? `${turn.prompt}\n\n${attachmentNote}` : turn.prompt;
   const portalAvailable =
     Boolean(environment.nodeDeviceId) &&
     environment.sshEndpoint === null &&
@@ -238,7 +253,8 @@ async function executeWorkerTurn(params: {
           agentRuntimeIdentityToken,
           runId: turn.runId,
           turnId: randomUUID(),
-          prompt: turn.prompt,
+          prompt,
+          ...(images.length > 0 ? { images } : {}),
           suppressPromptTranscript: true,
           workspaceDir: placement.remoteWorkspaceDir,
           ...(turn.permissionMode

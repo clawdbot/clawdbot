@@ -6,6 +6,7 @@ import {
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-descriptor.js";
 
@@ -62,6 +63,38 @@ describe("worker launch descriptor", () => {
       client: { id: "openclaw-worker", mode: "worker", version: "2026.7.12" },
       admission: { ...descriptor.admission, runId: descriptor.assignment.runId },
     });
+  });
+
+  it("admits current images above the transcript frame ceiling using the inference budget", () => {
+    const descriptor = launchDescriptor();
+    const images = [
+      {
+        type: "image" as const,
+        data: createNoisyPngBuffer(320, 240).toString("base64"),
+        mimeType: "image/png",
+      },
+    ];
+    descriptor.assignment.images = images;
+    descriptor.assignment.suppressPromptTranscript = true;
+    expect(images[0]?.data.length).toBeGreaterThan(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES);
+
+    expect(parseWorkerLaunchDescriptor(descriptor).assignment).toMatchObject({ images });
+    for (const invalidImage of [
+      { ...images[0], data: "" },
+      { ...images[0], type: "text" },
+      { ...images[0], extra: true },
+    ]) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, images: [invalidImage] },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
+    descriptor.assignment.suppressPromptTranscript = false;
+    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
+      "invalid worker launch descriptor",
+    );
   });
 
   it("accepts the permission context pair only when both fields are present", () => {

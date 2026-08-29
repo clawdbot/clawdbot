@@ -156,6 +156,7 @@ export function createWorkerWorkspaceActions(
       command.signal,
     );
     signal.throwIfAborted();
+    command.assertCurrent?.();
     const remainingCommandTimeoutMs = () => Math.max(0, deadlineMs - Date.now());
     const commandOptions = (remainingTimeoutMs: number): CommandOptions => {
       const base = workerSshCommandOptions({
@@ -180,11 +181,13 @@ export function createWorkerWorkspaceActions(
     return await runWorkerSshCandidates(
       prepared,
       remainingCommandTimeoutMs(),
-      async (port, remainingTimeoutMs) =>
-        await runTask(
+      async (port, remainingTimeoutMs) => {
+        command.assertCurrent?.();
+        return await runTask(
           workerWorkspaceSshArgv(prepared, command.argv, port),
           commandOptions(remainingTimeoutMs),
-        ),
+        );
+      },
     );
   };
 

@@ -47,6 +47,7 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import {
@@ -876,6 +877,39 @@ afterEach(async () => {
 });
 
 describe("worker runtime", () => {
+  it("sends current image and scanned PDF page content through remote inference exactly once", async () => {
+    const { gateway, launch } = await setup();
+    const images = [
+      {
+        type: "image" as const,
+        data: createNoisyPngBuffer(320, 240).toString("base64"),
+        mimeType: "image/png",
+      },
+      {
+        type: "image" as const,
+        data: createSolidPngBuffer(2, 2, { r: 0, g: 128, b: 255 }).toString("base64"),
+        mimeType: "image/png",
+      },
+    ];
+    launch.assignment.images = images;
+    launch.assignment.suppressPromptTranscript = true;
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    expect(gateway.inferenceRequests[0]?.context.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: launch.assignment.prompt }, ...images],
+        timestamp: expect.any(Number),
+      },
+    ]);
+    expect(
+      gateway.transcriptRequests.flatMap((request) =>
+        request.messages.map((message) => message.role),
+      ),
+    ).toEqual(["assistant"]);
+  });
+
   it("runs a full embedded turn through remote inference, live events, and transcript commits", async () => {
     const { gateway, workspaceDir, launch } = await setup();
     await writeFile(path.join(workspaceDir, "AGENTS.md"), "worker-bootstrap-marker", "utf8");

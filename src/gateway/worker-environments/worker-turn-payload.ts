@@ -24,6 +24,7 @@ import { resolveDefaultModelForAgent } from "../../agents/model-selection-config
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
@@ -48,6 +49,35 @@ import {
   bindWorkerTurnAdmissionContinuation,
   bindWorkerTurnExecutionIdentity,
 } from "./placement-turn-claim-events.js";
+import { WorkerTurnExecutionError } from "./worker-turn-failure.js";
+
+export async function prepareWorkerTurnImages(
+  turn: SessionPlacementTurnParams,
+  agentId: string,
+  workspaceDir: string,
+) {
+  // Managed image references belong to the Gateway filesystem. Rendered PDF
+  // pages use the same ordered image input before crossing the worker boundary.
+  const { prepareEmbeddedAttemptPromptExecution } =
+    await import("../../agents/embedded-agent-runner/run/prompt-image-preparation.js");
+  const result = await prepareEmbeddedAttemptPromptExecution({
+    attempt: {
+      ...turn,
+      model: { input: turn.modelHasVision === false ? ["text"] : ["text", "image"] },
+    },
+    mediaOwnerAgentId: agentId,
+    effectiveFsWorkspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg: turn.config, agentId }),
+    effectiveWorkspace: workspaceDir,
+    prompt: "",
+    skipPromptSubmission: false,
+  });
+  if (result.failedMediaCount > 0) {
+    throw new WorkerTurnExecutionError(
+      `Cloud worker could not load ${result.failedMediaCount} image attachment(s). Resend the attachments and retry.`,
+    );
+  }
+  return result.images;
+}
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -321,9 +351,6 @@ export function assertSupportedTurn(params: SessionPlacementTurnParams): {
   provider: string;
   model: string;
 } {
-  if (params.images?.length || params.imageOrder?.length) {
-    throw new Error("Cloud worker turns do not yet support current-turn image input");
-  }
   if (params.clientTools?.length) {
     throw new Error("Cloud worker turns do not support client-provided tools");
   }
