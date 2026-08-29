@@ -69,6 +69,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Worker shutdown:** release completed worker capacity promptly after IPC disconnect and closed pipes, avoiding unnecessary shutdown escalation when Node omits its child close event.
 - **Control UI tool progress:** keep error-shaped partial output running until the tool returns its result, with consistent status in collapsed rows, expanded cards, and side-panel details.
 
 - MCP Apps: let standalone operations finish across catalog refreshes within per-request server budgets, propagate App cancellation without cancelling shared catalog work, and reload restored history views without replaying interrupted operations. Thanks @tzy-17. (#119388)

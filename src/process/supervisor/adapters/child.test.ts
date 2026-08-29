@@ -280,6 +280,128 @@ describe("createChildAdapter", () => {
     expect(disconnectMock).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { order: "disconnect first", events: ["disconnect", "exit", "stdout", "stderr"] },
+    { order: "disconnect last", events: ["stdout", "stderr", "exit", "disconnect"] },
+    { order: "exit last", events: ["disconnect", "stdout", "stderr", "exit"] },
+  ] as const)(
+    "settles owned POSIX workers after all resources close ($order)",
+    async ({ events }) => {
+      vi.useFakeTimers();
+      setPlatform("darwin");
+      const { child, disconnectMock, emitExit, killMock } = createStubChild();
+      // Node marks connected false before a queued IPC disconnect has completed.
+      disconnectMock.mockImplementation(() => {
+        child.connected = false;
+      });
+      spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+      const adapter = await createChildAdapter({
+        argv: ["node", "worker"],
+        ownedWorker: true,
+        stdinMode: "pipe-open",
+      });
+      const settled = vi.fn();
+      const wait = adapter.wait();
+      void wait.then(settled);
+
+      try {
+        adapter.closeStartGate?.();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).not.toHaveBeenCalled();
+        for (const [index, event] of events.entries()) {
+          if (event === "exit") {
+            emitExit(7);
+          } else if (event === "disconnect") {
+            child.emit("disconnect");
+          } else {
+            child[event]?.emit("end");
+            await vi.advanceTimersByTimeAsync(0);
+            expect(settled).not.toHaveBeenCalled();
+            child[event]?.emit("close");
+          }
+          await vi.advanceTimersByTimeAsync(0);
+          if (index < events.length - 1) {
+            expect(settled).not.toHaveBeenCalled();
+          }
+        }
+        expect(settled).toHaveBeenCalledExactlyOnceWith({ code: 7, signal: null });
+        await expect(wait).resolves.toEqual({ code: 7, signal: null });
+        expect(signalProcessTreeMock).not.toHaveBeenCalled();
+        expect(killMock).not.toHaveBeenCalled();
+      } finally {
+        adapter.dispose();
+      }
+    },
+  );
+
+  it("keeps ordinary POSIX child waits bound to close after exit and pipe closure", async () => {
+    vi.useFakeTimers();
+    setPlatform("darwin");
+    const { child, emitClose, emitExit } = createStubChild();
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    const adapter = await createChildAdapter({ argv: ["node", "-e", "process.exit(0)"] });
+    const settled = vi.fn();
+    const wait = adapter.wait();
+    void wait.then(settled);
+
+    try {
+      emitExit(0);
+      child.stdout?.emit("close");
+      child.stderr?.emit("close");
+      child.emit("disconnect");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).not.toHaveBeenCalled();
+      emitClose(0);
+      await expect(wait).resolves.toEqual({ code: 0, signal: null });
+    } finally {
+      adapter.dispose();
+    }
+  });
+
+  it("waits for an owned worker's secret descriptor to close after delivery", async () => {
+    vi.useFakeTimers();
+    setPlatform("darwin");
+    const { child, emitExit } = createStubChild();
+    const secretStream = new Writable({
+      autoDestroy: false,
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    Object.defineProperty(child, "stdio", {
+      value: [child.stdin, child.stdout, child.stderr, secretStream, null],
+      configurable: true,
+    });
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    const transient = Buffer.from("synthetic-secret");
+    const adapter = await createChildAdapter({
+      argv: ["node", "worker"],
+      ownedWorker: true,
+      secretInput: { fd: 3, createData: () => transient },
+    });
+    const settled = vi.fn();
+    const wait = adapter.wait();
+    void wait.then(settled);
+
+    try {
+      expect(secretStream.writableFinished).toBe(true);
+      expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
+      adapter.closeStartGate?.();
+      emitExit(0);
+      child.stdout?.emit("close");
+      child.stderr?.emit("close");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).not.toHaveBeenCalled();
+      secretStream.destroy();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toHaveBeenCalledExactlyOnceWith({ code: 0, signal: null });
+      await expect(wait).resolves.toEqual({ code: 0, signal: null });
+    } finally {
+      secretStream.destroy();
+      adapter.dispose();
+    }
+  });
+
   it("keeps ordinary children supervised through repeated operational errors", async () => {
     const { child, emitClose, emitExit } = createStubChild(7865);
     spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
@@ -742,36 +864,41 @@ describe("createChildAdapter", () => {
     expect(settled).toHaveBeenCalledWith({ code: null, signal: "SIGKILL" });
   });
 
-  it("blocks drained Windows streams until tree-kill completion", async () => {
-    vi.useFakeTimers();
-    setPlatform("win32");
-    let resolveTreeKill: (() => void) | undefined;
-    signalProcessTreeMock.mockImplementationOnce(
-      (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
-        resolveTreeKill = opts?.onComplete;
-      },
-    );
+  it.each([false, true])(
+    "blocks drained Windows streams until tree-kill completion (ownedWorker=%s)",
+    async (ownedWorker) => {
+      vi.useFakeTimers();
+      setPlatform("win32");
+      let resolveTreeKill: (() => void) | undefined;
+      signalProcessTreeMock.mockImplementationOnce(
+        (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+          resolveTreeKill = opts?.onComplete;
+        },
+      );
 
-    const stub = createStubChild(9755);
-    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
-    const adapter = await createChildAdapter({
-      argv: ["node", "-e", "setInterval(() => {}, 1000)"],
-      stdinMode: "pipe-closed",
-    });
-    const settled = vi.fn();
-    void adapter.wait().then(settled);
+      const stub = createStubChild(9755);
+      spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+      const adapter = await createChildAdapter({
+        argv: ["node", "-e", "setInterval(() => {}, 1000)"],
+        stdinMode: "pipe-closed",
+        ...(ownedWorker ? { ownedWorker: true } : {}),
+      });
+      const settled = vi.fn();
+      void adapter.wait().then(settled);
 
-    adapter.kill("SIGKILL");
-    stub.emitExit(null, "SIGKILL");
-    stub.child.stdout?.emit("end");
-    stub.child.stderr?.emit("end");
-    await Promise.resolve();
-    expect(settled).not.toHaveBeenCalled();
+      adapter.kill("SIGKILL");
+      adapter.closeStartGate?.();
+      stub.emitExit(null, "SIGKILL");
+      stub.child.stdout?.emit("end");
+      stub.child.stderr?.emit("end");
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
 
-    resolveTreeKill?.();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settled).toHaveBeenCalledWith({ code: null, signal: "SIGKILL" });
-  });
+      resolveTreeKill?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toHaveBeenCalledWith({ code: null, signal: "SIGKILL" });
+    },
+  );
 
   it("preserves descendant output after ordinary Windows child exit", async () => {
     vi.useFakeTimers();
