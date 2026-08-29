@@ -2903,6 +2903,65 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
   });
 
+  it("does not classify or replace a stale third-party runtime from old official resolution fields", async () => {
+    const installDir = tempDirs.make("openclaw-plugin-stub-repair-");
+    fs.writeFileSync(
+      path.join(installDir, "package.json"),
+      JSON.stringify({ name: "@example/codex", version: "2026.5.6" }),
+    );
+    const records = {
+      codex: {
+        source: "npm" as const,
+        spec: "@example/codex",
+        resolvedName: "@openclaw/codex",
+        resolvedSpec: "@openclaw/codex@2026.5.6",
+        resolvedVersion: "2026.5.6",
+        version: "2026.5.6",
+        integrity: "sha512-old-example-codex",
+        installPath: installDir,
+      },
+    };
+    const pluginMetadata = {
+      id: "codex",
+      packageName: "@example/codex",
+      packageVersion: "2026.5.6",
+      providers: ["codex"],
+      channels: [],
+      origin: "global" as const,
+      rootDir: installDir,
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [pluginMetadata],
+      diagnostics: [],
+      byPluginId: new Map([["codex", pluginMetadata]]),
+    });
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
+      successfulInstall({
+        pluginId: "codex",
+        npmSpec: "@openclaw/codex",
+        version: VERSION,
+      }),
+    );
+
+    const { detectConfiguredPluginInstallHealthIssues, repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    };
+    const issues = await detectConfiguredPluginInstallHealthIssues({ cfg, env: {} });
+    const result = await repairMissingConfiguredPluginInstalls({ cfg, env: {} });
+
+    expect.soft(issues).toEqual([]);
+    expect.soft(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect.soft(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(result).toEqual({ changes: [], warnings: [], records });
+  });
+
   it.each([
     {
       name: "stale pinned selector",
