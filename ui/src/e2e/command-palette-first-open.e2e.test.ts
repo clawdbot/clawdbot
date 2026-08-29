@@ -22,7 +22,7 @@ suite.define(() => {
 
       try {
         // Navigation can finish before the shell installs its shortcut handler.
-        await page.getByRole("button", { name: "Open command palette" }).waitFor();
+        await page.locator(".shell").waitFor({ state: "visible" });
         await page.keyboard.press("Control+K");
 
         const shell = page.locator(".cmd-palette");
