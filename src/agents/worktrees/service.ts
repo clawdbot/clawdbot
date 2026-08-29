@@ -72,6 +72,7 @@ import type {
   ManagedWorktreeRecord,
   ManagedWorktreeRunEndCleanup,
   ManagedWorktreeRunEndCleanupOutcome,
+  ProvisionedFileState,
   RemoveManagedWorktreeResult,
 } from "./types.js";
 
@@ -482,12 +483,16 @@ async function containsSnapshotGitMarker(
 }
 
 async function snapshotWorktree(
+  stateEnv: NodeJS.ProcessEnv,
   record: ManagedWorktreeRecord,
   reason: string,
-  provisionedPaths: readonly string[],
+  provisionedPaths: readonly string[] | undefined,
   commitGuard?: () => void,
-): Promise<string> {
+): Promise<{ snapshotRef: string; provisionedState: ProvisionedFileState[] }> {
   commitGuard?.();
+  if (!provisionedPaths) {
+    throw new Error("provisioned path ledger is unavailable");
+  }
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worktree-index-"));
   const indexPath = path.join(tempDir, "index");
   const snapshotRef = `${SNAPSHOT_REF_PREFIX}/${record.id}`;
@@ -574,9 +579,17 @@ async function snapshotWorktree(
       throw new Error("nested git repositories cannot be snapshotted losslessly");
     }
     commitGuard?.();
-    await requireGit(record.path, [...filemodeArgs, "read-tree", "HEAD"], { env });
+    await prepareSnapshotIndex(stateEnv, record, snapshotPaths, provisionedPaths, env);
+    const provisionedState = await snapshotProvisionedFiles(
+      stateEnv,
+      record.id,
+      record.path,
+      provisionedPaths,
+      commitGuard,
+    );
     // This index came from a tree, so it has no checkout-local skip-worktree
     // bits and update-index is independent of the source worktree's sparse cone.
+    commitGuard?.();
     await requireGit(
       record.path,
       [...filemodeArgs, "update-index", "--add", "--remove", "-z", "--stdin"],
@@ -628,40 +641,57 @@ async function snapshotWorktree(
     );
     commitGuard?.();
     await requireGit(record.repoRoot, ["update-ref", snapshotRef, commit]);
-    return snapshotRef;
+    return { snapshotRef, provisionedState };
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
 }
 
-async function requireSnapshotSpace(
+async function prepareSnapshotIndex(
   env: NodeJS.ProcessEnv,
   record: ManagedWorktreeRecord,
+  snapshotPaths: ReadonlyMap<string, Buffer>,
+  provisioned: readonly string[],
+  indexEnv: NodeJS.ProcessEnv,
 ): Promise<void> {
-  const provisioned = getRegistryWorktreeProvisionedPaths(env, record.id) ?? [];
-  const paths = [
-    ...splitNullBuffer(
-      await requireGitBuffer(record.path, [
-        "ls-files",
-        "-z",
-        "--cached",
-        "--others",
-        "--exclude-standard",
-      ]),
-    ),
-    ...splitNullBuffer(
-      await requireGitBuffer(record.path, [
-        "ls-files",
-        "-z",
-        "--others",
-        "--ignored",
-        "--exclude-standard",
-        "--",
-        STAGED_INPUT_GIT_PATHSPEC,
-      ]),
-    ),
-  ];
-  const unique = new Map(paths.map((value) => [gitPathKey(value), value]));
+  const headPaths = splitNullBuffer(
+    await requireGitBuffer(record.path, ["ls-tree", "-r", "--name-only", "-z", "HEAD"]),
+  );
+  const metadataBytes = [...headPaths, ...snapshotPaths.values()].reduce(
+    (total, entry) => total + 512 + 2 * entry.length,
+    0,
+  );
+  requireWorktreeDiskSpace(
+    [{ path: os.tmpdir(), bytes: 2 * metadataBytes }],
+    "worktree safety snapshot index",
+    true,
+  );
+  await requireGit(record.path, ["read-tree", "HEAD"], { env: indexEnv });
+  // Compare against the same fresh index used by the writer: source-index flags
+  // can hide edits, while an unrefreshed HEAD index falsely marks unchanged blobs.
+  const changed = new Set(
+    splitNullBuffer(
+      await requireGitBuffer(
+        record.path,
+        [
+          "-c",
+          "diff.autoRefreshIndex=true",
+          "diff",
+          "--no-ext-diff",
+          "--no-textconv",
+          "--no-renames",
+          "--name-only",
+          "-z",
+          "--",
+        ],
+        { env: indexEnv },
+      ),
+    ).map(gitPathKey),
+  );
+  const tracked = new Set(headPaths.map(gitPathKey));
+  const unique = new Map(
+    [...snapshotPaths].filter(([key]) => changed.has(key) || !tracked.has(key)),
+  );
   for (const value of provisioned) {
     unique.set(gitPathKey(Buffer.from(value)), Buffer.from(value));
   }
@@ -685,9 +715,9 @@ async function requireSnapshotSpace(
   const commonDir = await requireGit(record.repoRoot, ["rev-parse", "--git-common-dir"]);
   requireWorktreeDiskSpace(
     [
-      { path: path.resolve(record.repoRoot, commonDir), bytes: 2 * gitBytes },
+      { path: path.resolve(record.repoRoot, commonDir), bytes: 2 * gitBytes + metadataBytes },
       { path: resolveStateDir(env), bytes: 2 * provisionedBytes },
-      { path: os.tmpdir(), bytes: unique.size * 512 },
+      { path: os.tmpdir(), bytes: 2 * metadataBytes },
     ],
     "worktree safety snapshot",
     true,
@@ -1171,25 +1201,18 @@ export class ManagedWorktreeService {
       let snapshotRef = record.snapshotRef;
       let snapshotError: string | undefined;
       try {
-        await requireSnapshotSpace(this.env, record);
-        params.commitGuard?.();
-        const provisionedState = await snapshotProvisionedFiles(
+        const snapshot = await snapshotWorktree(
           this.env,
-          record.id,
-          record.path,
+          record,
+          params.reason,
           getRegistryWorktreeProvisionedPaths(this.env, record.id),
           params.commitGuard,
         );
-        snapshotRef = await snapshotWorktree(
-          record,
-          params.reason,
-          provisionedState.map((entry) => entry.path),
-          params.commitGuard,
-        );
+        snapshotRef = snapshot.snapshotRef;
         params.commitGuard?.();
         updateRegistryWorktree(this.env, record.id, {
           snapshotRef,
-          provisionedState,
+          provisionedState: snapshot.provisionedState,
         });
       } catch (error) {
         snapshotError = error instanceof Error ? error.message : String(error);

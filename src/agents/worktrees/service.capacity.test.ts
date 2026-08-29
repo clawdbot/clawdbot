@@ -211,6 +211,58 @@ describe("ManagedWorktreeService capacity", () => {
     expect(await git(repo, "branch", "--list", "openclaw/setup-space")).toBe("");
   });
 
+  it("archives a large unchanged checkout with space for only its snapshot writes", async () => {
+    const unchanged = Buffer.alloc(16 * 1024 ** 2, 7);
+    await fs.writeFile(path.join(repo, "unchanged.bin"), unchanged);
+    await git(repo, "add", "unchanged.bin");
+    await git(repo, "commit", "-m", "large unchanged content");
+    const created = await service.create({
+      repoRoot: repo,
+      name: "snapshot-delta",
+      baseRef: "HEAD",
+    });
+    await git(created.path, "config", "diff.autoRefreshIndex", "false");
+    await fs.writeFile(path.join(created.path, "uncommitted.txt"), "preserved delta\n");
+    availableBytes = 144 * 1024 ** 2;
+
+    await service.remove({ id: created.id, reason: "archive" });
+
+    const removed = getRegistryWorktree(env, created.id)!;
+    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await git(repo, "show", `${removed.snapshotRef}:uncommitted.txt`)).toBe(
+      "preserved delta",
+    );
+    availableBytes = 100 * GiB;
+    const restored = await service.restore({ id: created.id });
+    expect((await fs.readFile(path.join(restored.path, "unchanged.bin"))).equals(unchanged)).toBe(
+      true,
+    );
+    expect(await fs.readFile(path.join(restored.path, "uncommitted.txt"), "utf8")).toBe(
+      "preserved delta\n",
+    );
+  });
+
+  it.each(["--assume-unchanged", "--skip-worktree"])(
+    "budgets snapshot writes hidden by %s in the source index",
+    async (flag) => {
+      const created = await service.create({
+        repoRoot: repo,
+        name: "hidden-delta",
+        baseRef: "HEAD",
+      });
+      await git(created.path, "update-index", flag, "README.md");
+      await fs.writeFile(path.join(created.path, "README.md"), Buffer.alloc(16 * 1024 ** 2, 8));
+      availableBytes = 144 * 1024 ** 2;
+
+      await expect(service.remove({ id: created.id, reason: "archive" })).rejects.toThrow(
+        /disk space/i,
+      );
+
+      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+      expect((await fs.stat(path.join(created.path, "README.md"))).size).toBe(16 * 1024 ** 2);
+    },
+  );
+
   it("preserves dirty work when there is insufficient room for its safety snapshot", async () => {
     const created = await service.create({
       repoRoot: repo,
