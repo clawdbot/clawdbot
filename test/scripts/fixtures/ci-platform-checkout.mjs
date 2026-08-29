@@ -27,9 +27,11 @@ function record(pid, role, attempt = 0) {
 }
 
 function records() {
+  // Keep producer observations and shutdown reports in the same order.
   return fs
     .readdirSync(recordsDir)
     .filter((file) => file.endsWith(".json"))
+    .toSorted()
     .map((file) => JSON.parse(fs.readFileSync(path.join(recordsDir, file), "utf8")));
 }
 
