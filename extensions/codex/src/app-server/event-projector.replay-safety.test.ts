@@ -23,6 +23,46 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector replay safety and progress projection", () => {
+  it.each(["item/started", "item/completed", "turn/completed"] as const)(
+    "counts each item once across repeated %s observations and snapshots",
+    async (method) => {
+      const projector = await createProjector();
+      const item = {
+        type: "commandExecution",
+        id: "cmd-observed",
+        command: "pwd",
+        cwd: "/workspace",
+        processId: null,
+        source: "agent",
+        status: "completed",
+        commandActions: [],
+        aggregatedOutput: "/workspace",
+        exitCode: 0,
+        durationMs: 1,
+      };
+      const notification =
+        method === "turn/completed"
+          ? turnCompleted([item])
+          : forCurrentTurn(method, {
+              item: { ...item, status: method === "item/started" ? "inProgress" : "completed" },
+            });
+      await projector.handleNotification(notification);
+      await projector.handleNotification(notification);
+      expect(projector.buildResult(buildEmptyToolTelemetry()).itemLifecycle).toEqual({
+        startedCount: 1,
+        completedCount: method === "item/started" ? 0 : 1,
+        activeCount: method === "item/started" ? 1 : 0,
+      });
+
+      await projector.handleNotification(turnCompleted([item, item]));
+      expect(projector.buildResult(buildEmptyToolTelemetry()).itemLifecycle).toEqual({
+        startedCount: 1,
+        completedCount: 1,
+        activeCount: 0,
+      });
+    },
+  );
+
   it("clears a prior terminal presentation after a native tool completes", async () => {
     let terminalPresentation: string | undefined = "stale web fetch";
     const projector = await createProjector({

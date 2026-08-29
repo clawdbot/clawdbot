@@ -193,7 +193,6 @@ extensions/codex/src/app-server/event-projector-reasoning.ts	1
 extensions/codex/src/app-server/event-projector-tool-items.ts	1
 extensions/codex/src/app-server/event-projector-tool-transcript.ts	4
 extensions/codex/src/app-server/event-projector-values.ts	2
-extensions/codex/src/app-server/event-projector.ts	1
 extensions/codex/src/app-server/explicit-skill-input.ts	1
 extensions/codex/src/app-server/image-payload-sanitizer.ts	3
 extensions/codex/src/app-server/managed-binary.ts	2

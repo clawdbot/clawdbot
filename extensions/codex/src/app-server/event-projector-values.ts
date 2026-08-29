@@ -39,11 +39,6 @@ export function readNonNegativeInteger(record: JsonObject, key: string): number 
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
-export function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
-  const error = record.error;
-  return isJsonObject(error) ? readStringField(error, "message") : undefined;
-}
-
 export function readHookOutputEntries(
   value: JsonValue | undefined,
 ): Array<{ kind?: string; text: string }> {

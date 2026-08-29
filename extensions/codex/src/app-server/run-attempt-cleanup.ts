@@ -167,6 +167,7 @@ export async function cleanupCodexAttempt(
       await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(cleanupReason)));
     });
     await runCleanupStep("codex-route-release", releaseCurrentRoute);
+    activeTurn.activeProjector.closeActiveCompactions();
     await runCleanupStep("codex-transcript-checkpoint", () =>
       activeTurn.activeProjector.transcriptCheckpoint.flush(true),
     );

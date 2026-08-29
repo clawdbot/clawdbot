@@ -47,6 +47,7 @@ type CodexAttemptResultInput = {
   contextTokens: number | undefined;
   contextTokensSource: EmbeddedRunAttemptResult["contextTokensSource"];
   completedCompactionCount: number;
+  observedItemCount: number;
   activeItemCount: number;
   completedItemCount: number;
   guardianReviewCount: number;
@@ -230,7 +231,7 @@ export function buildCodexAttemptResult(
       replaySafe: !hadPotentialSideEffects,
     },
     itemLifecycle: {
-      startedCount: input.activeItemCount + input.completedItemCount,
+      startedCount: input.observedItemCount,
       completedCount: input.completedItemCount,
       activeCount: input.activeItemCount,
     },

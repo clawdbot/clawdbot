@@ -35,11 +35,7 @@ import {
   normalizeCodexThreadTokenUsage,
   projectCodexThreadUsageUpdate,
 } from "./event-projector-usage.js";
-import {
-  readCodexErrorNotificationMessage,
-  readItem,
-  readItemString,
-} from "./event-projector-values.js";
+import { readItem, readItemString } from "./event-projector-values.js";
 import type { CodexNativePreToolUseFailure } from "./native-hook-relay.js";
 import {
   isCodexNotificationForTurn,
@@ -67,6 +63,8 @@ export class CodexAppServerEventProjector {
   private readonly asyncDeliveryProjection: CodexAsyncDeliveryProjection;
   private readonly assistantProjection: CodexAssistantProjection;
   private readonly reasoningProjection: CodexReasoningProjection;
+  // Observed identities survive local teardown of unfinished items.
+  private readonly observedItemIds = new Set<string>();
   private readonly activeItemIds = new Set<string>();
   private readonly completedItemIds = new Set<string>();
   private readonly activeCompactionItemIds = new Set<string>();
@@ -250,7 +248,10 @@ export class CodexAppServerEventProjector {
       return;
     }
     if (notification.method === "hook/started" || notification.method === "hook/completed") {
-      if (!this.isHookNotificationForCurrentThread(params)) {
+      // Thread-level hooks carry a null turn id.
+      const threadId = readString(params, "threadId");
+      const turnId = params.turnId;
+      if (threadId !== this.threadId || (turnId !== this.turnId && turnId !== null)) {
         return;
       }
     } else if (
@@ -364,7 +365,7 @@ export class CodexAppServerEventProjector {
         const compactionFailure = codexErrorInfo === "other" && this.isCompacting();
         this.settledTurnFailureFinalizationAllowed =
           codexErrorInfo === "serverOverloaded" || compactionFailure;
-        this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
+        this.promptError = this.formatCodexErrorMessage(params.error) ?? "codex app-server error";
         this.promptErrorSource = compactionFailure ? "compaction" : "prompt";
         break;
       }
@@ -408,6 +409,7 @@ export class CodexAppServerEventProjector {
       contextTokens: this.contextTokens,
       contextTokensSource: this.contextTokensSource,
       completedCompactionCount: this.completedCompactionCount,
+      observedItemCount: this.observedItemIds.size,
       activeItemCount: this.activeItemIds.size,
       completedItemCount: this.completedItemIds.size,
       guardianReviewCount: this.eventProjection.guardianReviewCount,
@@ -468,11 +470,22 @@ export class CodexAppServerEventProjector {
     return this.activeCompactionItemIds.size > 0;
   }
 
+  closeActiveCompactions(): void {
+    // Native interruption can omit item/completed. Close only projector activity;
+    // the controller's separate active-item set still gates recovery.
+    for (const itemId of this.activeCompactionItemIds) {
+      this.activeItemIds.delete(itemId);
+      this.activeCompactionItemIds.delete(itemId);
+      this.eventProjection.emitCompactionEnd(itemId, false);
+    }
+  }
+
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
     const itemId = item?.id ?? readString(params, "itemId");
     this.assistantProjection.recordItemStarted(item, itemId);
     if (itemId) {
+      this.observedItemIds.add(itemId);
       this.activeItemIds.add(itemId);
     }
     this.recordNativeToolOutcome(item);
@@ -521,6 +534,7 @@ export class CodexAppServerEventProjector {
     this.clearTerminalPresentationForNativeItem(item);
     const itemId = item?.id ?? readString(params, "itemId");
     if (itemId) {
+      this.observedItemIds.add(itemId);
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
     }
@@ -537,8 +551,11 @@ export class CodexAppServerEventProjector {
     }
     this.reasoningProjection.recordItem(item);
     await this.generatedMediaProjection.recordNative(item);
-    if (item?.type === "contextCompaction" && itemId) {
-      this.activeCompactionItemIds.delete(itemId);
+    if (
+      item?.type === "contextCompaction" &&
+      itemId &&
+      this.activeCompactionItemIds.delete(itemId)
+    ) {
       this.completedCompactionCount += 1;
       await this.options.onContextCompacted?.();
       await runAgentHarnessAfterCompactionHook({
@@ -599,26 +616,10 @@ export class CodexAppServerEventProjector {
       this.responseCompletions.clear();
     }
     if (turn.status === "failed") {
-      const usageLimitMessage = formatCodexUsageLimitErrorMessage({
-        message: turn.error?.message,
-        codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
-        rateLimits: this.options.readRecentRateLimits?.(),
-      });
-      this.promptError = usageLimitMessage
-        ? createCodexUsageLimitPromptError(usageLimitMessage)
-        : (turn.error?.message ?? "codex app-server turn failed");
+      this.promptError = this.formatCodexErrorMessage(turn.error) ?? "codex app-server turn failed";
       this.promptErrorSource = compactionFailure ? "compaction" : "prompt";
     }
-    if (compactionFailure) {
-      // Codex omits item/completed on failure, so the terminal turn must close
-      // every active structural compaction for state and stream consumers.
-      const failedCompactionItemIds = [...this.activeCompactionItemIds];
-      for (const itemId of failedCompactionItemIds) {
-        this.activeItemIds.delete(itemId);
-        this.activeCompactionItemIds.delete(itemId);
-        this.eventProjection.emitCompactionEnd(itemId, false);
-      }
-    }
+    this.closeActiveCompactions();
     const turnItems = turn.items ?? [];
     // Upstream terminal summaries contain only the last assistant item. Keep
     // earlier unsettled deliveries at their producer instead of inferring them.
@@ -663,7 +664,6 @@ export class CodexAppServerEventProjector {
       await this.asyncDeliveryProjection.deliver(delivery);
     }
     this.assistantProjection.finalizeAnswerCandidate(turn);
-    this.activeCompactionItemIds.clear();
     await this.reasoningProjection.maybeEndReasoning();
   }
 
@@ -676,6 +676,7 @@ export class CodexAppServerEventProjector {
     ) {
       return;
     }
+    this.observedItemIds.add(item.id);
     const wasStarted = this.activeItemIds.has(item.id);
     if (!wasStarted) {
       this.eventProjection.emitStandardItemEvent({ phase: "start", item });
@@ -724,27 +725,20 @@ export class CodexAppServerEventProjector {
     });
   }
 
-  private formatCodexErrorMessage(params: JsonObject): string | Error | undefined {
-    const error = isJsonObject(params.error) ? params.error : undefined;
+  private formatCodexErrorMessage(value: unknown): string | Error | undefined {
+    const error = isJsonObject(value) ? value : undefined;
+    const message = error ? readString(error, "message") : undefined;
     const usageLimitMessage = formatCodexUsageLimitErrorMessage({
-      message: error ? readString(error, "message") : undefined,
+      message,
       codexErrorInfo: error?.codexErrorInfo,
       rateLimits: this.options.readRecentRateLimits?.(),
     });
-    return usageLimitMessage
-      ? createCodexUsageLimitPromptError(usageLimitMessage)
-      : readCodexErrorNotificationMessage(params);
+    return usageLimitMessage ? createCodexUsageLimitPromptError(usageLimitMessage) : message;
   }
 
   private emitAgentEvent(
     event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
   ): void {
     emitCodexAgentEvent(this.params, event);
-  }
-
-  private isHookNotificationForCurrentThread(params: JsonObject): boolean {
-    const threadId = readString(params, "threadId");
-    const turnId = params.turnId;
-    return threadId === this.threadId && (turnId === this.turnId || turnId === null);
   }
 }

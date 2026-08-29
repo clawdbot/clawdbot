@@ -18,6 +18,7 @@ import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
 import * as authBridge from "./auth-bridge.js";
+import { CodexAppServerRpcError } from "./client.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -25,6 +26,7 @@ import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
+import * as attemptFinalization from "./run-attempt-finalize.js";
 import {
   createParams,
   createTestParams,
@@ -781,6 +783,155 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
     expect(result.promptTimeoutOutcome).toBeUndefined();
+  });
+
+  it.each(["cancel", "timeout", "timeout-with-terminal", "client-close"] as const)(
+    "closes active compaction during local %s finalization",
+    async (termination) => {
+      const abortController = new AbortController();
+      const onAgentEvent = vi.fn();
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "turn/interrupt" && termination === "timeout-with-terminal") {
+          await harness.notify(turnCompleted({ id: "turn-1", status: "interrupted", items: [] }));
+        }
+        return undefined;
+      });
+      const params = makeTestParams({
+        timeoutMs: termination.startsWith("timeout") ? 200 : 5_000,
+        abortSignal: abortController.signal,
+        onAgentEvent,
+      });
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      await harness.notify(
+        itemNotification("item/started", { type: "contextCompaction", id: "compact-local" }),
+      );
+      await vi.waitFor(
+        () =>
+          expect(onAgentEvent).toHaveBeenCalledWith(
+            expect.objectContaining({
+              stream: "compaction",
+              data: expect.objectContaining({ phase: "start" }),
+            }),
+          ),
+        fastWait,
+      );
+      if (termination === "cancel") {
+        abortController.abort();
+      } else if (termination === "client-close") {
+        harness.close();
+      }
+      const result = await run;
+      expect(readAttemptTerminal(result)).toMatchObject({
+        aborted: termination !== "client-close",
+        timedOut: termination.startsWith("timeout"),
+      });
+      if (termination !== "cancel") {
+        expect(result.codexAppServerFailure).toMatchObject({
+          kind:
+            termination === "client-close"
+              ? "client_closed_before_turn_completed"
+              : "turn_completion_idle_timeout",
+          replaySafe: false,
+          replayBlockedReason: "active_item",
+        });
+      }
+      expect(result.compactionCount).toBeUndefined();
+      expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 0, activeCount: 0 });
+      expect(result.settledTurnFinalizationContext).toBeUndefined();
+      expect(
+        onAgentEvent.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.stream === "compaction"),
+      ).toEqual([
+        expect.objectContaining({
+          data: expect.objectContaining({ phase: "start", itemId: "compact-local" }),
+        }),
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "end",
+            itemId: "compact-local",
+            completed: false,
+          }),
+        }),
+      ]);
+    },
+  );
+
+  it("closes unfinished compaction in cleanup when finalization fails after local cancellation", async () => {
+    const abortController = new AbortController();
+    const onAgentEvent = vi.fn();
+    const finalizationError = new Error("finalization failed after local completion");
+    let readResult: (() => EmbeddedRunAttemptResult) | undefined;
+    vi.spyOn(attemptFinalization, "finalizeCodexAttempt").mockImplementationOnce(
+      async (resources, turnRuntime, _lifecycle, notifications, _requestRuntime, activeTurn) => {
+        await turnRuntime.completion;
+        await notifications.drainNotificationQueue();
+        // Fail only after the real cancellation owner has confirmed termination.
+        // Neither native terminal projection nor normal finalization closes this item.
+        expect(turnRuntime.state.completed).toBe(true);
+        expect(activeTurn.activeProjector.isCompacting()).toBe(true);
+        readResult = () =>
+          activeTurn.activeProjector.buildResult(
+            resources.prompt.context.attemptTools.toolBridge.telemetry,
+          );
+        throw finalizationError;
+      },
+    );
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/interrupt") {
+        // Codex's exact already-terminal response also covers a lost terminal notification.
+        throw new CodexAppServerRpcError(
+          { code: -32_600, message: "no active turn to interrupt" },
+          method,
+        );
+      }
+      return undefined;
+    });
+    const params = makeTestParams({ abortSignal: abortController.signal, onAgentEvent });
+    const run = runCodexAppServerAttempt(params, { nativeHookRelay: { enabled: true } });
+    await harness.waitForMethod("turn/start");
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-cleanup" }),
+    );
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "compaction",
+        data: expect.objectContaining({ phase: "start", itemId: "compact-cleanup" }),
+      }),
+    );
+    abortController.abort();
+    await expect(run).rejects.toBe(finalizationError);
+
+    expect(readResult?.().compactionCount).toBeUndefined();
+    expect(readResult?.().itemLifecycle).toEqual({
+      startedCount: 1,
+      completedCount: 0,
+      activeCount: 0,
+    });
+    expect(
+      onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "compaction"),
+    ).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ phase: "start", itemId: "compact-cleanup" }),
+      }),
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phase: "end",
+          itemId: "compact-cleanup",
+          completed: false,
+        }),
+      }),
+    ]);
+    expect(harness.requests.filter(({ method }) => method === "thread/unsubscribe")).toEqual([
+      { method: "thread/unsubscribe", params: { threadId: "thread-1" } },
+    ]);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+    expect(queueActiveRunMessageForTest(params.sessionId, "after cleanup")).toBe(false);
   });
 
   it("unsubscribes and closes the app-server client when the active turn goes idle past the attempt timeout", async () => {

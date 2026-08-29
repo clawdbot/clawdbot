@@ -274,7 +274,10 @@ describe("CodexAppServerClient", () => {
     });
     controller.abort();
 
-    await expect(request).rejects.toThrow("model/list aborted");
+    await expect(request).rejects.toMatchObject({
+      message: "model/list aborted",
+      mayHaveWritten: false,
+    });
     await vi.advanceTimersByTimeAsync(1_000);
     expect(harness.writes).toHaveLength(1);
   });

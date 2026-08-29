@@ -31,7 +31,12 @@ import {
   retainCodexAppServerLiveThread,
   type CodexAppServerLiveThreadOwnership,
 } from "./client-runtime.js";
-import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerIndeterminateRequestCancellationError,
+  isCodexAppServerPrewriteRequestCancellationError,
+  type CodexAppServerClient,
+} from "./client.js";
 import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
 import { readCodexThreadContextSnapshot } from "./event-projector-usage.js";
 import {
@@ -549,8 +554,7 @@ async function compactCodexNativeThread(
         });
         let releaseThreadSubscription: (() => Promise<void>) | undefined;
         let retainedThreadOwnership: CodexAppServerLiveThreadOwnership | undefined;
-        let compactionSucceeded = false;
-        let compactionRequestDefinitelyRejected = false;
+        let canRetainThreadOwnership = true;
         let tokensAfter: number | undefined;
         const releaseCompactionThread = async (threadId: string) => {
           if (
@@ -692,6 +696,7 @@ async function compactCodexNativeThread(
                 )
               : undefined;
             await acquireThreadSubscription(guardedRequestTimeoutMs);
+            params.abortSignal?.throwIfAborted();
             await clearContextEngineProjectionBeforeNativeCompaction({
               sessionId: params.sessionId,
               bindingStore: options.bindingStore,
@@ -699,47 +704,54 @@ async function compactCodexNativeThread(
               binding,
             });
             try {
+              canRetainThreadOwnership = false;
               completionWatch.beginRequest();
-              if (guardedRequestTimeoutMs === undefined) {
-                await client.request("thread/compact/start", { threadId: binding.threadId });
-              } else {
-                await client.request(
-                  "thread/compact/start",
-                  { threadId: binding.threadId },
-                  { timeoutMs: guardedRequestTimeoutMs },
-                );
-              }
+              await client.request(
+                "thread/compact/start",
+                { threadId: binding.threadId },
+                { timeoutMs: guardedRequestTimeoutMs, signal: params.abortSignal },
+              );
               return { started: true as const, accepted: true as const };
             } catch (error) {
-              if (error instanceof CodexAppServerRpcError) {
-                // A server rejection proves native history was untouched; an
-                // ambiguous transport failure must never restore stale context.
+              const rejected =
+                error instanceof CodexAppServerRpcError ||
+                isCodexAppServerPrewriteRequestCancellationError(error);
+              if (rejected) {
+                // Rejection or cancellation before write leaves history untouched.
+                // A written request must keep its fence and cleared projection.
+                canRetainThreadOwnership = !isCodexThreadNotFoundError(error);
+                completionWatch.confirmRequestRejected();
                 await options.bindingStore.mutate(bindingIdentity, {
                   kind: "set",
                   binding,
                 });
-                compactionRequestDefinitelyRejected = !isCodexThreadNotFoundError(error);
               }
               // Retirement can acquire this same generation lease.
-              return { started: true as const, accepted: false as const, error };
+              return { started: true as const, accepted: false as const, rejected, error };
             }
           });
           if (!guardedResult.started) {
             return guardedResult.result;
           }
           if (!guardedResult.accepted) {
-            if (guardedResult.error instanceof CodexAppServerRpcError) {
-              completionWatch.confirmRequestRejected();
-            } else {
+            if (guardedResult.rejected) {
+              throw guardedResult.error;
+            }
+            if (
+              !params.abortSignal?.aborted ||
+              !isCodexAppServerIndeterminateRequestCancellationError(guardedResult.error)
+            ) {
               // Transport errors after the write leave the server-side start
               // ambiguous. Retire or detach the thread before releasing its fence.
               await completionWatch.retireUnconfirmedRequest(
                 `codex app-server compaction start was unconfirmed: ${coerceErrorMessage(guardedResult.error)}`,
               );
+              throw guardedResult.error;
             }
-            throw guardedResult.error;
+            // Cancellation after write leaves native completion authoritative,
+            // including when completion wins before the compact ACK arrives.
           }
-          embeddedAgentLog.info("started codex app-server compaction", {
+          embeddedAgentLog.info("waiting for codex app-server compaction completion", {
             sessionId: params.sessionId,
             threadId: binding.threadId,
           });
@@ -764,7 +776,7 @@ async function compactCodexNativeThread(
             sessionId: params.sessionId,
             threadId: binding.threadId,
           });
-          compactionSucceeded = true;
+          canRetainThreadOwnership = true;
         } catch (error) {
           if (isCodexThreadNotFoundError(error)) {
             return failedCodexThreadBindingCompactionResult(params, {
@@ -787,10 +799,7 @@ async function compactCodexNativeThread(
         } finally {
           completionWatch.cancel();
           try {
-            if (
-              (compactionSucceeded || compactionRequestDefinitelyRejected) &&
-              retainedThreadOwnership
-            ) {
+            if (canRetainThreadOwnership && retainedThreadOwnership) {
               const ownership = retainedThreadOwnership;
               const currentBinding = await options.bindingStore.read(bindingIdentity);
               // Reset uses this same generation lease; without it compaction

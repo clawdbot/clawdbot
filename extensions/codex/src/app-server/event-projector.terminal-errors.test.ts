@@ -223,85 +223,93 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     },
   );
 
-  it("keeps an active native compaction failure scoped through the failed turn", async () => {
-    const onAgentEvent = vi.fn();
-    const onContextCompacted = vi.fn();
-    const projector = await createProjector(
-      { ...(await createParams()), onAgentEvent },
-      { onContextCompacted },
-    );
-
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "contextCompaction", id: "compact-failed" },
-      }),
-    );
-    await projector.handleNotification(
-      appServerError({
-        message: "remote compaction failed",
-        willRetry: false,
-        codexErrorInfo: "other",
-      }),
-    );
-
-    expect(readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry()))).toMatchObject({
-      promptError: "remote compaction failed",
-      promptErrorSource: "compaction",
-    });
-    expect(projector.settledTurnFailureFinalizationAllowed).toBe(true);
-
-    await projector.handleNotification(
-      forCurrentTurn("turn/completed", {
-        turn: {
-          id: TURN_ID,
-          status: "failed",
-          error: { message: "remote compaction failed", codexErrorInfo: "other" },
-          items: [],
+  it.each([
+    { status: "failed", codexErrorInfo: "other", recoverable: true },
+    { status: "failed", codexErrorInfo: "unauthorized", recoverable: false },
+    { status: "failed", codexErrorInfo: "usageLimitExceeded", recoverable: false },
+    { status: "interrupted", codexErrorInfo: undefined, recoverable: false },
+  ] as const)(
+    "closes active native compaction for $status/$codexErrorInfo without widening recovery",
+    async ({ status, codexErrorInfo, recoverable }) => {
+      const onAgentEvent = vi.fn();
+      const onContextCompacted = vi.fn();
+      const projector = await createProjector(
+        { ...(await createParams()), onAgentEvent },
+        { onContextCompacted },
+      );
+      const compaction = { item: { type: "contextCompaction", id: "compact-failed" } };
+      await projector.handleNotification(forCurrentTurn("item/started", compaction));
+      if (codexErrorInfo) {
+        await projector.handleNotification(
+          appServerError({ message: "remote compaction failed", willRetry: false, codexErrorInfo }),
+        );
+        expect(readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry()))).toMatchObject(
+          {
+            promptErrorSource: recoverable ? "compaction" : "prompt",
+          },
+        );
+      }
+      await projector.handleNotification(
+        forCurrentTurn("turn/completed", {
+          turn: {
+            id: TURN_ID,
+            status,
+            error: codexErrorInfo ? { message: "remote compaction failed", codexErrorInfo } : null,
+            items: [],
+          },
+        }),
+      );
+      expect(projector.buildResult(buildEmptyToolTelemetry()).itemLifecycle).toEqual({
+        startedCount: 1,
+        completedCount: 0,
+        activeCount: 0,
+      });
+      expect(projector.buildResult(buildEmptyToolTelemetry()).compactionCount).toBeUndefined();
+      // A late native completion must not report a second outcome after
+      // the enclosing turn has already closed its unfinished compaction.
+      await projector.handleNotification(forCurrentTurn("item/completed", compaction));
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      expect(projector.settledTurnFailureFinalizationAllowed).toBe(recoverable);
+      expect(readAttemptTerminal(result).promptErrorSource).toBe(
+        codexErrorInfo ? (recoverable ? "compaction" : "prompt") : null,
+      );
+      expect(projector.isCompacting()).toBe(false);
+      expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
+      expect(result.compactionCount).toBeUndefined();
+      expect(onContextCompacted).not.toHaveBeenCalled();
+      expect(
+        onAgentEvent.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.stream === "compaction"),
+      ).toEqual([
+        {
+          stream: "compaction",
+          data: {
+            phase: "start",
+            backend: "codex-app-server",
+            threadId: THREAD_ID,
+            turnId: TURN_ID,
+            itemId: "compact-failed",
+          },
         },
-      }),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(readAttemptTerminal(result)).toMatchObject({
-      promptError: "remote compaction failed",
-      promptErrorSource: "compaction",
-    });
-    expect(projector.settledTurnFailureFinalizationAllowed).toBe(true);
-    expect(projector.isCompacting()).toBe(false);
-    expect(result.itemLifecycle).toEqual({ startedCount: 0, completedCount: 0, activeCount: 0 });
-    expect(result.compactionCount).toBeUndefined();
-    expect(onContextCompacted).not.toHaveBeenCalled();
-    expect(
-      onAgentEvent.mock.calls
-        .map(([event]) => event)
-        .filter((event) => event.stream === "compaction"),
-    ).toEqual([
-      {
-        stream: "compaction",
-        data: {
-          phase: "start",
-          backend: "codex-app-server",
-          threadId: THREAD_ID,
-          turnId: TURN_ID,
-          itemId: "compact-failed",
+        {
+          stream: "compaction",
+          data: {
+            phase: "end",
+            backend: "codex-app-server",
+            completed: false,
+            threadId: THREAD_ID,
+            turnId: TURN_ID,
+            itemId: "compact-failed",
+          },
         },
-      },
-      {
-        stream: "compaction",
-        data: {
-          phase: "end",
-          backend: "codex-app-server",
-          completed: false,
-          threadId: THREAD_ID,
-          turnId: TURN_ID,
-          itemId: "compact-failed",
-        },
-      },
-    ]);
-  });
+      ]);
+    },
+  );
 
   it("keeps other errors prompt-scoped after native compaction completes", async () => {
-    const projector = await createProjector();
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
     const compaction = { item: { type: "contextCompaction", id: "compact-completed" } };
 
     await projector.handleNotification(forCurrentTurn("item/started", compaction));
@@ -319,6 +327,16 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       promptErrorSource: "prompt",
     });
     expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
+    await projector.handleNotification(turnWithStatus("interrupted"));
+    expect(projector.buildResult(buildEmptyToolTelemetry()).compactionCount).toBe(1);
+    expect(
+      onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "compaction"),
+    ).toEqual([
+      expect.objectContaining({ data: expect.objectContaining({ phase: "start" }) }),
+      expect.objectContaining({ data: expect.objectContaining({ phase: "end", completed: true }) }),
+    ]);
   });
 
   it("uses Codex rate-limit resets for usage-limit app-server errors", async () => {

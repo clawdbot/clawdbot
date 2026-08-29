@@ -504,6 +504,13 @@ public OpenAI summarizer. If the native Codex thread binding is missing or
 stale, the command fails closed instead of silently switching compaction
 backends.
 
+Cancellation before the compact request is written prevents new native
+compaction. If the request may already have been written, OpenClaw keeps the
+native completion fence until the turn ends or the unconfirmed thread is
+retired. Unfinished compaction progress closes on terminal status or local
+teardown with an unsuccessful end event. This closeout does not increment
+successful compaction counts or undo an already recorded completion.
+
 ### Direct API long context
 
 Codex subscription and direct OpenAI API traffic are separate contracts. The

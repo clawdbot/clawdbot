@@ -13,8 +13,10 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
+import { threadStartResult } from "./codex-app-server.test-fixtures.js";
 import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl } from "./compact.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import * as compactionActivity from "./context-compaction-activity.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
@@ -29,6 +31,7 @@ import {
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
+import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 let tempDir: string;
@@ -220,7 +223,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       await startCompaction(sessionFile, { currentTokenCount: 123 }),
     );
 
-    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" }, {});
     expect(fake.client["addNotificationHandler"]).toHaveBeenCalledTimes(1);
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
@@ -306,7 +309,11 @@ describe("maybeCompactCodexAppServerSession", () => {
     const sessionFile = await writeTestBinding();
     const pending = startCompaction(sessionFile);
     await vi.waitFor(() => {
-      expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+      expect(fake.request).toHaveBeenCalledWith(
+        "thread/compact/start",
+        { threadId: "thread-1" },
+        {},
+      );
     });
 
     await fake.client.request("thread/resume", { threadId: "thread-2", excludeTurns: true });
@@ -333,7 +340,11 @@ describe("maybeCompactCodexAppServerSession", () => {
     const sessionFile = await writeTestBinding({ clientId: "client-before-compaction" });
     const pending = startCompaction(sessionFile);
     await vi.waitFor(() => {
-      expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+      expect(fake.request).toHaveBeenCalledWith(
+        "thread/compact/start",
+        { threadId: "thread-1" },
+        {},
+      );
     });
 
     seedCodexTestBinding(sessionFile, {
@@ -694,6 +705,228 @@ describe("maybeCompactCodexAppServerSession", () => {
       expect.objectContaining({ release: expect.any(Function) }),
     );
   });
+
+  it.each(["resume", "projection", "overload"] as const)(
+    "cancels native admission during %s without retiring an untouched thread",
+    async (cancelAt) => {
+      const harness = createClientHarness();
+      const abortController = new AbortController();
+      ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+      if (cancelAt !== "resume") {
+        await retainCodexAppServerLiveThread(harness.client, "thread-1");
+      }
+      const projection = {
+        schemaVersion: 1 as const,
+        mode: "thread_bootstrap" as const,
+        epoch: "epoch-1",
+        fingerprint: "fingerprint-1",
+      };
+      const sessionFile = await writeTestBinding({
+        contextEngine: {
+          schemaVersion: 1,
+          engineId: "lossless-claw",
+          policyFingerprint: "policy-1",
+          projection,
+        },
+      });
+      const run = maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "manual",
+          abortSignal: abortController.signal,
+        },
+        {
+          clientFactory: async () => harness.client,
+          nativeCompletionTimeoutMs: 1_000,
+          nativeInterruptGraceMs: 100,
+          bindingStore: {
+            ...testCodexAppServerBindingStore,
+            mutate: async (...args) => {
+              const result = await testCodexAppServerBindingStore.mutate(...args);
+              if (cancelAt === "projection" && args[1].kind === "patch") {
+                abortController.abort();
+              }
+              return result;
+            },
+          },
+        },
+      );
+      try {
+        if (cancelAt === "resume") {
+          const resume = JSON.parse(await harness.waitForWrite(0));
+          expect(resume.method).toBe("thread/resume");
+          harness.send({ id: resume.id, result: threadStartResult("thread-1", tempDir) });
+          // The response has settled the physical request; cancel before its
+          // asynchronous subscription acquisition returns to compaction.
+          queueMicrotask(() => abortController.abort());
+          const release = JSON.parse(await harness.waitForWrite(1));
+          expect(release.method).toBe("thread/unsubscribe");
+          harness.send({ id: release.id, result: {} });
+        } else if (cancelAt === "overload") {
+          const request = JSON.parse(await harness.waitForWrite(0));
+          expect(request.method).toBe("thread/compact/start");
+          harness.send({
+            id: request.id,
+            error: { code: -32_001, message: "Server overloaded; retry later." },
+          });
+          abortController.abort();
+        }
+        await expect(run).resolves.toMatchObject({ ok: false, compacted: false });
+        expect(harness.writes.map((line) => JSON.parse(line).method)).toEqual(
+          cancelAt === "resume"
+            ? ["thread/resume", "thread/unsubscribe"]
+            : cancelAt === "overload"
+              ? ["thread/compact/start"]
+              : [],
+        );
+        expect(harness.client.getCloseError()).toBeUndefined();
+        expect((await readCodexAppServerBinding(sessionFile))?.contextEngine?.projection).toEqual(
+          projection,
+        );
+        if (cancelAt !== "resume") {
+          await expect(
+            consumeCodexAppServerLiveThread(harness.client, "thread-1"),
+          ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+        }
+      } finally {
+        harness.client.close();
+        await run.catch(() => undefined);
+      }
+    },
+  );
+
+  it.each(["completed", "interrupted"] as const)(
+    "holds a cancelled written compact request until native terminal state: %s",
+    async (terminalStatus) => {
+      const harness = createClientHarness();
+      const abortController = new AbortController();
+      const persistActivity = vi.spyOn(compactionActivity, "persistCodexContextCompactionActivity");
+      ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+      await retainCodexAppServerLiveThread(
+        harness.client,
+        "thread-1",
+        undefined,
+        "config-thread-1",
+        "priority",
+      );
+      const sessionFile = await writeTestBinding();
+      let settled = false;
+      const run = maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "manual",
+          abortSignal: abortController.signal,
+          currentTokenCount: 456,
+        },
+        { clientFactory: async () => harness.client },
+      ).finally(() => {
+        settled = true;
+      });
+      try {
+        const request = JSON.parse(await harness.waitForWrite(0));
+        expect(request.method).toBe("thread/compact/start");
+        harness.send({
+          method: "turn/started",
+          params: { threadId: "thread-1", turn: { id: "compact-turn", status: "inProgress" } },
+        });
+        const itemParams = {
+          threadId: "thread-1",
+          turnId: "compact-turn",
+          item: { id: "compact-item", type: "contextCompaction" },
+        };
+        harness.send({ method: "item/started", params: itemParams });
+        // Do not acknowledge compact/start: cancellation now leaves a written
+        // request whose native lifetime must still be owned by the completion watch.
+        abortController.abort();
+        const interrupt = JSON.parse(await harness.waitForWrite(1));
+        expect(interrupt).toMatchObject({
+          method: "turn/interrupt",
+          params: { threadId: "thread-1", turnId: "compact-turn" },
+        });
+        if (terminalStatus === "interrupted") {
+          harness.send({ id: interrupt.id, result: {} });
+        }
+        await flushAsyncTasks();
+        expect(settled).toBe(false);
+        expect(harness.client.getCloseError()).toBeUndefined();
+        expect(persistActivity).not.toHaveBeenCalled();
+        if (terminalStatus === "completed") {
+          harness.send({
+            method: "thread/tokenUsage/updated",
+            params: {
+              threadId: "thread-1",
+              turnId: "compact-turn",
+              tokenUsage: { last: { totalTokens: 123 } },
+            },
+          });
+          harness.send({ method: "item/completed", params: itemParams });
+        }
+        harness.send({
+          method: "turn/completed",
+          params: { threadId: "thread-1", turn: { id: "compact-turn", status: terminalStatus } },
+        });
+        // Native completion can beat cancellation even when the compact ACK arrives last.
+        harness.send({ id: request.id, result: {} });
+        if (terminalStatus === "completed") {
+          harness.send({
+            id: interrupt.id,
+            error: { code: -32_600, message: "no active turn to interrupt" },
+          });
+        }
+        await flushAsyncTasks();
+        // Answer cleanup if requested so a retention regression fails on outcome, not timeout.
+        if (harness.writes[2]) {
+          const release = JSON.parse(harness.writes[2]);
+          expect(release.method).toBe("thread/unsubscribe");
+          harness.send({ id: release.id, result: {} });
+        }
+        const result = requireCompactResult(await run);
+        expect(result).toMatchObject({
+          ok: terminalStatus === "completed",
+          compacted: terminalStatus === "completed",
+        });
+        expect(harness.client.getCloseError()).toBeUndefined();
+        if (terminalStatus === "completed") {
+          expect(result.result).toMatchObject({
+            tokensBefore: 456,
+            tokensAfter: 123,
+            details: { pending: false, completed: true },
+          });
+          expect(persistActivity).toHaveBeenCalledOnce();
+          expect(persistActivity).toHaveBeenCalledWith(
+            expect.objectContaining({
+              threadId: "thread-1",
+              turnId: "compact-turn",
+              itemId: "compact-item",
+            }),
+          );
+          expect(harness.writes).toHaveLength(2);
+          await expect(
+            consumeCodexAppServerLiveThread(harness.client, "thread-1", "config-thread-1"),
+          ).resolves.toMatchObject({
+            configFingerprint: "config-thread-1",
+            serviceTier: "priority",
+          });
+        } else {
+          expect(persistActivity).not.toHaveBeenCalled();
+          expect(harness.writes).toHaveLength(3);
+          await expect(
+            consumeCodexAppServerLiveThread(harness.client, "thread-1"),
+          ).resolves.toBeUndefined();
+        }
+      } finally {
+        harness.client.close();
+        await run.catch(() => undefined);
+        persistActivity.mockRestore();
+      }
+    },
+  );
 
   it("records the required-preflight origin on native app-server compaction requests", async () => {
     const fake = createFakeCodexClient({ retainedThreadId: null });
@@ -1213,7 +1446,11 @@ describe("maybeCompactCodexAppServerSession", () => {
       settled = true;
     });
     await vi.waitFor(() => {
-      expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+      expect(fake.request).toHaveBeenCalledWith(
+        "thread/compact/start",
+        { threadId: "thread-1" },
+        {},
+      );
     });
     await flushAsyncTasks();
     expect(settled).toBe(false);
@@ -1915,7 +2152,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       await startCompaction(sessionFile, { currentTokenCount: 456 }),
     );
 
-    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" }, {});
     const preservedBinding = await readCodexAppServerBinding(sessionFile);
     expect(preservedBinding?.threadId).toBe("thread-1");
     expect(preservedBinding?.authProfileId).toBe("openai:work");
@@ -2053,7 +2290,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       },
     });
 
-    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" }, {});
     expect(warn).toHaveBeenCalledWith(
       "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
       {
@@ -2104,7 +2341,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       },
     });
 
-    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" }, {});
     expect(warn).toHaveBeenCalledWith(
       "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
       {
@@ -2186,7 +2423,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       }),
     );
 
-    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" }, {});
     expect(fake.request.mock.calls.map(([method]) => method)).toEqual([
       "thread/resume",
       "thread/compact/start",
