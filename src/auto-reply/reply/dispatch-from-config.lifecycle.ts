@@ -592,10 +592,10 @@ export function createDispatchReplyOperationCoordinator(params: {
     const abortSignal = getDispatchAbortSignal();
     const onAgentRunStart: NonNullable<
       NonNullable<DispatchFromConfigParams["replyOptions"]>["onAgentRunStart"]
-    > = (runId, executionIdentityToken) => {
+    > = (...args) => {
       agentRunTerminalOutcome = "completed";
-      params.messageAuditTerminal?.observeRunId(runId);
-      params.replyOptions?.onAgentRunStart?.(runId, executionIdentityToken);
+      params.messageAuditTerminal?.observeRunId(args[0]);
+      return params.replyOptions?.onAgentRunStart?.(...args);
     };
     const onAgentRunTerminalOutcome: NonNullable<
       NonNullable<DispatchFromConfigParams["replyOptions"]>["onAgentRunTerminalOutcome"]
