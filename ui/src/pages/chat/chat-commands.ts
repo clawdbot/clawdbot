@@ -231,8 +231,9 @@ async function requestRemoteSlashCommands(
 function loadRemoteSlashCommands(
   client: GatewayBrowserClient,
   agentId: string | undefined,
+  sessionKey?: string,
 ): Promise<SlashCommandDef[]> {
-  const metadata = peekChatMetadata(client, agentId);
+  const metadata = peekChatMetadata(client, { agentId, sessionKey });
   // Store-held metadata carries app-level invalidation on config changes and logical reconnects,
   // so no TTL applies here. The cache below owns only commands.list-derived entries.
   if (Array.isArray(metadata?.commands)) {
@@ -279,6 +280,7 @@ export function applyRemoteSlashCommandsResult(params: {
 export async function refreshSlashCommands(params: {
   client: GatewayBrowserClient | null;
   agentId?: string | null;
+  sessionKey?: string;
   shouldApply?: () => boolean;
 }): Promise<void> {
   const seq = ++refreshSeq;
@@ -290,7 +292,7 @@ export async function refreshSlashCommands(params: {
     replaceSlashCommands(buildFallbackSlashCommands());
     return;
   }
-  const commands = await loadRemoteSlashCommands(params.client, agentId);
+  const commands = await loadRemoteSlashCommands(params.client, agentId, params.sessionKey);
   if (seq !== refreshSeq || params.shouldApply?.() === false) {
     return;
   }
@@ -469,7 +471,7 @@ export async function dispatchChatSlashCommand(
     );
   }
 
-  if (result.sessionPatch && "modelOverride" in result.sessionPatch) {
+  if (result.modelChanged) {
     if (targetIsCurrent()) {
       await host.refreshCurrentSessionTools?.();
     }

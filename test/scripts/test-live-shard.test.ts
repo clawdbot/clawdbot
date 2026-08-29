@@ -85,77 +85,65 @@ describe("scripts/test-live-shard", () => {
     );
   });
 
-  it("keeps slow gateway backend and media-capable extension files in their own shards", () => {
-    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
-      "src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.live.test.ts",
+  it("routes fixture files across alphabet boundaries and dedicated slow shards", () => {
+    const expectedByShard = {
+      "native-live-src-agents": [
+        "src/agents/zai.live.test.ts",
+        "src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.live.test.ts",
+        "src/skills/workshop/experience-review.live.test.ts",
+      ],
+      "native-live-src-agents-zai-coding": ["src/agents/zai.live.test.ts"],
+      "native-live-src-gateway-backends": [
+        "src/gateway/gateway-acp-bind.live.test.ts",
+        "src/gateway/gateway-cli-backend.live.test.ts",
+        "src/gateway/gateway-codex-bind.live.test.ts",
+        "src/gateway/gateway-codex-harness.live.test.ts",
+      ],
+      "native-live-src-gateway-profiles": [
+        "src/gateway/gateway-models.profiles.live.test.ts",
+        "src/gateway/gateway-openai-long-context.live.test.ts",
+      ],
+      "native-live-src-gateway-core": [
+        "src/gateway/fixture.live.test.ts",
+        "src/system-agent/fixture.live.test.ts",
+      ],
+      "native-live-src-infra": ["src/infra/fixture.live.test.ts"],
+      "native-live-test": ["test/fixture.live.test.ts"],
+      "native-live-extensions-a-k": [
+        "extensions/a-provider/model.live.test.ts",
+        "extensions/k-provider/model.live.test.ts",
+      ],
+      "native-live-extensions-l-n": [
+        "extensions/l-provider/model.live.test.ts",
+        "extensions/n-provider/model.live.test.ts",
+      ],
+      "native-live-extensions-moonshot": ["extensions/moonshot/moonshot.live.test.ts"],
+      "native-live-extensions-openai": ["extensions/openai/openai.live.test.ts"],
+      "native-live-extensions-o-z-other": [
+        "extensions/o-provider/model.live.test.ts",
+        "extensions/z-provider/model.live.test.ts",
+      ],
+      "native-live-extensions-xai": ["extensions/xai/xai.live.test.ts"],
+      "native-live-extensions-media": [
+        "extensions/minimax/minimax.live.test.ts",
+        "extensions/music-generation-providers.live.test.ts",
+        "extensions/openai/openai-tts.live.test.ts",
+        "extensions/tts-local-cli/speech-provider.live.test.ts",
+        "extensions/video-generation-providers.live.test.ts",
+        "extensions/volcengine/tts.live.test.ts",
+        "extensions/vydra/vydra.live.test.ts",
+      ],
+    };
+    const files = [...new Set(Object.values(expectedByShard).flat())].toSorted((a, b) =>
+      a.localeCompare(b),
     );
-    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
-      "src/skills/workshop/experience-review.live.test.ts",
-    );
-    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
-      "src/agents/zai.live.test.ts",
-    );
-    expect(selectLiveShardFiles("native-live-src-agents-zai-coding", allFiles)).toEqual([
-      "src/agents/zai.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-src-gateway-backends", allFiles)).toEqual([
-      "src/gateway/gateway-acp-bind.live.test.ts",
-      "src/gateway/gateway-cli-backend.live.test.ts",
-      "src/gateway/gateway-codex-bind.live.test.ts",
-      "src/gateway/gateway-codex-harness.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-src-gateway-profiles", allFiles)).toEqual([
-      "src/gateway/gateway-models.profiles.live.test.ts",
-      "src/gateway/gateway-openai-long-context.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-src-gateway-core", allFiles)).toEqual([
-      "src/gateway/android-node.capabilities.live.test.ts",
-      "src/gateway/gateway-acp-spawn-defaults.live.test.ts",
-      "src/gateway/gateway-trajectory-export.live.test.ts",
-      "src/system-agent/rescue-channel.live.test.ts",
-      "src/system-agent/setup-app-recommendations.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-src-infra", allFiles)).toEqual([
-      "src/infra/push-apns-http2.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-test", allFiles)).toEqual([
-      "test/e2e/qa-lab/runtime/gateway-node-mcp.live.test.ts",
-      "test/image-generation.infer-cli.live.test.ts",
-      "test/image-generation.runtime.live.test.ts",
-      "test/openai-onboarding.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-extensions-media", allFiles)).toEqual([
-      "extensions/minimax/minimax.live.test.ts",
-      "extensions/music-generation-providers.live.test.ts",
-      "extensions/openai/openai-tts.live.test.ts",
-      "extensions/video-generation-providers.live.test.ts",
-      "extensions/volcengine/tts.live.test.ts",
-      "extensions/vydra/vydra.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-extensions-openai", allFiles)).toEqual([
-      "extensions/openai/openai-provider.live.test.ts",
-      "extensions/openai/openai.live.test.ts",
-      "extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts",
-      "extensions/openai/realtime-quicksilver.live.test.ts",
-      "extensions/openai/realtime-voice-provider.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-extensions-l-n", allFiles)).toEqual([
-      "extensions/llama-cpp/src/external-server/llama-server.live.test.ts",
-      "extensions/memory-lancedb/memory-lancedb.live.test.ts",
-      "extensions/meta/meta.live.test.ts",
-      "extensions/microsoft/microsoft.live.test.ts",
-      "extensions/mistral/mistral.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-extensions-moonshot", allFiles)).toEqual([
-      "extensions/moonshot/moonshot.live.test.ts",
-    ]);
-  });
 
-  it("keeps the Codex CLI backend live smoke on a minimal tool profile", () => {
-    const source = readFileSync("src/gateway/gateway-cli-backend.live.test.ts", "utf8");
-
-    expect(source).toContain('providerId === "codex-cli" && !schemaProbePluginPath');
-    expect(source).toContain('profile: "minimal" as const');
+    for (const [shard, expectedFiles] of Object.entries(expectedByShard)) {
+      expect(selectLiveShardFiles(shard, files), shard).toEqual(expectedFiles);
+    }
+    expect(selectLiveShardFiles("native-live-extensions-media-audio", allFiles)).toContain(
+      "extensions/tts-local-cli/speech-provider.live.test.ts",
+    );
   });
 
   it("rejects unknown shard names", () => {

@@ -1,4 +1,21 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
+import { expect } from "vitest";
+
+export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+export const uiProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "drafts-ux",
+);
+export const sessionOwnerProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "session-owner-stack",
+);
 
 type AvatarFixture = {
   id: string;
@@ -47,4 +64,48 @@ export async function avatarLabelCenterDelta(row: Locator) {
       avatarBounds.top + avatarBounds.height / 2 - (labelBounds.top + labelBounds.height / 2),
     );
   });
+}
+
+export async function captureUiProof(page: Page, fileName: string) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(uiProofArtifactDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(uiProofArtifactDir, fileName),
+  });
+}
+
+export async function captureSessionOwnerProof(page: Page, fileName: string) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
+  await page.locator(".sidebar-sessions").screenshot({
+    animations: "disabled",
+    path: path.join(sessionOwnerProofArtifactDir, fileName),
+  });
+}
+
+export async function captureSessionOwnerPageProof(page: Page, fileName: string) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(sessionOwnerProofArtifactDir, fileName),
+  });
+}
+
+export async function openSidebarSortMenu(page: Page) {
+  const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
+  await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
+  await filterAndSort.click();
+  const menu = page.locator(".sidebar-session-sort-menu");
+  await menu.waitFor();
+  return menu;
 }

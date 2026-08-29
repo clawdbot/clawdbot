@@ -2,6 +2,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawnCommand } from "../../../process/exec.js";
 import { ensureTool } from "../../utils/tools-manager.js";
@@ -60,6 +61,75 @@ function textContent(
 }
 
 describe("grep tool streaming", () => {
+  it.for([
+    { context: undefined, expected: ["sample.txt:3: context needle"] },
+    { context: 0, expected: ["sample.txt:3: context needle"] },
+    {
+      context: 1,
+      expected: ["sample.txt-2- second", "sample.txt:3: context needle", "sample.txt-4- fourth"],
+    },
+    { context: 0.5, expected: ["sample.txt:3: context needle"] },
+    {
+      context: 1.5,
+      expected: ["sample.txt-2- second", "sample.txt:3: context needle", "sample.txt-4- fourth"],
+    },
+    { context: -1, expected: ["sample.txt:3: context needle"] },
+  ])(
+    "normalizes grep context $context after argument validation",
+    async ({ context, expected }) => {
+      const child = createChild();
+      vi.mocked(spawnCommand).mockReturnValue(child as never);
+      vi.mocked(ensureTool).mockResolvedValue("rg");
+
+      const cwd = "/workspace";
+      const filePath = `${cwd}/sample.txt`;
+      const tool = createGrepToolDefinition(cwd, {
+        operations: {
+          isDirectory: () => false,
+          readFile: () => "first\nsecond\ncontext needle\nfourth\nfifth\n",
+        },
+      });
+      const args = {
+        pattern: "context needle",
+        path: "sample.txt",
+        literal: true,
+        ...(context === undefined ? {} : { context }),
+      };
+      const validated = validateToolArguments(tool, {
+        type: "toolCall",
+        id: "grep-context",
+        name: tool.name,
+        arguments: args,
+      }) as Parameters<typeof tool.execute>[1];
+      expect(validated).toEqual(args);
+
+      const resultPromise = tool.execute(
+        "grep-context",
+        validated,
+        undefined,
+        undefined,
+        {} as never,
+      );
+      await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+      child.stdout.end(
+        `${JSON.stringify({
+          type: "match",
+          data: {
+            path: { text: filePath },
+            line_number: 3,
+            lines: { text: "context needle\n" },
+          },
+        })}\n`,
+      );
+      child.stderr.end();
+      child.emit("close", 0);
+
+      const result = await resultPromise;
+      expect(result.content).toEqual([{ type: "text", text: expected.join("\n") }]);
+      expect(result.details).toBeUndefined();
+    },
+  );
+
   it.each([
     {
       name: "keeps an exact-size result complete",

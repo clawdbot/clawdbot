@@ -78,8 +78,10 @@ export async function createDiscordLoopbackRest(options?: {
         path: request.url,
       };
       requests.push(received);
+      // server.close() does not await the fetch client's deferred keep-alive timer.
       response.writeHead(options?.status?.(received) ?? 200, {
         "Content-Type": "application/json",
+        Connection: "close",
       });
       response.end(
         JSON.stringify(

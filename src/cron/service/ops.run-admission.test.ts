@@ -672,6 +672,7 @@ describe("cron service run admission", () => {
     job.failureAlert = { after: 1, cooldownMs: 60_000, includeSkipped: true };
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
     const sendCronFailureAlert = vi.fn(async () => {});
+    const editedName = "edited before invalid-run commit";
     let edited = false;
     const state = createAdmissionTestState({
       cronEnabled: true,
@@ -689,9 +690,9 @@ describe("cron service run admission", () => {
         edited = true;
         openOpenClawStateDatabase()
           .db.prepare(
-            "UPDATE cron_jobs SET name = ?, updated_at = updated_at + 1 WHERE store_key = ? AND job_id = ?",
+            "UPDATE cron_jobs SET name = ?, job_json = json_set(job_json, '$.name', ?), updated_at = updated_at + 1 WHERE store_key = ? AND job_id = ?",
           )
-          .run("edited before invalid-run commit", cronStoreKey(store.storePath), job.id);
+          .run(editedName, editedName, cronStoreKey(store.storePath), job.id);
       },
     });
 
@@ -702,7 +703,7 @@ describe("cron service run admission", () => {
     });
 
     const persisted = (await loadCronStore(store.storePath)).jobs[0];
-    expect(persisted?.name).toBe("edited before invalid-run commit");
+    expect(persisted?.name).toBe(editedName);
     expect(persisted?.state.lastRunStatus).toBeUndefined();
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
   });

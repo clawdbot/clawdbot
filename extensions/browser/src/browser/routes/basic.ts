@@ -397,7 +397,14 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         signal: req.signal,
         run: async (signal) => {
           const status = await buildBrowserStatus(ctx, profileCtx, signal);
-          const doctorReport = buildBrowserDoctorReport({ status });
+          const doctorReport = buildBrowserDoctorReport({
+            status,
+            extensionVersion:
+              status.transport === "extension"
+                ? ctx.state().extensionRelays?.get(profileCtx.profile.name)?.bridge.identity
+                    ?.extensionVersion
+                : undefined,
+          });
           if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
             doctorReport.checks.push(await runBrowserLiveProbe(profileCtx, signal));
             doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");

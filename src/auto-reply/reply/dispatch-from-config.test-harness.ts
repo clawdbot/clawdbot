@@ -77,7 +77,7 @@ export let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").d
 
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
-export let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acp-runtime.js").tryDispatchAcpReplyHook;
+export let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acpx.js").tryDispatchAcpReplyHook;
 
 export let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 
@@ -378,7 +378,8 @@ export const globalBeforeAll0 = async () => {
   await import("./dispatch-acp.js");
   await import("./dispatch-acp-command-bypass.js");
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-  ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acp-runtime.js"));
+  // The broad facade imports the real manager outside this fixture's mocked dispatch boundary.
+  ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acpx.js"));
   ({ createReplyOperation, replyRunRegistry } = await import("./reply-run-registry.js"));
   ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
   ({ admitReplyTurn, runWithReplyOperationLifecycleAdmission } =

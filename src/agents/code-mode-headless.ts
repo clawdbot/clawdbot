@@ -30,7 +30,9 @@ import {
 } from "./code-mode-runtime.js";
 import {
   cancelPendingBridgeStates,
+  cancelPendingBridgeStatesById,
   createCodeModeBridgeDispatchState,
+  createCodeModeRunOwner,
   createPendingBridgeStates,
   pendingBridgeStatesForSettlement,
   settledBridgeRequestsInCompletionOrder,
@@ -81,12 +83,20 @@ function headlessFailure(params: {
   error: string;
   output: unknown[];
   toolCallCount: number;
+  maxOutputBytes: number;
 }): CodeModeHeadlessResult {
-  return { status: "failed", ...params };
+  const bounded = boundCodeModeResult(params);
+  return {
+    status: "failed",
+    code: params.code,
+    toolCallCount: params.toolCallCount,
+    error: bounded.error,
+    output: bounded.output,
+  };
 }
 
 function remainingHeadlessMs(deadline: number): number {
-  const remaining = deadline - Date.now();
+  const remaining = Math.ceil(deadline - performance.now());
   if (remaining <= 0) {
     throw new CodeModeHeadlessTimeoutError();
   }
@@ -209,8 +219,9 @@ export async function runCodeModeScriptHeadless(params: {
     1,
     MAX_HEADLESS_TOOL_CALLS,
   );
-  const deadline = Date.now() + wallClockMs;
-  const abortScope = createHeadlessAbortScope(params.signal, wallClockMs);
+  const deadline = performance.now() + wallClockMs;
+  const owner = createCodeModeRunOwner(params.ctx);
+  const abortScope = createHeadlessAbortScope(owner.bindCall(params.signal), wallClockMs);
   const output: unknown[] = [];
   let pending: PendingBridgeState[] = [];
   let toolCallCount = 0;
@@ -220,13 +231,14 @@ export async function runCodeModeScriptHeadless(params: {
     const codeModeRunId = `cm_headless_${randomUUID()}`;
     const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config), {
       prepareInput: true,
+      validateInput: true,
     });
     const bridgeDispatch = createCodeModeBridgeDispatchState();
     const namespaceCatalog = runtime.namespaceEntries();
     const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
     const preparedSource = await awaitCodeModeDeadline({
       operation: () => prepareSource({ code: params.code, language: params.language, config }),
-      deadlineMs: deadline,
+      remainingMs: remainingHeadlessMs(deadline),
       signal: abortScope.signal,
       createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
       createAbortError: headlessAbortError,
@@ -278,10 +290,12 @@ export async function runCodeModeScriptHeadless(params: {
           error: result.error,
           output,
           toolCallCount,
+          maxOutputBytes: config.maxOutputBytes,
         });
       }
 
       enforceSnapshotPayloadLimits({ snapshotBytes: result.snapshotBytes, config });
+      cancelPendingBridgeStatesById(pending, result.canceledRequestIds);
       const pendingIds = new Set(pending.map((entry) => entry.id));
       const newRequests = result.pendingRequests.filter((request) => !pendingIds.has(request.id));
       // Node discovery invokes the generic nodes tool for live status too;
@@ -299,6 +313,7 @@ export async function runCodeModeScriptHeadless(params: {
           error: `code mode headless tool budget exceeded (${maxToolCalls})`,
           output,
           toolCallCount,
+          maxOutputBytes: config.maxOutputBytes,
         });
       }
 
@@ -311,7 +326,7 @@ export async function runCodeModeScriptHeadless(params: {
           namespaceRuntime,
           parentToolCallId,
           codeModeRunId,
-          deadlineMs: deadline,
+          remainingMs: remainingHeadlessMs(deadline),
           ctx: params.ctx,
           signal: abortScope.signal,
           bridgeDispatch,
@@ -327,11 +342,12 @@ export async function runCodeModeScriptHeadless(params: {
           error: "code mode is waiting without pending bridge requests",
           output,
           toolCallCount,
+          maxOutputBytes: config.maxOutputBytes,
         });
       }
       await awaitCodeModeDeadline({
         operation: () => waitForPendingBridgeSettlement(pending, settlementMode),
-        deadlineMs: deadline,
+        remainingMs: remainingHeadlessMs(deadline),
         signal: abortScope.signal,
         createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
         createAbortError: headlessAbortError,
@@ -360,9 +376,11 @@ export async function runCodeModeScriptHeadless(params: {
       error: timedOut || aborted ? error.message : codeModeFailureMessage(error),
       output,
       toolCallCount,
+      maxOutputBytes: config.maxOutputBytes,
     });
   } finally {
     cancelPendingBridgeStates(pending);
     abortScope.cleanup();
+    owner.close();
   }
 }

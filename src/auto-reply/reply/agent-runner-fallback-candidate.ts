@@ -16,7 +16,10 @@ import { runCliFallbackCandidate } from "./agent-runner-cli-candidate.js";
 import { runEmbeddedFallbackCandidate } from "./agent-runner-embedded-candidate.js";
 import type { MessageToolDeliveryState } from "./agent-runner-event-handler.js";
 import type { EmbeddedAgentRunResult } from "./agent-runner-execution.types.js";
-import type { AgentFallbackCycleParams } from "./agent-runner-fallback-cycle.types.js";
+import type {
+  AgentFallbackCandidateCommonParams,
+  AgentFallbackCycleParams,
+} from "./agent-runner-fallback-cycle.types.js";
 import { emitModelFallbackStepLifecycle } from "./agent-runner-model-fallback-lifecycle.js";
 import {
   resolveModelFallbackOptions,
@@ -240,6 +243,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           candidateFastMode,
           runId: params.runId,
           runAbortSignal: params.runAbortSignal,
+          runLane,
           isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
           suppressQueuedUserPersistenceForCandidate:
             (turn.followupRun.run.suppressNextUserMessagePersistence ?? false) ||
@@ -263,13 +267,14 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => {
             params.state.pendingLifecycleTerminal = { provider, model, backstop };
           },
-        };
+          deferredLifecycle: params.state.deferredLifecycle,
+        } satisfies AgentFallbackCandidateCommonParams;
         if (runtime.useCliExecution) {
+          params.state.deferredLifecycle.handoffToCli();
           const candidate = await runCliFallbackCandidate({
             ...common,
             cliExecutionProvider: runtime.cliExecutionProvider,
             lifecycleGeneration: params.state.lifecycleGeneration,
-            runLane,
           });
           params.state.bootstrapPromptWarningSignaturesSeen =
             candidate.bootstrapPromptWarningSignaturesSeen;
@@ -277,7 +282,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         }
         const candidate = await runEmbeddedFallbackCandidate({
           ...common,
-          runLane,
           githubPublicationAvailable: await (githubPublicationAvailability ??=
             turn.sessionKey && params.effectiveRun.agentId
               ? prepareGitHubPublicationAvailability({

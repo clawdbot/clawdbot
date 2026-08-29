@@ -2,7 +2,7 @@
 // Adds workspace-root guards, adaptive read paging, image validation, memory
 // append-only writes, and parameter cleanup around the session file tools.
 
-import fs, { type FileHandle } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
@@ -10,7 +10,7 @@ import { formatByteSize } from "@openclaw/normalization-core";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import { hasErrnoCode, toErrorObject } from "../infra/errors.js";
+import { toErrorObject } from "../infra/errors.js";
 import {
   canonicalPathFromExistingAncestor,
   root as fsRoot,
@@ -35,6 +35,7 @@ import {
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { writeHostFile } from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import {
   type MemoryWriteProvenanceObserver,
@@ -43,6 +44,7 @@ import {
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AgentTool, AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import {
   createEditTool,
@@ -84,6 +86,12 @@ type SkillReadContent = {
   filePath: string;
   readContent?: string;
 };
+
+export type SkillInstructionDeliveryCache = Map<string, Promise<boolean>>;
+
+export function createSkillInstructionDeliveryCache(): SkillInstructionDeliveryCache {
+  return new Map();
+}
 
 /** Erase a schema-specific session tool only after its input passes that owned schema. */
 function eraseSessionFileTool<TParameters extends TSchema, TDetails>(
@@ -528,11 +536,6 @@ function normalizeReadResultDetails(
   return { ...result, details: { kind: "text", content: text } };
 }
 
-/** Wrap a file tool so path params stay inside the workspace root. */
-export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
-  return wrapToolWorkspaceRootGuardWithOptions(tool, root);
-}
-
 function mapContainerPathToWorkspaceRoot(params: {
   filePath: string;
   root: string;
@@ -955,6 +958,7 @@ type SandboxToolParams = {
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  modelHasVision?: boolean;
 };
 
 /** Create a sandbox-backed read tool with OpenClaw result normalization. */
@@ -965,6 +969,7 @@ export function createSandboxedReadTool(
     (params.createTool ?? createReadTool)(params.root, {
       operations: createSandboxReadOperations(params),
       maxBytes: resolveAdaptiveReadMaxBytes(params),
+      modelHasVision: params.modelHasVision,
     }),
   );
   return createOpenClawReadTool(base, {
@@ -1088,6 +1093,7 @@ export function wrapReadToolWithSkillContent(
     cwd?: string;
     containerWorkdir?: string;
     instructionPaths?: readonly string[];
+    instructionDeliveryCache?: SkillInstructionDeliveryCache;
   },
 ): AnyAgentTool {
   const cwd = options?.cwd ?? process.cwd();
@@ -1117,6 +1123,15 @@ export function wrapReadToolWithSkillContent(
   if (instructionContent.size === 0) {
     return tool;
   }
+  const instructionDeliveryCache = options?.instructionDeliveryCache;
+  const alreadyDeliveredResult = (): AgentToolResult<unknown> => {
+    const text =
+      "Skill instructions were already served whole earlier in the current model context. Reuse that content; the full document will be served again if compaction removes it.";
+    return {
+      content: [{ type: "text", text }],
+      details: { kind: "text", content: text },
+    };
+  };
   const readContent = (filePath: string): string => {
     const content = instructionContent.get(filePath);
     if (content === undefined) {
@@ -1134,16 +1149,42 @@ export function wrapReadToolWithSkillContent(
       const rawPath = record?.path;
       const normalizedPath =
         typeof rawPath === "string" ? normalizeFileToolPathParam(rawPath) : undefined;
-      if (!normalizedPath || !instructionContent.has(resolveInstructionPath(normalizedPath))) {
+      const instructionPath = normalizedPath ? resolveInstructionPath(normalizedPath) : undefined;
+      if (!normalizedPath || !instructionPath || !instructionContent.has(instructionPath)) {
         return tool.execute(toolCallId, args, signal, onUpdate);
       }
-      if (record && ["offset", "limit", "cursor"].some((key) => record[key] !== undefined)) {
-        throw new Error(
-          "Skill instructions must be read whole; offset, limit, and cursor windows are not allowed.",
-        );
+      for (;;) {
+        const priorDelivery = instructionDeliveryCache?.get(instructionPath);
+        if (!priorDelivery) {
+          break;
+        }
+        const delivered = await priorDelivery;
+        if (instructionDeliveryCache?.get(instructionPath) !== priorDelivery) {
+          continue;
+        }
+        if (delivered) {
+          return alreadyDeliveredResult();
+        }
+        instructionDeliveryCache?.delete(instructionPath);
       }
+      let settleDelivery = (_delivered: boolean): void => undefined;
+      let delivery: Promise<boolean> | undefined;
+      if (instructionDeliveryCache) {
+        delivery = new Promise<boolean>((resolve) => {
+          settleDelivery = resolve;
+        });
+        // The resolved promise covers sequential and concurrent reads without
+        // changing prior transcript bytes. The compaction owner clears it.
+        instructionDeliveryCache.set(instructionPath, delivery);
+      }
+      const resetDelivery = () => {
+        settleDelivery(false);
+        if (delivery && instructionDeliveryCache?.get(instructionPath) === delivery) {
+          instructionDeliveryCache.delete(instructionPath);
+        }
+      };
       const instructionTool =
-        typeof instructionContent.get(normalizedPath) === "string"
+        typeof instructionContent.get(instructionPath) === "string"
           ? (virtualRead ??= createOpenClawReadTool(
               eraseSessionFileTool(
                 createReadTool("/", {
@@ -1158,29 +1199,48 @@ export function wrapReadToolWithSkillContent(
               options,
             ))
           : tool;
-      const instructionArgs =
-        normalizedPath === rawPath || !record ? args : { ...record, path: normalizedPath };
-      const result = await instructionTool.execute(toolCallId, instructionArgs, signal, onUpdate);
-      const details = result.details;
-      if (
-        details &&
-        typeof details === "object" &&
-        "kind" in details &&
-        details.kind === "truncated"
-      ) {
-        const text = `Skill instructions cannot be partially served: the whole document exceeds the ${formatBytes(resolveAdaptiveReadMaxBytes(options))} read budget. Ask the operator to reduce the document or increase the model context.`;
-        return {
-          content: [{ type: "text", text }],
-          details: { kind: "text", content: text },
-        };
+      // Skill instructions are served whole. Some models still send paging arguments,
+      // so windows are dropped rather than rejected.
+      const instructionArgs: Record<string, unknown> = { ...record, path: normalizedPath };
+      for (const key of ["offset", "limit", "cursor"]) {
+        delete instructionArgs[key];
       }
-      return result;
+      try {
+        const result = await instructionTool.execute(toolCallId, instructionArgs, signal, onUpdate);
+        const details = result.details;
+        const detailsKind =
+          details &&
+          typeof details === "object" &&
+          "kind" in details &&
+          typeof details.kind === "string"
+            ? details.kind
+            : undefined;
+        if (detailsKind === "truncated") {
+          resetDelivery();
+          const text = `Skill instructions cannot be partially served: the whole document exceeds the ${formatBytes(resolveAdaptiveReadMaxBytes(options))} read budget. Ask the operator to reduce the document or increase the model context.`;
+          return {
+            content: [{ type: "text", text }],
+            details: { kind: "text", content: text },
+          };
+        }
+        if (detailsKind !== "text") {
+          resetDelivery();
+          return result;
+        }
+        settleDelivery(true);
+        return result;
+      } catch (error) {
+        resetDelivery();
+        throw error;
+      }
     },
   };
 }
 
 function createSandboxReadOperations(params: SandboxToolParams) {
   return {
+    resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
+      resolveSandboxFileQueueKey(params, absolutePath, signal),
     resolvePath: (filePath: string) => {
       const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
       if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
@@ -1205,6 +1265,8 @@ function createSandboxReadOperations(params: SandboxToolParams) {
 function createSandboxWriteOperations(params: SandboxToolParams) {
   return withMemoryWriteProvenance(
     {
+      resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
+        resolveSandboxFileQueueKey(params, absolutePath, signal),
       mkdir: async (dir: string) => {
         await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
       },
@@ -1223,6 +1285,8 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
 function createSandboxEditOperations(params: SandboxToolParams) {
   return withMemoryWriteProvenance(
     {
+      resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
+        resolveSandboxFileQueueKey(params, absolutePath, signal),
       readFile: (absolutePath: string) =>
         params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
       writeFile: (absolutePath: string, content: string) =>
@@ -1233,6 +1297,20 @@ function createSandboxEditOperations(params: SandboxToolParams) {
     } as const,
     params.memoryWriteProvenance,
   );
+}
+
+async function resolveSandboxFileQueueKey(
+  params: SandboxToolParams,
+  absolutePath: string,
+  signal?: AbortSignal,
+) {
+  return await resolveSandboxFileMutationQueueKey({
+    bridge: params.bridge,
+    root: params.root,
+    filePath: absolutePath,
+    cwd: params.root,
+    signal,
+  });
 }
 
 async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: string) {
@@ -1247,98 +1325,6 @@ async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: 
 
 function resolveHostPath(filePath: string): string {
   return path.resolve(expandOsHomePrefix(filePath));
-}
-
-async function writeHostFileRange(
-  handle: FileHandle,
-  payload: Buffer,
-  offset: number,
-  length: number,
-  position: number,
-) {
-  let written = 0;
-  while (written < length) {
-    const { bytesWritten } = await handle.write(
-      payload,
-      offset + written,
-      length - written,
-      position + written,
-    );
-    if (bytesWritten <= 0) {
-      throw new Error(`host file write made no progress at byte ${position + written}`);
-    }
-    written += bytesWritten;
-  }
-}
-
-async function readHostFilePrefix(handle: FileHandle, length: number) {
-  const prefix = Buffer.alloc(length);
-  let read = 0;
-  while (read < length) {
-    const { bytesRead } = await handle.read(prefix, read, length - read, read);
-    if (bytesRead <= 0) {
-      throw new Error(`host file read made no progress at byte ${read}`);
-    }
-    read += bytesRead;
-  }
-  return prefix;
-}
-
-async function overwriteHostFileInPlace(handle: FileHandle, payload: Buffer, currentSize: number) {
-  const prefixLength = Math.min(payload.length, currentSize);
-  const originalPrefix = await readHostFilePrefix(handle, prefixLength);
-  let prefixStarted = false;
-  try {
-    if (payload.length > currentSize) {
-      await writeHostFileRange(
-        handle,
-        payload,
-        currentSize,
-        payload.length - currentSize,
-        currentSize,
-      );
-    }
-    prefixStarted = true;
-    await writeHostFileRange(handle, payload, 0, prefixLength, 0);
-    if (payload.length < currentSize) {
-      await handle.truncate(payload.length);
-    }
-  } catch (error) {
-    if (prefixStarted) {
-      await writeHostFileRange(handle, originalPrefix, 0, prefixLength, 0).catch(() => undefined);
-    }
-    await handle.truncate(currentSize).catch(() => undefined);
-    throw error;
-  }
-}
-
-async function openHostFileForUpdate(resolved: string) {
-  try {
-    const existing = await fs.stat(resolved);
-    // Rollback requires the original bytes; unreadable files must fail before mutation.
-    return existing.isFile() ? await fs.open(resolved, "r+") : undefined;
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-async function writeHostFile(absolutePath: string, content: string) {
-  const resolved = resolveHostPath(absolutePath);
-  await fs.mkdir(path.dirname(resolved), { recursive: true });
-  const handle = await openHostFileForUpdate(resolved);
-  if (!handle) {
-    await fs.writeFile(resolved, content, "utf-8");
-    return;
-  }
-  try {
-    const stat = await handle.stat();
-    await overwriteHostFileInPlace(handle, Buffer.from(content, "utf-8"), stat.size);
-  } finally {
-    await handle.close().catch(() => undefined);
-  }
 }
 
 async function statHostFile(absolutePath: string) {

@@ -4,7 +4,7 @@ import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
-import { verifyBoardViewTicket } from "./board-view-ticket.js";
+import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 
@@ -68,6 +68,8 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
   ["sessions.github.publish", ["sessionKey"]],
   ["sessions.fork", ["sessionKey"]],
   ["sessions.patch", ["key"]],
+  ["sessions.goal.update", ["sessionKey"]],
+  ["sessions.goal.clear", ["sessionKey"]],
   ["sessions.pluginPatch", ["key"]],
   ...(["sessions.move", "sessions.reclaim"] as const).map((method) => [method, ["key"]] as const),
   ["sessions.recover", ["key"]],
@@ -122,6 +124,8 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
   "sessions.groups.update",
   "sessions.github.publish",
   "sessions.patch",
+  "sessions.goal.update",
+  "sessions.goal.clear",
   "sessions.pluginPatch",
   "sessions.reclaim",
   "sessions.recover",
@@ -329,7 +333,9 @@ export function resolveSessionMutationTargets(params: {
   }
   if (params.method === "board.event" || params.method === "board.action") {
     const ticket = readSessionSharingStringParam(params.requestParams, "ticket");
-    const claims = ticket ? verifyBoardViewTicket(ticket) : undefined;
+    const claims = ticket
+      ? resolveAuthorizedBoardViewTicketClaims(ticket, { gatewayContext: params.context })
+      : undefined;
     if (!claims || (requestedAgentId && requestedAgentId !== claims.agentId)) {
       return undefined;
     }

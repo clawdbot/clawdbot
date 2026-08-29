@@ -39,7 +39,7 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
-import type { GatewayAgentRow } from "./session-utils.types.js";
+import type { GatewayAgentRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 /**
@@ -185,11 +185,11 @@ export function loadGatewaySessionEntryReadOnly(
 }
 
 /** Returns the one canonical entry and the exact persisted key that owns it. */
-export function resolveCanonicalSessionStoreMatchFromStoreKeys(
-  store: Record<string, SessionEntry>,
+export function resolveCanonicalSessionStoreMatchFromStoreKeys<TEntry extends SessionEntry>(
+  store: Record<string, TEntry>,
   storeKeys: string[],
-): { key: string; entry: SessionEntry } | undefined {
-  let selected: { key: string; entry: SessionEntry } | undefined;
+): { key: string; entry: TEntry } | undefined {
+  let selected: { key: string; entry: TEntry } | undefined;
   for (const key of storeKeys) {
     const entry = store[key];
     if (!entry) {
@@ -304,7 +304,7 @@ export function listAgentsForGateway(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
   options?: {
-    modelCatalogByAgentId?: ReadonlyMap<string, ModelCatalogEntry[] | undefined>;
+    modelCatalogByAgentId?: SessionListModelCatalog;
     includeSystem?: boolean;
   },
 ): {
@@ -357,9 +357,17 @@ export function listAgentsForGateway(
         acpRuntime: false,
       }),
     );
-    const agentModelCatalog = options?.modelCatalogByAgentId?.has(id)
-      ? options.modelCatalogByAgentId.get(id)
-      : (modelCatalog ?? options?.modelCatalogByAgentId?.get(basic.defaultId));
+    const hasAgentCatalog = options?.modelCatalogByAgentId?.has(id);
+    // Unconfigured system rows inherit the default catalog; keep its provider
+    // policy attached. A configured owner with no catalog must not inherit it.
+    const preparedCatalog = hasAgentCatalog
+      ? options?.modelCatalogByAgentId?.get(id)
+      : modelCatalog
+        ? undefined
+        : options?.modelCatalogByAgentId?.get(basic.defaultId);
+    const agentModelCatalog = hasAgentCatalog
+      ? preparedCatalog?.entries
+      : (modelCatalog ?? preparedCatalog?.entries);
     const thinkingProfile = resolveGatewayModelThinkingProfile({
       cfg,
       agentId: id,
@@ -367,6 +375,7 @@ export function listAgentsForGateway(
       model: resolvedModel.model,
       modelCatalog: agentModelCatalog,
       sessionKey,
+      providerPolicySource: preparedCatalog?.pluginRegistry,
     });
     const workspace = resolveAgentWorkspaceDir(cfg, id);
     // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a

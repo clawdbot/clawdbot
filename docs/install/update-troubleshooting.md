@@ -36,6 +36,12 @@ the CLI fallback on the Gateway host.
 ## Reason codes
 
 - `dirty`, `no-upstream`: repair the source checkout before retrying.
+- `preflight-insufficient-space`: free space on the filesystems containing
+  preflight staging (the checkout's `.artifacts` area on POSIX) and the
+  package-manager store, then retry. The updater stops on
+  confirmed ENOSPC instead of trying older commits; it does not delete shared
+  package-manager stores. See [Git checkout flow](/cli/update#git-checkout-flow)
+  for staging placement and the older published-updater limitation.
 - `deps-install-failed`, `build-failed`, `ui-build-failed`: inspect the failing
   step, fix the dependency or build error, then retry.
 - `global-install-failed`: retry after checking package-manager ownership and

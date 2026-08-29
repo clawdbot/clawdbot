@@ -16,6 +16,7 @@ import {
   createMockPluginRegistry,
   loadWebFetchToolFactoryForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   codexTestTurnIds,
@@ -29,7 +30,7 @@ import {
   createCodexTestBindingStore,
   type CodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
-import { createClientHarness } from "./test-support.js";
+import { createClientHarness, createCodexTestModel } from "./test-support.js";
 
 const readCodexAppServerBindingMock = vi.fn();
 const isCodexAppServerNativeAuthProfileMock = vi.fn();
@@ -44,16 +45,16 @@ type SelectionRetryParams = {
   options: { timeoutMs?: number; abandonSignal?: AbortSignal };
   run: (
     client: unknown,
-    requestOptions: { timeoutMs: number; signal?: AbortSignal },
+    requestOptions: () => { timeoutMs: number; signal?: AbortSignal },
   ) => Promise<unknown>;
   onClientChange: (client: unknown) => void;
 };
 const withLeasedCodexAppServerClientStartSelectionRetryMock = vi.fn(
   async (params: SelectionRetryParams) =>
-    await params.run(params.lease.client, {
+    await params.run(params.lease.client, () => ({
       timeoutMs: params.options.timeoutMs ?? 60_000,
       signal: params.options.abandonSignal,
-    }),
+    })),
 );
 
 function supervisionConnectionFingerprint(): string {
@@ -549,10 +550,10 @@ describe("runCodexAppServerSideQuestion", () => {
     withLeasedCodexAppServerClientStartSelectionRetryMock.mockReset();
     withLeasedCodexAppServerClientStartSelectionRetryMock.mockImplementation(
       async (params: SelectionRetryParams) =>
-        await params.run(params.lease.client, {
+        await params.run(params.lease.client, () => ({
           timeoutMs: params.options.timeoutMs ?? 60_000,
           signal: params.options.abandonSignal,
-        }),
+        })),
     );
     resolveCodexProviderWebSearchSupportForClientMock.mockResolvedValue("supported");
 
@@ -982,10 +983,10 @@ describe("runCodexAppServerSideQuestion", () => {
         expect(params.lease.client).toBe(initialClient);
         params.lease.client = replacementClient;
         params.onClientChange(replacementClient);
-        return await params.run(replacementClient, {
+        return await params.run(replacementClient, () => ({
           timeoutMs: params.options.timeoutMs ?? 60_000,
           signal: params.options.abandonSignal,
-        });
+        }));
       },
     );
 
@@ -999,6 +1000,64 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(replacementClient.notifications).toHaveLength(1);
     expect(replacementClient.requests).toHaveLength(1);
   });
+
+  it.each([
+    {
+      metadata: "Platform",
+      supported: ["none", "low", "medium", "high", "xhigh", "max"],
+      expected: "none",
+    },
+    {
+      metadata: "subscription",
+      supported: ["low", "medium", "high", "xhigh", "max"],
+      expected: null,
+    },
+    { metadata: "unknown", supported: undefined, expected: null },
+  ] as const)(
+    "sends off with $metadata metadata to the side-question request boundary",
+    async ({ metadata, supported, expected }) => {
+      const client = createFakeClient();
+      getSharedCodexAppServerClientMock.mockResolvedValue(client);
+      const compat: ModelCompatConfig | undefined = supported
+        ? { supportedReasoningEfforts: [...supported] }
+        : undefined;
+      const params = sideParams({
+        model: "gpt-5.6-luna",
+        resolvedThinkLevel: "off",
+        runtimeModel: {
+          ...createCodexTestModel(),
+          id: "gpt-5.6-luna",
+          api: metadata === "subscription" ? "openai-chatgpt-responses" : "openai-responses",
+          baseUrl:
+            metadata === "subscription"
+              ? "https://chatgpt.com/backend-api/codex"
+              : "https://api.openai.com/v1",
+          compat,
+        },
+      });
+      if (metadata !== "subscription") {
+        params.preparedRuntimeAuth = platformPreparedRuntimeAuth("platform-test-key");
+        params.authProfileId = undefined;
+        params.authProfileIdSource = undefined;
+        isCodexAppServerNativeAuthProfileMock.mockReturnValue(false);
+      }
+      params.preparedRuntimeAuth.plan.modelRoute!.modelId = params.model;
+
+      await expect(runCodexAppServerSideQuestion(params)).resolves.toEqual({
+        text: "Side answer.",
+      });
+
+      const turnStartCall = client.request.mock.calls.find(([method]) => method === "turn/start");
+      expect(turnStartCall?.[1]).toMatchObject({
+        threadId: "side-thread",
+        model: "gpt-5.6-luna",
+        effort: expected,
+        collaborationMode: {
+          settings: { model: "gpt-5.6-luna", reasoning_effort: expected },
+        },
+      });
+    },
+  );
 
   it("rejects a Platform plan before binding OAuth can fill missing prepared auth", async () => {
     await expect(
@@ -1137,8 +1196,9 @@ describe("runCodexAppServerSideQuestion", () => {
           runtimeModel: {
             id: "claude-opus-4-6",
             provider: "anthropic",
-            compat: { supportsTools: false },
+            compat: { supportsTools: false, supportedReasoningEfforts: ["none", "high"] },
           } as never,
+          resolvedThinkLevel: "off",
           authProfileId: "openai:outer",
         }),
         { pluginConfig: { supervision: { enabled: true } } },

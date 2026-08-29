@@ -41,7 +41,11 @@ import {
   buildChannelWizardMocks,
 } from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
-import { buildPluginCatalogMock } from "./control-ui-mock-plugins.ts";
+import {
+  buildPluginCatalogMock,
+  buildPluginInspectMock,
+  buildPluginSetEnabledMock,
+} from "./control-ui-mock-plugins.ts";
 import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
@@ -51,6 +55,7 @@ type CliOptions = {
     | "attachments"
     | "board"
     | "code-fences"
+    | "goal"
     | "swarm"
     | "update-available"
     | "update-blocked"
@@ -354,6 +359,7 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
     value !== "attachments" &&
     value !== "board" &&
     value !== "code-fences" &&
+    value !== "goal" &&
     value !== "swarm" &&
     value !== "update-available" &&
     value !== "update-blocked" &&
@@ -1694,7 +1700,22 @@ async function createChatPickerScenario(
         ]
       : [];
   const workboardMocks = buildWorkboardMocks(baseTime);
-  const activitySessions = buildActivitySessionRows(Date.now());
+  const activityTime = Date.now();
+  const activitySessions = buildActivitySessionRows(activityTime);
+  const activeGoal = {
+    schemaVersion: 1 as const,
+    id: "goal-mobile-parity",
+    objective:
+      "Make Goal work on mobile exactly as it does on desktop while preserving action access, progress visibility, timing, token usage, and composer space across narrow viewports. Keep the collapsed state compact enough for active conversations, while making the expanded state comfortable to scan and operate with one hand. Preserve clear hierarchy between the objective, elapsed time, token budget, and available actions without letting long content push the composer out of reach. Ensure the full objective remains readable when it contains detailed constraints, acceptance criteria, rollout notes, and operational context that cannot be reduced to a short summary. Account for long-running sessions whose goals accumulate multiple requirements, edge cases, validation steps, ownership notes, and deployment considerations. The operator should be able to review all of that context without losing access to the Goal controls or forcing the message composer below the visible viewport.",
+    status: "active" as const,
+    createdAt: activityTime - 14 * 60_000,
+    updatedAt: activityTime - 30_000,
+    tokenStart: 120_000,
+    tokenStartFresh: true,
+    tokensUsed: 127_000,
+    tokenBudget: 300_000,
+    continuationTurns: 3,
+  };
   const sessions = [
     ...activitySessions,
     ...(fixture === "workboard"
@@ -1711,6 +1732,7 @@ async function createChatPickerScenario(
       hasActiveRun: true,
       totalTokens: 170_000,
       totalTokensFresh: true,
+      ...(fixture === "goal" ? { goal: activeGoal } : {}),
     }),
     ...swarmChildRows,
     sessionRow(OBSERVER_DEMO_SESSION_KEY, "Session observer demo", baseTime - 3_000, {
@@ -1739,6 +1761,32 @@ async function createChatPickerScenario(
       status: "running",
       childSessions: ["agent:main:subagent:tax-receipts"],
       pinned: true,
+    }),
+    sessionRow("agent:main:cloud-refactor", "Cloud refactor worker", baseTime - 70_000, {
+      hasActiveRun: true,
+      status: "running",
+      startedAt: baseTime - 3_500_000,
+      execCwd: "/workspace/openclaw",
+      placement: {
+        state: "active",
+        generation: 3,
+        createdAtMs: baseTime - 3_600_000,
+        updatedAtMs: baseTime - 20_000,
+        stateChangedAtMs: baseTime - 3_500_000,
+        environmentId: "worker:9f2c4e7a81d24b06a5c3f8e1b7d94c1a",
+        providerId: "machine0",
+        profileId: "team",
+        activeOwnerEpoch: 4,
+        workerBundleHash: "b".repeat(64),
+        workspaceBaseManifestRef: "sha256:cloud-refactor-base",
+        remoteWorkspaceDir: "/workspace/openclaw",
+        diskSpace: {
+          status: "ok",
+          availableBytes: 61 * 1024 ** 3,
+          totalBytes: 100 * 1024 ** 3,
+          observedAtMs: baseTime - 20_000,
+        },
+      },
     }),
     sessionRow(
       "agent:main:production-export",
@@ -1794,6 +1842,18 @@ async function createChatPickerScenario(
         branch: "claude/sidebar-agent-zones",
         repoRoot: "~/Projects/openclaw",
       },
+    }),
+    // Second repo plus a spawned worktree checkout so the sidebar's
+    // Project grouping shows several sections and the worktree fold.
+    sessionRow("agent:main:clawdbot-vite", "Vite upgrade spike", baseTime - 160_000, {
+      worktree: {
+        id: "wt-clawdbot-vite",
+        branch: "openclaw/vite-upgrade",
+        repoRoot: "~/Projects/clawdbot",
+      },
+    }),
+    sessionRow("agent:main:project-grouping", "Sidebar project grouping", baseTime - 170_000, {
+      spawnedCwd: "~/Projects/openclaw/.claude/worktrees/groups-c7c338",
     }),
     ...buildSessionRows({
       baseTime: baseTime - 400_000,
@@ -1896,6 +1956,7 @@ async function createChatPickerScenario(
     activeRunIds: [PLAN_DEMO_RUN_ID],
     hasActiveRun: true,
     key: "agent:main:main",
+    ...(fixture === "goal" ? { goal: activeGoal } : {}),
   };
   const planInFlightRun = {
     runId: PLAN_DEMO_RUN_ID,
@@ -2055,8 +2116,38 @@ async function createChatPickerScenario(
         name: selfProfile.displayName ?? undefined,
         email: selfProfile.emails[0],
       },
-      { id: "presence-colin", name: "Colin", email: "colin@example.com" },
-      { id: "presence-patricia", email: "patricia.erichsen@example.com" },
+      {
+        id: "presence-colin",
+        name: "Colin",
+        email: "colin@example.com",
+        onlineSince: activityTime - 47 * 60_000,
+        lastActivityAt: activityTime - 2 * 60_000,
+        deviceFamily: "Mac",
+        platform: "macOS",
+        timeZone: "America/Los_Angeles",
+        watchedSessions: ["agent:activity:design-review", "agent:main:main"],
+      },
+      {
+        id: "presence-colin",
+        name: "Colin",
+        email: "colin@example.com",
+        onlineSince: activityTime - 47 * 60_000,
+        lastActivityAt: activityTime - 2 * 60_000,
+        deviceFamily: "Mac",
+        platform: "macOS",
+        timeZone: "America/Los_Angeles",
+        watchedSessions: ["agent:activity:design-review"],
+      },
+      {
+        id: "presence-patricia",
+        email: "patricia.erichsen@example.com",
+        onlineSince: activityTime - 12 * 60_000,
+        lastActivityAt: activityTime - 30_000,
+        deviceFamily: "iPhone",
+        platform: "iOS",
+        timeZone: "Europe/Stockholm",
+        watchedSessions: ["agent:activity:support-handoff"],
+      },
     ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
@@ -2477,6 +2568,8 @@ async function createChatPickerScenario(
         ],
       },
       "plugins.list": buildPluginCatalogMock(),
+      "plugins.inspect": buildPluginInspectMock(),
+      "plugins.setEnabled": buildPluginSetEnabledMock(),
       "channels.status": buildChannelsStatusMock(baseTime),
       "channels.pairing.list": buildChannelsPairingMock(baseTime),
       "channels.pairing.approve": {

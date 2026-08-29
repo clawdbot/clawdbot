@@ -99,6 +99,8 @@ describe("release wrapper scripts", () => {
         releaseSha,
         "--release-publish-branch",
         "main",
+        "--release-publish-full-ref",
+        "refs/heads/main",
         "--release-publish-run-attempt",
         "1",
         "--release-publish-run-id",
@@ -112,7 +114,7 @@ describe("release wrapper scripts", () => {
     expect(JSON.parse(plan.stdout)).toMatchObject({
       bootstrapWorkflowSha: "b".repeat(40),
       bootstrap: { ref: bootstrapWorkflowRef, shouldDispatch: false },
-      normal: { ref: "v2026.7.1-beta.3", shouldDispatch: false },
+      normal: { ref: bootstrapWorkflowRef, shouldDispatch: false },
     });
     expect(plan.stderr).not.toContain("old target planner invoked");
 

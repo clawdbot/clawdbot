@@ -661,18 +661,35 @@ describe("createCopilotToolBridge", () => {
     expect(hiddenExecute).not.toHaveBeenCalled();
   });
 
-  it("reports code mode as disengaged when the config leaves it off", async () => {
-    const result = await createCopilotToolBridge({
-      attemptParams: {
-        config: { tools: { codeMode: false } },
-        runId: "run-no-code-mode",
-        sessionKey: "agent:agent-1:main",
-      } as never,
-      createOpenClawCodingTools: vi.fn(async () => [makeTool({ name: "read" })]),
-    });
-
-    expect(result.codeModeEngaged).toBe(false);
-  });
+  it.each([
+    { configured: false, override: undefined },
+    { configured: true, override: false },
+  ])(
+    "keeps the direct surface when configured=$configured, invocation=$override",
+    async ({ configured, override }) => {
+      const result = await createCopilotToolBridge({
+        attemptParams: {
+          config: {
+            tools: { codeMode: configured, toolSearch: false },
+            agents: {
+              entries: { "agent-1": {} },
+              defaults: { models: { "github-copilot/gpt-4o": { codeMode: configured } } },
+            },
+          },
+          codeModeOverride: override,
+          runId: "run-no-code-mode",
+          sessionKey: "agent:agent-1:main",
+        },
+        createOpenClawCodingTools: vi.fn(async () => [makeTool({ name: "read" })]),
+      });
+      try {
+        expect(result.codeModeEngaged).toBe(false);
+        expect(result.promptToolPolicy.apply().tools.map((tool) => tool.name)).toEqual(["read"]);
+      } finally {
+        result.cleanup?.();
+      }
+    },
+  );
 
   it("keeps code-mode controls visible when a narrow allowlist is active", async () => {
     const createOpenClawCodingTools = vi.fn(async () => [
@@ -1358,6 +1375,64 @@ describe("createCopilotToolBridge", () => {
   // so a Copilot run cannot expose the SDK any tool that the same
   // OpenClaw attempt would suppress. These tests pin the contract.
   describe("tool-surface gating (PR #86155 [P1] round-6)", () => {
+    it.each([
+      { toolsAllow: undefined, codeMode: false },
+      { toolsAllow: ["read"], codeMode: false },
+      { toolsAllow: [], codeMode: false },
+      { toolsAllow: undefined, codeMode: true },
+    ])("preserves the collector handoff and SDK result %j", async ({ toolsAllow, codeMode }) => {
+      const schema = {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"],
+      };
+      const output = makeTool({ name: "structured_output", catalogMode: "direct-only" });
+      // The host contract is checked below, not recreated inside this factory.
+      const createTools = vi.fn(async () => [makeTool({ name: "read" }), output]);
+      const bridge = await createCopilotToolBridge({
+        attemptParams: {
+          config: { tools: { codeMode } },
+          runId: "copilot-collector-contract",
+          toolsAllow,
+          swarmCollector: true,
+          swarmOutputSchema: schema,
+        },
+        createOpenClawCodingTools: createTools,
+      });
+      try {
+        expect(createTools).toHaveBeenCalledWith(
+          expect.objectContaining({
+            swarmCollector: true,
+            swarmOutputSchema: schema,
+            ...(toolsAllow ? { runtimeToolAllowlist: [...toolsAllow, "structured_output"] } : {}),
+          }),
+        );
+        const initial = bridge.promptToolPolicy.apply();
+        expect(initial.callableToolNames).toContain("structured_output");
+        if (toolsAllow) {
+          expect(initial.tools.map((tool) => tool.name).toSorted()).toEqual(
+            [...toolsAllow, "structured_output"].toSorted(),
+          );
+        }
+        // Prompt hooks narrow the already-compacted surface a second time.
+        const narrowed = bridge.promptToolPolicy.apply({ toolsAllow: ["read"] });
+        expect(narrowed.callableToolNames).toContain("structured_output");
+        const sdkOutput = expectDefined(
+          narrowed.tools.find((tool) => tool.name === "structured_output"),
+          "collector structured output tool",
+        );
+        expect(sdkOutput.defer).toBe("never");
+        const args = { result: { answer: "ok" } };
+        await expect(runSdkTool(sdkOutput, args)).resolves.toEqual({
+          resultType: "success",
+          textResultForLlm: "done",
+        });
+        expect(output.execute).toHaveBeenCalledWith("call-1", args, undefined, undefined);
+      } finally {
+        bridge.cleanup?.();
+      }
+    });
+
     it("submits the exact conversation-policy-filtered catalog to the SDK", async () => {
       await withTempDir("openclaw-copilot-policy-", async (workspaceDir) => {
         const result = await createCopilotToolBridge({
@@ -1680,6 +1755,28 @@ describe("createCopilotToolBridge", () => {
       expect(options?.toolConstructionPlan?.includeOpenClawTools).toBe(true);
     });
 
+    it("constructs shell tools through the shared glob-aware plan", async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "exec" }),
+        makeTool({ name: "read" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        attemptParams: { toolsAllow: ["exec*"] } as never,
+        createOpenClawCodingTools,
+      });
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["exec"]);
+      const options = (createOpenClawCodingTools.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        toolConstructionPlan?: {
+          includeBaseCodingTools?: boolean;
+          includeShellTools?: boolean;
+        };
+      };
+      expect(options?.toolConstructionPlan).toMatchObject({
+        includeBaseCodingTools: false,
+        includeShellTools: true,
+      });
+    });
+
     it("does not keep apply_patch for a write-only allowlist", async () => {
       const createOpenClawCodingTools = vi.fn(async () => [
         makeTool({ name: "write" }),
@@ -1974,6 +2071,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     const observeToolTerminal = vi.fn(() => ({
       executionStarted: true,
       sideEffectEvidence: true,
+      effectReceipt: { state: "uncertain" as const },
     }));
     const sdkTool = await convertOpenClawToolToSdkToolForTest(
       makeTool({ execute, name: "message" }),

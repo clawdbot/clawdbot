@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import type { SkillUsagePath } from "../skills/types.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
@@ -179,7 +180,12 @@ describe("resolveSandboxContext", () => {
     const sessionKey = "agent:main:guest";
     const workspaceDir = await createSandboxFixtureDir("required-sandbox");
     const storePath = path.join(workspaceDir, "agents", "main", "sessions", "sessions.json");
-    const entry = { sessionId: "guest-session", updatedAt: 1, sandbox: "required" as const };
+    const entry = {
+      sessionId: "guest-session",
+      updatedAt: 1,
+      sandbox: "required" as const,
+      createdActor: { type: "human" as const, source: "unknown" as const, id: "guest-principal" },
+    };
     await replaceSessionEntry({ sessionKey, storePath }, entry);
     const backendFactory = vi.fn(async () => ({
       id: "required-backend",
@@ -198,6 +204,7 @@ describe("resolveSandboxContext", () => {
       }),
     }));
     const restore = registerSandboxBackend("required-backend", backendFactory);
+    const warnLogs = createWarnLogCapture("openclaw-required-sandbox-workspace");
 
     try {
       const sandbox = await resolveSandboxContext({
@@ -208,7 +215,7 @@ describe("resolveSandboxContext", () => {
               sandbox: {
                 mode: "off",
                 backend: "required-backend",
-                scope: "session",
+                scope: "shared",
                 workspaceAccess: "rw",
                 prune: { idleHours: 0, maxAgeDays: 0 },
               },
@@ -221,13 +228,16 @@ describe("resolveSandboxContext", () => {
       });
 
       expect(sandbox).toMatchObject({
-        enabled: true,
         required: true,
-        backendId: "required-backend",
-        sessionKey,
+        workspaceAccess: "ro",
       });
-      expect(backendFactory).toHaveBeenCalledOnce();
+      expect(sandbox?.workspaceDir).not.toBe(workspaceDir);
+      expect(await warnLogs.findText("workspaceAccess")).toMatch(/rw.*ro/i);
+      expect(backendFactory).toHaveBeenCalledWith(
+        expect.objectContaining({ cfg: expect.objectContaining({ scope: "agent" }) }),
+      );
     } finally {
+      warnLogs.cleanup();
       restore();
     }
   }, 15_000);
@@ -466,7 +476,12 @@ describe("resolveSandboxContext", () => {
     const sessionKey = "agent:main:guest";
     const workspaceDir = await createSandboxFixtureDir("required-sandbox-failure");
     const storePath = path.join(workspaceDir, "agents", "main", "sessions", "sessions.json");
-    const entry = { sessionId: "guest-session", updatedAt: 1, sandbox: "required" as const };
+    const entry = {
+      sessionId: "guest-session",
+      updatedAt: 1,
+      sandbox: "required" as const,
+      createdActor: { type: "human" as const, source: "unknown" as const, id: "guest-principal" },
+    };
     await replaceSessionEntry({ sessionKey, storePath }, entry);
     const backendFailure = new Error("Required sandbox backend unavailable");
     const restore = registerSandboxBackend("required-broken-backend", async () => {

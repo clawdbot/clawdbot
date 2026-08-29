@@ -672,11 +672,13 @@ describe("agent-events sequencing", () => {
     registerAgentRunContext("maintenance-run", {
       mainSessionRestartRecovery: true,
       projectSessionLifecycle: false,
+      projectSessionMessages: false,
       sessionKey: "main",
     });
     let received:
       | {
           projectSessionLifecycle?: boolean;
+          projectSessionMessages?: boolean;
           mainSessionRestartRecovery?: true;
           keys: string[];
         }
@@ -684,6 +686,7 @@ describe("agent-events sequencing", () => {
     const stop = onAgentRuntimeEvent((evt) => {
       received = {
         projectSessionLifecycle: evt.projectSessionLifecycle,
+        projectSessionMessages: evt.projectSessionMessages,
         mainSessionRestartRecovery: evt.mainSessionRestartRecovery,
         keys: Object.keys(evt),
       };
@@ -697,8 +700,10 @@ describe("agent-events sequencing", () => {
     stop();
 
     expect(received?.projectSessionLifecycle).toBe(false);
+    expect(received?.projectSessionMessages).toBe(false);
     expect(received?.mainSessionRestartRecovery).toBe(true);
     expect(received?.keys).not.toContain("projectSessionLifecycle");
+    expect(received?.keys).not.toContain("projectSessionMessages");
     expect(received?.keys).not.toContain("mainSessionRestartRecovery");
   });
 

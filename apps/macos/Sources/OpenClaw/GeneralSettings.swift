@@ -253,7 +253,7 @@ struct GeneralSettings: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 18)
-                Button("Quit") { NSApp.terminate(nil) }
+                Button("Quit") { AppDelegate.requestTermination() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }

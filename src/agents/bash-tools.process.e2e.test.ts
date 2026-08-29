@@ -129,7 +129,7 @@ test.skipIf(process.platform === "win32").each([
     expect(outcome.status).toBe(expectedStatus);
     expect(details.status).toBe(expectedStatus);
     expect(details.exitCode).toBe(expectedExitCode);
-    expect(getFinishedSession(run.session.id)?.status).toBe(expectedStatus);
+    expect(getFinishedSession(run.session.id)?.terminalStatus).toBe(expectedStatus);
     expect(textContent(poll)).toContain(`Process exited with ${expectedExitLabel}.`);
     expect(notification).toContain(expectedExitLabel);
     if (finalizerError) {

@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
+import { projectUpstreamProviderCatalogModel } from "./provider-catalog-live-normalize.internal.js";
 import {
   clearLiveCatalogCacheForTests,
   getCachedUpstreamProviderCatalog,
-  projectUpstreamProviderCatalogModel,
   type LiveModelCatalogFetchGuard,
   type UpstreamProviderCatalog,
 } from "./provider-catalog-live-runtime.js";
@@ -19,6 +19,12 @@ function buildFetchGuard(body: unknown): {
   }));
   return { fetchGuard, release };
 }
+
+const UPSTREAM_TIER_COST = { input: 4, output: 12, cache_read: 1, cache_write: 2 };
+const UPSTREAM_CONTEXT_TIER = {
+  ...UPSTREAM_TIER_COST,
+  tier: { type: "context", size: 200_000 },
+};
 
 describe("shared upstream provider metadata catalogs", () => {
   beforeEach(() => clearLiveCatalogCacheForTests());
@@ -86,101 +92,147 @@ describe("shared upstream provider metadata catalogs", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("projects authoritative upstream pricing, reasoning, tool, and modality metadata", () => {
-    const provider: UpstreamProviderCatalog = {
-      id: "opencode-go",
-      api: "https://opencode.ai/zen/go/v1",
-      npm: "@ai-sdk/openai-compatible",
-      models: {},
-    };
-    const model = projectUpstreamProviderCatalogModel({
-      providerId: provider.id,
-      provider,
-      model: {
+  it.each([
+    ["modern tiers", { tiers: [UPSTREAM_CONTEXT_TIER] }, true],
+    ["legacy tier", { context_over_200k: UPSTREAM_TIER_COST }, true],
+    ["object tiers", { tiers: {} }, false],
+    ["null tier", { tiers: [null] }, false],
+    ["mixed tiers", { tiers: [null, UPSTREAM_CONTEXT_TIER] }, true],
+    [
+      "malformed tiers with legacy pricing",
+      { tiers: {}, context_over_200k: UPSTREAM_TIER_COST },
+      true,
+    ],
+    [
+      "modern tiers before legacy pricing",
+      {
+        tiers: [UPSTREAM_CONTEXT_TIER],
+        context_over_200k: { ...UPSTREAM_TIER_COST, input: 99 },
+      },
+      true,
+    ],
+  ] as const)(
+    "projects pricing, reasoning, tools, and modalities from %s JSON",
+    async (_name, pricing, hasTiers) => {
+      const { fetchGuard } = buildFetchGuard({
+        "opencode-go": {
+          id: "opencode-go",
+          api: "https://opencode.ai/zen/go/v1",
+          npm: "@ai-sdk/openai-compatible",
+          models: {
+            "frontier-model": {
+              id: "frontier-model",
+              name: "Frontier Model",
+              reasoning: true,
+              tool_call: true,
+              reasoning_options: [{ type: "effort", values: ["low", "high", "high", null] }],
+              modalities: { input: ["text", "image", "video"] },
+              provider: { npm: "@ai-sdk/openai" },
+              limit: { context: 1_000_000, input: 900_000, output: 128_000 },
+              cost: { input: 2, output: 6, cache_read: 0.5, cache_write: 1, ...pricing },
+            },
+          },
+        },
+      });
+      const provider = await getCachedUpstreamProviderCatalog({
+        endpoint: "https://models.opencode.ai/api.json",
+        providerId: "opencode-go",
+        fetchGuard,
+      });
+      const upstreamModel = provider?.models["frontier-model"];
+      if (!provider || !upstreamModel) {
+        throw new Error("expected upstream provider model");
+      }
+      const model = projectUpstreamProviderCatalogModel({
+        providerId: provider.id,
+        provider,
+        model: upstreamModel,
+      });
+
+      expect(model).toEqual({
         id: "frontier-model",
         name: "Frontier Model",
+        provider: "opencode-go",
+        api: "openai-responses",
+        baseUrl: "https://opencode.ai/zen/go/v1",
         reasoning: true,
-        tool_call: true,
-        reasoning_options: [{ type: "effort", values: ["low", "high", "high", null] }],
-        modalities: { input: ["text", "image", "video"] },
-        provider: { npm: "@ai-sdk/openai" },
-        limit: { context: 1_000_000, input: 900_000, output: 128_000 },
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+        contextTokens: 900_000,
+        maxTokens: 128_000,
+        thinkingLevelMap: { off: null },
         cost: {
           input: 2,
           output: 6,
-          cache_read: 0.5,
-          cache_write: 1,
-          tiers: [
-            {
-              input: 4,
-              output: 12,
-              cache_read: 1,
-              cache_write: 2,
-              tier: { type: "context", size: 200_000 },
-            },
-          ],
+          cacheRead: 0.5,
+          cacheWrite: 1,
+          ...(hasTiers
+            ? {
+                tieredPricing: [
+                  { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 1, range: [0, 200_000] },
+                  { input: 4, output: 12, cacheRead: 1, cacheWrite: 2, range: [200_000] },
+                ],
+              }
+            : {}),
         },
-      },
-    });
-
-    expect(model).toEqual({
-      id: "frontier-model",
-      name: "Frontier Model",
-      provider: "opencode-go",
-      api: "openai-responses",
-      baseUrl: "https://opencode.ai/zen/go/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-      contextTokens: 900_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { off: null },
-      cost: {
-        input: 2,
-        output: 6,
-        cacheRead: 0.5,
-        cacheWrite: 1,
-        tieredPricing: [
-          { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 1, range: [0, 200_000] },
-          { input: 4, output: 12, cacheRead: 1, cacheWrite: 2, range: [200_000] },
-        ],
-      },
-      compat: {
-        supportsUsageInStreaming: true,
-        maxTokensField: "max_tokens",
-        supportsTools: true,
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "high"],
-      },
-    });
-  });
+        compat: {
+          supportsUsageInStreaming: true,
+          maxTokensField: "max_tokens",
+          supportsTools: true,
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "high"],
+        },
+      });
+    },
+  );
 
   it.each([
     ["@ai-sdk/openai-compatible", "openai-completions", "https://opencode.ai/zen/v1"],
     ["@ai-sdk/openai", "openai-responses", "https://opencode.ai/zen/v1"],
     ["@ai-sdk/anthropic", "anthropic-messages", "https://opencode.ai/zen"],
     ["@ai-sdk/google", "google-generative-ai", "https://opencode.ai/zen/v1"],
-  ])("projects upstream %s transport without guessing from model ids", (npm, api, baseUrl) => {
-    const provider: UpstreamProviderCatalog = {
-      id: "opencode",
-      api: "https://opencode.ai/zen/v1",
-      npm: "@ai-sdk/openai-compatible",
-      models: {},
-    };
-
-    expect(
-      projectUpstreamProviderCatalogModel({
+    ["@unsupported/sdk", undefined, undefined],
+    ["constructor", undefined, undefined],
+  ] as const)(
+    "projects only supported upstream %s transport from JSON",
+    async (npm, api, baseUrl) => {
+      const { fetchGuard } = buildFetchGuard({
+        opencode: {
+          id: "opencode",
+          api: "https://opencode.ai/zen/v1",
+          npm: "@ai-sdk/openai-compatible",
+          models: {
+            "opaque-preview-id": {
+              id: "opaque-preview-id",
+              name: "Opaque Preview",
+              provider: { npm },
+              limit: { context: 128_000, output: 8192 },
+            },
+          },
+        },
+      });
+      const provider = await getCachedUpstreamProviderCatalog({
+        endpoint: "https://models.opencode.ai/api.json",
+        providerId: "opencode",
+        fetchGuard,
+      });
+      const upstreamModel = provider?.models["opaque-preview-id"];
+      if (!provider || !upstreamModel) {
+        throw new Error("expected upstream provider model");
+      }
+      const model = projectUpstreamProviderCatalogModel({
         providerId: provider.id,
         provider,
-        model: {
-          id: "opaque-preview-id",
-          name: "Opaque Preview",
-          provider: { npm },
-          limit: { context: 128_000, output: 8192 },
-        },
-      }),
-    ).toMatchObject({ api, baseUrl });
-  });
+        model: upstreamModel,
+      });
+
+      if (api === undefined) {
+        expect(model).toBeUndefined();
+      } else {
+        expect(model).toMatchObject({ api, baseUrl });
+      }
+    },
+  );
 
   it("rejects upstream metadata that would redirect authenticated inference to another origin", () => {
     const provider: UpstreamProviderCatalog = {

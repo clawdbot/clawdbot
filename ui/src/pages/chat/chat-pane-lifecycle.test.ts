@@ -17,8 +17,8 @@ import { createInitialUserMessageHandoff } from "../../app/initial-user-message-
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
-import { applySelectedChatAgent } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { applySelectedChatAgent } from "./chat-state-refresh.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
@@ -57,7 +57,9 @@ describe("chat pane composer prefill attention", () => {
 
     expect(document.activeElement).toBe(textarea);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
-    vi.advanceTimersByTime(1_200);
+    vi.advanceTimersByTime(599);
+    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
+    vi.advanceTimersByTime(1);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
     input.remove();
   });
@@ -67,12 +69,12 @@ describe("chat pane composer prefill attention", () => {
     const { input, lifecycle } = createComposerAttentionFixture();
 
     lifecycle.updated(new Map([["focusComposer", false]]));
-    vi.advanceTimersByTime(600);
+    vi.advanceTimersByTime(300);
     lifecycle.updated(new Map([["focusComposer", false]]));
-    vi.advanceTimersByTime(600);
+    vi.advanceTimersByTime(599);
 
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
-    vi.advanceTimersByTime(600);
+    vi.advanceTimersByTime(1);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
     input.remove();
   });
@@ -875,7 +877,7 @@ describe("chat pane connection lifecycle", () => {
   });
 
   it("advances session ownership once per same-client connection transition", async () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const initialGeneration = pane.connectionGeneration;
     const snapshot = { ...pane.context.gateway.snapshot, client };
@@ -915,7 +917,6 @@ describe("chat pane connection lifecycle", () => {
     const cancelCommit = vi.fn();
     const initialScrollGeneration = state.chatScrollGeneration;
     state.chatScrollCommitCleanup = cancelCommit;
-    state.chatIsProgrammaticScroll = true;
 
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
@@ -927,7 +928,6 @@ describe("chat pane connection lifecycle", () => {
     expect(cancelCommit).toHaveBeenCalledOnce();
     expect(state.chatScrollCommitCleanup).toBeNull();
     expect(state.chatScrollGeneration).toBe(initialScrollGeneration + 1);
-    expect(state.chatIsProgrammaticScroll).toBe(false);
   });
 
   it("retires pending model selection state when the Gateway owner changes", () => {
@@ -997,7 +997,7 @@ describe("chat pane connection lifecycle", () => {
   ])(
     "retires pending global model selection state when the selected agent changes for $sessionKey",
     ({ sessionKey, mainKey }) => {
-      const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+      const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
       const retireModelOverride = vi.fn();
       const sessions = { retireModelOverride } as unknown as SessionCapability;
       const { state } = createTestChatPane({ client, sessions });

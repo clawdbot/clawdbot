@@ -6,7 +6,10 @@ import type { LiveSessionModelSelection } from "../../agents/live-model-switch.j
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
-import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import {
+  buildSessionCreationStamp,
+  inheritSessionCreationPolicy,
+} from "../../config/sessions/session-entry-provenance.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
@@ -15,10 +18,15 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
+  normalizeCronToolsAllowExecTarget,
+  normalizeCronToolsAllowExecTargetRequirement,
+  stripCronPinnedExecGrant,
 } from "../scheduled-tool-policy.js";
 import type {
   CronScheduledToolCallerOrigin,
   CronScheduledToolPolicy,
+  CronToolsAllowExecTarget,
+  CronToolsAllowExecTargetRequirement,
 } from "../scheduled-tool-policy.js";
 import { setSessionRuntimeModel } from "./run.runtime.js";
 import type { resolveCronSession } from "./session.js";
@@ -134,6 +142,7 @@ export function createPersistCronSessionEntry(params: {
   cronSession: MutableCronSession;
   agentSessionKey: string;
   createdActor?: SessionCreatedActor;
+  sandbox?: "required";
   persistSessionEntry: PersistSessionEntry;
 }): PersistCronSessionEntry {
   return async () => {
@@ -161,6 +170,7 @@ export function createPersistCronSessionEntry(params: {
           const creationStamp = buildSessionCreationStamp({
             via: "cron",
             actor: params.createdActor ?? { type: "system" },
+            sandbox: params.sandbox,
           });
           committedEntry = { ...persistedEntry, ...creationStamp };
           mergedLiveEntry = { ...liveEntry, ...creationStamp };
@@ -241,11 +251,14 @@ export function createCronRunContinuationSession(params: {
   cronSession: MutableCronSession;
   runSessionKey: string;
   createdActor?: SessionCreatedActor;
+  sandbox?: "required";
   thinkingLevel?: string;
   toolsAllow?: string[];
   toolsAllowIsDefault?: boolean;
   scheduledToolPolicy?: CronScheduledToolPolicy;
   scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
+  toolsAllowExecTarget?: CronToolsAllowExecTarget;
+  toolsAllowExecTargetRequirement?: CronToolsAllowExecTargetRequirement;
   cliSessionBindingFacts?: {
     extraSystemPromptStatic?: string;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -260,13 +273,27 @@ export function createCronRunContinuationSession(params: {
   const scheduledToolCallerOrigin = normalizeCronScheduledToolCallerOrigin(
     params.scheduledToolCallerOrigin,
   );
+  const toolsAllowExecTarget =
+    params.toolsAllow === undefined
+      ? undefined
+      : normalizeCronToolsAllowExecTarget(params.toolsAllowExecTarget);
+  const toolsAllowExecTargetRequirement =
+    params.toolsAllow === undefined
+      ? undefined
+      : normalizeCronToolsAllowExecTargetRequirement(params.toolsAllowExecTargetRequirement);
+  const storedToolsAllow = stripCronPinnedExecGrant({
+    toolsAllow: params.toolsAllow,
+    requirement: toolsAllowExecTargetRequirement,
+  });
   const continuation: NonNullable<SessionEntry["cronRunContinuation"]> = {
     lifecycleRevision: params.cronSession.lifecycleRevision,
     phase: "running" as const,
-    ...(params.toolsAllow !== undefined ? { toolsAllow: [...params.toolsAllow] } : {}),
+    ...(storedToolsAllow !== undefined ? { toolsAllow: storedToolsAllow } : {}),
     ...(params.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
     ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
     ...(scheduledToolPolicy?.mode === "account" ? { scheduledToolCallerOrigin } : {}),
+    ...(toolsAllowExecTarget ? { toolsAllowExecTarget } : {}),
+    ...(toolsAllowExecTargetRequirement ? { toolsAllowExecTargetRequirement } : {}),
     ...(params.cliSessionBindingFacts
       ? { cliSessionBindingFacts: { ...params.cliSessionBindingFacts } }
       : {}),
@@ -308,7 +335,11 @@ export function createCronRunContinuationSession(params: {
           ...(!current
             ? buildSessionCreationStamp({
                 via: "cron",
-                actor: params.createdActor ?? { type: "system" },
+                ...inheritSessionCreationPolicy(
+                  params.cronSession.sessionEntry,
+                  params.createdActor ?? { type: "system" },
+                ),
+                sandbox: params.cronSession.sessionEntry.sandbox ?? params.sandbox,
               })
             : {}),
           ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),

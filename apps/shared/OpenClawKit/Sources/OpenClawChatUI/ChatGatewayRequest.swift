@@ -192,6 +192,7 @@ public enum OpenClawChatGatewayRequests {
         limit: Int?,
         search: String?,
         archived: Bool,
+        agentID: String? = nil,
         includeGlobal: Bool = true,
         includeUnknown: Bool = false,
         activeMinutes: Int? = nil,
@@ -204,6 +205,9 @@ public enum OpenClawChatGatewayRequests {
             "includeGlobal": AnyCodable(includeGlobal),
             "includeUnknown": AnyCodable(includeUnknown),
         ]
+        if let agentID = normalized(agentID) {
+            params["agentId"] = AnyCodable(agentID)
+        }
         if let limit {
             params["limit"] = AnyCodable(limit)
         }
@@ -408,7 +412,7 @@ public enum OpenClawChatGatewayRequests {
         return OpenClawChatGatewayRequest(
             method: "sessions.delete",
             params: params,
-            timeoutMs: self.mutationTimeoutMs)
+            timeoutMs: self.archiveMutationTimeoutMs)
     }
 
     public static func forkSession(

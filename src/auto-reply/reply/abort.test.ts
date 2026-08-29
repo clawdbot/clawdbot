@@ -8,9 +8,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   loadSessionEntry,
+  markSessionAbortTarget,
   replaceSessionEntry,
+  resolveSessionAbortTarget,
   type SessionAbortTargetResult,
 } from "../../config/sessions/session-accessor.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 import { getAbortMemory } from "./abort-primitives.js";
@@ -22,15 +25,12 @@ import {
   stopSubagentsForRequester,
   tryFastAbortFromMessage,
 } from "./abort.js";
-import { testing as abortTesting } from "./abort.test-support.js";
-import { testing as acpResetTargetTesting } from "./acp-reset-target.test-support.js";
 import {
   clearSessionQueues,
   enqueueFollowupRun,
   getFollowupQueueDepth,
   type FollowupRun,
 } from "./queue.js";
-import { testing as queueCleanupTesting } from "./queue/cleanup.test-support.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -122,6 +122,21 @@ const runtimeAbortMocks = vi.hoisted(() => ({
   >(() => true),
   resolveActiveEmbeddedRunSessionId: vi.fn(() => undefined as string | undefined),
 }));
+
+const killControlledSubagentRunMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../agents/embedded-agent-runner/runs.js", () => runtimeAbortMocks);
+vi.mock("../../agents/subagents/registry/subagent-control.js", () => ({
+  killControlledSubagentRun: killControlledSubagentRunMock,
+}));
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    markSessionAbortTarget: vi.fn(actual.markSessionAbortTarget),
+    resolveSessionAbortTarget: vi.fn(actual.resolveSessionAbortTarget),
+  };
+});
 
 vi.mock("../../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
@@ -268,6 +283,19 @@ describe("abort detection", () => {
     expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${sessionKey}`);
   }
 
+  function bindAcpSessionForTest(targetSessionKey: string) {
+    vi.spyOn(getSessionBindingService(), "resolveByConversation").mockImplementation(
+      (conversation) => ({
+        bindingId: "test-acp-binding",
+        targetKind: "session",
+        targetSessionKey,
+        conversation,
+        status: "active",
+        boundAt: 0,
+      }),
+    );
+  }
+
   async function killControlledSubagentRunForTest(params: {
     cfg: OpenClawConfig;
     entry: SubagentRunRecord;
@@ -333,23 +361,7 @@ describe("abort detection", () => {
   }
 
   beforeEach(() => {
-    abortTesting.setDepsForTests({
-      getAcpSessionManager: (() =>
-        ({
-          resolveSession: acpManagerMocks.resolveSession,
-          cancelSession: acpManagerMocks.cancelSession,
-        }) as never) as never,
-      abortEmbeddedAgentRun: runtimeAbortMocks.abortEmbeddedAgentRun,
-      resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
-      getLatestSubagentRunByChildSessionKey:
-        subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
-      listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
-      killControlledSubagentRun: killControlledSubagentRunForTest as never,
-    });
-    queueCleanupTesting.setDepsForTests({
-      resolveEmbeddedSessionLane: (key) => `session:${key.trim() || "main"}`,
-      clearCommandLane: commandQueueMocks.clearCommandLane,
-    });
+    killControlledSubagentRunMock.mockImplementation(killControlledSubagentRunForTest);
     commandQueueMocks.clearCommandLane.mockClear().mockReturnValue(1);
   });
 
@@ -358,9 +370,9 @@ describe("abort detection", () => {
       setAbortMemory(key, false);
     }
     trackedAbortMemoryKeys.clear();
-    abortTesting.resetDepsForTests();
-    acpResetTargetTesting.setDepsForTest();
-    queueCleanupTesting.resetDepsForTests();
+    vi.restoreAllMocks();
+    vi.mocked(markSessionAbortTarget).mockReset();
+    vi.mocked(resolveSessionAbortTarget).mockReset();
     replyRunRegistryTesting.resetReplyRunRegistry();
     commandQueueMocks.clearCommandLane.mockClear().mockReturnValue(1);
     acpManagerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
@@ -647,22 +659,9 @@ describe("abort detection", () => {
       sessionIdsByKey: { [sessionKey]: sessionId },
     });
     runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(activeSessionId);
-    abortTesting.setDepsForTests({
-      getAcpSessionManager: (() =>
-        ({
-          resolveSession: acpManagerMocks.resolveSession,
-          cancelSession: acpManagerMocks.cancelSession,
-        }) as never) as never,
-      abortEmbeddedAgentRun: runtimeAbortMocks.abortEmbeddedAgentRun,
-      resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
-      markSessionAbortTarget: vi.fn(async () => {
-        throw new Error("simulated persistence failure");
-      }),
-      getLatestSubagentRunByChildSessionKey:
-        subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
-      listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
-      killControlledSubagentRun: killControlledSubagentRunForTest as never,
-    });
+    vi.mocked(markSessionAbortTarget).mockRejectedValueOnce(
+      new Error("simulated persistence failure"),
+    );
     enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
 
     const result = await runStopCommand({
@@ -684,36 +683,23 @@ describe("abort detection", () => {
     const canonicalKey = "agent:main:telegram:group:-1001234567890:topic:99";
     const sessionId = "resolved-persistence-failure";
     const { root, cfg } = await createAbortConfig();
-    abortTesting.setDepsForTests({
-      getAcpSessionManager: (() =>
-        ({
-          resolveSession: acpManagerMocks.resolveSession,
-          cancelSession: acpManagerMocks.cancelSession,
-        }) as never) as never,
-      abortEmbeddedAgentRun: runtimeAbortMocks.abortEmbeddedAgentRun,
-      resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
-      markSessionAbortTarget: vi.fn(async () => ({
-        entry: {
-          sessionId,
-          updatedAt: 10,
-        },
-        persisted: false,
-        persistenceError: "simulated persistence failure",
+    vi.mocked(markSessionAbortTarget).mockResolvedValueOnce({
+      entry: {
         sessionId,
-        sessionKey: canonicalKey,
-      })),
-      resolveSessionAbortTarget: vi.fn(() => ({
-        entry: {
-          sessionId,
-          updatedAt: 10,
-        },
+        updatedAt: 10,
+      },
+      persisted: false,
+      persistenceError: "simulated persistence failure",
+      sessionId,
+      sessionKey: canonicalKey,
+    });
+    vi.mocked(resolveSessionAbortTarget).mockReturnValueOnce({
+      entry: {
         sessionId,
-        sessionKey: canonicalKey,
-      })),
-      getLatestSubagentRunByChildSessionKey:
-        subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
-      listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
-      killControlledSubagentRun: killControlledSubagentRunForTest as never,
+        updatedAt: 10,
+      },
+      sessionId,
+      sessionKey: canonicalKey,
     });
     enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey: canonicalKey });
 
@@ -734,21 +720,8 @@ describe("abort detection", () => {
   it("fast-abort uses abort memory when no persisted target entry exists", async () => {
     const sessionKey = "telegram:missing-persistence-target";
     const { cfg } = await createAbortConfig();
-    abortTesting.setDepsForTests({
-      getAcpSessionManager: (() =>
-        ({
-          resolveSession: acpManagerMocks.resolveSession,
-          cancelSession: acpManagerMocks.cancelSession,
-        }) as never) as never,
-      abortEmbeddedAgentRun: runtimeAbortMocks.abortEmbeddedAgentRun,
-      resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
-      markSessionAbortTarget: vi.fn(async () => null),
-      resolveSessionAbortTarget: vi.fn(() => null),
-      getLatestSubagentRunByChildSessionKey:
-        subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
-      listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
-      killControlledSubagentRun: killControlledSubagentRunForTest as never,
-    });
+    vi.mocked(markSessionAbortTarget).mockResolvedValueOnce(null);
+    vi.mocked(resolveSessionAbortTarget).mockReturnValueOnce(null);
 
     const result = await runStopCommand({
       cfg,
@@ -774,43 +747,30 @@ describe("abort detection", () => {
     });
     let finishPersistence: (() => void) | undefined;
     const persistenceStarted = new Promise<void>((resolveStarted) => {
-      abortTesting.setDepsForTests({
-        getAcpSessionManager: (() =>
-          ({
-            resolveSession: acpManagerMocks.resolveSession,
-            cancelSession: acpManagerMocks.cancelSession,
-          }) as never) as never,
-        abortEmbeddedAgentRun: runtimeAbortMocks.abortEmbeddedAgentRun,
-        resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
-        markSessionAbortTarget: vi.fn(
-          () =>
-            new Promise<SessionAbortTargetResult | null>((resolvePersistence) => {
-              resolveStarted();
-              finishPersistence = () => {
-                resolvePersistence({
-                  entry: {
-                    sessionId,
-                    updatedAt: 10,
-                  },
-                  persisted: true,
+      vi.mocked(markSessionAbortTarget).mockImplementationOnce(
+        () =>
+          new Promise<SessionAbortTargetResult | null>((resolvePersistence) => {
+            resolveStarted();
+            finishPersistence = () => {
+              resolvePersistence({
+                entry: {
                   sessionId,
-                  sessionKey,
-                });
-              };
-            }),
-        ),
-        resolveSessionAbortTarget: vi.fn(() => ({
-          entry: {
-            sessionId,
-            updatedAt: 10,
-          },
+                  updatedAt: 10,
+                },
+                persisted: true,
+                sessionId,
+                sessionKey,
+              });
+            };
+          }),
+      );
+      vi.mocked(resolveSessionAbortTarget).mockReturnValueOnce({
+        entry: {
           sessionId,
-          sessionKey,
-        })),
-        getLatestSubagentRunByChildSessionKey:
-          subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
-        listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
-        killControlledSubagentRun: killControlledSubagentRunForTest as never,
+          updatedAt: 10,
+        },
+        sessionId,
+        sessionKey,
       });
     });
     enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
@@ -933,17 +893,7 @@ describe("abort detection", () => {
       sessionId: "acp-store-session",
       sessionKey: acpSessionKey,
     });
-    acpResetTargetTesting.setDepsForTest({
-      getSessionBindingService: () =>
-        ({
-          resolveByConversation: () => ({
-            targetKind: "session",
-            targetSessionKey: acpSessionKey,
-          }),
-        }) as never,
-      listAcpBindings: () => [],
-      resolveConfiguredBindingRecord: () => null,
-    });
+    bindAcpSessionForTest(acpSessionKey);
     acpManagerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey: acpSessionKey,
@@ -994,8 +944,7 @@ describe("abort detection", () => {
     operation.setPhase("running");
     runtimeAbortMocks.abortEmbeddedAgentRun.mockReturnValue(false);
     runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(sessionId);
-    const markSessionAbortTarget = vi.fn();
-    abortTesting.setDepsForTests({ markSessionAbortTarget });
+    vi.mocked(markSessionAbortTarget).mockClear();
 
     const result = await runStopCommand({
       cfg,
@@ -1044,17 +993,7 @@ describe("abort detection", () => {
       sessionId: "acp-store-session",
       sessionKey: acpSessionKey,
     });
-    acpResetTargetTesting.setDepsForTest({
-      getSessionBindingService: () =>
-        ({
-          resolveByConversation: () => ({
-            targetKind: "session",
-            targetSessionKey: acpSessionKey,
-          }),
-        }) as never,
-      listAcpBindings: () => [],
-      resolveConfiguredBindingRecord: () => null,
-    });
+    bindAcpSessionForTest(acpSessionKey);
     acpManagerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey: acpSessionKey,
@@ -1132,17 +1071,7 @@ describe("abort detection", () => {
       sessionId: "source-active-session",
       resetTriggered: false,
     });
-    acpResetTargetTesting.setDepsForTest({
-      getSessionBindingService: () =>
-        ({
-          resolveByConversation: () => ({
-            targetKind: "session",
-            targetSessionKey: acpSessionKey,
-          }),
-        }) as never,
-      listAcpBindings: () => [],
-      resolveConfiguredBindingRecord: () => null,
-    });
+    bindAcpSessionForTest(acpSessionKey);
     acpManagerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey: acpSessionKey,
@@ -1194,17 +1123,7 @@ describe("abort detection", () => {
       sessionId: "acp-active-session",
       sessionKey: acpSessionKey,
     });
-    acpResetTargetTesting.setDepsForTest({
-      getSessionBindingService: () =>
-        ({
-          resolveByConversation: () => ({
-            targetKind: "session",
-            targetSessionKey: acpSessionKey,
-          }),
-        }) as never,
-      listAcpBindings: () => [],
-      resolveConfiguredBindingRecord: () => null,
-    });
+    bindAcpSessionForTest(acpSessionKey);
     acpManagerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey: acpSessionKey,

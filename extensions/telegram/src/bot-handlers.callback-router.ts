@@ -17,6 +17,7 @@ import { resolveAgentDir, resolveDefaultModelForAgent } from "./bot-handlers.age
 import {
   createTelegramCallbackMessageActions,
   handleTelegramQuestionCallback,
+  sendTelegramQuestionFeedback,
   type TelegramCallbackMessageActions,
 } from "./bot-handlers.callback-actions.js";
 import {
@@ -51,7 +52,6 @@ import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
   buildModelsKeyboard,
   calculateTotalPages,
-  getModelsPageSize,
   parseModelCallbackData,
   resolveModelListCallback,
   resolveModelSelection,
@@ -295,12 +295,14 @@ export function createTelegramCallbackRouter({
           callback: typedQuestionCallback,
           cfg: runtimeCfg,
           senderId,
-          feedback: async (text, terminal) => {
-            if (terminal) {
-              await actions.clearCallbackButtons().catch(() => {});
-            }
-            await actions.replyToCallbackChat(text);
-          },
+          feedback: async (text, mode) =>
+            await sendTelegramQuestionFeedback({
+              actions,
+              text,
+              mode,
+              isGroup,
+              user: callback.from,
+            }),
         });
         return;
       }
@@ -568,8 +570,7 @@ async function handleTelegramModelCallback(params: {
       return true;
     }
     const models = [...modelSet].toSorted((left, right) => left.localeCompare(right));
-    const pageSize = getModelsPageSize();
-    const totalPages = calculateTotalPages(models.length, pageSize);
+    const totalPages = calculateTotalPages(models.length);
     const safePage = Math.max(1, Math.min(page, totalPages));
     const currentModel =
       sessionState.model || `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
@@ -579,7 +580,6 @@ async function handleTelegramModelCallback(params: {
       currentModel,
       currentPage: safePage,
       totalPages,
-      pageSize,
       modelNames,
     });
     const text = formatModelsAvailableHeader({
@@ -637,9 +637,6 @@ async function handleTelegramModelCallback(params: {
     };
     const previousAuthProfileId = sessionEntry.authProfileOverride?.trim();
     const sessionStore = { [sessionState.sessionKey]: sessionEntry };
-    const modelCatalog = [...byProvider.entries()].flatMap(([provider, models]) =>
-      [...models].map((model) => ({ provider, id: model, name: model })),
-    );
     const currentModelRef = sessionState.model?.trim();
     const currentModelSeparator = currentModelRef?.indexOf("/") ?? -1;
     const currentProvider =
@@ -663,8 +660,7 @@ async function handleTelegramModelCallback(params: {
         defaultModel: resolvedDefault.model,
         currentProvider,
         currentModel,
-        allowedModelKeys: new Set(modelCatalog.map((entry) => `${entry.provider}/${entry.id}`)),
-        modelCatalog,
+        modelCatalog: modelData.modelCatalog,
         canPersistStickyModelSelection: false,
         request: {
           provider: selection.provider,

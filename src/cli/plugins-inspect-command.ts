@@ -140,6 +140,11 @@ export async function runPluginsInspectCommand(
   );
   const loggerParams = opts.json ? { logger: quietPluginJsonLogger } : {};
   const runtimeInspect = opts.runtime === true;
+  const runtimeReportParams = {
+    config: cfg,
+    ...loggerParams,
+    runtimeInspection: true,
+  };
   if (opts.all) {
     if (id) {
       failPluginInspect("Pass either a plugin id or --all, not both.", opts.json);
@@ -148,11 +153,7 @@ export async function runPluginsInspectCommand(
     const report = runtimeInspect
       ? tracePluginLifecyclePhase(
           "runtime plugin registry load",
-          () =>
-            buildPluginDiagnosticsReport({
-              config: cfg,
-              ...loggerParams,
-            }),
+          () => buildPluginDiagnosticsReport(runtimeReportParams),
           { command: "inspect", all: true },
         )
       : tracePluginLifecyclePhase(
@@ -271,8 +272,7 @@ export async function runPluginsInspectCommand(
         "runtime plugin registry load",
         () =>
           buildPluginDiagnosticsReport({
-            config: cfg,
-            ...loggerParams,
+            ...runtimeReportParams,
             onlyPluginIds: [targetPlugin.id],
           }),
         { command: "inspect", pluginId: targetPlugin.id },
@@ -373,6 +373,7 @@ export async function runPluginsInspectCommand(
   lines.push(...formatInspectSection("Commands", inspect.commands));
   lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
   lines.push(...formatInspectSection("Services", inspect.services));
+  lines.push(...formatInspectSection("Gateway discovery", inspect.gatewayDiscoveryServices));
   lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods ?? []));
   lines.push(
     ...formatInspectSection(

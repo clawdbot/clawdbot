@@ -429,7 +429,7 @@ class GatewaySessionReconnectTest {
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
       val hello = CompletableDeferred<GatewayHelloSummary>()
-      val capabilities = setOf("session-unread-ack-contract")
+      val capabilities = setOf("session-unread-ack-contract", "session-scoped-chat-metadata")
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
           if (method == "connect") {

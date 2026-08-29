@@ -36,23 +36,25 @@ type ResolveBundledProviderPolicySurface =
 type ResolveProviderPolicySurface =
   typeof import("./provider-public-artifacts.js").resolveProviderPolicySurface;
 
-const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
-const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_) => false);
+const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>(
+  (_params) => [] as ProviderPlugin[],
+);
+const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_params) => false);
 const resolveCatalogHookProviderPluginIdsMock = vi.fn<ResolveCatalogHookProviderPluginIds>(
-  (_) => [] as string[],
+  (_params) => [] as string[],
 );
 const resolveUsageHookProviderPluginContractsMock = vi.fn<ResolveUsageHookProviderPluginContracts>(
-  (_) => [],
+  (_params) => [],
 );
 const resolveExternalAuthProfileProviderPluginIdsMock =
-  vi.fn<ResolveExternalAuthProfileProviderPluginIds>((_) => [] as string[]);
+  vi.fn<ResolveExternalAuthProfileProviderPluginIds>((_params) => [] as string[]);
 const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForProvider>(
-  (_) => undefined,
+  (_params) => undefined,
 );
 const resolveBundledProviderPolicySurfaceMock = vi.fn<ResolveBundledProviderPolicySurface>(
-  (_) => null,
+  (_providerId) => null,
 );
-const resolveProviderPolicySurfaceMock = vi.fn<ResolveProviderPolicySurface>((_) => null);
+const resolveProviderPolicySurfaceMock = vi.fn<ResolveProviderPolicySurface>((_providerId) => null);
 const providerRuntimeWarnMock = vi.fn();
 
 let getAiTransportHost: typeof import("@openclaw/ai").getAiTransportHost;
@@ -62,7 +64,6 @@ let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
 let buildProviderMissingAuthMessageWithPlugin: typeof import("./provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
 let buildProviderUnknownModelHintWithPlugin: typeof import("./provider-runtime.js").buildProviderUnknownModelHintWithPlugin;
-let applyProviderNativeStreamingUsageCompatWithPlugin: typeof import("./provider-runtime.js").applyProviderNativeStreamingUsageCompatWithPlugin;
 let formatProviderAuthProfileApiKeyWithPlugin: typeof import("./provider-runtime.js").formatProviderAuthProfileApiKeyWithPlugin;
 let loginProviderOAuthWithPlugin: typeof import("./provider-runtime.js").loginProviderOAuthWithPlugin;
 let classifyProviderFailoverSignalWithPlugin: typeof import("./provider-runtime.js").classifyProviderFailoverSignalWithPlugin;
@@ -311,7 +312,6 @@ describe("provider-runtime", () => {
       buildProviderAuthDoctorHintWithPlugin,
       buildProviderMissingAuthMessageWithPlugin,
       buildProviderUnknownModelHintWithPlugin,
-      applyProviderNativeStreamingUsageCompatWithPlugin,
       applyProviderResolvedTransportWithPlugin,
       classifyProviderFailoverSignalWithPlugin,
       formatProviderAuthProfileApiKeyWithPlugin,
@@ -2175,10 +2175,6 @@ describe("provider-runtime", () => {
           normalizeModelId: ({ modelId }) => modelId.replace("-legacy", ""),
           resolveDynamicModel: () => MODEL,
           prepareDynamicModel,
-          applyNativeStreamingUsageCompat: ({ providerConfig }) => ({
-            ...providerConfig,
-            compat: { supportsUsageInStreaming: true },
-          }),
           sanitizeReplayHistory,
           validateReplayTurns,
           normalizeToolSchemas,
@@ -2287,21 +2283,6 @@ describe("provider-runtime", () => {
         },
       })?.baseUrl,
     ).toBe("https://normalized.example.com/v1");
-
-    const streamingCompatConfig = applyProviderNativeStreamingUsageCompatWithPlugin({
-      provider: DEMO_PROVIDER_ID,
-      context: {
-        provider: DEMO_PROVIDER_ID,
-        providerConfig: {
-          baseUrl: "https://demo.example.com",
-          api: "openai-completions",
-          models: [],
-        },
-      },
-    });
-    expect(requireRecord(streamingCompatConfig, "streaming compat config").compat).toEqual({
-      supportsUsageInStreaming: true,
-    });
 
     expect(
       resolveProviderConfigApiKeyWithPlugin({

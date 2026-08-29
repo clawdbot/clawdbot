@@ -273,4 +273,14 @@ export function hasAssistantVisibleReply(params: {
   return resolveSendableOutboundReplyParts(params).hasContent || Boolean(params.audioAsVoice);
 }
 
+/** Exact tool-owned media that the managed WebChat pipeline may hide from display text. */
+export function resolveManagedStreamMediaUrls(
+  state: Pick<EmbeddedAgentSubscribeState, "pendingToolMediaTrustByUrl">,
+  mediaUrls: readonly string[],
+): string[] {
+  return uniqueStrings(
+    mediaUrls.filter((url) => state.pendingToolMediaTrustByUrl.get(url.trim()) === true),
+  );
+}
+
 /** Builds normalized stream payload data for assistant visible output. */

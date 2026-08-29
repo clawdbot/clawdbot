@@ -474,6 +474,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
         attempt.suppressTranscriptOnlyAssistantPersistence,
       suppressAssistantErrorPersistence: attempt.suppressAssistantErrorPersistence,
       skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",
+      prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
       onUserMessagePreparingForPersistence: (_message, recorder) => {
         latestPersistedUserMessage = undefined;
         latestUserTurnTranscriptRecorder = recorder;

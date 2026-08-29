@@ -1,5 +1,7 @@
 import { once } from "node:events";
+import { runInNewContext } from "node:vm";
 // Qa Lab tests cover server plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
@@ -5582,6 +5584,35 @@ Update and merge these partial structured summaries.`,
     );
   });
 
+  it.each([
+    {
+      fixture: "single",
+      expectedQuestionId: "deploy_target",
+      expectedMultiSelect: undefined,
+    },
+    { fixture: "multi", expectedQuestionId: "checks", expectedMultiSelect: true },
+  ])("plans the $fixture ask_user Telegram fixture", async (entry) => {
+    const server = await startMockServer();
+    const response = await expectNonStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          `tool search qa check target=ask_user ask_user_fixture=${entry.fixture}. Ask the question.`,
+        ),
+      ],
+    });
+
+    const call = outputItem(await response.json());
+    const args = JSON.parse(String(call.arguments)) as {
+      questions?: Array<{ id?: string; multiSelect?: boolean }>;
+    };
+    expect(call.name).toBe("ask_user");
+    expect(args.questions).toHaveLength(1);
+    expect(args.questions?.[0]).toMatchObject({
+      id: entry.expectedQuestionId,
+      ...(entry.expectedMultiSelect ? { multiSelect: true } : {}),
+    });
+  });
+
   it("plans QA tool-search failure calls with denied-input args", async () => {
     const server = await startMockServer();
 
@@ -6853,47 +6884,127 @@ Update and merge these partial structured summaries.`,
     expect(outputText(payload)).not.toBe("Protocol note: replay unsafe after write.");
   });
 
+  const restartCheckpointTools = [
+    {
+      type: "function",
+      name: "exec",
+      parameters: {
+        type: "object",
+        properties: {
+          language: { type: "string" },
+          code: { type: "string" },
+          restartSafe: { type: "boolean" },
+        },
+        required: ["code"],
+      },
+    },
+    {
+      type: "function",
+      name: "wait",
+      parameters: {
+        type: "object",
+        properties: { runId: { type: "string" } },
+        required: ["runId"],
+      },
+    },
+  ];
+  const restartRecoveryPrompt =
+    "Your previous turn was interrupted by a gateway restart. Continue from the existing transcript.";
+
+  async function expectRestartCheckpointExecution(
+    execArgs: Record<string, unknown>,
+    checkpoint: number,
+  ) {
+    expect(execArgs).toMatchObject({ language: "javascript", restartSafe: true });
+    expect(execArgs.code).toContain("qa_restart_wait");
+    expect(execArgs.code).toContain('catalog.search("qa_restart_wait")');
+    expect(execArgs.code).toContain(`CHECKPOINT-${checkpoint}`);
+
+    const started = createDeferred<void>();
+    const released = createDeferred<void>();
+    const calls: unknown[] = [];
+    const target = Object.assign(
+      (args: unknown) => {
+        calls.push(args);
+        started.resolve();
+        return released.promise;
+      },
+      { toolName: "qa_restart_wait" },
+    );
+    let yielded = false;
+    const execution: unknown = runInNewContext(`(async () => { ${String(execArgs.code)} })()`, {
+      catalog: {
+        search: async (name: string) => {
+          expect(name).toBe("qa_restart_wait");
+          return [target];
+        },
+      },
+      yield_control: () => {
+        yielded = true;
+      },
+    });
+    try {
+      await started.promise;
+      expect(yielded).toBe(true);
+    } finally {
+      released.resolve();
+      await expect(execution).resolves.toBe(`CHECKPOINT-${checkpoint}`);
+    }
+    expect(calls).toEqual([{}]);
+  }
+
+  it("settles hard-kill recovery after one real checkpoint and resets from request history", async () => {
+    const server = await startMockServer();
+    const prompt = "Code Mode restart wait QA check. Original prompt marker: KILL-RESTART-PROMPT.";
+    const tools = [
+      ...restartCheckpointTools,
+      { type: "function", name: "qa_restart_unsafe_probe", parameters: { type: "object" } },
+    ];
+    const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
+    const execPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+    expect(outputItems(execPayload)).toHaveLength(1);
+    const execCall = outputToolCall(execPayload, "exec");
+    const execArgs = outputToolArgsFromItem(execCall);
+    await expectRestartCheckpointExecution(execArgs, 1);
+
+    const runId = "kill-restart-checkpoint-1";
+    input.push(
+      execCall,
+      makeToolOutputWithCallId(
+        outputToolCallId(execCall, "kill-restart-exec"),
+        JSON.stringify({ status: "waiting", runId }),
+      ),
+    );
+    const waitPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+    expect(outputItems(waitPayload)).toHaveLength(1);
+    const waitCall = outputToolCall(waitPayload, "wait");
+    expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
+    input.push(waitCall, makeUserInput(restartRecoveryPrompt));
+
+    const recovered = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+    expect(outputItems(recovered).map((item) => item.type)).toEqual(["message"]);
+    expect(outputText(recovered)).toBe("KILL-RESTART-RECOVERED-OK");
+
+    const freshPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools,
+      input: [makeUserInput(prompt)],
+    });
+    expect(outputItems(freshPayload)).toHaveLength(1);
+    expect(outputToolArgsFromItem(outputToolCall(freshPayload, "exec"))).toEqual(execArgs);
+  });
+
   it("derives three restart checkpoints from request history without server counters", async () => {
     const server = await startMockServer();
     const prompt =
       "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT.";
-    const recoveryPrompt =
-      "Your previous turn was interrupted by a gateway restart. Continue from the existing transcript.";
-    const tools = [
-      {
-        type: "function",
-        name: "exec",
-        parameters: {
-          type: "object",
-          properties: {
-            language: { type: "string" },
-            code: { type: "string" },
-            restartSafe: { type: "boolean" },
-          },
-          required: ["code"],
-        },
-      },
-      {
-        type: "function",
-        name: "wait",
-        parameters: {
-          type: "object",
-          properties: { runId: { type: "string" } },
-          required: ["runId"],
-        },
-      },
-    ];
+    const tools = restartCheckpointTools;
     const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
 
     for (const checkpoint of [1, 2, 3]) {
       const execPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
       const execCall = outputToolCall(execPayload, "exec");
       const execArgs = outputToolArgsFromItem(execCall);
-      expect(execArgs).toMatchObject({ language: "javascript", restartSafe: true });
-      expect(execArgs.code).toContain("qa_restart_wait");
-      expect(execArgs.code).toContain('catalog.search("qa_restart_wait")');
-      expect(execArgs.code).toContain("await target({})");
-      expect(execArgs.code).toContain(`CHECKPOINT-${checkpoint}`);
+      await expectRestartCheckpointExecution(execArgs, checkpoint);
 
       const runId = `restart-checkpoint-${checkpoint}`;
       input.push(
@@ -6906,7 +7017,7 @@ Update and merge these partial structured summaries.`,
       const waitPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
       const waitCall = outputToolCall(waitPayload, "wait");
       expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
-      input.push(waitCall, makeUserInput(recoveryPrompt));
+      input.push(waitCall, makeUserInput(restartRecoveryPrompt));
     }
 
     const finalPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
@@ -8128,7 +8239,7 @@ Update and merge these partial structured summaries.`,
     expect(outputText(laterHeartbeatPayload)).toBe("HEARTBEAT_OK");
   });
 
-  it("scripts one failure-honest Code Mode terminal-tool continuation (#118274)", async () => {
+  it("reports a failed Code Mode read honestly through ordinary continuation", async () => {
     const server = await startMockServer();
     const prompt =
       "Failed tool terminal recovery QA check: read the missing file, then respond with exact marker: `QA-FAILED-TOOL-FINALIZED-OK`.";
@@ -8172,33 +8283,28 @@ Update and merge these partial structured summaries.`,
       String(plannedRequest.plannedToolCallId),
       JSON.stringify({ status: "failed", error: "ENOENT: qa-failed-terminal-missing-file.txt" }),
     );
-    const dishonestFinalization = await expectNonStreamingResponsesJson<{
-      output?: Array<{ content?: Array<{ text?: string }> }>;
-    }>(server, {
-      model: "gpt-5.6-luna",
-      input: [
-        makeUserInput(prompt),
-        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
-        failedToolOutput,
-      ],
-    });
-    expect(outputText(dishonestFinalization)).toBe("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
-
     const recovered = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
       model: "gpt-5.6-luna",
-      input: [
-        makeUserInput(prompt),
-        makeUserInput(
-          `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If a tool failed, say so; never claim completion or success.`,
-        ),
-        failedToolOutput,
-      ],
+      tools: codeModeTools,
+      input: [makeUserInput(prompt), failedToolOutput],
     });
     expect(outputText(recovered)).toBe(
       "The requested file could not be read: ENOENT. QA-FAILED-TOOL-FINALIZED-OK",
     );
+
+    const succeeded = await expectNonStreamingResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      model: "gpt-5.6-luna",
+      tools: codeModeTools,
+      input: [
+        makeUserInput(prompt),
+        makeToolOutputWithCallId(String(plannedRequest.plannedToolCallId), "file contents"),
+      ],
+    });
+    expect(outputText(succeeded)).toBe("BUG-TOOL-DID-NOT-FAIL");
   });
 });
 

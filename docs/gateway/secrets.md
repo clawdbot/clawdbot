@@ -1,7 +1,7 @@
 ---
 summary: "Secrets management: SecretRef contract, shared secret store, runtime snapshots, and safe one-way scrubbing"
 read_when:
-  - Configuring SecretRefs for provider credentials and `auth-profiles.json` refs
+  - Configuring SecretRefs for provider credentials and SQLite auth-profile refs
   - Storing team-wide secrets and environment values in the shared SQLite store
   - Operating secrets reload, audit, configure, and apply safely in production
   - Understanding startup fail-fast, inactive-surface filtering, and last-known-good behavior
@@ -24,6 +24,7 @@ Plaintext credentials remain agent-readable when they sit in files the agent can
 - Secrets resolve into an in-memory runtime snapshot, eagerly during activation, not lazily on request paths.
 - Cold Gateway startup isolates a retryable SecretRef failure to a known non-Gateway owner when that owner supports isolation. Mapped owner classes include model providers and skills, media/TTS/cron providers, eligible auth profiles, per-agent memory, sandbox SSH, channel accounts, and manifest-declared plugin routes. The Gateway starts, records the owner as configured-unavailable, and emits a redacted degradation warning. Gateway ingress auth, structurally invalid refs or resolved values, fail-closed owners, and refs whose runtime owner is not mapped still fail startup.
 - Reload validates each mapped owner independently, then publishes one atomic snapshot. Healthy owners refresh. An eligible failed owner keeps its last-known-good value and becomes stale only when its ref identities, provider definitions, and complete non-secret owner contract are unchanged; a changed or new failed owner becomes cold. A strict failure rejects the reload and preserves the active snapshot.
+- Config reload also reconciles channel connections when a secret-provider edit changes resolved credentials. Plugins that support account-scoped reload restart only the affected named accounts; shared, default, removed, or unresolved account changes use the plugin's whole-channel restart policy. Cold accounts stop, eligible stale accounts keep using their last-known-good credentials, and recovery preserves manual stops.
 - Policy violations (for example an OAuth-mode auth profile combined with SecretRef input) fail activation before the runtime swap.
 - Runtime requests read only the active in-memory snapshot. Model-provider SecretRef credentials pass through auth storage and stream options as process-local sentinels until egress. Outbound delivery paths (Discord reply/thread delivery, Telegram action sends) also read that snapshot and do not re-resolve refs per send.
 - Read-only channel capability discovery evaluates accounts independently. A configured-but-unavailable account does not hide healthy sibling accounts' message actions, while direct sends through the unavailable account still fail closed.
@@ -213,9 +214,11 @@ Define providers under `secrets.providers`:
 
 Provider aliases are source-specific. A matching explicit provider entry wins; if an `env` or `store` default alias is also used by an entry for another source, that source's built-in provider wins. Non-default aliases and `file` or `exec` providers must resolve to an explicit entry with the matching source.
 
+Read-only inspection recognizes valid `store` bindings without opening the database. That is configuration evidence, not proof that the value exists: credential availability stays unknown until runtime resolution.
+
 <Accordion title="Env provider">
-- Optional exact-name allowlist via `allowlist`.
-- Missing or empty env values fail resolution.
+- Optional exact-name allowlist via `allowlist`. A matching explicit env provider enforces this list even when it is the selected default. Omit the list to allow any name; use `[]` to deny every name.
+- Missing or empty env values fail resolution. An explicit env SecretRef remains authoritative and does not fall through to another credential or auth profile.
 
 </Accordion>
 
@@ -230,7 +233,8 @@ Provider aliases are source-specific. A matching explicit provider entry wins; i
 
 <Accordion title="Exec provider">
 - Runs the configured absolute binary path directly, no shell.
-- `command` must be a regular file, not a symlink. For package-manager shims, resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute path. Use `trustedDirs` to restrict executables to approved directories.
+- `command` must not be a symlink, must not be group- or world-writable, and on POSIX must be owned by the current user. For package-manager shims, resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute path. Use `trustedDirs` to restrict executables to approved directories.
+- [`config validate`](/cli/config#config-validate) checks every manual exec command path without executing providers. Config writes and dry runs check only changed or newly referenced providers, so an unrelated inactive provider does not block repairs. These are path trust checks, not proof that a provider can execute or return a secret.
 - Supports `timeoutMs` (default 5000), `noOutputTimeoutMs` (default equals `timeoutMs`), `maxOutputBytes` (default 1 MiB), `env`/`passEnv` allowlist, and `trustedDirs`.
 - `jsonOnly` defaults to `true`. With `jsonOnly: false` and a single requested id, plain non-JSON stdout is accepted as that id's value.
 - Windows fail-closed: if ACL verification is unavailable for the command path, resolution fails. Use a command path whose ACLs OpenClaw can verify; there is no provider-level bypass.

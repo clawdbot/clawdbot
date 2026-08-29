@@ -9,7 +9,11 @@ import { setSubagentRegistryDepsForTest } from "../../agents/subagents/registry/
 import type { SubagentRegistryDeps } from "../../agents/subagents/registry/subagent-registry-deps.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import type { SessionTranscriptStats } from "../../config/sessions/session-accessor.js";
+import type {
+  SessionTranscriptStats,
+  recordSessionParticipant,
+  listSessionParticipantsReadOnly,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import {
@@ -40,6 +44,8 @@ const mocks = vi.hoisted(() => ({
   applySessionEntryReplacements: vi.fn(),
   patchSessionEntryTarget: vi.fn(),
   persistSessionTranscriptTurn: vi.fn(),
+  recordSessionParticipant: vi.fn<typeof recordSessionParticipant>(() => "inserted"),
+  listSessionParticipantsReadOnly: vi.fn<typeof listSessionParticipantsReadOnly>(() => new Map()),
   readTranscriptStatsSync: vi.fn<() => SessionTranscriptStats>(() => ({
     eventCount: 0,
     maxSeq: 0,
@@ -146,6 +152,9 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
     applySessionEntryReplacements: mocks.applySessionEntryReplacements,
     patchSessionEntryTarget: mocks.patchSessionEntryTarget,
     persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn,
+    // These handler fixtures own an in-memory store; participant access must not reach shared /tmp SQLite.
+    recordSessionParticipant: mocks.recordSessionParticipant,
+    listSessionParticipantsReadOnly: mocks.listSessionParticipantsReadOnly,
     readTranscriptStatsSync: mocks.readTranscriptStatsSync,
   };
 });
@@ -193,10 +202,16 @@ vi.mock("../../commands/agent.js", () => {
 vi.mock("../../agents/prepared-model-runtime.js", () => ({
   // Direct handler tests bypass Gateway startup, so provide the lifecycle fact
   // that production publishes before admitting agent RPCs.
+  acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
+    release: vi.fn(),
+    snapshot: {},
+  })),
   loadPublishedGatewayReplyDispatchRuntime: async ({ agentId }: { agentId: string }) => ({
     agentId,
+    agentDir: "/tmp/agent",
     config: resolveAgentTestConfig(),
     pluginGeneration: { pluginMetadataSnapshot: {} },
+    workspaceDir: "/tmp/workspace",
   }),
 }));
 
@@ -586,6 +601,8 @@ function selectFreshestTargetFixtureEntry(
 }
 
 function resetSessionAccessorMocks() {
+  mocks.recordSessionParticipant.mockReset().mockReturnValue("inserted");
+  mocks.listSessionParticipantsReadOnly.mockReset().mockReturnValue(new Map());
   mocks.readTranscriptStatsSync.mockReset().mockReturnValue({
     eventCount: 0,
     maxSeq: 0,
@@ -917,7 +934,9 @@ export function operatorWriteGatewayClient(): AgentHandlerArgs["client"] {
   } as AgentHandlerArgs["client"];
 }
 
-export function operatorWriteCliClient(): AgentHandlerArgs["client"] {
+export function operatorWriteCliClient(
+  scopes: string[] = ["operator.write"],
+): NonNullable<AgentHandlerArgs["client"]> {
   return {
     connect: {
       minProtocol: 1,
@@ -928,9 +947,9 @@ export function operatorWriteCliClient(): AgentHandlerArgs["client"] {
         platform: "test",
         mode: "cli",
       },
-      scopes: ["operator.write"],
+      scopes,
     },
-  } as AgentHandlerArgs["client"];
+  };
 }
 
 export async function waitForAgentCommandCall<

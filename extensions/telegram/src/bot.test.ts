@@ -1804,6 +1804,37 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-question-blocked");
   });
 
+  it("targets the group member who requests custom question input", async () => {
+    const config = makeTelegramConfig({
+      dmPolicy: "open",
+      allowFrom: ["9"],
+      capabilities: { inlineButtons: "all" },
+      groupPolicy: "open",
+      groups: { "*": { requireMention: false, allowFrom: ["9"] } },
+    });
+    loadConfig.mockReturnValue(config);
+    createTelegramBot({ token: "tok", config });
+    const callbackHandler = getTelegramCallbackHandlerForTests();
+    const from = { id: 9, is_bot: false, first_name: "Ada", username: "ada_bot" };
+
+    await callbackHandler(
+      createTelegramCallbackContext({
+        id: "cbq-question-other",
+        data: "tgqo1:ask_0123456789abcdef0123456789abcdef",
+        from,
+        message: {
+          chat: { id: -100999, type: "supergroup", title: "Test Group" },
+          message_id: 21,
+        },
+      }),
+    );
+
+    expect(sendMessageSpy).toHaveBeenCalledWith(-100999, "Ada, reply with your own answer.", {
+      entities: [{ type: "text_mention", offset: 0, length: 3, user: from }],
+      reply_markup: { force_reply: true, selective: true },
+    });
+  });
+
   it("replaces legacy approval controls with a visible terminal receipt", async () => {
     mockTelegramConfig(makeExecApprovalTelegramConfig());
     createTelegramBot({ token: "tok" });
@@ -2749,6 +2780,17 @@ describe("createTelegramBot", () => {
           providers: ["anthropic", "openai"],
           resolvedDefault: { provider: defaultProvider, model: defaultModel },
           modelNames: new Map(),
+          modelCatalog: [
+            { provider: "openai", id: "gpt-4o", name: "GPT-4o", reasoning: false },
+            { provider: "openai", id: "gpt-4.1", name: "GPT-4.1", reasoning: false },
+            { provider: "openai", id: "gpt-5", name: "GPT-5", reasoning: true },
+            {
+              provider: "anthropic",
+              id: "claude-sonnet-4-5",
+              name: "Claude Sonnet",
+              reasoning: true,
+            },
+          ],
         });
 
         loadConfig.mockReturnValue(config);
@@ -2785,6 +2827,7 @@ describe("createTelegramBot", () => {
       byProvider: new Map<string, Set<string>>([["openai", new Set(["gpt-5", "gpt-4.1"])]]),
       providers: ["openai"],
       resolvedDefault: { provider: "openai", model: "gpt-5" },
+      modelCatalog: [],
       modelNames: new Map<string, string>([
         ["openai/gpt-4.1", "GPT 4.1 Bridge"],
         ["openai/gpt-5", "GPT Five Bridge"],

@@ -122,22 +122,6 @@ const finalizeSetupWizard = vi.hoisted(() =>
 const listChannelPlugins = vi.hoisted(() => vi.fn(() => []));
 const logConfigUpdated = vi.hoisted(() => vi.fn(() => {}));
 const setupInternalHooks = vi.hoisted(() => vi.fn(async (cfg) => cfg));
-const enableDefaultOnboardingInternalHooks = vi.hoisted(() =>
-  vi.fn((cfg) => ({
-    ...cfg,
-    hooks: {
-      ...(cfg as { hooks?: Record<string, unknown> }).hooks,
-      internal: {
-        ...(cfg as { hooks?: { internal?: Record<string, unknown> } }).hooks?.internal,
-        entries: {
-          ...(cfg as { hooks?: { internal?: { entries?: Record<string, unknown> } } }).hooks
-            ?.internal?.entries,
-          "session-memory": { enabled: true },
-        },
-      },
-    },
-  })),
-);
 const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
 const listSetupMigrationOptions = vi.hoisted(() =>
   vi.fn<ListSetupMigrationOptions>(async () => []),
@@ -413,8 +397,8 @@ vi.mock("../commands/health.js", () => ({
   healthCommandNonExiting: healthCommand,
 }));
 
-vi.mock("../commands/onboard-hooks.js", () => ({
-  enableDefaultOnboardingInternalHooks,
+vi.mock("../commands/onboard-hooks.js", async (importActual) => ({
+  ...(await importActual<typeof import("../commands/onboard-hooks.js")>()),
   setupInternalHooks,
 }));
 
@@ -1004,78 +988,92 @@ describe("runSetupWizard", () => {
   });
 
   it.each([
-    { name: "token", optionKey: "remoteToken", remoteKey: "token" },
-    { name: "password", optionKey: "remotePassword", remoteKey: "password" },
-  ])("seeds interactive remote $name auth from command flags", async ({ optionKey, remoteKey }) => {
-    const remoteCredential = "REDACTED";
-    readConfigFileSnapshot.mockResolvedValueOnce({
-      path: "/tmp/.openclaw/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      resolved: {},
-      sourceConfigBeforeMigrations: {},
-      valid: true,
-      config: {
-        gateway: {
-          remote: {
-            url: "wss://stored.example.com:18789",
-            token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
-            password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
+    { name: "token", optionKey: "remoteToken", remoteKey: "token", hasStoredUrl: true },
+    { name: "password", optionKey: "remotePassword", remoteKey: "password", hasStoredUrl: true },
+    {
+      name: "token without a saved endpoint",
+      optionKey: "remoteToken",
+      remoteKey: "token",
+      hasStoredUrl: false,
+    },
+  ])(
+    "seeds interactive remote $name auth from command flags",
+    async ({ optionKey, remoteKey, hasStoredUrl }) => {
+      const storedUrl = hasStoredUrl ? "wss://stored.example.com:18789" : undefined;
+      const remoteCredential = "REDACTED";
+      readConfigFileSnapshot.mockResolvedValueOnce({
+        path: "/tmp/.openclaw/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        resolved: {},
+        sourceConfigBeforeMigrations: {},
+        valid: true,
+        config: {
+          gateway: {
+            remote: {
+              url: storedUrl,
+              token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
+              password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
+            },
           },
         },
-      },
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    });
-    const prompter = buildWizardPrompter({});
-    const runtime = createRuntime();
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      });
+      const prompter = buildWizardPrompter({});
+      const runtime = createRuntime();
 
-    if (remoteKey === "password") {
-      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "ambient-gateway-token");
-    }
-    try {
-      await runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "advanced",
-          mode: "remote",
-          remoteUrl: " wss://flag.example.com:18789 ",
-          [optionKey]: ` ${remoteCredential} `,
-        },
-        runtime,
-        prompter,
-      );
-    } finally {
       if (remoteKey === "password") {
-        vi.unstubAllEnvs();
+        vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "ambient-gateway-token");
       }
-    }
-
-    expect(probeGatewayReachable).toHaveBeenCalledWith({
-      url: "wss://flag.example.com:18789",
-      token: remoteKey === "token" ? remoteCredential : undefined,
-      ...(remoteKey === "password" ? { password: remoteCredential } : {}),
-    });
-    expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gateway: expect.objectContaining({
-          remote: {
-            url: "wss://flag.example.com:18789",
-            token: remoteKey === "token" ? remoteCredential : undefined,
-            password: remoteKey === "password" ? remoteCredential : undefined,
+      try {
+        await runSetupWizard(
+          {
+            acceptRisk: true,
+            flow: "advanced",
+            mode: "remote",
+            remoteUrl: " wss://flag.example.com:18789 ",
+            [optionKey]: ` ${remoteCredential} `,
           },
+          runtime,
+          prompter,
+        );
+      } finally {
+        if (remoteKey === "password") {
+          vi.unstubAllEnvs();
+        }
+      }
+
+      expect(probeGatewayReachable).toHaveBeenCalledWith({
+        url: "wss://flag.example.com:18789",
+        config: expect.any(Object),
+        token: remoteKey === "token" ? remoteCredential : undefined,
+        ...(remoteKey === "password" ? { password: remoteCredential } : {}),
+      });
+      expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          gateway: expect.objectContaining({
+            remote: {
+              url: "wss://flag.example.com:18789",
+              token: remoteKey === "token" ? remoteCredential : undefined,
+              password: remoteKey === "password" ? remoteCredential : undefined,
+            },
+          }),
         }),
-      }),
-      expect.any(Object),
-      {
+        expect.any(Object),
+        expect.any(Object),
+      );
+      expect(
+        getMockCallArg(promptRemoteGatewayConfig, 0, 2, "remote prompt options"),
+      ).toStrictEqual({
         secretInputMode: undefined,
-        edgeAuthOriginUrl: "wss://stored.example.com:18789",
-      },
-    );
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteCredential));
-  });
+        remoteOriginUrl: storedUrl,
+      });
+      expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteCredential));
+    },
+  );
 
   it("uses the configured remote password for the setup reachability probe", async () => {
     const remotePassword = "remote-password"; // pragma: allowlist secret
@@ -1099,37 +1097,41 @@ describe("runSetupWizard", () => {
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
       url: "wss://gateway.example.test",
+      config: expect.any(Object),
       token: undefined,
       password: remotePassword,
     });
   });
 
-  it("passes configured remote edge auth to the setup reachability probe", async () => {
-    const config: OpenClawConfig = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://gateway.example.test",
-          edgeAuth: { "X-Edge-Auth": "test-secret" },
+  it.each([{ edgeAuth: { "X-Edge-Auth": "test-secret" } }, { tlsFingerprint: "ab".repeat(32) }])(
+    "passes remote trust settings to the setup reachability probe: %j",
+    async (trust) => {
+      const config: OpenClawConfig = {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example.test",
+            ...trust,
+          },
         },
-      },
-    };
-    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(config));
+      };
+      readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(config));
 
-    await runSetupWizard(
-      { acceptRisk: true, flow: "advanced", mode: "remote" },
-      createRuntime(),
-      buildWizardPrompter({}),
-    );
+      await runSetupWizard(
+        { acceptRisk: true, flow: "advanced", mode: "remote" },
+        createRuntime(),
+        buildWizardPrompter({}),
+      );
 
-    expect(probeGatewayReachable).toHaveBeenCalledWith({
-      url: "wss://gateway.example.test",
-      config: expect.objectContaining({
-        gateway: config.gateway,
-      }),
-      token: undefined,
-    });
-  });
+      expect(probeGatewayReachable).toHaveBeenCalledWith({
+        url: "wss://gateway.example.test",
+        config: expect.objectContaining({
+          gateway: config.gateway,
+        }),
+        token: undefined,
+      });
+    },
+  );
 
   it("keeps a configured remote token authoritative over an environment password", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce(
@@ -1159,6 +1161,7 @@ describe("runSetupWizard", () => {
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
       url: "wss://gateway.example.test",
+      config: expect.any(Object),
       token: "resolved-remote-token",
     });
   });
@@ -1193,6 +1196,7 @@ describe("runSetupWizard", () => {
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
       url: "wss://gateway.example.test",
+      config: expect.any(Object),
       token: "ambient-token",
     });
   });
@@ -1213,6 +1217,7 @@ describe("runSetupWizard", () => {
             token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
             password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
             edgeAuth: { "X-Edge-Auth": "test-secret" },
+            tlsFingerprint: "ab".repeat(32),
           },
         },
       },
@@ -1244,6 +1249,7 @@ describe("runSetupWizard", () => {
           remote: expect.objectContaining({
             url: "wss://stored.example.com:18789",
             edgeAuth: { "X-Edge-Auth": "test-secret" },
+            tlsFingerprint: "ab".repeat(32),
           }),
         }),
       }),
@@ -1257,13 +1263,14 @@ describe("runSetupWizard", () => {
             token: undefined,
             password: undefined,
             edgeAuth: { "X-Edge-Auth": "test-secret" },
+            tlsFingerprint: "ab".repeat(32),
           },
         }),
       }),
       expect.any(Object),
       {
         secretInputMode: undefined,
-        edgeAuthOriginUrl: "wss://stored.example.com:18789",
+        remoteOriginUrl: "wss://stored.example.com:18789",
       },
     );
   });
@@ -1285,50 +1292,33 @@ describe("runSetupWizard", () => {
     );
 
     expect(validateGatewayWebSocketUrl).toHaveBeenCalledWith("ws://public.example");
-    expect(probeGatewayReachable).not.toHaveBeenCalledWith({
-      url: "ws://public.example",
-      token: remoteToken,
-    });
+    expect(probeGatewayReachable).not.toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://public.example" }),
+    );
   });
 
   it("auto-enables the bundled session-memory hook without showing the hooks screen", async () => {
     replaceConfigFile.mockClear();
     setupInternalHooks.mockClear();
-    enableDefaultOnboardingInternalHooks.mockClear();
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime({ throwsOnExit: true });
 
     await runWizard({}, runtime, prompter);
 
     expect(setupInternalHooks).not.toHaveBeenCalled();
-    expect(enableDefaultOnboardingInternalHooks).toHaveBeenCalledOnce();
-    const finalCallIndex = replaceConfigFile.mock.calls.length - 1;
-    const replaceParams = requireRecord(
-      getMockCallArg(replaceConfigFile, finalCallIndex, 0, "final config replacement"),
-      "final config replacement params",
-    );
-    const nextConfig = requireRecord(replaceParams.nextConfig, "next config");
-    const hooks = requireRecord(nextConfig.hooks, "next config hooks");
-    const internal = requireRecord(hooks.internal, "next config internal hooks");
-    const entries = requireRecord(internal.entries, "next config hook entries");
-    expect(entries["session-memory"]).toEqual({ enabled: true });
+    expect(persistedWizardConfigs().at(-1)?.hooks?.internal?.entries?.["session-memory"]).toEqual({
+      enabled: true,
+    });
   });
 
   it("does not auto-enable default hooks when skipHooks is set", async () => {
     replaceConfigFile.mockClear();
-    enableDefaultOnboardingInternalHooks.mockClear();
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime({ throwsOnExit: true });
 
     await runWizard({ skipHooks: true }, runtime, prompter);
 
-    expect(enableDefaultOnboardingInternalHooks).not.toHaveBeenCalled();
-    const finalCallIndex = replaceConfigFile.mock.calls.length - 1;
-    const replaceParams = requireRecord(
-      getMockCallArg(replaceConfigFile, finalCallIndex, 0, "final config replacement"),
-      "final config replacement params",
-    );
-    expect(requireRecord(replaceParams.nextConfig, "next config").hooks).toBeUndefined();
+    expect(persistedWizardConfigs().at(-1)?.hooks).toBeUndefined();
   });
 
   it("persists the first security acknowledgement", async () => {

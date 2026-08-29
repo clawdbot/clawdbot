@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -11,6 +12,10 @@ import type {
   SessionTranscriptRawDeltaResult,
   SessionTranscriptReadScope,
 } from "./session-accessor.sqlite-contract.js";
+import {
+  positionTranscriptDisplayEvents,
+  readTranscriptDisplaySource,
+} from "./session-accessor.sqlite-display-position.js";
 import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import {
   getSessionKysely,
@@ -41,7 +46,12 @@ type SessionTranscriptRawDeltaPage = Extract<SessionTranscriptRawDeltaResult, { 
 export type SessionTranscriptDisplayDeltaResult =
   | (Omit<SessionTranscriptRawDeltaPage, "events"> & {
       activeLeafEntryId: string | null;
-      events: Array<SessionTranscriptRawDeltaPage["events"][number] & { messageSeq?: number }>;
+      events: Array<
+        SessionTranscriptRawDeltaPage["events"][number] & {
+          messageSeq?: number;
+          displayPosition?: TranscriptDisplayPosition;
+        }
+      >;
     })
   | Exclude<SessionTranscriptRawDeltaResult, { kind: "page" }>;
 
@@ -176,7 +186,7 @@ export function readTranscriptDisplayDelta(
       database: projection.database,
       ...projection.resolved,
     })?.beforeRawSeq;
-    return readRawDeltaInTransaction(
+    const result = readRawDeltaInTransaction(
       projection.database.db,
       projection.resolved,
       limits.cursor,
@@ -185,6 +195,16 @@ export function readTranscriptDisplayDelta(
       beforeEventSeq,
       true,
     );
+    if (result.kind !== "page") {
+      return result;
+    }
+    const rows = result.events.map((row) => ({ ...row, eventSeq: row.seq }));
+    const events = positionTranscriptDisplayEvents(
+      projection,
+      readTranscriptDisplaySource(projection),
+      rows,
+    );
+    return { ...result, events };
   });
 }
 
@@ -275,7 +295,7 @@ function readRawDeltaInTransaction(
       .select([
         "seq",
         /* kysely-allow-raw: SQLite byte length avoids fetching or parsing excluded JSON. */
-        sql<number>`LENGTH(CAST(event_json AS BLOB)) + 1`.as("serialized_bytes"),
+        sql<number>`OCTET_LENGTH(event_json) + 1`.as("serialized_bytes"),
       ])
       .where("session_id", "=", scope.sessionId)
       .where("seq", ">", cursor.lastSeq)

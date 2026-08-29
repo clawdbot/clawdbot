@@ -173,6 +173,26 @@ function stripVerifiedConversationContext(
   return result;
 }
 
+export function createVerifiedConversationContextStreamFilter(
+  getConversationContext?: () => string | undefined,
+): (delta: string) => string {
+  let accumulatedText = "";
+  let releasedText: string | null = "";
+  return (delta) => {
+    accumulatedText += delta;
+    const conversationContext = getConversationContext?.();
+    const safeText = stripVerifiedConversationContext(accumulatedText, conversationContext, true);
+    // Already delivered stream text cannot be retracted if its safe projection changes.
+    if (releasedText === null || !safeText.startsWith(releasedText)) {
+      releasedText = null;
+      return "";
+    }
+    const newlySafeText = safeText.slice(releasedText.length);
+    releasedText = safeText;
+    return newlySafeText;
+  };
+}
+
 function collapseConsecutiveDuplicateBlocks(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {

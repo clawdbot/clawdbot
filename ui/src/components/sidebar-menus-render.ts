@@ -436,11 +436,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onOwnerFilterChange: (ownerId, involvingMe = false) => {
-      host.sessionOwnerFilterId = ownerId;
-      host.sessionInvolvingMeFilterActive = involvingMe;
-      void (involvingMe
-        ? host.sessionDataContext?.sessions.setInvolvingMeFilter(true)
-        : host.sessionDataContext?.sessions.setOwnerFilter(ownerId));
+      host.setSessionOwnerFilter(ownerId, involvingMe);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onShowCronChange: (show) => {
@@ -487,11 +483,7 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
       controller.closeCatalogViewMenu();
     },
     onOwnerFilterChange: (ownerId, involvingMe = false) => {
-      host.sessionOwnerFilterId = ownerId;
-      host.sessionInvolvingMeFilterActive = involvingMe;
-      void (involvingMe
-        ? host.sessionDataContext?.sessions.setInvolvingMeFilter(true)
-        : host.sessionDataContext?.sessions.setOwnerFilter(ownerId));
+      host.setSessionOwnerFilter(ownerId, involvingMe);
       controller.closeCatalogViewMenu({ restoreFocus: true });
     },
     onClose: (restoreFocus) => {

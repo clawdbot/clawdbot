@@ -29,6 +29,16 @@ export type ReplyMediaAttachment = {
   trustedLocalMedia?: boolean;
 };
 
+export type ReplyMediaFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
+
+/** Producer-owned outcome for one attachment that could not be delivered. */
+export type ReplyMediaFailure = {
+  code: ReplyMediaFailureCode;
+  kind: "image" | "audio" | "video" | "document";
+  label: string;
+  mimeType?: string;
+};
+
 /** Channel-agnostic assistant reply payload. */
 export type ReplyPayload = {
   text?: string;
@@ -153,18 +163,44 @@ export type ReplyDeliveryContext = {
   replyToMode: ReplyToMode;
 };
 
-const REPLY_MEDIA_FAILURE_WARNING =
-  "⚠️ Media failed. Try sending a smaller supported file or a different format.";
+const REPLY_MEDIA_FAILURE_MESSAGES: Record<ReplyMediaFailureCode, string> = {
+  "file-not-found": "File not found. Check the path and try again.",
+  "unsupported-format": "Rejected by the local attachment allowlist. Send a supported file type.",
+  "delivery-failed": "Delivery failed. Try sending this file again.",
+};
 
-/** Appends the standard media failure warning without duplicating it. */
-export function appendReplyMediaFailureWarning(text: string | undefined): string {
-  if (!text?.trim()) {
-    return REPLY_MEDIA_FAILURE_WARNING;
-  }
-  if (text.includes(REPLY_MEDIA_FAILURE_WARNING)) {
+function formatReplyMediaFailures(failures: readonly ReplyMediaFailure[]): string {
+  return failures
+    .map((failure) => `⚠️ ${failure.label}: ${REPLY_MEDIA_FAILURE_MESSAGES[failure.code]}`)
+    .join("\n");
+}
+
+/** Appends one named, actionable fallback receipt per failed attachment. */
+export function appendReplyMediaFailures(
+  text: string | undefined,
+  failures: readonly ReplyMediaFailure[],
+): string | undefined {
+  if (failures.length === 0) {
     return text;
   }
-  return `${text}\n${REPLY_MEDIA_FAILURE_WARNING}`;
+  const receipt = formatReplyMediaFailures(failures);
+  return text?.trim() ? `${text}\n${receipt}` : receipt;
+}
+
+/** Removes producer-authored fallback receipts when structured display cards supersede them. */
+export function stripReplyMediaFailureFallback(
+  text: string | undefined,
+  failures: readonly ReplyMediaFailure[],
+): string | undefined {
+  if (!text || failures.length === 0) {
+    return text;
+  }
+  const receipt = formatReplyMediaFailures(failures);
+  if (text === receipt) {
+    return undefined;
+  }
+  const suffix = `\n${receipt}`;
+  return text.endsWith(suffix) ? text.slice(0, -suffix.length) : text;
 }
 
 function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls">): boolean {
@@ -248,12 +284,16 @@ export type ReplyPayloadMetadata = {
   ttsExplicit?: true;
   /** Original runtime MEDIA references used to identify the persisted assistant row. */
   assistantTranscriptMediaUrls?: string[];
+  /** Ordered per-source failures retained until transcript/display projection. */
+  assistantMediaFailures?: ReplyMediaFailure[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
   /** Exact channel/account transform owner that already accepted this payload. */
   channelReplyTransformOwner?: object;
   /** Exact dispatcher that already ran its full normalization before side effects. */
   replyDispatcherNormalizationOwner?: object;
+  /** The command owner produced this terminal reply without starting an agent run. */
+  commandReply?: true;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
@@ -347,13 +387,28 @@ export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(p
 export function markCommandReplyForDelivery(
   reply: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload | ReplyPayload[] | undefined {
+  const markPayload = (payload: ReplyPayload): ReplyPayload =>
+    setReplyPayloadMetadata(markReplyPayloadForSourceSuppressionDelivery(payload), {
+      commandReply: true,
+    });
   if (!reply) {
     return reply;
   }
   if (Array.isArray(reply)) {
-    return reply.map((payload) => markReplyPayloadForSourceSuppressionDelivery(payload));
+    return reply.map(markPayload);
   }
-  return markReplyPayloadForSourceSuppressionDelivery(reply);
+  return markPayload(reply);
+}
+
+/** Returns true only when a command owner produced every payload in a non-empty reply. */
+export function isCommandReplyForDelivery(
+  reply: ReplyPayload | ReplyPayload[] | undefined,
+): boolean {
+  const payloads = Array.isArray(reply) ? reply : reply ? [reply] : [];
+  return (
+    payloads.length > 0 &&
+    payloads.every((payload) => getReplyPayloadMetadata(payload)?.commandReply === true)
+  );
 }
 
 /** Returns true for internal status/notice payloads, not assistant answer content. */

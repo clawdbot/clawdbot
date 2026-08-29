@@ -4,6 +4,9 @@ import {
 } from "../process/gateway-work-admission.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 
+/** A node may emit this only before invoking a handler or sending any progress. */
+export const NODE_INVOKE_NOT_READY = "NODE_NOT_READY";
+
 export type PendingSystemRunEvent = {
   runId: string;
   sessionKey?: string;
@@ -27,6 +30,7 @@ export type PendingInvoke = {
   idleTimer?: ReturnType<typeof setTimeout>;
   idleTimeoutMs?: number;
   onProgress?: (chunk: string) => void;
+  receivedProgress?: boolean;
   nextProgressSeq: number;
   progressChunks: Map<number, string>;
   nextInputSeq: number;
@@ -133,11 +137,17 @@ export class NodeInvokeStreamController {
     if (!params.ok) {
       this.options.onFailedResult(pending);
     }
+    // Even an out-of-order frame proves execution. A contradictory readiness
+    // rejection must not authorize another attempt of a non-idempotent command.
+    const error =
+      params.error?.code === NODE_INVOKE_NOT_READY && pending.receivedProgress
+        ? { code: "UNAVAILABLE", message: "node reported not-ready after invocation progress" }
+        : (params.error ?? null);
     pending.resolve({
       ok: params.ok,
       payload: params.payload,
       payloadJSON: params.payloadJSON ?? null,
-      error: params.error ?? null,
+      error,
     });
     return true;
   }
@@ -199,12 +209,17 @@ export class NodeInvokeStreamController {
       pending.nodeId !== params.nodeId ||
       pending.connId !== params.connId ||
       !this.options.isConnectionActive(pending) ||
-      !pending.onProgress ||
       params.seq < pending.nextProgressSeq
     ) {
       return false;
     }
     if (this.settleIfExpired(params.invokeId, pending)) {
+      return false;
+    }
+    // Receipt proves execution even without a stream consumer. Keep ignored
+    // acknowledgments and cancellation capability independent of this fact.
+    pending.receivedProgress = true;
+    if (!pending.onProgress) {
       return false;
     }
     if (params.seq > pending.nextProgressSeq) {

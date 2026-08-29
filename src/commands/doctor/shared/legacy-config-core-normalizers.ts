@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveBundledChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-bundled.js";
+import { resolveDiscoveredChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-discovery.js";
 import { resolveSingleAccountPromotion } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -154,8 +154,11 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     const promotion = resolveSingleAccountPromotion({
       channelKey: channelId,
       channel: rawChannel,
-      resolveBundledSurface: resolveBundledChannelSetupPromotionSurface,
+      resolveBundledSurface: (key) => resolveDiscoveredChannelSetupPromotionSurface(key, cfg),
     });
+    if (promotion.kind === "preserve-root") {
+      continue;
+    }
     // Defer only undeclared keys outside generic + legacy coverage. A partial
     // accounts.default would make later runs skip and permanently strand them at root.
     if (promotion.shouldDeferPromotion) {
@@ -762,6 +765,28 @@ export function normalizeLegacyRuntimeModelRefs(
     });
     if (changed) {
       nextAgents.list = nextList;
+    }
+  }
+
+  if (isRecord(rawAgents.entries)) {
+    let nextEntries: Record<string, unknown> | undefined;
+    for (const [agentId, entry] of Object.entries(rawAgents.entries)) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      const agent = normalizeLegacyRuntimeAgentContainer(
+        entry,
+        `agents.entries.${sanitizeForLog(agentId)}`,
+        changes,
+        blockedModelIdentities,
+      );
+      if (agent.changed) {
+        (nextEntries ??= { ...rawAgents.entries })[agentId] = agent.value;
+      }
+    }
+    if (nextEntries) {
+      nextAgents.entries = nextEntries;
+      changed = true;
     }
   }
 

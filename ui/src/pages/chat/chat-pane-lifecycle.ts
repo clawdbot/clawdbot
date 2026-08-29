@@ -30,6 +30,7 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache, refreshChatAvatar } from "./chat-avatar.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import {
   type ChatAttachmentGatewayOwner,
   discardStateStagedAttachments,
@@ -55,13 +56,17 @@ import {
   subscribeChatPaneSnapshotInvalidation,
   subscribeChatPaneStartup,
 } from "./chat-pane-startup-subscriptions.ts";
-import { applySelectedChatAgent } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { refreshPageChat, retireChatMetadataRequests } from "./chat-state-refresh.ts";
+import {
+  applySelectedChatAgent,
+  refreshPageChat,
+  retireChatMetadataRequests,
+} from "./chat-state-refresh.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts";
+import { dismissThreadPortals } from "./components/chat-thread-interactions.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
@@ -77,9 +82,9 @@ import {
   readChatSessionSnapshot,
   resolveChatSnapshotKey,
 } from "./session-message-cache.ts";
-import { closeSlot, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
+import { closeSlot, isSidebarSlotVisible, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
 
-const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
+const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
@@ -92,9 +97,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     },
     pending: this.pendingPanelToggleRequests,
     requestUpdate: () => this.requestUpdate(),
+    updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
   });
 
   private chatRouteReadyReported = false;
+  private currentSessionArchived: boolean | undefined;
   private stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
   private suppressStagedAttachmentHandoffOnDisconnect = false;
 
@@ -302,18 +309,19 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   }
 
   protected readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (document.querySelector(".shell-nav[aria-modal='true']")) {
+      return;
+    }
     const togglePanelSlot = (slot: SidebarSlotId) => {
       const state = this.state;
       if (!state) {
         return;
       }
-      const visible =
-        state.sidebarLayout.open === true &&
-        state.sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === slot) === true;
+      const visible = isSidebarSlotVisible(state.sidebarLayout, slot);
       if (visible) {
         releaseAttachmentWorkspaceOwner(state, slot);
       }
-      state.updateSidebarLayout(
+      this.commitSidebarLayout(
         visible ? closeSlot(state.sidebarLayout, slot) : openSlot(state.sidebarLayout, slot),
       );
     };
@@ -437,6 +445,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       this,
       this.chatMessagesBySession,
     );
+    // Task tabs can precede main chat in DOM order; viewport reads and commands
+    // must resolve through the same transcript owner.
+    pageState.chatIsProgrammaticScroll = () => this.transcript.isProgrammaticScroll;
+    pageState.chatScrollElement = () => this.transcript.scrollElement;
     pageState.chatScrollToEnd = (options) => this.transcript.scrollToEnd(options);
     pageState.createChatSession = () => this.createSession();
     pageState.confirmConversationReset = () => this.confirmConversationReset();
@@ -535,9 +547,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     chatState.addCleanup(() => this.removeEventListener(WIDGET_PROMPT_EVENT, handleWidgetPrompt));
     chatState.addCleanup(this.context.gateway.subscribe((next) => this.applyGatewaySnapshot(next)));
     chatState.addCleanup(
-      this.context.agentSelection.subscribe((next) =>
-        applySelectedChatAgent(this.state, next.selectedId),
-      ),
+      this.context.agentSelection.subscribe((next) => {
+        applySelectedChatAgent(this.state, next.selectedId);
+        if (this.state) {
+          void syncSelectedSessionMessageSubscription(this.state);
+        }
+      }),
     );
     const sessionPullRequests = sessionPullRequestsForGateway(this.context.gateway);
     chatState.addCleanup(
@@ -565,7 +580,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
             invalidateChatAvatarCache(state);
             invalidateAssistantIdentityCache(state.client);
             state.assistantIdentityRequestVersion += 1;
-            retireChatMetadataRequests(state);
             void refreshChatAvatar(state).finally(() => state.requestUpdate?.());
           }
           handleQuestionPromptEvent(this.questionPromptState, event);
@@ -663,6 +677,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         this.showComposerPrefillAttention(input);
       }
     }
+    const archived = this.state ? this.isCurrentSessionArchived(this.state) : false;
+    if (archived && this.currentSessionArchived === false) {
+      dismissThreadPortals(this.presentationId, this);
+      this.querySelector<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
+    }
+    this.currentSessionArchived = archived;
     this.cancelResetConfirmationForSessionChange();
     this.syncHistoryObserver();
     const board = this.resolveBoardView();
@@ -672,6 +692,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
 
   override disconnectedCallback() {
     if (this.state) {
+      retireChatMetadataRequests(this.state);
       if (this.suppressStagedAttachmentHandoffOnDisconnect) {
         // MCP app teardown can delay DOM removal after pane close. Finalize any
         // attachment that completed during that delay instead of leaking it.

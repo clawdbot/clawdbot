@@ -4,7 +4,7 @@ import {
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
 } from "matrix-js-sdk/lib/matrix.js";
-import type { Room } from "matrix-js-sdk/lib/models/room.js";
+import { RoomEvent, type Room } from "matrix-js-sdk/lib/models/room.js";
 import type { MatrixSyncState } from "../sync-state.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { matrixEventToRaw } from "./event-helpers.js";
@@ -18,6 +18,19 @@ export function registerMatrixClientBridge(params: {
   getSelfUserId: () => string;
   setCurrentSyncState: (state: MatrixSyncState, error?: unknown) => void;
 }): void {
+  let initialSyncComplete = false;
+  const joinTransitions = new WeakSet<MatrixEvent>();
+  params.client.on(RoomEvent.MyMembership, (room, membership, previousMembership) => {
+    // The SDK records transitions before raw events. Missing prev_content alone
+    // cannot distinguish a new join from state replay or a profile update.
+    if (!initialSyncComplete || membership !== "join" || previousMembership === "join") {
+      return;
+    }
+    const event = room.currentState.getStateEvents("m.room.member", params.getSelfUserId());
+    if (event) {
+      joinTransitions.add(event);
+    }
+  });
   params.client.on(ClientEvent.Event, (event: MatrixEvent) => {
     const roomId = event.getRoomId();
     if (!roomId) {
@@ -43,7 +56,14 @@ export function registerMatrixClientBridge(params: {
       if (membership === "invite") {
         params.emitter.emit("room.invite", roomId, raw);
       } else if (membership === "join") {
-        params.emitter.emit("room.join", roomId, raw);
+        params.emitter.emit("room.join", roomId, {
+          ...raw,
+          membershipProvenance: joinTransitions.delete(event)
+            ? "transition"
+            : initialSyncComplete
+              ? "update"
+              : "snapshot",
+        } satisfies MatrixRawEvent);
       }
     }
 
@@ -57,6 +77,8 @@ export function registerMatrixClientBridge(params: {
   params.client.on(
     ClientEvent.Sync,
     (state: MatrixSyncState, prevState: string | null, data?: unknown) => {
+      // CATCHUP can precede the first successful sync after startup connection errors.
+      initialSyncComplete ||= state === "PREPARED" || state === "SYNCING";
       const error =
         data && typeof data === "object" && "error" in data
           ? (data as { error?: unknown }).error
@@ -89,6 +111,7 @@ export function emitMatrixMembershipForRoom(params: {
     content: { membership },
     origin_server_ts: Date.now(),
     unsigned: { age: 0 },
+    membershipProvenance: "snapshot",
   };
   if (membership === "invite") {
     params.emitter.emit("room.invite", roomId, raw);

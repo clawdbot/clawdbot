@@ -21,6 +21,9 @@ data class ChatQuestionPrompt(
   val errorText: String? = null,
   val terminalObservedAtMs: Long? = null,
   val recoveryUnavailable: Boolean = false,
+  // Process-only input can contain secrets; it must not enter saved or persisted state.
+  val draft: ChatQuestionDraft = ChatQuestionDraft(),
+  internal val promptOwner: Any = Any(),
 ) {
   fun status(nowMs: Long = System.currentTimeMillis()): ChatQuestionStatus =
     if (recoveryUnavailable) {

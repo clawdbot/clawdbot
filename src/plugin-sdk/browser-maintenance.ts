@@ -17,8 +17,6 @@ type BrowserMaintenanceSurface = {
   closeTrackedBrowserTabsForSessions: (params: CloseTrackedBrowserTabsParams) => Promise<number>;
 };
 
-let cachedBrowserMaintenanceSurface: BrowserMaintenanceSurface | undefined;
-
 function hasRequestedSessionKeys(sessionKeys: Array<string | undefined>): boolean {
   return sessionKeys.some((key) => Boolean(key?.trim()));
 }
@@ -31,12 +29,7 @@ function loadBrowserMaintenanceSurface(): BrowserMaintenanceSurface | null {
   if (!canLoadActivatedBundledPluginPublicSurface(request)) {
     return null;
   }
-  if (!cachedBrowserMaintenanceSurface) {
-    cachedBrowserMaintenanceSurface =
-      tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>(request) ??
-      undefined;
-  }
-  return cachedBrowserMaintenanceSurface ?? null;
+  return tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>(request);
 }
 
 /** Closes tracked browser tabs for requested session keys when the browser plugin is active. */

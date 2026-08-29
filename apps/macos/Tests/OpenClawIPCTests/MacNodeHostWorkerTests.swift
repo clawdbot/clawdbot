@@ -40,7 +40,7 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
         true
     }
 
-    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async {}
     func invokedCommands() -> [String] {
         self.requests.map(\.command)
@@ -134,9 +134,10 @@ struct MacNodeHostWorkerTests {
         OpenClawSystemCommand.run.rawValue,
         "mcp.tools.call.v1",
         "codex.terminal.resume.v1",
+        "system.worker.start",
     ])
     func `Mac runtime forwards worker-owned commands to the shared worker`(command: String) async {
-        let worker = StubMacNodeHostWorker(commands: [command])
+        let worker = StubMacNodeHostWorker(commands: command == "system.worker.start" ? [] : [command])
         let runtime = MacNodeRuntime(nodeHostWorker: worker)
 
         let response = await runtime.handleInvoke(BridgeInvokeRequest(
@@ -396,13 +397,16 @@ struct MacNodeHostWorkerTests {
         test "$OPENCLAW_NODE_EXEC_HOST" = app || exit 42
         test "$OPENCLAW_NODE_EXEC_FALLBACK" = 0 || exit 43
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
-        printf '%s\\n' '{"type":"gateway-request","id":"gateway-1","method":"node.invoke.progress","params":{"invokeId":"terminal-1","nodeId":"node-1","seq":0,"chunk":"hello"},"timeoutMs":1000}'
-        IFS= read -r unavailable
-        printf '%s' "$unavailable" | grep -q '"type":"gateway-response"' || exit 44
-        printf '%s' "$unavailable" | grep -q '"ok":false' || exit 45
+        # Progress belongs to the invoke; ready already lets the app send that invoke.
         while IFS= read -r line; do
           case "$line" in
-            *'"type":"invoke"'*) printf '%s\\n' '{"type":"invoke-result","result":{"id":"worker-run","ok":true,"payload":{"owner":"cli"}}}' ;;
+            *'"type":"invoke"'*)
+              printf '%s\\n' '{"type":"gateway-request","generation":0,"id":"gateway-1","method":"node.invoke.progress","params":{"invokeId":"worker-run","nodeId":"","seq":0,"chunk":"hello"},"timeoutMs":1000}'
+              IFS= read -r unavailable
+              printf '%s' "$unavailable" | grep -q '"type":"gateway-response"' || exit 44
+              printf '%s' "$unavailable" | grep -q '"ok":false' || exit 45
+              printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"worker-run","ok":true,"payload":{"owner":"cli"}}}'
+              ;;
           esac
         done
         """
@@ -616,15 +620,17 @@ struct MacNodeHostWorkerTests {
             try? FileManager.default.removeItem(at: directory)
         }
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        // Shell builtins handle TERM without waiting on a sleep child. Keep cleanup
+        // pending on stdin until the owner's existing termination deadline reaps it.
         let firstScript = """
-        trap 'printf "%s\n" "$$" > "$1"; /bin/sleep 0.2; exit 0' TERM
+        trap 'printf "%s\n" "$$" > "$1"; IFS= read -r _; exit 0' TERM
         printf '%s\n' '{"type":"ready","version":"first","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
-        while :; do /bin/sleep 1; done
+        while IFS= read -r line; do :; done
         """
         let replacementScript = """
         printf '%s\n' "$$" > "$1"
         printf '%s\n' '{"type":"ready","version":"replacement","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
-        while :; do /bin/sleep 1; done
+        while IFS= read -r line; do :; done
         """
 
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(command: [
@@ -651,8 +657,8 @@ struct MacNodeHostWorkerTests {
         case .success:
             Issue.record("changed launch succeeded after stop returned")
             await worker.stop()
-        case .failure:
-            break
+        case let .failure(error):
+            #expect(error.localizedDescription == "worker stopped")
         }
         #expect(TestProcessSupport.pollPID(in: replacementPIDFile) == nil)
     }
@@ -703,11 +709,11 @@ struct MacNodeHostWorkerTests {
         let script = """
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         IFS= read -r first
-        printf '{"type":"invoke-result","result":{"id":"first","ok":true,"payload":{"blob":"'
+        printf '{"type":"invoke-result","generation":0,"result":{"id":"first","ok":true,"payload":{"blob":"'
         head -c 2097152 /dev/zero | tr '\\000' x
         printf '"}}}\\n'
         IFS= read -r second
-        printf '%s\\n' '{"type":"invoke-result","result":{"id":"second","ok":true,"payload":{"done":true}}}'
+        printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"second","ok":true,"payload":{"done":true}}}'
         """
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
             command: ["/bin/sh", "-c", script]))
@@ -768,6 +774,14 @@ struct MacNodeHostWorkerTests {
                 configurationGeneration: 3))
             Issue.record("worker start unexpectedly succeeded")
         } catch {
+            let workerError = try #require(error as? MacNodeHostWorker.WorkerError)
+            guard case let .unavailable(reason, diagnostic) = workerError else {
+                Issue.record("worker start did not report an unavailable error")
+                return
+            }
+            #expect(reason.contains("exited"))
+            #expect(!reason.contains("state database"))
+            #expect(diagnostic?.contains("state database uses newer schema version") == true)
             #expect(error.localizedDescription.contains("state database uses newer schema version"))
         }
 

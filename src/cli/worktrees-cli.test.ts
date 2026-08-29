@@ -42,8 +42,9 @@ describe("worktrees cli", () => {
     await program.parseAsync(["worktrees", "gc"], { from: "user" });
 
     expect(gc).toHaveBeenCalledWith({
-      limits: {},
+      limits: { maxCount: 30 },
       shouldProtectOwner: expect.any(Function),
+      shouldRemoveOwner: expect.any(Function),
     });
   });
 });

@@ -67,6 +67,8 @@ Password-based (token is cached after first login):
 }
 ```
 
+Token and password SecretRefs follow the shared [source-specific provider-alias rules](/gateway/secrets#provider-config), including for named accounts. An explicit matching `env` provider still enforces its allowlist; an empty allowlist denies all variables.
+
 ### Auto-join
 
 `channels.matrix.autoJoin` defaults to `"off"`: the bot will not appear in new rooms or DMs from fresh invites until you join manually. OpenClaw cannot tell at invite time whether an invite is a DM or a group, so every invite goes through `autoJoin` first; `dm.policy` only applies later, after the bot has joined and the room is classified.
@@ -90,6 +92,24 @@ Set `autoJoin: "allowlist"` plus `autoJoinAllowlist` to restrict accepted invite
   },
 }
 ```
+
+### Group join introductions
+
+When the bot joins an allowed group room, it posts one introduction grounded in
+the room name, topic, and up to 100 readable recent room messages. If reading
+history fails, the introduction uses only available metadata and does not invent
+room activity.
+
+Introductions are enabled by default. Set `channels.matrix.joinIntro: false` to
+disable them, or use `channels.matrix.accounts.<accountId>.joinIntro` to override
+one account. Direct rooms never receive introductions. Only an actual join
+transition triggers one: an unaccepted invite, a startup snapshot of an existing
+room, or a profile update while already joined does not. This does not change
+[`autoJoin`](#auto-join), which defaults to `"off"`.
+
+See [group join introductions](/channels#group-join-introductions) for room
+admission, once-per-room behavior, and the no-tools turn that treats room content
+as untrusted.
 
 ### Allowlist target formats
 
@@ -341,6 +361,8 @@ openclaw matrix account add \
 openclaw matrix verify status
 openclaw matrix verify status --include-recovery-key --json
 ```
+
+With `--include-recovery-key`, text output confirms when a raw recovery key is available and directs you to add `--json`. Text output never prints the key itself; keep JSON output containing a recovery key private.
 
 `verify status` reports three independent trust signals (`--verbose` shows all of them):
 
@@ -885,6 +907,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 
 ### Reply behavior
 
+- `joinIntro`: introduce when the bot joins an allowed group room. Default: `true`. Per-account override: `accounts.<accountId>.joinIntro`.
 - `replyToMode`: `"off"` (default), `"first"`, `"all"`, or `"batched"`.
 - `threadReplies`: `"off"` (top-level default resolves to `"inbound"` unless explicitly set), `"inbound"`, or `"always"`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.

@@ -7,9 +7,11 @@ import { describe, expect, it } from "vitest";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import {
   admitInitialUserMessageHandoff,
+  getChatRunOwner,
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
+  setChatRunOwner,
   setChatSessionProjection,
 } from "./history-merge.ts";
 import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
@@ -64,6 +66,12 @@ function createInitialHandoffFixture(messageSequence = 1) {
         },
       ],
       createdAt: 123,
+      sender: {
+        id: "local",
+        name: "Local",
+        identity: { type: "profile", id: "local" },
+        profileAvatarUrl: "/api/users/local/avatar",
+      },
     },
     client,
     { runId: "initial-run", messageSeq: messageSequence },
@@ -87,6 +95,32 @@ function createAuthoritativeInitialMessage(sequence = 1) {
 }
 
 describe("pane-owned canonical session projection", () => {
+  it.each(["messagePersisted", "snapshotLoaded"] as const)(
+    "sender provenance does not survive authoritative omission in %s",
+    (type) => {
+      const { owner, initialUserMessage, client, sessionKey } = createInitialHandoffFixture();
+      const handoff = initialUserMessage.read(sessionKey, client)!;
+      expect(handoff.message["__openclaw"]).toHaveProperty("senderIdentity", {
+        type: "profile",
+        id: "local",
+      });
+      admitInitialUserMessageHandoff(owner, sessionKey);
+      const authoritative = createAuthoritativeInitialMessage();
+      reduceChatSessionProjection(
+        owner,
+        type === "messagePersisted"
+          ? { type, message: authoritative }
+          : { type, messages: [authoritative] },
+      );
+      const metadata = (owner.chatMessages[0] as { __openclaw: Record<string, unknown> })[
+        "__openclaw"
+      ];
+      expect(metadata).not.toHaveProperty("senderIdentity");
+      expect(metadata).not.toHaveProperty("senderId");
+      expect(metadata).not.toHaveProperty("senderProfileAvatarUrl");
+    },
+  );
+
   it("uses one canonical identity for an explicitly unbranched pane", () => {
     const owner = {
       sessionKey: "agent:main:shared",
@@ -249,6 +283,7 @@ describe("pane-owned canonical session projection", () => {
       scope: initialScope,
     });
     setChatSessionProjection(owner, runningProjection);
+    setChatRunOwner(owner, "same-live-run");
     const learnedScope = {
       ...initialScope,
       sessionId: "learned-session",
@@ -262,6 +297,8 @@ describe("pane-owned canonical session projection", () => {
     expect(projection.entries[0]?.live).toBe(true);
     expect(projection.runs).toBe(runningProjection.runs);
     expect(projection.runs["same-live-run"]?.status).toBe("streaming");
+    expect(getChatRunOwner(owner)).toBe("same-live-run");
+    expect(getChatRunOwner({})).toBeUndefined();
   });
 
   it.each([
@@ -318,12 +355,25 @@ describe("pane-owned canonical session projection", () => {
       scope: previous,
     });
     setChatSessionProjection(owner, running);
+    setChatRunOwner(owner, "obsolete-run");
 
     const projection = getChatSessionProjection(owner, [], next);
 
     expect(projection.messages).toEqual([]);
     expect(projection.runs).toEqual({});
     expect(projection.scope).toEqual(next);
+    expect(getChatRunOwner(owner)).toBeUndefined();
+  });
+
+  it("retires run display ownership when the same session is reset", () => {
+    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
+    reduceChatSessionProjection(owner, { type: "runDelta", runId: "before-reset" });
+    setChatRunOwner(owner, "before-reset");
+
+    reduceChatSessionProjection(owner, { type: "sessionReset" });
+
+    expect(getChatRunOwner(owner)).toBeUndefined();
+    expect(getChatSessionProjection(owner, owner.chatMessages).runs).toEqual({});
   });
 
   it("retains a proven live branch when another consumer omits optional scope", () => {

@@ -135,17 +135,13 @@ function createLazyXaiRealtimeTranscriptionSession(
     session = await sessionPromise;
     return session;
   };
-  const beginConnectGeneration = () => {
-    if (closed) {
-      generation += 1;
-      closed = false;
-    }
-    return generation;
-  };
-
   return {
     connect: async () => {
-      const connectGeneration = beginConnectGeneration();
+      if (closed) {
+        generation += 1;
+        closed = false;
+      }
+      const connectGeneration = generation;
       if (activeConnect?.generation === connectGeneration) {
         await activeConnect.promise;
         return;
@@ -158,11 +154,14 @@ function createLazyXaiRealtimeTranscriptionSession(
           }
           return;
         }
+        // connect() synchronously reopens a closed provider session. Starting it
+        // first keeps explicit-reconnect audio from being silently discarded.
+        const providerConnect = loadedSession.connect();
         for (const audio of pendingAudio.drain()) {
           loadedSession.sendAudio(audio);
         }
         acceptsInput = true;
-        await loadedSession.connect();
+        await providerConnect;
         if (connectGeneration === generation && closed) {
           closeSession(connectGeneration, loadedSession);
         }

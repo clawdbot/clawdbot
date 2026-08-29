@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
@@ -36,6 +38,7 @@ import {
   applySessionPatchProjections,
   appendTranscriptEvent,
   appendTranscriptMessage,
+  appendTranscriptMessageSync,
   applySessionEntryLifecycleMutation,
   assignSessionOwner,
   commitReplySessionInitialization,
@@ -180,7 +183,7 @@ describe("session accessor seam", () => {
     });
   });
 
-  it("returns typed sync event append outcomes for missing, rebound, and duplicate rows", async () => {
+  it("returns typed sync append outcomes for missing, rebound, and duplicate rows", async () => {
     const scope = {
       agentId: "main",
       sessionId: "expected-session",
@@ -188,13 +191,17 @@ describe("session accessor seam", () => {
       storePath,
     };
     const event = { type: "custom", id: "typed-event", timestamp: 1 };
+    const identity = {
+      agentIdHash: redactIdentifier(scope.agentId),
+      expectedSessionIdHash: redactIdentifier(scope.sessionId),
+      sessionKeyHash: redactIdentifier(scope.sessionKey),
+    };
 
     expect(appendTranscriptEventSync(scope, event)).toEqual({
       ok: false,
       error: {
+        ...identity,
         code: "session-entry-missing",
-        expectedSessionId: scope.sessionId,
-        sessionKey: scope.sessionKey,
       },
     });
 
@@ -202,10 +209,22 @@ describe("session accessor seam", () => {
     expect(appendTranscriptEventSync(scope, event)).toEqual({
       ok: false,
       error: {
-        actualSessionId: "replacement-session",
+        ...identity,
+        actualSessionIdHash: redactIdentifier("replacement-session"),
         code: "session-rebound",
-        expectedSessionId: scope.sessionId,
-        sessionKey: scope.sessionKey,
+      },
+    });
+    expect(
+      appendTranscriptMessageSync(scope, {
+        eventId: "typed-message",
+        message: { role: "user", content: "late" },
+      }),
+    ).toEqual({
+      ok: false,
+      error: {
+        ...identity,
+        actualSessionIdHash: redactIdentifier("replacement-session"),
+        code: "session-rebound",
       },
     });
 
@@ -322,7 +341,7 @@ describe("session accessor seam", () => {
     expect(countSessionEntryRowsReadOnly({ agentId: "main", storePath })).toBe(1);
   });
 
-  it("retains legacy createdBy actor projections across rewrites", async () => {
+  it("does not project retired createdBy input into canonical creator fields", async () => {
     const sessionKey = "agent:main:created-by";
     await replaceSessionEntry({ sessionKey, storePath }, {
       createdBy: { id: "legacy-human" },
@@ -342,7 +361,7 @@ describe("session accessor seam", () => {
           "SELECT created_actor_type, created_actor_id FROM session_nodes WHERE session_key = ?",
         )
         .get(sessionKey),
-    ).toEqual({ created_actor_type: "human", created_actor_id: "legacy-human" });
+    ).toEqual({ created_actor_type: null, created_actor_id: null });
   });
 
   it("lists retained transcript instances across same-key session rotation", async () => {
@@ -400,6 +419,30 @@ describe("session accessor seam", () => {
         ]),
       ),
     ).toEqual(transcriptTimes);
+  });
+
+  it("retains email hook transcript provenance using the existing untrusted storage class", async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:email-hook",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: "email-hook-session",
+      updatedAt: 10,
+      hookExternalContentSource: "email",
+    });
+    await appendTranscriptMessage(
+      { ...scope, sessionId: "email-hook-session" },
+      { message: { role: "assistant", content: "email transcript" } },
+    );
+
+    expect(listSessionTranscriptInstances({ agentId: "main", storePath })).toEqual([
+      expect.objectContaining({
+        entry: expect.objectContaining({ hookExternalContentSource: "webhook" }),
+        provenanceKnown: true,
+      }),
+    ]);
   });
 
   it("marks transcript-only rows as unknown provenance", async () => {
@@ -717,7 +760,7 @@ describe("session accessor seam", () => {
     expect(recorded).toMatchObject({
       chatType: "direct",
       createdVia: "channel",
-      createdActor: { type: "human", id: "webchat:user-1" },
+      createdActor: { type: "human", source: "channel", id: "webchat:user-1" },
       createdAt: expect.any(Number),
     });
     const creationStamp = {
@@ -748,13 +791,13 @@ describe("session accessor seam", () => {
         SessionKey: operatorKey,
         SessionCreation: {
           via: "operator",
-          actor: { type: "human", id: "profile-ada" },
+          actor: { type: "human", source: "profile", id: "profile-ada" },
         },
       },
     });
     expect(operator).toMatchObject({
       createdVia: "operator",
-      createdActor: { type: "human", id: "profile-ada" },
+      createdActor: { type: "human", source: "profile", id: "profile-ada" },
       createdAt: expect.any(Number),
     });
 
@@ -872,7 +915,7 @@ describe("session accessor seam", () => {
     });
     expect(participant).toMatchObject({
       createdVia: "channel",
-      createdActor: { type: "human", id: "webchat:person-1" },
+      createdActor: { type: "human", source: "channel", id: "webchat:person-1" },
     });
 
     const senderlessKey = "agent:main:webchat:dm:route-senderless";
@@ -2366,7 +2409,7 @@ describe("session accessor seam", () => {
       for (let promptedAt = 0; promptedAt < count; promptedAt += 1) {
         recordSessionParticipant(
           { sessionKey, storePath },
-          { actor: { type: "human", id: "profile-shared" }, promptedAt, source: "profile" },
+          { identity: { type: "profile", id: "profile-shared" }, promptedAt },
         );
       }
     }
@@ -2420,6 +2463,27 @@ describe("session accessor seam", () => {
         .get("profile-shared"),
     ).toEqual({ contribution_count: 5 });
     expect(identityListener.mock.calls.map(([event]) => event.kind)).toEqual(["move", "replace"]);
+    await expect(
+      applySessionEntryCanonicalReplacements({
+        sessionKeys: [canonicalKey, previousKey],
+        storePath,
+        update: (entries) => ({
+          replacements: [
+            {
+              entry: entries.find((entry) => entry.sessionKey === canonicalKey)!.entry,
+              previousSessionKeys: [previousKey],
+              sessionKey: canonicalKey,
+            },
+          ],
+          result: undefined,
+        }),
+      }),
+    ).rejects.toThrow("cannot replace missing alias");
+    expect(
+      database.db
+        .prepare("SELECT contribution_count FROM session_participants WHERE actor_id = ?")
+        .get("profile-shared"),
+    ).toEqual({ contribution_count: 5 });
   });
 
   it("rejects internal canonical targets and alias sources without changing rows or events", async () => {
@@ -2613,8 +2677,13 @@ describe("session accessor seam", () => {
     // No owner or createdActor, so this participant survives owner filtering and the
     // transaction-side read hydrates fields the status-selected snapshot never sees.
     recordSessionParticipant(scope, {
-      actor: { id: "8167215807", type: "human" },
-      source: "channel",
+      identity: {
+        type: "observation",
+        id: "8167215807",
+        pluginId: null,
+        accountId: null,
+        senderKind: "unknown",
+      },
     });
 
     await applySessionEntryReplacements({
@@ -3796,6 +3865,70 @@ describe("session accessor seam", () => {
     expect(unrelatedWriteError).toBeUndefined();
   });
 
+  it("rechecks a turn predicate after a direct transcript commit", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-commit-predicate",
+      sessionKey: "agent:main:commit-predicate",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    let markAdmissionEntered!: () => void;
+    const admissionEntered = new Promise<void>((resolve) => {
+      markAdmissionEntered = resolve;
+    });
+    let resumeAdmission!: () => void;
+    const admissionReleased = new Promise<boolean>((resolve) => {
+      resumeAdmission = () => resolve(true);
+    });
+
+    const turnPromise = persistSessionTranscriptTurn(scope, {
+      cwd: tempDir,
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            content: "committed reply",
+            timestamp: 200,
+          },
+          shouldAppend: async () => {
+            markAdmissionEntered();
+            return await admissionReleased;
+          },
+          shouldAppendInTransaction: (latestAssistantMessage) => {
+            const latest = latestAssistantMessage as { content?: unknown } | undefined;
+            return latest?.content !== "committed reply";
+          },
+        },
+      ],
+      publishWhen: "always",
+      touchSessionEntry: true,
+      updateMode: "file-only",
+    });
+
+    await admissionEntered;
+    appendTranscriptMessageSync(scope, {
+      idempotencyLookup: "caller-checked",
+      message: {
+        role: "assistant",
+        content: "committed reply",
+        stopReason: "stop",
+        timestamp: 100,
+      },
+    });
+    resumeAdmission();
+    await turnPromise;
+
+    const assistantMessages = (await loadTranscriptEvents(scope)).flatMap((event) => {
+      const message = (event as { message?: { role?: unknown } }).message;
+      return message?.role === "assistant" ? [message] : [];
+    });
+    expect(assistantMessages).toHaveLength(1);
+  });
+
   it("persists expected-session SQLite transcript turns without reentering the writer queue", async () => {
     const scope = {
       agentId: "main",
@@ -4276,10 +4409,11 @@ describe("session accessor seam", () => {
   });
 
   it("fences matching sync transcript mutations with the admitted writer claim", async () => {
+    const sensitivePeer = "+15551234567";
     const scope = {
       agentId: "main",
       sessionId: "session-owned-fence",
-      sessionKey: "agent:main:owned-fence",
+      sessionKey: `agent:main:owned-fence:${sensitivePeer}\n\x1b[31mspoof`,
       storePath,
     };
     replaceSessionEntrySync(scope, {
@@ -4302,9 +4436,42 @@ describe("session accessor seam", () => {
         expect(ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 2 })).toBe(
           true,
         );
-        expect(() => replaceTranscriptEventsSync(scope, [])).toThrow(
-          SessionTranscriptWriterClaimReboundError,
+        const captureClaimError = (run: () => unknown): unknown => {
+          try {
+            run();
+          } catch (error) {
+            return error;
+          }
+          throw new Error("expected the writer claim to reject transcript persistence");
+        };
+        const replacementError = captureClaimError(() => replaceTranscriptEventsSync(scope, []));
+        const eventError = captureClaimError(() =>
+          appendTranscriptEventSync(scope, { type: "custom", id: "stale-event" }),
         );
+        const messageError = captureClaimError(() =>
+          appendTranscriptMessageSync(scope, {
+            eventId: "stale-message",
+            message: { role: "user", content: "late" },
+          }),
+        );
+        const expectedCause = {
+          actualSessionIdHash: redactIdentifier(scope.sessionId),
+          agentIdHash: redactIdentifier(scope.agentId),
+          code: "session-rebound",
+          expectedSessionIdHash: redactIdentifier(scope.sessionId),
+          sessionKeyHash: redactIdentifier(scope.sessionKey),
+        };
+        expect(eventError).toMatchObject({ cause: expectedCause });
+        expect(messageError).toMatchObject({ cause: expectedCause });
+        for (const error of [replacementError, eventError, messageError]) {
+          expect(error).toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+          const formatted = formatErrorMessage(error);
+          expect(formatted).not.toContain(scope.sessionKey);
+          expect(formatted).not.toContain(sensitivePeer);
+          expect(formatted).not.toContain("spoof");
+          expect(formatted).not.toContain("\n");
+          expect(formatted).not.toContain("\x1b");
+        }
       },
     );
 
@@ -4436,15 +4603,17 @@ describe("session accessor seam", () => {
       sessionId: scope.sessionId,
       updatedAt: 10,
     });
-    await replaceTranscriptEvents(scope, [
+    const events = [
       { sessionId: scope.sessionId, type: "session" },
-      { timestamp: "1970-01-01T00:00:00.001Z", type: "custom" },
-    ]);
+      { timestamp: "1970-01-01T00:00:00.001Z", type: "custom", text: "🦞 café\u0000尾" },
+    ];
+    await replaceTranscriptEvents(scope, events);
 
     const replaced = readTranscriptStatsSync(scope);
     expect(replaced).toMatchObject({
       eventCount: 2,
       lastMutationAtMs: expect.any(Number),
+      sizeBytes: Buffer.byteLength(events.map((event) => JSON.stringify(event)).join("\n")),
     });
     expect(replaced.lastMutationAtMs).toBeGreaterThanOrEqual(1_700_000_000_000);
 
@@ -4461,6 +4630,7 @@ describe("session accessor seam", () => {
     const imported = readTranscriptStatsSync(scope);
     expect(imported.lastMutationAtMs).toBe(replaced.lastMutationAtMs);
     expect(imported.lastObservedMutationAtMs).toBe(replaced.lastMutationAtMs);
+    expect(imported.sizeBytes).toBe(replaced.sizeBytes);
 
     await replaceTranscriptEvents(scope, []);
 
@@ -4469,6 +4639,7 @@ describe("session accessor seam", () => {
     expect(cleared).toMatchObject({
       eventCount: 0,
       lastMutationAtMs: expect.any(Number),
+      sizeBytes: 0,
     });
     expect(cleared.lastMutationAtMs).toBeGreaterThan(imported.lastMutationAtMs ?? 0);
   });

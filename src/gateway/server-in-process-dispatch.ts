@@ -4,14 +4,10 @@ import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/fram
 import { createAbortError } from "../infra/abort-signal.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
+import type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 
-export type GatewayMethodDispatchResponse = {
-  ok: boolean;
-  payload?: unknown;
-  error?: ErrorShape;
-  meta?: Record<string, unknown>;
-};
+export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
 
 type InProcessGatewayDispatchOptions = {
   client: GatewayRequestOptions["client"];
@@ -22,6 +18,7 @@ type InProcessGatewayDispatchOptions = {
   onAccepted?: (payload: unknown) => void;
   onSignalAbort?: () => Promise<void> | void;
   requestIdPrefix?: string;
+  sessionMutationCommitGuard?: () => void;
   timeoutMs?: number;
   signal?: AbortSignal;
 };
@@ -182,6 +179,7 @@ export async function dispatchGatewayRequestInProcessRaw(
     },
     context: options.context,
     methodRegistry: options.methodRegistry,
+    sessionMutationCommitGuard: options.sessionMutationCommitGuard,
     ...(options.signal ? { signal: options.signal } : {}),
   })
     .then(() => {

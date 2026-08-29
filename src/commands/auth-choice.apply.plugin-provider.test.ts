@@ -2,6 +2,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { buildPluginCapabilityConsentReview } from "../plugins/capability-consent.js";
+import * as pluginEnable from "../plugins/enable.js";
+import { metadataSnapshot } from "../plugins/management-service.test-helpers.js";
 import {
   applyAuthChoiceLoadedPluginProvider,
   prepareAuthChoiceLoadedPluginProvider,
@@ -256,6 +259,70 @@ function buildInstalledLocalProviderPluginResult() {
 }
 
 describe("applyAuthChoiceLoadedPluginProvider", () => {
+  it("checks the persistent-effect guard before accepting plugin capabilities", async () => {
+    const beforePersistentEffect = vi.fn(async () => {
+      throw new Error("setup was cancelled");
+    });
+    const params = { ...buildParams(), beforePersistentEffect };
+    params.prompter.confirm = vi.fn(async () => true);
+    const entry = buildLocalProviderInstallCatalogEntry();
+    resolveProviderInstallCatalogEntry.mockReturnValueOnce(entry);
+    const enable = vi
+      .spyOn(pluginEnable, "enablePluginWithCapabilityConsent")
+      .mockResolvedValueOnce({ config: params.config, enabled: false, pluginId: entry.pluginId });
+    try {
+      await prepareAuthChoiceLoadedPluginProvider(params);
+      const consent = expectDefined(
+        enable.mock.calls[0]?.[2]?.onCapabilityConsent,
+        "selected provider capability callback",
+      );
+      const manifest = expectDefined(
+        metadataSnapshot({ id: entry.pluginId, enabled: false }).byPluginId.get(entry.pluginId),
+        "selected provider manifest",
+      );
+      const review = buildPluginCapabilityConsentReview({
+        pluginId: entry.pluginId,
+        manifest,
+        record: { source: "npm", spec: entry.install.npmSpec },
+        config: params.config,
+      });
+
+      await expect(consent(review)).rejects.toThrow("setup was cancelled");
+      expect(beforePersistentEffect).toHaveBeenCalledOnce();
+      expect(persistAuthProfileBatch).not.toHaveBeenCalled();
+      expect(resolvePluginProviders).not.toHaveBeenCalled();
+    } finally {
+      enable.mockRestore();
+    }
+  });
+
+  it("does not load a selected provider when capability consent is declined", async () => {
+    const params = buildParams();
+    const entry = buildLocalProviderInstallCatalogEntry();
+    resolveProviderInstallCatalogEntry.mockReturnValueOnce(entry);
+    const enable = vi
+      .spyOn(pluginEnable, "enablePluginWithCapabilityConsent")
+      .mockResolvedValueOnce({
+        config: params.config,
+        enabled: false,
+        pluginId: entry.pluginId,
+        reason: "Plugin requires capability consent.",
+      });
+    try {
+      const result = await applyAuthChoiceLoadedPluginProvider(params);
+      expect(result?.config).toBe(params.config);
+      expect(params.prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining("capability consent"),
+        entry.label,
+      );
+      expect(resolvePluginSetupProvider).not.toHaveBeenCalled();
+      expect(resolvePluginProviders).not.toHaveBeenCalled();
+      expect(persistAuthProfileBatch).not.toHaveBeenCalled();
+    } finally {
+      enable.mockRestore();
+    }
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     applyAuthProfileConfig.mockImplementation((config) => config);

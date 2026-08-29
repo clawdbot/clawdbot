@@ -35,6 +35,14 @@ const hoisted = vi.hoisted(() => ({
   resolveContextEngineMock: vi.fn(),
   countActiveRunsForSessionMock: vi.fn(),
   listSwarmRunsForGroupMock: vi.fn(),
+  resolveSandboxRuntimeStatusMock: vi.fn<
+    (params: { sessionKey?: string }) => {
+      sandboxed: boolean;
+      sandboxRequired: boolean;
+      isolationSubject?: import("../../sandbox/types.js").SandboxIsolationSubject;
+      createdActor?: import("../../../config/sessions/session-entry-provenance.js").SessionCreatedActor;
+    }
+  >(),
   configOverride: {} as Record<string, unknown>,
 }));
 
@@ -185,7 +193,7 @@ describe("spawnSubagentDirect seam flow", () => {
       countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
       listSwarmRunsForGroup: hoisted.listSwarmRunsForGroupMock,
       resolveSubagentSpawnModelSelection: () => "openai/gpt-5.4",
-      resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
+      resolveSandboxRuntimeStatus: hoisted.resolveSandboxRuntimeStatusMock,
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
     }));
   });
@@ -213,6 +221,10 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.resolveContextEngineMock.mockReset().mockResolvedValue({});
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
     hoisted.listSwarmRunsForGroupMock.mockReset().mockReturnValue([]);
+    hoisted.resolveSandboxRuntimeStatusMock.mockReset().mockReturnValue({
+      sandboxed: false,
+      sandboxRequired: false,
+    });
     hoisted.resolveAgentConfigMock.mockImplementation(
       (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
         cfg.agents?.list?.find((agent) => agent.id === agentId),
@@ -1120,6 +1132,71 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 
+  it("reconciles a transport-ambiguous dispatch so an accepted run is surfaced instead of misreported as an error", async () => {
+    let dispatchAttempts = 0;
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; timeoutMs?: number }) => {
+        if (request.method === "agent") {
+          dispatchAttempts += 1;
+          if (dispatchAttempts === 1) {
+            throw new Error("gateway timeout after 60000ms");
+          }
+          if (dispatchAttempts === 2) {
+            return {
+              runId: "accepted-ambig-run",
+              status: "in_flight",
+              admissionPending: true,
+            };
+          }
+          return { runId: "accepted-ambig-run", status: "in_flight" };
+        }
+        return request.method?.startsWith("sessions.") ? { ok: true } : {};
+      },
+    );
+    const context = { agentSessionKey: "agent:main:main" };
+
+    const result = await spawnSubagentDirect({ task: "ambiguous child" }, context);
+
+    expect(dispatchAttempts).toBe(3);
+    const agentRequests = gatewayRequestRecords().filter((request) => request.method === "agent");
+    expect(agentRequests.map((request) => request.params)).toEqual([
+      agentRequests[0]?.params,
+      agentRequests[0]?.params,
+      agentRequests[0]?.params,
+    ]);
+    expect(agentRequests.slice(1).map((request) => request.timeoutMs)).toEqual([800, 800]);
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "accepted-ambig-run",
+      childSessionKey: expect.any(String),
+    });
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not register a child when reconciliation finds a terminal run", async () => {
+    let dispatchAttempts = 0;
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent" && ++dispatchAttempts === 1) {
+        throw new Error("gateway timeout after 60000ms");
+      }
+      return request.method === "agent"
+        ? { runId: "stopped-run", status: "timeout" }
+        : { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "ambiguous terminal child" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(dispatchAttempts).toBe(2);
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("no active subagent run (status: timeout)"),
+    });
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
   it("shares pending child capacity between native and visible spawn paths", async () => {
     const { maybeSpawnVisibleSession } = await import("../../tools/sessions-spawn-visible.js");
     hoisted.configOverride = createConfigOverride({
@@ -1469,6 +1546,79 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams.provider).toBe("openai");
     expect(agentParams.model).toBe("gpt-5.4");
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
+  it.each([
+    { required: false, source: "profile" },
+    { required: true, source: "profile" },
+    { required: true, source: "channel" },
+    { required: true, source: "unknown" },
+  ] as const)(
+    "inherits native child $source provenance only from a required parent ($required)",
+    async ({ required, source }) => {
+      const parentSessionKey = "agent:main:main";
+      const actor = { type: "human", source, id: "profile-native-creator" } as const;
+      hoisted.loadSessionStoreMock.mockReturnValue({
+        [parentSessionKey]: {
+          sessionId: "parent-session",
+          updatedAt: 1,
+          createdActor: actor,
+          ...(required ? { sandbox: "required" } : {}),
+        },
+      });
+      hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(({ sessionKey }) => ({
+        sandboxed: true,
+        sandboxRequired: required && sessionKey === parentSessionKey,
+        ...(required && sessionKey === parentSessionKey
+          ? {
+              isolationSubject:
+                source === "profile"
+                  ? { kind: "profile" as const, profileId: actor.id }
+                  : { kind: "session" as const, sessionKey: parentSessionKey },
+              createdActor: actor,
+            }
+          : {}),
+      }));
+      let persistedStore: Record<string, Record<string, unknown>> | undefined;
+      installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+        onStore: (store) => {
+          persistedStore = store;
+        },
+      });
+
+      const result = await spawnSubagentDirect(
+        { task: "continue under the parent's isolation policy" },
+        { agentSessionKey: parentSessionKey },
+      );
+
+      expect(result.status).toBe("accepted");
+      const entry = persistedStore?.[result.childSessionKey as string];
+      expect(entry).toMatchObject({
+        createdVia: "spawn",
+        createdActor: required ? actor : { type: "agent", id: "main" },
+        parentSessionKey,
+      });
+      expect(entry?.sandbox).toBe(required ? "required" : undefined);
+    },
+  );
+
+  it("rejects a required parent spawning an unsandboxed native child before side effects", async () => {
+    hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(({ sessionKey }) => ({
+      sandboxed: sessionKey === "agent:main:main",
+      sandboxRequired: sessionKey === "agent:main:main",
+      ...(sessionKey === "agent:main:main"
+        ? { isolationSubject: { kind: "profile" as const, profileId: "profile-native-creator" } }
+        : {}),
+    }));
+    const result = await spawnSubagentDirect(
+      { task: "try an unsandboxed child" },
+      { agentSessionKey: "agent:main:main" },
+    );
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("cannot spawn unsandboxed"),
+    });
+    expectNoChildSpawnSideEffects();
   });
 
   it("dispatches spawned agent runs in process when a gateway context is available", async () => {

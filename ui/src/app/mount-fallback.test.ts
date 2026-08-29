@@ -100,7 +100,7 @@ describe("Control UI mount fallback", () => {
       "Absolutely dark",
       { theme: "absolutely", themeMode: "dark" },
       "absolutely",
-      "rgb(38, 38, 36)",
+      "rgb(28, 28, 26)",
     ],
     [
       "Absolutely light",
@@ -108,6 +108,10 @@ describe("Control UI mount fallback", () => {
       "absolutely-light",
       "rgb(250, 249, 245)",
     ],
+    ["Tide dark", { theme: "tide", themeMode: "dark" }, "tide", "rgb(16, 21, 27)"],
+    ["Beacon dark", { theme: "beacon", themeMode: "dark" }, "beacon", "rgb(0, 0, 0)"],
+    ["Beacon light", { theme: "beacon", themeMode: "light" }, "beacon-light", "rgb(255, 255, 255)"],
+    ["Phosphor dark", { theme: "phosphor", themeMode: "dark" }, "phosphor", "rgb(10, 15, 10)"],
   ])(
     "paints %s before the app stylesheet loads",
     async (_name, settings, expectedTheme, expectedBackground) => {

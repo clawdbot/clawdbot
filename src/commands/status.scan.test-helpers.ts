@@ -224,7 +224,7 @@ export async function loadStatusScanModuleForTest(
       return {
         snapshot: {
           path: result.configDiagnostics?.path ?? mocks.resolveConfigPath(),
-          exists: true,
+          exists: false,
           raw: null,
           parsed: result.sourceConfig,
           sourceConfig: result.sourceConfig,

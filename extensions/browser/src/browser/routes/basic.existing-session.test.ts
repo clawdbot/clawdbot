@@ -1,5 +1,6 @@
 // Browser tests cover basic.existing session plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import chromeExtensionManifest from "../../../chrome-extension/manifest.json" with { type: "json" };
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const { inspectChromeGraphicsDiagnosticsMock } = vi.hoisted(() => ({
@@ -212,6 +213,43 @@ function responseBodyRecord(response: { body: unknown }): Record<string, unknown
 describe("basic browser routes", () => {
   beforeEach(() => {
     inspectChromeGraphicsDiagnosticsMock.mockReset();
+  });
+
+  it("reports version drift only from the selected extension profile owner", async () => {
+    const outdatedVersion = chromeExtensionManifest.version === "2.0.0" ? "1.0.0" : "2.0.0";
+    const state = {
+      ...createManagedProfileState(
+        { name: "chrome", driver: "extension", attachOnly: true },
+        {
+          isHttpReachable: async () => true,
+          isTransportAvailable: async () => true,
+        },
+      ),
+      extensionRelays: new Map([
+        ["chrome", { bridge: { identity: { extensionVersion: outdatedVersion } } }],
+        ["other", { bridge: { identity: { extensionVersion: chromeExtensionManifest.version } } }],
+      ]),
+    };
+
+    const response = await callBasicRouteWithState({
+      route: "/doctor",
+      query: { profile: "chrome" },
+      state,
+    });
+    const report = responseBodyRecord(response);
+    expect(response.statusCode).toBe(200);
+    expect(report.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "extension-version",
+          status: "warn",
+          summary: expect.stringContaining(
+            `running ${outdatedVersion}; bundled ${chromeExtensionManifest.version}`,
+          ),
+        }),
+      ]),
+    );
+    expect(report.status).not.toHaveProperty("chromeExtension");
   });
 
   it("releases the doctor transaction, restarts once, and retries the live probe", async () => {

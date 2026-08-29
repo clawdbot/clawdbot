@@ -75,7 +75,7 @@ export async function sendA2aChannelText(
   for (let attempt = 0; attempt < 2; attempt += 1) {
     // Peer URLs are operator config, but they still leave the Gateway: the shared
     // guard keeps that egress on the same SSRF policy as every other plugin call.
-    const { response } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithSsrFGuard({
       url: peer.url,
       timeoutMs: A2A_OUTBOUND_TIMEOUT_MS,
       signal,
@@ -89,31 +89,38 @@ export async function sendA2aChannelText(
         body: JSON.stringify(request),
       },
     });
-    if (!response.ok) {
-      throw new Error(`outbound A2A request to peer ${peerName} failed (HTTP ${response.status})`);
-    }
-
-    const parsed = A2aOutboundResponseSchema.safeParse(await response.json());
-    if (!parsed.success) {
-      throw new Error(`peer ${peerName} returned an invalid A2A JSON-RPC response`);
-    }
-
-    if (parsed.data.error) {
-      if (attempt === 0 && parsed.data.error.code === -32601) {
-        // Hermes-generation A2A 0.3 peers only expose the shipped dotted method.
-        request.method = "message/send";
-        continue;
+    try {
+      if (!response.ok) {
+        throw new Error(
+          `outbound A2A request to peer ${peerName} failed (HTTP ${response.status})`,
+        );
       }
-      throw new Error(
-        `outbound A2A request to peer ${peerName} failed: ${parsed.data.error.message}`,
-      );
-    }
 
-    if (!parsed.data.result) {
-      throw new Error(`peer ${peerName} returned an A2A response without a result`);
-    }
+      const parsed = A2aOutboundResponseSchema.safeParse(await response.json());
+      if (!parsed.success) {
+        throw new Error(`peer ${peerName} returned an invalid A2A JSON-RPC response`);
+      }
 
-    return { to: params.to, messageId: parsed.data.result.task?.id ?? messageId };
+      if (parsed.data.error) {
+        if (attempt === 0 && parsed.data.error.code === -32601) {
+          // Hermes-generation A2A 0.3 peers only expose the shipped dotted method.
+          request.method = "message/send";
+          continue;
+        }
+        throw new Error(
+          `outbound A2A request to peer ${peerName} failed: ${parsed.data.error.message}`,
+        );
+      }
+
+      if (!parsed.data.result) {
+        throw new Error(`peer ${peerName} returned an A2A response without a result`);
+      }
+
+      return { to: params.to, messageId: parsed.data.result.task?.id ?? messageId };
+    } finally {
+      // Each attempt owns its guard lease, including before the compatibility retry.
+      await release();
+    }
   }
 
   throw new Error(`outbound A2A request to peer ${peerName} exhausted its compatibility retry`);

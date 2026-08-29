@@ -2,11 +2,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import type { EmbeddingProvider } from "./embeddings.js";
 import {
   createManagerIndexFixture,
   type ManagerIndexFixtureConfig,
 } from "./manager-index.test-support.js";
+import * as knnSubprocess from "./manager-search-knn-subprocess.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -62,6 +65,82 @@ describe("memory index", () => {
     await expectHybridKeywordSearchFindsMemory(createCfg(config));
   });
 
+  it("preserves semantic results when a concurrent reindex publishes before KNN returns", async () => {
+    const manager = await getPersistentManager(
+      createCfg({
+        vectorEnabled: true,
+        minScore: 0,
+        hybrid: { enabled: true, vectorWeight: 1, textWeight: 0 },
+      }),
+    );
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      db: DatabaseSync;
+      provider: EmbeddingProvider;
+      syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
+    };
+    const queryStarted = createDeferred<void>();
+    const releaseQuery = createDeferred<void>();
+    const shadowReady = createDeferred<void>();
+    const releaseReindex = createDeferred<void>();
+    const childReady = createDeferred<void>();
+    const releaseChild = createDeferred<void>();
+    const publishedDb = fields.db;
+    const publishedChunks = manager.status().chunks;
+    let shadowDb: DatabaseSync | undefined;
+    const syncMemoryFiles = fields.syncMemoryFiles.bind(manager);
+    const runKnn = knnSubprocess.runVectorKnnInSubprocess;
+    const querySpy = vi.spyOn(fields.provider, "embed").mockImplementation(async () => {
+      queryStarted.resolve();
+      await releaseQuery.promise;
+      return [1, 0, 0, 0];
+    });
+    const syncSpy = vi.spyOn(fields, "syncMemoryFiles").mockImplementation(async (params) => {
+      shadowDb = fields.db;
+      expect(manager.status().chunks).toBe(publishedChunks);
+      const lexical = await manager.search("zebra", { lexicalOnly: true, minScore: 0 });
+      expect(lexical.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+      const result = await syncMemoryFiles(params);
+      shadowReady.resolve();
+      await releaseReindex.promise;
+      return result;
+    });
+    const childSpy = vi
+      .spyOn(knnSubprocess, "runVectorKnnInSubprocess")
+      .mockImplementation(async (params) => {
+        const result = await runKnn(params);
+        expect(result.rows.length).toBeGreaterThan(0);
+        childReady.resolve();
+        await releaseChild.promise;
+        return result;
+      });
+    let search: ReturnType<typeof manager.search> | undefined;
+    let reindex: ReturnType<typeof manager.sync> | undefined;
+    try {
+      search = manager.search("semantic needle without lexical overlap");
+      await queryStarted.promise;
+      reindex = manager.sync({ reason: "test", force: true });
+      await shadowReady.promise;
+      expect(fields.db).toBe(publishedDb);
+      releaseQuery.resolve();
+      await childReady.promise;
+      releaseReindex.resolve();
+      await reindex;
+      expect(shadowDb?.isOpen).toBe(false);
+      releaseChild.resolve();
+      const results = await search;
+      expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+    } finally {
+      releaseQuery.resolve();
+      releaseReindex.resolve();
+      releaseChild.resolve();
+      await Promise.allSettled([search, reindex]);
+      childSpy.mockRestore();
+      syncSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
+
   it("retries transient query embedding transport failures during search", async () => {
     const cfg = createCfg({
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
@@ -72,26 +151,20 @@ describe("memory index", () => {
     let queryCalls = 0;
     (
       manager as unknown as {
-        provider: {
-          id: string;
-          model: string;
-          embedQuery: (text: string) => Promise<number[]>;
-          embedBatch: (texts: string[]) => Promise<number[][]>;
-          close: () => Promise<void>;
-        };
+        provider: EmbeddingProvider;
         waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
       }
     ).provider = {
       id: "mock",
       model: "mock-embed",
-      embedQuery: async () => {
+      embed: async () => {
         queryCalls += 1;
         if (queryCalls === 1) {
           throw new Error("TypeError: fetch failed | other side closed");
         }
         return [1, 0, 0, 0];
       },
-      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
+      embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
       close: async () => {},
     };
     (
@@ -116,22 +189,16 @@ describe("memory index", () => {
     let queryCalls = 0;
     (
       manager as unknown as {
-        provider: {
-          id: string;
-          model: string;
-          embedQuery: (text: string) => Promise<number[]>;
-          embedBatch: (texts: string[]) => Promise<number[][]>;
-          close: () => Promise<void>;
-        };
+        provider: EmbeddingProvider;
       }
     ).provider = {
       id: "mock",
       model: "mock-embed",
-      embedQuery: async () => {
+      embed: async () => {
         queryCalls += 1;
         throw new Error("TypeError: fetch failed | other side closed");
       },
-      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
+      embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
       close: async () => {},
     };
     (
@@ -154,13 +221,7 @@ describe("memory index", () => {
     const close = vi.fn(async () => {});
     let queryCalls = 0;
     const fields = manager as unknown as {
-      provider: {
-        id: string;
-        model: string;
-        embedQuery: (text: string) => Promise<number[]>;
-        embedBatch: (texts: string[]) => Promise<number[][]>;
-        close: () => Promise<void>;
-      };
+      provider: EmbeddingProvider;
       providerKey: string;
       providerLifecycle: { mode: "active"; providerId: string };
       computeProviderKey: () => string;
@@ -168,7 +229,7 @@ describe("memory index", () => {
     fields.provider = {
       id: "local",
       model: "mock-embed",
-      embedQuery: async () => {
+      embed: async () => {
         queryCalls += 1;
         return [1, 0, 0, 0];
       },
@@ -300,10 +361,8 @@ describe("memory index", () => {
       }),
     );
     await manager.sync({ reason: "test" });
-    const provider = Reflect.get(manager, "provider") as {
-      embedQuery: (text: string) => Promise<number[]>;
-    };
-    const embedQuerySpy = vi.spyOn(provider, "embedQuery");
+    const provider = Reflect.get(manager, "provider") as EmbeddingProvider;
+    const embedSpy = vi.spyOn(provider, "embed");
 
     for (const entry of cases) {
       const results = await manager.search(entry.query, { maxResults: 6 });
@@ -311,7 +370,7 @@ describe("memory index", () => {
         true,
       );
     }
-    expect(embedQuerySpy).toHaveBeenCalledTimes(cases.length);
+    expect(embedSpy).toHaveBeenCalledTimes(cases.length);
   });
 
   it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
@@ -369,7 +428,7 @@ describe("memory index", () => {
     );
     await fs.writeFile(
       path.join(fixture.paths.memory, "alpha.md"),
-      "Unrelated path-only candidate.",
+      "Unrelated beta path-only candidate.",
     );
     await manager.sync({ reason: "test" });
 

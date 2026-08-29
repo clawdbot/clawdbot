@@ -41,6 +41,14 @@ describe("update failure hints", () => {
     vi.restoreAllMocks();
   });
 
+  it("explains capacity exhaustion without blaming candidate commits", () => {
+    const result = makeResult("preflight-insufficient-space", "", "git");
+    const output = renderResult(result);
+    expect(output).toContain("Free space");
+    expect(output).toContain("preflight staging and package-manager store");
+    expect(output).toContain("rerun the update");
+  });
+
   it("returns a package-manager bootstrap hint for pnpm npm-bootstrap failures", () => {
     const result = {
       status: "error",

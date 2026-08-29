@@ -6,7 +6,7 @@ import type { NodeWorkerWorkspaceTransferInput } from "./node-workspace-transfer
 const IDENTIFIER_MAX_CHARS = 256;
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const REQUEST_MAX_BYTES = 256 * 1024;
-const INPUT_MAX_BYTES = 128 * 1024;
+export const NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES = 128 * 1024;
 const OUTPUT_MAX_BYTES = 64 * 1024;
 const STDERR_MAX_BYTES = 16 * 1024;
 const ARGV_MAX_ITEMS = 128;
@@ -14,6 +14,10 @@ const ARGV_MAX_ITEMS = 128;
 // REQUEST_MAX_BYTES; the canonical manifest script is larger than an ordinary argv item.
 const ARG_MAX_BYTES = 128 * 1024;
 const TIMEOUT_MAX_MS = 10 * 60 * 1000;
+
+export type NodeWorkerWorkspaceSeedInput =
+  | { action: "apply"; key: string }
+  | { action: "store"; key: string; maxAgeMs: number };
 
 export type NodeWorkerWorkspaceExecInput = {
   gatewayNamespace: string;
@@ -25,6 +29,7 @@ export type NodeWorkerWorkspaceExecInput = {
   timeoutMs?: number;
   resetWorkspace?: boolean;
   transfer?: NodeWorkerWorkspaceTransferInput;
+  seed?: NodeWorkerWorkspaceSeedInput;
 };
 
 export type NodeWorkerWorkspaceExecResult = SpawnResult & { workspaceDir: string };
@@ -70,7 +75,7 @@ export function parseNodeWorkerWorkspaceExecInput(
     !hasExactKeys(
       value,
       ["gatewayNamespace", "environmentId", "sessionId", "generation", "argv"],
-      ["input", "timeoutMs", "resetWorkspace", "transfer"],
+      ["input", "timeoutMs", "resetWorkspace", "transfer", "seed"],
     )
   ) {
     throw new Error("INVALID_REQUEST: invalid node worker workspace request");
@@ -102,7 +107,8 @@ export function parseNodeWorkerWorkspaceExecInput(
   }
   if (
     value.input !== undefined &&
-    (typeof value.input !== "string" || Buffer.byteLength(value.input, "utf8") > INPUT_MAX_BYTES)
+    (typeof value.input !== "string" ||
+      Buffer.byteLength(value.input, "utf8") > NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES)
   ) {
     throw new Error("INVALID_REQUEST: workspace command input exceeds its bound");
   }
@@ -117,6 +123,35 @@ export function parseNodeWorkerWorkspaceExecInput(
   }
   if (value.resetWorkspace !== undefined && typeof value.resetWorkspace !== "boolean") {
     throw new Error("INVALID_REQUEST: resetWorkspace must be a boolean");
+  }
+  let seed: NodeWorkerWorkspaceSeedInput | undefined;
+  if (value.seed !== undefined) {
+    if (value.transfer !== undefined || value.resetWorkspace !== undefined) {
+      throw new Error(
+        "INVALID_REQUEST: workspace seed cannot combine with transfer or resetWorkspace",
+      );
+    }
+    if (
+      !isRecord(value.seed) ||
+      typeof value.seed.key !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(value.seed.key)
+    ) {
+      throw new Error("INVALID_REQUEST: workspace seed key must be a SHA-256 hex digest");
+    }
+    const { action, key, maxAgeMs } = value.seed;
+    if (action === "apply" && hasExactKeys(value.seed, ["action", "key"])) {
+      seed = { action, key };
+    } else if (
+      action === "store" &&
+      hasExactKeys(value.seed, ["action", "key", "maxAgeMs"]) &&
+      typeof maxAgeMs === "number" &&
+      Number.isSafeInteger(maxAgeMs) &&
+      maxAgeMs >= 0
+    ) {
+      seed = { action, key, maxAgeMs };
+    } else {
+      throw new Error("INVALID_REQUEST: workspace seed action or maxAgeMs is invalid");
+    }
   }
   let transfer: NodeWorkerWorkspaceTransferInput | undefined;
   if (value.transfer !== undefined) {
@@ -135,8 +170,9 @@ export function parseNodeWorkerWorkspaceExecInput(
       token.length > 1_024 ||
       token.includes("\0") ||
       (direction === "download"
-        ? !hasExactKeys(value.transfer, ["direction", "token", "manifestRef"]) ||
-          !validRef(manifestRef)
+        ? !hasExactKeys(value.transfer, ["direction", "token", "manifestRef"], ["attachments"]) ||
+          !validRef(manifestRef) ||
+          (value.transfer.attachments !== undefined && value.transfer.attachments !== true)
         : direction === "upload"
           ? !hasExactKeys(value.transfer, ["direction", "token", "baseManifestRef"]) ||
             !validRef(baseManifestRef)
@@ -146,7 +182,12 @@ export function parseNodeWorkerWorkspaceExecInput(
     }
     transfer =
       direction === "download"
-        ? { direction, token, manifestRef: manifestRef as string }
+        ? {
+            direction,
+            token,
+            manifestRef: manifestRef as string,
+            ...(value.transfer.attachments === true ? { attachments: true } : {}),
+          }
         : { direction: "upload", token, baseManifestRef: baseManifestRef as string };
   }
   return {
@@ -159,6 +200,7 @@ export function parseNodeWorkerWorkspaceExecInput(
     ...(value.timeoutMs === undefined ? {} : { timeoutMs: value.timeoutMs }),
     ...(value.resetWorkspace === undefined ? {} : { resetWorkspace: value.resetWorkspace }),
     ...(transfer ? { transfer } : {}),
+    ...(seed ? { seed } : {}),
   };
 }
 
@@ -224,6 +266,39 @@ export function parseNodeWorkerWorkspaceExecResult(
     return null;
   }
   return value as NodeWorkerWorkspaceExecResult;
+}
+
+export function projectNodeWorkerWorkspaceExecResult(
+  workspaceDir: string,
+  result: SpawnResult,
+): NodeWorkerWorkspaceExecResult {
+  const projected = {
+    workspaceDir,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    code: result.code,
+    signal: result.signal,
+    killed: result.killed,
+    termination: result.termination,
+    ...(result.stdoutTruncatedBytes === undefined
+      ? {}
+      : { stdoutTruncatedBytes: result.stdoutTruncatedBytes }),
+    ...(result.stderrTruncatedBytes === undefined
+      ? {}
+      : { stderrTruncatedBytes: result.stderrTruncatedBytes }),
+    ...(result.noOutputTimedOut === undefined ? {} : { noOutputTimedOut: result.noOutputTimedOut }),
+    ...(result.outputLimitExceeded === undefined
+      ? {}
+      : { outputLimitExceeded: result.outputLimitExceeded }),
+    ...(result.outputErrorStream === undefined
+      ? {}
+      : { outputErrorStream: result.outputErrorStream }),
+  };
+  const parsed = parseNodeWorkerWorkspaceExecResult(projected);
+  if (!parsed) {
+    throw new Error("node worker workspace result violated its bounded contract");
+  }
+  return parsed;
 }
 
 export const NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES = OUTPUT_MAX_BYTES;

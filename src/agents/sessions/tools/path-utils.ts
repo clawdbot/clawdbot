@@ -55,8 +55,7 @@ export function resolveToCwd(filePath: string, cwd: string): string {
   return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
 }
 
-/** Equivalent filename spellings worth probing after an exact read path misses. */
-export function getReadPathVariants(filePath: string): string[] {
+function collectReadPathVariants(filePath: string, includeNfd: boolean): string[] {
   const variants = new Set<string>();
   const fileName = basename(filePath);
   const parentPrefix = filePath.slice(0, filePath.length - fileName.length);
@@ -70,11 +69,21 @@ export function getReadPathVariants(filePath: string): string[] {
       variants.add(`${parentPrefix}${quoted.normalize("NFC")}`);
       // macOS filesystems resolve NFC/NFD spellings to the same entry; probing both
       // makes one file look ambiguous. Other platforms can store both distinctly.
-      if (process.platform !== "darwin") {
+      if (includeNfd) {
         variants.add(`${parentPrefix}${quoted.normalize("NFD")}`);
       }
     }
   }
   variants.delete(filePath);
   return [...variants];
+}
+
+/** Equivalent filename spellings worth probing after an exact read path misses. */
+export function getReadPathVariants(filePath: string): string[] {
+  return collectReadPathVariants(filePath, process.platform !== "darwin");
+}
+
+/** Every spelling an exact read or its fallback probes can accept. */
+export function getReadQueuePaths(filePath: string): string[] {
+  return [filePath, ...collectReadPathVariants(filePath, true)];
 }

@@ -74,7 +74,7 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        await installMockGateway(page, {
+        const gateway = await installMockGateway(page, {
           historyMessages: [
             {
               role: "assistant",
@@ -214,6 +214,31 @@ suite.define(() => {
           element.scrollTop = Math.min(160, element.scrollHeight - element.clientHeight);
         });
         await captureUiProof(page, "03-settings-contextual-scrollbars.png");
+
+        const usageError = "Unknown system error -122, write";
+        await gateway.setMethodResponse("sessions.usage", {
+          __mockError: { code: "UNAVAILABLE", message: usageError },
+        });
+        await gateway.setMethodResponse("usage.cost", {
+          updatedAt: Date.now(),
+          days: 1,
+          daily: [],
+          totals: {},
+        });
+        await gateway.setMethodResponse("usage.status", {
+          updatedAt: Date.now(),
+          providers: [],
+        });
+        await page.goto(`${suite.server.baseUrl}usage`);
+        const usageErrorCallout = page.locator(".usage-callout.callout.danger");
+        await usageErrorCallout.waitFor();
+        expect(await usageErrorCallout.textContent()).toContain(usageError);
+        expect(
+          await usageErrorCallout.evaluate((element) => getComputedStyle(element).userSelect),
+        ).toBe("text");
+        await page.evaluate(() => globalThis.getSelection()?.removeAllRanges());
+        expect(await dragAcross(page, usageErrorCallout)).toContain(usageError);
+        await captureUiProof(page, "04-usage-selectable-error.png");
       },
     );
   });

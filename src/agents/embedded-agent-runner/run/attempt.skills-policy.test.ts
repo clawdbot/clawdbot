@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveInternalSessionEffectsIdentity } from "../../../config/sessions/internal-session-key.js";
+import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createFixtureSkillEntry } from "../../../skills/test-support/test-helpers.js";
 import {
   runSkillExperienceReview,
@@ -12,6 +14,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../cron-creator-authority-context.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import type {
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,
@@ -156,7 +159,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
 
     reviewRunEmbeddedAgent.mockImplementation(async (params: RunEmbeddedAgentParams) => {
       snapshots.push(captureToolSurface(params));
-      return {};
+      return { meta: { durationMs: 1 } };
     });
     const reviewCandidate: ExperienceReviewCandidate = {
       ctx: {
@@ -178,7 +181,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     expect(snapshots[1]).toEqual(snapshots[0]);
   });
 
-  it("keeps review prompt digests equal while transcript and store stay unchanged", async () => {
+  it("keeps review prompt digests equal on a private session without persistence", async () => {
     const sessionRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-parity-"));
     tempPaths.push(sessionRoot);
     const transcriptFile = path.join(sessionRoot, "transcript.jsonl");
@@ -218,23 +221,35 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       },
     ] as AnyAgentTool[];
 
+    const foregroundSession = {
+      sessionId: "embedded-session",
+      sessionKey: "agent:main:main",
+    };
+    const reviewSession = resolveInternalSessionEffectsIdentity({
+      agentId: "main",
+      runId: "skill-workshop-review:prompt-parity",
+    });
     const snapshots = [];
     for (const review of [false, true]) {
+      const session = review ? reviewSession : foregroundSession;
       resetEmbeddedAttemptHarness();
       hoisted.createOpenClawCodingToolsMock.mockReturnValue(codingTools);
       await createContextEngineAttemptRunner({
         contextEngine: createContextEngineBootstrapAndAssemble(),
-        sessionKey: "agent:main:main",
+        sessionKey: session.sessionKey,
         tempPaths,
         attemptOverrides: {
           disableTools: false,
           disableMessageTool: false,
           reasoningLevel: "on",
+          sessionId: session.sessionId,
+          sandboxSessionKey: foregroundSession.sessionKey,
+          promptCacheKey: "foreground-cache-prefix",
           sessionFile: transcriptFile,
           sessionTarget: {
             agentId: "main",
-            sessionId: "embedded-session",
-            sessionKey: "agent:main:main",
+            sessionId: session.sessionId,
+            sessionKey: session.sessionKey,
             storePath: storeFile,
           },
           ...(review
@@ -258,8 +273,8 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       expect(tools.some((tool) => tool.name === "message")).toBe(true);
       snapshots.push(
         beginPromptCacheObservation({
-          sessionId: "embedded-session",
-          sessionKey: "agent:main:main",
+          sessionId: session.sessionId,
+          sessionKey: session.sessionKey,
           provider: "openai",
           modelId: "gpt-test",
           streamStrategy: "test",
@@ -339,6 +354,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     ]);
   });
   it("gates catalog-hidden tools during review while skill_workshop stays callable", async () => {
+    const sessionManager = SessionManager.inMemory();
     const executed: string[] = [];
     const tool = (name: string): AnyAgentTool =>
       ({
@@ -390,6 +406,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       attemptOverrides: {
         config: { tools: { toolSearch: { enabled: true, mode: "tools" } } },
         disableTools: false,
+        sessionManager,
         sessionPersistence: "detached",
         toolExecutionAllow: ["skill_workshop"],
       },
@@ -400,5 +417,25 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     expect(String((outcomes[0] as PromiseRejectedResult).reason)).toContain(
       "Unavailable during skill review",
     );
+    const activities = sessionManager.getEntries().flatMap((entry) => {
+      const activity = entry.type === "message" && readNestedToolActivity(entry.message);
+      return activity ? [activity.details] : [];
+    });
+    expect(activities).toHaveLength(2);
+    expect(activities.find((activity) => activity.toolName === "read")).toMatchObject({
+      parentToolCallId: "call-read",
+      isError: true,
+      result: {
+        details: {
+          status: "error",
+          error: expect.stringContaining("Unavailable during skill review"),
+        },
+      },
+    });
+    expect(activities.find((activity) => activity.toolName === "skill_workshop")).toMatchObject({
+      parentToolCallId: "call-workshop",
+      isError: false,
+      result: { content: [{ type: "text", text: "ok" }] },
+    });
   });
 });

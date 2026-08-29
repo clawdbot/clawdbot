@@ -8,10 +8,40 @@ read_when:
 
 ## Status
 
+Product update (2026-08-28, maintainer decision): warm images are now **on by
+default**, answering the open default-on question below. The capture boundary
+that gates it is the profile's own declared secret input: `setupEnv` is the
+channel that forwards host environment into the setup command, so profiles
+declaring it keep requiring an explicit `settings.warmImage: true`, while
+profiles without it capture by default. An explicit value always wins in both
+directions. Operators who do not want provider-side image storage, or whose
+images would retain repository content through Git seeds, set
+`settings.warmImage: false`.
+
+Implementation update (2026-08-28): warm images support `machine0` through
+`--strategy image`, refresh automatically at the next eligible teardown after
+24 hours, and delete superseded checkpoints after replacement. Scrubbing now
+also removes SSH-transport session workspaces under
+`~/.openclaw-worker/workspaces`. Core node-tunnel sync adds per-repository Git
+seeds: pristine post-sync repository copies stored outside the scrub root at
+`~/.openclaw-worker/git-seeds`, alongside retained machine-level caches. These
+extend warm starts, not phase-2 per-session hibernation, which remains gated;
+the historical phase-1 scrub description below predates this cache boundary.
+
 Accepted 2026-08-26 (maintainer: "build live test document PR land"). Phase 1
 is implemented in `extensions/crabbox/` and live-proven; phases 2 and 3 remain
 gated as designed. Written from direct source inspection of this repo and the
 sibling `openclaw/crabbox` checkout (`../crabbox` @ 19bd2f51).
+
+Product update (2026-08-26): profile-level `suspendAfter` is the accepted knob
+for automatically suspending idle workers; the next message provisions a
+replacement. Crabbox warm images remain opt-in (`settings.warmImage: true`,
+paired with `suspendAfter` for warm wakes): review found that default-on
+capture would retain whatever `setup` wrote outside the scrubbed worker root
+(setup-created credentials included) in provider images for profiles that
+never chose it. Default-on returns only with a proven capture boundary.
+(Superseded by the 2026-08-28 product update above, which supplies that
+boundary.) Phases 2 and 3 remain gated.
 
 Live proof (2026-08-26, isolated dev gateway, Crabbox dev build with the
 fixed-ID fork contract):

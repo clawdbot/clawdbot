@@ -344,9 +344,11 @@ describe("OpenClawTerminalPanel reconnect", () => {
 
     expect(requests).toHaveLength(0);
     await waitForFast(() => {
-      expect(panel.renderRoot.querySelector(".tp-connecting")?.textContent).toContain(
-        "Connecting to session",
-      );
+      expect(
+        panel.renderRoot
+          .querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]')
+          ?.getAttribute("aria-label"),
+      ).toContain("Connecting to session");
     });
 
     releaseRefresh?.(false);
@@ -519,7 +521,11 @@ describe("OpenClawTerminalPanel reconnect", () => {
         "Reload this page to continue the terminal action",
       );
     });
-    expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull();
+    expect(
+      panel.renderRoot.querySelector(
+        'openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]',
+      ),
+    ).toBeNull();
   });
 
   it("carries an explicit terminal action through an activated-worker reload", async () => {

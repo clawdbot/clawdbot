@@ -191,3 +191,57 @@ export function clearAccountEntryFields<TAccountEntry extends object>(params: {
     cleared,
   };
 }
+
+/** Clear plugin-selected account fields and prune only the config branches changed by cleanup. */
+export function clearAccountFieldsFromConfigSection(params: {
+  cfg: OpenClawConfig;
+  sectionKey: string;
+  accountId: string;
+  fields: string[];
+  markClearedOnFieldPresence?: boolean;
+}): { nextConfig: OpenClawConfig; changed: boolean; cleared: boolean } {
+  // SAFETY: Channel sections are config objects; the account helper checks nested entries.
+  const section = params.cfg.channels?.[params.sectionKey] as
+    | (ChannelSection & Record<string, unknown>)
+    | undefined;
+  const nextSection = { ...section };
+  // Root fields clear as a group only for the explicit default account and a
+  // truthy value. Nested cleanup retains its own empty-id and presence semantics.
+  const clearedRoot =
+    params.accountId === DEFAULT_ACCOUNT_ID &&
+    params.fields.some((field) => Boolean(nextSection[field]));
+  if (clearedRoot) {
+    for (const field of params.fields) {
+      delete nextSection[field];
+    }
+  }
+  const accountCleanup = clearAccountEntryFields({
+    accounts: nextSection.accounts,
+    accountId: params.accountId,
+    fields: params.fields,
+    markClearedOnFieldPresence: params.markClearedOnFieldPresence,
+  });
+  if (!clearedRoot && !accountCleanup.changed) {
+    return { nextConfig: params.cfg, changed: false, cleared: false };
+  }
+  if (accountCleanup.changed) {
+    if (accountCleanup.nextAccounts) {
+      nextSection.accounts = accountCleanup.nextAccounts;
+    } else {
+      delete nextSection.accounts;
+    }
+  }
+  const nextChannels = { ...params.cfg.channels };
+  if (Object.keys(nextSection).length > 0) {
+    nextChannels[params.sectionKey] = nextSection;
+  } else {
+    delete nextChannels[params.sectionKey];
+  }
+  const nextConfig = { ...params.cfg };
+  if (Object.keys(nextChannels).length > 0) {
+    nextConfig.channels = nextChannels;
+  } else {
+    delete nextConfig.channels;
+  }
+  return { nextConfig, changed: true, cleared: clearedRoot || accountCleanup.cleared };
+}

@@ -1,5 +1,11 @@
 // Browser tests cover pw tools core.interactions.batch plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import {
+  BrowserObservedDialogBlockedError,
+  isBrowserObservedDialogBlockedError,
+} from "./pw-session-contracts.js";
+import { isPolicyDenyNavigationError } from "./pw-session-navigation.js";
 
 let page: {
   evaluate: ReturnType<typeof vi.fn>;
@@ -24,8 +30,7 @@ const getPageForTargetId = vi.fn(async () => {
 const ensurePageState = vi.fn(() => {});
 const assertPageNavigationCompletedSafely = vi.fn(async () => {});
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
-const isBrowserObservedDialogBlockedError = vi.fn(() => false);
-const isPolicyDenyNavigationError = vi.fn(() => false);
+const quarantineBlockedNavigationTarget = vi.fn(async () => {});
 const markObservedDialogsHandledRemotelyForPage = vi.fn(() => ({}));
 const refLocator = vi.fn(() => {
   if (!locator) {
@@ -56,6 +61,7 @@ vi.mock("./pw-session.js", () => ({
   isBrowserObservedDialogBlockedError,
   isPolicyDenyNavigationError,
   markObservedDialogsHandledRemotelyForPage,
+  quarantineBlockedNavigationTarget,
   refLocator,
   restoreRoleRefsForTarget,
   wasBrowserNavigationSourcePreservedAfterPolicyDenial,
@@ -422,5 +428,167 @@ describe("batchViaPlaywright", () => {
       ssrfPolicy,
       browserProxyMode: "explicit-browser-proxy",
     });
+  });
+
+  it.each([
+    { innerStopOnError: undefined, outerStopOnError: undefined },
+    { innerStopOnError: false, outerStopOnError: undefined },
+    { innerStopOnError: undefined, outerStopOnError: false },
+    { innerStopOnError: false, outerStopOnError: false },
+  ])(
+    "reports nested failure with inner stop=$innerStopOnError and outer stop=$outerStopOnError",
+    async ({ innerStopOnError, outerStopOnError }) => {
+      locator!.fill!.mockRejectedValueOnce(new Error("not editable"));
+
+      const result = await batchViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        stopOnError: outerStopOnError,
+        actions: [
+          {
+            kind: "batch",
+            stopOnError: innerStopOnError,
+            actions: [
+              { kind: "type", ref: "1", text: "value" },
+              { kind: "hover", ref: "2" },
+            ],
+          },
+          { kind: "press", key: "Enter" },
+        ],
+      });
+
+      expect(result.results).toEqual([
+        { ok: false, error: "not editable" },
+        ...(outerStopOnError === false ? [{ ok: true }] : []),
+      ]);
+      expect(locator!.hover).toHaveBeenCalledTimes(innerStopOnError === false ? 1 : 0);
+      expect(page!.keyboard.press).toHaveBeenCalledTimes(outerStopOnError === false ? 1 : 0);
+    },
+  );
+
+  it("propagates a failed grandchild through each batch boundary", async () => {
+    locator!.fill!.mockRejectedValueOnce(new Error("not editable"));
+
+    const result = await batchViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      actions: [
+        {
+          kind: "batch",
+          actions: [{ kind: "batch", actions: [{ kind: "type", ref: "1", text: "value" }] }],
+        },
+        { kind: "press", key: "Enter" },
+      ],
+    });
+
+    expect(result).toEqual({ results: [{ ok: false, error: "not editable" }] });
+    expect(page!.keyboard.press).not.toHaveBeenCalled();
+  });
+
+  it("reports the first nested failure after all continue-on-error actions run", async () => {
+    locator!.fill!.mockRejectedValueOnce(new Error("first failure"));
+    locator!.hover!.mockRejectedValueOnce(new Error("second failure"));
+
+    const result = await batchViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      actions: [
+        {
+          kind: "batch",
+          stopOnError: false,
+          actions: [
+            { kind: "type", ref: "1", text: "value" },
+            { kind: "hover", ref: "2" },
+            { kind: "press", key: "Enter" },
+          ],
+        },
+      ],
+    });
+
+    expect(result).toEqual({ results: [{ ok: false, error: "first failure" }] });
+    expect(locator!.hover).toHaveBeenCalledOnce();
+    expect(page!.keyboard.press).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { reason: "navigation", nested: false, stopOnError: false },
+    { reason: "closed", nested: false, stopOnError: false },
+    { reason: "navigation", nested: true, stopOnError: undefined },
+    { reason: "closed", nested: true, stopOnError: undefined },
+    { reason: "navigation", nested: true, stopOnError: false },
+    { reason: "closed", nested: true, stopOnError: false },
+  ])(
+    "preserves failure and $reason abort details (nested=$nested, stop=$stopOnError)",
+    async ({ reason, nested, stopOnError }) => {
+      locator!.fill!.mockRejectedValueOnce(new Error("action failed"));
+      locator!.click!.mockImplementationOnce(() => {
+        if (reason === "navigation") {
+          setPageUrl("https://example.com/next");
+        } else {
+          setPageClosed(true);
+        }
+        if (!nested) {
+          throw new Error("action failed");
+        }
+      });
+
+      const result = await batchViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        stopOnError,
+        actions: [
+          nested
+            ? {
+                kind: "batch",
+                stopOnError: false,
+                actions: [
+                  { kind: "type", ref: "1", text: "value" },
+                  { kind: "click", ref: "2" },
+                  { kind: "hover", ref: "3" },
+                ],
+              }
+            : { kind: "click", ref: "1" },
+          { kind: "press", key: "Enter" },
+        ],
+      });
+      const url = reason === "navigation" ? "https://example.com/next" : "https://example.com";
+
+      expect(result).toEqual({
+        results: [
+          {
+            ok: false,
+            error: "action failed",
+            ...(reason === "navigation" ? { navigated: true, url } : {}),
+          },
+        ],
+        aborted: { reason, afterAction: 1, url, skipped: 1 },
+      });
+      expect(locator!.hover).not.toHaveBeenCalled();
+      expect(page!.keyboard.press).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    new SsrFBlockedError("browser navigation blocked by policy"),
+    new BrowserObservedDialogBlockedError({ dialogs: { pending: [], recent: [] } }),
+  ])("preserves $name identity through permissive nested batches", async (error) => {
+    locator!.fill!.mockRejectedValueOnce(error);
+
+    await expect(
+      batchViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        stopOnError: false,
+        actions: [
+          {
+            kind: "batch",
+            stopOnError: false,
+            actions: [
+              { kind: "type", ref: "1", text: "value" },
+              { kind: "hover", ref: "2" },
+            ],
+          },
+          { kind: "press", key: "Enter" },
+        ],
+      }),
+    ).rejects.toBe(error);
+    expect(locator!.hover).not.toHaveBeenCalled();
+    expect(page!.keyboard.press).not.toHaveBeenCalled();
   });
 });

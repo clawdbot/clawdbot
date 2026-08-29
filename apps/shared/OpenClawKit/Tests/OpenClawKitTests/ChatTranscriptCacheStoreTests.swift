@@ -32,11 +32,16 @@ func cacheMessage(
         idempotencyKey: idempotencyKey)
 }
 
-func cacheSessionEntry(key: String, updatedAt: Double) -> OpenClawChatSessionEntry {
+func cacheSessionEntry(
+    key: String,
+    updatedAt: Double,
+    agentID: String? = nil) -> OpenClawChatSessionEntry
+{
     OpenClawChatSessionEntry(
         key: key,
         kind: nil,
         displayName: nil,
+        agentId: agentID,
         surface: nil,
         subject: nil,
         room: nil,
@@ -277,6 +282,88 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         #expect(!messageRows[0].payloadJSON.hasPrefix("["))
     }
 
+    @Test func `agent session snapshots preserve another agents offline roster`() async throws {
+        await store.storeSessions([
+            cacheSessionEntry(key: "global", updatedAt: 1, agentID: "agent-a"),
+        ], agentID: "agent-a")
+        await store.storeSessions([
+            cacheSessionEntry(key: "global", updatedAt: 2, agentID: "agent-b"),
+        ], agentID: "agent-b")
+
+        #expect(await store.loadSessions(agentID: "agent-a").map(\.agentId) == ["agent-a"])
+        #expect(await store.loadSessions(agentID: "agent-b").map(\.agentId) == ["agent-b"])
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        #expect(await reopened.store(gatewayID: "gw-a").loadSessions(agentID: "agent-a").map(\.agentId) == [
+            "agent-a",
+        ])
+        #expect(await reopened.store(gatewayID: "gw-a").loadSessions(agentID: "agent-b").map(\.agentId) == [
+            "agent-b",
+        ])
+    }
+
+    @Test func `empty or rejected agent snapshot cannot erase another roster`() async {
+        await store.storeSessions([
+            cacheSessionEntry(key: "global", updatedAt: 1, agentID: "agent-a"),
+        ], agentID: "agent-a")
+        await store.storeSessions([
+            cacheSessionEntry(key: "global", updatedAt: 2, agentID: "agent-b"),
+        ], agentID: "agent-b")
+
+        await store.storeSessions([
+            cacheSessionEntry(key: "agent:agent-a:main", updatedAt: 3, agentID: "agent-a"),
+        ], agentID: "agent-b")
+
+        #expect(await store.loadSessions(agentID: "agent-a").map(\.agentId) == ["agent-a"])
+        #expect(await store.loadSessions(agentID: "agent-b").map(\.agentId) == ["agent-b"])
+
+        await store.storeSessions([], agentID: "agent-b")
+
+        #expect(await store.loadSessions(agentID: "agent-a").map(\.agentId) == ["agent-a"])
+        #expect(await store.loadSessions(agentID: "agent-b").isEmpty)
+    }
+
+    @Test func `agent session owner partitions remain bounded`() async throws {
+        for index in 0...OpenClawChatSQLiteTranscriptCache.maxCachedSessionOwners {
+            let agentID = "agent-\(index)"
+            await store.storeSessions([
+                cacheSessionEntry(key: "global", updatedAt: Double(index), agentID: agentID),
+            ], agentID: agentID)
+        }
+
+        let counts = try await databases.cacheQueue.read { db in
+            try (
+                Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_session_rosters WHERE gateway_id = 'gw-a'"),
+                Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_agent_sessions WHERE gateway_id = 'gw-a'"))
+        }
+        #expect(counts.0 == OpenClawChatSQLiteTranscriptCache.maxCachedSessionOwners)
+        #expect(counts.1 == OpenClawChatSQLiteTranscriptCache.maxCachedSessionOwners)
+    }
+
+    @Test func `agent snapshot discards legacy roster without touching transcripts`() async throws {
+        await store.storeTestTranscript(
+            sessionKey: "global",
+            agentID: "agent-a",
+            messages: [cacheMessage(role: "assistant", text: "preserved", timestamp: 1)])
+        try await databases.cacheQueue.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO cached_sessions(gateway_id, session_key, position, updated_at, payload_json)
+                VALUES ('gw-a', 'global', 0, 1, '{}')
+                """)
+        }
+
+        await store.storeSessions([
+            cacheSessionEntry(key: "global", updatedAt: 2, agentID: "agent-a"),
+        ], agentID: "agent-a")
+
+        #expect(try await databases.cacheQueue.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_sessions WHERE gateway_id = 'gw-a'")
+        } == 0)
+        #expect(await messageTexts(store.loadTranscript(sessionKey: "global", agentID: "agent-a")) == ["preserved"])
+    }
+
     @Test func `cache format mismatch rebuilds without touching client state`() async throws {
         let stateIdentity = try #require(OpenClawChatSessionRoutingIdentity(
             scope: "per-sender",
@@ -421,21 +508,33 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
     }
 
     @Test func `malformed cache partitions are discarded atomically`() async throws {
-        await store.storeSessions([cacheSessionEntry(key: "main", updatedAt: 1)])
+        await store.storeSessions([
+            cacheSessionEntry(key: "global", updatedAt: 1, agentID: "agent-a"),
+        ], agentID: "agent-a")
+        await store.storeSessions([
+            cacheSessionEntry(key: "global", updatedAt: 2, agentID: "agent-b"),
+        ], agentID: "agent-b")
         await store.storeTestTranscript(
             sessionKey: "main",
             messages: [cacheMessage(role: "assistant", text: "cached", timestamp: 1)])
         try await databases.cacheQueue.write { db in
             try db.execute(
-                sql: "UPDATE cached_sessions SET payload_json = 'not-json' WHERE gateway_id = 'gw-a'")
+                sql: """
+                UPDATE cached_agent_sessions SET payload_json = 'not-json'
+                WHERE gateway_id = 'gw-a' AND agent_id = 'agent-a'
+                """)
             try db.execute(
                 sql: "UPDATE cached_messages SET payload_json = 'not-json' WHERE gateway_id = 'gw-a'")
         }
 
-        #expect(await store.loadSessions().isEmpty)
+        #expect(await store.loadSessions(agentID: "agent-a").isEmpty)
+        #expect(await store.loadSessions(agentID: "agent-b").map(\.agentId) == ["agent-b"])
         #expect(await store.loadTranscript(sessionKey: "main").isEmpty)
         #expect(try await databases.cacheQueue.read { db in
-            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_sessions WHERE gateway_id = 'gw-a'")
+            try Int.fetchOne(db, sql: """
+            SELECT COUNT(*) FROM cached_agent_sessions
+            WHERE gateway_id = 'gw-a' AND agent_id = 'agent-a'
+            """)
         } == 0)
         #expect(try await databases.cacheQueue.read { db in
             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_transcripts WHERE gateway_id = 'gw-a'")

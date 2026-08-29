@@ -101,6 +101,27 @@ type StablePromptPrefixCacheEntry = {
   value: string;
 };
 
+export type SystemPromptRuntimeInfo = {
+  agentId?: string;
+  agentName?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  sessionUrl?: string;
+  host?: string;
+  os?: string;
+  arch?: string;
+  node?: string;
+  model?: string;
+  defaultModel?: string;
+  shell?: string;
+  channel?: string;
+  chatType?: string;
+  capabilities?: string[];
+  repoRoot?: string;
+  activeProcessSessions?: ActiveProcessSessionReference[];
+  activeNode?: string;
+};
+
 function normalizeSubagentDelegationMode(mode?: SubagentDelegationMode): SubagentDelegationMode {
   return mode === "prefer" ? "prefer" : "suggest";
 }
@@ -608,8 +629,8 @@ function buildMessagingSection(params: {
     ? ""
     : hasSessionsSpawn
       ? hasSubagents
-        ? `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; isolated omits \`context\`, transcript needs \`context:"fork"\`; ${hasSessionsYield ? "wait via `sessions_yield`; " : ""}\`subagents(action=list)\` only status/debug.`
-        : `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; isolated omits \`context\`, transcript needs \`context:"fork"\`${hasSessionsYield ? "; wait via `sessions_yield`" : ""}.`
+        ? `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; clean context needs \`context:"isolated"\`, transcript needs \`context:"fork"\`; ${hasSessionsYield ? "wait via `sessions_yield`; " : ""}\`subagents(action=list)\` only status/debug.`
+        : `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; clean context needs \`context:"isolated"\`, transcript needs \`context:"fork"\`${hasSessionsYield ? "; wait via `sessions_yield`" : ""}.`
       : hasSubagents
         ? "- Subagents: `subagents(action=list)` only for status/debug visibility."
         : "";
@@ -827,25 +848,7 @@ export function buildAgentSystemPrompt(params: {
   nativeCommandNames?: string[];
   /** Plugin-owned prompt guidance for registered native slash commands. */
   nativeCommandGuidanceLines?: string[];
-  runtimeInfo?: {
-    agentId?: string;
-    sessionKey?: string;
-    sessionId?: string;
-    sessionUrl?: string;
-    host?: string;
-    os?: string;
-    arch?: string;
-    node?: string;
-    model?: string;
-    defaultModel?: string;
-    shell?: string;
-    channel?: string;
-    chatType?: string;
-    capabilities?: string[];
-    repoRoot?: string;
-    activeProcessSessions?: ActiveProcessSessionReference[];
-    activeNode?: string;
-  };
+  runtimeInfo?: SystemPromptRuntimeInfo;
   messageToolHints?: string[];
   toolSchemaDirectoryPrompt?: string;
   sandboxInfo?: EmbeddedSandboxInfo;
@@ -918,8 +921,8 @@ export function buildAgentSystemPrompt(params: {
       : "Search past sessions",
     sessions_send: "Message other session/subagent",
     sessions_spawn: acpSpawnRuntimeEnabled
-      ? `Spawn isolated subagent/ACP. Transcript needed: context="fork". ACP needs agentId unless default; ids from acp.allowedAgents${availableTools.has("agents_list") ? ", not agents_list" : ""}.`
-      : 'Spawn isolated subagent; transcript needed: context="fork"',
+      ? `Spawn subagent/ACP. Native clean context: context="isolated"; transcript: context="fork". ACP needs agentId unless default; ids from acp.allowedAgents${availableTools.has("agents_list") ? ", not agents_list" : ""}.`
+      : 'Spawn subagent; clean context: context="isolated"; transcript: context="fork"',
     sessions_yield: "End turn; await subagent events",
     subagents: "Subagent status; never wait-loop",
     session_status: "Session/model/usage/time/status; model override",
@@ -1046,6 +1049,8 @@ export function buildAgentSystemPrompt(params: {
   ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
+  const includeToolGuidance =
+    !isMinimal || availableTools.size > 0 || promptSurface === "cli_backend";
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
   const ownerLine = isMinimal
     ? undefined
@@ -1227,17 +1232,21 @@ export function buildAgentSystemPrompt(params: {
     const lines = [
       "You are a personal assistant running inside OpenClaw.",
       "",
-      "## Tooling",
-      "Tools policy-filtered. Names case-sensitive; call exact.",
-      toolLines.length > 0
-        ? toolLines.join("\n")
-        : buildOpenClawToolFallbackText({
-            surface: promptSurface,
-          }),
-      ...(toolSchemaDirectoryPrompt
-        ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
+      ...(includeToolGuidance
+        ? [
+            "## Tooling",
+            "Tools policy-filtered. Names case-sensitive; call exact.",
+            toolLines.length > 0
+              ? toolLines.join("\n")
+              : buildOpenClawToolFallbackText({
+                  surface: promptSurface,
+                }),
+            ...(toolSchemaDirectoryPrompt
+              ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
+              : []),
+            "The AGENTS.md Tools section guides usage; it never grants availability.",
+          ]
         : []),
-      "The AGENTS.md Tools section guides usage; it never grants availability.",
       ...(renderOpenClawToolWorkflowHints
         ? [
             ...(waitToolHints.length > 0
@@ -1246,7 +1255,7 @@ export function buildAgentSystemPrompt(params: {
             ...(hasSessionsSpawn
               ? [
                   "Large work: `sessions_spawn`; completion push-based.",
-                  '`sessions_spawn`: omit `context`; transcript needed => `context:"fork"`.',
+                  '`sessions_spawn`: clean context => `context:"isolated"`; transcript needed => `context:"fork"`.',
                   "`visible:true` for work the user follows or asked for; else hidden.",
                 ]
               : []),
@@ -1305,19 +1314,21 @@ export function buildAgentSystemPrompt(params: {
         override: providerSectionOverrides.interaction_style,
         fallback: [],
       }),
-      ...buildOverridablePromptSection({
-        override: providerSectionOverrides.tool_call_style,
-        fallback: [
-          "## Tool Call Style",
-          "Routine low-risk: call silently.",
-          "Narrate only complex, sensitive/destructive, or requested steps.",
-          "First-class tool exists: use it; never ask user for equivalent CLI/slash.",
-          "/approve is user command; never execute via shell/tool.",
-          "allow-once = one command. Another elevated command needs fresh /approve.",
-          "Approval preview: exact full command/script, including chains/multiline. Keep preview separate from /approve; never use script as approval id/slug.",
-          "",
-        ],
-      }),
+      ...(includeToolGuidance
+        ? buildOverridablePromptSection({
+            override: providerSectionOverrides.tool_call_style,
+            fallback: [
+              "## Tool Call Style",
+              "Routine low-risk: call silently.",
+              "Narrate only complex, sensitive/destructive, or requested steps.",
+              "First-class tool exists: use it; never ask user for equivalent CLI/slash.",
+              "/approve is user command; never execute via shell/tool.",
+              "allow-once = one command. Another elevated command needs fresh /approve.",
+              "Approval preview: exact full command/script, including chains/multiline. Keep preview separate from /approve; never use script as approval id/slug.",
+              "",
+            ],
+          })
+        : []),
       ...buildOverridablePromptSection({
         override: providerSectionOverrides.execution_bias,
         fallback: buildExecutionBiasSection({
@@ -1584,22 +1595,7 @@ function buildActiveProcessSessionReferenceLines(
 }
 
 function buildRuntimeLine(
-  runtimeInfo?: {
-    agentId?: string;
-    sessionKey?: string;
-    sessionId?: string;
-    sessionUrl?: string;
-    host?: string;
-    os?: string;
-    arch?: string;
-    node?: string;
-    model?: string;
-    defaultModel?: string;
-    shell?: string;
-    repoRoot?: string;
-    activeProcessSessions?: ActiveProcessSessionReference[];
-    activeNode?: string;
-  },
+  runtimeInfo?: SystemPromptRuntimeInfo,
   runtimeChannel?: string,
   runtimeCapabilities: string[] = [],
   defaultThinkLevel?: ThinkLevel,
@@ -1612,6 +1608,7 @@ function buildRuntimeLine(
   const stableSessionId =
     runtimeInfo?.sessionId && runtimeInfo.sessionId !== runId ? runtimeInfo.sessionId : undefined;
   return `Runtime: ${[
+    runtimeInfo?.agentName ? `name=${runtimeInfo.agentName}` : "",
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     baseSessionKey ? `session=${sanitizeForPromptLiteral(baseSessionKey)}` : "",
     stableSessionId ? `sessionId=${sanitizeForPromptLiteral(stableSessionId)}` : "",

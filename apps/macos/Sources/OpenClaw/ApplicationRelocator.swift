@@ -1014,7 +1014,7 @@ extension ApplicationRelocator {
         do {
             try helper.run()
             TerminationSignalWatcher.scheduleExitFailsafe()
-            NSApp.terminate(nil)
+            AppDelegate.requestTermination()
             return .terminating
         } catch {
             self.logger.error("Could not schedule relaunch: \(error.localizedDescription, privacy: .public)")
@@ -1111,7 +1111,7 @@ extension ApplicationRelocator {
             }
             self.cancelSupervisorRestorationWatcher()
             TerminationSignalWatcher.scheduleExitFailsafe()
-            NSApp.terminate(nil)
+            AppDelegate.requestTermination()
         }
         return .scheduled
     }
@@ -1171,7 +1171,7 @@ extension ApplicationRelocator {
                 \(supervisor.label, privacy: .public) can restart the installed app.
                 """)
             TerminationSignalWatcher.scheduleExitFailsafe()
-            NSApp.terminate(nil)
+            AppDelegate.requestTermination()
         }
     }
 

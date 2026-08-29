@@ -51,6 +51,24 @@ execution or Gateway/node host overrides cannot bypass it. The default
 - `session`: one container per session.
 - `shared`: one container shared by all sandboxed sessions (per-agent `docker`/`ssh`/`browser` overrides are ignored under this scope).
 
+Required sandboxes with proven Gateway-profile creators use that profile as
+their isolation boundary. Different guests on the same agent receive separate
+environments and workspaces, regardless of configured scope. Sessions created
+by the same profile reuse its existing environment and workspace, including
+when the configured scope is `session`; this upgrade does not rekey those paths.
+Channel, unknown, and other non-profile creators instead receive a separate
+required sandbox per canonical session. A matching raw ID cannot reuse a
+profile's resources. Required sandboxing and the read-only workspace cap remain
+in force; backend failure never falls back to host execution.
+Sessions without a role-required sandbox keep the configured scope behavior.
+
+The [creator namespace migration](/reference/database-schemas#creator-namespace-migration)
+does not delete or adopt old ambiguous workspaces or containers. Such sessions
+start with separate resources after upgrade. Preserve any needed old data
+before normal sandbox retention or manual cleanup, then recover selected files
+explicitly as an operator; do not copy an entire ambiguous environment into a
+trusted profile workspace automatically.
+
 Non-shared runtime identity also includes the resolved agent workspace path. This prevents co-hosted workspaces that reuse the same agent or session keys from sharing Docker, browser, SSH, OpenShell, or plugin-provided sandbox state. `shared` scope intentionally remains workspace-independent.
 
 The first use after upgrading from an older release creates non-shared runtimes and sandbox workspaces under the workspace-qualified identity. Existing non-shared runtimes are not adopted; this is an intentional one-time reset. They can age out through configured prune settings or be removed with `openclaw sandbox recreate`; the next use provisions the current identity.
@@ -206,6 +224,13 @@ A containerized Gateway creates sibling sandboxes through the host's local Podma
 
 Use `backend: "ssh"` to sandbox `exec`, file tools, and media reads on an arbitrary SSH-accessible machine.
 
+The remote environment must provide `/bin/sh`, `python3`, and GNU-compatible
+`stat` (`-c`) and `readlink` (`-f`) for the filesystem bridge. These utilities
+must be available to the non-interactive SSH command, not just an interactive
+login shell. The Gateway host does not need these remote utilities: a macOS or
+Windows Gateway can use an SSH target that supplies them. This is a remote
+utility contract, not a Linux-only Gateway requirement.
+
 ```json5
 {
   agents: {
@@ -285,6 +310,13 @@ For the full prerequisites, configuration reference, workspace-mode comparison, 
 | `none` (default) | Tools see an isolated sandbox workspace under `~/.openclaw/sandboxes`.                    |
 | `ro`             | Mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`). |
 | `rw`             | Mounts the agent workspace read/write at `/workspace`.                                    |
+
+For a role-required sandbox, OpenClaw caps configured `rw` workspace access at
+`ro` and logs an `agent/sandbox` warning. The guest keeps a separate sandbox
+workspace, while the shared agent workspace is available only as a read-only
+mount. This prevents guests from sharing the writable agent workspace; `none`
+and `ro` remain unchanged. Sessions without a role-required sandbox retain their
+configured workspace access.
 
 With the OpenShell backend, `mirror` mode still uses the local workspace as the canonical source between exec turns, `remote` mode uses the remote OpenShell workspace as canonical after the initial seed, and `workspaceAccess: "ro"`/`"none"` still restrict write behavior the same way.
 
@@ -450,7 +482,13 @@ commands shown below instead.
     scripts/sandbox-common-setup.sh
     ```
 
-    From an npm install, build the default image first (see above), then build the common image on top using [`scripts/docker/sandbox/Dockerfile.common`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.common) from the repository.
+    From an npm install, build the default image first (see above). Download [`scripts/docker/sandbox/Dockerfile.common`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.common) and the root [`package.json`](https://github.com/openclaw/openclaw/blob/main/package.json) from the same OpenClaw commit or tag into an empty directory. Keep their filenames, then run from that directory:
+
+    ```bash
+    docker build -t openclaw-sandbox-common:bookworm-slim -f Dockerfile.common .
+    ```
+
+    `package.json` supplies the pinned pnpm version and must be in the build context, even with `--build-arg INSTALL_PNPM=0`. It is a read-only build input; you do not need a source checkout or a host pnpm installation.
 
     Then set `agents.defaults.sandbox.docker.image` to `openclaw-sandbox-common:bookworm-slim`.
 

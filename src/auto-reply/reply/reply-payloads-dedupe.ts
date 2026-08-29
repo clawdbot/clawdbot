@@ -200,14 +200,12 @@ function resolveOriginThreadIdForPayload(params: {
   replyDelivery?: ReplyDeliveryContext;
 }): string | undefined {
   const originThreadId = normalizeThreadIdForComparison(params.originatingThreadId);
-  if (originThreadId && !params.replyToIsExplicit) {
-    return originThreadId;
-  }
   const replyToId = normalizeThreadIdForComparison(params.replyToId);
   const resolveReplyTransport = getChannelPlugin(params.provider)?.threading?.resolveReplyTransport;
-  if (!replyToId || !params.config || !resolveReplyTransport) {
+  if (!params.config || !resolveReplyTransport) {
     return originThreadId;
   }
+  // Implicit replies can leave the inbound thread; dedupe must use the same transport as delivery.
   const transport = resolveReplyTransport({
     cfg: params.config,
     accountId: params.accountId,

@@ -6,8 +6,11 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { Type } from "typebox";
-import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { Value } from "typebox/value";
+import {
+  SessionRunStatusSchema,
+  type SessionRunStatus,
+} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-title-reader.js";
@@ -41,14 +44,12 @@ import {
 } from "./in-process-gateway.js";
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
-  createAgentToAgentPolicy,
   createSessionVisibilityRowChecker,
   classifySessionListKind,
   deriveChannel,
   resolveDisplaySessionKey,
-  resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
-  resolveSandboxedSessionToolContext,
+  resolveSessionToolContext,
   SESSION_LIST_KINDS,
   type GatewaySessionListRow,
   type SessionListRow,
@@ -87,15 +88,7 @@ const SessionListRowOutputSchema = Type.Object(
     model: Type.Optional(Type.String()),
     contextTokens: Type.Optional(Type.Number()),
     totalTokens: Type.Optional(Type.Number()),
-    status: Type.Optional(
-      Type.Union([
-        Type.Literal("running"),
-        Type.Literal("done"),
-        Type.Literal("failed"),
-        Type.Literal("killed"),
-        Type.Literal("timeout"),
-      ]),
-    ),
+    status: Type.Optional(SessionRunStatusSchema),
     abortedLastRun: Type.Optional(Type.Boolean()),
     childSessions: Type.Optional(Type.Array(Type.String())),
     messages: Type.Optional(Type.Array(Type.Unknown())),
@@ -131,13 +124,7 @@ type GatewayCaller = AgentToolGatewayRequestCaller;
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
 
 function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
-  return value === "running" ||
-    value === "done" ||
-    value === "failed" ||
-    value === "killed" ||
-    value === "timeout"
-    ? value
-    : undefined;
+  return Value.Check(SessionRunStatusSchema, value) ? value : undefined;
 }
 
 /** Creates the sessions-list tool with gateway-backed listing and local transcript enrichment. */
@@ -158,25 +145,21 @@ export function createSessionsListTool(opts?: {
     outputSchema: SessionsListOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, requesterInternalKey, mainSessionKey, restrictToSpawned } =
-        resolveSandboxedSessionToolContext({
-          cfg,
-          agentSessionKey: opts?.agentSessionKey,
-          requesterAgentId: opts?.requesterAgentIdOverride,
-          sandboxed: opts?.sandboxed,
-        });
-      const effectiveRequesterKey = requesterInternalKey ?? alias;
+      const {
+        cfg,
+        mainKey,
+        alias,
+        effectiveRequesterKey,
+        mainSessionKey,
+        restrictToSpawned,
+        sessionVisibility: visibility,
+        a2aPolicy,
+      } = resolveSessionToolContext(opts);
       const requesterAgentId = resolveSessionAgentIds({
         config: cfg,
         sessionKey: effectiveRequesterKey,
         agentId: opts?.requesterAgentIdOverride,
       }).sessionAgentId;
-      const visibility = resolveEffectiveSessionToolsVisibility({
-        cfg,
-        sandboxed: opts?.sandboxed === true,
-      });
-
       const kindsRaw = readStringArrayParam(params, "kinds")?.map((value) => value.toLowerCase());
       const requestedKinds = params.kinds;
       const allowedKinds =
@@ -196,7 +179,6 @@ export function createSessionsListTool(opts?: {
       const includeDerivedTitles = params.includeDerivedTitles === true;
       const includeLastMessage = params.includeLastMessage === true;
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
-      const a2aPolicy = createAgentToAgentPolicy(cfg);
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
       const defaultAgentId = requesterAgentId;
       const visibilityGuard = createSessionVisibilityRowChecker({

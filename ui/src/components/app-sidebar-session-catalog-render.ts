@@ -40,6 +40,7 @@ import {
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
 import { sidebarSessionStateId } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { renderNewSessionLink } from "./new-session-link.ts";
 import { hasProviderBrandIcon, renderProviderBrandIcon } from "./provider-icon.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 
@@ -175,8 +176,8 @@ function catalogErrorMessages(catalog: SessionCatalog): string[] {
 }
 
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
-  // Adopted rows reuse the live session row so activity, unread state, and
-  // the session menu behave exactly like the regular list.
+  // Adopted rows use canonical local labels and title snapshots; native catalog
+  // refreshes must not rename them or replace the regular session presentation.
   const liveRowsByKey = new Map<string, GatewaySessionRow>();
   const liveOwnerIdBySessionKey = new Map<string, string | undefined>();
   for (const row of params.liveRows) {
@@ -308,20 +309,16 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               ${icons.listFilter}
             </button>
             ${canCreateSession
-              ? html`<button
-                  type="button"
-                  class="sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new"
-                  title=${params.newSessionDisabledReason ??
-                  `${t("chat.runControls.newSession")} — ${catalog.label}`}
-                  aria-label=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
-                  ?disabled=${Boolean(params.newSessionDisabledReason)}
-                  @click=${() =>
-                    params.onOpenNewSession?.(params.newSessionAgentId, {
-                      catalogId: catalog.id,
-                    })}
-                >
-                  ${icons.plus}
-                </button>`
+              ? renderNewSessionLink({
+                  basePath: params.basePath,
+                  agentId: params.newSessionAgentId,
+                  target: { catalogId: catalog.id },
+                  className:
+                    "sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new",
+                  label: `${t("chat.runControls.newSession")} — ${catalog.label}`,
+                  disabledReason: params.newSessionDisabledReason,
+                  onOpen: params.onOpenNewSession,
+                })
               : nothing}
           `,
         })}
@@ -477,9 +474,7 @@ function renderCatalogSessionRow(
   const rowRef = catalogRowRef(identityKey, key, catalogKey, menuOpen, params);
   const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
   if (adoptedRow) {
-    const label = session.name || session.threadId;
     return params.renderLiveRow(adoptedRow, {
-      label,
       catalogIdentityKey: identityKey,
       catalogMenuOpen: menuOpen,
       ...(rowRef ? { rowRef } : {}),
@@ -573,7 +568,6 @@ function renderCatalogSessionRow(
           <span class="sidebar-recent-session__details">
             <span class="sidebar-recent-session__details-endcap">
               ${renderSessionRowBadges({
-                hasAutomation: false,
                 pullRequest: session.pullRequest,
               })}
               ${running

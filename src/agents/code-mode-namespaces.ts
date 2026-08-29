@@ -7,6 +7,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { tokTypes } from "acorn";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import type { PluginToolMcpMeta } from "../plugins/tools.js";
+import { sanitizeNodeIdFragment } from "./agent-bundle-mcp-names.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
   buildMcpApiResponse,
@@ -17,6 +18,7 @@ import {
   type CodeModeApiVirtualFile,
   type McpApiServerDoc,
 } from "./code-mode-mcp-api.js";
+import { registerToolEffectReceipt } from "./tool-effect-receipt.js";
 
 export type { CodeModeApiVirtualFile } from "./code-mode-mcp-api.js";
 
@@ -295,19 +297,6 @@ function mcpNamespaceServerKey(mcp: NonNullable<CodeModeNamespaceCatalogEntry["m
     : JSON.stringify(["gateway", mcp.safeServerName]);
 }
 
-function sanitizeNodeFragment(value: string): string {
-  const fragment = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 32);
-  if (!fragment) {
-    return "node";
-  }
-  return /^[a-z]/.test(fragment) ? fragment : `node_${fragment}`.slice(0, 32);
-}
-
 function assignMcpNamespaceServerNames(
   servers: readonly McpNamespaceServer[],
 ): Map<string, string> {
@@ -333,7 +322,7 @@ function assignMcpNamespaceServerNames(
     if (!server.node || assignments.has(server.key)) {
       continue;
     }
-    const base = `${sanitizeNodeFragment(server.node.id)}_${server.safeServerName}`;
+    const base = `${sanitizeNodeIdFragment(server.node.id)}_${server.safeServerName}`;
     let candidate = base;
     let index = 2;
     while (used.has(candidate.toLowerCase())) {
@@ -655,9 +644,17 @@ export function createCodeModeNamespaceRuntime(
       if (!isCodeModeNamespaceToolCall(target)) {
         throw new Error(`Code mode namespace path is not callable: ${path.join(".")}`);
       }
-      const input = target.input ? await target.input(args) : (args[0] ?? {});
+      let input: unknown;
+      try {
+        input = target.input ? await target.input(args) : (args[0] ?? {});
+      } catch (error) {
+        if (target.local) {
+          throw registerToolEffectReceipt(error, { state: "failed_no_effect" });
+        }
+        throw error;
+      }
       if (target.local) {
-        return toCodeModeJsonSafe(input);
+        return registerToolEffectReceipt(toCodeModeJsonSafe(input), { state: "read_completed" });
       }
       if (!target.catalogId) {
         throw new Error(`Code mode namespace path has no catalog tool: ${path.join(".")}`);

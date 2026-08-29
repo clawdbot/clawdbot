@@ -11,14 +11,12 @@ import {
   CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
 } from "./openclaw-state-db-additive-columns.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   ensureAdditiveStateColumns,
   ensureDevicePairSetupBootstrapSchema,
 } from "./openclaw-state-db-schema-additive.js";
-import {
-  assertOpenClawStateDatabaseForMaintenance,
-  OPENCLAW_STATE_SCHEMA_VERSION,
-} from "./openclaw-state-db.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
@@ -46,12 +44,12 @@ describe("OpenClaw database maintenance schema validation", () => {
 
   it("accepts a global schema produced by an additive column migration", () => {
     const schemaWithoutMigratedColumn = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  delivery_thread_id_type TEXT,\n",
+      "  schedule_identity TEXT,\n",
       "",
     );
     const database = createGlobalDatabase(schemaWithoutMigratedColumn);
     try {
-      database.exec("ALTER TABLE cron_jobs ADD COLUMN delivery_thread_id_type TEXT;");
+      database.exec("ALTER TABLE cron_jobs ADD COLUMN schedule_identity TEXT;");
 
       expect(() =>
         assertOpenClawStateDatabaseForMaintenance(database, {
@@ -222,7 +220,6 @@ describe("OpenClaw database maintenance schema validation", () => {
       "device_bootstrap_tokens.setup_id TEXT",
       "session_groups.cwd TEXT",
       "session_groups.worktree INTEGER",
-      "installed_plugin_index.workspace_dir TEXT",
       "secret_store_entries.allowed_hosts TEXT",
       "skill_workshop_proposals.claim_released_time INTEGER",
     ]);
@@ -283,8 +280,8 @@ describe("OpenClaw database maintenance schema validation", () => {
 
   it("accepts a migrated required column with its temporary default", () => {
     const schemaWithoutMigratedColumn = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  owner_session_key TEXT,\n  name TEXT NOT NULL,\n  description TEXT,\n",
-      "  owner_session_key TEXT,\n  description TEXT,\n",
+      "  name TEXT NOT NULL,\n  description TEXT,\n  enabled INTEGER NOT NULL,\n",
+      "  description TEXT,\n  enabled INTEGER NOT NULL,\n",
     );
     const database = createGlobalDatabase(schemaWithoutMigratedColumn);
     try {

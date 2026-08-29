@@ -4,6 +4,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import {
+  distArtifactEntryArgs,
+  withDistArtifactOwnership,
+} from "./lib/dist-artifact-ownership.mts";
 import {
   applyLocalOxlintPolicy,
   resolveLocalCheckEnv,
@@ -12,11 +17,9 @@ import {
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
-const PREPARE_EXTENSION_BOUNDARY_ARGS = [
-  "--import",
-  "tsx",
+const PREPARE_EXTENSION_BOUNDARY_ARGS = distArtifactEntryArgs(
   path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mts"),
-];
+);
 const OXLINT_PREPARE_SKIP_FLAGS = new Set([
   "--help",
   "-h",
@@ -229,6 +232,7 @@ async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) 
     bin: process.execPath,
     args: PREPARE_EXTENSION_BOUNDARY_ARGS,
     env,
+    requireProcessTreeExit: process.platform !== "win32",
   });
 
   if (status !== 0) {
@@ -239,10 +243,10 @@ async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) 
 /**
  * Applies wrapper policy and runs oxlint with the final argument list.
  */
-async function main(
+async function runOxlint(
   argv: string[] = process.argv.slice(2),
   runtimeEnv: NodeJS.ProcessEnv = process.env,
-) {
+): Promise<number> {
   const focusedConfig = argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG);
   const oxlintArgs = argv.filter((arg) => arg !== OPENCLAW_FOCUSED_CONFIG_FLAG);
   const localEnv = resolveLocalCheckEnv(runtimeEnv);
@@ -270,25 +274,32 @@ async function main(
     console.error(
       `[oxlint] sparse checkout is missing tracked config(s); skipping oxlint: ${sparseTargets.skippedConfigs.join(", ")}`,
     );
-    return;
+    return 0;
   }
   if (sparseTargets.hadExplicitTargets && sparseTargets.remainingExplicitTargets === 0) {
     console.error("[oxlint] no present sparse-checkout targets remain; skipping oxlint.");
-    return;
+    return 0;
   }
 
   if (needsArtifactPreparation) {
-    await prepareExtensionPackageBoundaryArtifacts(env);
+    // Declaration compilation owns its Go policy; lint limits belong to the oxlint child.
+    await prepareExtensionPackageBoundaryArtifacts(localEnv);
   }
-
-  const status = await runManagedCommand({
+  return await runManagedCommand({
     bin: oxlintPath,
     args: finalArgs,
     env: resolveOxlintToolchainEnv(oxlintPath, env),
+    requireProcessTreeExit: process.platform !== "win32",
   });
-  process.exitCode = status;
 }
 
-if (import.meta.main) {
-  await main();
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
+  const argv = process.argv.slice(2);
+  // Skip-prepare callers still consume shared declarations. Source-only lint
+  // remains independent; sharded lint inherits its parent's owner.
+  process.exitCode =
+    !argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG) &&
+    shouldPrepareExtensionPackageBoundaryArtifacts(argv)
+      ? await withDistArtifactOwnership(process.cwd(), () => runOxlint(argv))
+      : await runOxlint(argv);
 }

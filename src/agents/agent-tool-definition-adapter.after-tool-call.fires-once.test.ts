@@ -29,7 +29,7 @@ const beforeToolCallMocks = vi.hoisted(() => ({
       this.reason = reason;
     }
   },
-  consumeAdjustedParamsForToolCall: vi.fn((_: string): unknown => undefined),
+  consumeAdjustedParamsForToolCall: vi.fn((_toolCallId: string): unknown => undefined),
   recordAdjustedParamsForToolCall: vi.fn(),
   recordStructuredReplayTrustForToolCall: vi.fn(),
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),

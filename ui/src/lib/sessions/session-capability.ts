@@ -65,6 +65,7 @@ export type SessionListOptions = {
   activeMinutes?: number;
   search?: string;
   ownerId?: string;
+  ownerFirst?: boolean;
   involvingMe?: boolean;
   offset?: number;
   limit?: number;
@@ -161,8 +162,6 @@ export type SessionCapability = {
     listener: (snapshot: SessionListSnapshot) => void,
   ) => () => void;
   refreshList: (options?: SessionRefreshOptions) => Promise<void>;
-  setOwnerFilter: (ownerId: string | null) => Promise<void>;
-  setInvolvingMeFilter: (enabled: boolean) => Promise<void>;
   reconcile: (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
@@ -180,14 +179,14 @@ export type SessionCapability = {
   recover: (params: { key: string; agentId?: string }) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
   archiveVisibility: (key: string) => SessionArchiveVisibility | undefined;
-  setArchiveVisibility: (key: string, visibility: SessionArchiveVisibility | undefined) => void;
+  setArchivePending: (key: string, pending: boolean) => void;
   assignOwner: (
     key: string,
     owner: SessionsAssignOwnerParams["owner"],
     options?: { agentId?: string | null },
   ) => Promise<SessionOwner | null>;
-  setModelOverride: (key: string, value: string | null | undefined) => void;
   retireModelOverride: (key: string) => void;
+  think: (key: string, agentId?: string | null) => string | undefined;
   /** Keep optimistic row changes in the published snapshot through later publishes. */
   patchRowLocal: (key: string, patch: Partial<GatewaySessionRow>) => void;
   /** True while a just-created work session awaits its canonical placement row. */
@@ -199,6 +198,11 @@ export type SessionCapability = {
     summary: SessionCatalogPullRequestSummary | undefined,
     epoch?: object,
   ) => void;
+  deletionState: (
+    key: string,
+    agentId?: string | null,
+    sessionId?: string,
+  ) => "pending" | "confirmed" | undefined;
   delete: (key: string, options?: SessionDeleteOptions) => Promise<SessionDeleteOutcome>;
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
   reset: (key: string, options?: SessionResetOptions) => Promise<SessionResetResult>;

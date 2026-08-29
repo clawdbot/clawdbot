@@ -383,6 +383,7 @@ describe("skill_workshop tool", () => {
       (tool.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum,
     ).toEqual([
       "create",
+      "prepare_patch",
       "patch",
       "update",
       "read",

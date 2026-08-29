@@ -469,6 +469,8 @@ export const sharedVitestConfig = {
   },
   test: {
     dir: repoRoot,
+    // Emit completed cases even under agent detection so healthy runs feed the output watchdog.
+    reporters: ["verbose", ...(process.env.GITHUB_ACTIONS === "true" ? ["github-actions"] : [])],
     testTimeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
     // 180s on every platform: GitHub-hosted 4-core fallback runners (Blacksmith
     // outage breaker) push e2e beforeAll hooks past 120s; Windows always needed it.
@@ -559,7 +561,6 @@ export const sharedVitestConfig = {
         "src/agents/sandbox.ts",
         "src/agents/agent-tool-definition-adapter.ts",
         "src/agents/tools/discord-actions*.ts",
-        "src/infra/state-migrations.ts",
         "src/infra/update-check.ts",
         "src/infra/ports-inspect.ts",
         "src/infra/outbound/outbound-session.ts",

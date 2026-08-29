@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { getModelProviderRequestRouteFacts } from "../provider-request-config.js";
+import { getModelProviderLocalService } from "../provider-local-service.js";
+import {
+  getModelProviderRequestRouteFacts,
+  getModelProviderRequestTransport,
+} from "../provider-request-config.js";
 
 const mocks = vi.hoisted(() => ({
   loadPluginManifestRegistryCore: vi.fn(),
@@ -196,17 +200,41 @@ describe("prepared bundled provider static catalogs", () => {
     );
   });
 
-  it("projects prepared rows without rerunning hooks", async () => {
+  it("projects heterogeneous prepared rows without rerunning hooks or resolving empty providers", async () => {
     mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
     mocks.normalizePluginDiscoveryResult.mockReturnValue({
       google: {
+        api: "fixture-api",
+        baseUrl: "https://fixture.example/v1",
+        authHeader: false,
+        maxTokens: 4096,
+        request: { headers: { "X-Catalog": "prepared" } },
+        localService: { command: "fixture-service" },
         models: [
           {
             id: "gemini-3.1-pro-preview",
             name: "Gemini Pro",
             contextWindow: 1_048_576,
+            reasoning: false,
+            input: ["text", "image"],
+            cost: { input: 0.5 },
+            maxTokens: 0,
+          },
+          {
+            id: "fallback-model",
+            name: "",
+            baseUrl: "",
+            input: [],
+            contextWindow: 0,
+            contextTokens: 0,
           },
         ],
+      },
+      empty: {
+        request: {
+          headers: { "X-Unused": { source: "env", provider: "default", id: "UNUSED_HEADER" } },
+        },
+        models: [],
       },
     });
 
@@ -223,12 +251,37 @@ describe("prepared bundled provider static catalogs", () => {
       expect.objectContaining({
         id: "gemini-3.1-pro-preview",
         provider: "google",
+        api: "fixture-api",
+        baseUrl: "https://fixture.example/v1",
+        authHeader: false,
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0.5 },
         contextWindow: 1_048_576,
+        maxTokens: 0,
+      }),
+      expect.objectContaining({
+        id: "fallback-model",
+        name: "fallback-model",
+        provider: "google",
+        api: "fixture-api",
+        baseUrl: "",
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 0,
+        contextTokens: 0,
+        maxTokens: 4096,
       }),
     ]);
-    expect(getModelProviderRequestRouteFacts(models[0]!)?.providerMetadataOwners).toBe(
-      metadataSnapshot.owners,
-    );
+    for (const model of models) {
+      expect(getModelProviderRequestRouteFacts(model)?.providerMetadataOwners).toBe(
+        metadataSnapshot.owners,
+      );
+      expect(getModelProviderRequestTransport(model)).toEqual({
+        headers: { "X-Catalog": "prepared" },
+      });
+      expect(getModelProviderLocalService(model)).toEqual({ command: "fixture-service" });
+    }
     expect(mocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledOnce();
     expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
   });

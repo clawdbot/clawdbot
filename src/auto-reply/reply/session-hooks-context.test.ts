@@ -4,7 +4,8 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { clearInternalHooks, registerInternalHook } from "../../hooks/internal-hooks.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import {
@@ -212,6 +213,74 @@ describe("session hook context wiring", () => {
     const [event, context] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
     expectFields(event, { sessionKey });
     expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
+  });
+
+  it("starts the first reply lifecycle for a session created by admission without resetting it", async () => {
+    const sessionKey = "agent:main:dashboard:admitted-goal";
+    const sessionId = "admitted-session";
+    const storePath = await createStorePath("openclaw-session-hook-admission");
+    const now = Date.now();
+    const seed: SessionEntry = {
+      sessionId,
+      lifecycleRevision: "admitted-generation",
+      updatedAt: now,
+      sessionStartedAt: now,
+      ...buildSessionCreationStamp({
+        via: "operator",
+        actor: { type: "human", source: "profile", id: "profile-ada" },
+        sandbox: "required",
+        now,
+      }),
+      goal: {
+        schemaVersion: 1,
+        id: "admitted-goal",
+        objective: "Start the first task",
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+        tokenStart: 0,
+        tokensUsed: 0,
+        continuationTurns: 0,
+      },
+    };
+    await writeStore(storePath, { [sessionKey]: seed });
+    const params = {
+      ctx: { Body: seed.goal?.objective, SessionKey: sessionKey },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+      expectedExistingSessionId: sessionId,
+      pinExpectedExistingSession: true,
+    };
+    const result = await initSessionState({ ...params, newlyCreatedSessionId: sessionId });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionCtx.IsNewSession).toBe("true");
+    expect(result.resetTriggered).toBe(false);
+    expect(result.previousSessionEntry).toBeUndefined();
+    const preserved = {
+      sessionId,
+      lifecycleRevision: seed.lifecycleRevision,
+      sessionStartedAt: now,
+      goal: seed.goal,
+      createdAt: now,
+      createdActor: seed.createdActor,
+      sandbox: "required",
+    };
+    expect(result.sessionEntry).toMatchObject(preserved);
+    expect(loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })).toMatchObject(
+      preserved,
+    );
+    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
+    expect(hookRunnerMocks.runSessionEnd).not.toHaveBeenCalled();
+    expectFields(requireHookCall(hookRunnerMocks.runSessionStart, "session_start")[0], {
+      sessionKey,
+      sessionId,
+      resumedFrom: undefined,
+    });
+
+    const next = await initSessionState(params);
+    expect(next.isNewSession).toBe(false);
+    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
   });
 
   it("passes sessionKey to session_end hook context on reset", async () => {

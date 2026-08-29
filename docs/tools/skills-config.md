@@ -84,7 +84,8 @@ Most skills configuration lives under `skills` in
   with WAL-reset-safe `node:sqlite` is supported as an explicit runtime opt-in.
   `openclaw setup --node-manager` and `openclaw onboard --node-manager` accept
   `npm`, `pnpm`, or `bun`; set `"yarn"` directly in config for Yarn-backed skill
-  installs.
+  installs. Setup preserves this preference unless you pass `--node-manager`;
+  fresh configurations default to `npm`.
 </ParamField>
 
 <ParamField path="skills.install.allowUploadedArchives" type="boolean" default="false">

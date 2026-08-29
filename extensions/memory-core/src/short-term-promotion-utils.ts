@@ -216,27 +216,6 @@ export function hashQuery(query: string): string {
     .slice(0, 12);
 }
 
-export function mergeQueryHashes(existing: string[], queryHash: string): string[] {
-  if (!queryHash) {
-    return existing;
-  }
-  const seen = new Set<string>();
-  const next = existing.filter((value) => {
-    if (!value || seen.has(value)) {
-      return false;
-    }
-    seen.add(value);
-    return true;
-  });
-  if (!seen.has(queryHash)) {
-    next.push(queryHash);
-  }
-  if (next.length <= MAX_QUERY_HASHES) {
-    return next;
-  }
-  return next.slice(next.length - MAX_QUERY_HASHES);
-}
-
 export function mergeRecentDistinct(
   existing: string[],
   nextValue: string,

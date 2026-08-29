@@ -59,6 +59,7 @@ type AssistantStreamData = {
   delta: string;
   replace?: true;
   mediaUrls?: string[];
+  managedMediaUrls?: string[];
   phase?: AssistantPhase;
   itemId?: string;
 };
@@ -178,6 +179,7 @@ export type EmbeddedAgentSubscribeState = {
   lastReasoningSent?: string;
   pendingAssistantUsage?: NormalizedUsage;
   assistantUsageCommitted: boolean;
+  retryUsage?: NormalizedUsage;
 
   compactionInFlight: boolean;
   lastCompactionTokensAfter?: number;

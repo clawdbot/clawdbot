@@ -12,6 +12,10 @@ import { buildChatItems } from "./chat-thread-build.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
+  visibleAssistantStreamParts,
+  visibleCurrentAssistantStreamTail,
+} from "./stream-reconciliation.ts";
+import {
   authoritativeHistoryAppliedForRun,
   reconcileAuthoritativeTerminalHistory,
   rememberAuthoritativeTerminal,
@@ -661,6 +665,13 @@ describe("handleChatGatewayEvent", () => {
       expected: "Live reply",
     },
     {
+      name: "appends an incremental-only delta to the rolled-over cumulative baseline",
+      previous: null,
+      segments: [{ text: "Live", ts: 1, runId: "run-1", boundaryRunId: "steer-run" }],
+      delta: " reply",
+      expected: "Live reply",
+    },
+    {
       name: "uses the cumulative snapshot when a missed delta would make append stale",
       previous: "Hello",
       delta: "!",
@@ -682,8 +693,13 @@ describe("handleChatGatewayEvent", () => {
       replace: true,
       expected: "Alpha",
     },
-  ])("$name", ({ previous, delta, snapshot, replace, expected }) => {
-    const state = createState({ sessionKey: "main", chatRunId: "run-1", chatStream: previous });
+  ])("$name", ({ previous, segments, delta, snapshot, replace, expected }) => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: previous,
+      ...(segments ? { chatStreamSegments: segments } : {}),
+    });
     const payload: ChatEventPayload = {
       runId: "run-1",
       sessionKey: "main",
@@ -2012,7 +2028,7 @@ describe("handleChatGatewayEvent", () => {
     for (const [index, [role, text]] of expected.entries()) {
       expectTextChatMessage(state.chatMessages[index], role, text);
     }
-    expect(state.chatRunError).toEqual({ summary: `Error: ${error}` });
+    expect(state.chatRunError).toEqual({ summary: `Error: ${error}`, runId: "run-1" });
     verify?.(state);
   });
   it.each([
@@ -2032,7 +2048,7 @@ describe("handleChatGatewayEvent", () => {
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatMessages).toEqual([message]);
     expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({ summary: "chat error" });
+    expect(state.chatRunError).toEqual({ summary: "chat error", runId: "run-1" });
   });
 
   it("preserves a legacy terminal message that completes streamed assistant content", () => {
@@ -2052,7 +2068,7 @@ describe("handleChatGatewayEvent", () => {
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatMessages).toHaveLength(1);
     expectTextChatMessage(state.chatMessages[0], "assistant", "Partial answer. Final detail.");
-    expect(state.chatRunError).toEqual({ summary: "chat error" });
+    expect(state.chatRunError).toEqual({ summary: "chat error", runId: "run-1" });
   });
 
   it("preserves a differing terminal message instead of classifying it as an error projection", () => {
@@ -2077,7 +2093,7 @@ describe("handleChatGatewayEvent", () => {
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatMessages).toEqual([message]);
     expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({ summary: "Error: raw gateway error" });
+    expect(state.chatRunError).toEqual({ summary: "Error: raw gateway error", runId: "run-1" });
   });
 
   it("uses server guidance when an error follows a source-reply final", () => {
@@ -2112,7 +2128,7 @@ describe("handleChatGatewayEvent", () => {
     ).toBe("error");
     expect(state.chatMessages).toHaveLength(1);
     expectTextChatMessage(state.chatMessages[0], "assistant", "Source reply delivered.");
-    expect(state.chatRunError).toEqual({ summary: "Error: raw provider failure" });
+    expect(state.chatRunError).toEqual({ summary: "Error: raw provider failure", runId: "run-1" });
   });
 
   it("deduplicates a delivered final and its late provider diagnostic", () => {
@@ -2139,7 +2155,10 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toHaveLength(1);
     expectTextChatMessage(state.chatMessages[0], "assistant", "Source reply delivered.");
     expect(state.chatRunError).toBe(displayedDiagnostic);
-    expect(state.chatRunError).toEqual({ summary: "Error: raw provider failure" });
+    expect(state.chatRunError).toEqual({
+      summary: "Error: raw provider failure",
+      runId: "run-source-reply",
+    });
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
   });
@@ -2344,7 +2363,10 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toEqual([existingMessage]);
     expect(state.chatRunId).toBe(null);
     expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({ summary: "Error: request failed before start" });
+    expect(state.chatRunError).toEqual({
+      summary: "Error: request failed before start",
+      runId: "run-failed-before-start",
+    });
   });
 
   it("uses the generic alert fallback for a blank orphan error", () => {
@@ -2360,7 +2382,7 @@ describe("handleChatGatewayEvent", () => {
     ).toBe("error");
     expect(state.chatMessages).toEqual([]);
     expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({ summary: "chat error" });
+    expect(state.chatRunError).toEqual({ summary: "chat error", runId: "run-failed-before-start" });
   });
 
   it("drops NO_REPLY final payload from another run", () => {
@@ -3397,10 +3419,20 @@ describe("loadChatHistory retry handling", () => {
       }
     }
     expect(state.chatRunId).toBe("run-1");
-    expect(state.chatStream).toBe(expectedStream);
+    expect(state.chatStream).toBe(stream);
+    expect(visibleCurrentAssistantStreamTail(state, () => false)).toBe(expectedStream);
     expect(state.chatStreamStartedAt).toBe(100);
     expect(state.chatToolMessages).toEqual(remainingTools.map((index) => tools[index]));
-    expect(state.chatStreamSegments).toEqual(remainingSegments);
+    expect(
+      visibleAssistantStreamParts(state, {
+        includeCurrent: false,
+        isHiddenStreamText: () => false,
+      }).map(({ text, timestamp, toolCallId }) => ({
+        text,
+        ts: timestamp,
+        toolCallId,
+      })),
+    ).toEqual(remainingSegments);
     expect(state.toolStreamById.size).toBe(remainingTools.length);
     expect(state.toolStreamOrder).toEqual(
       remainingTools.map((index) => String(tools[index]?.toolCallId)),
@@ -3494,7 +3526,12 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatStream).toBe("Still answering.");
     expect(state.chatStreamStartedAt).toBe(100);
     expect(state.chatToolMessages).toEqual([]);
-    expect(state.chatStreamSegments).toEqual([]);
+    expect(
+      visibleAssistantStreamParts(state, {
+        includeCurrent: false,
+        isHiddenStreamText: () => false,
+      }),
+    ).toEqual([]);
     expect(state.toolStreamById.size).toBe(0);
     expect(state.toolStreamOrder).toEqual([]);
   });
@@ -3532,7 +3569,12 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
     expect(state.chatToolMessages).toEqual([]);
-    expect(state.chatStreamSegments).toEqual([]);
+    expect(
+      visibleAssistantStreamParts(state, {
+        includeCurrent: false,
+        isHiddenStreamText: () => false,
+      }),
+    ).toEqual([]);
     expect(state.toolStreamById.size).toBe(0);
     expect(state.toolStreamOrder).toEqual([]);
   });
@@ -3656,7 +3698,12 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
     expect(state.chatToolMessages).toEqual([liveToolMessage]);
-    expect(state.chatStreamSegments).toEqual([]);
+    expect(
+      visibleAssistantStreamParts(state, {
+        includeCurrent: false,
+        isHiddenStreamText: () => false,
+      }),
+    ).toEqual([]);
     expect(state.toolStreamById.size).toBe(1);
     expect(state.toolStreamOrder).toEqual(["call_current"]);
   });

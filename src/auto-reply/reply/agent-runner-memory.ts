@@ -72,7 +72,7 @@ import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
-  resolveMemoryFlushThreshold,
+  resolveCompactionThreshold,
   resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
@@ -274,10 +274,18 @@ type FollowupRuntimeParams = {
   >;
   sessionKey?: string;
   runtimePolicySessionKey?: string;
+  agentHarnessId?: string;
 };
 
 function followupUsesCliRuntime(params: FollowupRuntimeParams, runtimeId: string): boolean {
   const provider = params.followupRun.run.provider;
+  if (params.agentHarnessId) {
+    return isCliRuntimeAliasForProvider({
+      provider,
+      runtime: params.agentHarnessId,
+      cfg: params.cfg,
+    });
+  }
   if (isCliProvider(provider, params.cfg)) {
     return true;
   }
@@ -296,6 +304,9 @@ function resolveFollowupContextConfigProvider(params: FollowupRuntimeParams): st
 }
 
 function resolveFollowupAgentRuntimeId(params: FollowupRuntimeParams): string {
+  if (params.agentHarnessId) {
+    return params.agentHarnessId;
+  }
   const matchingSessionEntry =
     params.sessionEntry?.sessionId === params.followupRun.run.sessionId
       ? params.sessionEntry
@@ -711,8 +722,8 @@ async function estimatePromptTokensFromSessionTranscript(params: {
   }
 }
 
-/** Runs preflight compaction when session state exceeds configured thresholds. */
-export async function runPreflightCompactionIfNeeded(params: {
+/** Compacts session context before a reply or after a completed direct command. */
+export async function runSessionCompactionIfNeeded(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
   promptForEstimate?: string;
@@ -723,13 +734,24 @@ export async function runPreflightCompactionIfNeeded(params: {
   runtimePolicySessionKey?: string;
   storePath?: string;
   isHeartbeat: boolean;
-  replyOperation: ReplyOperation;
+  /** Completed commands carry the actual harness, not the originally requested runtime. */
+  agentHarnessId?: string;
+  abortSignal?: AbortSignal;
+  authorize?: () => boolean;
+  onCompactionStart?: () => void;
+  onSessionIdChanged?: (sessionId: string) => void;
   onCompactionNotice?: (phase: CompactionNoticePhase, text?: string) => Promise<void> | void;
 }): Promise<SessionEntry | undefined> {
   const deps = {
     compactEmbeddedAgentSession: memoryDeps.compactEmbeddedAgentSession,
     incrementCompactionCount: memoryDeps.incrementCompactionCount,
     refreshQueuedFollowupSession: memoryDeps.refreshQueuedFollowupSession,
+  };
+  const assertActive = () => {
+    params.abortSignal?.throwIfAborted();
+    if (params.authorize?.() === false) {
+      throw new Error("Session compaction maintenance is no longer active");
+    }
   };
   if (!params.sessionKey) {
     return params.sessionEntry;
@@ -748,7 +770,9 @@ export async function runPreflightCompactionIfNeeded(params: {
     sessionEntry: entry,
     sessionKey: params.sessionKey,
     runtimePolicySessionKey: params.runtimePolicySessionKey,
+    agentHarnessId: params.agentHarnessId,
   };
+  assertActive();
   const runtimeId = resolveFollowupAgentRuntimeId(runtimeParams);
   const isCli = followupUsesCliRuntime(runtimeParams, runtimeId);
   const ownsNativeCompaction = followupOwnsNativeCompaction(runtimeParams, runtimeId);
@@ -775,12 +799,10 @@ export async function runPreflightCompactionIfNeeded(params: {
 
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
-    provider: resolveFollowupContextConfigProvider({
-      cfg: params.cfg,
-      followupRun: params.followupRun,
-      sessionEntry: entry,
-      sessionKey: params.sessionKey,
-      runtimePolicySessionKey: params.runtimePolicySessionKey,
+    provider: resolveContextConfigProviderForRuntime({
+      provider: params.followupRun.run.provider,
+      runtimeId,
+      config: params.cfg,
     }),
     modelId: params.followupRun.run.model ?? params.defaultModel,
   });
@@ -791,9 +813,6 @@ export async function runPreflightCompactionIfNeeded(params: {
       contextTokenBudget: contextWindowTokens,
       reserveTokens: 20_000,
     });
-  const softThresholdTokens =
-    memoryFlushPlan?.softThresholdTokens ??
-    Math.min(4_000, Math.floor((contextWindowTokens - reserveTokensFloor) / 2));
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
@@ -803,10 +822,9 @@ export async function runPreflightCompactionIfNeeded(params: {
     provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model ?? params.defaultModel,
   });
-  const threshold = resolveMemoryFlushThreshold({
+  const threshold = resolveCompactionThreshold({
     contextWindowTokens,
     reserveTokensFloor,
-    softThresholdTokens,
     minimumThresholdTokens: responsesServerCompactionThreshold,
   });
   const freshNeedsOutputRead =
@@ -902,10 +920,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const shouldCompactByTokens = shouldRunPreflightCompaction({
     entry,
     tokenCount: tokenCountForCompaction,
-    contextWindowTokens,
-    reserveTokensFloor,
-    softThresholdTokens,
-    minimumThresholdTokens: responsesServerCompactionThreshold,
+    threshold,
   });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
@@ -921,7 +936,8 @@ export async function runPreflightCompactionIfNeeded(params: {
       `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"}`,
   );
 
-  params.replyOperation.setPhase("preflight_compacting");
+  assertActive();
+  params.onCompactionStart?.();
   const notifyCompaction = async (phase: CompactionNoticePhase, text?: string) => {
     try {
       if (text) {
@@ -946,8 +962,13 @@ export async function runPreflightCompactionIfNeeded(params: {
     terminalCompactionNoticeSent = true;
     await notifyCompaction(phase, text);
   };
+  // Provider work can outlive the caller; never account against a replacement session row.
+  const expectedSession = params.authorize
+    ? { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision }
+    : undefined;
   try {
     await notifyStartCompaction();
+    assertActive();
     const result = await deps.compactEmbeddedAgentSession({
       sessionId: entry.sessionId,
       sessionKey: compactionSessionKey,
@@ -975,6 +996,12 @@ export async function runPreflightCompactionIfNeeded(params: {
       cwd: params.followupRun.run.cwd,
       agentDir: params.followupRun.run.agentDir,
       config: params.cfg,
+      // Group session keys do not encode account identity, so without this the
+      // preflight path resolves the root history limit after prompt preparation
+      // already used the account limit.
+      agentAccountId: params.followupRun.run.agentAccountId,
+      conversationRoutePeerId: params.followupRun.run.conversationRoutePeerId,
+      chatType: params.followupRun.run.chatType,
       skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
       provider: params.followupRun.run.provider,
       model: params.followupRun.run.model,
@@ -982,11 +1009,12 @@ export async function runPreflightCompactionIfNeeded(params: {
       authProfileIdSource: params.followupRun.run.authProfileIdSource,
       sessionEntry: entry,
       agentHarnessId:
-        entry.sessionId === params.followupRun.run.sessionId
+        params.agentHarnessId ??
+        (entry.sessionId === params.followupRun.run.sessionId
           ? entry.modelSelectionLocked === true
             ? resolvePersistedSessionRuntimeId(entry)
             : runtimeId
-          : undefined,
+          : undefined),
       modelSelectionLocked: entry.modelSelectionLocked === true,
       thinkLevel: params.followupRun.run.thinkLevel,
       bashElevated: params.followupRun.run.bashElevated,
@@ -999,8 +1027,9 @@ export async function runPreflightCompactionIfNeeded(params: {
       contextTokenBudget: contextWindowTokens,
       currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
       ownerNumbers: params.followupRun.run.ownerNumbers,
-      abortSignal: params.replyOperation.abortSignal,
+      abortSignal: params.abortSignal,
     });
+    assertActive();
 
     if (!result?.ok) {
       const reason = result?.reason ?? "not_compacted";
@@ -1026,7 +1055,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       throw new Error(`Preflight compaction required but failed: ${reason}`);
     }
 
-    await deps.incrementCompactionCount({
+    const compactionCount = await deps.incrementCompactionCount({
       agentId: compactionAgentId,
       cfg: params.cfg,
       sessionEntry: entry,
@@ -1036,11 +1065,17 @@ export async function runPreflightCompactionIfNeeded(params: {
       tokensAfter: result.result?.tokensAfter,
       newSessionId: result.result?.sessionId,
       compactionKind: result.compactionKind,
+      ...(expectedSession ? { expectedSession, authorize: params.authorize } : {}),
     });
+    assertActive();
+    if (expectedSession && compactionCount === undefined) {
+      throw new Error("Session changed before compaction maintenance could be recorded");
+    }
     await appendPostCompactionRefreshPrompt({
       cfg: params.cfg,
       followupRun: params.followupRun,
     });
+    assertActive();
     const serverNotice =
       result.compactionKind === "server-endpoint" &&
       typeof result.result?.tokensBefore === "number" &&
@@ -1048,11 +1083,12 @@ export async function runPreflightCompactionIfNeeded(params: {
         ? `🧹 Server-side compaction complete (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
         : undefined;
     await notifyTerminalCompaction("end", serverNotice);
+    assertActive();
     entry = params.sessionStore?.[params.sessionKey] ?? entry;
     if (entry) {
       const previousSessionId = params.followupRun.run.sessionId;
       params.followupRun.run.sessionId = entry.sessionId;
-      params.replyOperation.updateSessionId(entry.sessionId);
+      params.onSessionIdChanged?.(entry.sessionId);
       const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
       if (queueKey) {
         params.followupRun.run.sessionFile = queueKey;
@@ -1183,11 +1219,14 @@ export async function runMemoryFlushIfNeeded(params: {
       : undefined;
   const hasFreshPersistedPromptTokens = resolveFreshSessionTotalTokens(entry) !== undefined;
 
-  const flushThreshold = resolveMemoryFlushThreshold({
-    contextWindowTokens,
-    reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
-    softThresholdTokens: memoryFlushPlan.softThresholdTokens,
-  });
+  // The soft margin belongs only to early flushing, leaving room before blocking compaction.
+  const flushThreshold = Math.max(
+    0,
+    resolveCompactionThreshold({
+      contextWindowTokens,
+      reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
+    }) - Math.max(0, Math.floor(memoryFlushPlan.softThresholdTokens)),
+  );
 
   // When totals are stale/unknown, derive prompt + last output from transcript so memory
   // flush can still be evaluated against projected next-input size.
@@ -1320,9 +1359,7 @@ export async function runMemoryFlushIfNeeded(params: {
     shouldRunMemoryFlush({
       entry,
       tokenCount: tokenCountForFlush,
-      contextWindowTokens,
-      reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
-      softThresholdTokens: memoryFlushPlan.softThresholdTokens,
+      threshold: flushThreshold,
     }) ||
     (shouldForceFlushByTranscriptSize &&
       entry != null &&
@@ -1408,6 +1445,7 @@ export async function runMemoryFlushIfNeeded(params: {
         isControlUiVisible: false,
         projectSessionActive: false,
         projectSessionLifecycle: false,
+        projectSessionMessages: false,
       });
       flushRunRegistered = true;
     }
@@ -1468,16 +1506,17 @@ export async function runMemoryFlushIfNeeded(params: {
           sessionEntry: activeSessionEntry,
           agentRuntime: sessionRuntimeOverride,
         });
-        const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
-          run: { ...params.followupRun.run, thinkLevel: candidateThinkLevel },
-          replyRoute: params.followupRun,
-          sessionCtx: params.sessionCtx,
-          hasRepliedRef: params.opts?.hasRepliedRef,
-          provider,
-          model,
-          runId: flushRunId,
-          allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
-        });
+        const { embeddedContext, senderContext, runBaseParams } =
+          await buildEmbeddedRunExecutionParams({
+            run: { ...params.followupRun.run, thinkLevel: candidateThinkLevel },
+            replyRoute: params.followupRun,
+            sessionCtx: params.sessionCtx,
+            hasRepliedRef: params.opts?.hasRepliedRef,
+            provider,
+            model,
+            runId: flushRunId,
+            allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
+          });
         const result = await memoryDeps.runEmbeddedAgent({
           preparedRunAdmission,
           ...embeddedContext,

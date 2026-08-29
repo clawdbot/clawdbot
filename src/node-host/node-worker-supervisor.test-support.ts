@@ -23,17 +23,16 @@ export const TEST_WORKER_SOURCE = String.raw`
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-let input = "";
-for await (const chunk of process.stdin) input += chunk;
-const descriptor = JSON.parse(input);
-if (descriptor.assignment.prompt === "exit-before-start") {
-  fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "prestart-exited"), "exited");
-  process.exit(23);
-}
-if (!process.connected || !process.channel || !process.argv.includes("--internal-worker-ipc")) {
+import { createInterface } from "node:readline";
+if (!process.connected || !process.channel ||
+    !process.argv.includes("--internal-worker-ipc") ||
+    !process.argv.includes("--internal-worker-session")) {
   process.exit(24);
 }
 let grandchild;
+let background;
+let retained = false;
+let currentTurn;
 let disposed = false;
 let started = false;
 let resolveStart;
@@ -79,32 +78,85 @@ const exitWorker = (code) => {
   if (process.connected) process.disconnect();
   process.exit(code);
 };
-const writeResultAndExit = (value) => {
-  fs.writeSync(1, value);
-  exitWorker(0);
+const completedResult = { status: "completed", transcriptLeafId: "leaf-1", transcriptNextSeq: 2 };
+const finish = (descriptor, result = completedResult, retainWorker = retained) => {
+  if (currentTurn !== descriptor) return;
+  fs.writeSync(1, JSON.stringify({
+    type: "result", turnId: descriptor.assignment.turnId, result, retainWorker,
+  }) + "\n");
+  currentTurn = undefined;
+  retained = retainWorker;
+  if (!retainWorker && descriptor.assignment.prompt !== "retire-stall") exitWorker(0);
 };
+const writeArtifact = (descriptor, name, value) => fs.writeFileSync(
+  path.join(descriptor.assignment.workspaceDir, descriptor.assignment.turnId + "." + name + ".json"),
+  JSON.stringify(value),
+);
+const runTurn = async (descriptor) => {
+const startedPath = path.join(descriptor.assignment.workspaceDir, descriptor.assignment.turnId + ".started.json");
+const starts = fs.existsSync(startedPath) ? JSON.parse(fs.readFileSync(startedPath, "utf8")).starts + 1 : 1;
+writeArtifact(descriptor, "started", { pid: process.pid, starts });
 const mode = descriptor.assignment.prompt;
-if (mode === "connection-failure") {
-  process.send(
-    {
-      type: "openclaw-worker-connection-failure-v1",
-      cause: "certificate rejected " + descriptor.admission.credential,
-    },
-    () =>
-      fs.writeFileSync(
-        path.join(descriptor.assignment.workspaceDir, "connection-failure-reported"),
-        "reported",
-      ),
-  );
-  setInterval(() => {}, 1000);
+if (mode === "admission-rearm") {
+  const marker = path.join(descriptor.assignment.workspaceDir, "admission-attempt");
+  const first = !fs.existsSync(marker);
+  fs.writeFileSync(marker, descriptor.assignment.turnId);
+  finish(descriptor, first
+    ? { status: "not-started", reason: "admission-deadline", errorText: "gateway unreachable " + descriptor.admission.credential }
+    : completedResult);
+} else if (mode === "connection-failure" || mode === "connection-deadline") {
+  const target = new URL(descriptor.connectionEndpoint.url).host;
+  const report = (cause) => new Promise((resolve) => process.send(
+    { type: "openclaw-worker-connection-failure-v1", cause }, resolve,
+  ));
+  await report("worker could not reach gateway " + target + ": certificate rejected " +
+    descriptor.admission.credential + "; check TLS pin/publicUrl configuration");
+  if (mode === "connection-deadline") {
+    await report("worker admission deadline exceeded after 3 attempts to " + target +
+      ": connect failed: Opening handshake has timed out " + descriptor.admission.credential);
+    process.stderr.write("worker admission deadline exceeded\n");
+    exitWorker(7);
+  } else {
+    fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "connection-failure-reported"), "reported");
+    setInterval(() => {}, 1000);
+  }
 } else if (mode === "wait") {
-  setInterval(() => {}, 1000);
+  return;
 } else if (mode === "tree") {
   grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
   fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "grandchild.pid"), String(grandchild.pid));
-  setInterval(() => {}, 1000);
+} else if (mode === "background-start") {
+  grandchild = spawn(process.execPath, ["-e", [
+    "const server = require('node:http').createServer((req, res) => res.end('preview-ready'));",
+    "server.listen(0, '127.0.0.1', () => process.stdout.write(JSON.stringify({",
+    "pid: process.pid, url: 'http://127.0.0.1:' + server.address().port,",
+    "}) + '\\n'));",
+  ].join("\n")], { stdio: ["ignore", "pipe", "inherit"] });
+  background = await new Promise((resolve, reject) => {
+    grandchild.once("error", reject);
+    const output = createInterface({ input: grandchild.stdout });
+    output.once("line", (line) => { output.close(); resolve(JSON.parse(line)); });
+  });
+  writeArtifact(descriptor, "background", background);
+  finish(descriptor, completedResult, true);
+} else if (mode === "background-poll") {
+  if (!background) throw new Error("background process was not retained");
+  const response = await fetch(background.url);
+  writeArtifact(descriptor, "background", { ...background, response: await response.text() });
+  finish(descriptor, completedResult, true);
+} else if (mode === "background-wait") {
+  if (!background) throw new Error("background process was not retained");
+  return;
+} else if (mode === "diagnostic-retain") {
+  fs.writeSync(2, "previous turn stderr " + descriptor.admission.credential + "\n");
+  await new Promise((resolve) => process.send({
+    type: "openclaw-worker-connection-failure-v1",
+    cause: "previous turn connection " + descriptor.admission.credential,
+  }, resolve));
+  finish(descriptor, completedResult, true);
+} else if (mode === "quiet-fail") {
+  exitWorker(7);
 } else if (mode === "secret-fail") {
-  await new Promise((resolve) => setTimeout(resolve, 500));
   const credential = descriptor.admission.credential;
   const escaped = JSON.stringify(credential).slice(1, -1);
   process.stderr.write(
@@ -123,13 +175,14 @@ if (mode === "connection-failure") {
   process.stderr.write("x".repeat(5000) + representation + "y".repeat(suffixBytes));
   exitWorker(7);
 } else if (mode === "secret-success") {
-  await new Promise((resolve) => setTimeout(resolve, 500));
   const credential = descriptor.admission.credential;
-  writeResultAndExit(
-    JSON.stringify({ raw: credential, encoded: encodeURIComponent(credential), status: "completed" }) + "\n",
-  );
+  finish(descriptor, {
+    ...completedResult,
+    transcriptLeafId: "raw " + credential + " encoded " + encodeURIComponent(credential),
+  });
 } else if (mode === "overflow") {
-  writeResultAndExit("x".repeat(70 * 1024));
+  fs.writeSync(1, "x".repeat(70 * 1024));
+  exitWorker(0);
 } else if (mode === "fast-terminal") {
   const marker = path.join(descriptor.assignment.workspaceDir, "fast-terminal-marker");
   process.once("SIGTERM", () => {
@@ -138,13 +191,45 @@ if (mode === "connection-failure") {
   });
   await new Promise((resolve) => setTimeout(resolve, 100));
   fs.writeFileSync(marker, "normal");
-  writeResultAndExit(JSON.stringify({ status: "completed" }) + "\n");
+  finish(descriptor);
 } else if (mode === "env") {
-  writeResultAndExit(JSON.stringify(process.env) + "\n");
+  writeArtifact(descriptor, "env", process.env);
+  finish(descriptor);
 } else {
   await new Promise((resolve) => setTimeout(resolve, 25));
-  writeResultAndExit(JSON.stringify({ argv: process.argv.slice(2), status: "completed" }) + "\n");
+  writeArtifact(descriptor, "argv", process.argv.slice(2));
+  finish(descriptor);
 }
+};
+const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+lines.on("line", (line) => {
+  const request = JSON.parse(line);
+  if (request.type === "cancel") {
+    const descriptor = currentTurn;
+    if (!descriptor || descriptor.assignment.turnId !== request.turnId) return;
+    const settle = () => finish(descriptor, {
+      status: "failed", reason: "turn-failed", transcriptLeafId: null, transcriptNextSeq: 1,
+    }, Boolean(background));
+    if (grandchild && !background) {
+      grandchild.once("exit", settle);
+      grandchild.kill("SIGKILL");
+    } else {
+      settle();
+    }
+    return;
+  }
+  if (currentTurn || request.type !== "turn" ||
+      request.turnId !== request.descriptor.assignment.turnId) {
+    process.stderr.write("invalid or concurrent managed turn\n");
+    exitWorker(25);
+  }
+  currentTurn = request.descriptor;
+  void runTurn(currentTurn).catch((error) => {
+    process.stderr.write(error.message + "\n");
+    hardTerminate();
+  });
+});
+lines.once("close", () => { if (!disposed) hardTerminate(); });
 `;
 
 export function testWorkerDescriptor(
@@ -199,6 +284,15 @@ export function testNodeWorkerLaunchIdentity(
   };
 }
 
+export function testNodeWorkerEnvironmentIdentity(input: NodeWorkerLaunchInput) {
+  return {
+    gatewayNamespace: input.gatewayNamespace,
+    environmentId: input.descriptor.admission.environmentId,
+    sessionId: input.descriptor.admission.sessionId,
+    ownerEpoch: input.descriptor.admission.ownerEpoch,
+  };
+}
+
 export function writeNodeWorkerFixture(root: string) {
   const stateDir = path.join(root, "state-root");
   const bundleRoot = path.join(root, "bundles-root");
@@ -216,6 +310,7 @@ export function testWorkerLaunchInput(
   prompt = "success",
 ): NodeWorkerLaunchInput {
   return {
+    environmentSession: 1,
     launchId,
     gatewayNamespace: "gateway-1",
     expectedBundleHash: TEST_BUNDLE_HASH,

@@ -9,6 +9,7 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-preserve.js";
 import { pruneStaleEntries } from "./store-maintenance.js";
+import type { SessionStoreTarget } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionRegistryMaintenanceStoreSummary = {
@@ -18,15 +19,13 @@ type SessionRegistryMaintenanceStoreSummary = {
   pruned: number;
 };
 
-type SessionRegistryMaintenanceStoreOptions = {
+type SessionRegistryMaintenanceStoreOptions = SessionStoreTarget & {
   /** Apply pruning to the backing store; false previews against a clone. */
   apply: boolean;
   /** Retention window for cron-run session entries. */
   retentionMs: number;
   /** Currently running cron job ids, normalized to lowercase. */
   runningCronJobIds: ReadonlySet<string>;
-  /** Resolved session registry store path for one agent. */
-  storePath: string;
 };
 
 function parseCronRunSessionJobId(sessionKey: string): string | undefined {
@@ -103,7 +102,8 @@ function pruneSessionRegistryStore(params: {
 export async function runSessionRegistryMaintenanceForStore(
   params: SessionRegistryMaintenanceStoreOptions,
 ): Promise<SessionRegistryMaintenanceStoreSummary> {
-  const sqliteTarget = resolveSqliteTargetFromSessionStorePath(params.storePath);
+  const { agentId, storePath } = params;
+  const sqliteTarget = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
   if (sqliteTarget.path && !fs.existsSync(sqliteTarget.path)) {
     return {
       beforeCount: 0,
@@ -113,7 +113,7 @@ export async function runSessionRegistryMaintenanceForStore(
     };
   }
   const beforeStore = Object.fromEntries(
-    listSessionEntriesCore({ storePath: params.storePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ agentId, storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),
@@ -126,7 +126,7 @@ export async function runSessionRegistryMaintenanceForStore(
       ...pruneSessionRegistryStore({
         retentionMs: params.retentionMs,
         runningCronJobIds: params.runningCronJobIds,
-        storePath: params.storePath,
+        storePath,
         store: previewStore,
       }),
     };
@@ -138,12 +138,13 @@ export async function runSessionRegistryMaintenanceForStore(
     retentionMs: params.retentionMs,
     removals,
     runningCronJobIds: params.runningCronJobIds,
-    storePath: params.storePath,
+    storePath,
     store: applyStore,
   });
   if (removals.length > 0) {
     const mutation = await applySessionEntryLifecycleMutation({
-      storePath: params.storePath,
+      agentId,
+      storePath,
       removals,
       skipMaintenance: true,
     });

@@ -126,7 +126,7 @@ suite.define(() => {
       const footer = page.locator(".new-session-page__composer .agent-chat__composer-footer");
       const attach = page.getByRole("button", { name: "Add attachment" });
       const takePhoto = page.getByRole("menuitem", { name: "Take photo" });
-      const draft = page.locator('.new-session-page__visibility--draft[aria-label="Draft"]');
+      const draft = page.locator('.new-session-page__draft-toggle[aria-label^="Draft:"]');
       const incognito = page.getByRole("switch", { name: "Incognito" });
       const model = page.locator(".new-session-page__composer .chat-composer-model-control");
       await Promise.all([
@@ -178,13 +178,13 @@ suite.define(() => {
         const sameLine = Math.abs(nextCenter - previousCenter) <= previous.height / 2;
         return sameLine ? next.x > previous.x : nextCenter > previousCenter;
       };
-      const sequence = [attachBox, draftBox, modelBox];
+      const sequence = [attachBox, modelBox];
       for (let index = 1; index < sequence.length; index += 1) {
         expect(followsInReadingOrder(sequence[index - 1] ?? null, sequence[index] ?? null)).toBe(
           true,
         );
       }
-      for (const control of [attachBox, draftBox, modelBox]) {
+      for (const control of [attachBox, modelBox]) {
         expect(control?.x ?? 0).toBeGreaterThanOrEqual(footerBox?.x ?? 0);
         expect((control?.x ?? 0) + (control?.width ?? 0)).toBeLessThanOrEqual(
           (footerBox?.x ?? 0) + (footerBox?.width ?? 0),

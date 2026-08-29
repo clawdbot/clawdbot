@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type {
   SessionCatalogHost,
   SessionCatalogSession,
@@ -8,16 +9,29 @@ import {
   listSessionEntriesReadOnly,
   type SessionEntrySummary,
 } from "../../config/sessions/session-accessor.js";
+import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionCatalogEntrySnapshot } from "../../plugins/session-catalog.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { projectSessionActor } from "../session-identity-projection.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
-import { projectSessionActor } from "../session-utils-row.js";
+import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
+
+export type SessionCatalogInstances = Map<
+  string,
+  Pick<SessionEntry, "sessionId" | "pluginOwnerId" | "createdActor">
+>;
 
 type SessionCatalogRequestEntrySnapshot = {
   sessionEntries: SessionCatalogEntrySnapshot;
-  projectHostCreatedActors: (host: SessionCatalogHost) => SessionCatalogHost;
+  freeze: () => void;
+  captureHostInstances: (host: SessionCatalogHost, instances: SessionCatalogInstances) => void;
+  entryForSession: (sessionKey: string) => SessionEntry | undefined;
+  projectHostCreatedActors: (
+    host: SessionCatalogHost,
+    instances: SessionCatalogInstances,
+  ) => SessionCatalogHost;
 };
 
 export function createSessionCatalogRequestEntrySnapshot(params: {
@@ -27,6 +41,9 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   const entriesByAgentId = new Map<string, readonly SessionEntrySummary[]>();
   const entryIndexByAgentId = new Map<string, ReadonlyMap<string, SessionEntry>>();
   const actorBySessionKey = new Map<string, SessionCatalogSession["createdActor"]>();
+  let frozen = false;
+  // Hosts share human identities within this request; a new snapshot must see profile edits.
+  const userProfileIdentityById = new Map<string, SessionActorProfileIdentity | undefined>();
   let catalogEntries:
     | ReturnType<NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]>>
     | undefined;
@@ -34,6 +51,9 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   const entriesForAgent = (rawAgentId: string): readonly SessionEntrySummary[] => {
     const agentId = normalizeAgentId(rawAgentId);
     if (!entriesByAgentId.has(agentId)) {
+      if (frozen) {
+        return [];
+      }
       entriesByAgentId.set(
         agentId,
         listSessionEntriesReadOnly({ agentId, clone: false, projection: "list" }),
@@ -69,15 +89,11 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
     return index;
   };
 
-  const createdActorForSession = (sessionKey: string): SessionCatalogSession["createdActor"] => {
+  const entryForSession = (sessionKey: string): SessionEntry | undefined => {
     const agentId = resolveAgentIdFromSessionKey(
       sessionKey,
       tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey) ?? params.fallbackAgentId,
     );
-    const actorCacheKey = `${agentId}\0${sessionKey}`;
-    if (actorBySessionKey.has(actorCacheKey)) {
-      return actorBySessionKey.get(actorCacheKey);
-    }
     const index = entryIndexForAgent(agentId);
     const canonicalKey = resolveStoredSessionKeyForAgentStore({
       cfg: params.cfg,
@@ -92,21 +108,67 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
         freshest = entry;
       }
     }
-    const actor = projectSessionActor(freshest?.createdActor, undefined, params.cfg);
-    actorBySessionKey.set(actorCacheKey, actor);
+    return freshest;
+  };
+
+  const createdActorForSession = (sessionKey: string): SessionCatalogSession["createdActor"] => {
+    if (actorBySessionKey.has(sessionKey)) {
+      return actorBySessionKey.get(sessionKey);
+    }
+    const entry = entryForSession(sessionKey);
+    const actor = projectSessionActor(
+      entry?.createdActor,
+      userProfileIdentityById,
+      params.cfg,
+      Boolean(sessionCreatorProfileId(entry?.createdActor)),
+    );
+    actorBySessionKey.set(sessionKey, actor);
     return actor;
   };
 
   return {
     sessionEntries: { entriesForAgent, entriesForCatalog },
-    projectHostCreatedActors: (host) => ({
+    freeze: () => {
+      // Capture before provider admission/IO, even when a provider first reads after awaiting.
+      // A key first resolved after deletion/recreation cannot prove the original adoption.
+      entriesForCatalog();
+      frozen = true;
+    },
+    captureHostInstances: (host, instances) => {
+      for (const session of host.sessions) {
+        if (!session.sessionKey) {
+          continue;
+        }
+        const entry = entryForSession(session.sessionKey);
+        if (entry) {
+          const { sessionId, pluginOwnerId, createdActor } = entry;
+          instances.set(session.sessionKey, { sessionId, pluginOwnerId, createdActor });
+        }
+      }
+    },
+    entryForSession,
+    projectHostCreatedActors: (host, instances) => ({
       ...host,
-      sessions: host.sessions.map(({ createdActor: _providerCreatedActor, ...session }) => {
-        const createdActor = session.sessionKey
-          ? createdActorForSession(session.sessionKey)
-          : undefined;
-        return createdActor ? { ...session, createdActor } : session;
-      }),
+      sessions: host.sessions.map(
+        ({ createdActor: _providerCreatedActor, sessionKey, ...session }) => {
+          const original = sessionKey ? instances.get(sessionKey) : undefined;
+          const current = sessionKey ? entryForSession(sessionKey) : undefined;
+          // Native rows remain native if their adoption was replaced or detached. Never project
+          // a reusable key's new creator onto the previous instance's provider metadata.
+          if (
+            !original ||
+            !current ||
+            original.sessionId !== current.sessionId ||
+            original.pluginOwnerId !== current.pluginOwnerId ||
+            current.initializationPending === true ||
+            !isDeepStrictEqual(original.createdActor, current.createdActor)
+          ) {
+            return session;
+          }
+          const createdActor = sessionKey ? createdActorForSession(sessionKey) : undefined;
+          return { ...session, sessionKey, ...(createdActor ? { createdActor } : {}) };
+        },
+      ),
     }),
   };
 }

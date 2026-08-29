@@ -1,10 +1,8 @@
 import { html, nothing } from "lit";
-import type {
-  ProgressCard,
-  SessionObserverDigest,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -12,7 +10,7 @@ import {
   sidebarPanelDefinitions,
   sidebarPanelTemplates,
 } from "./chat-pane-embedded-panels.ts";
-import type { ChatProgressCardPlacement } from "./chat-pane-rails.ts";
+import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion, sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -38,8 +36,6 @@ type ChatPaneLayoutRenderParams = {
   currentAgentId: string;
   board: ResolvedBoardView;
   sidebarLayout: SidebarLayout;
-  progressCardPlacement: ChatProgressCardPlacement;
-  onDismissProgressCard?: (card: ProgressCard) => void;
   sessionWorkspace: SessionWorkspaceProps;
   backgroundTasks: BackgroundTasksProps;
   chatProps: ChatProps;
@@ -60,8 +56,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       currentAgentId,
       board,
       sidebarLayout,
-      progressCardPlacement,
-      onDismissProgressCard,
       sessionWorkspace,
       backgroundTasks,
       chatProps,
@@ -84,6 +78,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     );
     const chat = renderChat({
       ...chatProps,
+      browserTabPreviewsActive: this.active && this.presented,
       historyState: catalog ? undefined : state,
       header: board.face === "dashboard" ? nothing : header,
     });
@@ -93,6 +88,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       ${board.face === "dashboard" ? header : nothing}${this.renderBoardPrimary(board, chat)}
     </div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
+    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
     const browserPresented =
@@ -105,9 +102,14 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
       browserPresented,
+      browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
+      preferredBrowserTab: [
+        ...latestBrowserTabCards(chatProps.messages, chatProps.toolMessages).values(),
+      ].at(-1),
       desktopPresented,
       desktopRefreshOnPresentation,
       desktopAvailable,
+      desktopSource: resolveChatPaneDesktopTarget(selectedSession),
       hasBoard: board.hasBoard,
       chat,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
@@ -127,8 +129,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
       lastReadAt: selectedSession?.lastReadAt,
       pullRequests: this.sessionPullRequests,
-      progressCard: progressCardPlacement === "rail" ? this.progressCard.card : null,
-      onDismissProgressCard,
       companion: companionThread,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionDraftChange: (draft) =>
@@ -138,6 +138,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       pendingQuestion: companionThread.pendingQuestion,
       onClearCompanion: () => void this.clearSessionCompanion(),
       discussion,
+      discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,
       discussionSourceGeneration: this.connectionGeneration,
     });

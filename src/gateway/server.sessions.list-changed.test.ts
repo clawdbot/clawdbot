@@ -146,7 +146,7 @@ async function invokeSessionsList({
     isWebchatConnect: () => false,
     context: {
       getRuntimeConfig,
-      readPreparedGatewayModelCatalog: async () => [],
+      readPreparedGatewayModelCatalog: async () => ({ entries: [] }),
       ...context,
     } as never,
   });
@@ -417,14 +417,16 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   const { respond } = await invokeSessionsList({
     requestId: "req-sessions-list-thinking-default",
     context: {
-      readPreparedGatewayModelCatalog: async () => [
-        {
-          provider: "test-provider",
-          id: "reasoner",
-          name: "Reasoner",
-          reasoning: true,
-        },
-      ],
+      readPreparedGatewayModelCatalog: async () => ({
+        entries: [
+          {
+            provider: "test-provider",
+            id: "reasoner",
+            name: "Reasoner",
+            reasoning: true,
+          },
+        ],
+      }),
     },
   });
 
@@ -1447,7 +1449,11 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     subagentRole: "orchestrator",
     subagentControlScope: "children",
     createdVia: "spawn",
-    createdActor: { type: "agent", id: "agent:main:main" },
+    createdActor: {
+      type: "agent",
+      id: "agent:main:main",
+      identity: { type: "agent", id: "agent:main:main" },
+    },
     createdAt: 1_000,
     forkSource: {
       sessionKey: "agent:main:main",

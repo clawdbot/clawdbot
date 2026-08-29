@@ -8,6 +8,7 @@ import type {
 } from "../components/app-sidebar-workboard.ts";
 import { icons } from "../components/icons.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
+import { renderNewSessionLink } from "../components/new-session-link.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import {
   renderLazySettingsSidebar,
@@ -26,7 +27,7 @@ import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./app-shell-chrome.ts";
+import { renderCommandPaletteLoading } from "./app-shell-command-palette-loading.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
@@ -36,7 +37,9 @@ import {
   isOptionalElementDefined,
   KEYBOARD_SHORTCUTS_ELEMENT,
   type LazyCustomElementRequestController,
+  MACOS_TITLEBAR_ELEMENT,
   type OptionalCustomElement,
+  SIDEBAR_ATTENTION_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
@@ -47,6 +50,7 @@ import {
   renderFloatingUpdateCard,
 } from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
+import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
 import {
   NAV_WIDTH_MAX,
   NAV_WIDTH_MIN,
@@ -56,11 +60,6 @@ import {
 import { createUpdateProgressWatcher } from "./update-overlay-helpers.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
-const SIDEBAR_ATTENTION_ELEMENT = {
-  tagName: "openclaw-sidebar-attention",
-  label: t("attention.issues"),
-  loadModule: () => import("../components/sidebar-attention.ts"),
-} satisfies OptionalCustomElement;
 
 export interface ShellViewHost {
   readonly context: ApplicationContext<RouteId> | undefined;
@@ -240,6 +239,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const custodianPanelAvailable =
     // Scope-aware to match the store: admin-only, never advertisement alone.
     canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
+  const lazyElementState = host.lazyCustomElements.visibleState;
   const activeRoute = host.routeState.routeId ?? "chat";
   const sessionRoute = isSessionRouteId(activeRoute);
   // Chat has an offline outbox, New Session keeps a local draft, and Appearance
@@ -270,6 +270,10 @@ export function renderApplicationShell(host: ShellViewHost) {
   const navDrawerOpen = host.navDrawerOpen && !onboarding;
   const mobileNavLayout = isMobileNavLayout();
   const nativeWebChrome = isNativeWebChromeHost();
+  // Native chrome is absent in browsers; the shell owns visible retry if its chunk fails.
+  if (nativeWebChrome && !onboarding) {
+    host.lazyCustomElements.preload(MACOS_TITLEBAR_ELEMENT, { reportError: true });
+  }
   const mergedChatChrome = shouldMergeChatChrome({
     mobileNavLayout,
     routeId: activeRoute,
@@ -440,10 +444,14 @@ export function renderApplicationShell(host: ShellViewHost) {
   // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
   // and the upgraded panels catch the first toggle instead of dropping the event.
   return html`
-    ${renderLazyElementModal(host.lazyCustomElements)}
+    ${lazyElementState?.status === "loading" &&
+    lazyElementState.element === host.commandPaletteElement
+      ? renderCommandPaletteLoading(() => host.lazyCustomElements.close())
+      : renderLazyElementModal(host.lazyCustomElements)}
     ${isOptionalElementDefined(host.commandPaletteElement)
       ? html`<openclaw-command-palette
-          .onNavigate=${(routeId: RouteId) => host.navigate(routeId)}
+          .onNavigate=${(routeId: RouteId, options?: ApplicationNavigationOptions) =>
+            host.navigate(routeId, options)}
           .onSelectSession=${(sessionKey: string) => host.selectChatSession(sessionKey)}
           .onSlashCommand=${(command: string) => host.handleCommandPaletteSlashCommand(command)}
         ></openclaw-command-palette>`
@@ -467,10 +475,13 @@ export function renderApplicationShell(host: ShellViewHost) {
       style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
       @theme-change=${(event: CustomEvent<ThemeModeChangeDetail>) => host.handleThemeChange(event)}
     >
-      <a class="shell-skip-link" href="#control-ui-main"> ${t("common.skipToMainContent")} </a>
+      <a class="shell-skip-link" href="#control-ui-main" ?inert=${navDrawerOpen}>
+        ${t("common.skipToMainContent")}
+      </a>
       ${nativeWebChrome && !onboarding
         ? html`
             <openclaw-macos-titlebar-controls
+              ?inert=${navDrawerOpen}
               .navCollapsed=${host.nativeNavCollapsed()}
               .historyOnly=${settingsTakeover}
               .canGoBack=${host.nativeHistoryState.canGoBack}
@@ -485,6 +496,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           `
         : nothing}
       <openclaw-app-topbar
+        ?inert=${navDrawerOpen}
         .resourceBasePath=${context.resourceBasePath}
         .environment=${config.environment}
         .navDrawerOpen=${navDrawerOpen}
@@ -511,21 +523,14 @@ export function renderApplicationShell(host: ShellViewHost) {
                 </button>
               </openclaw-tooltip>
               ${navCollapsed
-                ? html`<openclaw-tooltip
-                    .content=${newSessionAccess.allowed
-                      ? t("chat.runControls.newSession")
-                      : newSessionAccess.reason}
-                  >
-                    <button
-                      type="button"
-                      class="shell-chrome-controls__button shell-chrome-controls__new-thread"
-                      aria-label=${t("chat.runControls.newSession")}
-                      ?disabled=${!newSessionAccess.allowed}
-                      @click=${() => openNewSession(selectedAgentId)}
-                    >
-                      ${icons.plus}
-                    </button>
-                  </openclaw-tooltip>`
+                ? renderNewSessionLink({
+                    basePath: context.basePath,
+                    agentId: selectedAgentId,
+                    className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
+                    label: t("chat.runControls.newSession"),
+                    disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
+                    onOpen: openNewSession,
+                  })
                 : nothing}
               <openclaw-tooltip
                 .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
@@ -555,19 +560,24 @@ export function renderApplicationShell(host: ShellViewHost) {
             </div>
           `
         : nothing}
-      <div class="shell-nav" ?inert=${navigationSurfaceHidden}>
-        ${mobileNavLayout
-          ? html`<openclaw-modal-dialog
-              class="drawer nav-drawer"
-              .open=${navDrawerOpen}
-              .label=${t("palette.categories.navigation")}
-              @modal-cancel=${() => host.closeNavDrawer({ restoreFocus: true })}
-            >
-              <div class="shell-nav-modal__content" tabindex="-1" autofocus>
-                ${navigationContent}
-              </div>
-            </openclaw-modal-dialog>`
-          : navigationContent}
+      <button
+        type="button"
+        class="shell-nav-backdrop"
+        tabindex="-1"
+        aria-hidden="true"
+        ?inert=${!navDrawerOpen}
+        @click=${() => host.closeNavDrawer({ restoreFocus: true })}
+      ></button>
+      <div
+        class="shell-nav ${mobileNavLayout ? "nav-drawer" : ""}"
+        role=${mobileNavLayout ? "dialog" : nothing}
+        aria-modal=${mobileNavLayout && navDrawerOpen ? "true" : nothing}
+        aria-label=${mobileNavLayout ? t("palette.categories.navigation") : nothing}
+        aria-hidden=${mobileNavLayout && navigationSurfaceHidden ? "true" : nothing}
+        tabindex=${mobileNavLayout ? -1 : nothing}
+        ?inert=${navigationSurfaceHidden}
+      >
+        ${navigationContent}
       </div>
       ${!navCollapsed && !onboarding && !settingsTakeover
         ? html`
@@ -590,7 +600,22 @@ export function renderApplicationShell(host: ShellViewHost) {
           ? "content--custodian"
           : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
+        ?inert=${pageActionsBlocked || (mobileNavLayout && navDrawerOpen)}
       >
+        ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
+          ? html`<div class="connection-action-block" role="status" aria-live="polite">
+              <span class="connection-action-block__icon" aria-hidden="true"
+                >${icons.globeOff}</span
+              >
+              <span class="connection-action-block__text">
+                ${t(
+                  settingsTakeover
+                    ? "connection.settingsChangesUnavailable"
+                    : "connection.actionsUnavailable",
+                )}
+              </span>
+            </div>`
+          : nothing}
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           mobileNavLayout,
@@ -613,11 +638,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           onNavigate: (routeId) => host.navigate(routeId),
           onOpenApprovals: () => host.openApprovals(),
         })}
-        ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
-          ? html`<div class="connection-action-block" role="status" aria-live="polite">
-              ${t("connection.actionsUnavailable")}
-            </div>`
-          : nothing}
         <openclaw-router-outlet
           ?inert=${pageActionsBlocked}
           aria-disabled=${pageActionsBlocked ? "true" : nothing}
@@ -628,6 +648,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         ></openclaw-router-outlet>
       </main>
       <openclaw-terminal-panel
+        ?inert=${navDrawerOpen}
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${terminalAvailable}
         .agentId=${selectedAgentId}
@@ -640,6 +661,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         ? nothing
         : html`
             <openclaw-browser-panel
+              ?inert=${navDrawerOpen}
               data-chat-autotype-exempt
               .client=${gatewayConnected ? gatewaySnapshot.client : null}
               .available=${browserPanelAvailable}
@@ -652,6 +674,7 @@ export function renderApplicationShell(host: ShellViewHost) {
               })}
             ></openclaw-browser-panel>
             <openclaw-desktop-panel
+              ?inert=${navDrawerOpen}
               data-chat-autotype-exempt
               .client=${gatewayConnected ? gatewaySnapshot.client : null}
               .available=${desktopPanelAvailable}
@@ -660,6 +683,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             ></openclaw-desktop-panel>
           `}
       <openclaw-custodian-panel
+        ?inert=${navDrawerOpen}
         .available=${custodianPanelAvailable}
         .suppressed=${activeRoute === "custodian"}
         .minimizeRequestId=${host.custodianMinimizeRequestId}

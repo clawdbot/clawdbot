@@ -304,7 +304,7 @@ describe("application shell pairing access", () => {
     button?.click();
 
     await waitForFast(() => expect(button?.textContent?.trim()).toBe("Copy failed"));
-    expect(button?.getAttribute("aria-label")).toBe("Copy failed");
+    expect(button?.getAttribute("aria-label")).toBeNull();
     expect(button?.querySelector("svg")).not.toBeNull();
     expect(writeText).toHaveBeenCalledWith("pair-mobile-secret");
     expect(execCommand).toHaveBeenCalledWith("copy");
@@ -316,7 +316,7 @@ describe("application shell pairing access", () => {
     reset();
 
     expect(button?.textContent?.trim()).toBe("Copy setup code");
-    expect(button?.getAttribute("aria-label")).toBe("Copy setup code");
+    expect(button?.getAttribute("aria-label")).toBeNull();
   });
 
   it("expires a node setup link from the pairing clock", async () => {

@@ -2,7 +2,6 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { resolveCompactionTimeoutMs } from "../agents/embedded-agent-runner/compaction-safety-timeout.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   areDiagnosticsEnabledForProcess,
@@ -92,7 +91,19 @@ const loadStuckSessionRecoveryRuntime = createLazyRuntimeModule(
   () => import("./diagnostic-stuck-session-recovery.runtime.js"),
 );
 
-type EmitDiagnosticMemorySample = typeof emitDiagnosticMemorySample;
+// The logging-core SDK shipped this callback input before automatic bundles retired.
+// Preserve its optional fields; the heartbeat only supplies emitSample.
+type DiagnosticMemorySampleCallbackOptions = NonNullable<
+  Parameters<typeof emitDiagnosticMemorySample>[0]
+> & {
+  writeCriticalBundle?: boolean;
+  stateDir?: string;
+  sessionStorePaths?: string[];
+  resolveSessionStorePaths?: () => string[] | undefined;
+};
+type EmitDiagnosticMemorySample = (
+  options?: DiagnosticMemorySampleCallbackOptions,
+) => ReturnType<typeof emitDiagnosticMemorySample>;
 type EventLoopDelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
 type CpuUsage = ReturnType<typeof process.cpuUsage>;
@@ -136,18 +147,6 @@ type StartDiagnosticHeartbeatOptions = {
     stuckSessionAbortMs: number;
   };
 };
-
-function resolveDiagnosticSessionStorePaths(config?: OpenClawConfig): string[] | undefined {
-  if (!config) {
-    return undefined;
-  }
-  try {
-    const paths = resolveAllAgentSessionStoreTargetsSync(config).map((target) => target.storePath);
-    return paths.length > 0 ? paths : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;
 let lastDiagnosticLivenessWallAt = 0;
@@ -512,8 +511,9 @@ function isBlockedToolCallRecoveryEligible(params: {
     params.classification.activeWorkKind === "tool_call" &&
     typeof toolAgeMs === "number" &&
     typeof lastProgressAgeMs === "number" &&
-    toolAgeMs >= abortMs &&
-    lastProgressAgeMs >= abortMs
+    (params.activity?.activeToolDeadlineAtMs !== undefined
+      ? Date.now() >= params.activity.activeToolDeadlineAtMs
+      : toolAgeMs >= abortMs && lastProgressAgeMs >= abortMs)
   );
 }
 
@@ -1217,8 +1217,6 @@ export function startDiagnosticHeartbeat(
     } else {
       emitDiagnosticMemorySample({
         emitSample: shouldRecordMemorySample,
-        writeCriticalBundle: false,
-        resolveSessionStorePaths: () => resolveDiagnosticSessionStorePaths(heartbeatConfig),
       });
     }
 

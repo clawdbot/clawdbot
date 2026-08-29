@@ -1,7 +1,9 @@
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 /** Dependency-light model catalog snapshots for default model-list views. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { modelCatalogRowToEntry } from "../../agents/model-catalog-entry.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -22,26 +24,6 @@ const persistedCatalogModuleLoader = createLazyImportLoader<PersistedCatalogModu
 const preparedScopedCatalogModuleLoader = createLazyImportLoader<PreparedScopedCatalogModule>(
   () => import("../../agents/prepared-model-runtime.scoped-catalog.js"),
 );
-
-function toCatalogEntry(row: NormalizedModelCatalogRow): ModelCatalogEntry {
-  return {
-    id: row.id,
-    name: row.name,
-    provider: row.provider,
-    api: row.api,
-    ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
-    ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
-    ...(row.contextTokens !== undefined ? { contextTokens: row.contextTokens } : {}),
-    reasoning: row.reasoning,
-    input: [...row.input],
-    ...(row.compat ? { compat: row.compat } : {}),
-    ...(row.mediaInput ? { mediaInput: row.mediaInput } : {}),
-    status: row.status,
-    ...(row.statusReason ? { statusReason: row.statusReason } : {}),
-    ...(row.replaces ? { replaces: [...row.replaces] } : {}),
-    ...(row.replacedBy ? { replacedBy: row.replacedBy } : {}),
-  };
-}
 
 function selectProviderRows(
   rows: readonly NormalizedModelCatalogRow[],
@@ -85,7 +67,9 @@ function enrichPersistedEntry(
   entry: ModelCatalogEntry,
   manifestEntry: ModelCatalogEntry | undefined,
 ): ModelCatalogEntry {
-  if (!manifestEntry) {
+  // Capabilities belong to a physical route, not just a logical provider/model id.
+  // A cached custom endpoint must not inherit the manifest endpoint's limits or effort map.
+  if (!manifestEntry || !modelTransportRoutesMatch(manifestEntry, entry)) {
     return entry;
   }
   return {
@@ -165,7 +149,7 @@ export async function loadScopedListModelCatalogSnapshot(params: {
   const manifestEntries = selectProviderRows(
     loadManifestCatalogRowsForList(loaderParams),
     providerIds,
-  ).map(toCatalogEntry);
+  ).map(modelCatalogRowToEntry);
   const manifestByKey = new Map(manifestEntries.map((entry) => [entryKey(entry), entry]));
   const configuredKeys = new Set(params.configuredKeys.map((key) => key.trim().toLowerCase()));
   const manifestFallbackProviderIds = new Set(
@@ -176,7 +160,7 @@ export async function loadScopedListModelCatalogSnapshot(params: {
   const staticEntries = selectProviderRows(
     loadStaticManifestCatalogRowsForList(loaderParams),
     providerIds,
-  ).map(toCatalogEntry);
+  ).map(modelCatalogRowToEntry);
   const { loadPersistedListCatalogEntries } = await persistedCatalogModuleLoader.load();
   const persistedEntries = loadPersistedListCatalogEntries({
     agentDir: params.agentDir,
@@ -234,7 +218,7 @@ export async function loadScopedListModelCatalogSnapshot(params: {
       config: params.cfg,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       agentDir: params.agentDir,
-      inheritedAuthDir: params.inheritedAuthDir ?? params.agentDir,
+      ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       readOnly: true,
     },

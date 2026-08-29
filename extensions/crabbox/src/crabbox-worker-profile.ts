@@ -26,6 +26,7 @@ const GO_DURATION_PATTERN = /^\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s
 const GO_DURATION_TOKEN_PATTERN = /(\d+(?:\.\d*)?|\.\d+)(ns|us|µs|μs|ms|s|m|h)/gu;
 const MAX_GO_DURATION_NANOSECONDS = 9_223_372_036_854_775_807n;
 const CRABBOX_LEASE_ID_DOMAIN = "openclaw:crabbox-worker-lease-id:v1\0";
+const LEGACY_PROVISION_OPERATION_ID_PATTERN = /^provision:[a-f0-9]{64}$/u;
 const DURATION_UNIT_NANOSECONDS: Readonly<Record<string, bigint>> = {
   h: 3_600_000_000_000n,
   m: 60_000_000_000n,
@@ -39,7 +40,7 @@ const DURATION_UNIT_NANOSECONDS: Readonly<Record<string, bigint>> = {
 
 type CrabboxProfile = {
   binary?: string;
-  class: string;
+  class?: string;
   desktop?: boolean;
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
@@ -48,10 +49,9 @@ type CrabboxProfile = {
   ttl: string;
   setup?: string;
   setupEnv?: string[];
-  warmImage: boolean;
+  warmImage?: boolean;
 };
 
-const CRABBOX_FALLBACK_MACHINE_CLASSES = ["standard", "fast", "large", "beast"] as const;
 const MAX_CRABBOX_MACHINE_CLASS_LENGTH = 128;
 const MAX_CRABBOX_MACHINE_OPTIONS = 32;
 const CRABBOX_DESKTOP_PROVIDERS = new Set(["aws", "hetzner"]);
@@ -127,7 +127,7 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   if (!provider) {
     throw new WorkerProviderError("Crabbox profile provider must be a non-empty string");
   }
-  if (!machineClass) {
+  if (profile.class !== undefined && !machineClass) {
     throw new WorkerProviderError("Crabbox profile class must be a non-empty string");
   }
   const { duration: ttl } = requirePositiveDuration(profile.ttl, "ttl");
@@ -201,7 +201,7 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
     setup,
     setupEnv,
     ttl,
-    warmImage: warmImage ?? false,
+    warmImage,
   };
 }
 
@@ -215,17 +215,33 @@ function resolveCrabboxProfileSetupEnv(
     setupEnv.map((name) => {
       const value = process.env[name];
       if (!Object.hasOwn(process.env, name) || value === undefined) {
-        throw new WorkerProviderError(`Crabbox profile setupEnv variable is missing: ${name}`);
+        throw new Error(`Crabbox profile setupEnv variable is missing: ${name}`);
       }
       return [name, value];
     }),
   );
 }
 
+// Resolve defaults only after sizing is known: placement and enrolled lease classes
+// must share the same policy without reading setup environment values during teardown.
+export function resolveCrabboxWarmImageProfile(
+  profile: CrabboxProfile,
+  machineClass = profile.class,
+) {
+  return {
+    ...profile,
+    class: machineClass,
+    warmImage: profile.warmImage ?? (machineClass !== undefined && !profile.setupEnv?.length),
+  };
+}
+
+type CrabboxProvisionProfile = CrabboxProfile &
+  ({ warmImage: false } | { warmImage: true; class: string });
+
 export function resolveCrabboxProvisionProfile(
   profile: WorkerProfile,
   requestedClassValue: unknown,
-): { profile: CrabboxProfile; forwardedEnv?: Record<string, string> } {
+): { profile: CrabboxProvisionProfile; forwardedEnv?: Record<string, string> } {
   const configured = parseCrabboxProfile(profile);
   const requestedClass = nonEmptyString(requestedClassValue);
   if (
@@ -236,32 +252,47 @@ export function resolveCrabboxProvisionProfile(
       "Crabbox machine class must be a non-empty string of at most 128 characters",
     );
   }
-  const resolved = requestedClass ? { ...configured, class: requestedClass } : configured;
-  return { profile: resolved, forwardedEnv: resolveCrabboxProfileSetupEnv(resolved.setupEnv) };
+  const resolved = resolveCrabboxWarmImageProfile(configured, requestedClass ?? configured.class);
+  let provisionProfile: CrabboxProvisionProfile;
+  if (!resolved.warmImage) {
+    provisionProfile = { ...resolved, warmImage: false };
+  } else {
+    // Reject immutable sizing before mutable setup values can mask it on replay.
+    if (!resolved.class) {
+      throw new WorkerProviderError(
+        "Crabbox warmImage requires a configured class or a placement machine class",
+      );
+    }
+    provisionProfile = { ...resolved, class: resolved.class, warmImage: true };
+  }
+  return {
+    profile: provisionProfile,
+    forwardedEnv: resolveCrabboxProfileSetupEnv(resolved.setupEnv),
+  };
 }
 
 export function listCrabboxMachineOptions(
-  configuredClass: string,
-  shapes: readonly CrabboxMachineShape[] | undefined,
+  configuredClass: string | undefined,
+  shapes: readonly CrabboxMachineShape[] = [],
 ): readonly WorkerMachineOption[] {
   const seen = new Set<string>();
-  const reportedShapes = shapes?.filter((shape) => {
+  const candidates = shapes.filter((shape) => {
     if (shape.class.length > MAX_CRABBOX_MACHINE_CLASS_LENGTH || seen.has(shape.class)) {
       return false;
     }
     seen.add(shape.class);
     return true;
   });
-  const candidates: readonly CrabboxMachineShape[] = reportedShapes?.length
-    ? reportedShapes
-    : CRABBOX_FALLBACK_MACHINE_CLASSES.map((machineClass) => ({ class: machineClass }));
-  const catalogLimit = candidates
-    .slice(0, MAX_CRABBOX_MACHINE_OPTIONS)
-    .some((shape) => shape.class === configuredClass)
-    ? MAX_CRABBOX_MACHINE_OPTIONS
-    : MAX_CRABBOX_MACHINE_OPTIONS - 1;
-  // Built by assignment rather than conditional spread: oxlint's no-map-spread
-  // rejects spreading to shape objects inside a map callback.
+  if (candidates.length === 0) {
+    return [];
+  }
+  const catalogLimit =
+    configuredClass === undefined ||
+    candidates
+      .slice(0, MAX_CRABBOX_MACHINE_OPTIONS)
+      .some((shape) => shape.class === configuredClass)
+      ? MAX_CRABBOX_MACHINE_OPTIONS
+      : MAX_CRABBOX_MACHINE_OPTIONS - 1;
   const options = candidates.slice(0, catalogLimit).map((shape) => {
     const id = shape.class;
     const result: {
@@ -271,10 +302,10 @@ export function listCrabboxMachineOptions(
       memoryGb?: number;
       default?: boolean;
     } = { id, label: id.replace(/^./u, (initial) => initial.toUpperCase()) };
-    if (shape?.cpu !== undefined) {
+    if (shape.cpu !== undefined) {
       result.cpu = shape.cpu;
     }
-    if (shape?.memoryGb !== undefined) {
+    if (shape.memoryGb !== undefined) {
       result.memoryGb = shape.memoryGb;
     }
     if (id === configuredClass) {
@@ -282,17 +313,14 @@ export function listCrabboxMachineOptions(
     }
     return result;
   });
-  if (options.some((option) => option.id === configuredClass)) {
-    return options;
-  }
-  return [
-    ...options,
-    {
+  if (configuredClass !== undefined && !options.some((option) => option.id === configuredClass)) {
+    options.push({
       id: configuredClass,
       label: configuredClass,
       default: true,
-    },
-  ];
+    });
+  }
+  return options;
 }
 
 export function buildCrabboxWarmupArgs(
@@ -307,8 +335,7 @@ export function buildCrabboxWarmupArgs(
     "--network",
     "public",
     "--tailscale=false",
-    "--class",
-    profile.class,
+    ...(profile.class ? ["--class", profile.class] : []),
     "--ttl",
     profile.ttl,
     "--idle-timeout",
@@ -411,6 +438,16 @@ export function operationSlug(operationId: string): string {
 }
 
 export function operationLeaseId(operationId: string): string {
+  if (!operationId.trim()) {
+    throw new Error("Crabbox provision requires an operation id");
+  }
+  if (LEGACY_PROVISION_OPERATION_ID_PATTERN.test(operationId)) {
+    // Historical random allocation can exist without a recorded handle; refusing replay
+    // must not terminalize unresolved cleanup responsibility.
+    throw new Error(
+      "Legacy Crabbox provision state cannot be replayed safely; clean up any prior lease and dispatch again",
+    );
+  }
   return `cbx_${createHash("sha256")
     .update(CRABBOX_LEASE_ID_DOMAIN)
     .update(operationId)

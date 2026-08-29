@@ -207,7 +207,7 @@ describe("CronService declarative jobs", () => {
     try {
       const created = declarativeResult(
         await writer.add(declaration(), {
-          createdActor: { type: "human", id: "profile-ada" },
+          createdActor: { type: "human", source: "profile", id: "profile-ada" },
         }),
       );
       createdId = created.id;
@@ -217,7 +217,7 @@ describe("CronService declarative jobs", () => {
 
       const converged = declarativeResult(
         await writer.add(declaration({ displayName: "Updated report" }), {
-          createdActor: { type: "human", id: "profile-bob" },
+          createdActor: { type: "human", source: "profile", id: "profile-bob" },
         }),
       );
       expect(converged).toMatchObject({ created: false, updated: true, id: created.id });

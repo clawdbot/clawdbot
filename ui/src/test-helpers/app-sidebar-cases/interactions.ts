@@ -220,8 +220,8 @@ describe("AppSidebar multi-select", () => {
     await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
     expect(harness.patchMany).toHaveBeenCalledWith(
       [
-        { key: "agent:main:a", agentId: "main" },
-        { key: "agent:main:b", agentId: "main" },
+        { key: "agent:main:a", agentId: "main", expectedSessionId: "session:agent:main:a" },
+        { key: "agent:main:b", agentId: "main", expectedSessionId: "session:agent:main:b" },
       ],
       { unread: true },
     );

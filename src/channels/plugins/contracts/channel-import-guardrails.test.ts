@@ -83,7 +83,7 @@ function createGuardedSource(
 const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
   ...["discord", "slack", "telegram", "imessage", "whatsapp", "signal"].flatMap((pluginId) => {
     const relativePaths =
-      pluginId === "signal" ? ["src/shared.ts", "src/runtime-api.ts"] : ["src/shared.ts"];
+      pluginId === "signal" ? ["src/shared.ts", "runtime-api.ts"] : ["src/shared.ts"];
     return relativePaths.map((relativePath) =>
       createGuardedSource(pluginId, relativePath, [
         new RegExp(`["']openclaw/plugin-sdk/${pluginId}["']`),

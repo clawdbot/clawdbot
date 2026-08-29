@@ -335,8 +335,11 @@ export function createSessionActions(context: SessionActionContext) {
   const runRefreshSessionInfo = async () => {
     const selection = captureSessionSelection();
     const historyGeneration = historyLoadGeneration;
+    const sessionGeneration = state.sessionGeneration ?? 0;
     const isCurrentRefresh = () =>
-      historyGeneration === historyLoadGeneration && isCurrentSessionSelection(selection);
+      historyGeneration === historyLoadGeneration &&
+      sessionGeneration === (state.sessionGeneration ?? 0) &&
+      isCurrentSessionSelection(selection);
     try {
       const resolveListAgentId = () => {
         if (selection.sessionKey === "global") {
@@ -470,7 +473,9 @@ export function createSessionActions(context: SessionActionContext) {
         messages?: unknown[];
         sessionId?: string;
         sessionInfo?: SessionInfoEntry &
-          Partial<Pick<SessionEntry, "abortedLastRun" | "lastRunError" | "status">>;
+          Partial<Pick<SessionEntry, "abortedLastRun" | "lastRunError" | "status">> & {
+            activeRunIds?: unknown;
+          };
         defaults?: SessionInfoDefaults;
         thinkingLevel?: string;
         fastMode?: FastMode;
@@ -630,7 +635,14 @@ export function createSessionActions(context: SessionActionContext) {
           : status === "killed" || sessionInfo?.abortedLastRun === true
             ? ({ state: "interrupted" } as const)
             : ({ state: "completed" } as const);
-      return { loaded: true, runOutcome };
+      const activeRunIds = sessionInfo?.activeRunIds;
+      return {
+        loaded: true,
+        runOutcome,
+        ...(Array.isArray(activeRunIds) && activeRunIds.every((id) => typeof id === "string")
+          ? { activeRunIds }
+          : {}),
+      };
     } catch (err) {
       if (isCurrentLoad() && !isAbortError(err)) {
         chatLog.addSystem(`history failed: ${formatTuiErrorMessage(err)}`);

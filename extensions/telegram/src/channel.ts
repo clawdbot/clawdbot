@@ -4,10 +4,10 @@ import {
   buildDmGroupAccountAllowlistAdapter,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { clearAccountFieldsFromConfigSection } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
-  clearAccountEntryFields,
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import {
@@ -1155,54 +1155,20 @@ export const telegramPlugin = createChatChannelPlugin({
       },
       logoutAccount: async ({ accountId, cfg }) => {
         const envToken = process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "";
-        const nextCfg = { ...cfg } as OpenClawConfig;
-        const nextTelegram = cfg.channels?.telegram ? { ...cfg.channels.telegram } : undefined;
-        let cleared = false;
-        let changed = false;
-        if (nextTelegram) {
-          if (accountId === DEFAULT_ACCOUNT_ID && nextTelegram.botToken) {
-            delete nextTelegram.botToken;
-            cleared = true;
-            changed = true;
-          }
-          const accountCleanup = clearAccountEntryFields({
-            accounts: nextTelegram.accounts,
-            accountId,
-            fields: ["botToken"],
-          });
-          if (accountCleanup.changed) {
-            changed = true;
-            if (accountCleanup.cleared) {
-              cleared = true;
-            }
-            if (accountCleanup.nextAccounts) {
-              nextTelegram.accounts = accountCleanup.nextAccounts;
-            } else {
-              delete nextTelegram.accounts;
-            }
-          }
-        }
-        if (changed) {
-          if (nextTelegram && Object.keys(nextTelegram).length > 0) {
-            nextCfg.channels = { ...nextCfg.channels, telegram: nextTelegram };
-          } else {
-            const nextChannels = { ...nextCfg.channels };
-            delete nextChannels.telegram;
-            if (Object.keys(nextChannels).length > 0) {
-              nextCfg.channels = nextChannels;
-            } else {
-              delete nextCfg.channels;
-            }
-          }
-        }
+        const { nextConfig, changed, cleared } = clearAccountFieldsFromConfigSection({
+          cfg,
+          sectionKey: "telegram",
+          accountId,
+          fields: ["botToken"],
+        });
         const resolved = resolveTelegramAccount({
-          cfg: changed ? nextCfg : cfg,
+          cfg: nextConfig,
           accountId,
         });
         const loggedOut = resolved.tokenSource === "none";
         if (changed) {
           await getTelegramRuntime().config.replaceConfigFile({
-            nextConfig: nextCfg,
+            nextConfig,
             afterWrite: { mode: "auto" },
           });
         }

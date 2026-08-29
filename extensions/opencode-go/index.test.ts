@@ -58,7 +58,7 @@ function upstreamModel(id: string, overrides: Record<string, unknown> = {}) {
 
 function createCatalogFetchGuard(params: {
   upstreamModels: Record<string, unknown>;
-  liveModelIds: string[];
+  liveModelIds: string[] | (() => string[]);
 }) {
   return vi.fn(async ({ url }: { url: string }) => ({
     response: new Response(
@@ -72,7 +72,12 @@ function createCatalogFetchGuard(params: {
                 models: params.upstreamModels,
               },
             }
-          : { data: params.liveModelIds.map((id) => ({ id, object: "model" })) },
+          : {
+              data: (typeof params.liveModelIds === "function"
+                ? params.liveModelIds()
+                : params.liveModelIds
+              ).map((id) => ({ id, object: "model" })),
+            },
       ),
     ),
     finalUrl: url,
@@ -532,6 +537,59 @@ describe("opencode-go provider plugin", () => {
       ACTIVE_MODEL_IDS.toSorted(),
     );
   });
+
+  it.each([
+    ["retired seed", "failed"],
+    ["retired seed", "filtered"],
+    ["activated preview", "failed"],
+  ] as const)(
+    "uses refreshed %s lifecycle on the first fallback after %s model advertising",
+    async (lifecycle, advertising) => {
+      const retired = lifecycle === "retired seed";
+      const modelId = retired ? "deepseek-v4-pro" : "hy3-preview";
+      const provider = await registerSingleProviderPlugin(plugin);
+      const fetchGuard = createCatalogFetchGuard({
+        upstreamModels: {
+          [modelId]: upstreamModel(modelId, retired ? { status: "deprecated" } : {}),
+        },
+        liveModelIds: () => {
+          if (advertising === "failed") {
+            throw new Error("model advertising unavailable");
+          }
+          return [modelId];
+        },
+      });
+
+      try {
+        expect(buildStaticOpencodeGoProviderConfig().models.map((model) => model.id)).toEqual(
+          ACTIVE_MODEL_IDS,
+        );
+        const fallback = await buildOpencodeGoLiveProviderConfig({
+          apiKey: "runtime-key",
+          discoveryApiKey: "discovery-key",
+          fetchGuard,
+        });
+
+        expect(fallback.apiKey).toBe("runtime-key");
+        expect(fallback.models.map((model) => model.id).toSorted()).toEqual(
+          (retired
+            ? ACTIVE_MODEL_IDS.filter((id) => id !== modelId)
+            : [...ACTIVE_MODEL_IDS, modelId]
+          ).toSorted(),
+        );
+        expect(provider.resolveDynamicModel?.({ modelId } as never)).toMatchObject({
+          id: modelId,
+        });
+      } finally {
+        clearLiveCatalogCacheForTests();
+        await buildOpencodeGoLiveProviderConfig({
+          discoveryApiKey: "discovery-key",
+          fetchGuard: createCatalogFetchGuard({ upstreamModels: {}, liveModelIds: [] }),
+        });
+        clearLiveCatalogCacheForTests();
+      }
+    },
+  );
 
   it("does not synthesize a stream when the runtime provides none", async () => {
     const provider = await registerSingleProviderPlugin(plugin);

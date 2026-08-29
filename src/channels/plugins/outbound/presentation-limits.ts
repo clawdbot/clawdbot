@@ -1,7 +1,7 @@
 /**
  * Presentation limit adapters for channel outbound payloads.
  *
- * Truncates and reshapes portable presentation blocks to match per-channel limits.
+ * Splits text and reshapes portable controls to match per-channel limits.
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -108,14 +108,15 @@ function splitPresentationText(value: string, limits: TextLimits | undefined): s
   return chunks;
 }
 
-function fallbackTextBlocks(params: {
+function presentationTextBlocks(params: {
   blockType: "context" | "text";
   text: string;
   limits?: TextLimits;
-}): MessagePresentationBlock[] {
+  continuation?: boolean;
+}): Array<{ type: "context" | "text"; text: string }> {
   return splitPresentationText(params.text, params.limits).map((text, index) => {
     const block = { type: params.blockType, text };
-    if (index > 0) {
+    if (index > 0 || params.continuation) {
       // Native fallback renderers must reassemble split fragments without inserting paragraph breaks.
       Object.defineProperty(block, PRESENTATION_FALLBACK_CONTINUATION, { value: true });
     }
@@ -143,7 +144,7 @@ function fallbackListBlocks(params: {
     return [];
   }
   // Action labels are operator-visible content; split like chart/table fallbacks instead of dropping them.
-  return fallbackTextBlocks({
+  return presentationTextBlocks({
     blockType: params.blockType,
     text: `${params.heading}:\n${labels.map((label) => `- ${label}`).join("\n")}`,
     limits: params.limits,
@@ -455,31 +456,11 @@ function createGlobalButtonSelection(params: {
   );
 }
 
-function adaptTextBlock(
-  block: MessagePresentationBlock,
-  limits: TextLimits | undefined,
-): MessagePresentationBlock {
-  if (block.type === "text" || block.type === "context") {
-    const adapted = {
-      ...block,
-      text: truncatePresentationText(block.text, limits),
-    };
-    if (
-      Object.getOwnPropertyDescriptor(block, PRESENTATION_FALLBACK_CONTINUATION)?.value === true
-    ) {
-      // Text normalization clones blocks; keep continuation ownership across that boundary.
-      Object.defineProperty(adapted, PRESENTATION_FALLBACK_CONTINUATION, { value: true });
-    }
-    return adapted;
-  }
-  return block;
-}
-
 /**
  * Adapt a portable presentation to the target channel's advertised capabilities.
  *
  * Unsupported controls are downgraded to text/context fallback blocks where possible, and
- * labels, values, rows, options, styles, disabled state, and text are clipped to channel limits.
+ * controls honor channel limits while authored and fallback text retain every character.
  */
 export function adaptMessagePresentationForChannel(params: {
   presentation: MessagePresentation;
@@ -495,11 +476,31 @@ export function adaptMessagePresentationForChannel(params: {
     limits: limits?.actions,
     selectLimits: limits?.selects,
   });
-  const blocks: MessagePresentationBlock[] = [];
+  const titleBlocks = params.presentation.title
+    ? presentationTextBlocks({
+        blockType: "text",
+        text: params.presentation.title,
+        limits: limits?.text,
+      })
+    : [];
+  const blocks: MessagePresentationBlock[] = titleBlocks.slice(1);
   for (const block of params.presentation.blocks) {
+    if (block.type === "text" || block.type === "context") {
+      blocks.push(
+        ...presentationTextBlocks({
+          blockType: block.type === "context" ? fallbackBlockType : "text",
+          text: block.text,
+          limits: limits?.text,
+          continuation:
+            Object.getOwnPropertyDescriptor(block, PRESENTATION_FALLBACK_CONTINUATION)?.value ===
+            true,
+        }),
+      );
+      continue;
+    }
     if (block.type === "chart" && capabilities?.charts !== true) {
       blocks.push(
-        ...fallbackTextBlocks({
+        ...presentationTextBlocks({
           blockType: fallbackBlockType,
           text: renderMessagePresentationChartFallbackText(block),
           limits: limits?.text,
@@ -509,7 +510,7 @@ export function adaptMessagePresentationForChannel(params: {
     }
     if (block.type === "table" && capabilities?.tables !== true) {
       blocks.push(
-        ...fallbackTextBlocks({
+        ...presentationTextBlocks({
           blockType: fallbackBlockType,
           text: renderMessagePresentationTableFallbackText(block),
           limits: limits?.text,
@@ -558,10 +559,6 @@ export function adaptMessagePresentationForChannel(params: {
       );
       continue;
     }
-    if (block.type === "context" && capabilities?.context === false) {
-      blocks.push({ type: "text", text: block.text });
-      continue;
-    }
     if (block.type === "divider" && capabilities?.divider === false) {
       continue;
     }
@@ -569,10 +566,8 @@ export function adaptMessagePresentationForChannel(params: {
   }
   return {
     ...params.presentation,
-    ...(params.presentation.title
-      ? { title: truncatePresentationText(params.presentation.title, limits?.text) }
-      : {}),
-    blocks: blocks.map((block) => adaptTextBlock(block, limits?.text)),
+    ...(params.presentation.title ? { title: titleBlocks[0]?.text } : {}),
+    blocks,
   };
 }
 

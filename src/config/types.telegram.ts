@@ -80,6 +80,8 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
   TelegramPreviewStreamingConfig
 > &
   ChannelReactionConfig<"off" | "own" | "all", "off" | "ack" | "minimal" | "extensive", string> & {
+    /** Post a room-specific introduction when joining a group. Default: true. */
+    joinIntro?: boolean;
     /** Telegram-native exec approval delivery + approver authorization. */
     execApprovals?: TelegramExecApprovalConfig;
     /** Override native command registration for Telegram (bool or "auto"). */

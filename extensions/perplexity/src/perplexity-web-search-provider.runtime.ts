@@ -234,6 +234,7 @@ async function runPerplexitySearchApi(params: {
     body.max_tokens_per_page = params.maxTokensPerPage;
   }
 
+  const headers = buildPerplexityRequestHeaders(params.apiKey, true);
   return withTrustedWebSearchEndpoint(
     {
       url: PERPLEXITY_SEARCH_ENDPOINT,
@@ -241,13 +242,16 @@ async function runPerplexitySearchApi(params: {
       signal: params.signal,
       init: {
         method: "POST",
-        headers: buildPerplexityRequestHeaders(params.apiKey, true),
+        headers,
         body: JSON.stringify(body),
       },
     },
     async (res) => {
       if (!res.ok) {
-        return await throwWebSearchApiError(res, "Perplexity Search");
+        return await throwWebSearchApiError(res, "Perplexity Search", {
+          headers,
+          signal: params.signal,
+        });
       }
       const data = await readProviderJsonResponse<PerplexitySearchApiResponse>(
         res,
@@ -282,6 +286,7 @@ async function runPerplexitySearch(params: {
     body.search_recency_filter = params.freshness;
   }
 
+  const headers = buildPerplexityRequestHeaders(params.apiKey);
   return withTrustedWebSearchEndpoint(
     {
       url: endpoint,
@@ -289,13 +294,13 @@ async function runPerplexitySearch(params: {
       signal: params.signal,
       init: {
         method: "POST",
-        headers: buildPerplexityRequestHeaders(params.apiKey),
+        headers,
         body: JSON.stringify(body),
       },
     },
     async (res) => {
       if (!res.ok) {
-        return await throwWebSearchApiError(res, "Perplexity");
+        return await throwWebSearchApiError(res, "Perplexity", { headers, signal: params.signal });
       }
       const data = await readProviderJsonResponse<PerplexitySearchResponse>(res, "Perplexity");
       const content = data.choices?.[0]?.message?.content;
@@ -441,7 +446,8 @@ export async function executePerplexitySearch(
     maxTokens,
     maxTokensPerPage,
   ]);
-  const cached = readCachedSearchPayload(cacheKey);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
   }
@@ -513,7 +519,7 @@ export async function executePerplexitySearch(
   }
 
   signal?.throwIfAborted();
-  writeCachedSearchPayload(cacheKey, payload, resolveSearchCacheTtlMs(searchConfig));
+  writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
 

@@ -175,7 +175,7 @@ export function suppressAnthropicCompaction(
   };
 }
 
-function resolveNewestAnthropicCompaction(
+export function resolveNewestAnthropicCompaction(
   messages: Context["messages"],
   model: Model,
   options?: ReplayOpts,

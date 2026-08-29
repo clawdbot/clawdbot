@@ -11,13 +11,13 @@ type EmbeddingQueryRetryHarness = {
 };
 
 function createEmbeddingQueryRetryHarness(
-  embedQuery: EmbeddingProvider["embedQuery"],
+  embedQuery: EmbeddingProvider["embed"],
   timeoutMs = 60_000,
 ): EmbeddingQueryRetryHarness {
   const provider: EmbeddingProvider = {
     id: "test-provider",
     model: "test-embedding-model",
-    embedQuery,
+    embed: embedQuery,
     embedBatch: async () => [],
   };
 
@@ -55,7 +55,7 @@ describe("memory embedding query retry cancellation", () => {
     const controller = new AbortController();
     const abortReason = new Error("memory search was cancelled");
     const embedQuery = vi
-      .fn<EmbeddingProvider["embedQuery"]>()
+      .fn<EmbeddingProvider["embed"]>()
       .mockRejectedValue(new Error("TypeError: fetch failed"));
     const manager = createEmbeddingQueryRetryHarness(embedQuery);
 
@@ -78,7 +78,7 @@ describe("memory embedding query retry cancellation", () => {
 
   it("never starts a provider request for an already-cancelled search", async () => {
     const abortReason = new Error("memory search was cancelled");
-    const embedQuery = vi.fn<EmbeddingProvider["embedQuery"]>();
+    const embedQuery = vi.fn<EmbeddingProvider["embed"]>();
     const manager = createEmbeddingQueryRetryHarness(embedQuery);
 
     await expect(
@@ -95,7 +95,7 @@ describe("memory embedding query retry cancellation", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const operationSignals: AbortSignal[] = [];
-    const embedQuery = vi.fn<EmbeddingProvider["embedQuery"]>(async (_text, options) => {
+    const embedQuery = vi.fn<EmbeddingProvider["embed"]>(async (_input, options) => {
       if (options?.signal) {
         operationSignals.push(options.signal);
       }
@@ -136,7 +136,8 @@ describe("memory embedding batch retry boundary", () => {
     "splits provider errors with %s without retrying oversized requests",
     async (_label, error) => {
       const items = Array.from({ length: 33 }, (_, index) => `item-${index}`);
-      const embedBatch = vi.fn(async (texts: string[]) => {
+      const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) => {
+        const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
         if (texts.length > 10) {
           throw new Error(`openai-compatible embeddings failed: HTTP 400: ${error(texts.length)}`);
         }

@@ -22,6 +22,7 @@ type ActiveRunSnapshotOptions = {
   events?: unknown[];
   messages?: unknown[];
   persistedToolCall?: boolean;
+  sessionAbortable?: boolean;
   startedAt?: number;
 };
 
@@ -44,6 +45,7 @@ function activeRunSnapshot(
       runId,
       text: streamText,
       startedAt: opts?.startedAt,
+      ...(opts?.sessionAbortable ? { sessionAbortable: true } : {}),
       events: opts?.events ?? [
         {
           runId,
@@ -86,7 +88,7 @@ function activeRunSnapshot(
     ],
     sessionId: "active-turn-recovery-session",
     sessionInfo: {
-      activeRunIds: [runId],
+      ...(opts?.sessionAbortable ? {} : { activeRunIds: [runId] }),
       hasActiveRun: true,
       key: "main",
       kind: "direct",
@@ -360,6 +362,27 @@ suite.define(() => {
       ).not.toHaveCount(0);
       await capture(page, "06-reload-after");
       await finishRecoveredTurn(page, gateway, runId, "Reload delivery complete.");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("routes recovered embedded-run Stop through the session owner", async () => {
+    const { context, page, gateway } = await openActiveTurn();
+    try {
+      const runId = "run-embedded-reload";
+      const startedAt = Date.now() - 10 * 60_000;
+      await installActiveRunSnapshot(gateway, runId, "channel turn", "", {
+        sessionAbortable: true,
+        startedAt,
+      });
+
+      await page.reload();
+      await page.getByRole("button", { name: "Stop generating" }).click();
+
+      const abortRequest = await gateway.waitForRequest("sessions.abort");
+      expect(abortRequest.params).toMatchObject({ key: "main", runId });
+      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -95,9 +95,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         },
         "models.list": {
           cases: [
-            { match: { view: "configured" }, response: { models: [] } },
             {
-              match: { view: "all", agentId: "main", refresh: true },
+              match: { view: "configured", agentId: "main", preparedOnly: true },
+              response: { models: [] },
+            },
+            {
+              match: { view: "configured", agentId: "main", refresh: true },
               response: {
                 models: [],
                 providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
@@ -185,7 +188,8 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         (await gateway.getRequests("models.list")).filter(
           (request) => (request.params as { view?: string } | undefined)?.view === "all",
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toHaveLength(2);
 
       await readiness.getByRole("button", { name: "Connect a verified AI model" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
@@ -386,6 +390,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         const utilityField = defaults.locator(".field").nth(1);
         const utilityLabel = utilityField.locator(".model-providers__utility-label");
         await utilityField.waitFor();
+        expect(await utilityLabel.evaluate((node) => getComputedStyle(node).columnGap)).toBe("8px");
         await expect
           .poll(() => modelPickerValue(utilityField.locator("wa-select")))
           .toBe("__openclaw_automatic_utility__");
@@ -404,6 +409,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
 
         const helpButton = defaults.getByRole("button", { name: "About the utility model" });
         await expect.poll(() => helpButton.count()).toBe(1);
+        await expect.poll(() => helpButton.locator("svg").count()).toBe(1);
         expect(await helpButton.getAttribute("aria-haspopup")).toBe("dialog");
 
         const defaultColor = await helpButton.evaluate((node) => getComputedStyle(node).color);
@@ -411,6 +417,23 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         await expect
           .poll(() => helpButton.evaluate((node) => getComputedStyle(node).color))
           .not.toBe(defaultColor);
+        const hoverTooltip = utilityLabel.locator("openclaw-tooltip wa-tooltip");
+        expect(await hoverTooltip.count()).toBe(1);
+        await expect
+          .poll(() => hoverTooltip.evaluate((node) => node.hasAttribute("open")))
+          .toBe(true);
+        await expect.poll(() => hoverTooltip.textContent()).toContain("short background tasks");
+        const helpButtonBox = await helpButton.boundingBox();
+        expect(helpButtonBox).not.toBeNull();
+        expect(helpButtonBox?.width).toBeLessThanOrEqual(16);
+        expect(helpButtonBox?.height).toBeLessThanOrEqual(16);
+        if (recordVisuals) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(utilityHelpArtifactDir, `${colorScheme}-hover-tooltip-full.png`),
+          });
+        }
 
         await helpButton.click();
         const popover = page.locator("wa-popover.model-providers__utility-help-popover");

@@ -20,11 +20,11 @@ import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js"
 import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue-recovery.js";
 import {
   claimDeliveryPlatformSendAttempt,
-  loadPendingDeliveries,
   reserveDeliveryAttempt,
   enqueueDeliveryOnce,
 } from "./delivery-queue-storage.js";
 import {
+  loadPendingDeliveries,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
 } from "./delivery-queue.test-helpers.js";

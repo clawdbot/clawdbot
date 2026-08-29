@@ -2,6 +2,7 @@ import type { WorkerTunnelStatus } from "@openclaw/gateway-protocol";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
+import type { NodeWorkerWorkspaceSeedInput } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type {
@@ -43,14 +44,20 @@ export type WorkerTunnelRequest = {
   ownerEpoch: number;
 };
 
+/** Provider teardown fences local work first; only its confirmed result releases physical ownership. */
+export type WorkerTunnelStopReason = "provider-destroying" | "provider-destroyed";
+
 export type WorkerWorkspaceCommand = {
   argv: readonly string[];
   transportRetry: "idempotent" | "never";
+  /** Local owner guard revalidated after transport awaits, immediately before dispatch. */
+  assertCurrent?: () => void;
   onDispatchReady?: () => void;
   input?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
   transfer?: NodeWorkerWorkspaceTransferInput;
+  seed?: NodeWorkerWorkspaceSeedInput;
 };
 
 export type WorkerWorkspaceSyncRequest = {
@@ -100,10 +107,13 @@ export type WorkerWorkspaceQuiescence = {
   resume(): Promise<void>;
 };
 
-export type WorkerTurnLaunchRequest = {
+type WorkerTurnLaunchRequest = {
   plan: WorkerLaunchPlan;
   turnClaim: WorkerSessionTurnClaim;
   timeoutMs?: number;
+  // Expiry of the minted admission credential; launch adapters cap admission
+  // re-arms so no advertised retry can outlive it.
+  credentialExpiresAtMs?: number;
   signal?: AbortSignal;
   onDispatchReady?: () => void;
 };
@@ -113,6 +123,11 @@ export type WorkerWorkspaceTunnelHandle = {
   ownerEpoch: number;
   launchTurn?: never;
   runWorkspaceCommand(command: WorkerWorkspaceCommand): Promise<SpawnResult>;
+  stageAttachments?(request: {
+    localPath: string;
+    isAuthorized: () => boolean;
+    signal: AbortSignal;
+  }): Promise<void>;
   quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence>;
   syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;
   reconcileWorkspace(

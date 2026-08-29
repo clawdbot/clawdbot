@@ -8,10 +8,9 @@ import {
   createImageCard,
   createInfoCard,
   createListCard,
-  createReceiptCard,
-  type CardAction,
-  type ListItem,
-} from "./flex-templates.js";
+} from "./flex-templates/basic-cards.js";
+import { createReceiptCard } from "./flex-templates/schedule-cards.js";
+import type { CardAction, ListItem } from "./flex-templates/types.js";
 import { createFlexMessage } from "./send.js";
 import type { LineChannelData } from "./types.js";
 
@@ -26,10 +25,13 @@ Types:
   confirm "Question?" --yes "Yes|data" --no "No|data"
   buttons "Title" "Text" --actions "Btn1|url1,Btn2|data2"
 
+Escape a separator that belongs to the data with a backslash: \\, \\|, or \\:
+
 Examples:
   /card info "Welcome" "Thanks for joining!"
   /card image "Product" "Check it out" --url https://example.com/img.jpg
-  /card action "Menu" "Choose an option" --actions "Order|/order,Help|/help"`;
+  /card action "Menu" "Choose an option" --actions "Order|/order,Help|/help"
+  /card action "Links" "Pick one" --actions "Open|https://example.com/a\\,b"`;
 
 function buildLineReply(lineData: LineChannelData): ReplyPayload {
   return {
@@ -50,6 +52,39 @@ function buildLineFlexReply(
 }
 
 /**
+ * Split a card option value on its unescaped separators.
+ *
+ * Each pass consumes escapes for its own separator and preserves every other
+ * backslash. This lets nested comma, pipe, and colon passes stay independent.
+ */
+function splitCardValue(value: string, separator: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "\\" && value[index + 1] === separator) {
+      current += separator;
+      index += 1;
+      continue;
+    }
+    if (char === separator) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts;
+}
+
+/** Split a "Label|data" pair, keeping escaped separators inside either side. */
+function splitCardPair(part: string): [string, string | undefined] {
+  const [label = "", data] = splitCardValue(part, "|").map((piece) => piece.trim());
+  return [label, data];
+}
+
+/**
  * Parse action string format: "Label|data,Label2|data2"
  * Data can be a URL (uri action) or plain text (message action) or key=value (postback)
  */
@@ -60,11 +95,8 @@ function parseActions(actionsStr: string | undefined): CardAction[] {
 
   const results: CardAction[] = [];
 
-  for (const part of actionsStr.split(",")) {
-    const [label, data] = part
-      .trim()
-      .split("|")
-      .map((s) => s.trim());
+  for (const part of splitCardValue(actionsStr, ",")) {
+    const [label, data] = splitCardPair(part);
     if (!label) {
       continue;
     }
@@ -87,14 +119,10 @@ function parseActions(actionsStr: string | undefined): CardAction[] {
  * Parse list items format: "Item1|Subtitle1,Item2|Subtitle2"
  */
 function parseListItems(itemsStr: string): ListItem[] {
-  return itemsStr
-    .split(",")
+  return splitCardValue(itemsStr, ",")
     .map((part) => {
-      const [title, subtitle] = part
-        .trim()
-        .split("|")
-        .map((s) => s.trim());
-      return { title: title || "", subtitle };
+      const [title, subtitle] = splitCardPair(part);
+      return { title, subtitle };
     })
     .filter((item) => item.title);
 }
@@ -103,16 +131,15 @@ function parseListItems(itemsStr: string): ListItem[] {
  * Parse receipt items format: "Item1:$10,Item2:$20"
  */
 function parseReceiptItems(itemsStr: string): Array<{ name: string; value: string }> {
-  return itemsStr
-    .split(",")
+  return splitCardValue(itemsStr, ",")
     .map((part) => {
-      const colonIndex = part.lastIndexOf(":");
-      if (colonIndex === -1) {
-        return { name: part.trim(), value: "" };
-      }
+      // The last unescaped colon separates the entry value, so a name may still
+      // contain colons of its own.
+      const segments = splitCardValue(part, ":");
+      const value = segments.length > 1 ? segments.pop() : undefined;
       return {
-        name: part.slice(0, colonIndex).trim(),
-        value: part.slice(colonIndex + 1).trim(),
+        name: segments.join(":").trim(),
+        value: value?.trim() ?? "",
       };
     })
     .filter((item) => item.name);
@@ -124,11 +151,11 @@ function parseReceiptItems(itemsStr: string): Array<{ name: string; value: strin
  */
 function parseCardArgs(argsStrInput: string): {
   type: string;
-  args: string[];
+  args: Array<string | undefined>;
   flags: Record<string, string>;
 } {
   let argsStr = argsStrInput;
-  const result: { type: string; args: string[]; flags: Record<string, string> } = {
+  const result: { type: string; args: Array<string | undefined>; flags: Record<string, string> } = {
     type: "",
     args: [],
     flags: {},
@@ -141,11 +168,13 @@ function parseCardArgs(argsStrInput: string): {
     argsStr = argsStr.slice(typeMatch[0].length).trim();
   }
 
-  // Extract quoted arguments
+  // Extract quoted arguments. A blank one keeps its position but reads as
+  // omitted, so the defaults below apply: LINE rejects the whole message when a
+  // Flex text or a template's altText is blank.
   const quotedRegex = /"([^"]*?)"/g;
   let match;
   while ((match = quotedRegex.exec(argsStr)) !== null) {
-    result.args.push(expectDefined(match[1], "quoted card argument capture"));
+    result.args.push(expectDefined(match[1], "quoted card argument capture") || undefined);
   }
 
   // Extract flags (--key value or --key "value")
@@ -188,7 +217,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
           case "info": {
             const [title = "Info", body = "", footer] = args;
             const bubble = createInfoCard(title, body, footer);
-            return buildLineFlexReply(`${title}: ${body}`, bubble);
+            return buildLineFlexReply(body ? `${title}: ${body}` : title, bubble);
           }
 
           case "image": {
@@ -210,7 +239,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const bubble = createActionCard(title, body, actions, {
               imageUrl: flags.url || flags.image,
             });
-            return buildLineFlexReply(`${title}: ${body}`, bubble);
+            return buildLineFlexReply(body ? `${title}: ${body}` : title, bubble);
           }
 
           case "list": {
@@ -252,8 +281,8 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const yesStr = flags.yes || "Yes|yes";
             const noStr = flags.no || "No|no";
 
-            const [yesLabel, yesData] = yesStr.split("|").map((s) => s.trim());
-            const [noLabel, noData] = noStr.split("|").map((s) => s.trim());
+            const [yesLabel, yesData] = splitCardPair(yesStr);
+            const [noLabel, noData] = splitCardPair(noStr);
 
             return buildLineReply({
               templateMessage: {

@@ -1,5 +1,4 @@
 /** Session-lifecycle mutation and persistence for subagent kills. */
-import type { ClearSessionQueueResult } from "../../../auto-reply/reply/queue.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -34,61 +33,9 @@ import {
 } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-type PatchSessionEntry = typeof patchSessionEntryCore;
-type AbortEmbeddedAgentRun = (sessionId: string) => boolean;
-type IsEmbeddedAgentRunActive = (sessionId: string) => boolean;
-type ClearSessionQueues = (keys: Array<string | undefined>) => ClearSessionQueueResult;
-
-type SubagentKillDeps = {
-  patchSessionEntryCore: PatchSessionEntry;
-  abortEmbeddedAgentRun?: AbortEmbeddedAgentRun;
-  isEmbeddedAgentRunActive?: IsEmbeddedAgentRunActive;
-  clearSessionQueues?: ClearSessionQueues;
-};
-
-const defaultSubagentKillDeps: SubagentKillDeps = {
-  patchSessionEntryCore,
-};
-
-let subagentKillDeps: SubagentKillDeps = defaultSubagentKillDeps;
-
 const subagentKillRuntimeLoader = createLazyImportLoader(
   () => import("./subagent-control.runtime.js"),
 );
-
-async function resolveSubagentKillRuntime(): Promise<{
-  abortEmbeddedAgentRun: AbortEmbeddedAgentRun;
-  isEmbeddedAgentRunActive: IsEmbeddedAgentRunActive;
-  clearSessionQueues: ClearSessionQueues;
-}> {
-  if (
-    subagentKillDeps.abortEmbeddedAgentRun &&
-    subagentKillDeps.isEmbeddedAgentRunActive &&
-    subagentKillDeps.clearSessionQueues
-  ) {
-    return {
-      abortEmbeddedAgentRun: subagentKillDeps.abortEmbeddedAgentRun,
-      isEmbeddedAgentRunActive: subagentKillDeps.isEmbeddedAgentRunActive,
-      clearSessionQueues: subagentKillDeps.clearSessionQueues,
-    };
-  }
-  const runtime = await subagentKillRuntimeLoader.load();
-  return {
-    abortEmbeddedAgentRun: subagentKillDeps.abortEmbeddedAgentRun ?? runtime.abortEmbeddedAgentRun,
-    isEmbeddedAgentRunActive:
-      subagentKillDeps.isEmbeddedAgentRunActive ?? runtime.isEmbeddedAgentRunActive,
-    clearSessionQueues: subagentKillDeps.clearSessionQueues ?? runtime.clearSessionQueues,
-  };
-}
-
-export function setSubagentKillTestDeps(overrides?: Partial<SubagentKillDeps>) {
-  subagentKillDeps = overrides
-    ? {
-        ...defaultSubagentKillDeps,
-        ...overrides,
-      }
-    : defaultSubagentKillDeps;
-}
 
 type SubagentKillTargetState =
   | { state: "finalizing" }
@@ -143,7 +90,7 @@ export async function persistSubagentAbortedLastRun(params: {
     return true;
   }
   try {
-    await subagentKillDeps.patchSessionEntryCore(
+    await patchSessionEntryCore(
       { storePath: params.storePath, sessionKey: params.childSessionKey },
       (current) =>
         current.sessionId !== params.expectedSessionId ||
@@ -226,7 +173,7 @@ async function killSubagentRun(params: {
   });
   const sessionId = resolved.entry?.sessionId;
   const sessionLifecycleRevision = resolved.entry?.lifecycleRevision;
-  const runtime = await resolveSubagentKillRuntime();
+  const runtime = await subagentKillRuntimeLoader.load();
   let admittedWorkReleased = true;
   return await runExclusiveSessionLifecycleMutation({
     scope: resolved.storePath,

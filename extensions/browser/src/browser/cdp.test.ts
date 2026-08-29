@@ -318,41 +318,65 @@ describe("cdp", () => {
     expect(methods).not.toContain("Runtime.evaluate");
   });
 
-  it("preserves caller cancellation after target creation while navigation is settling", async () => {
-    const controller = new AbortController();
-    const reason = new Error("cancel after target creation");
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method === "Target.createTarget") {
-        socket.send(JSON.stringify({ id: msg.id, result: { targetId: "TARGET_CANCEL" } }));
-        return;
-      }
-      if (msg.method === "Page.getFrameTree") {
-        controller.abort(reason);
-        socket.send(
-          JSON.stringify({
-            id: msg.id,
-            result: {
-              frameTree: {
-                frame: { loaderId: "LOADER_CANCEL", url: "https://example.com" },
+  it.each([
+    { abortAt: "creation", closeFails: false },
+    { abortAt: "navigation", closeFails: false },
+    { abortAt: "navigation", closeFails: true },
+  ])(
+    "closes an unreturned target after $abortAt abort (close fails: $closeFails)",
+    async ({ abortAt, closeFails }) => {
+      const controller = new AbortController();
+      const reason = new Error("cancel after target creation");
+      const closedTargets: unknown[] = [];
+      const wsPort = await startWsServerWithMessages((msg, socket) => {
+        if (msg.method === "Target.createTarget") {
+          if (abortAt === "creation") {
+            controller.abort(reason);
+          }
+          socket.send(JSON.stringify({ id: msg.id, result: { targetId: "TARGET_CANCEL" } }));
+          return;
+        }
+        if (msg.method === "Target.closeTarget") {
+          closedTargets.push(msg.params?.targetId);
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              ...(closeFails
+                ? { error: { message: "close failed" } }
+                : { result: { success: true } }),
+            }),
+          );
+          return;
+        }
+        if (msg.method === "Page.getFrameTree") {
+          controller.abort(reason);
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              result: {
+                frameTree: {
+                  frame: { loaderId: "LOADER_CANCEL", url: "https://example.com" },
+                },
               },
-            },
-          }),
-        );
-      }
-    });
-    const httpPort = await startVersionHttpServer({
-      webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
-    });
+            }),
+          );
+        }
+      });
+      const httpPort = await startVersionHttpServer({
+        webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
+      });
 
-    await expect(
-      createTargetViaCdp({
-        cdpUrl: `http://127.0.0.1:${httpPort}`,
-        url: "https://example.com",
-        signal: controller.signal,
-        waitForNavigationResult: true,
-      }),
-    ).rejects.toBe(reason);
-  });
+      await expect(
+        createTargetViaCdp({
+          cdpUrl: `http://127.0.0.1:${httpPort}`,
+          url: "https://example.com",
+          signal: controller.signal,
+          waitForNavigationResult: true,
+        }),
+      ).rejects.toBe(reason);
+      expect(closedTargets).toEqual(["TARGET_CANCEL"]);
+    },
+  );
 
   it("cancels hanging endpoint discovery without creating a target", async () => {
     const controller = new AbortController();
@@ -906,6 +930,33 @@ describe("cdp", () => {
       "http://example.com:9222",
     );
     expect(normalized).toBe("ws://example.com:9222/devtools/browser/ABC");
+  });
+
+  it("places child frame content after the real iframe ref, not ref-looking page text", async () => {
+    const name = "Literal [ref=e2]\t\b";
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method === "Accessibility.getFullAXTree") {
+        const nodes = msg.params?.frameId
+          ? [{ nodeId: "child", role: { value: "button" }, name: { value: "Frame button" } }]
+          : [
+              { nodeId: "root", role: { value: "RootWebArea" }, childIds: ["button", "frame"] },
+              { nodeId: "button", role: { value: "button" }, name: { value: name } },
+              { nodeId: "frame", role: { value: "Iframe" }, backendDOMNodeId: 42 },
+            ];
+        socket.send(JSON.stringify({ id: msg.id, result: { nodes } }));
+      } else if (msg.method === "Runtime.evaluate") {
+        socket.send(JSON.stringify({ id: msg.id, result: { result: { value: [] } } }));
+      } else if (msg.method === "DOM.describeNode") {
+        socket.send(JSON.stringify({ id: msg.id, result: { node: { frameId: "child-frame" } } }));
+      }
+    });
+    const result = await snapshotRoleViaCdp({ wsUrl: `ws://127.0.0.1:${wsPort}` });
+    const lines = result.snapshot.split("\n");
+    expect(lines).toContain(`  - button ${JSON.stringify(name)} [ref=e1]`);
+    expect(lines.findIndex((line) => line.includes('"Frame button"'))).toBeGreaterThan(
+      lines.findIndex((line) => line.includes("- Iframe [ref=e2]")),
+    );
+    expect(result.refs.e3).toMatchObject({ name: "Frame button", frameId: "child-frame" });
   });
 
   it("propagates auth and query params onto normalized websocket URLs", () => {

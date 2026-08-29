@@ -17,11 +17,16 @@ import {
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
 } from "../../scripts/lib/extension-test-plan.mts";
-import { hasImportGraphImpactOnTargets } from "../../scripts/test-projects.test-support.mts";
+import {
+  buildVitestRunPlans,
+  hasImportGraphImpactOnTargets,
+  resolveChangedTestTargetPlan,
+} from "../../scripts/test-projects.test-support.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 
 const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
+const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh";
 
 function expectBoundedCodexFallback(
   shards: ReturnType<typeof createChangedExtensionFallbackShards>,
@@ -61,6 +66,17 @@ it.each([
   [["scripts/e2e/cron-mcp-cleanup-seed.ts"], ["cron-mcp-cleanup"]],
   [["scripts/e2e/mcp-code-mode-gateway-seed.ts"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/lib/mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
+  [["scripts/e2e/lib/mcp-code-mode/scenario.sh"], ["mcp-code-mode-gateway"]],
+  [["scripts/e2e/update-channel-switch-docker.sh"], ["update-channel-switch"]],
+  [["scripts/e2e/lib/update-channel-switch/assertions.mjs"], ["update-channel-switch"]],
+  [
+    [
+      "scripts/e2e/update-channel-switch-docker.sh",
+      "scripts/e2e/lib/update-channel-switch/assertions.mjs",
+      "scripts/e2e/mcp-channels-seed.ts",
+    ],
+    ["mcp-channels", "update-channel-switch"],
+  ],
   [["scripts/e2e/docker-openai-seed.ts"], allDockerSeedLanes],
   [
     [
@@ -74,20 +90,69 @@ it.each([
   [[".github/workflows/ci.yml"], allDockerSeedLanes],
   [["scripts/lib/ci-changed-node-test-plan.mts"], allDockerSeedLanes],
   [["scripts\\e2e\\lib\\mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
+  [["scripts\\e2e\\lib\\mcp-code-mode\\scenario.sh"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/install-e2e.ts", "docs/ci.md"], []],
 ])("resolves Docker seed lanes for %j", (changedPaths, expected) => {
   expect(resolveChangedDockerSeedLanes(changedPaths)).toEqual(expected);
 });
 
 describe("CI changed Node test plan", () => {
-  it("routes Control UI style changes through source-scanning policy tests", () => {
-    const shards = createChangedNodeTestShards(["ui/src/styles/chat/layout.css"]);
+  it.each([
+    "extensions/copilot/index.ts",
+    "extensions/copilot/harness.ts",
+    "extensions/copilot/openclaw.plugin.json",
+  ])("keeps host discovery proof when only %s changes", (changedPath) => {
+    const hostTest = "src/agents/prepared-model-runtime.copilot.integration.test.ts";
+    const shards = createChangedNodeTestShards([changedPath]);
+    expect(shards).not.toBeNull();
+    expect(shards).toHaveLength(2);
+    expect(shards?.flatMap((shard) => shard.targets ?? [])).toEqual([hostTest]);
+    expect(shards?.flatMap((shard) => shard.configs)).toEqual([
+      "test/vitest/vitest.extensions.config.ts",
+    ]);
+    expect(buildVitestRunPlans([hostTest])).toEqual([
+      {
+        config: "test/vitest/vitest.agents-core.config.ts",
+        forwardedArgs: [],
+        includePatterns: [hostTest],
+        watchMode: false,
+      },
+    ]);
+    expect(
+      buildVitestRunPlans([
+        "extensions/copilot/index.test.ts",
+        "extensions/copilot/harness.test.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.extensions.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/copilot/index.test.ts", "extensions/copilot/harness.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      source: "ui/src/styles/chat/layout.css",
+      targets: [
+        "ui/src/styles/base-theme-tokens.node.test.ts",
+        "ui/src/styles/cursor-policy.node.test.ts",
+      ],
+    },
+    {
+      source: "ui/public/themes/tide.css",
+      targets: [
+        "ui/src/styles/base-theme-tokens.node.test.ts",
+        "ui/src/styles/base-theme-contrast.node.test.ts",
+      ],
+    },
+  ])("routes $source through source-scanning policy tests", ({ source, targets: expected }) => {
+    const shards = createChangedNodeTestShards([source]);
     const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
 
-    expect(targets).toEqual([
-      "ui/src/styles/base-theme-tokens.node.test.ts",
-      "ui/src/styles/cursor-policy.node.test.ts",
-    ]);
+    expect(targets).toEqual(expected);
   });
 
   it("routes cron alert sanitization changes through alert policy suites", () => {
@@ -177,6 +242,14 @@ describe("CI changed Node test plan", () => {
     expect(hasQaSmokeAffectingChange([".github/actions/setup-node-env/action.yml"])).toBe(true);
     expect(hasQaSmokeAffectingChange(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(true);
     expect(hasQaSmokeAffectingChange([".github/workflows/labeler.yml"])).toBe(false);
+  });
+
+  it.each([
+    "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+    "extensions/browser/src/browser/extension-install.test-support.ts",
+    "extensions/browser/chrome-extension/relay-key.test-support.ts",
+  ])("keeps the built native-host proof selected when only %s changes", (changedPath) => {
+    expect(hasBuildArtifactAffectingChange([changedPath])).toBe(true);
   });
 
   it("classifies prompt-snapshot impact by surface and generator import graph", () => {
@@ -391,6 +464,42 @@ describe("CI changed Node test plan", () => {
   });
 
   it.each([
+    { name: "helper alone", changedPaths: [githubActivityHelper] },
+    {
+      name: "helper trio",
+      changedPaths: [
+        githubActivityHelper,
+        ".agents/skills/openclaw-pr-maintainer/SKILL.md",
+        "test/scripts/github-activity-helper.test.ts",
+      ],
+    },
+  ])(
+    "keeps hidden maintainer helper targets and compact core fallback for $name",
+    ({ changedPaths }) => {
+      expect(hasCoreExtensionImpact(changedPaths)).toBe(false);
+      expect(createChangedExtensionFallbackShards(changedPaths)).toEqual([]);
+      expect(resolveChangedTestTargetPlan(changedPaths, { broad: true })).toMatchObject({
+        mode: "targets",
+        targets: expect.arrayContaining(["test/scripts/github-activity-helper.test.ts"]),
+      });
+      expect(createChangedNodeTestShards(changedPaths)).toBeNull();
+    },
+  );
+
+  it.each([
+    "src/plugin-sdk/core.ts",
+    ".agents/skills/openclaw-pr-maintainer/scripts/unknown-helper.sh",
+  ])(
+    "retains all extension configs for the hidden maintainer helper mixed with %s",
+    (changedPath) => {
+      const paths = [githubActivityHelper, changedPath];
+      expect(hasCoreExtensionImpact(paths)).toBe(true);
+      expect(createChangedNodeTestShards(paths)).toBeNull();
+      expectAllExtensionConfigs(createChangedExtensionFallbackShards(paths));
+    },
+  );
+
+  it.each([
     {
       changedPath: "extensions/browser/src/browser/cdp.helpers.test.ts",
       config: "test/vitest/vitest.extension-browser.config.ts",
@@ -488,6 +597,17 @@ describe("CI changed Node test plan", () => {
         configs: ["test/vitest/vitest.extension-qa.config.ts"],
         pretestBuildMode: "private-qa",
       }),
+    ]);
+  });
+
+  it("routes lifecycle edits to the prepared QA config without losing boundary coverage", () => {
+    const target = "extensions/qa-lab/src/suite-process-lifecycle.test.ts";
+    expect(createChangedNodeTestShards([target])).toEqual([
+      expect.objectContaining({
+        configs: ["test/vitest/vitest.extension-qa.config.ts"],
+        pretestBuildMode: "private-qa",
+      }),
+      expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
     ]);
   });
 

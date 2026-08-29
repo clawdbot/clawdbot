@@ -2976,37 +2976,47 @@ describe("cron tool", () => {
     });
   });
 
-  it("rejects agentId retargeting on update", async () => {
-    const tool = createTestCronTool({
-      agentSessionKey: "agent:agent-123:telegram:direct:channing",
-    });
+  it.each(["agent-123", "worker", null])(
+    "rejects scoped update agentId %j in either shape",
+    async (agentId) => {
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
+      });
 
-    await expect(
-      tool.execute("call-update-agent-id", {
-        action: "update",
-        id: "job-1",
-        job: { agentId: "worker" },
-      }),
-    ).rejects.toThrow("automation patch agentId cannot be changed");
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
+      for (const fields of [{ job: { agentId, enabled: false } }, { agentId, enabled: false }]) {
+        await expect(
+          tool.execute("call-update-agent-id", {
+            action: "update",
+            id: "job-1",
+            ...fields,
+          }),
+        ).rejects.toThrow("automation patch agentId cannot be changed");
+      }
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
 
-  it("allows unscoped operator cron.update agentId retargeting", async () => {
+  it.each([
+    ["nested", "worker"],
+    ["flat", "worker"],
+    ["nested", null],
+    ["flat", null],
+  ])("allows unscoped operator %s agentId %j updates", async (shape, agentId) => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
     const tool = createTestCronTool();
 
     await tool.execute("call-unscoped-update-agent-id", {
       action: "update",
       id: "job-1",
-      job: { agentId: "worker" },
+      ...(shape === "nested" ? { job: { agentId } } : { agentId }),
     });
 
     const params = expectSingleGatewayCallMethod("cron.update") as
-      | { id?: string; patch?: { agentId?: string } }
+      | { id?: string; patch?: { agentId?: string | null } }
       | undefined;
     expect(params).toEqual({
       id: "job-1",
-      patch: { agentId: "worker" },
+      patch: { agentId },
     });
   });
 

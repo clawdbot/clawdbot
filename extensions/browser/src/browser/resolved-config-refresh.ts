@@ -117,6 +117,8 @@ function applyResolvedConfig(
     // Only an exact live relay owns its process-local CDP credential; stale
     // config snapshots must never resurrect closed or replaced credentials.
     extensionRelayInternalTokens,
+    // Config refresh must not erase the lifecycle's key while a relay is starting.
+    extensionRelayToken: current.resolved.extensionRelayToken,
   };
   for (const [name, runtime] of current.profiles) {
     const actor = getProfileLifecycle(runtime);

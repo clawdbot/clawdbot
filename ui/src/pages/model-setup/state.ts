@@ -21,7 +21,7 @@ export type ModelSetupPageState =
 
 export type ModelSetupActivationState =
   | { phase: "idle" }
-  | { phase: "testing"; targetId: string; modelRef: string }
+  | { phase: "testing"; targetId: string }
   | {
       phase: "failure";
       targetId: string;
@@ -53,6 +53,10 @@ export type ModelSetupWizardState =
   | { phase: "error"; message: string };
 
 export function activationTimeoutForKind(kind: string): number {
+  // Match the Gateway-owned provider-auth wizard lifetime, including user sign-in.
+  if (kind === "provider-auth") {
+    return 25 * 60 * 1000;
+  }
   return kind === "codex-cli"
     ? MODEL_SETUP_CODEX_ACTIVATE_TIMEOUT_MS
     : MODEL_SETUP_ACTIVATE_TIMEOUT_MS;
@@ -108,7 +112,7 @@ export function wizardStateFromResult(
       validationError: result.error?.trim() ? formatUiExternalText(result.error) : null,
     };
   }
-  if (result.status === "done") {
+  if (result.done && result.status === "done") {
     return {
       phase: "done",
       authChoice,

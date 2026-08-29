@@ -1,5 +1,6 @@
 // Discord plugin module implements security behavior.
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createConditionalWarningCollector,
   createOpenProviderConfiguredRouteWarningCollector,
@@ -11,6 +12,7 @@ import {
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import type { ChannelPlugin } from "./channel-api.js";
+import { discordIngressIdentity } from "./monitor/ingress-identity.js";
 
 const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAccount>({
   channelKey: "discord",
@@ -21,6 +23,7 @@ const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAcc
     allowFrom: resolveDiscordAccountAllowFrom({ cfg, accountId: account.accountId }),
   }),
   policyPathSuffix: "dmPolicy",
+  classifyEntryAuthentication: identityEntryAuthenticationClassifier(discordIngressIdentity),
   normalizeEntry: (raw) =>
     raw
       .trim()

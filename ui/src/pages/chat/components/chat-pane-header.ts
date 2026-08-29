@@ -173,20 +173,19 @@ function renderIdentityCrumbs(
   copyBranchLabel: string,
 ) {
   const projectCrumb = renderProjectCrumb(props, copied, copyPathLabel, copyBranchLabel);
-  const segments: TemplateResult[] = projectCrumb ? [projectCrumb] : [];
   const parentCrumb = renderParentSessionCrumb(props);
-  if (parentCrumb) {
-    segments.push(parentCrumb);
-  }
-  segments.push(renderSessionCrumb(props));
   return html`
     <div class="chat-pane__crumbs">
-      ${segments.map(
-        (segment, index) =>
-          html`${index > 0
-            ? html`<span class="chat-pane__crumb-sep" aria-hidden="true">/</span>`
-            : nothing}${segment}`,
-      )}
+      ${projectCrumb ? html`<div class="chat-pane__project-row">${projectCrumb}</div>` : nothing}
+      <div class="chat-pane__session-trail">
+        ${projectCrumb
+          ? html`<span class="chat-pane__crumb-sep" aria-hidden="true">/</span>`
+          : nothing}
+        ${parentCrumb
+          ? html`${parentCrumb}<span class="chat-pane__crumb-sep" aria-hidden="true">/</span>`
+          : nothing}
+        ${renderSessionCrumb(props)}
+      </div>
     </div>
   `;
 }
@@ -268,7 +267,7 @@ function renderProjectCrumb(
     >
       <button
         slot="trigger"
-        class="chat-pane__workspace-chip"
+        class=${`chat-pane__workspace-chip${!copied && !props.workspaceIcon ? " chat-pane__workspace-chip--fallback-icon" : ""}`}
         type="button"
         title=${props.workspaceRoot ?? props.workspaceLabel}
         aria-label=${t("chat.sessionHeader.workspaceAria", {
@@ -459,18 +458,19 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
           props.ownerViewing,
         ),
         props.showOwnerChip
-          ? personActivityLink(props.session?.owner?.actor.id, props.personActivity)
+          ? personActivityLink(
+              props.session?.owner?.actor.identity?.type === "profile"
+                ? props.session.owner.actor.identity.id
+                : undefined,
+              props.personActivity,
+            )
           : null,
       )}
       ${props.showOwnerChip && props.session?.participants?.length
         ? html`<openclaw-viewer-facepile
             class="chat-pane__participants"
-            .staticUsers=${props.session.participants.map((participant) => ({
-              id: participant.id ?? "",
-              name: participant.label,
-              avatarUrl: participant.avatarUrl,
-              watchedSessions: [],
-            }))}
+            .staticParticipants=${props.session.participants}
+            .totalCount=${props.session.participantCount}
             .maxVisible=${4}
             .personActivity=${props.personActivity}
             variant="session"

@@ -347,9 +347,7 @@ class ProviderAdapterEmbeddings implements Embeddings {
       fallback: "none",
       model: embedding.model,
       ...(remote ? { remote } : {}),
-      ...(typeof embedding.dimensions === "number"
-        ? { outputDimensionality: embedding.dimensions }
-        : {}),
+      ...(typeof embedding.dimensions === "number" ? { dimensions: embedding.dimensions } : {}),
     });
     if (!result.provider) {
       throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
@@ -374,7 +372,7 @@ class ProviderAdapterEmbeddings implements Embeddings {
     try {
       const provider = await entry.promise;
       if (!timeoutMs) {
-        return await provider.embedQuery(text);
+        return await provider.embed(text, { inputType: "query" });
       }
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -384,7 +382,7 @@ class ProviderAdapterEmbeddings implements Embeddings {
           resolveTimerTimeoutMs(timeoutMs, 1),
         );
         timer.unref?.();
-        return await provider.embedQuery(text, { signal: controller.signal });
+        return await provider.embed(text, { signal: controller.signal, inputType: "query" });
       } finally {
         if (timer) {
           clearTimeout(timer);

@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import type {
   WorkerDispatchEnvironmentService,
@@ -29,6 +30,9 @@ import {
 export function createHarness(
   placementStore: PlacementStore,
   options: {
+    runReclaimBarrier?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["runReclaimBarrier"];
     failAt?: DispatchStage;
     destroyFails?: boolean;
     destroyFailureCount?: number;
@@ -452,14 +456,30 @@ export function createHarness(
           }
         : { requiredNodeCommands: [], consumesWorkerSlot: true },
     isCurrentNodePlacement: options.isCurrentNodePlacement ?? (() => true),
-    runReclaimBarrier: async ({ authorize, begin, reclaim }) => {
-      authorize?.();
-      return await reclaim(options.workspacePath ?? "/gateway/workspace", begin(), authorize);
-    },
-    runFailedReclaimBarrier: async ({ authorize, reclaim }) => {
-      authorize?.();
-      return await reclaim(authorize);
-    },
+    runReclaimBarrier:
+      options.runReclaimBarrier ??
+      (async ({ sessionId, sessionKey, authorize, beforeDrain, begin, reclaim }) =>
+        await runExclusiveSessionLifecycleMutation({
+          scope: options.workspacePath ?? "/gateway/workspace",
+          identities: [sessionId, sessionKey],
+          run: async () => {
+            authorize?.();
+            beforeDrain?.();
+            const placement = begin();
+            return placement.state === "reclaimed"
+              ? placement
+              : await reclaim(options.workspacePath ?? "/gateway/workspace", placement, authorize);
+          },
+        })),
+    runFailedReclaimBarrier: async ({ sessionId, sessionKey, authorize, reclaim }) =>
+      await runExclusiveSessionLifecycleMutation({
+        scope: options.workspacePath ?? "/gateway/workspace",
+        identities: [sessionId, sessionKey],
+        run: async () => {
+          authorize?.();
+          return await reclaim(authorize);
+        },
+      }),
     resolveWorkspacePath: async () => {
       fail("workspace");
       return options.workspacePath ?? "/gateway/workspace";

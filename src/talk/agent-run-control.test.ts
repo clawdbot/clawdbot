@@ -347,25 +347,30 @@ describe("controlRealtimeVoiceAgentRun", () => {
     expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
   });
 
-  it("returns a structured rejection when no run is active", async () => {
-    const deps = createDeps({});
+  it.each(["injected", "runtime"] as const)(
+    "returns a structured rejection when no run is active (%s dependencies)",
+    async (source) => {
+      const deps = source === "injected" ? createDeps({}) : undefined;
 
-    const result = await controlRealtimeVoiceAgentRun(
-      {
-        sessionKey: "agent:main:main",
-        text: "use the safer path",
+      const result = await controlRealtimeVoiceAgentRun(
+        {
+          sessionKey: "agent:main:main",
+          text: "use the safer path",
+          mode: "steer",
+        },
+        deps,
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
         mode: "steer",
-      },
-      deps,
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      mode: "steer",
-      active: false,
-      queued: false,
-      reason: "no_active_run",
-    });
-    expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
-  });
+        active: false,
+        queued: false,
+        reason: "no_active_run",
+      });
+      if (deps) {
+        expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

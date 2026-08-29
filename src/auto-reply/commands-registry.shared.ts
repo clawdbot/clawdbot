@@ -43,6 +43,7 @@ type DefineChatCommandInput = {
   category?: CommandCategory;
   /** Progressive disclosure tier. Defaults to "standard". */
   tier?: CommandTier;
+  activeRunSafe?: true;
 };
 
 /**
@@ -84,6 +85,7 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
     scope,
     category: command.category,
     tier: command.tier,
+    activeRunSafe: command.activeRunSafe,
   };
 }
 
@@ -258,6 +260,7 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand("status", "Show current status.", "status", "essential", {
       acceptsArgs: true,
+      activeRunSafe: true,
     }),
     defineBuiltinCommand("goal", "Show or control the current goal.", "status", "standard", {
       args: [
@@ -535,7 +538,9 @@ export function buildBuiltinChatCommands(
       ],
       argsMenu: "auto",
     }),
-    defineBuiltinCommand("stop", "Stop the current run.", "session", "essential"),
+    defineBuiltinCommand("stop", "Stop the current run.", "session", "essential", {
+      activeRunSafe: true,
+    }),
     defineBuiltinCommand("restart", "Restart OpenClaw.", "tools", "power"),
     defineBuiltinCommand("activation", "Set group activation mode.", "management", "power", {
       args: [
@@ -572,6 +577,7 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineBuiltinCommand("think", "Set thinking level.", "options", "essential", {
+      activeRunSafe: true,
       args: [
         defineCommandArgument("level", "Thinking level", {
           choices: ({ provider, model, catalog, agentRuntime }) =>
@@ -638,11 +644,16 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand(
       "model",
-      "Show or set the model; direct owner/admin selections request a default update.",
+      "Show or set the model; use -s, -a, or -g to choose scope.",
       "options",
       "essential",
       {
-        args: [defineCommandArgument("model", "Model id; add -s to change only this session")],
+        args: [
+          defineCommandArgument(
+            "model",
+            "Model id; add -s for session, -a for agent, or -g for global scope",
+          ),
+        ],
       },
     ),
     defineBuiltinCommand("models", "List model providers/models.", "options", "standard", {

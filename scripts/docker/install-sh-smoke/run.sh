@@ -306,30 +306,7 @@ run_install_smoke() {
     PREVIOUS_VERSION="$SMOKE_PREVIOUS_VERSION"
   else
     LATEST_VERSION="$(quiet_npm view "$PACKAGE_NAME" dist-tags.latest)"
-    VERSIONS_JSON="$(quiet_npm view "$PACKAGE_NAME" versions --json)"
-    PREVIOUS_VERSION="$(LATEST_VERSION="$LATEST_VERSION" VERSIONS_JSON="$VERSIONS_JSON" node - <<'NODE'
-const latest = String(process.env.LATEST_VERSION || "");
-const raw = process.env.VERSIONS_JSON || "[]";
-let versions;
-try {
-  versions = JSON.parse(raw);
-} catch {
-  versions = raw ? [raw] : [];
-}
-if (!Array.isArray(versions)) {
-  versions = [versions];
-}
-if (versions.length === 0 || latest.length === 0) {
-  process.exit(1);
-}
-const latestIndex = versions.lastIndexOf(latest);
-if (latestIndex <= 0) {
-  process.stdout.write(latest);
-  process.exit(0);
-}
-process.stdout.write(String(versions[latestIndex - 1] ?? latest));
-NODE
-)"
+    PREVIOUS_VERSION="$(resolve_previous_npm_version "$PACKAGE_NAME" "$LATEST_VERSION")"
   fi
 
   echo "package=$PACKAGE_NAME latest=$LATEST_VERSION previous=$PREVIOUS_VERSION"

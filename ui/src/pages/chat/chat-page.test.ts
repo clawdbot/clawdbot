@@ -13,6 +13,7 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
   nativeGatewaysCapability: () => nativeGateways.current,
 }));
 
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
@@ -68,6 +69,30 @@ type RenderedPane = HTMLElement & {
 
 type RenderedDivider = HTMLElement & { orientation: "horizontal" | "vertical" };
 
+function createSessionTitleSource() {
+  const listeners = new Set<() => void>();
+  const state: {
+    result: { sessions: Array<{ key: string; displayName?: string }> } | null;
+  } = { result: null };
+  return {
+    sessions: {
+      canonicalListRevision: 0,
+      state,
+      subscribe(listener: () => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    listeners,
+    publish(key: string, displayName: string) {
+      state.result = { sessions: [{ key, displayName }] };
+      for (const listener of listeners) {
+        listener();
+      }
+    },
+  };
+}
+
 function createSplitLayout(sessionKey: string): ChatSplitLayout {
   const singlePane: ChatSplitLayout = {
     columns: [{ id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] }],
@@ -79,14 +104,6 @@ function createSplitLayout(sessionKey: string): ChatSplitLayout {
 
 function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
   return expectDefined(items[index], `${label} ${index}`);
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function setLayout(page: ChatPage, layout: ChatSplitLayout | undefined) {
@@ -437,7 +454,7 @@ describe("chat page split layout host", () => {
     window.history.replaceState({}, "", "/chat/research/workspace?draft=ship");
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
-    const canonicalLocation = deferred<RouteLocation | null>();
+    const canonicalLocation = createDeferred<RouteLocation | null>();
     page.data = {
       sessionKey: "agent:research:workspace",
       face: "chat",
@@ -472,7 +489,7 @@ describe("chat page split layout host", () => {
     window.history.replaceState({}, "", "/chat/research/workspace");
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
-    const canonicalLocation = deferred<RouteLocation | null>();
+    const canonicalLocation = createDeferred<RouteLocation | null>();
     page.data = {
       sessionKey: "agent:research:workspace",
       face: "chat",
@@ -498,7 +515,7 @@ describe("chat page split layout host", () => {
     window.history.replaceState({}, "", "/chat/research/workspace?draft=old");
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
-    const canonicalLocation = deferred<RouteLocation | null>();
+    const canonicalLocation = createDeferred<RouteLocation | null>();
     page.data = {
       sessionKey: "agent:research:workspace",
       face: "chat",
@@ -802,27 +819,14 @@ describe("chat page split layout host", () => {
 
   it("refreshes split toolbar titles after the shared list loads", async () => {
     const page = new ChatPage();
-    const cleanup = vi.fn();
-    const sessionsState: {
-      result: { sessions: Array<{ key: string; displayName?: string }> } | null;
-    } = {
-      result: null,
-    };
-    let notify = () => {};
+    const source = createSessionTitleSource();
     (page as unknown as { context: unknown }).context = {
       agents: { state: { agentsList: null } },
       gateway: {
         snapshot: { assistantAgentId: "main", client: null, hello: null, phase: "stopped" },
         subscribe: () => () => undefined,
       },
-      sessions: {
-        canonicalListRevision: 0,
-        state: sessionsState,
-        subscribe: (listener: () => void) => {
-          notify = listener;
-          return cleanup;
-        },
-      },
+      sessions: source.sessions,
     };
     page.data = { sessionKey: "main" };
     document.body.append(page);
@@ -853,37 +857,18 @@ describe("chat page split layout host", () => {
       },
       subscribe: () => () => undefined,
     };
-    sessionsState.result = {
-      sessions: [{ key: "agent:dev:main", displayName: "Main desk" }],
-    };
-    notify();
+    source.publish("agent:dev:main", "Main desk");
     await page.updateComplete;
 
     expect(paneTitles()).toEqual(["Main desk", "Main desk"]);
 
     page.remove();
-    expect(cleanup).toHaveBeenCalledOnce();
+    expect(source.listeners.size).toBe(0);
   });
 
   it("moves session updates to a replacement context source", async () => {
-    const firstCleanup = vi.fn();
-    const secondCleanup = vi.fn();
-    let notifyFirst = () => {};
-    let notifySecond = () => {};
-    const firstSessions = {
-      state: { result: null },
-      subscribe: vi.fn((listener: () => void) => {
-        notifyFirst = listener;
-        return firstCleanup;
-      }),
-    };
-    const secondSessions = {
-      state: { result: null },
-      subscribe: vi.fn((listener: () => void) => {
-        notifySecond = listener;
-        return secondCleanup;
-      }),
-    };
+    const first = createSessionTitleSource();
+    const second = createSessionTitleSource();
     const page = new ChatPage();
     const sharedContext = {
       agents: { state: { agentsList: null } },
@@ -894,30 +879,41 @@ describe("chat page split layout host", () => {
     };
     (page as unknown as { context: unknown }).context = {
       ...sharedContext,
-      sessions: firstSessions,
+      sessions: first.sessions,
     };
+    page.data = { sessionKey: "main" };
     document.body.append(page);
+    setLayout(page, createSplitLayout("main"));
     await page.updateComplete;
+    const paneTitles = () =>
+      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map((pane) => pane.paneTitle);
+    first.publish("agent:main:main", "First desk");
+    await page.updateComplete;
+    expect(paneTitles()).toEqual(["First desk", "First desk"]);
 
-    expect(firstSessions.subscribe).toHaveBeenCalledOnce();
+    second.publish("agent:main:main", "Second desk");
     (page as unknown as { context: unknown }).context = {
       ...sharedContext,
-      sessions: secondSessions,
+      sessions: second.sessions,
     };
     page.requestUpdate();
     await page.updateComplete;
-
-    expect(firstCleanup).toHaveBeenCalledOnce();
-    expect(secondSessions.subscribe).toHaveBeenCalledOnce();
+    expect(first.listeners.size).toBe(0);
+    expect(paneTitles()).toEqual(["Second desk", "Second desk"]);
 
     const requestUpdate = vi.spyOn(page, "requestUpdate");
-    notifyFirst();
+    first.publish("agent:main:main", "Retired desk");
     expect(requestUpdate).not.toHaveBeenCalled();
-    notifySecond();
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(paneTitles()).toEqual(["Second desk", "Second desk"]);
+    second.publish("agent:main:main", "Updated desk");
+    await page.updateComplete;
+    expect(paneTitles()).toEqual(["Updated desk", "Updated desk"]);
 
     page.remove();
-    expect(secondCleanup).toHaveBeenCalledOnce();
+    expect(second.listeners.size).toBe(0);
+    requestUpdate.mockClear();
+    second.publish("agent:main:main", "Disposed desk");
+    expect(requestUpdate).not.toHaveBeenCalled();
   });
 
   it("routes a classic-mode center drop without creating a layout", () => {

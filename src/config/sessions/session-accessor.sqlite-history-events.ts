@@ -19,6 +19,10 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { createTranscriptRawDeltaCursor } from "./session-accessor.sqlite-delta.js";
 import {
+  positionTranscriptDisplayEvents,
+  readTranscriptDisplaySource,
+} from "./session-accessor.sqlite-display-position.js";
+import {
   readTranscriptProjectionGeneration,
   readVisibleMessageRange,
   resolveVisibleMessagePositionRange,
@@ -36,14 +40,16 @@ type VisibleHistoryBoundary = {
 
 type VisibleHistoryProjection = {
   boundaries: VisibleHistoryBoundary[];
+  displaySource?: string;
   total: number;
 };
 
 function resolveVisibleHistoryProjection(
   projection: CurrentTranscriptProjection,
 ): VisibleHistoryProjection {
+  const displaySource = readTranscriptDisplaySource(projection);
   if (projection.state.activeEventCount === projection.state.activeMessageCount) {
-    return { boundaries: [], total: projection.state.activeMessageCount };
+    return { boundaries: [], displaySource, total: projection.state.activeMessageCount };
   }
   const visibleMessages = resolveVisibleMessagePositions(projection);
   const db = getActiveTranscriptKysely(projection.database);
@@ -66,7 +72,7 @@ function resolveVisibleHistoryProjection(
         "identity.event_type",
         "identity.seq",
         /* kysely-allow-raw: history byte caps include each event's JSONL newline. */
-        sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
+        sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
       ])
       .select((eb) =>
         eb
@@ -83,18 +89,16 @@ function resolveVisibleHistoryProjection(
       .where("identity.event_type", "in", ["compaction", "reset"])
       .orderBy("active.active_position", "asc"),
   ).rows;
-  const latestBoundaryIsReset = rows.at(-1)?.event_type === "reset";
-  const visibleRows = latestBoundaryIsReset ? rows.slice(-1) : rows;
-  let priorBoundaries = 0;
-  const boundaries = visibleRows.map((row): VisibleHistoryBoundary => {
-    const messagePosition = latestBoundaryIsReset
-      ? visibleMessages.kept.length
-      : Math.min(
-          row.next_message_position ?? projection.state.activeMessageCount,
-          visibleMessages.total,
-        );
+  const resetIndex = rows.findLastIndex((row) => row.event_type === "reset");
+  const visibleRows = rows.slice(Math.max(0, resetIndex));
+  const boundaries = visibleRows.map((row, index): VisibleHistoryBoundary => {
+    // Kept messages precede the latest reset; later markers share its logical window.
+    // Rebase raw positions so discarded messages cannot shift those markers.
+    const nextMessagePosition = row.next_message_position ?? projection.state.activeMessageCount;
+    const messagePosition =
+      visibleMessages.kept.length + Math.max(0, nextMessagePosition - visibleMessages.postStart);
     return {
-      displayPosition: messagePosition + priorBoundaries++,
+      displayPosition: messagePosition + index,
       eventId: row.event_id,
       eventSeq: row.seq,
       messagePosition,
@@ -103,6 +107,7 @@ function resolveVisibleHistoryProjection(
   });
   return {
     boundaries,
+    displaySource,
     total: visibleMessages.total + boundaries.length,
   };
 }
@@ -183,16 +188,16 @@ function readVisibleHistoryRange(
     if (boundary) {
       const event = boundaryEvents.get(boundary.eventSeq);
       if (event) {
-        events.push({ event, seq: displayPosition + 1 });
+        events.push({ event, eventSeq: boundary.eventSeq, seq: displayPosition + 1 });
       }
       continue;
     }
     const message = messages[messageIndex++];
     if (message) {
-      events.push({ event: message.event, seq: displayPosition + 1 });
+      events.push({ ...message, seq: displayPosition + 1 });
     }
   }
-  return events;
+  return positionTranscriptDisplayEvents(projection, history.displaySource, events);
 }
 
 function resolveRecentHistoryStart(
@@ -225,7 +230,7 @@ function resolveRecentHistoryStart(
             .select([
               "active.message_position",
               /* kysely-allow-raw: excluded history payloads must not be fetched or parsed. */
-              sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
+              sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
             ])
             .where("active.session_id", "=", projection.resolved.sessionId)
             .where("active.message_position", "in", positions),
@@ -284,7 +289,7 @@ function readVisibleMessageById(
           .onRef("event.session_id", "=", "active.session_id")
           .onRef("event.seq", "=", "active.event_seq"),
       )
-      .select(["active.message_position", "event.event_json"])
+      .select(["active.event_seq", "active.message_position", "event.event_json"])
       .where("identity.session_id", "=", projection.resolved.sessionId)
       .where("identity.event_id", "=", eventId)
       .where("active.message_position", "is not", null),
@@ -299,7 +304,11 @@ function readVisibleMessageById(
       : visible.kept.indexOf(row.message_position);
   return logicalPosition < 0
     ? undefined
-    : { event: JSON.parse(row.event_json) as TranscriptEvent, seq: logicalPosition + 1 };
+    : {
+        event: JSON.parse(row.event_json) as TranscriptEvent,
+        eventSeq: row.event_seq,
+        seq: logicalPosition + 1,
+      };
 }
 
 function resolveHistoryEventById(
@@ -310,7 +319,9 @@ function resolveHistoryEventById(
   const boundary = history.boundaries.find((candidate) => candidate.eventId === eventId);
   if (boundary) {
     const event = readBoundaryEvents(projection, [boundary]).get(boundary.eventSeq);
-    return event ? { event, seq: boundary.displayPosition + 1 } : undefined;
+    return event
+      ? { event, eventSeq: boundary.eventSeq, seq: boundary.displayPosition + 1 }
+      : undefined;
   }
   const message = readVisibleMessageById(projection, eventId);
   if (!message) {
@@ -321,7 +332,7 @@ function resolveHistoryEventById(
     (candidate) => candidate.messagePosition <= messagePosition,
   ).length;
   return {
-    event: message.event,
+    ...message,
     seq: message.seq + precedingBoundaries,
   };
 }
@@ -363,6 +374,7 @@ export function readRecentSessionTranscriptHistoryEvents(
         activeLeafEntryId: projection.state.leafEventId,
         ...(deltaCursor ? { deltaCursor } : {}),
         events: [],
+        displaySource: history.displaySource,
         totalMessages: history.total,
       };
     }
@@ -382,6 +394,7 @@ export function readRecentSessionTranscriptHistoryEvents(
       activeLeafEntryId: projection.state.leafEventId,
       ...(deltaCursor ? { deltaCursor } : {}),
       events: readVisibleHistoryRange(projection, selectedStart, history.total, history),
+      displaySource: history.displaySource,
       totalMessages: history.total,
     };
   });
@@ -406,6 +419,7 @@ export function readSessionTranscriptHistoryEventPage(
     return {
       activeLeafEntryId: projection.state.leafEventId,
       events: readVisibleHistoryRange(projection, start, endExclusive, history),
+      displaySource: history.displaySource,
       totalMessages: history.total,
     };
   });
@@ -422,9 +436,13 @@ export function readSessionTranscriptHistoryEventById(
   scope: SessionTranscriptReadScope,
   eventId: string,
 ): SessionTranscriptMessageEvent | undefined {
-  return withCurrentProjectionSnapshot(scope, (projection) =>
-    resolveHistoryEventById(projection, eventId),
-  );
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const history = resolveVisibleHistoryProjection(projection);
+    const event = resolveHistoryEventById(projection, eventId, history);
+    return event
+      ? positionTranscriptDisplayEvents(projection, history.displaySource, [event])[0]
+      : undefined;
+  });
 }
 
 export function readSessionTranscriptHistoryAnchorPage(
@@ -440,6 +458,7 @@ export function readSessionTranscriptHistoryAnchorPage(
         found: false,
         hasOverreadContext: false,
         offset: 0,
+        displaySource: history.displaySource,
         totalMessages: history.total,
       };
     }
@@ -459,6 +478,7 @@ export function readSessionTranscriptHistoryAnchorPage(
       found: true,
       hasOverreadContext: readStart < start,
       offset: history.total - endExclusive,
+      displaySource: history.displaySource,
       totalMessages: history.total,
     };
   });

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { AGENT_RUN_RESTART_ABORT_ERROR_CODE } from "../../agents/run-termination.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
@@ -18,10 +19,10 @@ import {
   retainQueuedAgentRunContext,
   sweepStaleRunContexts,
 } from "../../infra/agent-run-registry.js";
+import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { getCommandLaneSnapshot, setCommandLaneConcurrency } from "../../process/command-queue.js";
-import type { SpawnResult } from "../../process/exec.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
-import type { WorkerTurnLaunchRequest } from "./tunnel-contract.js";
+import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -109,7 +110,7 @@ describe("worker turn launcher reclaimed placement", () => {
       }
       return active;
     };
-    const launchTurn = vi.fn(async (request: WorkerTurnLaunchRequest): Promise<SpawnResult> => {
+    const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
       request.onDispatchReady?.();
       workerStarted.resolve();
       await resumeWorker.promise;
@@ -414,7 +415,10 @@ describe("worker turn launcher reclaimed placement", () => {
       const versionBeforeRejectedAdmission = readAgentRunIndexVersion();
 
       resumeWorkspaceResolution.resolve();
-      await expect(pending).rejects.toThrow("stale gateway lifecycle");
+      await expect(pending).rejects.toMatchObject({ code: AGENT_RUN_RESTART_ABORT_ERROR_CODE });
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId: SESSION_ID }).activeWorkKind,
+      ).toBeUndefined();
       expect(getAgentRunContext(runId)).toMatchObject({
         lifecycleGeneration: replacementGeneration,
         sessionId: "replacement-session",

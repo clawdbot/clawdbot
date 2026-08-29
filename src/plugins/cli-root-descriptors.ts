@@ -6,10 +6,8 @@ import { normalizePluginsConfig, resolveMemorySlotDecision } from "./config-stat
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { validatePluginConfig } from "./loader-shared.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
-import {
-  buildPluginRuntimeLoadOptions,
-  resolvePluginRuntimeLoadContext,
-} from "./runtime/load-context.js";
+import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import { hasKind } from "./slots.js";
 import type { OpenClawPluginCliRootCommandDescriptor, PluginLogger } from "./types.js";
 
@@ -37,6 +35,7 @@ export async function getPluginCliCommandDescriptors(
     let selectedMemoryPluginId: string | null = null;
     const memorySlot = context.config.plugins?.slots?.memory;
     const normalizedConfig = normalizePluginsConfig(context.config.plugins);
+    const sourceConfig = normalizePluginsConfig(context.activationSourceConfig.plugins);
 
     for (const plugin of snapshot.plugins) {
       if (seenPluginIds.has(plugin.id)) {
@@ -49,9 +48,13 @@ export async function getPluginCliCommandDescriptors(
       const pluginConfig = normalizedConfig.entries[normalizePluginPolicyId(plugin.id)]?.config;
       if (
         !validatePluginConfig({
+          origin: plugin.origin,
           schema: plugin.configSchema,
           cacheKey: plugin.schemaCacheKey,
           value: pluginConfig,
+          sourceValue: plugin.configContracts?.secretInputs
+            ? sourceConfig.entries[normalizePluginPolicyId(plugin.id)]?.config
+            : undefined,
         }).ok
       ) {
         continue;

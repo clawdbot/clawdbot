@@ -496,6 +496,16 @@ describe("openclaw launcher", () => {
 
   it.each([
     {
+      name: "container env with root --help",
+      args: ["--help"],
+      env: { OPENCLAW_CONTAINER: "demo" },
+    },
+    {
+      name: "container env with root -h",
+      args: ["-h"],
+      env: { OPENCLAW_CONTAINER: "demo" },
+    },
+    {
       name: "container env",
       args: ["browser", "--help"],
       env: { OPENCLAW_CONTAINER: "demo" },
@@ -514,7 +524,10 @@ describe("openclaw launcher", () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
-      JSON.stringify({ browserHelpText: "PRECOMPUTED browser help\n" }),
+      JSON.stringify({
+        rootHelpText: "PRECOMPUTED root help\n",
+        browserHelpText: "PRECOMPUTED browser help\n",
+      }),
       "utf8",
     );
     await fs.writeFile(
@@ -805,6 +818,60 @@ describe("openclaw launcher", () => {
         }
         if (isProcessAlive(launcher.pid)) {
           process.kill(launcher.pid!, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each([true, false])(
+    "preserves foreground Gmail shutdown grace with compile cache (source=%s)",
+    async (sourceCheckout) => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      if (sourceCheckout) {
+        await addGitMarker(fixtureRoot);
+      }
+      const readyPath = path.join(fixtureRoot, "gmail-ready.json");
+      const stoppedPath = path.join(fixtureRoot, "gmail-stopped.txt");
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          `process.on("SIGTERM", () => setTimeout(() => { writeFileSync(${JSON.stringify(stoppedPath)}, "stopped"); process.exit(0); }, 3025));`,
+          `writeFileSync(${JSON.stringify(readyPath)}, JSON.stringify({ pid: process.pid }));`,
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      );
+      const launcher = spawn(
+        process.execPath,
+        [
+          path.join(fixtureRoot, "openclaw.mjs"),
+          "webhooks",
+          "--profile",
+          "fixture",
+          "gmail",
+          "run",
+        ],
+        {
+          cwd: fixtureRoot,
+          env: launcherEnv({ NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-cache") }),
+          stdio: "ignore",
+        },
+      );
+      let ownerPid: number | undefined;
+      try {
+        ownerPid = (await waitForJsonFile<{ pid: number }>(readyPath, 5000)).pid;
+        launcher.kill("SIGTERM");
+        await expect(waitForProcessExit(launcher, "foreground Gmail", 5000)).resolves.toEqual({
+          code: 0,
+          signal: null,
+        });
+        await expect(fs.readFile(stoppedPath, "utf8")).resolves.toBe("stopped");
+        expect(isProcessAlive(ownerPid)).toBe(false);
+      } finally {
+        for (const pid of [ownerPid, launcher.pid]) {
+          if (isProcessAlive(pid)) {
+            process.kill(pid!, "SIGKILL");
+          }
         }
       }
     },

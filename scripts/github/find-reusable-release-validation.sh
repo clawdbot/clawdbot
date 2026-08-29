@@ -39,7 +39,7 @@ Usage: find-reusable-release-validation.sh --target-sha <sha> --workflow-sha <sh
 
 Scans recent successful Full Release Validation runs for an exact-target
 validation manifest whose recorded lane-selection inputs match --inputs-json
-and whose normalized strict-v3 evidence is accepted by the current trusted-main
+and whose normalized strict-v4 phased evidence is accepted by the current trusted-main
 verifier identified by --workflow-sha. The historical producer workflow SHA
 remains independent. A descendant target may reuse product validation only
 when GitHub proves the entire delta is CHANGELOG.md. Writes reuse=true plus
@@ -278,7 +278,7 @@ for ((index = 0; index < run_count; index += 1)); do
     --arg trusted_workflow_route "$trusted_workflow_route" \
     --arg verifier_sha "$VERIFIER_WORKFLOW_SHA" '
       . as $record
-      | .schema == "openclaw.release-validation-evidence/v3"
+      | .schema == "openclaw.release-validation-evidence/v4"
       and .valid == true
       and .repository == $repo
       and .producerOnTrustedMainLineage == ($trusted_workflow_route == "main")
@@ -312,24 +312,22 @@ for ((index = 0; index < run_count; index += 1)); do
           (
             (
               .workflowRef == "main"
-              and (
-                (.manifestVersion == 3 and .workflowRefProof == "manifest-v3-branch")
-                or (
-                  .manifestVersion == 2
-                  and .workflowRefProof == "legacy-v2-main-ancestry"
-                )
-              )
+              and .manifestVersion == 4
+              and .workflowRefProof == "manifest-v3-branch"
             )
             or (
-              .manifestVersion == 3
+              .manifestVersion == 4
               and .workflowRefProof == "manifest-v3-sha-pinned-main-ancestry"
               and (.workflowRef | test("^release-ci/[0-9a-f]{12}-[1-9][0-9]*$"))
               and (.workflowRef | startswith("release-ci/\($parent.workflowSha[0:12])-"))
             )
           )
         else
-          .manifestVersion == 3
-          and .workflowRefProof == "manifest-v3-protected-tag-exact-sha"
+          .manifestVersion == 4
+          and (
+            .workflowRefProof == "manifest-v3-protected-tag-exact-sha"
+            or .workflowRefProof == "manifest-v3-protected-tag-tooling-lineage"
+          )
           and (.workflowRef | test("^release-ci/[0-9a-f]{12}-[1-9][0-9]*$"))
           and (.workflowRef | startswith("release-ci/\($parent.workflowSha[0:12])-"))
         end
@@ -344,9 +342,9 @@ for ((index = 0; index < run_count; index += 1)); do
             or ((.validationInputs.releasePackageSpec // "") | length) > 0
           )
         ) then
-          ["normalCi", "npmTelegram", "pluginPrerelease", "productPerformance", "releaseChecks"]
+          ["normalCi", "npmTelegram", "pluginPrereleaseCandidate", "pluginPrereleaseIndependent", "productPerformance", "releaseChecksCandidate", "releaseChecksIndependent"]
         else
-          ["normalCi", "pluginPrerelease", "productPerformance", "releaseChecks"]
+          ["normalCi", "pluginPrereleaseCandidate", "pluginPrereleaseIndependent", "productPerformance", "releaseChecksCandidate", "releaseChecksIndependent"]
         end)
       and ([.children[].runId] | length == (unique | length))
       and ([.children[]

@@ -125,6 +125,7 @@ describe("worker environment service", () => {
     const unsubscribeTurnClaimClosed = vi.fn();
     const placementStore = {
       readWorkerTurnClaim: vi.fn(),
+      readWorkerTurnLiveAckCursor: vi.fn(() => 0),
       validateWorkerTurn: vi.fn(() => false),
       isWorkerTurnToolAuthorized: vi.fn(() => false),
       updateAckCursors: vi.fn(),

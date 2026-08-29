@@ -278,7 +278,14 @@ suite.define(() => {
       const headers = page.locator(".chat-pane__header");
       await expect.poll(() => panes.count()).toBe(2);
       await panes.last().getByText("Split toolbar proof.").waitFor();
-      await expect.poll(() => panes.last().locator(".chat-loading-skeleton").count()).toBe(0);
+      await expect
+        .poll(() =>
+          panes
+            .last()
+            .locator('openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
+            .count(),
+        )
+        .toBe(0);
       await gateway.resolveDeferred("chat.startup");
       await expect
         .poll(() =>
@@ -554,7 +561,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps stale context visible as approximate without warning or compaction", async () => {
+  it("keeps stale context visible as approximate without warning", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -598,7 +605,6 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".context-usage__popover").textContent())
         .toContain("~190k / 200k · ~95%");
-      expect(await page.locator(".context-ring__action").count()).toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -640,7 +646,7 @@ suite.define(() => {
 
       // The background hydrate must not take the shared sessions loading
       // flag, which would disable New session for the whole request.
-      const newThread = page.getByRole("button", { name: "New session" }).first();
+      const newThread = page.getByRole("link", { name: "New session" }).first();
       expect(await newThread.isEnabled()).toBe(true);
 
       await gateway.resolveDeferred("sessions.list");

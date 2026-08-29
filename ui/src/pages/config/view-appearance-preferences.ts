@@ -9,17 +9,16 @@ import {
 import { icons } from "../../components/icons.ts";
 import { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
-import { LOBSTER_PALETTE_LORE } from "../../components/lobster-pet-lore.ts";
 import {
-  LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
   lobsterLookStyle,
-  lobsterPaletteName,
   renderLobsterSvg,
-} from "../../components/lobster-pet.ts";
+} from "../../components/lobster-pet-look.ts";
+import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
+import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import "../../components/tooltip.ts";
 import {
-  renderSettingsDefaultState,
+  renderSettingsDefaultDescription,
   renderSettingsRow,
   renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
@@ -32,6 +31,9 @@ import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import type { ConfigProps } from "./view-types.ts";
 
 export function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): string {
+  if (provenance === "profile") {
+    return t("configView.profileSyncedHint");
+  }
   if (provenance === "device-local") {
     return t("quickSettings.personal.browserOnly");
   }
@@ -42,11 +44,10 @@ export function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): 
 }
 
 export function renderLanguageSection(props: ConfigProps) {
-  const defaultState = renderSettingsDefaultState({
-    value: props.localeResetValue ? languageLabel(props.localeResetValue) : t("common.system"),
-    overridden: props.localeOverridden,
-    onReset: props.resetLocale,
-  });
+  const defaultDescription = renderSettingsDefaultDescription(
+    props.localeResetValue ? languageLabel(props.localeResetValue) : t("common.system"),
+    props.localeOverridden,
+  );
   const provenance = serverUiPrefProvenanceHint(props.localeProvenance);
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.language} class="settings-section">
@@ -56,11 +57,12 @@ export function renderLanguageSection(props: ConfigProps) {
       <div class="settings-group">
         ${renderSettingsRow({
           title: t("quickSettings.language"),
-          description: html`${defaultState.description} ${provenance}`,
-          control: html`
-            ${defaultState.action}
-            ${renderLanguageSelect(props.localeOverride, props.systemLocale, props.onLocaleChange)}
-          `,
+          description: html`${defaultDescription} ${provenance}`,
+          control: renderLanguageSelect(
+            props.localeOverride,
+            props.systemLocale,
+            props.onLocaleChange,
+          ),
         })}
       </div>
     </section>
@@ -189,33 +191,27 @@ export function renderChatPreferencesSection(
   const followUpDescription = props.chatFollowUpMode
     ? t("chat.followUpModeOverriding", { mode: serverQueueMode })
     : t("chat.followUpModeUsingServer", { mode: serverQueueMode });
-  const messageWidthDefaultState = renderSettingsDefaultState({
-    value: UI_APPEARANCE_DEFAULTS.chatMessageMaxWidth,
-    overridden: props.chatMessageMaxWidth !== undefined,
-    onReset: () => props.setChatMessageMaxWidth(undefined),
-  });
-  const sendShortcutDefaultState = renderSettingsDefaultState({
-    value:
-      props.chatSendShortcutResetValue === "modifier-enter"
-        ? t("chat.sendShortcutModifierEnter")
-        : t("chat.sendShortcutEnter"),
-    overridden: props.chatSendShortcutOverridden,
-    onReset: props.resetChatSendShortcut,
-  });
+  const messageWidthDefaultDescription = renderSettingsDefaultDescription(
+    UI_APPEARANCE_DEFAULTS.chatMessageMaxWidth,
+    props.chatMessageMaxWidth !== undefined,
+  );
+  const sendShortcutDefaultDescription = renderSettingsDefaultDescription(
+    props.chatSendShortcutResetValue === "modifier-enter"
+      ? t("chat.sendShortcutModifierEnter")
+      : t("chat.sendShortcutEnter"),
+    props.chatSendShortcutOverridden,
+  );
   const sendShortcutProvenance = serverUiPrefProvenanceHint(props.chatSendShortcutProvenance);
   const followUpProvenance = serverUiPrefProvenanceHint(props.chatFollowUpModeProvenance);
-  const catalogTargetDefaultState = renderSettingsDefaultState({
-    value: t("chat.catalogOpenTargetViewer"),
-    overridden: props.catalogOpenTarget !== UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
-    onReset: () => props.setCatalogOpenTarget(UI_APPEARANCE_DEFAULTS.catalogOpenTarget),
-  });
-  const holdToRecordDefaultState = renderSettingsDefaultState({
-    value: t("common.enabled"),
-    overridden:
-      (props.composerHoldToRecord ?? UI_APPEARANCE_DEFAULTS.composerHoldToRecord) !==
+  const catalogTargetDefaultDescription = renderSettingsDefaultDescription(
+    t("chat.catalogOpenTargetViewer"),
+    props.catalogOpenTarget !== UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
+  );
+  const holdToRecordDefaultDescription = renderSettingsDefaultDescription(
+    t("common.enabled"),
+    (props.composerHoldToRecord ?? UI_APPEARANCE_DEFAULTS.composerHoldToRecord) !==
       UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
-    onReset: () => props.setComposerHoldToRecord?.(UI_APPEARANCE_DEFAULTS.composerHoldToRecord),
-  });
+  );
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.chat} class="settings-section">
       <div class="settings-section__header">
@@ -225,15 +221,14 @@ export function renderChatPreferencesSection(
         ${renderSettingsRow({
           title: t("configView.chatPrefs.messageWidth"),
           description: html`${t("configView.chatPrefs.messageWidthHint")}<br />
-            ${messageWidthDefaultState.description} ${t("quickSettings.personal.browserOnly")}`,
-          control: html` ${messageWidthDefaultState.action} ${messageWidthInput} `,
+            ${messageWidthDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+          control: messageWidthInput,
         })}
         ${renderSettingsSelectRow({
           title: t("chat.sendShortcut"),
           value: props.chatSendShortcut,
           setting: "send-shortcut",
-          description: html`${sendShortcutDefaultState.description} ${sendShortcutProvenance}`,
-          actions: sendShortcutDefaultState.action,
+          description: html`${sendShortcutDefaultDescription} ${sendShortcutProvenance}`,
           options: [
             { value: "enter", label: t("chat.sendShortcutEnter") },
             { value: "modifier-enter", label: t("chat.sendShortcutModifierEnter") },
@@ -281,9 +276,8 @@ export function renderChatPreferencesSection(
           title: t("chat.catalogOpenTarget"),
           value: props.catalogOpenTarget,
           setting: "catalog-open-target",
-          description: html`${catalogTargetDefaultState.description}
+          description: html`${catalogTargetDefaultDescription}
           ${t("quickSettings.personal.browserOnly")}`,
-          actions: catalogTargetDefaultState.action,
           options: [
             { value: "viewer", label: t("chat.catalogOpenTargetViewer") },
             { value: "terminal", label: t("chat.catalogOpenTargetTerminal") },
@@ -295,10 +289,9 @@ export function renderChatPreferencesSection(
           ? renderSettingsToggleRow({
               title: t("chat.composer.holdToRecordSetting"),
               description: html`${t("chat.composer.holdToRecordSettingDescription")}<br />
-                ${holdToRecordDefaultState.description} ${t("quickSettings.personal.browserOnly")}`,
+                ${holdToRecordDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
               checked: props.composerHoldToRecord ?? UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
               onChange: props.setComposerHoldToRecord,
-              actions: holdToRecordDefaultState.action,
             })
           : nothing}
       </div>
@@ -314,16 +307,14 @@ export function renderLobsterPetSection(props: ConfigProps) {
   }
   const lobsterPetVisits = props.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits;
   const lobsterPetSounds = props.lobsterPetSounds ?? UI_APPEARANCE_DEFAULTS.lobsterPetSounds;
-  const lobsterVisitsDefaultState = renderSettingsDefaultState({
-    value: t("common.enabled"),
-    overridden: lobsterPetVisits !== UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
-    onReset: () => props.setLobsterPetVisits?.(UI_APPEARANCE_DEFAULTS.lobsterPetVisits),
-  });
-  const lobsterSoundsDefaultState = renderSettingsDefaultState({
-    value: t("common.disabled"),
-    overridden: lobsterPetSounds !== UI_APPEARANCE_DEFAULTS.lobsterPetSounds,
-    onReset: () => props.setLobsterPetSounds?.(UI_APPEARANCE_DEFAULTS.lobsterPetSounds),
-  });
+  const lobsterVisitsDefaultDescription = renderSettingsDefaultDescription(
+    t("common.enabled"),
+    lobsterPetVisits !== UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
+  );
+  const lobsterSoundsDefaultDescription = renderSettingsDefaultDescription(
+    t("common.disabled"),
+    lobsterPetSounds !== UI_APPEARANCE_DEFAULTS.lobsterPetSounds,
+  );
   const dexEntries = getLobsterdexEntries();
   const seenCount = LOBSTER_PET_PALETTES.filter((palette) => dexEntries.has(palette.id)).length;
   return html`
@@ -336,23 +327,21 @@ export function renderLobsterPetSection(props: ConfigProps) {
           title: t("quickSettings.appearance.lobsterVisits"),
           description: lobsterPetVisits
             ? html`${t("quickSettings.appearance.lobsterVisitsOn")}<br />
-                ${lobsterVisitsDefaultState.description} ${t("quickSettings.personal.browserOnly")}`
+                ${lobsterVisitsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`
             : html`${t("quickSettings.appearance.lobsterVisitsOff")}<br />
-                ${lobsterVisitsDefaultState.description} ${t("quickSettings.personal.browserOnly")}`,
+                ${lobsterVisitsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           checked: lobsterPetVisits,
           onChange: (enabled) => props.setLobsterPetVisits?.(enabled),
-          actions: lobsterVisitsDefaultState.action,
         })}
         ${renderSettingsToggleRow({
           title: t("quickSettings.appearance.lobsterSounds"),
           description: lobsterPetSounds
             ? html`${t("quickSettings.appearance.lobsterSoundsOn")}<br />
-                ${lobsterSoundsDefaultState.description} ${t("quickSettings.personal.browserOnly")}`
+                ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`
             : html`${t("quickSettings.appearance.lobsterSoundsOff")}<br />
-                ${lobsterSoundsDefaultState.description} ${t("quickSettings.personal.browserOnly")}`,
+                ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           checked: lobsterPetSounds,
           onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
-          actions: lobsterSoundsDefaultState.action,
           onAct: (enabled) => {
             if (enabled) {
               previewLobsterChirp();
@@ -437,21 +426,19 @@ export function renderLobsterPetSection(props: ConfigProps) {
 
 export function renderSidebarPreferencesSection(props: ConfigProps) {
   const hiddenCatalogIds = [...props.hiddenSessionCatalogIds].toSorted();
-  const liveActivityDefaultState = renderSettingsDefaultState({
-    value: t("common.enabled"),
-    overridden: props.sidebarLiveActivity !== UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
-    onReset: () => props.setSidebarLiveActivity(UI_APPEARANCE_DEFAULTS.sidebarLiveActivity),
-  });
+  const liveActivityDefaultDescription = renderSettingsDefaultDescription(
+    t("common.enabled"),
+    props.sidebarLiveActivity !== UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
+  );
   // The delete dialog's "Don't ask me again" writes this off; this row is where
   // the operator turns it back on, so it has to stay next to the session prefs.
   const setSessionDeleteConfirm = props.setSessionDeleteConfirm;
   const sessionDeleteConfirm =
     props.sessionDeleteConfirm ?? UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm;
-  const deleteConfirmDefaultState = renderSettingsDefaultState({
-    value: t("common.enabled"),
-    overridden: sessionDeleteConfirm !== UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
-    onReset: () => setSessionDeleteConfirm?.(UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm),
-  });
+  const deleteConfirmDefaultDescription = renderSettingsDefaultDescription(
+    t("common.enabled"),
+    sessionDeleteConfirm !== UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
+  );
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.sidebar} class="settings-section">
       <div class="settings-section__header">
@@ -462,19 +449,17 @@ export function renderSidebarPreferencesSection(props: ConfigProps) {
         ${renderSettingsToggleRow({
           title: t("configView.sidebarPrefs.liveActivity"),
           description: html`${t("configView.sidebarPrefs.liveActivityHint")}<br />
-            ${liveActivityDefaultState.description} ${t("quickSettings.personal.browserOnly")}`,
+            ${liveActivityDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           checked: props.sidebarLiveActivity,
           onChange: props.setSidebarLiveActivity,
-          actions: liveActivityDefaultState.action,
         })}
         ${setSessionDeleteConfirm
           ? renderSettingsToggleRow({
               title: t("configView.sidebarPrefs.deleteConfirm"),
               description: html`${t("configView.sidebarPrefs.deleteConfirmHint")}<br />
-                ${deleteConfirmDefaultState.description} ${t("quickSettings.personal.browserOnly")}`,
+                ${deleteConfirmDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
               checked: sessionDeleteConfirm,
               onChange: setSessionDeleteConfirm,
-              actions: deleteConfirmDefaultState.action,
             })
           : nothing}
       </div>

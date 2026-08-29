@@ -34,10 +34,10 @@ function parseDiscordModelPickerCustomId(customId: string) {
     : null;
 }
 
-const buildModelsProviderDataMock = vi.hoisted(() => vi.fn());
+const buildPreparedModelsProviderDataMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
-  buildModelsProviderData: buildModelsProviderDataMock,
+  buildPreparedModelsProviderData: buildPreparedModelsProviderDataMock,
 }));
 
 type SerializedComponent = {
@@ -92,15 +92,15 @@ function requireValue<T>(value: T | null | undefined, message: string): T {
 }
 
 describe("loadDiscordModelPickerData", () => {
-  it("reuses buildModelsProviderData as source of truth with agent scope", async () => {
+  it("reuses buildPreparedModelsProviderData as source of truth with agent scope", async () => {
     const expected = createModelsProviderData({ openai: ["gpt-4o"] });
     const cfg = EMPTY_DISCORD_TEST_CONFIG;
-    buildModelsProviderDataMock.mockResolvedValue(expected);
+    buildPreparedModelsProviderDataMock.mockResolvedValue(expected);
 
     const result = await loadDiscordModelPickerData(cfg, "support");
 
-    expect(buildModelsProviderDataMock).toHaveBeenCalledTimes(1);
-    expect(buildModelsProviderDataMock).toHaveBeenCalledWith(cfg, "support");
+    expect(buildPreparedModelsProviderDataMock).toHaveBeenCalledTimes(1);
+    expect(buildPreparedModelsProviderDataMock).toHaveBeenCalledWith(cfg, "support");
     expect(result).toBe(expected);
   });
 });

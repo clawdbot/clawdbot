@@ -290,7 +290,7 @@ export async function projectInferenceRoute(
       ? {
           agent: {
             id: normalizeAgentId(agent.id),
-            agentDir: agent.agentDir,
+            // route.agentDir pins the resolved owner; setup may materialize that same default.
             model: structuredClone(agent.model),
             params: structuredClone(agent.params),
             tools: structuredClone(agent.tools),

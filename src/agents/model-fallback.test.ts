@@ -486,24 +486,32 @@ function createOverrideFailureRun(params: {
 function makeSingleProviderStore(params: {
   provider: string;
   usageStat: NonNullable<AuthProfileStore["usageStats"]>[string];
-  credentialType?: "api_key" | "token";
+  credentialType?: "api_key" | "oauth" | "token";
 }): AuthProfileStore {
   const profileId = `${params.provider}:default`;
   return {
     version: AUTH_STORE_VERSION,
     profiles: {
       [profileId]:
-        params.credentialType === "token"
+        params.credentialType === "oauth"
           ? {
-              type: "token",
+              type: "oauth",
               provider: params.provider,
-              token: "test-token",
+              access: "test-access",
+              refresh: "test-refresh",
+              expires: Date.now() + 60_000,
             }
-          : {
-              type: "api_key",
-              provider: params.provider,
-              key: "test-key",
-            },
+          : params.credentialType === "token"
+            ? {
+                type: "token",
+                provider: params.provider,
+                token: "test-token",
+              }
+            : {
+                type: "api_key",
+                provider: params.provider,
+                key: "test-key",
+              },
     },
     usageStats: {
       [profileId]: params.usageStat,
@@ -524,8 +532,8 @@ async function expectSkippedUnavailableProvider(params: {
   providerPrefix: string;
   usageStat: NonNullable<AuthProfileStore["usageStats"]>[string];
   expectedReason: string;
-  credentialType?: "api_key" | "token";
-  expectedAuthMode?: "token";
+  credentialType?: "api_key" | "oauth" | "token";
+  expectedAuthMode?: "oauth" | "token";
 }) {
   const provider = `${params.providerPrefix}-${crypto.randomUUID()}`;
   const cfg = makeProviderFallbackCfg(provider);
@@ -1340,6 +1348,56 @@ describe("runWithModelFallback", () => {
     expect(expectDefined(result.attempts[0], "result.attempts[0] test invariant").reason).toBe(
       "unknown",
     );
+  });
+
+  // A transport-owning plugin harness disables generic compaction recovery, so a provider
+  // request-size ceiling leaves the embedded runner as a FailoverError whose message has already
+  // been replaced with context-overflow copy. Only rawError still states the figures, which is why
+  // the boundary reads the recorded fact rather than the message. See #130096.
+  const GROQ_REQUEST_CEILING_413 =
+    "413 Request too large for model `openai/gpt-oss-120b` in organization `org_x` " +
+    "service tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested 8098, " +
+    "please reduce your message size and try again.";
+
+  function makeNormalizedOverflowFailover(rawError?: string) {
+    return new FailoverError(
+      "Context overflow: prompt too large for the model. " +
+        "Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+      { reason: "context_overflow", provider: "groq", model: "openai/gpt-oss-120b", rawError },
+    );
+  }
+
+  it("keeps configured fallback running when the provider states a request-size ceiling", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(makeNormalizedOverflowFailover(GROQ_REQUEST_CEILING_413))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    // The ceiling belongs to the refusing provider's quota, not to any model's context window,
+    // so a differently provisioned candidate is exactly what may still admit the request.
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("still rethrows a context overflow that no request-size ceiling explains", async () => {
+    const cfg = makeCfg();
+    const overflow = makeNormalizedOverflowFailover("400 input is too long for the model");
+    const run = vi.fn().mockRejectedValue(overflow);
+
+    // Ordinary overflow stays the inner runner's to compact and retry; rotating to a model with a
+    // smaller window would fail worse. This pins that contract against the exception above.
+    await expect(
+      runWithModelFallback({ cfg, provider: "openai", model: "gpt-4.1-mini", run }),
+    ).rejects.toBe(overflow);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("does not treat Codex missing tool-result failures as model fallback candidates", async () => {
@@ -3451,6 +3509,39 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0]?.authMode).toBe("oauth");
   });
 
+  it("preserves auth mode metadata after fallback exhaustion", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.6-sol",
+            fallbacks: ["openai/gpt-5.6-terra"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockRejectedValue(
+      new FailoverError("OpenAI OAuth unavailable", {
+        reason: "auth_permanent",
+        provider: "openai",
+        authMode: "oauth",
+      }),
+    );
+
+    const error = requireFallbackSummaryError(
+      await captureRejection(
+        runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-5.6-sol",
+          run,
+        }),
+      ),
+    );
+
+    expect(error.authMode).toBe("oauth");
+  });
+
   it("falls back on model-not-found error shapes", async () => {
     const cases: Array<{
       name: string;
@@ -3572,6 +3663,19 @@ describe("runWithModelFallback", () => {
         cooldownUntil: Date.now() + 5 * 60_000,
       },
       expectedReason: "unknown",
+    });
+  });
+
+  it("preserves OAuth mode when auth-disabled profiles are skipped", async () => {
+    await expectSkippedUnavailableProvider({
+      providerPrefix: "auth-disabled",
+      usageStat: {
+        disabledUntil: Date.now() + 5 * 60_000,
+        disabledReason: "auth_permanent",
+      },
+      expectedReason: "auth_permanent",
+      credentialType: "oauth",
+      expectedAuthMode: "oauth",
     });
   });
 

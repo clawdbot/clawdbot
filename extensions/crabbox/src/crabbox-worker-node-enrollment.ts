@@ -42,7 +42,10 @@ export function createCrabboxNodeEnrollmentSetup(params: {
     if (executionMode !== "remote-exec") {
       return [];
     }
+    // Uncaught node -e errors dump source and append a stack to the diagnosis,
+    // pushing the actionable message out of the bounded provider error tail.
     const inspectPlugin = [
+      "try{",
       'const fs=require("node:fs"),path=require("node:path"),module=require("node:module");',
       'const inspection=JSON.parse(fs.readFileSync(0,"utf8")),plugin=inspection.plugin;',
       `const version=${JSON.stringify(enrollment.openclawVersion)};`,
@@ -69,6 +72,7 @@ export function createCrabboxNodeEnrollmentSetup(params: {
       'if(!existing.isSymbolicLink()||fs.realpathSync(projected)!==root){throw new Error("Codex node plugin path is occupied")}',
       '}catch(error){if(error.code!=="ENOENT"){throw error}fs.symlinkSync(root,projected)}',
       "}",
+      "}catch(error){console.error(String(error));process.exitCode=1}",
     ].join("");
     return [
       `"$@" plugins inspect codex --json | node -e ${shellQuote(inspectPlugin)} "$state_dir"`,
@@ -82,17 +86,19 @@ export function createCrabboxNodeEnrollmentSetup(params: {
     'chmod 700 "$state_dir"',
     'pid_file="$state_dir/node.pid"',
     'package_spec_file="$state_dir/package-spec"',
+    'global_probe_log="$state_dir/global-probe.log"',
+    'package_probe_log="$state_dir/package-probe.log"',
     'if [ -s "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then exit 0; fi',
     ...setupCodeLines,
-    "if command -v openclaw >/dev/null 2>&1; then",
-    '  case "$(openclaw --version 2>/dev/null || true)" in',
+    'if global_version="$(openclaw --version 2>"$global_probe_log")"; then',
+    '  case "$global_version" in',
     `    ${versionLabel}|${versionMetadataPrefix}*) printf "%s\\n" "@global" >"$package_spec_file" ;;`,
     "  esac",
     "fi",
     'if [ ! -s "$package_spec_file" ]; then',
     '  rm -f "$package_spec_file"',
     `  for package_candidate in ${packageCandidates}; do`,
-    '    if OPENCLAW_STATE_DIR="$state_dir" npx --yes --package "$package_candidate" -- openclaw --version >/dev/null 2>&1; then',
+    '    if OPENCLAW_STATE_DIR="$state_dir" npx --yes --package "$package_candidate" -- openclaw --version >"$package_probe_log" 2>&1; then',
     '      printf "%s\\n" "$package_candidate" >"$package_spec_file"',
     "      break",
     "    fi",
@@ -102,6 +108,21 @@ export function createCrabboxNodeEnrollmentSetup(params: {
     `  printf "%s\\n" ${shellQuote(
       `OpenClaw worker bootstrap could not install Gateway version ${enrollment.openclawVersion}; for an unreleased Gateway build, cloudWorkers profile setup must install that exact version globally before enrollment.`,
     )} >&2`,
+    '  printf "Last package probe: " >&2',
+    '  tail -c 2048 "$package_probe_log" >&2',
+    '  printf "\\nGlobal CLI probe: " >&2',
+    '  tail -c 1024 "$global_probe_log" >&2',
+    // command -v hides inaccessible installs. Inspect PATH as the node user and
+    // put the actionable cause last so the provider's redacted error tail keeps it.
+    '  printf "%s\\n" "$PATH" | tr ":" "\\n" | while IFS= read -r bin_dir; do',
+    '    global_cli="${bin_dir:-.}/openclaw"',
+    '    if { [ -e "$global_cli" ] || [ -L "$global_cli" ]; } && { [ ! -r "$global_cli" ] || [ ! -x "$global_cli" ]; }; then',
+    '      printf "\\nGlobal openclaw not readable/executable by node user %s: %s\\n" "$(id -un)" "$global_cli" >&2',
+    '      ls -ldL "$global_cli" >&2 2>&1 || true',
+    '      printf "%s\\n" "Install with umask 022 in the root shell; ensure package files and parent directories are accessible to the node user." >&2',
+    "      break",
+    "    fi",
+    "  done",
     "  exit 1",
     "fi",
     'package_spec="$(cat "$package_spec_file")"',

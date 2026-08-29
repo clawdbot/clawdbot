@@ -1,9 +1,8 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * Finalizes post-turn state, abort resources, and terminal trajectory artifacts.
  * It may assume stream execution and transcript writes are settled.
  */
-
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { readActiveTranscriptEntryAnchor } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -11,6 +10,10 @@ import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import {
+  projectNestedToolActivityForHooks,
+  type NestedToolActivity,
+} from "../../../sessions/nested-tool-activity.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
@@ -21,7 +24,6 @@ import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handle
 import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
 import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
-import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -37,6 +39,7 @@ import {
   resolveTerminalAssistantTexts,
 } from "./attempt-trajectory-status.js";
 import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
+import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {
   isEmbeddedRunTerminalInterrupted,
@@ -55,6 +58,7 @@ type FinalizeEmbeddedAttemptParams = {
   emptyAssistantReplyIsSilent: boolean;
   hasTerminalOutput: boolean;
   silentExpected?: boolean;
+  deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
 };
 
 /** Classifies the completed attempt and records its terminal trajectory artifacts. */
@@ -157,7 +161,7 @@ export function finalizeEmbeddedAttempt(
       lastToolError: result.lastToolError,
     }),
   );
-  trajectoryRecorder.recordEvent("session.ended", {
+  const sessionEndData = {
     status: terminal.status,
     aborted: terminalState.aborted,
     externalAbort: terminalState.externalAbort,
@@ -169,7 +173,12 @@ export function finalizeEmbeddedAttempt(
     promptError,
     terminalError: terminal.terminalError,
     stopReason,
-  });
+  };
+  if (params.deferredLifecycleOwner) {
+    params.deferredLifecycleOwner.recordSessionEnd(sessionEndData);
+  } else {
+    trajectoryRecorder.recordEvent("session.ended", sessionEndData);
+  }
 
   return result;
 }
@@ -196,6 +205,7 @@ type CompleteEmbeddedAttemptAfterTurnInput = {
     sessionIdUsed: string;
     sessionFileUsed?: string;
     messagesSnapshot: AgentMessage[];
+    nestedToolActivities?: readonly NestedToolActivity[];
     prePromptMessageCount: number;
     contextEngineAfterTurnCheckpoint: number | null;
     lastCallUsage?: NormalizedUsage;
@@ -368,9 +378,8 @@ export async function completeEmbeddedAttemptAfterTurn(
   });
   runtime.anthropicPayloadLogger?.recordUsage(state.messagesSnapshot, state.promptError);
 
-  // A detached run (skill experience review) writes no transcript or session record and
-  // runs under the foreground session key; firing agent_end here would let plugins observe
-  // it as a foreground turn and let the review schedule a successor review of itself.
+  // A detached run (such as skill experience review) writes no transcript or session record.
+  // Firing agent_end would expose maintenance as a normal turn and schedule successor work.
   if (
     attempt.operation !== "settled-tool-finalization" &&
     attempt.sessionPersistence !== "detached" &&
@@ -386,7 +395,10 @@ export async function completeEmbeddedAttemptAfterTurn(
         : undefined;
     runAgentEndSideEffects({
       event: {
-        messages: state.messagesSnapshot,
+        messages: projectNestedToolActivityForHooks(
+          state.messagesSnapshot,
+          state.nestedToolActivities ?? [],
+        ),
         success: !lifecycleForAgentEnd.aborted && !state.promptError,
         error: agentEndError,
         durationMs: Date.now() - runtime.promptStartedAt,
@@ -623,45 +635,6 @@ export function createEmbeddedAttemptRunAbort(input: {
       });
     }
   };
-}
-
-/**
- * Flushes attempt trajectory recorders during cleanup.
- */
-
-/** Minimal recorder surface needed to flush trajectory data during run cleanup. */
-type EmbeddedAttemptTrajectoryRecorder = {
-  describeFlushState: () => string | undefined;
-  flush: () => Promise<void>;
-};
-
-/**
- * Flushes attempt trajectory data through the shared cleanup timeout wrapper so
- * stuck recorder writes warn with run/session context instead of blocking run
- * teardown indefinitely.
- */
-export async function flushEmbeddedAttemptTrajectoryRecorder(params: {
-  runId: string;
-  sessionId: string;
-  trajectoryRecorder: EmbeddedAttemptTrajectoryRecorder | null;
-  log: {
-    warn: (message: string) => void;
-  };
-  env?: NodeJS.ProcessEnv;
-  timeoutMs?: number;
-}): Promise<void> {
-  await runAgentCleanupStep({
-    runId: params.runId,
-    sessionId: params.sessionId,
-    step: "openclaw-trajectory-flush",
-    log: params.log,
-    env: params.env,
-    timeoutMs: params.timeoutMs,
-    getTimeoutDetails: () => params.trajectoryRecorder?.describeFlushState(),
-    cleanup: async () => {
-      await params.trajectoryRecorder?.flush();
-    },
-  });
 }
 
 /**

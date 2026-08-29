@@ -1,5 +1,5 @@
 // Line plugin module implements auto reply delivery behavior.
-import { HTTPFetchError, type messagingApi } from "@line/bot-sdk";
+import type { messagingApi } from "@line/bot-sdk";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -12,11 +12,13 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import type { FlexContainer } from "./flex-templates.js";
+import type { FlexContainer } from "./flex-templates/types.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import { hasLineSpecificMediaOptions } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
-import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
+import { createLineQuickReply } from "./rich-messages.js";
+import { findLineHttpError, resolveLineNonDispatchRetryable } from "./send-retry.js";
+import type { LineChannelData, LineQuickReplyItem, LineTemplateMessagePayload } from "./types.js";
 
 type LineAutoReplyDeps = {
   buildTemplateMessageFromPayload: (
@@ -24,7 +26,6 @@ type LineAutoReplyDeps = {
   ) => messagingApi.TemplateMessage | null;
   processLineMessage: (text: string) => ProcessedLineMessage;
   chunkMarkdownText: (text: string, limit: number) => string[];
-  createQuickReplyItems: (labels: string[]) => messagingApi.QuickReply;
   pushMessagesLine: (
     to: string,
     messages: messagingApi.Message[],
@@ -58,14 +59,8 @@ function toLineDeliveryError(error: unknown): Error {
   return error instanceof Error ? error : new Error("LINE message send failed", { cause: error });
 }
 
-function getLineHttpError(error: unknown): HTTPFetchError | undefined {
-  return collectErrorGraphCandidates(error, (candidate) => [candidate.cause, candidate.error]).find(
-    (candidate): candidate is HTTPFetchError => candidate instanceof HTTPFetchError,
-  );
-}
-
 function canFallbackAfterLineReplyFailure(error: unknown): boolean {
-  const httpError = getLineHttpError(error);
+  const httpError = findLineHttpError(error);
   if (httpError) {
     return httpError.status >= 400 && httpError.status < 500 && httpError.status !== 408;
   }
@@ -206,7 +201,7 @@ export async function deliverLineAutoReply(params: {
         // Only a definitive LINE 400 makes text recovery after a rejected push safe.
         await pushLineMessages(
           replyBatch,
-          getLineHttpError(err)?.status === 400,
+          findLineHttpError(err)?.status === 400,
           remaining.slice(replyBatch.length),
         );
       } finally {
@@ -222,7 +217,15 @@ export async function deliverLineAutoReply(params: {
   };
 
   const richMessages: messagingApi.Message[] = [];
-  const hasQuickReplies = Boolean(lineData.quickReplies?.length);
+  // The presentation renderer emits typed items; plain labels are the caller-authored carrier.
+  const quickReplyItems: LineQuickReplyItem[] = lineData.quickReplyItems?.length
+    ? lineData.quickReplyItems
+    : (lineData.quickReplies ?? []).map((label) => ({
+        label,
+        action: { type: "command", command: label },
+      }));
+  const quickReplyLabels = quickReplyItems.map((item) => item.label);
+  const hasQuickReplies = quickReplyItems.length > 0;
 
   if (lineData.flexMessage) {
     richMessages.push(
@@ -312,7 +315,7 @@ export async function deliverLineAutoReply(params: {
   if (hasQuickReplies && textMessages.length === 0 && richMediaMessages.length === 0) {
     textMessages.push({
       type: "text",
-      text: buildLineQuickReplyFallbackText(lineData.quickReplies),
+      text: buildLineQuickReplyFallbackText(quickReplyLabels),
     });
   }
   if (hasQuickReplies) {
@@ -325,7 +328,7 @@ export async function deliverLineAutoReply(params: {
     const target = expectDefined(targetMessages[lastIndex], "last LINE auto-reply message");
     targetMessages[lastIndex] = {
       ...target,
-      quickReply: deps.createQuickReplyItems(lineData.quickReplies!),
+      quickReply: createLineQuickReply(quickReplyItems),
     };
   }
 
@@ -342,7 +345,7 @@ export async function deliverLineAutoReply(params: {
     deliveryError ??= err;
     const failedSegment =
       typeof err === "object" && err !== null ? failedPushSegments.get(err) : undefined;
-    const httpError = getLineHttpError(err);
+    const httpError = findLineHttpError(err);
     const retryCandidates = failedSegment
       ? [
           ...(failedSegment.allowFailedBatchTextRecovery ? failedSegment.failedBatch : []),
@@ -359,21 +362,22 @@ export async function deliverLineAutoReply(params: {
           ? [
               {
                 type: "text" as const,
-                text: buildLineQuickReplyFallbackText(lineData.quickReplies),
-                quickReply: deps.createQuickReplyItems(lineData.quickReplies!),
+                text: buildLineQuickReplyFallbackText(quickReplyLabels),
+                quickReply: createLineQuickReply(quickReplyItems),
               },
             ]
           : [];
     const canRetryTextOnly =
       retryMessages.length > 0 &&
       failedSegment?.failedBatch.some((message) => message.type !== "text") &&
-      httpError?.status === 400;
+      httpError?.status === 400 &&
+      resolveLineNonDispatchRetryable(err) !== undefined;
     if (canRetryTextOnly) {
       // HTTPFetchError 400 is an actual LINE response: that request was rejected
       // atomically. Retry its text/actions plus the tail that was never attempted.
       const lastRetryMessage = retryMessages.at(-1);
       if (quickRepliesNeedCarrier && lastRetryMessage && !lastRetryMessage.quickReply) {
-        lastRetryMessage.quickReply = deps.createQuickReplyItems(lineData.quickReplies!);
+        lastRetryMessage.quickReply = createLineQuickReply(quickReplyItems);
       }
       try {
         await sendLineMessages(retryMessages, false);

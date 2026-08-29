@@ -463,13 +463,14 @@ create_verified_peekaboo_snapshot() {
   PEEKABOO_SNAPSHOT_IMAGE="$PEEKABOO_SNAPSHOT_ROOT/Peekaboo.dmg"
   PEEKABOO_SNAPSHOT_MOUNT="$PEEKABOO_SNAPSHOT_ROOT/mount"
   mkdir "$PEEKABOO_SNAPSHOT_MOUNT"
-  hdiutil create -quiet -fs APFS -format UDRO \
+  # -quiet suppresses failure stderr too; discard only routine stdout.
+  hdiutil create -fs APFS -format UDRO \
     -srcfolder "$source_checkout" \
     -volname OpenClawPeekabooSnapshot \
-    "$PEEKABOO_SNAPSHOT_IMAGE"
-  hdiutil attach -quiet -readonly -nobrowse \
+    "$PEEKABOO_SNAPSHOT_IMAGE" >/dev/null
+  hdiutil attach -readonly -nobrowse \
     -mountpoint "$PEEKABOO_SNAPSHOT_MOUNT" \
-    "$PEEKABOO_SNAPSHOT_IMAGE"
+    "$PEEKABOO_SNAPSHOT_IMAGE" >/dev/null
   snapshot_commit="$(compiled_peekaboo_commit "$PEEKABOO_SNAPSHOT_MOUNT" "$expected")" || return 1
   [[ "$snapshot_commit" == "$source_commit" ]] || return 1
 }

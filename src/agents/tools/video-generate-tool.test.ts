@@ -6,10 +6,8 @@ import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js
 import type { OpenClawConfig } from "../../config/config.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../../plugins/current-plugin-metadata-snapshot.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -186,36 +184,38 @@ function createVideoProviderSnapshot(params: {
             [params.id]: { referenceAudioInputs: params.referenceAudioInputs },
           },
   };
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [
+      {
+        pluginId: params.id,
+        manifestPath: plugin.manifestPath,
+        manifestHash: "test",
+        source: plugin.source,
+        rootDir: plugin.rootDir,
+        origin: params.origin,
+        enabled: true,
+        startup: {
+          sidecar: false,
+          memory: false,
+          agentHarnesses: [],
+        },
+        compat: [],
+      },
+    ],
+    diagnostics: [],
+  };
   return {
     policyHash,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [
-        {
-          pluginId: params.id,
-          manifestPath: plugin.manifestPath,
-          manifestHash: "test",
-          source: plugin.source,
-          rootDir: plugin.rootDir,
-          origin: params.origin,
-          enabled: true,
-          startup: {
-            sidecar: false,
-            memory: false,
-            agentHarnesses: [],
-          },
-          compat: [],
-        },
-      ],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins: [plugin], diagnostics: [] },
     plugins: [plugin],
@@ -897,6 +897,64 @@ describe("createVideoGenerateTool", () => {
     expect(details.metadata).toEqual({ taskId: "task-1" });
   });
 
+  it("preserves provider order across URL and saved video outputs", async () => {
+    vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      ignoredOverrides: [],
+      videos: [
+        {
+          url: "https://example.com/first.mp4",
+          mimeType: "video/mp4",
+          fileName: "first.mp4",
+        },
+        {
+          buffer: Buffer.from("middle-video"),
+          mimeType: "video/mp4",
+          fileName: "middle.mp4",
+        },
+        {
+          url: "https://example.com/last.mp4",
+          mimeType: "video/mp4",
+          fileName: "last.mp4",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/tmp/middle.mp4",
+      id: "middle.mp4",
+      size: 12,
+      contentType: "video/mp4",
+    });
+    const tool = expectVideoGenerateTool(
+      createVideoGenerateTool({
+        config: asConfig({
+          agents: { defaults: { videoGenerationModel: { primary: "vydra/veo3" } } },
+        }),
+      }),
+    );
+
+    const result = await tool.execute("call-mixed-outputs", { prompt: "three videos" });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+    const details = resultDetails(result);
+    const expectedPaths = [
+      "https://example.com/first.mp4",
+      "/tmp/middle.mp4",
+      "https://example.com/last.mp4",
+    ];
+
+    expect(details.paths).toEqual(expectedPaths);
+    expect((details.media as { mediaUrls: string[] }).mediaUrls).toEqual(expectedPaths);
+    expect(details.attachments).toMatchObject([
+      { url: expectedPaths[0], name: "first.mp4" },
+      { path: expectedPaths[1], name: "middle.mp4" },
+      { url: expectedPaths[2], name: "last.mp4" },
+    ]);
+    expect(text.indexOf('name="first.mp4"')).toBeLessThan(text.indexOf('name="middle.mp4"'));
+    expect(text.indexOf('name="middle.mp4"')).toBeLessThan(text.indexOf('name="last.mp4"'));
+  });
+
   it("keeps signed video URLs exact while disarming provider-controlled attachment presentation", async () => {
     const signedUrl =
       "https://example.com/generated.mp4?signature=abc%2Fdef%3D&voice=[[audio_as_voice]]&reply=[[reply_to:attacker]]&image=![hidden](https://example.com/hidden.png)&tail=signed";
@@ -1021,15 +1079,25 @@ describe("createVideoGenerateTool", () => {
       videos: [
         {
           buffer: Buffer.from("large-video-bytes"),
-          url: "https://fal.run/files/generated-lobster.mp4",
+          url: "https://fal.run/files/first.mp4",
           mimeType: "video/mp4",
-          fileName: "lobster.mp4",
+          fileName: "first.mp4",
+        },
+        {
+          buffer: Buffer.from("second-video-bytes"),
+          mimeType: "video/mp4",
+          fileName: "second.mp4",
         },
       ],
     });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockRejectedValueOnce(
-      new Error("Media exceeds 16MB limit"),
-    );
+    vi.spyOn(mediaStore, "saveMediaBuffer")
+      .mockRejectedValueOnce(new Error("Media exceeds 16MB limit"))
+      .mockResolvedValueOnce({
+        path: "/tmp/second.mp4",
+        id: "second.mp4",
+        size: 18,
+        contentType: "video/mp4",
+      });
 
     const tool = createVideoGenerateTool({
       config: asConfig({
@@ -1049,17 +1117,18 @@ describe("createVideoGenerateTool", () => {
     });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
-    expect(text).toContain("Generated 1 video with fal/fal-ai/minimax/video-01-live.");
-    expect(text).toContain('mediaUrl="https://fal.run/files/generated-lobster.mp4"');
+    expect(text).toContain("Generated 2 videos with fal/fal-ai/minimax/video-01-live.");
+    expect(text).toContain('mediaUrl="https://fal.run/files/first.mp4"');
     expect(text).not.toContain("MEDIA:");
     const details = resultDetails(result);
     expect(details.provider).toBe("fal");
     expect(details.model).toBe("fal-ai/minimax/video-01-live");
-    expect(details.count).toBe(1);
+    expect(details.count).toBe(2);
     expect((details.media as { mediaUrls?: string[] }).mediaUrls).toEqual([
-      "https://fal.run/files/generated-lobster.mp4",
+      "https://fal.run/files/first.mp4",
+      "/tmp/second.mp4",
     ]);
-    expect(details.paths).toEqual(["https://fal.run/files/generated-lobster.mp4"]);
+    expect(details.paths).toEqual(["https://fal.run/files/first.mp4", "/tmp/second.mp4"]);
   });
 
   it("starts background generation and wakes the session with url-only MEDIA lines", async () => {

@@ -1,9 +1,7 @@
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   parseBrowserNativeHostOrigins,
   runBrowserNativeHost,
 } from "./src/browser/extension-native-host.js";
-import { buildBrowserExtensionPairing } from "./src/browser/extension-pairing.js";
 
 function requiredArgument(name: string): string {
   const index = process.argv.indexOf(name);
@@ -26,11 +24,12 @@ async function main(): Promise<void> {
     write: (frame) => {
       responseFrame = frame;
     },
-    buildPairing: async () =>
-      await buildBrowserExtensionPairing({
-        cfg: getRuntimeConfig(),
-        localTransport: "gateway",
-      }),
+    buildPairing: async () => {
+      // Config and relay-key work must remain behind the host's validation boundary.
+      const { buildBrowserNativeHostPairing } =
+        await import("./src/browser/extension-native-host.runtime.js");
+      return await buildBrowserNativeHostPairing();
+    },
   });
   const response = responseFrame;
   if (!response) {

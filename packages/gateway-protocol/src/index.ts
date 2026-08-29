@@ -27,8 +27,10 @@ export {
   type SessionToolOverrides,
 } from "./schema/sessions-row.js";
 export * from "./schema/session-classification.js";
+export * from "./schema/session-participant.js";
 export * from "./schema/sessions-suggestions.js";
 export * from "./schema/sessions-delete.js";
+export * from "./schema/sessions-goal.js";
 export {
   SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
   SESSION_CREATE_RETRY_WINDOW_MS,
@@ -54,4 +56,5 @@ export {
   PROTOCOL_VERSION,
 } from "./version.js";
 export type * from "./schema-types.js";
+export type { GatewayCoreRequestParams } from "./core-request-params.js";
 export type { SessionsPatchResult } from "./sessions-patch-result.js";

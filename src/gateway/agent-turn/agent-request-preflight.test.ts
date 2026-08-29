@@ -19,6 +19,7 @@ function runPreflight(
     includeCollectorFields?: boolean;
     launchPending?: boolean;
     cached?: boolean;
+    admissionPending?: boolean;
     completed?: boolean;
     ended?: boolean;
   },
@@ -68,7 +69,12 @@ function runPreflight(
             {
               ts: 1,
               ok: true,
-              payload: { status: "accepted", runId: "gateway-run", sessionKey },
+              payload: {
+                status: "accepted",
+                runId: "gateway-run",
+                sessionKey,
+                ...(options.admissionPending ? { reservationId: "pending" } : {}),
+              },
             },
           ],
         ])
@@ -298,6 +304,29 @@ describe("agent request Swarm preflight", () => {
       undefined,
       expect.objectContaining({ cached: true, runId: "gateway-run" }),
     );
+  });
+
+  it("marks a provisional cached replay as admission pending without exposing its reservation", async () => {
+    const replayed = runPreflight(undefined, true, {
+      backend: true,
+      register: true,
+      launchPending: false,
+      cached: true,
+      admissionPending: true,
+    });
+    expect(replayed.result).toBeDefined();
+    await replayed.replay();
+    expect(replayed.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "gateway-run",
+        status: "in_flight",
+        admissionPending: true,
+      }),
+      undefined,
+      expect.objectContaining({ cached: true, runId: "gateway-run" }),
+    );
+    expect(replayed.respond.mock.calls[0]?.[1]).not.toHaveProperty("reservationId");
   });
 
   it("rejects a terminal collector even when its pending launch flag remains set", () => {

@@ -29,6 +29,7 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 import { registerSessionAutomationSource } from "./session-automation-index.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
+import { projectSessionActor } from "./session-identity-projection.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils-list.js";
@@ -41,10 +42,7 @@ import {
   buildSessionListRowContext,
   buildSingleRowStoreChildSessionsByKey,
 } from "./session-utils-projection.js";
-import {
-  buildGatewaySessionRow as buildGatewaySessionRowOwner,
-  projectSessionActor,
-} from "./session-utils-row.js";
+import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
 import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -297,6 +295,7 @@ describe("gateway session utils", () => {
     expect(projectSessionActor({ type: "agent", id: "roboclaw" }, new Map(), cfg)).toEqual({
       type: "agent",
       id: "roboclaw",
+      identity: { type: "agent", id: "roboclaw" },
       label: "Roboclaw",
       avatarUrl: "/control/avatar/roboclaw",
     });
@@ -306,7 +305,11 @@ describe("gateway session utils", () => {
         new Map(),
         cfg,
       ),
-    ).toEqual({ type: "agent", id: "agent:roboclaw:discord:channel:123" });
+    ).toEqual({
+      type: "agent",
+      id: "agent:roboclaw:discord:channel:123",
+      identity: { type: "agent", id: "agent:roboclaw:discord:channel:123" },
+    });
   });
 
   beforeEach(() => {
@@ -317,6 +320,50 @@ describe("gateway session utils", () => {
   });
 
   afterAll(closeSessionSqliteDatabasesForTest);
+
+  test.each([
+    {
+      name: "inherited default",
+      entry: { sessionId: "inherited-default", updatedAt: 1 },
+      expected: null,
+    },
+    {
+      name: "user pin equal to default",
+      entry: {
+        sessionId: "user-pin",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "user",
+      },
+      expected: "user",
+    },
+    {
+      name: "automatic fallback",
+      entry: {
+        sessionId: "automatic-fallback",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4-mini",
+        modelOverrideSource: "auto",
+      },
+      expected: "auto",
+    },
+  ] satisfies Array<{
+    name: string;
+    entry: SessionEntry;
+    expected: "auto" | "user" | null;
+  }>)("projects model override source for $name", ({ entry, expected }) => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "main",
+      entry,
+    });
+
+    expect(row.modelOverrideSource).toBe(expected);
+  });
 
   test.each([
     { name: "never read", entry: {}, expected: false },
@@ -1285,7 +1332,7 @@ describe("gateway session utils", () => {
     expect(options).toHaveProperty("manifestRegistry");
   });
 
-  test("keeps stored thinking text without a catalog and clamps it when one is present", () => {
+  test("keeps stored thinking without capability facts and clamps it with a known profile", () => {
     providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue({
       resolveThinkingProfile: () => ({
         levels: [{ id: "off" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
@@ -1301,20 +1348,24 @@ describe("gateway session utils", () => {
         },
       },
     } as OpenClawConfig;
-    const row = (entry: SessionEntry, withCatalog: boolean) =>
+    const row = (
+      entry: SessionEntry,
+      catalog?: { reasoning?: boolean; compat?: { supportedReasoningEfforts: string[] } },
+    ) =>
       buildGatewaySessionRow({
         cfg,
         storePath: "",
         store: {},
         key: "agent:main:main",
         entry,
-        ...(withCatalog
+        ...(catalog
           ? {
               modelCatalog: [
                 {
                   provider: "openai",
                   id: "gpt-5.6-sol",
                   name: "GPT-5.6 Sol (API route)",
+                  ...catalog,
                 },
               ],
             }
@@ -1323,8 +1374,19 @@ describe("gateway session utils", () => {
 
     const stored = { sessionId: "stored", thinkingLevel: "ultra" } as SessionEntry;
 
-    expect(row(stored, false).thinkingLevel).toBe("ultra");
-    expect(row(stored, true).thinkingLevel).toBe("high");
+    expect(row(stored).thinkingLevel).toBe("ultra");
+    expect(row(stored, {}).thinkingLevel).toBe("ultra");
+    expect(row(stored, { reasoning: true }).thinkingLevel).toBe("high");
+    expect(
+      row(stored, { reasoning: true, compat: { supportedReasoningEfforts: ["max"] } })
+        .thinkingLevel,
+    ).toBe("max");
+    const nativeUltra = row(stored, {
+      reasoning: true,
+      compat: { supportedReasoningEfforts: ["max", "ultra"] },
+    });
+    expect(nativeUltra.thinkingLevel).toBe("ultra");
+    expect(nativeUltra.thinkingLevels).toContainEqual({ id: "ultra", label: "ultra" });
   });
 
   test("strips retired thinking provenance from Gateway patch results", async () => {
@@ -3898,8 +3960,8 @@ describe("gateway session utils", () => {
 
     const result = listAgentsForGateway(cfg, disabledCatalog, {
       modelCatalogByAgentId: new Map([
-        ["main", disabledCatalog],
-        ["work", enabledCatalog],
+        ["main", { entries: disabledCatalog }],
+        ["work", { entries: enabledCatalog }],
         ["missing", undefined],
       ]),
     });

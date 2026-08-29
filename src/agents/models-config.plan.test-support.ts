@@ -15,6 +15,7 @@ type ResolveImplicitProvidersForModelsJson = (params: {
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
+  sourceModelInputOmissions?: ReadonlySet<string>;
 }) => Promise<Record<string, ProviderConfig>>;
 
 type PreparedPlanParams = Parameters<

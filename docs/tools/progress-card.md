@@ -83,13 +83,11 @@ An empty plan plus empty or whitespace-only Markdown also clears it. A successfu
 
 ## Where the card appears
 
-The current chat shows exactly one live card:
+The current chat keeps exactly one live card in the main conversation:
 
-- When the session rail is visible, the card appears in the rail.
-- Otherwise, when the chat is wide enough that the centered composer leaves a free gutter, the card docks in that space beside the composer with its full checklist expanded.
-- At narrower widths the card appears in the collapsible surface inside the composer.
+- The card appears in the collapsible surface inside the composer at every width.
 
-The placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+Opening a side panel does not move the card out of the conversation. The placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
 Each placement shows the local time of the last progress update, including seconds.
 
 ## Pin the card to the dashboard

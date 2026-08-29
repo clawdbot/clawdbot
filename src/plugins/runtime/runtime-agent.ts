@@ -39,6 +39,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
 import { resolveRuntimeThinkingCatalog } from "./runtime-agent-thinking.js";
 import { defineCachedValue } from "./runtime-cache.js";
@@ -182,13 +183,19 @@ async function createSessionEntry(
     { createGatewaySession },
     { resolveGatewaySessionStoreTarget },
     { readAcpSessionMetaForEntry, upsertAcpSessionMeta },
+    { resolveSandboxedSessionCreation },
   ] = await Promise.all([
     import("../../gateway/session-create-service.js"),
     import("../../gateway/session-utils.js"),
     // session-meta rides the same lazy boundary: session-utils already pulls it
     // in transitively, so a separate import here would only duplicate the edge.
     import("../../acp/runtime/session-meta.js"),
+    import("../../gateway/operator-role-policy.js"),
   ]);
+  const requiredCreation = resolveSandboxedSessionCreation(
+    getPluginRuntimeGatewayRequestScope()?.client,
+    params.cfg,
+  );
   type CreatedContext = Parameters<
     NonNullable<Parameters<typeof createGatewaySession>[0]["afterCreate"]>
   >[0];
@@ -371,10 +378,12 @@ async function createSessionEntry(
         } else {
           const result = await createGatewaySession({
             cfg: params.cfg,
-            operatorRoleActor: { kind: "system" },
+            operatorRoleActor: requiredCreation ? undefined : { kind: "system" },
+            requestingOperatorProfileId: requiredCreation?.actor?.id,
             key: params.key,
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             ...(params.label !== undefined ? { label: params.label } : {}),
+            ...(params.displayName !== undefined ? { displayName: params.displayName } : {}),
             ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
             ...(params.sessionRoot !== undefined ? { sessionRoot: params.sessionRoot } : {}),
             ...(params.permissionMode !== undefined
@@ -413,7 +422,7 @@ async function createSessionEntry(
             ...(pluginInitial?.pluginOwnerId
               ? { authorizedPluginId: pluginInitial.pluginOwnerId }
               : {}),
-            creation: {
+            creation: requiredCreation ?? {
               via: "plugin",
               actor: {
                 type: "system",

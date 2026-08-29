@@ -5,6 +5,10 @@ import {
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
+import {
+  createNestedToolActivity,
+  projectNestedToolActivityForHooks,
+} from "../../sessions/nested-tool-activity.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import {
   createSkillExperienceReviewScheduler,
@@ -130,6 +134,39 @@ describe("skill experience review scheduler", () => {
       }),
     );
     expect(runReview.mock.calls[0]?.[0]).not.toHaveProperty("transcript");
+    scheduler.clear();
+  });
+
+  it("does not count nested tool activity as model iterations", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+    const run = completedRun({ messages: 2 });
+    const activities = Array.from({ length: 8 }, (_, index) =>
+      createNestedToolActivity({
+        runId: "run-1",
+        scopeId: "scope-1",
+        afterEntryId: null,
+        startOrder: index,
+        parentToolCallId: "outer-exec",
+        toolCallId: `nested-${index}`,
+        toolName: "read",
+        input: {},
+        result: { content: [{ type: "text", text: "file contents" }] },
+        isError: false,
+        startedAt: index,
+        timestamp: index + 1,
+      }),
+    );
+    run.event.messages = projectNestedToolActivityForHooks(run.event.messages, activities);
+
+    scheduler.schedule(run);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(runReview).not.toHaveBeenCalled();
     scheduler.clear();
   });
 
@@ -374,6 +411,38 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
+  it("does not re-arm evidence during asynchronous review preparation", async () => {
+    vi.useFakeTimers();
+    let finishPreparation: (() => void) | undefined;
+    const prepareReview = vi.fn(async (candidate) => {
+      await new Promise<void>((resolve) => {
+        finishPreparation = resolve;
+      });
+      return candidate;
+    });
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      prepareReview,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ runId: "deep-turn" }));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(prepareReview).toHaveBeenCalledOnce();
+    expect(runReview).not.toHaveBeenCalled();
+
+    scheduler.schedule(completedRun({ runId: "shallow-turn", modelIterations: 1 }));
+    finishPreparation?.();
+    await flushMicrotasks();
+    expect(runReview).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(runReview).toHaveBeenCalledOnce();
+    scheduler.clear();
+  });
+
   it("serializes reviews across sessions", async () => {
     vi.useFakeTimers();
     let finishFirst: (() => void) | undefined;
@@ -470,12 +539,22 @@ describe("skill experience review prompt", () => {
       ],
     });
     expect(prompt).toContain("this message starts a review pass");
-    expect(prompt).toContain("NOTHING_TO_LEARN is the correct answer for most turns");
-    expect(prompt).toContain("One call at most, smallest mutation first");
+    expect(prompt).toContain("NO_REPLY is the correct answer for most turns");
+    expect(prompt).toContain("One mutation at most, smallest mutation first");
+    expect(prompt).toContain("prepare_patch with one non-empty unique old_string, then patch");
+    expect(prompt).toContain("Reading and preparing do not spend the mutation");
+    expect(prompt).toContain("Only writable workspace skills can be read or updated");
+    expect(prompt).toContain("only when no writable skill covers this class of work");
     expect(prompt).toContain("Writable skills:");
     expect(prompt).toContain("- release-runbook — Ship releases");
     expect(prompt).toContain("- local-notes — Local workflow (user-authored)");
     expect(prompt).not.toContain("Trajectory:");
+
+    const emptyWorkspacePrompt = buildSkillExperienceReviewPrompt({
+      ctx: { runId: "run-1" },
+      existingSkills: [],
+    });
+    expect(emptyWorkspacePrompt).toContain("Writable skills: none.");
   });
 
   it("caps used and writable skill lists", () => {
@@ -505,7 +584,10 @@ describe("skill experience review prompt", () => {
     const prompt = build(usedSkills.toReversed());
 
     expect(prompt).toBe(build(usedSkills));
-    const receipt = prompt.slice(prompt.indexOf("Skills actually used in this trajectory"));
+    const receipt = prompt.slice(
+      prompt.indexOf("Skills actually used in this trajectory"),
+      prompt.indexOf("\n\nWritable skills:"),
+    );
     expect(receipt).toContain(
       "Skills actually used in this trajectory (authoritative runtime receipt):",
     );

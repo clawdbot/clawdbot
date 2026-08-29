@@ -25,7 +25,7 @@ type UsageSessionQueryTarget = {
   providerOverride?: string;
   origin?: { provider?: string };
   model?: string;
-  contextWeight?: unknown;
+  hasContextWeight?: boolean;
   usage?: {
     totalTokens?: number;
     totalCost?: number;
@@ -71,20 +71,10 @@ export function toggleUsageRangeSelection<T>(
 export function selectUsageSessionKeys(
   selected: string[],
   key: string,
-  sessions: UsageSessionQueryTarget[],
-  tokenMode: boolean,
+  orderedKeys: string[],
   shiftKey: boolean,
 ): string[] {
   if (shiftKey && selected.length > 0) {
-    const orderedKeys = [...sessions]
-      .toSorted((left, right) => {
-        const leftValue = tokenMode ? (left.usage?.totalTokens ?? 0) : (left.usage?.totalCost ?? 0);
-        const rightValue = tokenMode
-          ? (right.usage?.totalTokens ?? 0)
-          : (right.usage?.totalCost ?? 0);
-        return rightValue - leftValue;
-      })
-      .map((session) => session.key);
     const lastIndex = orderedKeys.indexOf(selected.at(-1) ?? "");
     const nextIndex = orderedKeys.indexOf(key);
     if (lastIndex !== -1 && nextIndex !== -1) {
@@ -193,7 +183,7 @@ type UsageQueryPredicate = (session: UsageSessionQueryTarget) => boolean;
 const HAS_PREDICATES: Readonly<Record<string, UsageQueryPredicate>> = {
   tools: (session) => (session.usage?.toolUsage?.totalCalls ?? 0) > 0,
   errors: (session) => (session.usage?.messageCounts?.errors ?? 0) > 0,
-  context: (session) => Boolean(session.contextWeight),
+  context: (session) => session.hasContextWeight === true,
   usage: (session) => Boolean(session.usage),
   model: (session) => getSessionModels(session).length > 0,
   provider: (session) => getSessionProviders(session).length > 0,

@@ -130,8 +130,6 @@ async function attachStartupNodeConnect(params: {
   const requestContext = {
     ...createGatewayWsTestRequestContext(),
     nodeRegistry,
-    broadcast: vi.fn(),
-    nodeUnsubscribeAll: vi.fn(),
   };
   const pendingSetup = vi.fn(params.isPendingWorkerNodeSetup);
   attachGatewayWsForTest({

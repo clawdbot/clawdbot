@@ -488,4 +488,57 @@ describe("openai completions stream", () => {
     expect(output.content).toHaveLength(1);
     expect((output.content[0] as { type?: string }).type).toBe("text");
   });
+
+  it("replaces the stored function name on a fragmented continuation (managed parity)", async () => {
+    // The managed path (no mode: "direct") invokes the same processCompletionsStream
+    // assembler. A fragmented function name arriving in two nonempty snapshots on
+    // the same index must resolve to the latest snapshot, matching the direct
+    // provider and the pinned OpenAI SDK. This satisfies the issue's
+    // "managed-parity assertions" requirement.
+    const model = makeCompletionsModel({
+      id: "qwen3.6-27b",
+      name: "Qwen 3.6 27B",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      contextWindow: 131072,
+    });
+
+    const output = createAssistantOutput(model);
+    const stream = { push: () => {} };
+
+    const chunks = [
+      makeCompletionsChunk({
+        tool_calls: [
+          {
+            index: 0,
+            id: "call_managed",
+            function: { name: "get_", arguments: '{"city":' },
+            type: "function",
+          },
+        ],
+      }),
+      makeCompletionsChunk({
+        tool_calls: [
+          {
+            index: 0,
+            function: { name: "weather", arguments: '"Paris"}' },
+            type: "function",
+          },
+        ],
+      }),
+      makeCompletionsChunk({}, "tool_calls"),
+    ];
+
+    await processCompletionsStream(streamChunks(chunks), output, model, stream);
+
+    const toolCalls = output.content.filter(
+      (block) => (block as { type?: string }).type === "toolCall",
+    );
+    expect(toolCalls).toHaveLength(1);
+    const toolCall = toolCalls[0] as { id?: string; name?: string; arguments?: unknown };
+    expect(toolCall.id).toBe("call_managed");
+    expect(toolCall.name).toBe("weather");
+    expect(toolCall.arguments).toEqual({ city: "Paris" });
+  });
 });

@@ -560,7 +560,7 @@ describe("iOS Fastlane release upload gates", () => {
     expect(screenshots).toContain('ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"');
   });
 
-  it("shards exact screenshot evidence without changing runner authorization", () => {
+  it("runs screenshot shards alongside builds without changing runner authorization", () => {
     const workflow = readFileSync(ciWorkflowPath, "utf8");
     const iosJobStart = workflow.indexOf("\n  ios-build:\n");
     const iosJobEnd = workflow.indexOf("\n  ios-screenshot-shard:\n", iosJobStart);
@@ -576,7 +576,7 @@ describe("iOS Fastlane release upload gates", () => {
     expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.6 Build version 17F113"');
     expect(iosJob).toContain("timeout-minutes: 150");
     expect(iosJob).not.toContain("Capture iOS release screenshots");
-    expect(shardJob).toContain("needs: [preflight, ios-build]");
+    expect(shardJob).toContain("needs: [preflight]");
     expect(shardJob).toContain("max-parallel: 2");
     expect(shardJob).toContain("device_family: [iphone, ipad-13]");
     expect(shardJob).toContain('OPENCLAW_SNAPSHOT_SKIP_WATCH: "1"');

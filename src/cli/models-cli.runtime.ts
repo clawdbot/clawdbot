@@ -27,7 +27,8 @@ export type GlobalOnlyModelCommandName =
   | "scan"
   | "aliases list"
   | "aliases add"
-  | "aliases remove";
+  | "aliases remove"
+  | "refresh";
 
 export function rejectAgentScopedModelCommand(
   command: Command,
@@ -37,7 +38,7 @@ export function rejectAgentScopedModelCommand(
   // does not exist. Kept scope-neutral: `scan --no-probe` returns after printing
   // the catalog without writing config at all.
   const agent = resolveOptionFromCommand<string>(command, "agent");
-  if (!agent) {
+  if (agent === undefined) {
     return;
   }
   throw new Error(

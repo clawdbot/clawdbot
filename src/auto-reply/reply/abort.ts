@@ -48,59 +48,6 @@ import { replyRunRegistry } from "./reply-run-registry.js";
 
 export { isAbortRequestText, isAbortTrigger, setAbortMemory };
 
-const defaultAbortDeps = {
-  getAcpSessionManager,
-  abortEmbeddedAgentRun,
-  resolveActiveEmbeddedRunSessionId,
-  markSessionAbortTarget,
-  resolveSessionAbortTarget,
-  getLatestSubagentRunByChildSessionKey,
-  listSubagentRunsForController,
-  killControlledSubagentRun,
-};
-
-const abortDeps = {
-  ...defaultAbortDeps,
-};
-
-const abortTestApi = {
-  setDepsForTests(deps: Partial<typeof defaultAbortDeps> | undefined): void {
-    abortDeps.getAcpSessionManager =
-      deps?.getAcpSessionManager ?? defaultAbortDeps.getAcpSessionManager;
-    abortDeps.abortEmbeddedAgentRun =
-      deps?.abortEmbeddedAgentRun ?? defaultAbortDeps.abortEmbeddedAgentRun;
-    abortDeps.resolveActiveEmbeddedRunSessionId =
-      deps?.resolveActiveEmbeddedRunSessionId ?? defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
-    abortDeps.markSessionAbortTarget =
-      deps?.markSessionAbortTarget ?? defaultAbortDeps.markSessionAbortTarget;
-    abortDeps.resolveSessionAbortTarget =
-      deps?.resolveSessionAbortTarget ?? defaultAbortDeps.resolveSessionAbortTarget;
-    abortDeps.getLatestSubagentRunByChildSessionKey =
-      deps?.getLatestSubagentRunByChildSessionKey ??
-      defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
-    abortDeps.listSubagentRunsForController =
-      deps?.listSubagentRunsForController ?? defaultAbortDeps.listSubagentRunsForController;
-    abortDeps.killControlledSubagentRun =
-      deps?.killControlledSubagentRun ?? defaultAbortDeps.killControlledSubagentRun;
-  },
-  resetDepsForTests(): void {
-    abortDeps.getAcpSessionManager = defaultAbortDeps.getAcpSessionManager;
-    abortDeps.abortEmbeddedAgentRun = defaultAbortDeps.abortEmbeddedAgentRun;
-    abortDeps.resolveActiveEmbeddedRunSessionId =
-      defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
-    abortDeps.markSessionAbortTarget = defaultAbortDeps.markSessionAbortTarget;
-    abortDeps.resolveSessionAbortTarget = defaultAbortDeps.resolveSessionAbortTarget;
-    abortDeps.getLatestSubagentRunByChildSessionKey =
-      defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
-    abortDeps.listSubagentRunsForController = defaultAbortDeps.listSubagentRunsForController;
-    abortDeps.killControlledSubagentRun = defaultAbortDeps.killControlledSubagentRun;
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.abortTestApi")] = abortTestApi;
-}
-
 export function abortSessionRunTargetWithOutcome(params: { key?: string; sessionId?: string }): {
   active: boolean;
   aborted: boolean;
@@ -109,7 +56,7 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
   const key = normalizeOptionalString(params.key);
   let active = key ? replyRunRegistry.isActive(key) : false;
   if (key) {
-    const activeSessionId = abortDeps.resolveActiveEmbeddedRunSessionId(key);
+    const activeSessionId = resolveActiveEmbeddedRunSessionId(key);
     if (activeSessionId) {
       active = true;
       sessionIds.add(activeSessionId);
@@ -122,7 +69,7 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
 
   let aborted = key ? replyRunRegistry.abort(key) : false;
   for (const sessionId of sessionIds) {
-    aborted = abortDeps.abortEmbeddedAgentRun(sessionId) || aborted;
+    aborted = abortEmbeddedAgentRun(sessionId) || aborted;
   }
   return { active, aborted };
 }
@@ -217,12 +164,12 @@ export async function stopSubagentsForRequester(params: {
     return { stopped: 0, failed: 0 };
   }
   const dedupedRunsByChildKey = new Map<string, SubagentRunRecord>();
-  for (const run of abortDeps.listSubagentRunsForController(requesterKey)) {
+  for (const run of listSubagentRunsForController(requesterKey)) {
     const childKey = normalizeOptionalString(run.childSessionKey);
     if (!childKey) {
       continue;
     }
-    const latest = abortDeps.getLatestSubagentRunByChildSessionKey(childKey);
+    const latest = getLatestSubagentRunByChildSessionKey(childKey);
     if (!latest) {
       const existing = dedupedRunsByChildKey.get(childKey);
       if (!existing || run.createdAt >= existing.createdAt) {
@@ -259,7 +206,7 @@ export async function stopSubagentsForRequester(params: {
     if (!childKey) {
       continue;
     }
-    const result = await abortDeps.killControlledSubagentRun({
+    const result = await killControlledSubagentRun({
       cfg: params.cfg,
       controller: {
         controllerSessionKey: requesterKey,
@@ -347,7 +294,7 @@ export async function tryFastAbortFromMessage(params: {
         : undefined;
     let resolvedAbortTarget: SessionAbortTargetIdentity | null = null;
     try {
-      resolvedAbortTarget = abortDeps.resolveSessionAbortTarget({
+      resolvedAbortTarget = resolveSessionAbortTarget({
         agentId,
         sessionKey: targetKey,
         storePath,
@@ -372,7 +319,7 @@ export async function tryFastAbortFromMessage(params: {
     if (boundAcpTargetKey && boundAcpTargetKey !== resolvedTargetKey) {
       abortTargetKeys.push(boundAcpTargetKey);
     }
-    const acpManager = abortDeps.getAcpSessionManager();
+    const acpManager = getAcpSessionManager();
     for (const acpTargetKey of abortTargetKeys.filter(isAcpSessionKey)) {
       const acpResolution = acpManager.resolveSession({
         cfg,
@@ -451,7 +398,7 @@ export async function tryFastAbortFromMessage(params: {
     }
     let persistedAbortTarget: SessionAbortTargetResult | null = null;
     try {
-      persistedAbortTarget = await abortDeps.markSessionAbortTarget({
+      persistedAbortTarget = await markSessionAbortTarget({
         scope: {
           agentId,
           sessionKey: targetKey,

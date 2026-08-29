@@ -4,6 +4,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -25,7 +26,6 @@ import {
 } from "./internal/discord.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import type { DiscordReplyReference } from "./reply-reference.js";
-import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import {
@@ -282,7 +282,7 @@ export async function sendDiscordComponentMessage(
       token: opts.token,
       rest: opts.rest,
       mediaUrl: opts.mediaUrl,
-      filename: opts.filename,
+      filename: opts.filename?.trim() || extractComponentAttachmentNames(spec)[0],
       mediaLocalRoots: opts.mediaLocalRoots,
       mediaReadFile: opts.mediaReadFile,
       mediaAccess: opts.mediaAccess,

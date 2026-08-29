@@ -51,8 +51,8 @@ type SandboxBackendRegistrationGeneration = {
   retired: boolean;
 };
 
-// Process-wide sandbox backend registry. Tests and plugins can install temporary
-// factories while core still auto-registers the bundled container and SSH backends.
+// Only explicit overrides need process-wide generations. Built-in defaults stay
+// module-local so repeated imports neither retain old graphs nor replace overrides.
 function getSandboxBackendFactories(): Map<SandboxBackendId, SandboxBackendRegistrationGeneration> {
   const globalStore = globalThis as typeof globalThis & {
     [SANDBOX_BACKEND_FACTORIES_STATE_KEY]?: Map<
@@ -110,24 +110,17 @@ export function registerSandboxBackend(
 
 /** Look up a sandbox backend factory by normalized backend id. */
 export function getSandboxBackendFactory(id: string): SandboxBackendFactory | null {
-  return (
-    getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.registration.factory ?? null
-  );
+  return resolveSandboxBackendRegistration(id)?.factory ?? null;
 }
 
 /** Look up optional lifecycle management hooks for a registered backend. */
 export function getSandboxBackendManager(id: string): SandboxBackendManager | null {
-  return (
-    getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.registration.manager ?? null
-  );
+  return resolveSandboxBackendRegistration(id)?.manager ?? null;
 }
 
 /** Look up optional backend workdir resolution that does not start the runtime. */
 export function getSandboxBackendWorkdirResolver(id: string): SandboxBackendWorkdirResolver | null {
-  return (
-    getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.registration.resolveWorkdir ??
-    null
-  );
+  return resolveSandboxBackendRegistration(id)?.resolveWorkdir ?? null;
 }
 
 /** Resolve a backend factory or throw the user-facing configuration error. */
@@ -144,21 +137,28 @@ export function requireSandboxBackendFactory(id: string): SandboxBackendFactory 
   );
 }
 
-registerSandboxBackend("docker", {
+const builtinSandboxBackends = new Map<SandboxBackendId, RegisteredSandboxBackend>();
+builtinSandboxBackends.set("docker", {
   factory: createDockerSandboxBackend,
   manager: dockerSandboxBackendManager,
   resolveWorkdir: ({ cfg }) => cfg.docker.workdir,
 });
-
-registerSandboxBackend("podman", {
+builtinSandboxBackends.set("podman", {
   factory: createPodmanSandboxBackend,
   manager: podmanSandboxBackendManager,
   resolveWorkdir: ({ cfg }) => cfg.docker.workdir,
 });
-
-registerSandboxBackend("ssh", {
+builtinSandboxBackends.set("ssh", {
   factory: createSshSandboxBackend,
   manager: sshSandboxBackendManager,
   resolveWorkdir: ({ cfg, scopeKey }) =>
     resolveSshRuntimePaths(cfg.ssh.workspaceRoot, scopeKey).remoteWorkspaceDir,
 });
+
+function resolveSandboxBackendRegistration(id: string): RegisteredSandboxBackend | undefined {
+  const normalizedId = normalizeSandboxBackendId(id);
+  return (
+    getSandboxBackendFactories().get(normalizedId)?.registration ??
+    builtinSandboxBackends.get(normalizedId)
+  );
+}

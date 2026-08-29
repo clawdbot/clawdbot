@@ -14,6 +14,8 @@ export type MemoryArtifactProvenance = {
   fileHash: string;
   originClass: MemoryArtifactOriginClass;
   observedAt: number;
+  sessionId?: string;
+  sessionKey?: string;
 };
 
 type StoredMemoryArtifactProvenance = MemoryArtifactProvenance & {
@@ -119,6 +121,8 @@ function toPublicProvenance(stored: StoredMemoryArtifactProvenance): MemoryArtif
     fileHash: stored.fileHash,
     originClass: stored.originClass,
     observedAt: stored.observedAt,
+    ...(stored.sessionId ? { sessionId: stored.sessionId } : {}),
+    ...(stored.sessionKey ? { sessionKey: stored.sessionKey } : {}),
   };
 }
 
@@ -129,6 +133,8 @@ export async function recordMemoryArtifactWriteProvenance(params: {
   contentAfter: string;
   originClass: MemoryArtifactOriginClass;
   observedAt: number;
+  sessionId?: string;
+  sessionKey?: string;
 }): Promise<(() => Promise<void>) | undefined> {
   const address = resolveAddress(params);
   if (!address) {
@@ -155,6 +161,8 @@ export async function recordMemoryArtifactWriteProvenance(params: {
       fileHash: sha256(params.contentAfter),
       originClass,
       observedAt: params.observedAt,
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       reservationId,
     };
   });

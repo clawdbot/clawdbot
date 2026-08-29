@@ -1,3 +1,4 @@
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import {
   parseControlUiFocusLocation,
   type ControlUiFocusLocation,
@@ -32,7 +33,6 @@ import {
   startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
-import { isBrowserPanelAvailable } from "./app-shell-chrome.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
@@ -45,7 +45,7 @@ import type {
   ApplicationTheme,
   ApplicationThemeServerSelection,
 } from "./context.ts";
-import { applyControlUiAccent } from "./control-ui-presentation.ts";
+import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
@@ -54,11 +54,14 @@ import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { isBrowserPanelAvailable } from "./panel-availability.ts";
 import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
 import {
+  loadGatewaySessionSelection,
   loadSettings,
   patchSettings,
   persistSessionToken,
+  resolveGatewayCredentialsForUrlEdit,
   resolvePageGatewaySettings,
   saveSettings,
   type UiSettings,
@@ -70,7 +73,13 @@ import {
   resolveApplicationStartupSettings,
 } from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
-import { resolveTheme, syncThemeFontStylesheet, type ThemeMode } from "./theme.ts";
+import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
+import {
+  applyChatFontSmoothing,
+  applyTypefaceOverrides,
+  resolveTypefaces,
+  syncTypefaceStylesheets,
+} from "./typography.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
 function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void {
@@ -88,16 +97,13 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
   root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
-  syncThemeFontStylesheet(settings.theme);
+  const typefaces = resolveTypefaces(settings.theme, settings.fontUi, settings.fontChat);
+  syncTypefaceStylesheets(typefaces);
+  applyTypefaceOverrides(settings.fontUi, settings.fontChat);
+  applyChatFontSmoothing(typefaces.chat);
   syncCustomThemeStyleTag(settings.customTheme);
   applyControlUiAccent(settings.accent);
-  const background = getComputedStyle(root).getPropertyValue("--bg").trim();
-  if (background) {
-    for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
-      meta.content = background;
-      meta.removeAttribute("media");
-    }
-  }
+  syncControlUiSystemChrome();
 }
 
 function createApplicationTheme(
@@ -106,13 +112,22 @@ function createApplicationTheme(
   let settings = initialSettings;
   let serverSelection: ApplicationThemeServerSelection | null = null;
   let systemThemeCleanup: (() => void) | undefined;
+  let chromeBreakpointCleanup: (() => void) | undefined;
   const listeners = new Set<() => void>();
 
+  let presentationGeneration = 0;
   const publish = () => {
-    applyThemePresentation(settings);
-    for (const listener of listeners) {
-      listener();
-    }
+    const generation = ++presentationGeneration;
+    syncThemePaletteStylesheet(settings.theme, () => {
+      // A slower palette cannot overwrite a newer selection or a disposed app.
+      if (generation !== presentationGeneration) {
+        return;
+      }
+      applyThemePresentation(settings);
+      for (const listener of listeners) {
+        listener();
+      }
+    });
   };
 
   const detachSystemThemeListener = () => {
@@ -140,7 +155,22 @@ function createApplicationTheme(
     }
   };
 
+  if (typeof globalThis.matchMedia === "function") {
+    const mediaQuery = globalThis.matchMedia(
+      "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
+    );
+    const onChange = () => syncControlUiSystemChrome();
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", onChange);
+      chromeBreakpointCleanup = () => mediaQuery.removeEventListener("change", onChange);
+    } else if (typeof mediaQuery.addListener === "function") {
+      mediaQuery.addListener(onChange);
+      chromeBreakpointCleanup = () => mediaQuery.removeListener(onChange);
+    }
+  }
+
   syncSystemThemeListener();
+  publish();
 
   return {
     get settings() {
@@ -185,7 +215,9 @@ function createApplicationTheme(
       return () => listeners.delete(listener);
     },
     dispose() {
+      presentationGeneration += 1;
       detachSystemThemeListener();
+      chromeBreakpointCleanup?.();
       listeners.clear();
     },
   };
@@ -242,7 +274,7 @@ export type ApplicationRuntime = {
   readonly focusLocation: ControlUiFocusLocation | null;
   readonly pendingGatewayConnection: {
     readonly gatewayUrl: string;
-    readonly token: string;
+    readonly token: string | null;
   } | null;
   readonly confirmPendingGatewayConnection: () => void;
   readonly cancelPendingGatewayConnection: () => void;
@@ -274,6 +306,18 @@ export function bootstrapApplication(
     ? resolvePageGatewaySettings(persistedSettings)
     : persistedSettings;
   const startup = resolveApplicationStartupSettings(initialSettings, startupLocation);
+  const startupTargetSelection =
+    gatewayOriginScope(startup.settings.gatewayUrl) ===
+    gatewayOriginScope(initialSettings.gatewayUrl)
+      ? null
+      : loadGatewaySessionSelection(startup.settings.gatewayUrl);
+  const settings = startupTargetSelection
+    ? {
+        ...startup.settings,
+        ...startupTargetSelection,
+        selectedAgentId: startupTargetSelection.selectedAgentId,
+      }
+    : startup.settings;
   if (
     startup.location.pathname !== startupLocation.pathname ||
     startup.location.search !== startupLocation.search ||
@@ -284,9 +328,9 @@ export function bootstrapApplication(
   }
   if (startup.changed) {
     if (documentMode) {
-      persistSessionToken(startup.settings.gatewayUrl, startup.settings.token);
+      persistSessionToken(settings.gatewayUrl, settings.token);
     } else {
-      saveSettings(startup.settings);
+      saveSettings(settings);
     }
   }
   let applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
@@ -318,16 +362,16 @@ export function bootstrapApplication(
           setSessionPathBuilder(contract.buildControlUiSessionPath);
         }));
 
-  const settings = startup.settings;
+  const hasPendingGateway = startup.pendingGatewayUrl !== null;
   const gateway = createApplicationGateway(
     settings,
     startup.password ?? "",
-    startup.pendingBootstrapToken ?? "",
+    hasPendingGateway ? "" : (startup.pendingBootstrapToken ?? ""),
     undefined,
     {
       persistDefaultConnectionSettings: documentMode === null,
       resourceBasePath,
-      ...(startup.pendingBootstrapProfile
+      ...(!hasPendingGateway && startup.pendingBootstrapProfile
         ? { bootstrapProfile: startup.pendingBootstrapProfile }
         : {}),
     },
@@ -353,6 +397,7 @@ export function bootstrapApplication(
               sessionKey: settings.sessionKey,
               gateway,
               agentsList: () => agents.state.agentsList,
+              selectedAgentId: settings.selectedAgentId,
               signal: startupLifecycle.signal,
             }),
         )
@@ -365,7 +410,20 @@ export function bootstrapApplication(
     throw error;
   });
   const agentIdentity = createAgentIdentityCapability(gateway);
-  const agentSelection = createAgentSelectionCapability(gateway, agents);
+  const agentSelection = createAgentSelectionCapability(
+    gateway,
+    agents,
+    startsApplicationRouter
+      ? {
+          load: (gatewayUrl) => loadGatewaySessionSelection(gatewayUrl).selectedAgentId ?? null,
+          save: (gatewayUrl, selectedAgentId) => {
+            if (gateway.connection.gatewayUrl === gatewayUrl) {
+              patchSettings({ selectedAgentId: selectedAgentId ?? undefined });
+            }
+          },
+        }
+      : undefined,
+  );
   const channels = createChannelCapability(gateway);
   const scopeUpgrade = createScopeUpgradeCapability(gateway);
   const config = createApplicationConfigCapability({
@@ -413,7 +471,6 @@ export function bootstrapApplication(
     initialUserMessage,
   });
   const chatAttachmentHandoff = createChatAttachmentHandoff();
-  applyThemePresentation(settings);
   const router = createApplicationRouter();
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so
@@ -423,7 +480,7 @@ export function bootstrapApplication(
     startup.pendingGatewayUrl !== null
       ? {
           gatewayUrl: startup.pendingGatewayUrl,
-          token: startup.pendingGatewayToken ?? "",
+          token: startup.pendingGatewayToken,
           bootstrapToken: startup.pendingBootstrapToken ?? "",
           ...(startup.pendingBootstrapProfile
             ? { bootstrapProfile: startup.pendingBootstrapProfile }
@@ -486,9 +543,15 @@ export function bootstrapApplication(
       return;
     }
     pendingGatewayConnection = null;
+    const credentials = resolveGatewayCredentialsForUrlEdit(
+      gateway.connection.gatewayUrl,
+      pending.gatewayUrl,
+      gateway.connection,
+    );
     gateway.connect({
       gatewayUrl: pending.gatewayUrl,
-      token: pending.token,
+      token: pending.bootstrapToken ? "" : (pending.token ?? credentials.token),
+      password: credentials.password,
       bootstrapToken: pending.bootstrapToken,
       bootstrapProfile: pending.bootstrapProfile,
     });

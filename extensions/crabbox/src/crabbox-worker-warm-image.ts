@@ -2,15 +2,12 @@ import { createHash } from "node:crypto";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { crabboxCommandError } from "./crabbox-worker-command-error.js";
-import {
-  provisionProfileError,
-  runCrabboxCommand,
-  type CrabboxCommandRunner,
-} from "./crabbox-worker-command.js";
+import { runCrabboxCommand, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   buildCrabboxWarmupArgs,
   nonEmptyString,
   type parseCrabboxProfile,
+  type resolveCrabboxProvisionProfile,
 } from "./crabbox-worker-profile.js";
 
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
@@ -23,25 +20,33 @@ type WarmImageRecord = {
 };
 type LeaseContext = { binary: string; id: string; provider: string };
 type AllocationContext = LeaseContext & {
-  profile: CrabboxProfile;
+  profile: ReturnType<typeof resolveCrabboxProvisionProfile>["profile"];
   slug: string;
   timeoutMs: () => number;
 };
 
 // Match the existing paired-device dormancy ceiling before reclaiming idle images.
 const WARM_IMAGE_RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
+const WARM_IMAGE_REFRESH_MS = 24 * 60 * 60 * 1_000;
 const WARM_IMAGE_COMMAND_TIMEOUT_MS = 60_000;
 // Scrub and create ride a full `crabbox run`/snapshot round trip (SSH, workspace
 // owner, coordinator posts); 60s starves them under coordinator latency and the
 // capture silently degrades to cold-only. Live-measured on AWS 2026-08-26.
 const WARM_IMAGE_CAPTURE_TIMEOUT_MS = 180_000;
-const WARM_IMAGE_CAPTURE_RESERVATION_TIMEOUT_MS = 2 * WARM_IMAGE_CAPTURE_TIMEOUT_MS;
+// Machine0 image save stops the source and waits for image availability even with --wait=false.
+const WARM_IMAGE_MACHINE0_CAPTURE_TIMEOUT_MS = 600_000;
+// Reservation staleness must cover the slowest provider capture budget: stealing a
+// live capture's reservation lets the finished capture overwrite the thief's record
+// and orphan its provider checkpoint outside retention cleanup.
+const WARM_IMAGE_CAPTURE_RESERVATION_TIMEOUT_MS = 2 * WARM_IMAGE_MACHINE0_CAPTURE_TIMEOUT_MS;
 const WARM_IMAGE_MAX_ENTRIES = 128;
 const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 
 // Enrollment roots its identity, device token, bundles, and node-host workspaces
 // under OPENCLAW_STATE_DIR here; deleting it is the cross-session data boundary.
 // Crabbox's separate checkpoint workdir never receives session files (--no-sync).
+// SSH session workspaces must also be scrubbed; sibling bundle installs and git-seeds
+// in .openclaw-worker are machine-level caches and intentionally survive.
 const SCRUB_WORKER_STATE = `set -eu
 worker_root="$HOME/.openclaw/cloud-workers"
 worker_processes=$(ps -eo pid=,args=)
@@ -52,6 +57,7 @@ if [ -n "$worker_pids" ]; then
   kill -KILL $worker_pids 2>/dev/null || true
 fi
 rm -rf "$worker_root"
+rm -rf "$HOME/.openclaw-worker/workspaces"
 `;
 
 function crabboxWarmImageKey(profile: CrabboxProfile): string {
@@ -132,7 +138,7 @@ export function createCrabboxWarmImageManager(dependencies: {
 
   const warnOnce = (action: string, error: unknown) => {
     const detail = error instanceof Error ? error.message : String(error);
-    const message = `Crabbox warm image ${action} failed; using cold provisioning: ${detail}`;
+    const message = `Crabbox warm image ${action} failed: ${detail}`;
     if (!warned.has(message)) {
       warned.add(message);
       dependencies.warn(message);
@@ -176,7 +182,11 @@ export function createCrabboxWarmImageManager(dependencies: {
     }
     // Delete the provider snapshot before its index; losing the index first
     // would orphan a billed resource outside warm-image retention cleanup.
-    openStore().delete(key);
+    openStore().deleteIf?.(
+      key,
+      (current) =>
+        current.checkpointId === record.checkpointId && current.createdAtMs === record.createdAtMs,
+    );
   };
 
   const makeRoomForCapture = async (context: LeaseContext): Promise<boolean> => {
@@ -231,11 +241,14 @@ export function createCrabboxWarmImageManager(dependencies: {
       ]),
     );
 
-  const forkImage = async (context: AllocationContext): Promise<boolean> => {
+  const forkImage = async (
+    context: AllocationContext,
+    profile: CrabboxProfile & { class: string },
+  ): Promise<boolean> => {
     try {
       await collectExpiredImages(context);
-      const key = crabboxWarmImageKey(context.profile);
-      let record = openStore().lookup(key);
+      const key = crabboxWarmImageKey(profile);
+      const record = openStore().lookup(key);
       if (!record?.checkpointId) {
         return false;
       }
@@ -248,8 +261,6 @@ export function createCrabboxWarmImageManager(dependencies: {
         if (state !== "available") {
           return false;
         }
-        record = { ...record, state };
-        openStore().register(key, record);
       }
       const fork = parseCheckpointJson(
         await checkpointCommand(
@@ -264,7 +275,7 @@ export function createCrabboxWarmImageManager(dependencies: {
             "--lease-id",
             context.id,
             "--class",
-            context.profile.class,
+            profile.class,
             "--slug",
             context.slug,
             "--json",
@@ -282,7 +293,13 @@ export function createCrabboxWarmImageManager(dependencies: {
       ) {
         throw new Error("Crabbox checkpoint fork returned an invalid lease identity");
       }
-      openStore().register(key, { ...record, lastUsedAtMs: Date.now() });
+      const checkpointId = record.checkpointId;
+      // Refresh may have claimed or replaced this image while its fork was running.
+      openStore().update?.(key, (current) =>
+        current?.checkpointId === checkpointId
+          ? { ...current, state: "available", lastUsedAtMs: Date.now() }
+          : undefined,
+      );
       return true;
     } catch (error) {
       warnOnce("fork", error);
@@ -294,6 +311,7 @@ export function createCrabboxWarmImageManager(dependencies: {
     async capture(context: LeaseContext & { profile: CrabboxProfile; eligible: boolean }) {
       const key = crabboxWarmImageKey(context.profile);
       let reservation: WarmImageRecord | undefined;
+      let superseded: WarmImageRecord | undefined;
       try {
         await collectExpiredImages(context);
         const existing = openStore().lookup(key);
@@ -309,11 +327,23 @@ export function createCrabboxWarmImageManager(dependencies: {
             ) {
               return;
             }
+          } else if ((await verifyImage(context, existing.checkpointId)) === "missing") {
+            await deleteImage(context, key, existing);
           } else {
-            if ((await verifyImage(context, existing.checkpointId)) !== "missing") {
+            if (!context.eligible || Date.now() - existing.createdAtMs < WARM_IMAGE_REFRESH_MS) {
               return;
             }
-            await deleteImage(context, key, existing);
+            if (
+              !openStore().deleteIf?.(
+                key,
+                (current) => current.checkpointId === existing.checkpointId,
+              )
+            ) {
+              return;
+            }
+            // Refresh briefly provisions cold while the replacement is captured;
+            // removing the old record lets the existing reservation own single-flight.
+            superseded = existing;
           }
         }
         if (!context.eligible || !(await makeRoomForCapture(context))) {
@@ -353,17 +383,39 @@ export function createCrabboxWarmImageManager(dependencies: {
               "native",
               "--wait=false",
               "--json",
+              ...(context.provider === "machine0" ? ["--strategy", "image"] : []),
             ],
-            WARM_IMAGE_CAPTURE_TIMEOUT_MS,
+            context.provider === "machine0"
+              ? WARM_IMAGE_MACHINE0_CAPTURE_TIMEOUT_MS
+              : WARM_IMAGE_CAPTURE_TIMEOUT_MS,
           ),
           context.id,
         );
         openStore().register(key, { ...reservation, ...created });
         reservation = undefined;
-      } catch (error) {
-        if (reservation) {
+        if (superseded) {
           try {
-            store?.deleteIf?.(key, (current) => current.checkpointId === "");
+            await checkpointCommand(context, "delete", [
+              "checkpoint",
+              "delete",
+              superseded.checkpointId,
+            ]);
+          } catch (error) {
+            warnOnce("superseded checkpoint deletion", error);
+          }
+        }
+      } catch (error) {
+        if (reservation || superseded) {
+          try {
+            if (superseded) {
+              openStore().register(key, superseded);
+            } else if (reservation) {
+              const createdAtMs = reservation.createdAtMs;
+              store?.deleteIf?.(
+                key,
+                (current) => current.checkpointId === "" && current.createdAtMs === createdAtMs,
+              );
+            }
           } catch {
             // A stale reservation is GC-eligible; teardown must still stop the lease.
           }
@@ -373,7 +425,7 @@ export function createCrabboxWarmImageManager(dependencies: {
     },
 
     async allocate(context: AllocationContext): Promise<void> {
-      if (context.profile.warmImage && (await forkImage(context))) {
+      if (context.profile.warmImage && (await forkImage(context, context.profile))) {
         return;
       }
       // Fork failure before create-intent permits cold warmup on the same fixed lease.
@@ -389,7 +441,8 @@ export function createCrabboxWarmImageManager(dependencies: {
       if (result.termination === "exit" && result.code === 0) {
         return;
       }
-      throw provisionProfileError(result) ?? crabboxCommandError("warmup", result);
+      // Current CLI/backend refusals cannot rule out allocation by an earlier fixed-ID attempt.
+      throw crabboxCommandError("warmup", result);
     },
   };
 }

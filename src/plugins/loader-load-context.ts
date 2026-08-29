@@ -1,12 +1,10 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import {
@@ -25,6 +23,15 @@ import type {
   PluginLoadOptions,
   PluginRuntimeSubagentMode,
 } from "./loader-types.js";
+import {
+  parsePluginCacheJson,
+  pluginCacheExistsSync,
+  pluginCacheRealpathSync,
+  pluginCacheStatSync,
+  readPluginCacheFile,
+} from "./plugin-cache-files.js";
+import type { BundledPackageCacheIdentity } from "./plugin-cache-sdk.js";
+import { getPluginCache } from "./plugin-cache.js";
 import {
   fingerprintPluginDiscoveryContext,
   resolvePluginDiscoveryContext,
@@ -45,29 +52,25 @@ function resolveBundledPackageRootForCache(stockRoot?: string): string | undefin
     return path.dirname(parent);
   }
   const sourcePackageRoot = parent;
-  return fs.existsSync(path.join(sourcePackageRoot, "package.json"))
+  return pluginCacheExistsSync(path.join(sourcePackageRoot, "package.json"))
     ? sourcePackageRoot
     : undefined;
 }
 
 function readPackageVersionForCache(packageJsonPath: string): string {
-  const parsed = tryReadJsonSync(packageJsonPath);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const file = readPluginCacheFile({
+    rootDir: path.dirname(packageJsonPath),
+    relativePath: path.basename(packageJsonPath),
+    rejectHardlinks: false,
+  });
+  const parsed = file.ok ? parsePluginCacheJson(file) : undefined;
+  if (!parsed?.ok || !isRecord(parsed.value)) {
     return "unknown";
   }
-  const version = (parsed as { version?: unknown }).version;
+  const version = parsed.value.version;
   return typeof version === "string" && version.trim() ? version.trim() : "unknown";
 }
 
-type BundledPackageCacheIdentity = {
-  packageJson: string;
-  packageRoot: string;
-  packageVersion: string;
-  size: number;
-  mtimeMs: number;
-};
-
-const bundledPackageCacheIdentityByStockRoot = new Map<string, BundledPackageCacheIdentity>();
 const runtimeBindingCacheIds = new WeakMap<object, number>();
 let nextRuntimeBindingCacheId = 1;
 
@@ -99,36 +102,26 @@ function resolveBundledPackageCacheIdentity(
   if (!stockRoot) {
     return undefined;
   }
+  const bundledPackages = getPluginCache().sdk.bundledPackages;
+  const stockRootKey = path.resolve(stockRoot);
+  if (bundledPackages.has(stockRootKey)) {
+    return bundledPackages.get(stockRootKey);
+  }
   const packageRoot = resolveBundledPackageRootForCache(stockRoot);
   if (!packageRoot) {
+    bundledPackages.set(stockRootKey, undefined);
     return undefined;
   }
-  const stockRootKey = path.resolve(stockRoot);
-  const cached = bundledPackageCacheIdentityByStockRoot.get(stockRootKey);
-  if (cached) {
-    return cached;
-  }
   const packageJsonPath = path.join(packageRoot, "package.json");
-  let identity: BundledPackageCacheIdentity;
-  try {
-    const stat = fs.statSync(packageJsonPath);
-    identity = {
-      packageJson: resolveRealpathOrAbsolute(packageJsonPath),
-      packageRoot: resolveRealpathOrAbsolute(packageRoot),
-      packageVersion: readPackageVersionForCache(packageJsonPath),
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
-    };
-  } catch {
-    identity = {
-      packageJson: path.resolve(packageJsonPath),
-      packageRoot: resolveRealpathOrAbsolute(packageRoot),
-      packageVersion: "missing",
-      size: -1,
-      mtimeMs: -1,
-    };
-  }
-  bundledPackageCacheIdentityByStockRoot.set(stockRootKey, identity);
+  const stat = pluginCacheStatSync(packageJsonPath);
+  const identity: BundledPackageCacheIdentity = {
+    packageJson: pluginCacheRealpathSync(packageJsonPath) ?? path.resolve(packageJsonPath),
+    packageRoot: pluginCacheRealpathSync(packageRoot) ?? path.resolve(packageRoot),
+    packageVersion: stat ? readPackageVersionForCache(packageJsonPath) : "missing",
+    size: stat?.size ?? -1,
+    mtimeMs: stat?.mtimeMs ?? -1,
+  };
+  bundledPackages.set(stockRootKey, identity);
   return identity;
 }
 
@@ -147,8 +140,10 @@ function buildActivationMetadataHash(params: {
     })
     .map(([channelId]) => channelId)
     .toSorted((left, right) => left.localeCompare(right));
-  const pluginEntryStates = Object.entries(params.activationSource.plugins.entries)
-    .map(([pluginId, entry]) => [pluginId, entry?.enabled ?? null] as const)
+  // Source config selects validation and defaults even when resolved values match.
+  // Object fields keep an absent config distinct from an explicit null source.
+  const pluginEntryInputs = Object.entries(params.activationSource.plugins.entries)
+    .map(([pluginId, { enabled, config }]) => [pluginId, { enabled, config }] as const)
     .toSorted(([left], [right]) => left.localeCompare(right));
   const autoEnableReasonEntries = Object.entries(params.autoEnabledReasons)
     .map(([pluginId, reasons]) => [pluginId, [...reasons]] as const)
@@ -161,7 +156,7 @@ function buildActivationMetadataHash(params: {
         allow: params.activationSource.plugins.allow,
         deny: params.activationSource.plugins.deny,
         memorySlot: params.activationSource.plugins.slots.memory,
-        entries: pluginEntryStates,
+        entries: pluginEntryInputs,
         enabledChannels: enabledSourceChannels,
         autoEnabledReasons: autoEnableReasonEntries,
       }),

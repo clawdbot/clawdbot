@@ -42,10 +42,6 @@ type AgentTurnStartRequest = {
   onRunObserved?: (runId: string) => void;
 };
 
-function createAcceptanceRespond(io: AgentTurnIo): RespondFn {
-  return (ok, payload, error, meta) => io.emitAcceptance([ok, payload, error], meta);
-}
-
 function replayAgentTurnIfCached(params: {
   preflight: AgentRequestPreflight;
   context: GatewayRequestHandlerOptions["context"];
@@ -60,19 +56,11 @@ function replayAgentTurnIfCached(params: {
     return false;
   }
   if (cached.ok && isAcceptedAgentDedupePayload(cached.payload)) {
-    const cachedRunId =
-      typeof cached.payload.runId === "string" && cached.payload.runId.trim()
-        ? cached.payload.runId.trim()
-        : runId;
-    const cachedSessionKey =
-      typeof cached.payload.sessionKey === "string" && cached.payload.sessionKey.trim()
-        ? cached.payload.sessionKey.trim()
-        : undefined;
-    const cachedAgentId =
-      typeof cached.payload.agentId === "string" && cached.payload.agentId.trim()
-        ? cached.payload.agentId.trim()
-        : undefined;
+    const cachedRunId = normalizeOptionalString(cached.payload.runId) ?? runId;
+    const cachedSessionKey = normalizeOptionalString(cached.payload.sessionKey);
+    const cachedAgentId = normalizeOptionalString(cached.payload.agentId);
     const cachedRuntime = asOptionalRecord(cached.payload.runtime);
+    const admissionPending = typeof cached.payload.reservationId === "string";
     params.io.emitAcceptance(
       [
         true,
@@ -82,6 +70,7 @@ function replayAgentTurnIfCached(params: {
           ...(cachedSessionKey ? { sessionKey: cachedSessionKey } : {}),
           ...(cachedAgentId ? { agentId: cachedAgentId } : {}),
           ...(cachedRuntime ? { runtime: cachedRuntime } : {}),
+          ...(admissionPending ? { admissionPending: true } : {}),
         },
         undefined,
       ],
@@ -93,20 +82,22 @@ function replayAgentTurnIfCached(params: {
   return true;
 }
 
-export function createAgentTurnService({
-  context,
-  isWebchatConnect,
-}: Pick<GatewayRequestHandlerOptions, "context" | "isWebchatConnect">) {
+export function createAgentTurnService(
+  { context, isWebchatConnect }: Pick<GatewayRequestHandlerOptions, "context" | "isWebchatConnect">,
+  assertContextCurrent?: () => void,
+) {
   const startTurn = async ({
     preflight,
     principal,
     io,
     onRunObserved,
   }: AgentTurnStartRequest): Promise<void> => {
+    const promptedAt = Date.now();
     if (replayAgentTurnIfCached({ preflight, context, io })) {
       return;
     }
-    const respond = createAcceptanceRespond(io);
+    const respond: RespondFn = (ok, payload, error, meta) =>
+      io.emitAcceptance([ok, payload, error], meta);
     const {
       request,
       cfg,
@@ -529,6 +520,7 @@ export function createAgentTurnService({
       const { activeSessionAgentId } = delivery;
 
       const preparedDispatch = await prepareAgentRunDispatch({
+        promptedAt,
         request,
         cfg,
         cfgForAgent,
@@ -590,6 +582,7 @@ export function createAgentTurnService({
       // This captures ambient root admission synchronously, then settles the final
       // frame on the existing detached chain after the router returns its acceptance.
       startAgentRunExecution({
+        assertContextCurrent,
         prepared: preparedDispatch,
         mainRestartRecoveryOwnerLease,
         request,

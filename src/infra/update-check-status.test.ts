@@ -9,6 +9,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { checkUpdateStatus } from "./update-check.js";
 
 const runCommandWithTimeout = processExec.runCommandWithTimeout;
+const PNPM_PACKAGE_MANAGER = "pnpm@12.0.0";
 
 async function runGit(cwd: string, ...args: string[]): Promise<string> {
   const result = await runCommandWithTimeout(["git", ...args], {
@@ -144,7 +145,7 @@ describe("checkUpdateStatus", () => {
       await initGitRepo(sourceRoot);
       await fs.writeFile(
         path.join(sourceRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", packageManager: "pnpm@10.0.0" }),
+        JSON.stringify({ name: "openclaw", packageManager: PNPM_PACKAGE_MANAGER }),
       );
       await runGit(sourceRoot, "add", "package.json");
       await commitGit(sourceRoot, "base");
@@ -505,7 +506,7 @@ describe("checkUpdateStatus", () => {
         await fs.mkdir(root, { recursive: true });
         await fs.writeFile(
           path.join(root, "package.json"),
-          JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
+          JSON.stringify({ name: "openclaw", packageManager: PNPM_PACKAGE_MANAGER }),
           "utf8",
         );
 
@@ -534,7 +535,7 @@ describe("checkUpdateStatus", () => {
     await withTestDir({ prefix: "openclaw-update-check-deps-" }, async (root) => {
       await fs.writeFile(
         path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
+        JSON.stringify({ name: "openclaw", packageManager: PNPM_PACKAGE_MANAGER }),
         "utf8",
       );
       const lockfilePath = path.join(root, "pnpm-lock.yaml");
@@ -580,7 +581,7 @@ describe("checkUpdateStatus", () => {
       await fs.mkdir(repoRoot, { recursive: true });
       await fs.writeFile(
         path.join(repoRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", packageManager: "pnpm@10.0.0" }),
+        JSON.stringify({ name: "openclaw", packageManager: PNPM_PACKAGE_MANAGER }),
         "utf8",
       );
       await runCommandWithTimeout(["git", "init"], {

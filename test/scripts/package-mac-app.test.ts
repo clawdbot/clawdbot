@@ -1580,13 +1580,133 @@ describe("package-mac-app plist stamping", () => {
     expect(script.indexOf(resolveCall)).toBeLessThan(script.indexOf(buildCall));
   });
 
+  it.each([
+    { operation: "create", exitCode: 1, reason: "No such file or directory" },
+    { operation: "attach", exitCode: 73, reason: "Permission denied" },
+    { operation: "none", exitCode: 0, reason: "" },
+  ])(
+    "preserves Peekaboo snapshot diagnostics and cleanup: $operation",
+    ({ operation, exitCode, reason }) => {
+      const root = tempDirs.make("openclaw-peekaboo-snapshot-fixture-");
+      const buildPath = path.join(root, "build with spaces");
+      const checkout = path.join(buildPath, "checkouts", "Peekaboo");
+      const scratch = path.join(root, "temporary snapshots");
+      const unrelated = path.join(scratch, "unrelated-snapshot", "marker");
+      const operationsPath = path.join(root, "operations");
+      const expectedCommit = "b".repeat(40);
+      mkdirSync(checkout, { recursive: true });
+      mkdirSync(path.dirname(unrelated), { recursive: true });
+      writeFileSync(path.join(checkout, "source"), "source preserved\n");
+      writeFileSync(unrelated, "unrelated snapshot preserved\n");
+      const hdiutil = path.join(root, "hdiutil");
+      writeFileSync(
+        hdiutil,
+        `#!/bin/bash
+        set -euo pipefail
+        printf '%s\\n' "$1" >> "$operations"
+        printf '%s\\0' "$@" > "$fixture_root/$1.args"
+        if [[ "$1" == create ]]; then
+          image="\${@: -1}"
+          printf '%s' "\${image%/*}" > "$fixture_root/snapshot-root"
+          : > "$image"
+        fi
+        for arg in "$@"; do
+          if [[ "$arg" == -quiet ]]; then
+            exec 1>&- 2>&-
+          fi
+        done
+        if [[ "$1" == ${JSON.stringify(operation)} ]]; then
+          printf 'hdiutil: %s failed - %s\\n' "$1" ${JSON.stringify(reason)} >&2 || true
+          exit ${exitCode}
+        fi
+        if [[ "$1" == detach && ${JSON.stringify(operation)} != none ]]; then
+          exit 1
+        fi
+        printf 'hdiutil: %s completed\\n' "$1" || true
+        exit 0
+        `,
+      );
+      chmodSync(hdiutil, 0o755);
+
+      const result = runHelper(
+        `
+      set -euo pipefail
+      export fixture_root=${JSON.stringify(root)}
+      export operations=${JSON.stringify(operationsPath)}
+      export PATH=${JSON.stringify(`${root}:/usr/bin:/bin`)}
+      TMPDIR=${JSON.stringify(scratch)}
+      ${getSwiftPackageResolutionBlock()}
+      compiled_peekaboo_commit() {
+        printf 'verify:%s:%s\\n' "$1" "$2" >> "$operations"
+        printf '%s' "$2"
+      }
+      rm() {
+        printf 'remove:%s\\n' "$*" >> "$operations"
+        command rm "$@"
+      }
+      create_verified_peekaboo_snapshot ${JSON.stringify(buildPath)} ${JSON.stringify(expectedCommit)}
+      printf 'snapshot-ready\\n' >> "$operations"
+      `,
+        "/bin/bash",
+      );
+
+      const snapshotRoot = readFileSync(path.join(root, "snapshot-root"), "utf8");
+      const image = path.join(snapshotRoot, "Peekaboo.dmg");
+      const mount = path.join(snapshotRoot, "mount");
+      const expectedOperations = [`verify:${checkout}:${expectedCommit}`, "create"];
+      if (operation !== "create") {
+        expectedOperations.push("attach");
+      }
+      if (operation === "none") {
+        expectedOperations.push(`verify:${mount}:${expectedCommit}`, "snapshot-ready");
+      }
+      expectedOperations.push("detach", `remove:-rf ${snapshotRoot}`);
+      expect(result.status).toBe(exitCode);
+      expect(readFileSync(operationsPath, "utf8").trim().split("\n")).toEqual(expectedOperations);
+      expect(existsSync(snapshotRoot)).toBe(false);
+      expect(readFileSync(path.join(checkout, "source"), "utf8")).toBe("source preserved\n");
+      expect(readFileSync(unrelated, "utf8")).toBe("unrelated snapshot preserved\n");
+      const readArgs = (command: string) =>
+        readFileSync(path.join(root, `${command}.args`), "utf8")
+          .split("\0")
+          .slice(0, -1)
+          .filter((arg) => arg !== "-quiet");
+      expect(readArgs("create")).toEqual([
+        "create",
+        "-fs",
+        "APFS",
+        "-format",
+        "UDRO",
+        "-srcfolder",
+        checkout,
+        "-volname",
+        "OpenClawPeekabooSnapshot",
+        image,
+      ]);
+      if (operation !== "create") {
+        expect(readArgs("attach")).toEqual([
+          "attach",
+          "-readonly",
+          "-nobrowse",
+          "-mountpoint",
+          mount,
+          image,
+        ]);
+      }
+      expect(readArgs("detach")).toEqual(["detach", mount]);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(
+        operation === "none" ? "" : `hdiutil: ${operation} failed - ${reason}\n`,
+      );
+    },
+  );
+
   it("stamps only the clean Peekaboo source that SwiftPM actually compiled", () => {
     const verifier = getCompiledPeekabooHelperBlock();
     expect(verifier).toContain('"core.commitGraph=false"');
     expect(verifier).toContain('"--no-replace-objects"');
     expect(verifier).toContain('"fsck", "--full", "--strict"');
     expect(verifier).toContain('"cat-file", object_type');
-    expect(readFileSync(scriptPath, "utf8")).toContain("hdiutil attach -quiet -readonly -nobrowse");
     expect(readFileSync(scriptPath, "utf8")).toContain(
       'swift package --scratch-path "$build_path" edit Peekaboo --path "$PEEKABOO_SNAPSHOT_MOUNT"',
     );
@@ -1692,9 +1812,9 @@ describe("package-mac-app plist stamping", () => {
     );
     expect(stageScript).toContain('manifest.dependencies["@trycua/cua-driver"]');
     expect(stageScript).toContain('manifest.cuaDriverArtifacts["darwin-universal-binary"]');
-    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.20.0");
+    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.21.0");
     expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
-      "07a88ea2c28a9ead66b2d9f6f93fab4b1189a1f7c704d2cd7b6d12c30eee9984",
+      "5e327e58f6ce81d5c117fe5edec5f267e87e1b921e8c5a8aa4f7f21cbcf5f273",
     );
     expect(packageScript).toContain(
       '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',

@@ -37,6 +37,8 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "sessionDiffBaselineCapture",
   "worktree",
   "projectId",
+  "pendingProjectGitUrl",
+  "pendingWorktree",
   "parentSessionKey",
   "parentSessionId",
   "createdVia",

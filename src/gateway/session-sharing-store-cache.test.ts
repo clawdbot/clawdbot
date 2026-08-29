@@ -73,7 +73,7 @@ describe("session mutation authorization store caches", () => {
           sessionId: "session-private",
           updatedAt: 1,
           visibility: "draft",
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
 
@@ -208,7 +208,11 @@ describe("session mutation authorization store caches", () => {
         sessionId: "session-private",
         updatedAt: 1,
         visibility: "draft" as const,
-        createdActor: { type: "human" as const, id: "owner@example.com" },
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: "owner@example.com",
+        },
       },
     },
     {
@@ -219,7 +223,11 @@ describe("session mutation authorization store caches", () => {
         updatedAt: 1,
         visibility: "shared" as const,
         incognito: true as const,
-        createdActor: { type: "human" as const, id: "owner@example.com" },
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: "owner@example.com",
+        },
       },
     },
   ])("matches uncached $name authorization", async ({ sessionKey, entry }) => {

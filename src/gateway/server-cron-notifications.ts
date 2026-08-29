@@ -227,8 +227,7 @@ async function postCronWebhookStrict(params: {
     params.onDeliveryAccepted?.();
   } finally {
     const cleanup = async () => {
-      // Guard release closes the dispatcher, not an unread response stream.
-      // Keep response cleanup inside the request deadline; a non-settling
+      // Keep response cleanup before guard release inside the request deadline; a non-settling
       // stream cancellation must not retain the dispatcher or Gateway root.
       if (!result.response.bodyUsed) {
         const cancellation = result.response.body?.cancel();

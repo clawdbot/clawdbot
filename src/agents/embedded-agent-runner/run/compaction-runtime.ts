@@ -13,6 +13,8 @@ import {
 } from "../compaction-safety-timeout.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
+import { mergeUsageIntoAccumulator, type UsageAccumulator } from "../usage-accumulator.js";
+import { attachCompactionUsageRecorder } from "./compaction-usage-bridge.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -66,6 +68,7 @@ export type EmbeddedRunCompactionRecoveryInput = {
   };
   prepareCompactedTranscriptRetry: () => Promise<void>;
   armPostCompactionGuard: () => void;
+  usageAccumulator: UsageAccumulator;
 };
 
 /** Preserve one prepared owner snapshot for both timeout and overflow recovery. */
@@ -90,6 +93,7 @@ export async function compactEmbeddedRunForRecovery(
       clientCaps: runParams.clientCaps,
       chatType: runParams.chatType,
       agentAccountId: runParams.agentAccountId,
+      conversationRoutePeerId: runParams.conversationRoutePeerId,
       currentChannelId: runParams.currentChannelId,
       currentThreadTs: runParams.currentThreadTs,
       currentMessageId: runParams.currentMessageId,
@@ -103,6 +107,7 @@ export async function compactEmbeddedRunForRecovery(
       agentDir: input.agentDir,
       config: runParams.config,
       toolOverrides: runParams.toolOverrides,
+      toolsAllow: runParams.toolsAllow,
       skillsSnapshot: runParams.skillsSnapshot,
       senderId: runParams.senderId,
       provider: input.provider,
@@ -146,6 +151,9 @@ export async function compactEmbeddedRunForRecovery(
     attempt: recovery.attempt,
     maxAttempts: recovery.maxAttempts,
   };
+  attachCompactionUsageRecorder(runtimeContext, (usage) => {
+    mergeUsageIntoAccumulator(input.usageAccumulator, usage);
+  });
   const runtimeSettings = input.buildRuntimeSettings({
     tokenBudget: recovery.tokenBudget,
     ...(recovery.trigger === "overflow" ? { degradedReason: "context_overflow" } : {}),

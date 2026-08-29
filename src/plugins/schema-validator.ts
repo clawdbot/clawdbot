@@ -1,15 +1,18 @@
 import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 // Compiles plugin manifest schemas for validation without runtime loading.
-import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import { Format } from "typebox/format";
+import { Compile, type Validator as TypeBoxValidator } from "typebox/schema";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   applyJsonSchemaDefaults,
   findJsonSchemaShapeError,
 } from "../shared/json-schema-defaults.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 
 type TypeBoxValidationError = {
   keyword?: string;
@@ -74,11 +77,30 @@ function schemaHasDefaults(schema: unknown): boolean {
   return Object.values(record).some((value) => schemaHasDefaults(value));
 }
 
-function cloneValidationValue<T>(value: T): T {
-  if (value === undefined || value === null) {
-    return value;
+// Transfer only defaults selected by the source; re-evaluating branches on resolved
+// strings changes their meaning. Never restore a reference removed by runtime isolation.
+function applyValidatedSourceDefaults(
+  value: unknown,
+  source: unknown,
+  defaulted: unknown,
+): unknown {
+  if (source === undefined) {
+    return value === undefined ? defaulted : value;
   }
-  return structuredClone(value);
+  const target = asOptionalObjectRecord(value);
+  const original = asOptionalObjectRecord(source);
+  const hydrated = asOptionalObjectRecord(defaulted);
+  if (target && original && hydrated) {
+    for (const [key, entry] of Object.entries(hydrated)) {
+      if (
+        !isBlockedObjectKey(key) &&
+        (Object.hasOwn(target, key) || !Object.hasOwn(original, key))
+      ) {
+        target[key] = applyValidatedSourceDefaults(target[key], original[key], entry);
+      }
+    }
+  }
+  return value;
 }
 
 function compileSchema(schema: JsonSchemaValue): TypeBoxValidator {
@@ -136,28 +158,8 @@ function checkSchemaWithCurrentFormats(
   if (validate.Check(value)) {
     return null;
   }
-  return [...validate.Errors(value)] as TypeBoxValidationError[];
-}
-
-function checkSchema(validate: TypeBoxValidator, value: unknown): TypeBoxValidationError[] | null {
-  return withPluginFormatSemantics(() => checkSchemaWithCurrentFormats(validate, value));
-}
-
-function applyDefaultsAndCheckSchema(params: {
-  schema: JsonSchemaValue;
-  validate: TypeBoxValidator;
-  value: unknown;
-  applyDefaults: boolean;
-  hasDefaults: boolean;
-}): { value: unknown; errors: TypeBoxValidationError[] | null } {
-  if (!params.applyDefaults || !params.hasDefaults) {
-    return { value: params.value, errors: checkSchema(params.validate, params.value) };
-  }
-  const clonedValue = cloneValidationValue(params.value);
-  return withPluginFormatSemantics(() => {
-    const value = applyJsonSchemaDefaults(params.schema, clonedValue);
-    return { value, errors: checkSchemaWithCurrentFormats(params.validate, value) };
-  });
+  // The schema-only compiler returns [valid, errors], without loading value codecs.
+  return validate.Errors(value)[1];
 }
 
 function isDefaultActivatedConditionalFailure(params: {
@@ -168,11 +170,11 @@ function isDefaultActivatedConditionalFailure(params: {
   const relaxedConditionalValidator = compileSchema(
     relaxConditionalRequiredKeywords(params.schema),
   );
-  if (checkSchema(relaxedConditionalValidator, params.defaultedValue)) {
+  if (checkSchemaWithCurrentFormats(relaxedConditionalValidator, params.defaultedValue)) {
     return false;
   }
   const originalValidator = compileSchema(params.schema);
-  return checkSchema(originalValidator, params.originalValue) === null;
+  return checkSchemaWithCurrentFormats(originalValidator, params.originalValue) === null;
 }
 
 /**
@@ -345,6 +347,42 @@ function formatValidationErrors(
 }
 
 /**
+ * Result of validating manifest-sourced input. `schemaError` on the failure branch tells
+ * callers whether the schema itself is unusable (true) versus the value failing a
+ * well-formed schema's constraints (false) — callers that report "config missing" vs.
+ * "config invalid" need this to avoid telling an operator to fill in config that no
+ * value could ever satisfy.
+ */
+type PluginSchemaValidationResult =
+  | { ok: true; value: unknown }
+  | { ok: false; errors: JsonSchemaValidationError[]; schemaError: boolean };
+
+/**
+ * Validate a value against a schema supplied by a plugin manifest.
+ * External manifest schemas are third-party input, so every failure mode becomes
+ * a validation result. Bundled schemas stay on the throwing path because a malformed
+ * repository-owned schema is a programming error and must stay loud.
+ */
+export function validatePluginSchemaValue(
+  params: Parameters<typeof validateJsonSchemaValue>[0] & { origin: PluginOrigin },
+): PluginSchemaValidationResult {
+  const { origin, ...validationParams } = params;
+  if (origin === "bundled") {
+    const result = validateJsonSchemaValue(validationParams);
+    return result.ok ? result : { ...result, schemaError: false };
+  }
+  try {
+    const result = validateJsonSchemaValue(validationParams);
+    return result.ok ? result : { ...result, schemaError: false };
+  } catch (error) {
+    // The thrown text can embed raw manifest content (TypeBox echoes a bad regex
+    // pattern), and callers log it, so it is sanitized like every other error path.
+    const text = sanitizeTerminalText(error instanceof Error ? error.message : String(error));
+    return { ok: false, errors: [{ path: "<root>", message: text, text }], schemaError: true };
+  }
+}
+
+/**
  * Validate a plugin-owned value against a JSON Schema, optionally hydrating schema defaults.
  * The cache key is caller-owned so repeated plugin/schema validations can reuse compiled TypeBox validators.
  */
@@ -352,6 +390,8 @@ export function validateJsonSchemaValue(params: {
   schema: JsonSchemaValue;
   cacheKey: string;
   value: unknown;
+  /** Persisted input paired with this runtime value, before secret resolution. */
+  sourceValue?: unknown;
   applyDefaults?: boolean;
   cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
@@ -360,37 +400,8 @@ export function validateJsonSchemaValue(params: {
     throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
   }
 
-  const useCache = params.cache !== false;
-  if (!useCache) {
-    const validate = compileSchema(params.schema);
-    const { value, errors } = applyDefaultsAndCheckSchema({
-      schema: params.schema,
-      validate,
-      value: params.value,
-      applyDefaults: params.applyDefaults === true,
-      hasDefaults: params.applyDefaults === true && schemaHasDefaults(params.schema),
-    });
-    if (!errors) {
-      return { ok: true, value };
-    }
-    if (
-      params.applyDefaults &&
-      value !== params.value &&
-      isDefaultActivatedConditionalFailure({
-        schema: params.schema,
-        originalValue: params.value,
-        defaultedValue: value,
-      })
-    ) {
-      // Defaults can select a conditional branch that requires the defaulted property;
-      // keep the hydrated value when the original input was valid before hydration.
-      return { ok: true, value };
-    }
-    return { ok: false, errors: formatValidationErrors(errors) };
-  }
-
   const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
-  let cached = schemaCache.get(cacheKey);
+  let cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
   const schemaFingerprint =
     !cached || cached.schema !== params.schema ? fingerprintSchema(params.schema) : undefined;
   if (
@@ -404,32 +415,44 @@ export function validateJsonSchemaValue(params: {
       schema: params.schema,
       schemaFingerprint: schemaFingerprint ?? fingerprintSchema(params.schema),
     };
-    schemaCache.set(cacheKey, cached);
+    if (params.cache !== false) {
+      schemaCache.set(cacheKey, cached);
+    }
   } else if (cached.schema !== params.schema) {
     cached.schema = params.schema;
   }
 
-  const { value, errors } = applyDefaultsAndCheckSchema({
-    schema: params.schema,
-    validate: cached.validate,
-    value: params.value,
-    applyDefaults: params.applyDefaults === true,
-    hasDefaults: cached.hasDefaults,
+  return withPluginFormatSemantics(() => {
+    const originalValue = params.sourceValue === undefined ? params.value : params.sourceValue;
+    const value =
+      params.applyDefaults && cached.hasDefaults
+        ? applyJsonSchemaDefaults(params.schema, structuredClone(originalValue))
+        : originalValue;
+    const errors = checkSchemaWithCurrentFormats(cached.validate, value);
+    // Defaults may activate a required-only conditional failure in otherwise valid source.
+    if (
+      errors &&
+      !(
+        params.applyDefaults &&
+        value !== originalValue &&
+        isDefaultActivatedConditionalFailure({
+          schema: params.schema,
+          originalValue,
+          defaultedValue: value,
+        })
+      )
+    ) {
+      return { ok: false, errors: formatValidationErrors(errors) };
+    }
+    if (originalValue === params.value) {
+      return { ok: true, value };
+    }
+    return {
+      ok: true,
+      value:
+        value === originalValue
+          ? params.value
+          : applyValidatedSourceDefaults(structuredClone(params.value), originalValue, value),
+    };
   });
-  if (!errors) {
-    return { ok: true, value };
-  }
-  if (
-    params.applyDefaults &&
-    value !== params.value &&
-    isDefaultActivatedConditionalFailure({
-      schema: params.schema,
-      originalValue: params.value,
-      defaultedValue: value,
-    })
-  ) {
-    // Same conditional-default exception as the uncached path; cache only changes validator reuse.
-    return { ok: true, value };
-  }
-  return { ok: false, errors: formatValidationErrors(errors) };
 }

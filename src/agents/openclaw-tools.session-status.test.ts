@@ -30,7 +30,7 @@ const resolveQueueSettingsMock = vi.hoisted(() =>
 );
 const listTasksForRelatedSessionKeyForOwnerMock = vi.hoisted(() =>
   vi.fn(
-    (_: { relatedSessionKey: string; callerOwnerKey: string }) =>
+    (_params: { relatedSessionKey: string; callerOwnerKey: string }) =>
       [] as Array<Record<string, unknown>>,
   ),
 );
@@ -205,7 +205,12 @@ function createConfigModuleMock() {
 function createModelCatalogModuleMock() {
   return {
     loadProviderScopedThinkingCatalog: async () => [],
-    loadPreparedModelCatalog: async () => [
+    // A run's captured config goes stale after any Gateway config republish; the exact
+    // loader then throws, and session_status must read the published owner instead.
+    loadPreparedModelCatalog: async () => {
+      throw new Error("prepared model catalog owner config was replaced during the read (/tmp)");
+    },
+    loadPublishedPreparedModelCatalog: async () => [
       {
         provider: "anthropic",
         id: "claude-sonnet-4-6",
@@ -618,40 +623,51 @@ describe("session_status tool", () => {
     expect(details.statusText).not.toContain("OAuth/token status");
     expect(tool.outputSchema).toBeDefined();
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ changedModel: boolean; ok: true; sessionKey: string; stateVersion: number; statusText: string; active?: { accountId?: string; channel?: string; threadId?: string | number; to?: string }; deliveryContext?: { accountId?: string; channel?: string; threadId?: string | number; to?: string }; model?: string; modelOverride?: string | null; modelProvider?: string; origin?: { accountId?: string; provider?: string; threadId?: string | number }; stateChanges?: { earliestAvailableSequence: number; events: Array<{ actorType: "human" | "agent" | "system"; kind: string; occurredAt: number; sequence: number; summary: string; actorId?: string; payload?: { channel?: string; outcome?: "error" | "timeout" | "cancelled"; turns?: number }; runId?: string }>; historyGap: boolean; truncated: boolean } }',
-    );
+    // The full contract exceeds the compact hint budget; never promote a truncated shape.
+    expect(compactToolOutputHint(tool.outputSchema)).toBeUndefined();
   });
 
-  it("uses the persisted fixed-store owner for a bare current session", async () => {
-    resetSessionStore({
-      global: {
-        sessionId: "ops-global",
-        updatedAt: 10,
-      },
-    });
-    mockConfig = {
-      session: { mainKey: "main", scope: "global", store: "/tmp/shared-sessions.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          model: { primary: "openai/gpt-5.4" },
-          models: {},
-          sessionStore: { agentId: "ops" },
+  it.each([false, true])(
+    "reports the fixed-store owner for a bare current session (reset: %s)",
+    async (reset) => {
+      resetSessionStore({
+        global: {
+          sessionId: "ops-global",
+          updatedAt: 10,
+          providerOverride: "anthropic",
+          modelOverride: "claude-sonnet-4-6",
         },
-        entries: { ops: {}, research: {} },
-      },
-      tools: { agentToAgent: { enabled: false } },
-    };
+      });
+      mockConfig = {
+        session: { mainKey: "main", scope: "global", store: "/tmp/shared-sessions.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: {},
+            sessionStore: { agentId: "ops" },
+          },
+          entries: { ops: {}, research: {} },
+        },
+        tools: { agentToAgent: { enabled: false } },
+      };
 
-    const result = await createSessionStatusTool({
-      agentSessionKey: "global",
-      config: mockConfig as never,
-    }).execute("owned-global", {});
+      const tool = createSessionStatusTool({
+        agentSessionKey: "global",
+        config: mockConfig as never,
+      });
+      const result = await tool.execute("owned-global", reset ? { model: "default" } : {});
 
-    expect(result.details).toMatchObject({ ok: true, sessionKey: "global" });
-    expect(getSessionStateVersionMock).toHaveBeenCalledWith("global", "ops");
-  });
+      expect(result.details).toMatchObject({
+        ok: true,
+        sessionKey: "global",
+        agentId: "ops",
+        changedModel: reset,
+      });
+      expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+      expect(getSessionStateVersionMock).toHaveBeenCalledWith("global", "ops");
+    },
+  );
 
   it("does not treat another agent's fixed-store bare key as self", async () => {
     resetSessionStore({

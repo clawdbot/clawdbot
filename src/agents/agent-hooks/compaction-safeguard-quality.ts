@@ -28,6 +28,15 @@ const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
 
+/** Demotes canonical headings when a summary is embedded as supporting context. */
+export function nestRequiredSummaryHeadings(text: string): string {
+  return text.replace(/^##[ \t]+\S.*$/gmu, (heading) =>
+    REQUIRED_SUMMARY_SECTIONS.some((required) => required === heading.trim())
+      ? heading.replace("##", "###")
+      : heading,
+  );
+}
+
 /** Wraps operator-provided compaction instruction text as untrusted prompt data. */
 export function wrapUntrustedInstructionBlock(label: string, text: string): string {
   return wrapUntrustedPromptDataBlock({
@@ -70,6 +79,7 @@ export function buildCompactionStructureInstructions(
     ...REQUIRED_SUMMARY_SECTIONS,
     identifierSectionInstruction,
     "Do not omit unresolved asks from the user.",
+    "Record completed requests outside ## Pending user asks; list only unresolved user requests there.",
     "When prior compaction summaries are present, re-distill them with new messages and remove stale duplicate detail.",
   ].join("\n");
   const custom = customInstructions?.trim();
@@ -129,6 +139,13 @@ function parseRequiredSummarySectionContents(summary: string): string[] | null {
   return contents.map((lines) => lines.join("\n").trim());
 }
 
+function parsePendingUserAskSections(summary: string): string[] {
+  return summary
+    .split(/^## Pending user asks[ \t]*$/gmu)
+    .slice(1)
+    .map((section) => section.split(/^##[ \t]+\S.*$/mu, 1)[0]?.trim() ?? "");
+}
+
 /**
  * Plan truncation that keeps the audit facts and lets everything else shrink.
  * Only the headings, the bounded latest-ask context, and the audited source
@@ -144,6 +161,7 @@ export function createSummaryQualityRetentionPlan(
     auditSummary?: string;
     identifiers: string[];
     latestAsk: string | null;
+    latestAskCompleted?: boolean;
     requiredAskContext?: string;
     identifierPolicy?: CompactionSummarizationInstructions["identifierPolicy"];
   },
@@ -162,9 +180,13 @@ export function createSummaryQualityRetentionPlan(
   const marker = truncatedMarker.trim();
   // Protected tails render after each section's optional content so the audit
   // facts survive regardless of how much model text the budget keeps.
+  const protectedAskSectionIndex = params.latestAskCompleted ? 0 : PENDING_ASK_SECTION_INDEX;
+  const protectedAskContext = params.latestAskCompleted
+    ? `Latest turn completed:\n${requiredAskContext}`
+    : requiredAskContext;
   const protectedTails = REQUIRED_SUMMARY_SECTIONS.map((_, index) =>
-    index === PENDING_ASK_SECTION_INDEX
-      ? requiredAskContext
+    index === protectedAskSectionIndex
+      ? protectedAskContext
       : index === EXACT_IDENTIFIERS_SECTION_INDEX
         ? auditedIdentifiers.join("\n")
         : "",
@@ -394,8 +416,10 @@ function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
 export function auditSummaryQuality(params: {
   summary: string;
   structuralSummary: string;
+  completionSummary?: string;
   identifiers: string[];
   latestAsk: string | null;
+  latestAskCompleted?: boolean;
   identifierPolicy?: CompactionSummarizationInstructions["identifierPolicy"];
 }): { ok: boolean; reasons: string[] } {
   const reasons: string[] = [];
@@ -416,6 +440,14 @@ export function auditSummaryQuality(params: {
   }
   if (!hasAskOverlap(params.summary, params.latestAsk)) {
     reasons.push("latest_user_ask_not_reflected");
+  }
+  if (params.latestAskCompleted) {
+    const pendingAskSections = parsePendingUserAskSections(
+      params.completionSummary ?? params.structuralSummary,
+    );
+    if (pendingAskSections.some((pendingAsks) => hasAskOverlap(pendingAsks, params.latestAsk))) {
+      reasons.push("completed_latest_user_ask_marked_pending");
+    }
   }
   return { ok: reasons.length === 0, reasons };
 }

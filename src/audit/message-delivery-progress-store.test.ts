@@ -11,6 +11,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v10-retirement.test-support.js";
 import { STATE_SCHEMA_11_TO_10_TABLES_SQL } from "../state/openclaw-state-schema-v11-retirement.test-support.js";
+import { STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v12-foldin.test-support.js";
+import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v13-widerow.test-support.js";
 import { recordAuditEvent } from "./audit-event-store.js";
 import type { OutboundMessageProgressInput } from "./audit-event-types.js";
 import {
@@ -275,13 +277,14 @@ describe("outbound message progress companion", () => {
     ).toBe(true);
     // This pinned reader predates the Workshop's first-use column and requires present lazy tables
     // to retain its exact shape; project that unrelated table to the reader's historical contract.
-    // It is a v9-era build, so both later retirements must be undone before the
-    // version markers rewind: v11's curator tables, then the documented 10->9 recipe.
-    openOpenClawStateDatabase(database).db.exec(
-      "ALTER TABLE skill_workshop_proposals DROP COLUMN claim_released_time;",
-    );
-    openOpenClawStateDatabase(database).db.exec(STATE_SCHEMA_11_TO_10_TABLES_SQL);
-    openOpenClawStateDatabase(database).db.exec(STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL);
+    // The v9-era reader needs the v13 projection removal, v12 singleton fold-in,
+    // v11 curator retirement, and v10 dead-table retirement reversed in order.
+    const projectedDatabase = openOpenClawStateDatabase(database).db;
+    projectedDatabase.exec("ALTER TABLE skill_workshop_proposals DROP COLUMN claim_released_time;");
+    projectedDatabase.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
+    projectedDatabase.exec(STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL);
+    projectedDatabase.exec(STATE_SCHEMA_11_TO_10_TABLES_SQL);
+    projectedDatabase.exec(STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL);
     closeOpenClawStateDatabaseForTest();
 
     const repositoryRoot = process.cwd();

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { reconcileHeartbeatMonitorJobs } from "../cron/heartbeat-monitor.js";
 import type { CronJob } from "../cron/types.js";
-import { reconcileHeartbeatMonitorJobs } from "./server-cron-heartbeat-jobs.js";
 
 const logger = { warn: vi.fn() };
 

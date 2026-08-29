@@ -4,6 +4,7 @@ import {
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   getRuntimeConfigSnapshot,
@@ -51,11 +52,7 @@ export type SlackMessageHandler = (
   },
 ) => Promise<void>;
 
-type SlackDispatchCompletion = {
-  promise: Promise<void>;
-  resolve: () => void;
-  reject: (error: unknown) => void;
-};
+type SlackDispatchCompletion = ReturnType<typeof createDeferred<void>>;
 
 type IngressSlackMessageOptions = Parameters<SlackMessageHandler>[1] & {
   retryAttempt?: number;
@@ -64,16 +61,6 @@ type IngressSlackMessageOptions = Parameters<SlackMessageHandler>[1] & {
 type QueuedSlackMessageOptions = IngressSlackMessageOptions & {
   dispatchCompletion?: Omit<SlackDispatchCompletion, "promise">;
 };
-
-function createSlackDispatchCompletion(): SlackDispatchCompletion {
-  let resolve!: () => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<void>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
-  });
-  return { promise, resolve, reject };
-}
 
 const RETRYABLE_FLUSH_MAX_ATTEMPTS = 3;
 const RETRYABLE_FLUSH_RETRY_DELAY_MS = 1_000;
@@ -365,6 +352,10 @@ export function createSlackMessageHandler(params: {
                     settlementHandedOff = true;
                     return undefined;
                   },
+                  onDeferredHeartbeat: () => {
+                    turnAdoptionLifecycle?.onDeferredHeartbeat?.();
+                    admissionLifecycle.onDeferredHeartbeat?.();
+                  },
                   onAbandoned: () => {
                     settlementHandedOff = true;
                     releaseClaims();
@@ -468,7 +459,7 @@ export function createSlackMessageHandler(params: {
       pendingKeys.add(debounceKey);
       pendingTopLevelDebounceKeys.set(conversationKey, pendingKeys);
     }
-    const dispatchCompletion = opts.awaitDispatch ? createSlackDispatchCompletion() : undefined;
+    const dispatchCompletion = opts.awaitDispatch ? createDeferred<void>() : undefined;
     await debouncer.enqueue({
       message: resolvedMessage,
       opts: {

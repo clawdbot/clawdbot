@@ -1,7 +1,11 @@
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const { runCliAgentMock } = vi.hoisted(() => ({
   runCliAgentMock: vi.fn(async (_params: { preparedRunAdmission?: PreparedAgentRunAdmission }) => ({
@@ -48,6 +52,7 @@ function registerBackend(overrides: Partial<CliBackendPlugin> = {}) {
 }
 
 function compactParams(overrides: Record<string, unknown> = {}) {
+  const dir = tempDirs.make("openclaw-compact-native-cli-");
   const cliSessionBinding = {
     sessionId: "native-session",
     authProfileId: "anthropic:subscription",
@@ -60,12 +65,12 @@ function compactParams(overrides: Record<string, unknown> = {}) {
       agentId: "main",
       sessionId: "openclaw-session",
       sessionKey: "agent:main:main",
-      storePath: "/tmp/openclaw.sqlite",
+      storePath: join(dir, "openclaw.sqlite"),
     },
     sessionFile: "agent:main:main",
     agentId: "main",
-    workspaceDir: "/tmp/workspace",
-    agentDir: "/tmp/agent",
+    workspaceDir: join(dir, "workspace"),
+    agentDir: join(dir, "agent"),
     config: {},
     provider: "anthropic",
     model: "opus",
@@ -117,6 +122,7 @@ describe("native CLI manual compaction", () => {
         sessionEntry: { execHost: "node", execNode: "paired-node" },
         controlOperation: "compact",
         disableCliLiveSession: true,
+        cleanupCliLiveSessionOnRunEnd: true,
         allowEmptyAssistantReplyAsSilent: true,
       }),
     );

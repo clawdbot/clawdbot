@@ -14,6 +14,8 @@ vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
 
 import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 
+const EXISTING_BINDING = { kind: "existing", device: "1", inode: "2" } as const;
+
 function commandResult(overrides: Record<string, unknown> = {}) {
   return {
     stdout: "",
@@ -55,6 +57,7 @@ function createDirFetchContext(): OpenClawPluginNodeInvokePolicyContext {
       ok: true,
       payload: {
         ok: true,
+        binding: EXISTING_BINDING,
         path: "/tmp/project",
         entries: ["ok.txt"],
         preflightOnly: true,
@@ -64,6 +67,7 @@ function createDirFetchContext(): OpenClawPluginNodeInvokePolicyContext {
       ok: true,
       payload: {
         ok: true,
+        binding: EXISTING_BINDING,
         path: "/tmp/project",
         tarBase64: archive.toString("base64"),
         tarBytes: archive.byteLength,
@@ -77,6 +81,7 @@ function createDirFetchContext(): OpenClawPluginNodeInvokePolicyContext {
     params: { path: "/tmp/project" },
     config: {},
     pluginConfig: {
+      policyVersion: 2,
       nodes: {
         "node-1": {
           allowReadPaths: ["/tmp/**"],

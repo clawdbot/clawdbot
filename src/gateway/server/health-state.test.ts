@@ -95,7 +95,7 @@ describe("buildGatewaySnapshot update metadata", () => {
       agents: { entries: { main: agent } },
     });
 
-    const snapshot = healthState.buildGatewaySnapshot({ revisionProjector });
+    const snapshot = healthState.buildGatewaySnapshot({ client: null, revisionProjector });
 
     expect(snapshot.sessionDefaults?.modelConfigured).toBe(expected);
   });
@@ -131,6 +131,7 @@ describe("buildGatewaySnapshot update metadata", () => {
     });
 
     const snapshot = healthState.buildGatewaySnapshot({
+      client: null,
       includeUpdateDetails: false,
       revisionProjector,
     });
@@ -167,6 +168,7 @@ describe("buildGatewaySnapshot update metadata", () => {
     getUpdateScheduleMock.mockReturnValue(updateSchedule);
 
     const snapshot = healthState.buildGatewaySnapshot({
+      client: null,
       includeUpdateDetails: true,
       revisionProjector,
     });

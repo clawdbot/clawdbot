@@ -399,6 +399,17 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
   }
 }
 
+export function coerceDiscordComponentParam(raw: unknown): unknown {
+  if (typeof raw !== "string") {
+    return raw;
+  }
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
+}
+
 export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageSpec | null {
   if (raw === undefined || raw === null) {
     return null;

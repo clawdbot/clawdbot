@@ -16,7 +16,6 @@ import {
   failDeliveryBeforePlatformSend,
   failPendingDelivery,
   loadPendingDelivery,
-  loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
@@ -24,7 +23,11 @@ import {
   reserveDeliveryAttempt,
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
-import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
+import {
+  loadPendingDeliveries,
+  installDeliveryQueueTmpDirHooks,
+  readQueuedEntry,
+} from "./delivery-queue.test-helpers.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 describe("delivery-queue storage", () => {

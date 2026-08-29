@@ -26,7 +26,14 @@ openclaw-new-session-page {
   z-index: 45;
 }
 
-.new-session-page__incognito-toggle.shell-chrome-controls__button {
+.new-session-page__draft-toggle {
+  display: none;
+}
+
+:is(
+  .new-session-page__draft-toggle,
+  .new-session-page__incognito-toggle
+).shell-chrome-controls__button {
   width: 40px;
   height: 40px;
   border-color: color-mix(in srgb, var(--text-strong) 12%, transparent);
@@ -35,18 +42,27 @@ openclaw-new-session-page {
   corner-shape: superellipse(1.5);
 }
 
-.new-session-page__incognito-toggle.shell-chrome-controls__button:hover:not(:disabled) {
+:is(
+  .new-session-page__draft-toggle,
+  .new-session-page__incognito-toggle
+).shell-chrome-controls__button:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--text-strong) 18%, transparent);
   background: color-mix(in srgb, var(--text-strong) 7%, var(--panel));
 }
 
-.new-session-page__incognito-toggle.shell-chrome-controls__button svg {
+:is(
+    .new-session-page__draft-toggle,
+    .new-session-page__incognito-toggle
+  ).shell-chrome-controls__button
+  svg {
   width: 19px;
   height: 19px;
 }
 
-.new-session-page__incognito-toggle--active,
-.new-session-page__incognito-toggle--active:hover:not(:disabled) {
+:is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active),
+:is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active):hover:not(
+  :disabled
+) {
   border-color: color-mix(in srgb, var(--accent) 42%, transparent);
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
   color: var(--accent);
@@ -54,6 +70,33 @@ openclaw-new-session-page {
 
 html.openclaw-native-macos .new-session-page__incognito-rail {
   top: 52px;
+}
+
+@media (max-width: 560px) {
+  .new-session-page__incognito-rail {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .new-session-page__draft-toggle {
+    display: inline-flex;
+  }
+
+  .new-session-page__draft-toggle--active.shell-chrome-controls__button {
+    width: auto;
+    padding-inline: 10px;
+    gap: 7px;
+  }
+
+  .new-session-page__draft-toggle-label {
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .new-session-page__composer .new-session-page__visibility--draft {
+    display: none;
+  }
 }
 
 /* Mirrors .chat-thread: the top inset doubles as the native macOS titlebar
@@ -374,6 +417,10 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   color: inherit;
 }
 
+.new-session-page__trigger-chevron--mobile {
+  display: none;
+}
+
 /* Icon templates only carry paths; without an explicit stroke rule the SVGs
    render as solid black fills (invisible-blob chips in dark mode). */
 .new-session-page__trigger-chevron svg,
@@ -575,6 +622,12 @@ wa-popover.new-session-page__select::part(body) {
   text-transform: uppercase;
 }
 
+wa-popover.new-session-page__picker-popover
+  .new-session-page__picker-root
+  > .new-session-page__menu-title:not(:first-child) {
+  margin-top: var(--space-2);
+}
+
 .new-session-page__project-search {
   display: block;
   padding: 4px 8px 6px;
@@ -650,13 +703,25 @@ wa-popover.new-session-page__select::part(body) {
   color: var(--muted);
 }
 
-.new-session-page__menu-facts {
+.new-session-page__menu-meta {
   display: inline-flex;
   flex: 0 1 auto;
-  gap: 3px;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   max-width: 62%;
   overflow: hidden;
+}
+
+.new-session-page__menu-facts {
+  display: inline-flex;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.new-session-page__menu-meta > .session-context-meter {
+  flex: 0 0 84px;
 }
 
 .new-session-page__menu-fact {
@@ -1048,6 +1113,14 @@ wa-popover.new-session-page__project-popover::part(body) {
   cursor: default;
 }
 
+/* The trailing actions already own the stable right edge on /new. Collapse the
+   empty effort slot while loading unless the open model menu needs its anchor. */
+.new-session-page__composer
+  .chat-controls__model-settings:not(:has(.chat-controls__model-picker[open]))
+  .chat-controls__effort-picker--reserved {
+  display: none;
+}
+
 /* Phones (and short landscape): match the chat thread's mobile inset, and
    anchor menus to the trigger row instead of their trigger — a near
    viewport-wide panel under a non-leftmost trigger would otherwise run past
@@ -1062,31 +1135,152 @@ wa-popover.new-session-page__project-popover::part(body) {
     gap: 4px 2px;
   }
 
-  /* Visibility chips stay intrinsic and let the model control use the
-     remaining width until the shared narrow-composer treatment takes over. */
-  .new-session-page__composer .agent-chat__composer-controls {
-    display: flex;
-    flex-wrap: wrap;
-  }
-
-  .new-session-page__composer .agent-chat__input .chat-composer-model-control {
-    flex: 1 1 auto;
-    width: auto;
-    min-width: 0;
-    max-width: 100%;
-    margin-left: auto;
-  }
-
   .new-session-page__select {
     position: static;
   }
 }
 
 @container chat-composer (max-width: 480px) {
-  .new-session-page__composer .agent-chat__input .chat-composer-model-control {
+  .new-session-page__composer .new-session-page__visibility {
     flex: 0 0 var(--chat-composer-control-size);
     width: var(--chat-composer-control-size);
-    min-width: var(--chat-composer-control-size);
-    max-width: var(--chat-composer-control-size);
+    padding-inline: 0;
+    justify-content: center;
+  }
+
+  .new-session-page__composer .new-session-page__visibility-label {
+    display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .new-session-page .agent-chat__welcome-secondary:has(.agent-chat__suggestions) {
+    display: none;
+  }
+
+  .agent-chat__input--mobile-toolbar .new-session-page__start-submit {
+    width: var(--chat-composer-send-size);
+    min-width: var(--chat-composer-send-size);
+    height: var(--chat-composer-send-size);
+    padding: var(--chat-mobile-row-action-padding);
+  }
+
+  .agent-chat__input--mobile-toolbar .new-session-page__start-submit > svg {
+    width: var(--chat-mobile-row-icon-size);
+    height: var(--chat-mobile-row-icon-size);
+    color: var(--primary-foreground);
+  }
+
+  .new-session-page .agent-chat__welcome {
+    min-height: 100%;
+  }
+
+  .new-session-page .agent-chat__welcome-identity {
+    gap: 6px;
+    margin-block: auto;
+  }
+
+  .new-session-page .agent-chat__welcome-clawd {
+    margin-bottom: 0;
+  }
+
+  .new-session-page__draft {
+    flex: 0 0 auto;
+    justify-content: flex-end;
+    min-height: 0;
+  }
+
+  .new-session-page__triggers {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    width: calc(100% - 8px);
+    margin-inline: 4px;
+    margin-block-end: 8px;
+    padding: 0 calc(var(--chat-composer-editor-inset-inline, 12px) - 6px);
+    border: 0;
+    background: transparent;
+  }
+
+  .new-session-page__trigger,
+  .agent-select--compact .agent-select__trigger,
+  :root[data-theme-mode="light"] .agent-select--compact .agent-select__trigger {
+    height: 32px;
+    padding-inline: 6px;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.4;
+  }
+
+  .new-session-page__triggers > span.new-session-page__select {
+    width: 100%;
+  }
+
+  .new-session-page__triggers > span.new-session-page__select > .new-session-page__trigger {
+    width: fit-content;
+    max-width: 100%;
+  }
+
+  .new-session-page__triggers > span.new-session-page__select ~ span.new-session-page__select {
+    margin-block-start: 6px;
+  }
+
+  .new-session-page__trigger-label {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .new-session-page__trigger {
+    gap: 0;
+  }
+
+  .new-session-page__trigger > .new-session-page__target-icon {
+    margin-inline-end: 8px;
+  }
+
+  .new-session-page__triggers
+    :is(.new-session-page__target-icon, .new-session-page__trigger-chevron) {
+    color: var(--muted);
+  }
+
+  .new-session-page__triggers
+    :is(.new-session-page__target-icon, .new-session-page__trigger-chevron)
+    svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .new-session-page__trigger-chevron--desktop {
+    display: none;
+  }
+
+  .new-session-page__trigger-chevron--mobile {
+    display: inline-flex;
+    margin-inline-start: 4px;
+  }
+
+  .new-session-page__trigger-chevron--mobile svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .new-session-page__composer.agent-chat__composer-shell {
+    margin-top: 0;
+  }
+
+  .new-session-page__incognito-notice {
+    align-items: flex-start;
+    width: calc(100% - 8px);
+    max-height: 0;
+    max-width: var(--chat-thread-max-width, 48rem);
+    margin-inline: 4px;
+    padding-inline: 0;
+    white-space: normal;
+    text-align: left;
+  }
+
+  .new-session-page__incognito-notice--visible {
+    max-height: 48px;
   }
 }

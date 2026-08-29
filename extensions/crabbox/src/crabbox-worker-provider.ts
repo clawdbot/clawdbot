@@ -16,7 +16,7 @@ import {
 } from "./crabbox-worker-command-error.js";
 import {
   type CrabboxCommandRunner,
-  isAuthoritativeLeaseAbsence,
+  isUnrecognizedLease,
   runCrabboxCommand,
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
@@ -41,6 +41,7 @@ import {
   parseCrabboxProfile,
   resolveCrabboxBinary,
   resolveCrabboxProvisionProfile,
+  resolveCrabboxWarmImageProfile,
 } from "./crabbox-worker-profile.js";
 import {
   countCrabboxProvisionSetupPhases,
@@ -61,22 +62,22 @@ import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 
 const MAX_ERROR_DETAIL_CHARS = 512;
-// Only states that prove the resource is gone or stopped map to `destroyed`. Crabbox also
-// treats `deleting` and `failed` as unable to become ready, but those can retain resources
-// that still need an explicit stop during teardown.
-const DESTROYED_STATES = new Set([
+// Crabbox states describe lease usability, not proven cleanup: released leases can retain
+// resources, and Machine0 maps both DELETING and DELETED to `deleted`. Always stop explicitly.
+const NON_RUNNABLE_STATES = new Set([
+  "archived",
   "deleted",
+  "deleting",
   "destroyed",
   "expired",
+  "failed",
   "missing",
   "released",
   "stopped",
   "stopped_with_code",
   "terminated",
 ]);
-const UNUSABLE_PROVISION_STATES = new Set([...DESTROYED_STATES, "deleting", "failed"]);
 const LEASE_ID_PATTERN = /^(?:cbx_|tbx_)[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
-const LEGACY_PROVISION_OPERATION_ID_PATTERN = /^provision:[a-f0-9]{64}$/u;
 
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
@@ -115,12 +116,12 @@ async function loadCrabboxConfigShow(params: {
     timeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
   });
   if (result.termination !== "exit" || result.code !== 0) {
-    throw permanentCrabboxCommandError("config show", result);
+    throw crabboxCommandError("config show", result);
   }
   try {
     return JSON.parse(result.stdout) as unknown;
   } catch {
-    throw new WorkerProviderError("Crabbox config show returned invalid JSON");
+    throw new Error("Crabbox config show returned invalid JSON");
   }
 }
 
@@ -150,7 +151,7 @@ async function assertHetznerDesktopHasManagedCoordinator(params: {
   if (nonEmptyString(view?.coordinator) && view?.brokerMode === "managed") {
     return;
   }
-  throw new WorkerProviderError("Crabbox Hetzner desktop profiles require a managed coordinator");
+  throw new Error("Crabbox Hetzner desktop profiles require a managed coordinator");
 }
 
 async function inspectWithContext(params: {
@@ -182,8 +183,8 @@ async function inspectWithContext(params: {
     timeoutMs: params.timeoutMs ?? resolveCrabboxLifecycleTimeoutMs(params.context.provider),
   });
   if (result.termination === "exit" && result.code === 0) {
-    // A successful but malformed response cannot attest the fixed lease. Command failures and
-    // authoritative absence remain transient so Gateway replay can inspect the live lease later.
+    // A successful but malformed response cannot attest the fixed lease. Provision callers
+    // must preserve cleanup uncertainty so Gateway replay can inspect the lease later.
     let inspect: ParsedInspect;
     try {
       inspect = parseInspectJson(result.stdout);
@@ -197,7 +198,7 @@ async function inspectWithContext(params: {
     }
     return { status: "found", inspect };
   }
-  if (result.termination === "exit" && isAuthoritativeLeaseAbsence(result, params.id)) {
+  if (result.termination === "exit" && isUnrecognizedLease(result, params.id)) {
     return { status: "unknown" };
   }
   throw crabboxCommandError(action, result);
@@ -211,9 +212,7 @@ function remainingProvisionTimeout(deadline: number, maximum: number): number {
   return Math.min(maximum, remaining);
 }
 
-const isTerminalState = (state: string) => DESTROYED_STATES.has(state.toLowerCase());
-const isUnusableProvisionState = (state: string) =>
-  UNUSABLE_PROVISION_STATES.has(state.toLowerCase());
+const isNonRunnableState = (state: string) => NON_RUNNABLE_STATES.has(state.toLowerCase());
 
 function leaseRunArgs(
   context: LeaseCommandContext,
@@ -244,7 +243,7 @@ function assertProvisionSecurityPolicy(params: { inspect: ParsedInspect; provide
     throw new WorkerProviderError("Crabbox cloud worker lease must not have Tailscale enabled");
   }
   const attached = params.inspect.awsInstanceProfileAttached;
-  const pending = !params.inspect.ready && !isUnusableProvisionState(params.inspect.state);
+  const pending = !params.inspect.ready && !isNonRunnableState(params.inspect.state);
   if (params.provider === "aws" && attached !== false && (attached || !pending)) {
     throw new WorkerProviderError(
       "Crabbox AWS inspect must attest that no instance profile is attached",
@@ -280,13 +279,13 @@ async function waitForProvisionReady(
     inspect = params.refresh ? await inspectAgain() : params.inspect;
     // Reject forbidden state immediately; omitted AWS metadata is pending only until ready.
     assertProvisionSecurityPolicy({ inspect, provider: params.provider });
-    while (inspect.ready !== true && !isUnusableProvisionState(inspect.state)) {
+    while (inspect.ready !== true && !isNonRunnableState(inspect.state)) {
       const remaining = remainingProvisionTimeout(params.deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS);
       await params.sleep(Math.min(resolveCrabboxReadyPollIntervalMs(params.provider), remaining));
       inspect = await inspectAgain();
       assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     }
-    if (isUnusableProvisionState(inspect.state)) {
+    if (isNonRunnableState(inspect.state)) {
       throw new WorkerProviderError(
         "Crabbox operation lease entered a terminal state while waiting for SSH",
       );
@@ -305,6 +304,7 @@ async function waitForProvisionReady(
 // otherwise the caller cannot release a box it never learned about.
 async function runProvisionSetupAndWaitReady(
   params: ProvisionInspectContext & {
+    phase: string;
     setup: string;
     timeoutMs?: number;
     forwardedEnv?: Record<string, string>;
@@ -316,7 +316,7 @@ async function runProvisionSetupAndWaitReady(
       params.forwardedEnv,
       (names, profilePath, childEnv) =>
         runCrabboxCommand({
-          action: "setup",
+          action: params.phase,
           args: leaseRunArgs({ ...params, id: params.inspect.id }, names, profilePath),
           binary: params.binary,
           env: childEnv,
@@ -329,7 +329,7 @@ async function runProvisionSetupAndWaitReady(
         }),
     );
     if (result.termination !== "exit" || result.code !== 0) {
-      throw permanentCrabboxCommandError("setup", result);
+      throw permanentCrabboxCommandError(params.phase, result);
     }
   } catch (error) {
     return await failProvisionAfterCleanup({ ...params, id: params.inspect.id }, error);
@@ -339,12 +339,9 @@ async function runProvisionSetupAndWaitReady(
   return await waitForProvisionReady({ ...params, refresh: true });
 }
 
-async function stopProvisionId(params: {
-  binary: string;
-  id: string;
-  provider: string;
-  runCommand: CrabboxCommandRunner;
-}): Promise<void> {
+async function stopLeaseWithLifecycleTimeout(
+  params: LeaseCommandContext & { runCommand: CrabboxCommandRunner },
+): Promise<void> {
   await stopCrabboxLease({
     binary: params.binary,
     id: params.id,
@@ -360,7 +357,7 @@ async function failProvisionAfterCleanup(
   provisionError: unknown,
 ): Promise<never> {
   try {
-    await stopProvisionId(params);
+    await stopLeaseWithLifecycleTimeout(params);
   } catch (cleanupError) {
     throw WorkerProviderError.cleanupIndeterminate(params.id, provisionError, cleanupError);
   }
@@ -400,9 +397,7 @@ async function rejectAwsProfileAfterLeaseReconciliation(
     }
     invalidInspect = error;
   }
-  if (!invalidInspect && inspected?.status === "unknown") {
-    throw profileError;
-  }
+  // An unrecognized fixed ID can still own a live resource; let stop establish cleanup.
   try {
     await stopCrabboxLease({ ...context, runCommand });
   } catch (error) {
@@ -500,6 +495,11 @@ export function createCrabboxWorkerProvider(
     };
   };
 
+  const resolveAllocation: WorkerProvider["resolveAllocation"] = async (_profile, operationId) => ({
+    leaseId: operationLeaseId(operationId),
+    sharedHost: false,
+  });
+
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
     dispose: () => heartbeats.dispose(),
@@ -507,6 +507,7 @@ export function createCrabboxWorkerProvider(
     supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,
     requiresNodeEnrollment: true,
+    resolveAllocation,
     resolveProvisionTimeoutMs(profile) {
       return resolveCrabboxProvisionCallTimeoutMs(parseCrabboxProfile(profile));
     },
@@ -535,17 +536,10 @@ export function createCrabboxWorkerProvider(
         deadline +
         countCrabboxProvisionSetupPhases(parsed) * CRABBOX_SETUP_TIMEOUT_MS +
         CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS;
-      if (!operationId.trim()) {
-        throw new Error("Crabbox provision requires an operation id");
-      }
-      if (LEGACY_PROVISION_OPERATION_ID_PATTERN.test(operationId)) {
-        throw new WorkerProviderError(
-          "Legacy Crabbox provision state cannot be replayed safely; clean up any prior lease and dispatch again",
-        );
-      }
+      const allocation = await resolveAllocation(profile, operationId);
       const binary = resolveBinary(parsed.binary);
       const context = { binary, provider: parsed.provider };
-      const leaseId = operationLeaseId(operationId);
+      const leaseId = allocation.leaseId;
       const slug = operationSlug(operationId);
       if (parsed.desktop && parsed.provider === "hetzner") {
         await assertHetznerDesktopHasManagedCoordinator({ binary, runCommand });
@@ -588,10 +582,7 @@ export function createCrabboxWorkerProvider(
       } catch (error) {
         // Transport failure after warmup is indeterminate; preserve the lease for durable replay.
         if (error instanceof WorkerProviderError) {
-          return await failProvisionAfterCleanup(
-            { binary, id: leaseId, provider: parsed.provider, runCommand },
-            error,
-          );
+          return await failProvisionAfterCleanup({ ...context, id: leaseId, runCommand }, error);
         }
         throw error;
       }
@@ -599,14 +590,13 @@ export function createCrabboxWorkerProvider(
         throw new Error("Crabbox warmup lease was not found during inspection");
       }
       const inspectedParams = {
-        binary,
+        ...context,
         deadline,
         inspect: inspected.inspect,
         profile: parsed,
-        provider: parsed.provider,
         runCommand,
       };
-      if (isUnusableProvisionState(inspected.inspect.state)) {
+      if (isNonRunnableState(inspected.inspect.state)) {
         return await failProvisionAfterCleanup(
           { ...inspectedParams, id: leaseId },
           new WorkerProviderError("Crabbox warmup lease entered a terminal state"),
@@ -617,6 +607,7 @@ export function createCrabboxWorkerProvider(
       if (parsed.setup) {
         inspectedParams.inspect = await runProvisionSetupAndWaitReady({
           ...inspectedParams,
+          phase: "profile setup",
           setup: parsed.setup,
           forwardedEnv,
           sleep,
@@ -625,6 +616,7 @@ export function createCrabboxWorkerProvider(
       if (parsed.desktop) {
         inspectedParams.inspect = await runProvisionSetupAndWaitReady({
           ...inspectedParams,
+          phase: "desktop setup",
           setup: createCrabboxWorkerDesktopSetup(leaseId, wallpaperBase64),
           sleep,
         });
@@ -652,6 +644,7 @@ export function createCrabboxWorkerProvider(
       });
       inspectedParams.inspect = await runProvisionSetupAndWaitReady({
         ...inspectedParams,
+        phase: "node enrollment setup",
         setup: nodeEnrollmentSetup.command,
         timeoutMs: CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
         ...(nodeEnrollmentSetup.forwardedEnv
@@ -693,9 +686,8 @@ export function createCrabboxWorkerProvider(
         provider: parsed.provider,
       });
       return {
-        leaseId,
+        ...allocation,
         node: { deviceId },
-        sharedHost: false,
         ...(parsed.desktop ? { desktop: createCrabboxWorkerDesktopEndpoint() } : {}),
       };
     },
@@ -707,15 +699,11 @@ export function createCrabboxWorkerProvider(
         id: context.id,
         runCommand,
       });
-      if (inspected.status === "unknown") {
+      if (inspected.status === "unknown" || isNonRunnableState(inspected.inspect.state)) {
         heartbeats.stop(context.id);
         return { status: "unknown" };
       }
       // `ready` is an SSH probe; every recognized nonterminal lease remains active.
-      if (isTerminalState(inspected.inspect.state)) {
-        heartbeats.stop(context.id);
-        return { status: "destroyed" };
-      }
       heartbeats.start(context);
       return { status: "active" };
     },
@@ -723,22 +711,21 @@ export function createCrabboxWorkerProvider(
       const { context, profile } = resolveLeaseContext(lease);
       // Fence the provider keepalive before teardown so an in-flight touch cannot reschedule.
       heartbeats.stop(context.id);
-      if (profile.warmImage) {
-        // Lifecycle profiles omit placement class overrides; only successful
-        // provisioning can durably attest which class owns this reusable image.
-        const machineClass = openWarmLeases().lookup(context.id)?.machineClass;
+      // Lifecycle profiles omit placement overrides. Successful enrollment records
+      // the class that owns both the default warm policy and reusable image after restart.
+      const machineClass = openWarmLeases().lookup(context.id)?.machineClass;
+      const captureProfile = resolveCrabboxWarmImageProfile(profile, machineClass ?? profile.class);
+      if (captureProfile.warmImage) {
         await warmImages.capture({
           ...context,
-          profile: machineClass ? { ...profile, class: machineClass } : profile,
+          profile: captureProfile,
           eligible: machineClass !== undefined,
         });
       }
-      await stopCrabboxLease({
-        ...context,
-        runCommand,
-        timeoutMs: resolveCrabboxLifecycleTimeoutMs(context.provider),
-      });
-      warmLeases?.delete(context.id);
+      await stopLeaseWithLifecycleTimeout({ ...context, runCommand });
+      if (machineClass !== undefined) {
+        warmLeases?.delete(context.id);
+      }
     },
   };
 }

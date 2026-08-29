@@ -360,11 +360,6 @@ async function readColdOpenOutcome(page: Page): Promise<ColdOpenOutcome> {
   };
 }
 
-async function offeredLabels(page: Page, scenario: ControlUiMockGatewayScenario) {
-  const choices = await openColdSidebar(page, scenario);
-  return choices.locator(".side-panel-type-option__label").allTextContents();
-}
-
 async function readSlotColdOpenOutcome(
   label: OfferedSlotLabel,
   scenario: ControlUiMockGatewayScenario,
@@ -374,6 +369,10 @@ async function readSlotColdOpenOutcome(
   try {
     const page = await context.newPage();
     const choices = await openColdSidebar(page, scenario);
+    expect(
+      await choices.locator(".side-panel-type-option__label").allTextContents(),
+      `${label} cold-open offered slots`,
+    ).toEqual(offeredSlotLabels);
     await choices.filter({ hasText: label }).click();
     if (expectedOutcome) {
       await expect
@@ -407,6 +406,9 @@ suite.define(() => {
       await waitForControlUiGatewayReady(page);
 
       const panel = page.locator(".sidebar-region__right-runtime .side-panel");
+      await expect.poll(() => panel.count()).toBe(0);
+
+      await page.locator(".chat-side-panel-toggle").click();
       await panel.locator(".side-panel-empty--selector").waitFor();
       expect(await panel.locator("wa-tab").count()).toBe(0);
 
@@ -720,17 +722,6 @@ suite.define(() => {
   });
 
   it("renders content for every offered slot with backing data", async () => {
-    const probeContext = await suite.newBrowserContext({ serviceWorkers: "block" });
-    try {
-      const offered = await offeredLabels(
-        await probeContext.newPage(),
-        populatedColdOpenScenario(),
-      );
-      expect(offered).toEqual(offeredSlotLabels);
-    } finally {
-      await suite.closeBrowserContext(probeContext);
-    }
-
     for (const label of offeredSlotLabels) {
       expect(
         await readSlotColdOpenOutcome(label, populatedColdOpenScenario(), "content"),
@@ -740,14 +731,6 @@ suite.define(() => {
   });
 
   it("keeps generic empty states actionable or explicitly allowlisted", async () => {
-    const probeContext = await suite.newBrowserContext({ serviceWorkers: "block" });
-    try {
-      const offered = await offeredLabels(await probeContext.newPage(), coldOpenScenario());
-      expect(offered).toEqual(offeredSlotLabels);
-    } finally {
-      await suite.closeBrowserContext(probeContext);
-    }
-
     const observedActionlessEmptyStates: OfferedSlotLabel[] = [];
     for (const label of offeredSlotLabels) {
       const outcome = await readSlotColdOpenOutcome(label, coldOpenScenario());

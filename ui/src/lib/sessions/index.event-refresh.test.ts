@@ -471,12 +471,14 @@ describe("event-driven session list refresh", () => {
     {
       filter: "ownerId",
       query: { ownerId: "profile-ada" },
-      applyFilter: (sessions: SessionCapability) => sessions.setOwnerFilter("profile-ada"),
+      applyFilter: (sessions: SessionCapability) =>
+        sessions.refresh({ agentId: "main", ownerId: "profile-ada", force: true }),
     },
     {
       filter: "involvingMe",
       query: { involvingMe: true },
-      applyFilter: (sessions: SessionCapability) => sessions.setInvolvingMeFilter(true),
+      applyFilter: (sessions: SessionCapability) =>
+        sessions.refresh({ agentId: "main", involvingMe: true, force: true }),
     },
     {
       filter: "search",
@@ -616,7 +618,7 @@ describe("event-driven session list refresh", () => {
       emitEvent({
         type: "event",
         event: "sessions.changed",
-        payload: { sessionKey: key, reason: "delete" },
+        payload: { sessionKey: key, sessionId: "deleted-generation", reason: "delete" },
       });
       expect(sessions.state.deletedSessions).toEqual([
         { key, retireBeforeRevision: expect.any(Number) },

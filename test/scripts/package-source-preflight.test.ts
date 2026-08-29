@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -296,6 +296,7 @@ function runReleaseInputCapture(params: {
         RELEASE_LIVE_SUITE_FILTER_INPUT: "",
         RELEASE_MODE_INPUT: "both",
         RELEASE_PACKAGE_SPEC_INPUT: params.releasePackageSpec ?? "",
+        RELEASE_PHASE_INPUT: "all",
         RELEASE_PROFILE_INPUT: "beta",
         RELEASE_PROVIDER_INPUT: "openai",
         RELEASE_QA_DISCORD_LIVE_CI_ENABLED: "false",
@@ -324,16 +325,19 @@ function runReleaseInputCapture(params: {
 }
 
 describe("package source preflight", () => {
-  it("accepts aligned source manifests and the explicitly allowed Unreleased section", () => {
-    expect(
-      validatePackageSource({
-        aiManifestContent: aiManifest(),
-        allowUnreleasedChangelog: true,
-        changelogContent: changelog,
-        rootManifestContent: rootManifest(),
-      }),
-    ).toBe("2026.8.1");
-  });
+  it.each(["2026.8.1", "2026.8.1-beta.4", "2026.9.1"])(
+    "accepts aligned %s source manifests with Unreleased notes",
+    (version) => {
+      expect(
+        validatePackageSource({
+          aiManifestContent: aiManifest({ version }),
+          allowUnreleasedChangelog: true,
+          changelogContent: changelog,
+          rootManifestContent: rootManifest({ version }),
+        }),
+      ).toBe(version);
+    },
+  );
 
   it("uses canonical package changelog validation", () => {
     expect(() =>
@@ -369,7 +373,7 @@ describe("package source preflight", () => {
         rootManifestContent: rootManifest(),
       }),
     ).toThrow(
-      "package.json must declare openai@6.50.0 to bundle @openclaw/ai without duplicate dependencies",
+      "package.json must declare openai@6.50.0 to bundle packages/ai/package.json without duplicate dependencies",
     );
   });
 
@@ -421,7 +425,7 @@ describe("package source preflight", () => {
         rootManifestContent: JSON.stringify(root),
       }),
     ).toThrow(
-      "package.json must declare partial-json@0.1.7 to bundle @openclaw/ai without duplicate dependencies",
+      "package.json must declare partial-json@0.1.7 to bundle packages/ai/package.json without duplicate dependencies",
     );
   });
 
@@ -437,16 +441,20 @@ describe("package source preflight", () => {
   });
 
   it("validates the current source ref without modifying the checkout", () => {
+    const committedManifest = JSON.parse(
+      execFileSync("git", ["show", "HEAD:package.json"], { encoding: "utf8" }),
+    ) as { version: string };
+    const workingManifest = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
     expect(
       validatePackageSourceRef("HEAD", {
         allowUnreleasedChangelog: true,
       }),
-    ).toBe("2026.8.1");
+    ).toBe(committedManifest.version);
     expect(
       validatePackageSourceDir(process.cwd(), {
         allowUnreleasedChangelog: true,
       }),
-    ).toBe("2026.8.1");
+    ).toBe(workingManifest.version);
   });
 
   it("normalizes release-check package mode and guards the source resolver", () => {
@@ -512,7 +520,8 @@ describe("package source preflight", () => {
         "${{ needs.resolve_target.outputs.package_mode != 'published' }}",
     });
     expect(workflow.jobs.package_acceptance_release_checks?.with).toMatchObject({
-      candidate_artifact_json: "${{ needs.resolve_target.outputs.candidate_artifact_json }}",
+      candidate_artifact_json:
+        "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.candidate_artifact_json || '' }}",
       source:
         "${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.package_mode == 'published') && 'npm' || 'artifact' }}",
     });

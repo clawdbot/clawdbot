@@ -29,7 +29,6 @@ import {
   type ChatPaneConnectionScope,
 } from "./chat-pane-shared.ts";
 import { resetSessionCompanion } from "./chat-session-companion.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { clearTypingActorForSessionMessage } from "./chat-typing-presence.ts";
 import {
@@ -333,15 +332,6 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
 
   protected hasMultipleIdentities(): boolean {
     return hasMultiplePresenceIdentities(this.presencePayload);
-  }
-
-  protected isCurrentSessionArchived(state: ChatPageHost): boolean {
-    return (
-      state.selectedChatSessionArchived ||
-      state.sessionsResult?.sessions.some(
-        (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
-      ) === true
-    );
   }
 
   protected resetSessionSuggestions(): void {

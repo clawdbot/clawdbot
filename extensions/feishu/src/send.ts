@@ -12,7 +12,9 @@ import { parseInteractiveCardContent } from "./interactive-message-content.js";
 import {
   assertFeishuPostWithinEnvelope,
   buildFeishuPostMessageContent,
+  chunkFeishuMarkdownByEnvelope,
   materializeFeishuPostMarkdownSoftBreaks,
+  type FeishuMarkdownChunkOptions,
 } from "./markdown.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
@@ -581,28 +583,6 @@ export async function editMessageFeishu(params: {
   return { messageId, contentType: "post" };
 }
 
-/**
- * Build a Feishu interactive card with markdown content.
- * Cards render markdown properly (code blocks, tables, links, etc.)
- * Uses schema 2.0 format for proper markdown rendering.
- */
-function buildMarkdownCard(text: string): Record<string, unknown> {
-  return {
-    schema: "2.0",
-    config: {
-      width_mode: "fill",
-    },
-    body: {
-      elements: [
-        {
-          tag: "markdown",
-          content: text,
-        },
-      ],
-    },
-  };
-}
-
 /** Header configuration for structured Feishu cards. */
 export type CardHeaderConfig = {
   /** Header title text, e.g. "💻 Coder" */
@@ -613,16 +593,19 @@ export type CardHeaderConfig = {
 
 /**
  * Build a Feishu interactive card with optional header and note footer.
- * When header/note are omitted, behaves identically to buildMarkdownCard.
  */
 function buildStructuredCard(
   text: string,
   options?: {
     header?: CardHeaderConfig;
     note?: string;
+    mentions?: MentionTarget[];
   },
 ): Record<string, unknown> {
-  const elements: Record<string, unknown>[] = [{ tag: "markdown", content: text }];
+  const content = options?.mentions?.length
+    ? buildMentionedCardContent(options.mentions, text)
+    : text;
+  const elements: Record<string, unknown>[] = [{ tag: "markdown", content }];
   if (options?.note) {
     elements.push({ tag: "hr" });
     elements.push({ tag: "markdown", content: `<font color='grey'>${options.note}</font>` });
@@ -639,6 +622,31 @@ function buildStructuredCard(
     };
   }
   return card;
+}
+
+export function chunkFeishuCardMarkdown(
+  params: FeishuMarkdownChunkOptions & {
+    header?: CardHeaderConfig;
+    note?: string;
+  },
+): string[] {
+  return chunkFeishuMarkdownByEnvelope({
+    ...params,
+    contentBytes: (text, isFirst) =>
+      Buffer.byteLength(
+        JSON.stringify(
+          buildStructuredCard(text, {
+            header: params.header,
+            note: params.note,
+            mentions: [
+              ...(params.chunkMentions ?? []),
+              ...(isFirst ? (params.firstChunkMentions ?? []) : []),
+            ],
+          }),
+        ),
+        "utf8",
+      ),
+  });
 }
 
 /**
@@ -669,53 +677,7 @@ export async function sendStructuredCardFeishu(params: {
     header,
     note,
   } = params;
-  let cardText = text;
-  if (mentions && mentions.length > 0) {
-    cardText = buildMentionedCardContent(mentions, text);
-  }
-  const card = buildStructuredCard(cardText, { header, note });
-  return sendCardFeishu({
-    cfg,
-    to,
-    card,
-    replyToMessageId,
-    replyInThread,
-    allowTopLevelReplyFallback,
-    accountId,
-  });
-}
-
-/**
- * Send a message as a markdown card (interactive message).
- * This renders markdown properly in Feishu (code blocks, tables, bold/italic, etc.)
- */
-export async function sendMarkdownCardFeishu(params: {
-  cfg: ClawdbotConfig;
-  to: string;
-  text: string;
-  replyToMessageId?: string;
-  /** When true, reply creates a Feishu topic thread instead of an inline reply */
-  replyInThread?: boolean;
-  allowTopLevelReplyFallback?: boolean;
-  /** Mention target users */
-  mentions?: MentionTarget[];
-  accountId?: string;
-}): Promise<FeishuSendResult> {
-  const {
-    cfg,
-    to,
-    text,
-    replyToMessageId,
-    replyInThread,
-    allowTopLevelReplyFallback,
-    mentions,
-    accountId,
-  } = params;
-  let cardText = text;
-  if (mentions && mentions.length > 0) {
-    cardText = buildMentionedCardContent(mentions, text);
-  }
-  const card = buildMarkdownCard(cardText);
+  const card = buildStructuredCard(text, { header, note, mentions });
   return sendCardFeishu({
     cfg,
     to,

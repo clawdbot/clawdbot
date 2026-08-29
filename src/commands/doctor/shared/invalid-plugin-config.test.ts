@@ -4,10 +4,15 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
 const validationMocks = vi.hoisted(() => ({
   validateConfigObjectWithPlugins: vi.fn(),
+  findDoctorLegacyConfigIssues: vi.fn((): Array<{ path: string; message: string }> => []),
 }));
 
 vi.mock("../../../config/validation.js", () => ({
   validateConfigObjectWithPlugins: validationMocks.validateConfigObjectWithPlugins,
+}));
+
+vi.mock("./legacy-config-issues.js", () => ({
+  findDoctorLegacyConfigIssues: validationMocks.findDoctorLegacyConfigIssues,
 }));
 
 const [{ maybeRepairInvalidPluginConfig }, { migrateLegacyConfig }] = await Promise.all([
@@ -18,7 +23,31 @@ const [{ maybeRepairInvalidPluginConfig }, { migrateLegacyConfig }] = await Prom
 describe("doctor invalid plugin config repair", () => {
   beforeEach(() => {
     validationMocks.validateConfigObjectWithPlugins.mockReset();
+    validationMocks.findDoctorLegacyConfigIssues.mockReset();
   });
+
+  it.each(["pending", "other"])(
+    "preserves only the plugin with a declared %s migration",
+    (migrationOwner) => {
+      validationMocks.validateConfigObjectWithPlugins.mockReturnValue({
+        ok: false,
+        issues: [
+          { path: "plugins.entries.pending.config", message: "invalid config: retired root" },
+        ],
+      });
+      validationMocks.findDoctorLegacyConfigIssues.mockReturnValue([
+        { path: `plugins.entries.${migrationOwner}.config.root`, message: "Run doctor --fix" },
+      ]);
+      const cfg: OpenClawConfig = {
+        plugins: { entries: { pending: { enabled: true, config: { root: "/legacy/documents" } } } },
+      };
+      const result = maybeRepairInvalidPluginConfig(cfg);
+      expect(result.config.plugins?.entries?.pending).toEqual(
+        migrationOwner === "pending" ? cfg.plugins?.entries?.pending : { enabled: false },
+      );
+      expect(result.changes).toHaveLength(migrationOwner === "pending" ? 0 : 1);
+    },
+  );
 
   it("disables plugins and removes invalid config payloads", () => {
     validationMocks.validateConfigObjectWithPlugins.mockReturnValue({

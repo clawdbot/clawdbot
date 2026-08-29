@@ -292,33 +292,6 @@ function resolvePersistedLmstudioApiKey(params: {
     : undefined;
 }
 
-/** Keeps explicit model entries first and appends unique discovered entries. */
-function mergeDiscoveredModels(params: {
-  explicitModels?: ModelDefinitionConfig[];
-  discoveredModels?: ModelDefinitionConfig[];
-}): ModelDefinitionConfig[] {
-  const explicitModels = Array.isArray(params.explicitModels) ? params.explicitModels : [];
-  const discoveredModels = Array.isArray(params.discoveredModels) ? params.discoveredModels : [];
-  if (explicitModels.length === 0) {
-    return discoveredModels;
-  }
-  if (discoveredModels.length === 0) {
-    return explicitModels;
-  }
-
-  const merged = [...explicitModels];
-  const seen = new Set(normalizeStringEntries(explicitModels.map((model) => model.id)));
-  for (const model of discoveredModels) {
-    const id = model.id.trim();
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    merged.push(model);
-  }
-  return merged;
-}
-
 async function discoverLmstudioProviderCatalog(params: {
   baseUrl?: string;
   apiKey?: string;
@@ -990,21 +963,15 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
   const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
   const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
   let resolvedHeaders: Record<string, string> | undefined;
+  let hasAuthorizationHeader: boolean;
+  let configuredDiscoveryApiKey: string | undefined;
   try {
     resolvedHeaders = await resolveLmstudioProviderHeaders({
       config: ctx.config,
       env: ctx.env,
       headers: explicit?.headers,
     });
-  } catch (error) {
-    if (isLmstudioDiscoveryConfigResolutionError(error)) {
-      return null;
-    }
-    throw error;
-  }
-  const hasAuthorizationHeader = hasLmstudioAuthorizationHeader(resolvedHeaders);
-  let configuredDiscoveryApiKey: string | undefined;
-  try {
+    hasAuthorizationHeader = hasLmstudioAuthorizationHeader(resolvedHeaders);
     configuredDiscoveryApiKey = await resolveLmstudioConfiguredApiKey({
       config: ctx.config,
       env: ctx.env,
@@ -1021,39 +988,17 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
     : (discoveryApiKey ?? configuredDiscoveryApiKey);
   // CLI/runtime-resolved key takes precedence over static provider config key.
   const resolvedApiKey = apiKey ?? explicit?.apiKey;
-  if (hasExplicitModels && explicitWithoutHeaders) {
-    const persistedApiKey = resolvePersistedLmstudioApiKey({
-      currentApiKey: resolvedApiKey,
-      explicitAuth,
-      fallbackApiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
-      hasModels: hasExplicitModels,
-      hasAuthorizationHeader,
-    });
-    const persistedAuth = resolveLmstudioProviderAuthMode(persistedApiKey);
-    return {
-      provider: {
-        ...explicitWithoutHeaders,
-        ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
-        baseUrl: resolveLmstudioInferenceBase(explicitWithoutHeaders.baseUrl),
-        // Keep explicit API unless absent, then fall back to provider default.
-        api: explicitWithoutHeaders.api ?? "openai-completions",
-        ...(persistedApiKey ? { apiKey: persistedApiKey } : {}),
-        ...(persistedAuth ? { auth: persistedAuth } : {}),
-        models: explicitWithoutHeaders.models,
-      },
-    };
-  }
-  const provider = await discoverLmstudioProviderCatalog({
-    baseUrl: explicit?.baseUrl,
-    // Prefer resolved discovery auth, then configured provider auth.
-    apiKey: resolvedDiscoveryApiKey,
-    headers: resolvedHeaders,
-    quiet: !apiKey && !explicit && !resolvedDiscoveryApiKey,
-  });
-  const models = mergeDiscoveredModels({
-    explicitModels: explicit?.models,
-    discoveredModels: provider.models,
-  });
+  const explicitProvider = hasExplicitModels ? explicitWithoutHeaders : undefined;
+  const provider =
+    explicitProvider ??
+    (await discoverLmstudioProviderCatalog({
+      baseUrl: explicit?.baseUrl,
+      // Prefer resolved discovery auth, then configured provider auth.
+      apiKey: resolvedDiscoveryApiKey,
+      headers: resolvedHeaders,
+      quiet: !apiKey && !explicit && !resolvedDiscoveryApiKey,
+    }));
+  const models = provider.models;
   if (models.length === 0 && !apiKey && !explicit?.apiKey) {
     return null;
   }
@@ -1071,6 +1016,7 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
       ...explicitWithoutHeaders,
       ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
       baseUrl: resolveLmstudioInferenceBase(explicit?.baseUrl ?? provider.baseUrl),
+      ...(explicitProvider ? { api: explicitProvider.api ?? "openai-completions" } : {}),
       ...(persistedApiKey ? { apiKey: persistedApiKey } : {}),
       ...(persistedAuth ? { auth: persistedAuth } : {}),
       models,

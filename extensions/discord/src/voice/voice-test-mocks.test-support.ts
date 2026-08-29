@@ -17,6 +17,7 @@ const {
   textToSpeechMock,
   logVerboseMock,
   loggerWarnMock,
+  loggerErrorMock,
   resolveConfiguredRealtimeVoiceProviderMock,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
@@ -125,9 +126,11 @@ const {
     createConnectionMock: createConnectionMockLocal,
     getVoiceConnectionMock: getVoiceConnectionMockLocal,
     joinVoiceChannelMock: vi.fn(() => createConnectionMockLocal()),
-    entersStateMock: vi.fn(async (_target?: unknown, _state?: string, _timeoutMs?: number) => {
-      return undefined;
-    }),
+    entersStateMock: vi.fn(
+      async (_target?: unknown, _state?: string, _timeoutOrSignal?: number | AbortSignal) => {
+        return undefined;
+      },
+    ),
     createAudioResourceMock: vi.fn(),
     createAudioPlayerMock: vi.fn(() => ({
       on: vi.fn(),
@@ -163,6 +166,7 @@ const {
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
     logVerboseMock: vi.fn(),
     loggerWarnMock: vi.fn(),
+    loggerErrorMock: vi.fn(),
     resolveConfiguredRealtimeVoiceProviderMock: vi.fn<
       (params?: {
         configuredProviderId?: string;
@@ -224,6 +228,7 @@ export const voiceTestMocks = {
   textToSpeechMock,
   logVerboseMock,
   loggerWarnMock,
+  loggerErrorMock,
   resolveConfiguredRealtimeVoiceProviderMock,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
@@ -309,6 +314,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
     createSubsystemLogger: (subsystem: string) => ({
       ...actual.createSubsystemLogger(subsystem),
       warn: loggerWarnMock,
+      error: loggerErrorMock,
     }),
     logVerbose: logVerboseMock,
   };
@@ -352,6 +358,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
                     clearAudio: request.onClearAudio,
                   },
                   onEvent: request.onEvent,
+                  onClose: request.onClose,
                   onReady: request.onReady,
                   onResponseDone: request.onResponseDone,
                   onToolCall: bridgeParams.onToolCall,

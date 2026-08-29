@@ -7,6 +7,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +29,77 @@ afterEach(async () => {
 });
 
 describe("Copilot attempt transcript journal", () => {
+  it("prepares standalone media after hooks without claiming user or tool-group media", async () => {
+    const sourceText = "Artifacts ready\nMEDIA:./artifact.json";
+    const rewrittenText = `${sourceText}\nMEDIA:./hook-only.json`;
+    const prepareAssistantTranscriptMessage = vi.fn((message: AssistantMessage) => ({
+      ...message,
+      openclawDelivery: { mediaUrls: ["./artifact.json"] },
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (input: unknown) => {
+            const message = (input as { message: AgentMessage }).message;
+            return message.role === "assistant" &&
+              message.content.some((part) => part.type === "text" && part.text === sourceText)
+              ? { message: { ...message, content: [{ type: "text", text: rewrittenText }] } }
+              : undefined;
+          },
+        },
+      ]),
+    );
+    const { attempt, journal, recorder, session, target } = await createFixture();
+    Object.assign(attempt, { prepareAssistantTranscriptMessage });
+    recorder.resolveMessage.mockResolvedValue({ role: "user", content: sourceText, timestamp: 1 });
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: sourceText }));
+    session.emit(
+      event("assistant.message", "tool-assistant", {
+        content: "MEDIA:./tool-only.json",
+        messageId: "tool-assistant",
+        toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-1" }],
+      }),
+    );
+    session.emit(
+      event("tool.execution_complete", "tool-result", {
+        result: { content: "done" },
+        success: true,
+        toolCallId: "call-1",
+      }),
+    );
+    session.emit(
+      event("assistant.message", "final-assistant", {
+        content: sourceText,
+        messageId: "final-assistant",
+      }),
+    );
+    await journal.barrier("media preparation");
+
+    expect(prepareAssistantTranscriptMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ content: [{ type: "text", text: rewrittenText }] }),
+      sourceText,
+    );
+    const persisted = transcriptMessages(await readSessionTranscriptEvents(target)).map(
+      (row) => row.message,
+    );
+    expect(persisted.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(persisted[0]).toMatchObject({ role: "user", content: sourceText });
+    expect(persisted.slice(0, -1).some((message) => "openclawDelivery" in message)).toBe(false);
+    expect(persisted.at(-1)).toMatchObject({
+      content: [{ type: "text", text: rewrittenText }],
+      openclawDelivery: { mediaUrls: ["./artifact.json"] },
+      idempotencyKey: "copilot-sdk:sdk-session:final-assistant",
+    });
+    expect(journal.snapshot().messagesSnapshot).toEqual(persisted);
+  });
+
   it("drains work appended after a barrier starts waiting", async () => {
     const { journal, session } = await createFixture();
     await journal.persistInitialUser();
@@ -404,10 +476,12 @@ describe("Copilot attempt transcript journal", () => {
   });
 
   it("commits a hidden tool turn to SQLite in assistant request order", async () => {
-    const { bridge, journal, recorder, session, target, tempDir } = await createFixture(
+    const { attempt, bridge, journal, recorder, session, target, tempDir } = await createFixture(
       "memory",
       new Map<string, "network">([["read", "network"]]),
     );
+    const prepareAssistantTranscriptMessage = vi.fn((message: AssistantMessage) => message);
+    Object.assign(attempt, { prepareAssistantTranscriptMessage });
     await journal.persistInitialUser();
     expect(recorder.markRuntimePersisted).toHaveBeenCalledOnce();
 
@@ -508,6 +582,7 @@ describe("Copilot attempt transcript journal", () => {
       rows.map((row) => row.id).slice(0, -1),
     );
     expect(rows.every((row) => row.message.display === false)).toBe(true);
+    expect(prepareAssistantTranscriptMessage).not.toHaveBeenCalled();
     expect(rows[0]?.message.idempotencyKey).toBe("run-1:user");
     expect(rows[1]?.message).toMatchObject({ usage: { input: 0, output: 0 } });
     expect(rows[5]?.message).toMatchObject({

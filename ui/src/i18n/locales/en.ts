@@ -3,6 +3,11 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap = {
+  capacityMeter: {
+    workerSlots: "{used} of {total} slots busy",
+    unavailable: "Slot utilization unavailable",
+    execHost: "Codex exec",
+  },
   common: {
     health: "Health",
     ok: "OK",
@@ -188,6 +193,7 @@ export const en: TranslationMap = {
     },
   },
   githubPreview: {
+    coAuthors: "Co-authored by {logins}",
     loading: "Loading GitHub details…",
     unavailable: "GitHub preview unavailable",
     states: {
@@ -212,11 +218,13 @@ export const en: TranslationMap = {
     projectLabel: "Project",
     workspaceLabel: "Workspace",
     branchLabel: "Branch",
+    runsOn: "Runs on {providerId} · {profileId}",
     noPrYet: "No PR yet",
     more: "+{count} more",
     changedFile: "{count} file",
     changedFiles: "{count} files",
     pullRequestLabel: "Pull request #{number}, {state}",
+    pullRequestAuthorLabel: "Opened by {login}",
     states: {
       open: "Open",
       draft: "Draft",
@@ -242,12 +250,25 @@ export const en: TranslationMap = {
     widgetUnavailable: "Session progress is unavailable.",
     widgetAccessDenied: "Select a session you can access or change sharing for this session.",
     countLabel: "{completed} of {total} completed",
-    lastActivity: "Last activity: {time}",
+    activity: {
+      updated: "Updated {time}",
+      completed: "Completed {time}",
+      failed: "Failed {time}",
+      stopped: "Stopped {time}",
+    },
+    outcome: {
+      completed: "Completed",
+      failed: "Failed",
+      stopped: "Stopped",
+    },
     stepLabel: "{step}, {status}",
     status: {
       completed: "completed",
+      failed: "failed",
       inProgress: "in progress",
+      paused: "paused",
       pending: "pending",
+      stopped: "stopped",
     },
     receipt: {
       updating: "Updating progress",
@@ -262,7 +283,7 @@ export const en: TranslationMap = {
     refreshingStaleSnapshot:
       "Refreshing channel status in the background; showing the last successful snapshot.",
     hub: {
-      connectedTitle: "Your channels",
+      connectedTitle: "Connected channels",
       addTitle: "Add a channel",
       addSubtitle: "Pick a service and follow the guided setup.",
       updatedAgo: "Updated {ago}",
@@ -334,7 +355,7 @@ export const en: TranslationMap = {
       dialogLabel: "Set up {channel}",
       title: "Set up {channel}",
       genericTitle: "a channel",
-      subtitle: "A short guided setup — you can fine-tune everything later.",
+      subtitle: "Guided channel setup",
       starting: "Starting setup…",
       working: "Working…",
       sessionExpired:
@@ -343,7 +364,7 @@ export const en: TranslationMap = {
       finish: "Finish",
       copyText: "Copy",
       openLink: "Open link",
-      docs: "Docs",
+      viewDocs: "View docs",
       doneTitle: "Channel configured",
       doneBody:
         "Configuration saved. The gateway reloads the channel automatically; check its card for live status.",
@@ -717,7 +738,6 @@ export const en: TranslationMap = {
       versionDriftTitle:
         "Device {nodeVersion}; Gateway {gatewayVersion}. Update the older component to align the fleet.",
       workerVersion: "Worker {version}",
-      workerSlots: "Worker slots {available}/{total}",
       workerMissing: "worker missing",
       workerMissingTitle:
         "The Gateway-managed worker bundle is missing. Start a new session on this device to reinstall it.",
@@ -876,7 +896,9 @@ export const en: TranslationMap = {
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
     yourDevices: "Your devices",
-    anyAvailableNode: "Any available node",
+    autoDevice: "Auto",
+    autoDeviceSub: "Least-busy device",
+    autoDeviceSubEligible: "First eligible device",
     noSessionHosts: "No session hosts are paired. Connect a machine with session hosting enabled.",
     neverConnected: "Never connected",
     offlineFor: "Offline for {duration}",
@@ -887,7 +909,6 @@ export const en: TranslationMap = {
     deviceCapacityUnavailable:
       "Worker capacity is unavailable. Restart the device session host and try again.",
     deviceNoSlots: "No worker slots are available. Wait for a slot or pick another device.",
-    workerSlots: "Worker slots {available}/{total}",
     nodeUpdateRequired:
       "Update required: run {updateCommand}, then reconnect. For a headless node, run {restartCommand}.",
     capabilityCamera: "Camera",
@@ -1034,7 +1055,8 @@ export const en: TranslationMap = {
     sessionArchived: "Session archived",
     sessionsArchived: "Archived {count} sessions",
     deleteAllArchived: "Delete all archived…",
-    deleteAllArchivedConfirm: "Delete {count} archived sessions and their transcripts?",
+    deleteAllArchivedConfirm:
+      "Delete {count} archived sessions and their transcripts? Any attached workers will be stopped safely first.",
     activeTooltip: "Loads sessions updated in the last {count} minutes.",
     limitTooltip: "Max sessions to load.",
     globalTooltip: "Include global sessions.",
@@ -1080,7 +1102,7 @@ export const en: TranslationMap = {
     actions: "Actions",
     addToWorkboard: "Add to Workboard",
     openWorkboardCard: "Open Workboard card",
-    dashboardAvailable: "Dashboard available",
+    opensAsDashboard: "Opens as dashboard",
     approvalNeeded: "Approval needed",
     messageNeedsAttention: "{count} message needs attention",
     messagesNeedAttention: "{count} messages need attention",
@@ -1154,8 +1176,8 @@ export const en: TranslationMap = {
     automationAttached: "Automation attached",
     incognito: "Incognito session",
     cloudWorkerPlacement: "Placement: {state}",
-    cloudWorkerPlacementConflict: "Placement: {state} · 1 workspace conflict",
-    cloudWorkerPlacementConflicts: "Placement: {state} · {count} workspace conflicts",
+    placementWorkspaceConflict: "{placement} · 1 workspace conflict",
+    placementWorkspaceConflicts: "{placement} · {count} workspace conflicts",
     cloudWorkerDiskWarning: "Cloud session disk space is low",
     cloudWorkerDiskCritical: "Cloud session disk space is critically low",
     cloudWorkerDescendantConflict: "Cloud worker child: 1 workspace conflict",
@@ -1208,15 +1230,17 @@ export const en: TranslationMap = {
       'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
-    deleteSessionConfirm: 'Delete "{session}" and its transcript?',
+    deleteSessionConfirm:
+      'Delete "{session}" and its transcript? Any attached worker will be stopped safely first.',
     deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
-    deleteSessionsConfirm: "Delete {count} sessions and their transcripts?",
+    deleteSessionsConfirm:
+      "Delete {count} sessions and their transcripts? Any attached workers will be stopped safely first.",
     deleteSessionsStale:
       "Gateway connection replaced before {count} sessions were deleted. Try again.",
     deleteSelectedConfirmOne:
-      "Delete 1 session?\n\nThis will delete the session entry and archive its transcript.",
+      "Delete 1 session?\n\nStop any attached worker safely, then delete the session entry and archive its transcript.",
     deleteSelectedConfirm:
-      "Delete {count} sessions?\n\nThis will delete the session entries and archive their transcripts.",
+      "Delete {count} sessions?\n\nStop any attached workers safely, then delete the session entries and archive their transcripts.",
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
@@ -1238,8 +1262,6 @@ export const en: TranslationMap = {
     newGroupStale: "Gateway connection replaced before the group was saved. Try again.",
     newGroupMoveSkipped:
       "Group created, but the move was skipped because the list changed. Move from the row menu.",
-    newGroupMovePartial:
-      "Group created, but some selected sessions were not moved because the list changed. Move them from the row menu.",
     moveToGroup: "Move session to a group",
     moveToGroupMenu: "Move to group",
     moveToGroupMenuCount: "Move {count} to group",
@@ -1513,11 +1535,8 @@ export const en: TranslationMap = {
   configForm: {
     redactedPlaceholder: "[redacted - click reveal to view]",
     sectionHelp: "Help for {section}",
-    readGuide: "Read the guide",
-    showAdvanced: "Show advanced",
-    advancedHidden: "{count} advanced setting hidden",
-    advancedHiddenPlural: "{count} advanced settings hidden",
     advancedDivider: "Advanced",
+    advancedSettings: "Advanced settings",
     hideValue: "Hide value",
     revealValue: "Reveal value",
     disableStreamToReveal: "Disable stream mode to reveal value",
@@ -1528,7 +1547,6 @@ export const en: TranslationMap = {
     structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
     defaultValue: "Default: {value}",
     usingDefault: "Using default: {value}",
-    resetToDefault: "Reset to default",
     select: "Select...",
     enumOn: "On",
     enumOff: "Off",
@@ -1756,6 +1774,7 @@ export const en: TranslationMap = {
   },
   configView: {
     adminRequired: "Configuration changes require operator.admin access.",
+    channelSettings: "Channel settings",
     categories: {
       core: "Core",
       ai: "Agent Defaults",
@@ -1821,6 +1840,18 @@ export const en: TranslationMap = {
         label: "Absolutely",
         description: "Clay on graphite",
       },
+      tide: {
+        label: "Tide",
+        description: "Slate & steel",
+      },
+      beacon: {
+        label: "Beacon",
+        description: "Maximum contrast",
+      },
+      phosphor: {
+        label: "Phosphor",
+        description: "Green on glass",
+      },
     },
     textSizes: {
       small: "Small",
@@ -1829,6 +1860,7 @@ export const en: TranslationMap = {
       xl: "XL",
       xxl: "XXL",
     },
+    profileSyncedHint: "Saved to your profile — follows you on every device.",
     syncedHint: "Synced across your devices through the gateway.",
     syncPendingHint: "Waiting to sync through the gateway.",
     notifications: {
@@ -1870,9 +1902,35 @@ export const en: TranslationMap = {
       intro: "Theme, chat, and sidebar preferences for this Control UI client.",
       theme: "Theme",
       chooseTheme: "Choose a theme family.",
+      typography: "Typography",
+      fonts: {
+        ui: "Interface",
+        chat: "Chat prose",
+        themeDefault: "Theme default",
+        themeFace: "{theme} · {face}",
+        system: "System",
+        previewCaption: "OpenClaw · A little clarity goes a long way",
+        previewProse:
+          "Good typography makes room for the conversation. Choose a face that feels comfortable to read.",
+        previewCode: 'const greeting = "Hello, world!";',
+      },
+      fontNotes: {
+        "instrument-sans": "Contemporary and crisp",
+        geist: "Clean and precise",
+        "dm-sans": "Warm and versatile",
+        "ibm-plex-sans": "Engineered and humanist",
+        "space-grotesk": "Geometric with character",
+        "atkinson-hyperlegible": "Distinct shapes for easy reading",
+        fraunces: "Expressive reading serif",
+        lora: "Calm, literary serif",
+        "jetbrains-mono": "Clear, evenly spaced letters",
+        system: "No webfont",
+      },
       accent: "Accent color",
       accentHint: "Choose an accent color for buttons, highlights, and other controls.",
       customAccent: "Custom color",
+      usingInheritedAccent: "Using inherited accent",
+      usingAccent: "Using {value}",
       accents: {
         default: "Theme default",
         claw: "Claw red",
@@ -1995,10 +2053,20 @@ export const en: TranslationMap = {
       "{count} sensitive values hidden. Use the reveal button above to edit the raw config.",
   },
   execApproval: {
+    scope: {
+      standingGrant:
+        'Always allow runs this exact command for "{automation}" without asking, until revoked (revocable)',
+      standingGrantDays:
+        'Always allow runs this exact command for "{automation}" without asking, for {count} days (revocable)',
+      messageSend: "Sends to {count} recipient(s) via {target}",
+      payment: "Pays {amount} {currency} to {target}",
+      externalPost: "Posts externally to {target}",
+    },
     expiresIn: "expires in {time}",
     expired: "expired",
     execApprovalNeeded: "Exec approval needed",
     pluginApprovalNeeded: "Plugin approval needed",
+    requestedBySession: "Approval requested by session {session}",
     pending: "{count} pending",
     otherPending: "Other pending requests",
     reviewRequest: "Review approval from {agent}: {command}",
@@ -2265,7 +2333,6 @@ export const en: TranslationMap = {
     clawHubSubtitle: "Search and install skills from the registry",
     searchClawHub: "Search ClawHub skills…",
     searching: "Searching…",
-    acknowledgeRisk: "Acknowledge risk and install",
     disconnected: "Not connected to gateway.",
     empty: "No skills found.",
     noClawHubResults: "No skills found on ClawHub.",
@@ -2381,7 +2448,16 @@ export const en: TranslationMap = {
     uploadUnsupportedShell: "Cannot safely insert an uploaded path into unsupported shell: {shell}",
   },
   browser: {
+    profile: "Browser profile: {profile}",
+    navigationBlocked:
+      "The current browser navigation rules block this address. Select another tab or enter an allowed address.",
+    navigationCheckFailed: "OpenClaw couldn’t verify this tab’s address. Refresh to try again.",
     title: "Browser",
+    open: "Open",
+    openPanel: "Open browser panel",
+    moreActions: "More actions",
+    copyUrl: "Copy URL",
+    openNewTab: "Open in new tab",
     toggle: "Toggle browser panel",
     close: "Close browser panel",
     resize: "Resize browser panel",
@@ -2423,6 +2499,7 @@ export const en: TranslationMap = {
       canvasUnavailable: "Canvas 2D context unavailable.",
     },
     annotatePrompt: {
+      browserTarget: "Browser target: {target}",
       // introTitled/elementDetail (not intro/element): translated keys never
       // retranslate on source-wording changes, so the provenance-label rewrite
       // required fresh key names to propagate to all locales.
@@ -2582,7 +2659,6 @@ export const en: TranslationMap = {
   },
   cloudWorkersPage: {
     intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
-    documentation: "Cloud worker documentation",
     sectionTitle: "Profiles",
     sectionDescription: "Each profile defines how its provider provisions and retires a worker.",
     empty: "No cloud worker profiles are configured.",
@@ -2602,7 +2678,6 @@ export const en: TranslationMap = {
     idleFact: "Idle stop: {value}",
     desktopFact: "Desktop: {value}",
     providerList: "View supported backends",
-    customClass: "Custom…",
     fields: {
       profileId: "Profile ID",
       profileIdHelp: "Use letters, numbers, hyphens, or underscores.",
@@ -2610,9 +2685,8 @@ export const en: TranslationMap = {
       backendHelp: "The backend passed to Crabbox, such as AWS or Hetzner.",
       backendPlaceholder: "hetzner",
       machineClass: "Machine class",
-      machineClassHelp: "Choose a portable class or enter an exact provider instance type.",
-      customClass: "Custom machine class",
-      customClassPlaceholder: "c7a.24xlarge",
+      machineClassHelp:
+        "Enter a class accepted by the selected Crabbox backend and binary. The provider determines its effective sizing.",
       ttl: "Max lifetime",
       ttlHelp: "Use a positive Go duration such as 8h or 90m.",
       ttlPlaceholder: "8h",
@@ -2638,7 +2712,7 @@ export const en: TranslationMap = {
       profileExists: "Choose another profile ID; this one already exists.",
       profileMissing: "This profile changed or was removed. Reload the page and try again.",
       backend: "Enter a Crabbox backend, such as aws or hetzner.",
-      machineClass: "Choose a machine class or enter an instance type up to 128 characters.",
+      machineClass: "Enter a machine class of 1 to 128 characters.",
       ttl: "Enter a positive Go duration for max lifetime, such as 8h or 90m.",
       idleTimeout: "Enter a positive Go duration for idle stop, such as 45m.",
       binary: "Enter an absolute Crabbox binary path or leave the field empty.",
@@ -2668,6 +2742,7 @@ export const en: TranslationMap = {
     retry: "Retry",
   },
   modelSetup: {
+    missingAuth: "No provider credential is configured for this model. Set it up in Model Setup.",
     heading: "Connect a verified AI model",
     intro:
       "OpenClaw checks the AI access available on this Gateway and verifies the exact model before it enables conversations.",
@@ -2682,8 +2757,15 @@ export const en: TranslationMap = {
       action: "Review connection",
     },
     loading: "Checking this Gateway for available AI access…",
+    testing: "Testing — asking the selected model for a quick reply…",
     retry: "Retry",
     checkAgain: "Check again",
+    recovery: {
+      unknown:
+        "The previous activation is unresolved. You can verify and use the selected model, or check again after the setup attempt has finished. No activation will be repeated automatically.",
+      wait: "The previous setup attempt may still be running. Wait for its bounded setup window to finish, then choose Check again to retry.",
+      useCurrent: "Verify & use selected model",
+    },
     verify: {
       title: "Selected model",
       button: "Check model",
@@ -2708,7 +2790,6 @@ export const en: TranslationMap = {
       testAndUse: "Test & use",
       retry: "Retry test",
       testingButton: "Testing…",
-      testing: "Testing — asking {modelRef} for a quick reply…",
     },
     empty: {
       title: "Recommended installs",
@@ -2992,7 +3073,6 @@ export const en: TranslationMap = {
   },
   mcpPage: {
     intro: "Connect and manage MCP servers that provide tools to OpenClaw.",
-    connectorsLink: "Discover one-click connectors on the Plugins page.",
     servers: "Servers",
     oauth: "OAuth",
     filtered: "Filtered",
@@ -3358,7 +3438,9 @@ export const en: TranslationMap = {
     remove: "Remove",
     removing: "Removing…",
     removeNamed: "Remove {name}",
-    removeConfirm: "Remove this plugin package and all of its entries?",
+    removeConfirmTitle: "Remove {name}?",
+    removeConfirmMessage:
+      "Removing this plugin package and all of its entries restarts the Gateway immediately and interrupts active sessions.",
     cancel: "Cancel",
     removedRestart: "Removed {name}. A Gateway restart is required to apply the change.",
     verifiedSource: "Verified source",
@@ -3370,6 +3452,7 @@ export const en: TranslationMap = {
     detailCategory: "Category",
     detailPackage: "Package",
     detailPluginId: "Plugin ID",
+    capabilities: "Capabilities",
     offlineTitle: "Gateway offline",
     offlineBody: "Connect to browse installed and recommended plugins.",
     optionalCapability: "Optional OpenClaw capability.",
@@ -3388,8 +3471,9 @@ export const en: TranslationMap = {
     install: "Install",
     installing: "Installing…",
     installNamed: "Install {name}",
-    acknowledgeRisk: "Acknowledge risk and install",
-    defaultRiskWarning: "Review the ClawHub warning before installing this plugin.",
+    installConfirmTitle: "Install {name}?",
+    installConfirmMessage:
+      "Installing this plugin restarts the Gateway immediately and interrupts active sessions.",
     policyReviewTitle: "Security review needed",
     policyReviewBodyKnown: "Policy warnings: {count}. Not installed.",
     policyReviewBodyReason: "{reason} Not installed.",
@@ -3424,7 +3508,7 @@ export const en: TranslationMap = {
     codeMode: {
       title: "Code Mode",
       description:
-        "Let agents combine tools in compact, sandboxed JavaScript workflows. Auto engages code mode only for models evaluated as strong code-mode performers.",
+        "Set the global default for compact, sandboxed JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
     },
     swarm: {
       title: "Swarm",
@@ -3561,8 +3645,31 @@ export const en: TranslationMap = {
   },
   presence: {
     rosterTitle: "Online",
+    card: {
+      details: "Details for {name}",
+      loadFailed: "Could not open details. Try again, or open this person’s Activity page.",
+      ariaLabel: "Activity for {name}",
+      person: "Person",
+      onlineFor: "Online for",
+      where: "Where",
+      reportedTimeZone: "Reported time zone: {zone}",
+      lastActivity: "Last activity",
+      notObserved: "Not observed yet",
+      viewingNow: "Viewing now",
+      recentSessions: "Recent sessions",
+      noVisibleSessions: "No visible sessions being viewed.",
+      noRecentSessions: "No recent visible sessions.",
+      sessionUpdated: "Session updated",
+      ago: "ago",
+      viewActivity: "View activity",
+      controlUi: "Control UI",
+      cli: "Command line",
+      app: "App",
+    },
   },
   activityFeed: {
+    partialHistory:
+      "People and counts describe visible recorded session associations; retained history and this people list may be incomplete.",
     sessionsMode: "Sessions",
     searchPlaceholder: "Search session titles…",
     time: "Time",
@@ -3595,7 +3702,7 @@ export const en: TranslationMap = {
     viewingNow: "Viewing now",
     notViewing: "Not viewing a session right now.",
     notFoundTitle: "Person not found",
-    notFoundDescription: "No presence or session activity matches this identity.",
+    notFoundDescription: "No online presence or visible session association matches this identity.",
   },
   profilePage: {
     offline: "Connect to the gateway to meet your agent.",
@@ -4251,11 +4358,14 @@ export const en: TranslationMap = {
     eventStale: "Stale session",
   },
   connection: {
+    disconnectedTitle: "Disconnected",
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
     restarting: "Restarting…",
     retryNow: "Retry now",
     actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
+    settingsChangesUnavailable:
+      "Changes to settings are disabled while the Gateway is reconnecting.",
     sessionOperationCompletedPreviousConnection:
       "The session operation completed on the previous connection. Check the current session list before continuing.",
     sessionOperationCompletedPreviousConnectionWithRefreshError:
@@ -4355,6 +4465,25 @@ export const en: TranslationMap = {
         "These automations are overdue:\n{facts}\nExplain why they have not run and how to fix them.",
       modelAuthExpiredQuestion:
         "These model-provider credentials need attention:\n{facts}\nExplain what expired and how to re-authenticate them.",
+    },
+  },
+  standingGrants: {
+    title: "Standing grants",
+    description:
+      "Allow-always on an automation approval mints a standing grant for that exact command. Revoking one makes the next occurrence ask again.",
+    historyTitle: "Approval history",
+    empty: "No standing grants. Answer an automation approval with Always allow to mint one.",
+    stateUntilRevoked: "Until revoked",
+    stateExpiresIn: "Expires in {count}d",
+    stateExpired: "Expired",
+    stateRevoked: "Revoked",
+    revoke: "Revoke",
+    revoking: "Revoking…",
+    columns: {
+      automation: "Automation",
+      command: "Command",
+      uses: "Uses",
+      state: "State",
     },
   },
   approvalHistory: {
@@ -4885,18 +5014,15 @@ export const en: TranslationMap = {
     },
     export: {
       label: "Export",
+      changed: "Session context changed while preparing the export. Refresh usage and try again.",
       sessionsCsv: "Sessions CSV",
       dailyCsv: "Daily CSV",
       json: "JSON",
     },
     cacheStatus: {
-      warning: "Usage cache is rebuilding in the background. Displayed totals may be stale.",
-      title: "{status}: {pending} pending, {stale} stale, {cached} cached",
-      status: {
-        refreshing: "refreshing",
-        stale: "stale",
-        partial: "partial",
-      },
+      warning: "Usage data may be incomplete. Checking for updated totals automatically.",
+      paused:
+        "Usage data may be incomplete. Automatic checks paused; select Refresh to check again.",
     },
     empty: {
       title: "Start with a date range",
@@ -5168,6 +5294,8 @@ export const en: TranslationMap = {
   },
   chat: {
     cloudWorkerFailed: "Runner failed: {error}",
+    errorDetails: "Error details",
+    copyError: "Copy error",
     diskSpace: {
       warningTitle: "Cloud session disk space is low",
       criticalTitle: "Cloud session disk space is critically low",
@@ -5182,6 +5310,9 @@ export const en: TranslationMap = {
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
+      namingWorktree: "Naming worktree…",
+      creatingWorktree: "Creating worktree…",
+      runningSetup: "Running setup…",
       provisioningEnvironment: "Provisioning environment…",
       preparingContext: "Preparing this turn…",
       startingModel: "Waiting for a response…",
@@ -5191,6 +5322,10 @@ export const en: TranslationMap = {
       chooseTitle: "Choose a session",
       multipleMatches: "More than one session matches {shortId}.",
       additionalMatches: "Search results remain. Use a longer id prefix.",
+      notFoundTitle: "Session not found",
+      notFoundExplanation: "The session may have been removed, or the link may be incorrect.",
+      goToMain: "Go to main session",
+      viewSessions: "View sessions",
     },
     commandResults: {
       startingNewThread: "Starting new session...",
@@ -5558,6 +5693,10 @@ export const en: TranslationMap = {
       gatewayRestarted: {
         label: "System · gateway restarted",
       },
+      cliHarnessContext: {
+        label: "System · injected context",
+      },
+      showContent: "Show content",
     },
     progressLabels: {
       shelling: "Shelling",
@@ -5664,7 +5803,14 @@ export const en: TranslationMap = {
       sendMessage: "Send message",
     },
     queue: {
+      connectionPending: "Finishing connection recovery. Try sending again when it is ready.",
+      initialTurnPending:
+        "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
       notSent: "Not sent",
+      deliveryUnconfirmed: "Delivery unconfirmed",
+      checkDelivery: "Check delivery",
+      checkDeliveryHelp:
+        "Delivery is unconfirmed. Check delivery looks for the original message without resending it or starting a worker. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt.",
       retry: "Retry",
       retryQueuedMessage: "Retry queued message",
       steer: "Steer",
@@ -5685,10 +5831,27 @@ export const en: TranslationMap = {
       imageCount: "Image ({count})",
     },
     goals: {
+      composerMode: "Goal",
+      sessionChanged: "Conversation changed. Cancel and select Goal again.",
+      start: "Start goal",
+      save: "Save goal",
+      startHint: "Enter your objective.",
+      editHint: "Save without starting a run.",
+      objectivePlaceholder: "What should this goal accomplish?",
+      cancel: "Cancel goal entry",
+      offline: "Reconnect to manage goals.",
+      busy: "Wait for this run to finish. Your draft is unchanged.",
+      annotationUnsupported: "Send or remove browser annotations first. Your draft is unchanged.",
+      actionPending: "Wait for the pending goal action.",
+      admissionImmutable: "Retry or remove this request. Editing requires a new goal.",
       edit: "Edit goal",
+      editChip: "Edit",
       pause: "Pause goal",
+      pauseChip: "Pause",
       resume: "Resume goal",
+      resumeChip: "Resume",
       clear: "Clear goal",
+      clearChip: "Clear",
       showDetails: "Show goal details",
       hideDetails: "Hide goal details",
     },
@@ -5774,7 +5937,9 @@ export const en: TranslationMap = {
       volume: "Volume",
       download: "Download {filename}",
       preparing: "Preparing playback…",
-      videoUnavailable: "Can't play this format — download instead.",
+      openVideo: "Expand {filename} in the media overlay",
+      videoPreview: "Video preview: {title}",
+      closeVideoPreview: "Close video preview",
     },
     modelControls: {
       default: "Default",
@@ -5784,9 +5949,8 @@ export const en: TranslationMap = {
       fastMode: "Fast mode",
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
-      sessionOverride: "Session override",
-      resetToDefault: "Reset to default ({model})",
-      useDefault: "Use default",
+      onlyForSession: "Only for this session",
+      useDefaultModel: "Use default ({model})",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
       fastHelp: "Faster responses, higher usage of limits.",
@@ -5940,7 +6104,6 @@ export const en: TranslationMap = {
       searchPlaceholder: "Search messages...",
       closeSearch: "Close search",
       loading: "Loading chat",
-      earlierHistoryAvailable: "Earlier history available",
       showEarlier: "Show earlier",
       loadingEarlier: "Loading earlier history…",
       noMatches: "No matching messages",
@@ -5964,8 +6127,6 @@ export const en: TranslationMap = {
       runInterrupted: "Interrupted",
       runStatus: "Run status: {status}",
       compactingContext: "Compacting context...",
-      compacting: "Compacting",
-      compact: "Compact",
       contextCompacted: "Context compacted",
       fallbackActive: "Fallback active: {model}",
       fallbackCleared: "Fallback cleared: {model}",
@@ -5984,7 +6145,6 @@ export const en: TranslationMap = {
       browserAnnotationRemoved: "Browser annotation removed.",
       browserAnnotationUndoUnavailable:
         "Undo is unavailable because the browser annotation limit has been reached.",
-      compactRecommendedContext: "Compact recommended session context",
       removeAttachment: "Remove attachment",
       removeBrowserAnnotation: "Remove browser annotation: {name}",
       addAttachment: "Add attachment",
@@ -6128,7 +6288,11 @@ export const en: TranslationMap = {
       showInTextField: "Show in text field",
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
-      checking: "Checking...",
+      failureDeliveryFailed: "Delivery failed. Try sending this file again.",
+      failureFileNotFound: "File not found. Check the path and try again.",
+      failureUnsupportedFormat:
+        "Rejected by the local attachment allowlist. Send a supported file type.",
+      notSent: "Not sent",
       video: "Video",
     },
     voice: {
@@ -6138,6 +6302,7 @@ export const en: TranslationMap = {
     },
     selectors: {
       loadMoreSessions: "Show more",
+      loadMoreRosterSessions: "Load more sessions",
       model: "Chat model",
       modelSection: "Model",
       modelLocked: "Locked",
@@ -6433,6 +6598,7 @@ export const en: TranslationMap = {
     partial: "{saved}/{total}: {error}",
     confirmDelete: "Delete {name}?",
     deleted: "Deleted {name}.",
+    deleteFailed: "The secret was not deleted. Reload the list and try again.",
   },
   cron: {
     adminRequired: "Browsing only. Automation changes require operator.admin access.",
@@ -6754,6 +6920,7 @@ export const en: TranslationMap = {
     },
     runEntry: {
       noSummary: "No summary.",
+      deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Run at",
       openRunChat: "Open run chat",
       next: "Next {rel}",

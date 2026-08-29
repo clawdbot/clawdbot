@@ -195,11 +195,6 @@
   --warn-strong: #d97706;
   --danger-solid-hover: #dc2626;
   --pr-merged: #a78bfa;
-  /* Run state needs its own token: --accent is red in every shipped theme and
-     sits on top of --danger, so a spinning ring reads as a failed session.
-     Graphical indicator, judged against WCAG 1.4.11 (3:1), not the label audit
-     above: #14b8a6 is 7.7:1 on --bg. */
-  --run: #14b8a6;
 
   /* Focus */
   --focus: rgba(255, 92, 92, 0.2);
@@ -227,7 +222,9 @@
   /* Typography */
   --mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
-  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* Claw's own face (fonts/instrument-sans.css, loaded by app/typography.ts); the
+     stack keeps system fallbacks so a failed font load degrades gracefully. */
+  --font-body: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
   /* Chat prose only. Defaults to the UI face; a theme may point it at a
      reading face without changing chrome, chips, tables, or code. */
@@ -502,7 +499,8 @@
 }
 
 /* Light theme tokens apply to every light-mode family. */
-:root[data-theme-mode="light"] {
+/* Defaults must lose to named palettes even when their link precedes the app CSS. */
+:root:where([data-theme-mode="light"]) {
   /*
    * Warm paper light mode - terracotta accent on ivory
    *
@@ -609,9 +607,6 @@
   --info: #1d4ed8;
   --info-subtle: rgba(29, 78, 216, 0.08);
   --pr-merged: #7c3aed;
-  /* See the dark-theme note: run state stays off --accent. #0d9488 is 3.6:1 on
-     --bg, above the 3:1 WCAG 1.4.11 bar for a non-text indicator. */
-  --run: #0d9488;
 
   --focus: rgba(189, 69, 49, 0.15);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
@@ -641,466 +636,6 @@
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 
   color-scheme: light;
-}
-
-/* Theme families override accent tokens while keeping shared surfaces/layout. */
-:root[data-theme="openknot"] {
-  /*
-   * Accent — crimson red on true black
-   *
-   * WCAG 2.1 AA audit (bg = #080808, relative luminance ≈ 0.003):
-   *   --accent #e5243b  L ≈ 0.118  contrast ≈ 5.8:1  AA text ✓
-   *   --accent-hover #f03e52  L ≈ 0.163  contrast ≈ 7.2:1  ✓
-   *   --primary-foreground #fafafa on #d92a3f button: 4.62:1 AA ✓
-   *   --primary-foreground #fafafa on #c22537 hover: 5.57:1 AA ✓
-   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
-   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
-   *   focus-ring at 70% opacity: ≈ 3.4:1 against bg ✓ (non-text 3:1 required)
-   */
-  --ring: #e5243b;
-  --accent: #e5243b;
-  --accent-hover: #f03e52;
-  --accent-muted: #e5243b;
-  --accent-subtle: rgba(229, 36, 59, 0.12);
-  --accent-glow: rgba(229, 36, 59, 0.24);
-  --primary: #d92a3f;
-  --primary-hover: #c22537;
-  --primary-foreground: #fafafa;
-
-  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
-  --destructive: #d32f2f;
-  --destructive-hover: #bc2a2a;
-
-  /* Focus — crimson ring */
-  --focus: rgba(229, 36, 59, 0.2);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
-  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
-
-  /* Surfaces — true black canvas */
-  --bg: #080808;
-  --bg-accent: #0d0d0f;
-  --bg-elevated: #141416;
-  --bg-hover: #1a1a1e;
-  --bg-muted: #1a1a1e;
-
-  --card: #111113;
-  --card-foreground: #f0f0f2;
-  --card-highlight: rgba(255, 255, 255, 0.03);
-  --popover: #141416;
-  --popover-foreground: #f0f0f2;
-
-  --panel: #080808;
-  --panel-strong: #141416;
-  --panel-hover: #1a1a1e;
-  --chrome: rgba(8, 8, 8, 0.96);
-  --chrome-strong: rgba(8, 8, 8, 0.98);
-
-  /* Text — high contrast on black */
-  --text: #e0e0e2;
-  --text-strong: #f5f5f7;
-  --chat-text: #e0e0e2;
-  --muted: #8a8a94;
-  --muted-strong: #888892;
-  --muted-foreground: #8a8a94;
-
-  /* Borders — whisper-thin, barely visible */
-  --border: #1a1a1e;
-  --border-strong: #2a2a30;
-  --border-hover: #3a3a42;
-  --input: #1a1a1e;
-
-  --secondary: #111113;
-  --secondary-foreground: #f0f0f2;
-  --accent-2: #8b1a2b;
-  --accent-2-muted: rgba(139, 26, 43, 0.7);
-  --accent-2-subtle: rgba(139, 26, 43, 0.12);
-
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
-  --overlay-shadow: var(--shadow-md);
-
-  --grid-line: rgba(255, 255, 255, 0.025);
-}
-
-:root[data-theme="openknot-light"] {
-  /*
-   * Accent — deep red on cool white
-   *
-   * WCAG 2.1 AA audit (bg = #f9f9fb, relative luminance ≈ 0.941):
-   *   --accent #c41e30  L ≈ 0.078  contrast ≈ 7.5:1  AAA text ✓
-   *   --accent-hover #a8192a  L ≈ 0.054  contrast ≈ 9.1:1  ✓
-   *   --primary-foreground #ffffff on #c41e30 button: 5.0:1 AA ✓
-   *   focus-ring at 60% opacity: ≈ 3.2:1 against bg ✓ (non-text 3:1 required)
-   */
-  --ring: #c41e30;
-  --accent: #c41e30;
-  --accent-hover: #a8192a;
-  --accent-muted: #c41e30;
-  --accent-subtle: rgba(196, 30, 48, 0.08);
-  --accent-glow: rgba(196, 30, 48, 0.12);
-  --primary: #c41e30;
-  --primary-foreground: #ffffff;
-
-  /* Surfaces — cool white with subtle warmth */
-  --bg: #f9f9fb;
-  --bg-accent: #f2f2f5;
-  --bg-elevated: #ffffff;
-  --bg-hover: #eaeaef;
-  --bg-muted: #eaeaef;
-  --bg-content: #f2f2f5;
-
-  --card: #ffffff;
-  --card-foreground: #18181b;
-  --card-highlight: rgba(0, 0, 0, 0.02);
-  --popover: #ffffff;
-  --popover-foreground: #18181b;
-  --session-hovercard-surface: var(--card);
-  --session-hovercard-progress-surface: color-mix(
-    in srgb,
-    var(--card) 52%,
-    var(--panel-strong) 48%
-  );
-
-  --panel: #f9f9fb;
-  --panel-strong: #f2f2f5;
-  --panel-hover: #e4e4ea;
-  --chrome: rgba(249, 249, 251, 0.96);
-  --chrome-strong: rgba(249, 249, 251, 0.98);
-
-  /* Text — crisp dark on white */
-  --text: #3a3a42;
-  --text-strong: #18181b;
-  --chat-text: #3a3a42;
-  --muted: #68676f;
-  --muted-strong: #52525a;
-  --muted-foreground: #68676f;
-
-  /* Borders — clean, minimal */
-  --border: #e2e2e8;
-  --border-strong: #ccccd4;
-  --border-hover: #adadb8;
-  --input: #e2e2e8;
-
-  --secondary: #f2f2f5;
-  --secondary-foreground: #3a3a42;
-  --accent-2: #7a1420;
-  --accent-2-muted: rgba(122, 20, 32, 0.75);
-  --accent-2-subtle: rgba(122, 20, 32, 0.08);
-
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.08);
-  --overlay-shadow: var(--shadow-md);
-
-  --grid-line: rgba(0, 0, 0, 0.04);
-}
-
-:root[data-theme="dash"] {
-  /*
-   * Accent — chocolate brown on deep cocoa
-   *
-   * WCAG 2.1 AA audit (bg = #1a1210, relative luminance ≈ 0.0069):
-   *   --accent #b47840  L ≈ 0.235  contrast ≈ 5.0:1  AA text ✓  (floor: #a8703c → 4.4:1, fails)
-   *   --accent-hover #c8885a  L ≈ 0.306  contrast ≈ 6.3:1  ✓
-   *   --primary-foreground #1a1210 on #b47840 button: 5.0:1 AA ✓
-   *   --primary-foreground #1a1210 on #c8885a hover: 6.26:1 AA ✓
-   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
-   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
-   *   focus-ring at 80% opacity: ≈ 3.5:1 against bg ✓ (non-text 3:1 required)
-   */
-  --ring: #b47840;
-  --accent: #b47840;
-  --accent-hover: #c8885a;
-  --accent-muted: #b47840;
-  --accent-subtle: rgba(180, 120, 64, 0.16);
-  --accent-glow: rgba(180, 120, 64, 0.24);
-  --primary: #b47840;
-  --primary-foreground: #1a1210;
-
-  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
-  --destructive: #d32f2f;
-  --destructive-hover: #bc2a2a;
-
-  /* Focus — match chocolate accent, slightly higher ring opacity for dark bg visibility */
-  --focus: rgba(180, 120, 64, 0.2);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
-  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
-
-  /* Surfaces — deep cocoa tones */
-  --bg: #1a1210;
-  --bg-accent: #201816;
-  --bg-elevated: #28201c;
-  --bg-hover: #302822;
-  --bg-muted: #302822;
-
-  --card: #221a16;
-  --card-foreground: #ece0d8;
-  --card-highlight: rgba(255, 240, 225, 0.04);
-  --popover: #28201c;
-  --popover-foreground: #ece0d8;
-
-  --panel: #1a1210;
-  --panel-strong: #28201c;
-  --panel-hover: #302822;
-  --chrome: rgba(26, 18, 16, 0.96);
-  --chrome-strong: rgba(26, 18, 16, 0.98);
-
-  --text: #d8c8b8;
-  --text-strong: #f0e4da;
-  --chat-text: #d8c8b8;
-  --muted: #a18f80;
-  --muted-strong: #a08f7f;
-  --muted-foreground: #a18f80;
-
-  --border: #302418;
-  --border-strong: #443828;
-  --border-hover: #5a4c3a;
-  --input: #302418;
-
-  --secondary: #221a16;
-  --secondary-foreground: #ece0d8;
-  --accent-2: #a88050;
-  --accent-2-muted: rgba(168, 128, 80, 0.7);
-  --accent-2-subtle: rgba(168, 128, 80, 0.12);
-
-  --shadow-sm: 0 1px 2px rgba(10, 6, 4, 0.35);
-  --shadow-md: 0 4px 16px rgba(10, 6, 4, 0.45);
-  --shadow-lg: 0 12px 32px rgba(10, 6, 4, 0.55);
-  --overlay-shadow: var(--shadow-md);
-
-  --grid-line: rgba(255, 240, 225, 0.03);
-}
-
-:root[data-theme="dash-light"] {
-  /*
-   * Accent — deep chocolate on warm parchment
-   *
-   * WCAG 2.1 AA audit (bg = #f7f2ec, relative luminance ≈ 0.893):
-   *   --accent #6e4828  L ≈ 0.081  contrast ≈ 7.2:1  AAA text ✓
-   *   --accent-hover #5c3c20  L ≈ 0.054  contrast ≈ 8.9:1  ✓
-   *   --primary-foreground #ffffff on #6e4828 button: 8.0:1 AAA ✓
-   *   focus-ring at 70% opacity: ≈ 3.4:1 against parchment bg ✓
-   */
-  --ring: #6e4828;
-  --accent: #6e4828;
-  --accent-hover: #5c3c20;
-  --accent-muted: #6e4828;
-  --accent-subtle: rgba(110, 72, 40, 0.12);
-  --accent-glow: rgba(110, 72, 40, 0.16);
-  --primary: #6e4828;
-  --primary-foreground: #ffffff;
-
-  /* Surfaces — warm parchment tones */
-  --bg: #f7f2ec;
-  --bg-accent: #f0e8e0;
-  --bg-elevated: #ffffff;
-  --bg-hover: #e8ddd2;
-  --bg-muted: #e8ddd2;
-  --bg-content: #f0e8e0;
-
-  --card: #ffffff;
-  --card-foreground: #2c2118;
-  --card-highlight: rgba(80, 50, 20, 0.02);
-  --popover: #ffffff;
-  --popover-foreground: #2c2118;
-  --session-hovercard-surface: var(--card);
-  --session-hovercard-progress-surface: color-mix(
-    in srgb,
-    var(--card) 48%,
-    var(--panel-strong) 52%
-  );
-
-  --panel: #f7f2ec;
-  --panel-strong: #f0e8e0;
-  --panel-hover: #e0d4c8;
-  --chrome: rgba(247, 242, 236, 0.96);
-  --chrome-strong: rgba(247, 242, 236, 0.98);
-
-  --text: #4a3828;
-  --text-strong: #2c2118;
-  --chat-text: #4a3828;
-  --muted: #725d4d;
-  --muted-strong: #604838;
-  --muted-foreground: #725d4d;
-
-  --border: #ddd0c2;
-  --border-strong: #c8b8a6;
-  --border-hover: #b0a090;
-  --input: #ddd0c2;
-
-  --secondary: #f0e8e0;
-  --secondary-foreground: #4a3828;
-  --accent-2: #6a4e30;
-  --accent-2-muted: rgba(106, 78, 48, 0.75);
-  --accent-2-subtle: rgba(106, 78, 48, 0.1);
-
-  --shadow-sm: 0 1px 2px rgba(60, 40, 20, 0.06);
-  --shadow-md: 0 4px 12px rgba(60, 40, 20, 0.08);
-  --shadow-lg: 0 12px 28px rgba(60, 40, 20, 0.1);
-  --overlay-shadow: var(--shadow-md);
-
-  --grid-line: rgba(80, 50, 20, 0.04);
-}
-
-:root[data-theme="absolutely"] {
-  /*
-   * Accent — terracotta clay on warm graphite
-   *
-   * WCAG 2.1 AA audit (bg = #262624, relative luminance ≈ 0.0198):
-   *   --accent #d97757  L ≈ 0.257  contrast ≈ 4.9:1  AA text ✓
-   *   --accent-hover #e68b6b  L ≈ 0.338  contrast ≈ 6.0:1  ✓
-   *   --primary-foreground #241f1b on #d97757 button: 5.2:1 AA ✓
-   *   --primary-foreground #241f1b on #e68b6b hover: 6.4:1 AA ✓
-   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
-   *   focus-ring at 75% opacity: ≈ 3.3:1 against bg ✓ (non-text 3:1 required)
-   *
-   * The accent dims below AA on the lightest surfaces (3.7:1 on --bg-muted),
-   * so it stays a fill/indicator color there; body copy uses --text.
-   */
-  --ring: #d97757;
-  --accent: #d97757;
-  --accent-hover: #e68b6b;
-  --accent-muted: #d97757;
-  --accent-subtle: rgba(217, 119, 87, 0.14);
-  --accent-glow: rgba(217, 119, 87, 0.22);
-  --primary: #d97757;
-  --primary-hover: #e68b6b;
-  --primary-foreground: #241f1b;
-
-  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
-  --destructive: #d32f2f;
-  --destructive-hover: #bc2a2a;
-
-  /* Focus — clay ring */
-  --focus: rgba(217, 119, 87, 0.2);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
-  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
-
-  /* Surfaces — warm graphite, a shade off true neutral */
-  --bg: #262624;
-  --bg-accent: #2d2c29;
-  --bg-elevated: #33322e;
-  --bg-hover: #3a3934;
-  --bg-muted: #3a3934;
-
-  --card: #2d2c29;
-  --card-foreground: #ede8dd;
-  --card-highlight: rgba(255, 246, 232, 0.04);
-  --popover: #33322e;
-  --popover-foreground: #ede8dd;
-
-  --panel: #262624;
-  --panel-strong: #33322e;
-  --panel-hover: #3a3934;
-  --chrome: rgba(38, 38, 36, 0.96);
-  --chrome-strong: rgba(38, 38, 36, 0.98);
-
-  --text: #e4dfd4;
-  --text-strong: #f5f1e8;
-  --chat-text: #e4dfd4;
-  --muted: #aba498;
-  --muted-strong: #b8b1a4;
-  --muted-foreground: #aba498;
-
-  --border: #383630;
-  --border-strong: #48453d;
-  --border-hover: #5c584e;
-  --input: #383630;
-
-  --secondary: #2d2c29;
-  --secondary-foreground: #ede8dd;
-  --accent-2: #b8926a;
-  --accent-2-muted: rgba(184, 146, 106, 0.7);
-  --accent-2-subtle: rgba(184, 146, 106, 0.12);
-
-  --shadow-sm: 0 1px 2px rgba(12, 10, 8, 0.35);
-  --shadow-md: 0 4px 16px rgba(12, 10, 8, 0.45);
-  --shadow-lg: 0 12px 32px rgba(12, 10, 8, 0.55);
-  --overlay-shadow: var(--shadow-md);
-
-  --grid-line: rgba(255, 246, 232, 0.03);
-  /* Typography is this theme's signature: a grotesque for chrome, a reading
-     serif for chat prose (styles/fonts.css self-hosts both). The stacks keep
-     system fallbacks so a failed font load degrades instead of blanking text. */
-  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-chat: "Lora", Georgia, "Times New Roman", serif;
-}
-
-:root[data-theme="absolutely-light"] {
-  /*
-   * Accent — burnt clay on ivory paper
-   *
-   * WCAG 2.1 AA audit (bg = #faf9f5, relative luminance ≈ 0.934):
-   *   --accent #a8452a  L ≈ 0.126  contrast ≈ 5.6:1  AA text ✓
-   *   --accent-hover #8e3822  L ≈ 0.086  contrast ≈ 7.3:1  ✓
-   *   --primary-foreground #ffffff on #a8452a button: 5.9:1 AA ✓
-   *   focus-ring at 70% opacity: ≈ 3.2:1 against ivory bg ✓
-   */
-  --ring: #a8452a;
-  --accent: #a8452a;
-  --accent-hover: #8e3822;
-  --accent-muted: #a8452a;
-  --accent-subtle: rgba(168, 69, 42, 0.1);
-  --accent-glow: rgba(168, 69, 42, 0.14);
-  --primary: #a8452a;
-  --primary-foreground: #ffffff;
-
-  /* Surfaces — ivory paper with a faint warm cast */
-  --bg: #faf9f5;
-  --bg-accent: #f3f1e9;
-  --bg-elevated: #ffffff;
-  --bg-hover: #edeae0;
-  --bg-muted: #edeae0;
-  --bg-content: #f3f1e9;
-
-  --card: #ffffff;
-  --card-foreground: #1f1d1a;
-  --card-highlight: rgba(60, 50, 30, 0.02);
-  --popover: #ffffff;
-  --popover-foreground: #1f1d1a;
-  --session-hovercard-surface: var(--card);
-  --session-hovercard-progress-surface: color-mix(
-    in srgb,
-    var(--card) 50%,
-    var(--panel-strong) 50%
-  );
-
-  --panel: #faf9f5;
-  --panel-strong: #f3f1e9;
-  --panel-hover: #e6e2d6;
-  --chrome: rgba(250, 249, 245, 0.96);
-  --chrome-strong: rgba(250, 249, 245, 0.98);
-
-  --text: #3d3a33;
-  --text-strong: #1f1d1a;
-  --chat-text: #3d3a33;
-  --muted: #6b655b;
-  --muted-strong: #555047;
-  --muted-foreground: #6b655b;
-
-  --border: #e3dfd2;
-  --border-strong: #cdc7b6;
-  --border-hover: #ada694;
-  --input: #e3dfd2;
-
-  --secondary: #f3f1e9;
-  --secondary-foreground: #3d3a33;
-  --accent-2: #8a6a44;
-  --accent-2-muted: rgba(138, 106, 68, 0.75);
-  --accent-2-subtle: rgba(138, 106, 68, 0.1);
-
-  --shadow-sm: 0 1px 2px rgba(60, 50, 30, 0.05);
-  --shadow-md: 0 4px 12px rgba(60, 50, 30, 0.07);
-  --shadow-lg: 0 12px 28px rgba(60, 50, 30, 0.09);
-  --overlay-shadow: var(--shadow-md);
-
-  --grid-line: rgba(60, 50, 30, 0.04);
-  /* Typography is this theme's signature: a grotesque for chrome, a reading
-     serif for chat prose (styles/fonts.css self-hosts both). The stacks keep
-     system fallbacks so a failed font load degrades instead of blanking text. */
-  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-chat: "Lora", Georgia, "Times New Roman", serif;
 }
 
 * {
@@ -1166,6 +701,15 @@ body {
   user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  html:has(.shell--chat),
+  body:has(.shell--chat) {
+    /* iOS Safari exposes the document canvas around its browser chrome; keep
+       that canvas on the same semantic surface as the narrow transcript. */
+    background: var(--control-ui-system-chrome-background, var(--bg-content, var(--bg)));
+  }
 }
 
 /* iOS Safari zooms the viewport when a focused text control is under 16px;
@@ -1293,6 +837,11 @@ a:hover {
   text-decoration-thickness: 2px;
 }
 
+.learn-more-link,
+.learn-more-link:hover {
+  text-decoration: none;
+}
+
 /* Web Awesome defaults checked switches to brand blue. Keep every switch on
    the Control UI accent, matching native check controls and custom switches. */
 wa-switch {
@@ -1329,8 +878,10 @@ wa-dropdown-item[type="checkbox"] {
 /* Web Awesome owns these popup panels in shadow DOM, so shared tokens enter
    through exported parts; feature styles continue to own content geometry. */
 wa-dropdown::part(menu),
+wa-dropdown-item::part(submenu),
 wa-popover::part(body),
 wa-select::part(listbox) {
+  background: var(--popover);
   border-color: var(--overlay-border);
   box-shadow: var(--overlay-shadow);
 }
@@ -1462,20 +1013,34 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
 }
 
 @keyframes shimmer {
-  0% {
-    background-position: -200% 0;
+  from {
+    transform: translateX(-100%);
   }
-  100% {
-    background-position: 200% 0;
+  to {
+    transform: translateX(100%);
   }
 }
 
 /* Skeleton loading primitives */
 .skeleton {
-  background: linear-gradient(90deg, var(--bg-muted) 25%, var(--bg-hover) 50%, var(--bg-muted) 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s ease-in-out infinite;
+  position: relative;
+  overflow: hidden;
+  background: var(--skeleton-base, var(--bg-muted));
   border-radius: var(--radius-md);
+}
+
+.skeleton::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 25%,
+    var(--skeleton-highlight, var(--bg-hover)) 50%,
+    transparent 75%
+  );
+  content: "";
+  animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
+  will-change: transform;
 }
 
 .skeleton-line {

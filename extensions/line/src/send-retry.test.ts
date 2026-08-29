@@ -3,6 +3,7 @@ import { HTTPFetchError } from "@line/bot-sdk";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveLineNonDispatchRetryable, runLinePushWithRetries } from "./send-retry.js";
 
 const {
   requireRuntimeConfigMock,
@@ -198,5 +199,67 @@ describe("LINE push retries", () => {
     ).rejects.toMatchObject({ status: 500 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(retryKeysOf(fetchMock)).toEqual([null]);
+  });
+});
+
+describe("resolveLineNonDispatchRetryable", () => {
+  const httpError = (status: number) =>
+    new HTTPFetchError(`${status} - provider answered`, {
+      status,
+      statusText: "provider answered",
+      headers: new Headers(),
+      body: "provider body",
+    });
+
+  it.each([
+    { label: "a rejected payload", error: httpError(400), retryable: false },
+    { label: "a forbidden recipient", error: httpError(403), retryable: false },
+    { label: "an unknown recipient", error: httpError(404), retryable: false },
+    { label: "a request timeout", error: httpError(408), retryable: undefined },
+    { label: "an accepted retry-key conflict", error: httpError(409), retryable: undefined },
+    { label: "a rate limit", error: httpError(429), retryable: true },
+    { label: "an upstream failure", error: httpError(503), retryable: undefined },
+    {
+      label: "a transport failure that never reached LINE",
+      error: new Error("fetch failed"),
+      retryable: undefined,
+    },
+    {
+      label: "a rejected payload behind an SDK wrapper",
+      error: new Error("send failed", { cause: httpError(400) }),
+      retryable: false,
+    },
+  ])("classifies $label with retryable=$retryable", ({ error, retryable }) => {
+    expect(resolveLineNonDispatchRetryable(error)).toBe(retryable);
+  });
+
+  it("keeps a push ambiguous when an earlier attempt never reached LINE", async () => {
+    const rejected = httpError(400);
+    let attempt = 0;
+    const failure = await runLinePushWithRetries(async () => {
+      attempt += 1;
+      // A reset connection may already have delivered the push, so the retry
+      // that follows cannot prove it was never sent.
+      throw attempt === 1
+        ? Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })
+        : rejected;
+    }, "line:push").catch((error: unknown) => error);
+
+    expect(attempt).toBeGreaterThan(1);
+    expect(resolveLineNonDispatchRetryable(failure)).toBeUndefined();
+    expect(
+      resolveLineNonDispatchRetryable(new Error("wrapped send failure", { cause: failure })),
+    ).toBeUndefined();
+  });
+
+  it("still proves a push was refused when LINE rejected the only attempt", async () => {
+    let attempt = 0;
+    const failure = await runLinePushWithRetries(async () => {
+      attempt += 1;
+      throw httpError(400);
+    }, "line:push").catch((error: unknown) => error);
+
+    expect(attempt).toBe(1);
+    expect(resolveLineNonDispatchRetryable(failure)).toBe(false);
   });
 });

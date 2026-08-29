@@ -9,7 +9,7 @@ import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
@@ -47,6 +47,7 @@ import {
 } from "./mutations.ts";
 import { isMissingMethodError, mergeProbeResults } from "./probe-results.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
+import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
 import { renderModelProviders, type ModelProviderRowMessage } from "./view.ts";
 
 const MODEL_PROVIDERS_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
@@ -87,7 +88,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       if (!client || !agentId) {
         return initialState;
       }
-      this.refreshPolicy.beginLoad();
       return loadModelProvidersData(client, {
         agentId,
         ...(force ? { refresh: true } : {}),
@@ -97,17 +97,24 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     onComplete: ({ client, data }) => {
       this.loadClient = null;
       this.adoptLoadedData(client, data);
-      this.refreshPolicy.flushPending();
     },
     onError: () => {
       this.loadClient = null;
-      this.refreshPolicy.flushPending();
     },
   });
   private readonly refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () => this.loadClient !== null,
-    reload: () => void this.refresh({ force: false }),
+    isLoading: () => this.loadClient !== null || this.supplemental.usageLoading,
+    // Usage convergence must not restart the independent local-cost request.
+    reload: () => this.supplemental.loadUsage(),
     onIncompleteUsageExhausted: () => this.requestUpdate(),
+  });
+  private readonly supplemental = new ModelProviderSupplementalLoader(this, {
+    getGateway: () => this.gateway,
+    getData: () => this.data,
+    getDataClient: () => this.dataClient,
+    setData: (data) => (this.data = data),
+    setDataClient: (client) => (this.dataClient = client),
+    refreshPolicy: this.refreshPolicy,
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -122,7 +129,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         this.resetConnectionState({ preserveVisibleData: true });
       }
       if (change.becameConnected && !change.initial) {
-        this.refreshPolicy.request("reconnect");
+        void this.refresh({ force: false });
       }
     },
     onPageActivation: () => this.refreshPolicy.request("focus"),
@@ -201,15 +208,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private adoptLoadedData(client: GatewayBrowserClient | null, data: ModelProvidersData) {
-    this.data = data;
-    this.dataClient = client;
-    this.refreshPolicy.markProviderUsage(data.providerUsage, data.updatedAt, this.gateway.epoch);
+    this.supplemental.adoptCoreData(client, data);
   }
 
   private invalidateRequests() {
-    this.refreshPolicy.interrupt();
     this.loadClient = null;
     void this.refreshTask.run([null, this.selectedAgentId, false]);
+    this.supplemental.invalidate();
   }
 
   private resetConnectionState(options: { preserveVisibleData?: boolean } = {}) {
@@ -279,9 +284,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
-    if (opts.force) {
-      this.refreshPolicy.resetPayload();
-    }
+    // Cancel the old supplemental generation before it can publish during core loading.
+    this.supplemental.beginCoreRefresh(opts.force);
     this.loadClient = client;
     return this.refreshTask.run([client, this.selectedAgentId, opts.force]);
   }
@@ -627,6 +631,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       refreshing: this.loadClient !== null,
       error: rosterError ?? data.error ?? data.catalogError,
       providerUsageFailed: data.providerUsage?.ok === false,
+      supplementalLoading: this.supplemental.loading,
       updatedAt: data.updatedAt,
       costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selectedAgentLabel,
@@ -715,15 +720,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onOpenModelSetup: () => this.context.navigate("model-setup"),
     });
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("model-providers")}</div>
-          <div class="page-subtitle">
-            ${t("modelProviders.subtitle")}
-            ${renderDocsLink(MODEL_PROVIDERS_DOCS_URL, t("common.learnMore"))}
-          </div>
-        </div>
-        <div class="page-header-actions">
+      ${renderSettingsPageHeader({
+        title: titleForRoute("model-providers"),
+        subtitle: html`${t("modelProviders.subtitle")}
+        ${renderLearnMoreLink(MODEL_PROVIDERS_DOCS_URL)}`,
+        actions: html`
           ${renderAgentScopeControl({
             agents,
             selection: this.context.agentSelection,
@@ -733,8 +734,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
           <button class="btn" @click=${() => this.context.navigate("model-setup")}>
             ${t("tabs.modelSetup")}
           </button>
-        </div>
-      </section>
+        `,
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

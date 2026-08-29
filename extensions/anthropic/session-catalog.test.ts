@@ -736,6 +736,7 @@ describe("Claude session catalog", () => {
     );
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
+        displayName: "Source session",
         spawnedCwd: "/work/source",
         initialEntry: expect.objectContaining({
           cliBackendId: "claude-cli",
@@ -750,6 +751,7 @@ describe("Claude session catalog", () => {
         }),
       }),
     );
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
   });
 
   it("does not advertise creation without a configured Claude CLI route", () => {
@@ -1133,6 +1135,7 @@ describe("Claude session catalog", () => {
     );
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
+        displayName: "Node source",
         execNode: "node-a",
         execCwd: "/work/on-node",
         spawnedCwd: "/work/on-node",
@@ -1150,6 +1153,7 @@ describe("Claude session catalog", () => {
         }),
       }),
     );
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         command: CLAUDE_SESSION_READ_COMMAND,
@@ -2800,7 +2804,7 @@ describe("Claude session catalog", () => {
       } as unknown as PluginRuntime);
       const pending = provider.list({ hostIds: ["node:slow-node"] });
 
-      await vi.advanceTimersByTimeAsync(8_000);
+      await vi.advanceTimersByTimeAsync(20_000);
 
       await expect(pending).resolves.toEqual([
         expect.objectContaining({
@@ -2816,7 +2820,18 @@ describe("Claude session catalog", () => {
     }
   });
 
-  it("publishes a paired-node page that finishes after the fail-soft response", async () => {
+  it.each([
+    {
+      name: "returns cold paired-node discovery before the fail-soft response",
+      delayMs: 10_000,
+      timedOut: false,
+    },
+    {
+      name: "publishes a paired-node page that finishes after the fail-soft response",
+      delayMs: 20_000,
+      timedOut: true,
+    },
+  ])("$name", async ({ delayMs, timedOut }) => {
     vi.useFakeTimers();
     try {
       let resolveInvoke!: (value: unknown) => void;
@@ -2842,10 +2857,14 @@ describe("Claude session catalog", () => {
       const onHost = vi.fn();
       const pending = provider.list({ hostIds: ["node:slow-node"], onHost });
 
-      await vi.advanceTimersByTimeAsync(8_000);
-      await expect(pending).resolves.toEqual([
-        expect.objectContaining({ error: expect.objectContaining({ code: "NODE_INVOKE_FAILED" }) }),
-      ]);
+      await vi.advanceTimersByTimeAsync(delayMs);
+      if (timedOut) {
+        await expect(pending).resolves.toEqual([
+          expect.objectContaining({
+            error: expect.objectContaining({ code: "NODE_INVOKE_FAILED" }),
+          }),
+        ]);
+      }
       expect(onHost).not.toHaveBeenCalled();
 
       resolveInvoke({
@@ -2863,6 +2882,14 @@ describe("Claude session catalog", () => {
       });
       await vi.advanceTimersByTimeAsync(0);
 
+      if (!timedOut) {
+        await expect(pending).resolves.toEqual([
+          expect.objectContaining({
+            hostId: "node:slow-node",
+            sessions: [expect.objectContaining({ threadId: "late-thread" })],
+          }),
+        ]);
+      }
       expect(onHost).toHaveBeenCalledWith(
         expect.objectContaining({
           hostId: "node:slow-node",

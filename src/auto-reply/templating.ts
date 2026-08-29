@@ -318,6 +318,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   SenderTag?: string;
   SenderE164?: string;
   SenderIsBot?: boolean;
+  /** Channel-ingress fact: sender is the operator's own account (from-me). */
+  SenderIsSelf?: boolean;
   Timestamp?: number;
   LocationLat?: number;
   LocationLon?: number;

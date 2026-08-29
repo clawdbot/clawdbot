@@ -2,7 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { fireFirstReplyConfetti } from "../../components/confetti.ts";
-import { isGitHubPullRequestLink } from "../../components/github-link-target.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
@@ -19,6 +19,7 @@ import {
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
+import { sleep } from "./chat-history-retry.ts";
 import {
   chatScopedEventSessionMatches,
   isHiddenAssistantStreamText,
@@ -27,6 +28,10 @@ import {
   retireChatBranchRequests,
   shouldHideAssistantChatMessage,
 } from "./chat-history.ts";
+import {
+  pullRequestLinksIn,
+  refreshPullRequestsForStreamedLinks,
+} from "./chat-pull-request-refresh.ts";
 import {
   clearPendingQueueItemsForRun,
   readDeliveredQueuedChatSendForRun,
@@ -49,18 +54,26 @@ import {
   storedChatOutboxScopeKey,
   type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
-import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+} from "./history-merge.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
   reconcileChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
+import { reconcileSessionApprovalEvent } from "./session-approval-projection.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
+import { readTerminalReplyRecoveryState } from "./terminal-reply-recovery.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
 
 const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
+const MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS = [100, 400, 1_500, 3_000] as const;
+const MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS = 64;
 type ChatPanePresentation = () => boolean;
 
 function sessionMessageMatchesChat(
@@ -196,7 +209,8 @@ function replayPendingSessionMessageReload(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
   presentation: ChatPanePresentation,
-) {
+  supersedeInFlight = false,
+): boolean {
   const pendingSessionKey = state.pendingSessionMessageReloadSessionKey;
   const payloadSessionKey = payload?.sessionKey?.trim();
   if (
@@ -206,12 +220,128 @@ function replayPendingSessionMessageReload(
     !areUiSessionKeysEquivalent(payloadSessionKey, state.sessionKey) ||
     state.chatRunId
   ) {
-    return;
+    return false;
   }
   state.pendingSessionMessageReloadSessionKey = null;
-  void loadChatHistory(state, { deferBranches: !presentation() }).finally(() =>
-    state.requestUpdate?.(),
+  void loadChatHistory(state, {
+    deferBranches: !presentation(),
+    supersedeInFlight,
+  }).finally(() => state.requestUpdate?.());
+  return true;
+}
+
+type TerminalRecoveryOwnership = {
+  sessionKey: string;
+  agentId: string;
+  runId: string;
+  client: ChatPageHost["client"];
+  connectionEpoch: number;
+  runLifecycleGeneration: number;
+  initialTerminalReplySignatures: ReadonlySet<string>;
+};
+
+const terminalRecoveryClaimsByPane = new WeakMap<object, Map<string, ChatPageHost["client"]>>();
+
+function createTerminalRecoveryOwnership(
+  state: ChatPageHost,
+  payload: ChatEventPayload,
+): TerminalRecoveryOwnership | null {
+  const runId = payload.runId;
+  if (!runId) {
+    return null;
+  }
+  return {
+    sessionKey: payload.sessionKey,
+    agentId: resolveChatAgentId(state),
+    runId,
+    client: state.client,
+    connectionEpoch: state.connectionEpoch,
+    runLifecycleGeneration: state.chatRunLifecycleGeneration ?? 0,
+    initialTerminalReplySignatures: readTerminalReplyRecoveryState(state, runId)
+      .terminalReplySignatures,
+  };
+}
+
+function claimTerminalRecovery(state: ChatPageHost, ownership: TerminalRecoveryOwnership): boolean {
+  let claims = terminalRecoveryClaimsByPane.get(state);
+  if (!claims) {
+    claims = new Map();
+    terminalRecoveryClaimsByPane.set(state, claims);
+  }
+  const key = [
+    ownership.connectionEpoch,
+    ownership.runLifecycleGeneration,
+    ownership.agentId,
+    ownership.sessionKey,
+    ownership.runId,
+  ].join("\0");
+  if (claims.has(key) && claims.get(key) === ownership.client) {
+    return false;
+  }
+  claims.delete(key);
+  claims.set(key, ownership.client);
+  while (claims.size > MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS) {
+    const oldest = claims.keys().next().value;
+    if (typeof oldest !== "string") {
+      break;
+    }
+    claims.delete(oldest);
+  }
+  return true;
+}
+
+function hasRecoveredTerminalReply(
+  state: ChatPageHost,
+  ownership: TerminalRecoveryOwnership,
+): boolean {
+  const recovery = readTerminalReplyRecoveryState(state, ownership.runId);
+  return (
+    recovery.acceptedFinal ||
+    [...recovery.terminalReplySignatures].some(
+      (signature) => !ownership.initialTerminalReplySignatures.has(signature),
+    )
   );
+}
+
+function terminalRecoveryStillOwned(
+  state: ChatPageHost,
+  ownership: TerminalRecoveryOwnership,
+): boolean {
+  return (
+    state.connected &&
+    state.client === ownership.client &&
+    state.connectionEpoch === ownership.connectionEpoch &&
+    areUiSessionKeysEquivalent(state.sessionKey, ownership.sessionKey) &&
+    resolveChatAgentId(state) === ownership.agentId &&
+    (state.chatRunId === null || state.chatRunId === ownership.runId) &&
+    (state.chatRunLifecycleGeneration ?? 0) === ownership.runLifecycleGeneration &&
+    !hasRecoveredTerminalReply(state, ownership)
+  );
+}
+
+async function recoverMissingTerminalReply(
+  state: ChatPageHost,
+  ownership: TerminalRecoveryOwnership,
+  presentation: ChatPanePresentation,
+): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    if (!terminalRecoveryStillOwned(state, ownership)) {
+      return;
+    }
+    await loadChatHistory(state, {
+      deferBranches: !presentation(),
+      supersedeInFlight: true,
+    });
+    state.requestUpdate?.();
+    if (!terminalRecoveryStillOwned(state, ownership)) {
+      return;
+    }
+    const delayMs = MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS[attempt];
+    if (delayMs === undefined) {
+      return;
+    }
+    await sleep(delayMs);
+  }
 }
 
 function handleSessionsChangedEvent(
@@ -231,6 +361,17 @@ function handleSessionsChangedEvent(
     state.retireSessionCompanion?.(event.key, event.agentId);
   }
   const resetsSelectedSession = matchesChat && resetsSession;
+  if (
+    matchesChat &&
+    state.client &&
+    (resetsSession || source?.reason === "command-metadata" || source?.reason === "patch")
+  ) {
+    // Selection commands and model patches can change the persisted profile without changing credentials.
+    invalidateChatMetadataStore(state.client, {
+      agentId: resolveChatAgentId(state) ?? undefined,
+      sessionKey: state.sessionKey,
+    });
+  }
   if (resetsSelectedSession) {
     const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
     // Reset keeps the public session ID; the explicit reducer event is the
@@ -295,27 +436,11 @@ function handleSessionsChangedEvent(
   }
 }
 
-const GITHUB_URL_CANDIDATE = /https:\/\/github\.com\/[^\s<>()\]}'"`]+/giu;
-
 function terminalOwnsActiveChatStream(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
 ): boolean {
   return typeof payload?.runId === "string" && payload.runId === state.chatRunId;
-}
-
-function pullRequestLinksIn(text: unknown): string[] {
-  if (typeof text !== "string" || !text.includes("github.com")) {
-    return [];
-  }
-  const links: string[] = [];
-  for (const match of text.matchAll(GITHUB_URL_CANDIDATE)) {
-    const href = match[0].replace(/[.,;:!?]+$/u, "");
-    if (isGitHubPullRequestLink(href)) {
-      links.push(href);
-    }
-  }
-  return links;
 }
 
 function finalAssistantReplyHasPullRequestLink(
@@ -333,48 +458,6 @@ function finalAssistantReplyHasPullRequestLink(
     );
   }
   return texts.some((text) => pullRequestLinksIn(text).length > 0);
-}
-
-// Bounds the refreshed-run set; clearing at worst re-fires one refresh per run.
-const STREAM_PR_REFRESH_RUN_LIMIT = 200;
-// Longest URL prefix worth carrying across delta chunks. GitHub caps owners at
-// 39 and repos at 100 chars, so a maximal PR URL is ~175 chars; 256 covers it.
-const STREAM_PR_LINK_TAIL_CHARS = 256;
-
-/**
- * A PR created or merged mid-turn should surface a chip right away instead of
- * waiting for the terminal reply or the minute poll, so the first streamed
- * sighting of a PR link forces one chips refresh. At most one per run: the
- * refresh reloads all of the branch's PRs regardless of which link fired it,
- * so more links in the same run add GitHub quota cost without information,
- * while a later run announcing a state change (created -> merged) refreshes
- * again. Deltas are arbitrary fragments, so a short rolling tail rejoins URLs
- * split across chunks; a link the tail still misses is caught by the
- * final-reply trigger. That terminal trigger intentionally refreshes again
- * even after a stream refresh — state often changes between the announcement
- * and the end of the turn (created -> merged) — bounding forced refreshes at
- * two per run, coalesced by the gateway while one is in flight.
- */
-function refreshPullRequestsForStreamedLinks(
-  state: ChatPageHost,
-  payload: ChatEventPayload,
-  deltaText: string,
-): void {
-  const scope = `${payload.sessionKey}|${payload.runId ?? ""}`;
-  const tail = state.streamPullRequestTail;
-  // The tail is scoped like the refresh: joining across runs would falsely
-  // complete split URLs.
-  const joined = (tail?.scope === scope ? tail.text : "") + deltaText;
-  state.streamPullRequestTail = { scope, text: joined.slice(-STREAM_PR_LINK_TAIL_CHARS) };
-  const seen = (state.streamPullRequestRefreshKeys ??= new Set());
-  if (seen.has(scope) || pullRequestLinksIn(joined).length === 0) {
-    return;
-  }
-  if (seen.size > STREAM_PR_REFRESH_RUN_LIMIT) {
-    seen.clear();
-  }
-  seen.add(scope);
-  void state.refreshSessionPullRequests?.({ refresh: true });
 }
 
 function hasVisibleFinalAssistantReply(
@@ -426,11 +509,37 @@ export function handlePageGatewayEvent(
   event: GatewayEventFrame,
   isPresented: ChatPanePresentation = () => true,
 ) {
+  if (event.event === "session.approval") {
+    const payload = asNullableRecord(event.payload);
+    if (!payload || typeof payload.sessionKey !== "string") {
+      return;
+    }
+    const queue = reconcileSessionApprovalEvent(
+      state.chatSessionApprovalQueue ?? [],
+      payload,
+      state.sessionKey,
+      resolveChatAgentId(state),
+    );
+    if (queue) {
+      state.chatSessionApprovalQueue = queue;
+      requestChatPageUpdate(state);
+    }
+    return;
+  }
   if (event.event === "chat") {
     const payload = event.payload as ChatEventPayload | undefined;
     const sessionMatches = Boolean(
       payload && chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId),
     );
+    const recoveryRunId =
+      payload?.state === "final" &&
+      (payload.message === undefined || payload.message === null) &&
+      sessionMatches &&
+      typeof payload.runId === "string" &&
+      (!state.chatRunId || state.chatRunId === payload.runId)
+        ? payload.runId
+        : null;
+    const recoveryScope = recoveryRunId ? readChatSessionProjectionScope(state) : null;
     if (
       payload?.state === "delta" &&
       typeof payload.runId === "string" &&
@@ -482,7 +591,32 @@ export function handlePageGatewayEvent(
     if (shouldRefreshPullRequests) {
       void state.refreshSessionPullRequests?.({ refresh: true });
     }
-    replayPendingSessionMessageReload(state, payload, isPresented);
+    const shouldRecoverMissingTerminal = Boolean(
+      recoveryRunId &&
+      recoveryScope &&
+      getChatSessionProjection(state, state.chatMessages, recoveryScope).runs[recoveryRunId]
+        ?.status === "completed",
+    );
+    const recoveryOwnership =
+      shouldRecoverMissingTerminal && payload
+        ? createTerminalRecoveryOwnership(state, payload)
+        : null;
+    const recoveryClaimed = recoveryOwnership
+      ? claimTerminalRecovery(state, recoveryOwnership)
+      : false;
+    if (recoveryOwnership && recoveryClaimed) {
+      state.pendingSessionMessageReloadSessionKey = null;
+      // The first owned message-less terminal recovers history even when an
+      // earlier snapshot already marked the run complete. Replays, yielded, or
+      // background-run terminals must not repeat I/O or disturb the foreground pane.
+      // Persistence can trail the terminal event, so retry bounded authoritative
+      // snapshots until the completed run's reply becomes visible.
+      void recoverMissingTerminalReply(state, recoveryOwnership, isPresented).catch(
+        () => undefined,
+      );
+    } else {
+      replayPendingSessionMessageReload(state, payload, isPresented);
+    }
     if (terminalPayload) {
       if (outboxScope) {
         removeDeliveredQueuedChatSendForRun(state, terminalPayload.runId, outboxScope);

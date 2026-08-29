@@ -41,7 +41,6 @@ export function createPopupMessageHandler({
   closeRelaySocket,
   connectRelay,
   setBadge,
-  attachingTabs,
   detachDebugger,
   removeTabFromOpenClawGroup,
   addTabToOpenClawGroup,
@@ -251,7 +250,6 @@ export function createPopupMessageHandler({
                   const selected = await isTabSelected(await chromeApi.tabs.get(tabId));
                   if (!msg.grant && selected) {
                     policy.invalidateTab(tabId);
-                    await Promise.allSettled([attachingTabs.get(tabId)]);
                     await detachDebugger(tabId);
                     await removeTabFromOpenClawGroup(tabId);
                   } else if (msg.grant && !selected) {

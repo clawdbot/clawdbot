@@ -37,6 +37,23 @@ export const log = {
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
 
+export function resolveOpenAIClientBaseUrl(
+  model: Pick<Model, "provider" | "baseUrl">,
+  baseUrl: string | undefined = model.baseUrl,
+): string | undefined {
+  if (baseUrl?.trim()) {
+    return baseUrl;
+  }
+  if (model.provider.trim().toLowerCase() === "openai") {
+    return undefined;
+  }
+  // The OpenAI SDK defaults a missing endpoint to api.openai.com. Only OpenAI may
+  // inherit that default; otherwise a third-party bearer token can cross providers.
+  throw new Error(
+    `Provider "${model.provider}" requires an explicit base URL before using an OpenAI-compatible API. Reload provider metadata or configure an endpoint.`,
+  );
+}
+
 export type OpenAICompletionsTextSource = "reasoning_detail" | "refusal";
 
 export type OpenAICompletionsContentDelta =

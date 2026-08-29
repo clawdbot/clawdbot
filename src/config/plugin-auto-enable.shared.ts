@@ -16,9 +16,9 @@ import {
   type ChannelPresenceSignalSource,
 } from "../channels/config-presence.js";
 import {
-  hasBundledChannelConfiguredState,
-  listBundledChannelIdsWithConfiguredState,
-} from "../channels/plugins/configured-state.js";
+  hasBundledChannelPackageState,
+  listBundledChannelIdsForPackageState,
+} from "../channels/plugins/package-state-probes.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -299,7 +299,9 @@ function collectConfiguredChannelIds(
   discovery?: PluginDiscoveryResult,
   ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
 ): string[] {
-  const configuredStateChannelIds = new Set(listBundledChannelIdsWithConfiguredState(discovery));
+  const configuredStateChannelIds = new Set(
+    listBundledChannelIdsForPackageState("configuredState", discovery),
+  );
   return listPotentialConfiguredChannelPresenceSignals(cfg, env, {
     includePersistedAuthState: false,
     discovery,
@@ -333,7 +335,8 @@ function isAutoEnableConfiguredChannelSignal(params: {
   if (
     params.source === "env" &&
     params.configuredStateChannelIds.has(params.channelId) &&
-    !hasBundledChannelConfiguredState({
+    !hasBundledChannelPackageState({
+      metadataKey: "configuredState",
       channelId: params.channelId,
       cfg: params.cfg,
       env: params.env,

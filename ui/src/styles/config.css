@@ -72,12 +72,6 @@
   gap: var(--space-2) var(--space-3);
 }
 
-.config-show-advanced.active {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  background: var(--accent-subtle);
-}
-
 /* Raw mode file operations (open / discard / save) */
 .config-raw-actions {
   display: flex;
@@ -209,6 +203,17 @@
    the first section. Keep one spacing owner. */
 .config-lead + .config-content {
   padding-top: 0;
+}
+
+/* Tabs sit between the route introduction and the active section. Remove the
+   generic lead inset; the workspace gap plus 4px content inset then matches
+   the 24px introduction-to-tabs rhythm. */
+.config-lead:has(.config-sections-hub-tabs) {
+  padding-top: 0;
+}
+
+.config-lead:has(.config-sections-hub-tabs) + .config-content {
+  padding-top: var(--space-1);
 }
 
 .config-content > .settings-page {
@@ -350,21 +355,42 @@
 .settings-accent-theme--knot {
   --theme-chip-bg: #080808;
   --theme-chip-accent: #e5243b;
-  --theme-chip-accent-2: #8b1a2b;
+  --theme-chip-accent-2: #b8bdc4;
 }
 
 .settings-theme-card--dash,
 .settings-accent-theme--dash {
   --theme-chip-bg: #1a1210;
-  --theme-chip-accent: #b47840;
-  --theme-chip-accent-2: #a88050;
+  --theme-chip-accent: #cf8b4d;
+  --theme-chip-accent-2: #dcb878;
 }
 
 .settings-theme-card--absolutely,
 .settings-accent-theme--absolutely {
-  --theme-chip-bg: #262624;
+  --theme-chip-bg: #1c1c1a;
   --theme-chip-accent: #d97757;
   --theme-chip-accent-2: #b8926a;
+}
+
+.settings-theme-card--tide,
+.settings-accent-theme--tide {
+  --theme-chip-bg: #10151b;
+  --theme-chip-accent: #5ab6d8;
+  --theme-chip-accent-2: #7f9bb5;
+}
+
+.settings-theme-card--beacon,
+.settings-accent-theme--beacon {
+  --theme-chip-bg: #000000;
+  --theme-chip-accent: #ffc233;
+  --theme-chip-accent-2: #8ecdff;
+}
+
+.settings-theme-card--phosphor,
+.settings-accent-theme--phosphor {
+  --theme-chip-bg: #0a0f0a;
+  --theme-chip-accent: #4ade80;
+  --theme-chip-accent-2: #8fd6a5;
 }
 
 :root[data-theme-mode="light"] :is(.settings-theme-card--claw, .settings-accent-theme--claw) {
@@ -376,13 +402,13 @@
 :root[data-theme-mode="light"] :is(.settings-theme-card--knot, .settings-accent-theme--knot) {
   --theme-chip-bg: #f9f9fb;
   --theme-chip-accent: #c41e30;
-  --theme-chip-accent-2: #7a1420;
+  --theme-chip-accent-2: #5a626e;
 }
 
 :root[data-theme-mode="light"] :is(.settings-theme-card--dash, .settings-accent-theme--dash) {
   --theme-chip-bg: #f7f2ec;
-  --theme-chip-accent: #6e4828;
-  --theme-chip-accent-2: #6a4e30;
+  --theme-chip-accent: #8a512c;
+  --theme-chip-accent-2: #7d6027;
 }
 
 :root[data-theme-mode="light"]
@@ -390,6 +416,25 @@
   --theme-chip-bg: #faf9f5;
   --theme-chip-accent: #a8452a;
   --theme-chip-accent-2: #8a6a44;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--tide, .settings-accent-theme--tide) {
+  --theme-chip-bg: #f7f9fb;
+  --theme-chip-accent: #1f6f8f;
+  --theme-chip-accent-2: #3d6d88;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--beacon, .settings-accent-theme--beacon) {
+  --theme-chip-bg: #ffffff;
+  --theme-chip-accent: #6e4a00;
+  --theme-chip-accent-2: #09428d;
+}
+
+:root[data-theme-mode="light"]
+  :is(.settings-theme-card--phosphor, .settings-accent-theme--phosphor) {
+  --theme-chip-bg: #f4f7f4;
+  --theme-chip-accent: #10693a;
+  --theme-chip-accent-2: #2f6b47;
 }
 /* stylelint-enable color-no-hex */
 
@@ -405,6 +450,18 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
+}
+
+.settings-accent-status {
+  min-height: 3em;
+}
+
+.settings-accent-status__scope {
+  opacity: 0.72;
+}
+
+.settings-accent-status__scope::before {
+  content: " ·\00a0";
 }
 
 .settings-accent-swatch {
@@ -439,21 +496,49 @@
 }
 
 .settings-accent-swatch--custom {
+  position: relative;
   overflow: hidden;
 }
 
-.settings-accent-swatch--custom::-webkit-color-swatch-wrapper {
+.settings-accent-swatch__input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   padding: 0;
+  border: 0;
+  opacity: 0;
 }
 
-.settings-accent-swatch--custom::-webkit-color-swatch {
-  border: 0;
-  border-radius: 50%;
+.settings-accent-swatch--custom:has(.settings-accent-swatch__input:focus-visible) {
+  outline: 2px solid var(--text-strong);
+  outline-offset: 4px;
 }
 
-.settings-accent-swatch--custom::-moz-color-swatch {
-  border: 0;
-  border-radius: 50%;
+.settings-accent-swatch__picker {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  color: var(--settings-accent-swatch-ink, var(--accent-foreground));
+  pointer-events: none;
+}
+
+.settings-accent-swatch__picker svg {
+  width: 15px;
+  height: 15px;
+}
+
+@media (forced-colors: active) {
+  .settings-accent-swatch__picker {
+    color: CanvasText;
+  }
+
+  .settings-accent-swatch--custom:has(.settings-accent-swatch__input:focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
 }
 
 .settings-theme-import {
@@ -837,7 +922,7 @@
    of which tab is active so its title and actions do not jump by one space. */
 .shell--settings .content:has(.memory-page) .content-header.hub-page-header {
   max-width: 1120px;
-  padding-inline: var(--space-4);
+  padding-inline: var(--settings-header-inline-padding, var(--space-4));
 }
 
 .memory-page__panel .settings-page,
@@ -1036,15 +1121,5 @@
   .mcp-server-form {
     grid-template-columns: minmax(0, 1fr);
     align-items: stretch;
-  }
-}
-
-/* ===========================================
-   Mobile Responsiveness
-   =========================================== */
-
-@media (max-width: 768px) {
-  .settings-theme-grid {
-    grid-template-columns: 1fr;
   }
 }

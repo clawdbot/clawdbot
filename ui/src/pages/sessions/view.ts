@@ -16,6 +16,7 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
+import { renderCapacityMeter } from "../../components/capacity-meter.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
@@ -60,7 +61,7 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
-import { DEFAULT_SESSION_LIST_QUERY } from "../../lib/sessions/session-requests.ts";
+import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 
 export type TranscriptSearchState =
   | { status: "idle" }
@@ -335,13 +336,7 @@ function renderTokensCell(row: GatewaySessionRow) {
         <span class="session-tokens__value"
           >${totalLabel} / ${formatCompactTokenCount(context)}</span
         >
-        <span
-          class="session-context-meter session-context-meter--${tone}"
-          role="img"
-          aria-label=${title}
-        >
-          <span class="session-context-meter__fill" style=${`width: ${percent}%`}></span>
-        </span>
+        ${renderCapacityMeter({ mode: "continuous", percent, tone, label: title })}
       </div>
     </openclaw-tooltip>
   `;
@@ -1121,7 +1116,7 @@ function renderSessionsAdvancedFilters(props: SessionsProps) {
   ) => props.onFiltersChange({ activeMinutes, limit, includeGlobal, includeUnknown, [key]: value });
   const active =
     activeMinutes.trim() !== "" ||
-    limit.trim() !== String(DEFAULT_SESSION_LIST_QUERY.limit) ||
+    limit.trim() !== String(SESSIONS_PAGE_DEFAULT_LIMIT) ||
     !includeGlobal ||
     includeUnknown ||
     props.groupBy !== "none";

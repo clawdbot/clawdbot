@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 FUNCTIONAL_IMAGE="$(docker_e2e_resolve_image \
@@ -15,6 +16,9 @@ SANDBOX_PREFIX="openclaw-e2e-sbx-${RUN_ID}-"
 BROWSER_PREFIX="openclaw-e2e-browser-${RUN_ID}-"
 NETWORK_NAME="openclaw-e2e-browser-${RUN_ID}"
 SCENARIO_ROOT="$(mktemp -d /tmp/openclaw-sandbox-browser-sidecar.XXXXXX)"
+SESSION_KEY="agent:main:sandbox-browser-sidecar"
+WORKSPACE_HASH="$(node -e 'process.stdout.write(require("node:crypto").createHash("sha256").update(process.argv[1]).digest("hex").slice(0, 32))' "$SCENARIO_ROOT/workspace")"
+SCOPE_KEY="${SESSION_KEY}:workspace:${WORKSPACE_HASH}"
 BUILD_DIR="$(mktemp -d /tmp/openclaw-sandbox-browser-sidecar-build.XXXXXX)"
 DOCKER_SOCKET="${OPENCLAW_DOCKER_SOCKET:-/var/run/docker.sock}"
 SCENARIO_SOURCE="$ROOT_DIR/scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs"
@@ -28,19 +32,15 @@ docker_socket_gid() {
   stat -f "%g" "$DOCKER_SOCKET"
 }
 
-remove_prefixed_containers() {
-  local prefix="$1"
+remove_task_containers() {
   local name
   while IFS= read -r name; do
-    case "$name" in
-      "$prefix"*) docker_e2e_docker_cmd rm -f "$name" >/dev/null 2>&1 || true ;;
-    esac
-  done < <(docker_e2e_docker_cmd ps -a --format '{{.Names}}' 2>/dev/null || true)
+    docker_e2e_docker_cmd rm -f "$name" >/dev/null 2>&1 || true
+  done < <(docker_e2e_docker_cmd ps -a --filter "label=openclaw.sessionKey=$SCOPE_KEY" --format '{{.Names}}' 2>/dev/null || true)
 }
 
 cleanup() {
-  remove_prefixed_containers "$SANDBOX_PREFIX"
-  remove_prefixed_containers "$BROWSER_PREFIX"
+  remove_task_containers
   docker_e2e_docker_cmd network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
   docker_e2e_docker_cmd run --rm --user 0:0 \
     -v "$SCENARIO_ROOT:/target" \
@@ -68,13 +68,13 @@ docker_e2e_build_or_reuse \
 
 docker_build_run sandbox-browser-sidecar-sandbox-build \
   -t "$SANDBOX_IMAGE" \
-  -f "$ROOT_DIR/scripts/docker/sandbox/Dockerfile" \
-  "$ROOT_DIR"
+  -f "$SOURCE_ROOT/scripts/docker/sandbox/Dockerfile" \
+  "$SOURCE_ROOT"
 
 docker_build_run sandbox-browser-sidecar-browser-build \
   -t "$BROWSER_IMAGE" \
-  -f "$ROOT_DIR/scripts/docker/sandbox/Dockerfile.browser" \
-  "$ROOT_DIR"
+  -f "$SOURCE_ROOT/scripts/docker/sandbox/Dockerfile.browser" \
+  "$SOURCE_ROOT"
 
 cat >"$BUILD_DIR/Dockerfile" <<'EOF'
 ARG BASE_IMAGE
@@ -100,6 +100,7 @@ docker_e2e_run_logged_print_with_harness sandbox-browser-sidecar \
   --group-add "$SOCKET_GID" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e "OPENCLAW_E2E_ROOT=$SCENARIO_ROOT" \
+  -e "OPENCLAW_E2E_SESSION_KEY=$SESSION_KEY" \
   -e "OPENCLAW_E2E_SANDBOX_IMAGE=$SANDBOX_IMAGE" \
   -e "OPENCLAW_E2E_BROWSER_IMAGE=$BROWSER_IMAGE" \
   -e "OPENCLAW_E2E_SANDBOX_PREFIX=$SANDBOX_PREFIX" \

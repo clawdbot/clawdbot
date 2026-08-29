@@ -45,6 +45,17 @@ export function createCodexTestToolTerminalObserver(): NonNullable<
       executionStarted,
       ...(Object.keys(record).length > 0 ? { executedArguments: record } : {}),
       sideEffectEvidence: executionStarted && !mutation.replaySafe,
+      effectReceipt: {
+        state: !executionStarted
+          ? "uncertain"
+          : mutation.replaySafe
+            ? observation.outcome === "success"
+              ? "read_completed"
+              : "failed_no_effect"
+            : mutation.mutatingAction && observation.outcome === "success"
+              ? "mutation_committed"
+              : "uncertain",
+      },
     };
   };
 }
@@ -93,6 +104,7 @@ export function createCodexTestModel(provider = "openai", input = ["text"]): Mod
 export function createClientHarness(options: { autoEmitExit?: boolean } = {}) {
   const stdout = new PassThrough();
   const writes: string[] = [];
+  const writeEvents = new EventEmitter();
   let stdinDestroyed = false;
   let exitEmitted = false;
   let emitProcessExit: () => void = () => undefined;
@@ -113,6 +125,7 @@ export function createClientHarness(options: { autoEmitExit?: boolean } = {}) {
     write(chunk, _encoding, callback) {
       writes.push(chunk.toString());
       callback();
+      writeEvents.emit("write");
     },
   });
   const destroyStdin = stdin.destroy.bind(stdin);
@@ -143,6 +156,28 @@ export function createClientHarness(options: { autoEmitExit?: boolean } = {}) {
     client,
     process,
     writes,
+    async waitForWrite(index: number): Promise<string> {
+      if (writes[index] !== undefined) {
+        return writes[index];
+      }
+      return await new Promise<string>((resolve, reject) => {
+        const cleanup = () => {
+          clearTimeout(timer);
+          writeEvents.off("write", onWrite);
+        };
+        const onWrite = () => {
+          if (writes[index] !== undefined) {
+            cleanup();
+            resolve(writes[index]);
+          }
+        };
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error(`Timed out waiting for app-server harness write ${index}`));
+        }, 1_000);
+        writeEvents.on("write", onWrite);
+      });
+    },
     get stdinDestroyed() {
       return stdinDestroyed;
     },

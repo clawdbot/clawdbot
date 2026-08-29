@@ -55,10 +55,12 @@ export async function modelsAliasesAddCommand(
 ) {
   const alias = normalizeAlias(aliasRaw);
   const normalizedAlias = alias.toLowerCase();
-  const cfg = await loadModelsConfig({ commandName: "models aliases add", runtime });
-  const resolved = resolveModelTarget({ raw: modelRaw, cfg });
-  await updateConfig((cfgLocal) => {
+  let target = modelRaw;
+  await updateConfig((cfgLocal, context) => {
+    // Alias resolution must share the snapshot whose hash fences this write.
+    const resolved = resolveModelTarget({ raw: modelRaw, cfg: context.runtimeConfig });
     const modelKey = `${resolved.provider}/${resolved.model}`;
+    target = modelKey;
     const nextModels = { ...cfgLocal.agents?.defaults?.models };
     // Model selection folds alias case, so case variants must not collide.
     for (const [key, entry] of Object.entries(nextModels)) {
@@ -82,7 +84,7 @@ export async function modelsAliasesAddCommand(
   });
 
   logConfigUpdated(runtime);
-  runtime.log(`Alias ${alias} -> ${resolved.provider}/${resolved.model}`);
+  runtime.log(`Alias ${alias} -> ${target}`);
 }
 
 /** Removes a configured alias by name. */

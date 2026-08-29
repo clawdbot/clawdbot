@@ -1,19 +1,21 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionBranch } from "../../api/types.ts";
+import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
-import type { LocalTerminalReconcile } from "./run-lifecycle.ts";
+import type { ChatRunError, LocalTerminalReconcile } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
+import type { StreamCausalBoundaryState } from "./stream-causal-boundary.ts";
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
 };
 
-export type ChatState = {
+export type ChatState = StreamCausalBoundaryState & {
   client: GatewayBrowserClient | null;
   connected: boolean;
   initialUserMessage?: ApplicationInitialUserMessageHandoff;
@@ -39,13 +41,19 @@ export type ChatState = {
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
+  /** Monotonic count of locally owned runs cleared by terminal reconciliation. */
+  chatRunLifecycleGeneration?: number;
+  /** True when the active run was recovered from the embedded-run registry and
+   * Stop must use the session-owned abort path (sessions.abort), not chat.abort. */
+  chatRunSessionAbortable?: boolean;
   chatRunUsageById?: Map<string, number>;
+  /** Producer-cumulative text; visible tails derive from the segment baseline. */
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunStartup?: ChatRunStartupState | null;
   lastError: string | null;
   chatError?: string | null;
-  chatRunError?: { summary: string } | null;
+  chatRunError?: ChatRunError | null;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
@@ -60,6 +68,7 @@ export type ChatState = {
   sessions?: Partial<SessionCapability>;
   chatSessionMessageSubscriptionRequestedKey?: string | null;
   chatSessionMessageSubscription?: SessionMessageSubscription | null;
+  chatSessionApprovalQueue?: ExecApprovalRequest[];
   chatBranches?: SessionBranch[];
   chatBranchesSessionKey?: string | null;
   chatBranchesConnectionEpoch?: number | null;

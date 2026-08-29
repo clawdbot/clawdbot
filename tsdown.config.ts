@@ -1,10 +1,11 @@
 // tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
-import { isBuiltin } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import type { UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
+  collectChannelConfigDoctorBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import {
@@ -171,6 +172,18 @@ function nodeBuildConfig(
   };
 }
 
+function fsSafeNativeCopy(): UserConfig["copy"] {
+  const packageRoot = path.dirname(
+    createRequire(import.meta.url).resolve("@openclaw/fs-safe/package.json"),
+  );
+  return ({ outDir }) => ({
+    from: path.join(packageRoot, "dist/native"),
+    // Both package graphs resolve this canonical directory, so npm ships one
+    // native tree even though their emitted loaders have different depths.
+    to: path.resolve(outDir, "..", "dist"),
+  });
+}
+
 function workerDeployBuildConfig(): UserConfig {
   return {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -196,6 +209,7 @@ function workerDeployBuildConfig(): UserConfig {
       onlyBundle: false,
     },
     fixedExtension: false,
+    minify: { codegen: true, compress: true, mangle: { keepNames: true } },
     outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
     outputOptions: { codeSplitting: false, assetFileNames: "worker/[name][extname]" },
     plugins: [createStateSchemaInlinePlugin(), createWorkerDeployBuildPlugin()],
@@ -273,28 +287,40 @@ const bundledHookEntries = buildBundledHookEntries();
 const bundledPluginRoot = (pluginId: string) => ["extensions", pluginId].join("/");
 const bundledPluginFile = (pluginId: string, relativePath: string) =>
   `${bundledPluginRoot(pluginId)}/${relativePath}`;
-const explicitNeverBundleDependencies = [
-  "@anthropic-ai/vertex-sdk",
-  "@slack/bolt",
-  "@slack/web-api",
-  "@discordjs/voice",
-  "@lancedb/lancedb",
-  "@larksuiteoapi/node-sdk",
-  "@matrix-org/matrix-sdk-crypto-nodejs",
-  "@openclaw/ai",
-  "@vitest/expect",
-  "jimp",
-  "matrix-js-sdk",
-  "prism-media",
-  "sharp",
-  "typescript",
-  "vitest",
-].toSorted((left, right) => left.localeCompare(right));
+function withExternalPackageSubpaths(options: { neverBundle: string[] }) {
+  return {
+    neverBundle: options.neverBundle.flatMap((dependency) => [
+      dependency,
+      new RegExp(`^${dependency.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}/`, "u"),
+    ]),
+  } satisfies NonNullable<UserConfig["deps"]>;
+}
+
+const rootDependencyOptions = withExternalPackageSubpaths({
+  neverBundle: [
+    // The root runtime loads the SDK as its own package; never inline a transitive
+    // copy and relocate its package identity or package-relative assets into dist.
+    "@anthropic-ai/claude-agent-sdk",
+    "@anthropic-ai/vertex-sdk",
+    "@discordjs/voice",
+    "@lancedb/lancedb",
+    "@larksuiteoapi/node-sdk",
+    "@matrix-org/matrix-sdk-crypto-nodejs",
+    "@openclaw/ai",
+    "@slack/bolt",
+    "@slack/web-api",
+    "@vitest/expect",
+    "jimp",
+    "matrix-js-sdk",
+    "prism-media",
+    "sharp",
+    "typescript",
+    "vitest",
+  ],
+});
 
 function shouldNeverBundleDependency(id: string): boolean {
-  return explicitNeverBundleDependencies.some((dependency) => {
-    return id === dependency || id.startsWith(`${dependency}/`);
-  });
+  return matchesExternalOption(rootDependencyOptions.neverBundle, id, undefined, false);
 }
 
 function shouldNeverBundleDeclarationDependency(id: string): boolean {
@@ -355,6 +381,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
+    "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
@@ -596,6 +623,8 @@ function buildUnifiedDistEntries(): Record<string, string> {
           "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
         }
       : {}),
+    "extensions/memory-core/memory-search-knn.child":
+      "extensions/memory-core/src/memory/manager-search-knn.child.ts",
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
     ...bundledHookEntries,
@@ -686,8 +715,8 @@ function buildUnifiedDeclarationPartitions(
 
 const unifiedDistEntries = buildUnifiedDistEntries();
 const unifiedDeps = {
+  ...rootDependencyOptions,
   alwaysBundle: shouldAlwaysBundleDependency,
-  neverBundle: shouldNeverBundleDependency,
   // Keep dependency-owned types canonical across independently emitted declaration graphs.
   dts: { neverBundle: shouldNeverBundleDeclarationDependency },
 };
@@ -746,11 +775,23 @@ const configs = [
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: unifiedDistEntries,
       deps: unifiedDeps,
+      copy: fsSafeNativeCopy(),
       plugins: [createStateSchemaInlinePlugin()],
     },
     false,
   ),
   workerDeployBuildConfig(),
+  nodeBuildConfig(
+    {
+      name: TSDOWN_UNIFIED_CONFIG_GROUP,
+      // Keep retained config repairs in their own graph: shared public SDK chunks
+      // otherwise pull state-migration exports into these pre-install artifacts.
+      entry: collectChannelConfigDoctorBuildEntries(),
+      outDir: "dist/config-doctor",
+      deps: unifiedDeps,
+    },
+    false,
+  ),
   workerRsyncReceiverBuildConfig(),
   ...(TSDOWN_DECLARATIONS
     ? buildUnifiedDeclarationPartitions(unifiedDistEntries).map(({ name, sources }) =>

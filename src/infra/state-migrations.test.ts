@@ -1,4 +1,5 @@
 // Covers legacy state migration detection and repair behavior.
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,8 +7,13 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { AgentSelectionRequiredError, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-repair.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readMemoryHostEventRecords } from "../memory-host-sdk/events.js";
@@ -17,31 +23,28 @@ import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/runtime-doct
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
-} from "../plugins/doctor-contract-registry.js";
+} from "../plugins/doctor-contract-module.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
+import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   ensureOpenClawAgentDatabaseSchema,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  OPENCLAW_STATE_SCHEMA_VERSION,
-  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { loadApnsRegistration } from "./push-apns.js";
 import {
   createWebPushVapidKeyPair,
@@ -53,17 +56,19 @@ import { readRestartSentinel } from "./restart-sentinel.js";
 import { acquireStartupMigrationLease } from "./startup-migration-checkpoint.js";
 import {
   autoMigrateLegacyState as autoMigrateLegacyStateWithSurfaces,
-  autoMigrateLegacyPluginDoctorState,
   detectLegacyStateMigrations as detectLegacyStateMigrationsWithSurfaces,
-  resetAutoMigrateLegacyStateDirForTest,
-  resetAutoMigrateLegacyStateForTest,
   runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
-} from "./state-migrations.js";
+} from "./state-migrations.doctor.js";
 import * as sessionStore from "./state-migrations.legacy-session-store.js";
+import { autoMigrateLegacyPluginDoctorState } from "./state-migrations.plugin-doctor.js";
 import {
   migrateLegacyCurrentConversationBindings,
   migrateLegacyPluginBindingApprovals,
 } from "./state-migrations.runtime-state.js";
+import {
+  resetAutoMigrateLegacyStateDirForTest,
+  resetAutoMigrateLegacyTaskStateSidecarsForTest,
+} from "./state-migrations.state-dir.js";
 import { loadVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
 
@@ -106,28 +111,65 @@ function autoMigrateLegacyState(
   });
 }
 
+// Static helpers can retain earlier cohorts after resetModules; close every cohort at teardown.
+const migrationDatabaseClosers = new Set([
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseForTest,
+]);
+
+function closeMigrationDatabases() {
+  for (const close of migrationDatabaseClosers) {
+    close();
+  }
+}
+
+async function rerunAutomaticMigrationAfterRestart(params: AutoMigrateLegacyStateParams) {
+  closeMigrationDatabases();
+  vi.resetModules();
+  const [agentDb, stateDb] = await Promise.all([
+    import("../state/openclaw-agent-db.js"),
+    import("../state/openclaw-state-db.js"),
+  ]);
+  migrationDatabaseClosers.add(agentDb.closeOpenClawAgentDatabasesForTest);
+  migrationDatabaseClosers.add(stateDb.closeOpenClawStateDatabaseForTest);
+  try {
+    const migrationOwner = await import("./state-migrations.doctor.js");
+    return await migrationOwner.autoMigrateLegacyState({
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      ...params,
+    });
+  } finally {
+    closeMigrationDatabases();
+    expect(agentDb.listOpenClawAgentDatabasesForTest()).toEqual([]);
+    expect(stateDb.isOpenClawStateDatabaseOpen()).toBe(false);
+  }
+}
+
 const pluginDoctorStateMigrationEntries = vi.hoisted(
   () =>
     ({
       entries: [] as Array<{
         pluginId: string;
+        channelIds?: string[];
+        trustedForDurableStores?: boolean;
         migration: {
           id: string;
           label: string;
           doctorOnly?: boolean;
+          phase?: "after-session-repair";
           detectLegacyState: (params: {
             config: OpenClawConfig;
             env: NodeJS.ProcessEnv;
             stateDir: string;
             oauthDir: string;
-            context: unknown;
+            context: PluginDoctorStateMigrationContext;
           }) => Promise<{ preview: string[] } | null> | { preview: string[] } | null;
           migrateLegacyState: (params: {
             config: OpenClawConfig;
             env: NodeJS.ProcessEnv;
             stateDir: string;
             oauthDir: string;
-            context: unknown;
+            context: PluginDoctorStateMigrationContext;
           }) =>
             | Promise<{ changes: string[]; warnings: string[] }>
             | {
@@ -139,6 +181,8 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
     }) satisfies {
       entries: Array<{
         pluginId: string;
+        channelIds?: string[];
+        trustedForDurableStores?: boolean;
         migration: {
           id: string;
           label: string;
@@ -147,14 +191,14 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
             env: NodeJS.ProcessEnv;
             stateDir: string;
             oauthDir: string;
-            context: unknown;
+            context: PluginDoctorStateMigrationContext;
           }) => Promise<{ preview: string[] } | null> | { preview: string[] } | null;
           migrateLegacyState: (params: {
             config: OpenClawConfig;
             env: NodeJS.ProcessEnv;
             stateDir: string;
             oauthDir: string;
-            context: unknown;
+            context: PluginDoctorStateMigrationContext;
           }) =>
             | Promise<{ changes: string[]; warnings: string[] }>
             | {
@@ -184,7 +228,6 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
 const tempDirs = createTrackedTempDirs();
 const APNS_DEVICE_FIELD = "token";
 
-type UpdateCheckStateDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 type PluginBindingApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_binding_approvals">;
 type CurrentConversationBindingsDatabase = Pick<
@@ -269,26 +312,13 @@ const createTempDir = () => tempDirs.make("openclaw-state-migrations-test-");
 
 function readUpdateCheckState(env: NodeJS.ProcessEnv):
   | {
-      last_checked_at: string | null;
-      last_available_version: string | null;
-      last_available_tag: string | null;
-      auto_install_id: string | null;
+      lastCheckedAt?: string;
+      lastAvailableVersion?: string;
+      lastAvailableTag?: string;
+      autoInstallId?: string;
     }
   | undefined {
-  const { db } = openOpenClawStateDatabase({ env });
-  const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(db);
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("update_check_state")
-      .select([
-        "last_checked_at",
-        "last_available_version",
-        "last_available_tag",
-        "auto_install_id",
-      ])
-      .where("state_key", "=", "default"),
-  );
+  return readConfigMachineState("update.checkState", { env });
 }
 
 function readConfigHealthRows(env: NodeJS.ProcessEnv): Array<{
@@ -487,39 +517,14 @@ function seedSchemaOnlyLegacyAgentDatabase(
   return databasePath;
 }
 
-type VoiceWakeRoutingTestDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "voicewake_routing_config" | "voicewake_routing_routes"
->;
-
 function seedCanonicalVoiceWakeRouting(stateDir: string, trigger: string): void {
-  const updatedAtMs = Date.now();
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const routingDb = getNodeSqliteKysely<VoiceWakeRoutingTestDatabase>(db);
-      executeSqliteQuerySync(
-        db,
-        routingDb.insertInto("voicewake_routing_config").values({
-          config_key: "default",
-          version: 1,
-          default_target_mode: "current",
-          default_target_agent_id: null,
-          default_target_session_key: null,
-          updated_at_ms: updatedAtMs,
-        }),
-      );
-      executeSqliteQuerySync(
-        db,
-        routingDb.insertInto("voicewake_routing_routes").values({
-          config_key: "default",
-          position: 0,
-          trigger,
-          target_mode: "agent",
-          target_agent_id: "main",
-          target_session_key: null,
-          updated_at_ms: updatedAtMs,
-        }),
-      );
+  writeConfigMachineState(
+    "voicewake.routing",
+    {
+      version: 1,
+      defaultTarget: { mode: "current" },
+      routes: [{ trigger, target: { agentId: "main" } }],
+      updatedAtMs: Date.now(),
     },
     { env: createEnv(stateDir) },
   );
@@ -774,10 +779,9 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
 afterEach(() => {
   vi.useRealTimers();
   pluginDoctorStateMigrationEntries.entries = [];
-  resetAutoMigrateLegacyStateForTest();
+  resetAutoMigrateLegacyTaskStateSidecarsForTest();
   resetAutoMigrateLegacyStateDirForTest();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  closeMigrationDatabases();
   resetPluginRuntimeStateForTest();
 });
 
@@ -969,6 +973,73 @@ describe("state migrations", () => {
     expect(destination?.entry.sessionId).toBe("legacy-main-session");
   });
 
+  it.each([
+    { location: "inside", doctorOnlyStateMigrations: false },
+    { location: "outside", doctorOnlyStateMigrations: false },
+    { location: "inside", doctorOnlyStateMigrations: true },
+    { location: "outside", doctorOnlyStateMigrations: true },
+  ])(
+    "preserves the retired physical owner of a shared store $location state (Doctor: $doctorOnlyStateMigrations)",
+    async ({ location, doctorOnlyStateMigrations }) => {
+      const root = fsSync.realpathSync.native(await createTempDir());
+      const stateDir = path.join(root, ".openclaw");
+      const env = createEnv(stateDir);
+      const storePath = path.join(location === "inside" ? stateDir : root, "shared.sqlite");
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { qa: {} } },
+        session: { store: storePath },
+      };
+      const scope = {
+        agentId: "qa",
+        defaultAgentId: "main",
+        env,
+        sessionKey: "agent:qa:proof",
+        storePath,
+      };
+      await upsertSessionEntryCore(scope, { sessionId: "qa-source", updatedAt: 1000 });
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      const originalEntry = loadSessionEntryReadOnly(scope);
+      expect(originalEntry).toMatchObject({
+        sessionId: "qa-source",
+        updatedAt: expect.any(Number),
+      });
+
+      const readFile = vi.spyOn(fsSync, "readFileSync");
+      try {
+        const result = await autoMigrateLegacyState({
+          cfg,
+          env,
+          homedir: () => root,
+          doctorOnlyStateMigrations,
+        });
+        expect(result.warnings).toEqual([]);
+        expect(readFile.mock.calls.map(([pathname]) => pathname)).not.toContain(storePath);
+      } finally {
+        readFile.mockRestore();
+      }
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
+        expect.objectContaining({ agentId: "main", path: storePath }),
+      ]);
+      expect(loadSessionEntryReadOnly(scope)).toStrictEqual(originalEntry);
+      const database = new DatabaseSync(storePath, { readOnly: true });
+      try {
+        expect(
+          database
+            .prepare("SELECT agent_id, app_version FROM schema_meta WHERE meta_key = ?")
+            .get("historical-transcript-directives-v1"),
+        ).toEqual({ agent_id: "main", app_version: JSON.stringify({ phase: "complete" }) });
+        expect(
+          database.prepare("SELECT session_key FROM session_nodes ORDER BY session_key").all(),
+        ).toEqual([{ session_key: "agent:qa:proof" }]);
+      } finally {
+        database.close();
+      }
+    },
+  );
+
   it("reports unresolved legacy-main ownership as a nonblocking automatic notice", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -1057,6 +1128,7 @@ describe("state migrations", () => {
 
       const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
 
+      expect(automatic.skipped).toBe(false);
       expect(automatic.warnings).toContainEqual(
         expect.stringContaining("agent schema owner is missing or blank"),
       );
@@ -1066,13 +1138,13 @@ describe("state migrations", () => {
       expect(fsSync.existsSync(databasePath)).toBe(true);
       expect(fsSync.existsSync(path.join(stateDir, "agents", "main", "agent"))).toBe(false);
 
-      resetAutoMigrateLegacyStateForTest();
       const doctor = await autoMigrateLegacyState({
         cfg,
         env,
         homedir: () => root,
         doctorOnlyStateMigrations: true,
       });
+      expect(doctor.skipped).toBe(false);
       expect(doctor.warnings).toContainEqual(
         expect.stringContaining("agent schema owner is missing or blank"),
       );
@@ -1104,19 +1176,20 @@ describe("state migrations", () => {
 
       const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
 
+      expect(automatic.skipped).toBe(false);
       expect(automatic.warnings).toEqual([]);
       expect(automatic.notices).toContain(
         "Deferred legacy agent/session migration: select an agent owner",
       );
       expect(fsSync.readFileSync(legacyAgentPath, "utf8")).toBe('{"legacy":true}\n');
 
-      resetAutoMigrateLegacyStateForTest();
       const doctor = await autoMigrateLegacyState({
         cfg,
         env,
         homedir: () => root,
         doctorOnlyStateMigrations: true,
       });
+      expect(doctor.skipped).toBe(false);
       expect(doctor.warnings).toContain(
         "Deferred legacy agent/session migration: select an agent owner",
       );
@@ -1127,7 +1200,7 @@ describe("state migrations", () => {
     },
   );
 
-  it("migrates legacy shared agent and session state to the configured system agent", async () => {
+  it("leaves legacy session files for Doctor repair with the configured system agent", async () => {
     const targetAgentId = "main";
     const cfg = {
       agents: {
@@ -1150,11 +1223,20 @@ describe("state migrations", () => {
     );
     await fs.writeFile(path.join(legacySessionsDir, "legacy-session.jsonl"), "{}\n", "utf8");
     await fs.writeFile(path.join(legacyAgentDir, "settings.json"), '{"legacy":true}\n', "utf8");
+    const legacyStorePath = path.join(legacySessionsDir, "sessions.json");
+    const legacyBytes = await fs.readFile(legacyStorePath);
+    await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    await expect(fs.readFile(legacyStorePath)).resolves.toEqual(legacyBytes);
+    await expect(
+      fs.readFile(path.join(legacySessionsDir, "legacy-session.jsonl"), "utf8"),
+    ).resolves.toBe("{}\n");
+
     const result = await autoMigrateLegacyState({
       cfg,
       env,
       homedir: () => root,
       now: () => 1234,
+      doctorOnlyStateMigrations: true,
     });
 
     expect(result.warnings).not.toContain(
@@ -1287,6 +1369,338 @@ describe("state migrations", () => {
     expect(result.changes).toContain("Migrated fixture environment");
   });
 
+  it("scopes doctor channel ingress queue access to the plugin's own channels", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const discovered: string[] = [];
+    const offeredChannelIds: string[][] = [];
+    const detectionMutableLanes: unknown[] = [];
+    const detectionPending: number[] = [];
+    const detectionMutatorsReachable: string[] = [];
+    const detectionWriteOutcomes: string[] = [];
+    // Detection is now read-only, so the account has to already exist. Seeding it
+    // directly is also what makes the inspection assertion meaningful.
+    await createChannelIngressQueue<{ note: string }>({
+      channelId: "line",
+      accountId: "default",
+      stateDir,
+    }).enqueue("ingress-scope-seed", { note: "seeded" });
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "line",
+        channelIds: ["line"],
+        migration: {
+          id: "line-ingress-scope-test",
+          label: "LINE ingress scope test",
+          async detectLegacyState({ context }) {
+            const queues = context.channelIngressQueues ?? [];
+            // The host hands out only owner-bound lanes; a foreign channel has no entry.
+            offeredChannelIds.push(queues.map((entry) => entry.channelId));
+            const line = queues.find((entry) => entry.channelId === "line");
+            // Detection runs before exclusive state ownership, so the mutable lane is
+            // absent entirely - there is no handle to write through, not merely a
+            // handle that refuses.
+            detectionMutableLanes.push(line?.openChannelIngressQueue);
+            const inspection = line?.openChannelIngressQueueForInspection<{ note: string }>({
+              accountId: "default",
+            });
+            // A narrowed return type still hands over every method at runtime, so the
+            // projection is checked as a value: detection must not be able to reach a
+            // mutator even by casting the type away.
+            for (const method of [
+              "enqueue",
+              "claimNext",
+              "claim",
+              "complete",
+              "release",
+              "fail",
+              "delete",
+              "recoverStaleClaims",
+              "prune",
+              "resubmit",
+              "refreshClaim",
+            ]) {
+              detectionMutatorsReachable.push(
+                typeof (inspection as Record<string, unknown> | undefined)?.[method],
+              );
+            }
+            detectionPending.push((await inspection?.listPending({ limit: "all" }))?.length ?? -1);
+            // Direct mutation attempt: cast the projection back and actually call a
+            // writer. There is no method to call, so the attempt cannot reach SQLite.
+            try {
+              const forced = inspection as unknown as {
+                enqueue?: (id: string, payload: unknown) => Promise<unknown>;
+              };
+              await forced.enqueue?.("detection-write", { note: "leaked" });
+              detectionWriteOutcomes.push("no-throw");
+            } catch (error) {
+              detectionWriteOutcomes.push(
+                error instanceof TypeError ? "type-error" : `other:${String(error)}`,
+              );
+            }
+            discovered.push(...((await line?.listChannelIngressQueueAccountIds()) ?? []));
+            return null;
+          },
+          migrateLegacyState: () => ({ changes: [], warnings: [] }),
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: createConfig(),
+      env,
+      homedir: () => root,
+    });
+
+    expect(
+      detected.warnings.filter((warning) => warning.includes("LINE ingress scope test")),
+    ).toStrictEqual([]);
+    // Detection can run more than once per pass; every run must see the same
+    // owner-bound lane set and the seeded account.
+    expect(offeredChannelIds.length).toBeGreaterThan(0);
+    for (const channelIds of offeredChannelIds) {
+      expect(channelIds).toStrictEqual(["line"]);
+    }
+    expect(discovered.length).toBeGreaterThan(0);
+    expect([...new Set(discovered)]).toStrictEqual(["default"]);
+    // The authority chain: no detection run was ever handed a mutable lane, while the
+    // inspection projection still answered on the same access entry.
+    expect(detectionMutableLanes.length).toBeGreaterThan(0);
+    expect(detectionMutableLanes.every((lane) => lane === undefined)).toBe(true);
+    expect(detectionPending.every((count) => count >= 0)).toBe(true);
+    // Not one mutating method is present on the inspection object at runtime.
+    expect(detectionMutatorsReachable.length).toBeGreaterThan(0);
+    expect([...new Set(detectionMutatorsReachable)]).toStrictEqual(["undefined"]);
+    // The forced call is optional-chained past a missing method, so it never runs.
+    expect([...new Set(detectionWriteOutcomes)]).toStrictEqual(["no-throw"]);
+    // And nothing detection did reached durable state: the seeded row is still the
+    // only row, so no detection-time write landed.
+    const afterDetection = await createChannelIngressQueue<{ note: string }>({
+      channelId: "line",
+      accountId: "default",
+      stateDir,
+    }).listPending({ limit: "all", orderBy: "received" });
+    expect(afterDetection.map((row) => row.id)).toStrictEqual(["ingress-scope-seed"]);
+  });
+
+  it("revokes migration ingress queue access once the repair section returns", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    let retainedOpen:
+      | ((options?: { accountId?: string }) => { enqueue: (...args: never[]) => unknown })
+      | undefined;
+    let retainedQueue: { enqueue: (id: string, payload: unknown) => Promise<unknown> } | undefined;
+    let mutableLanePresentDuringMigration = false;
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "line",
+        channelIds: ["line"],
+        migration: {
+          id: "line-ingress-revocation-test",
+          label: "LINE ingress revocation test",
+          detectLegacyState: () => ({ preview: ["ingress revocation preview"] }),
+          async migrateLegacyState({ context }) {
+            const line = (context.channelIngressQueues ?? []).find(
+              (entry) => entry.channelId === "line",
+            );
+            const open = line?.openChannelIngressQueue;
+            mutableLanePresentDuringMigration = open !== undefined;
+            if (open) {
+              // Inside the locked section the lane works, and both handles are kept so
+              // the same objects can be driven again after the section returns.
+              const queue = open<{ note: string }>({ accountId: "default" });
+              await queue.enqueue("inside-section", { note: "owned" });
+              retainedOpen = open as unknown as typeof retainedOpen;
+              retainedQueue = queue as unknown as typeof retainedQueue;
+            }
+            return { changes: ["ingress revocation test migrated"], warnings: [] };
+          },
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: createConfig(),
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: createConfig(), env });
+
+    expect(mutableLanePresentDuringMigration).toBe(true);
+    expect(result.changes).toContain("ingress revocation test migrated");
+
+    // Durable-state evidence: the throw alone does not prove the write never reached
+    // SQLite. Hash the real database file and re-read the rows through a fresh queue,
+    // so a post-section mutation would have to surface as a changed digest.
+    const sqlitePath = resolveOpenClawStateSqlitePath(env);
+    // Hash the write-ahead log alongside the main file: committed rows can sit in the
+    // WAL, so hashing only the .sqlite file would be vacuously stable and prove nothing.
+    const digest = () => {
+      const hash = createHash("sha256");
+      for (const suffix of ["", "-wal", "-shm"]) {
+        const file = `${sqlitePath}${suffix}`;
+        hash.update(suffix);
+        hash.update(fsSync.existsSync(file) ? fsSync.readFileSync(file) : Buffer.alloc(0));
+      }
+      return hash.digest("hex");
+    };
+    const readPendingIds = async () =>
+      (
+        await createChannelIngressQueue<{ note: string }>({
+          channelId: "line",
+          accountId: "default",
+          stateDir,
+        }).listPending({ limit: "all", orderBy: "received" })
+      ).map((row) => row.id);
+
+    const beforeDigest = digest();
+    const beforeIds = await readPendingIds();
+    // The write the locked section DID make is on disk, so the file is a live witness.
+    expect(beforeIds).toContain("inside-section");
+
+    // Both retained handles are now outside the section that owned the state, and the
+    // guard refuses before any promise is created, so no write ever starts.
+    expect(() => retainedOpen?.({ accountId: "default" })).toThrow(
+      /ingress queue access has expired/i,
+    );
+    expect(() => retainedQueue?.enqueue("after-section", { note: "leaked" })).toThrow(
+      /ingress queue access has expired/i,
+    );
+
+    expect(digest()).toBe(beforeDigest);
+    expect(await readPendingIds()).toStrictEqual(beforeIds);
+  });
+
+  it("withholds ingress queue access from an untrusted plugin owner", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const detectionLanes: unknown[] = [];
+    const migrationLanes: unknown[] = [];
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "line",
+        channelIds: ["line"],
+        // Same decision the runtime proxy makes for openChannelIngressQueue: an
+        // activated workspace plugin is neither bundled nor a trusted official install.
+        trustedForDurableStores: false,
+        migration: {
+          id: "line-ingress-trust-test",
+          label: "LINE ingress trust test",
+          detectLegacyState({ context }) {
+            detectionLanes.push(context.channelIngressQueues);
+            return { preview: ["ingress trust preview"] };
+          },
+          migrateLegacyState({ context }) {
+            migrationLanes.push(context.channelIngressQueues);
+            return { changes: ["ingress trust test ran"], warnings: [] };
+          },
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: createConfig(),
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: createConfig(), env });
+
+    expect(result.changes).toContain("ingress trust test ran");
+    // Neither phase is handed a lane at all - not an empty list, and not a lane that
+    // refuses on use. There is nothing to reach the durable queue through.
+    expect(detectionLanes.length).toBeGreaterThan(0);
+    expect(migrationLanes.length).toBeGreaterThan(0);
+    expect(detectionLanes.every((lanes) => lanes === undefined)).toBe(true);
+    expect(migrationLanes.every((lanes) => lanes === undefined)).toBe(true);
+  });
+
+  it("rejects a recovery predicate that resolves after the repair section returns", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    // The latch keeps the predicate pending until the migration has returned and the
+    // section has closed, which is the exact window the guard has to cover.
+    let releasePredicate!: () => void;
+    const predicateGate = new Promise<void>((resolve) => {
+      releasePredicate = resolve;
+    });
+    let recoveryOutcome: string | undefined;
+    let recoverySettled!: () => void;
+    const recoveryDone = new Promise<void>((resolve) => {
+      recoverySettled = resolve;
+    });
+
+    const seeded = createChannelIngressQueue<{ note: string }>({
+      channelId: "line",
+      accountId: "default",
+      stateDir,
+    });
+    await seeded.enqueue("latch-evt", { note: "seeded" });
+    const claimed = await seeded.claimNext({ ownerId: "retired-owner" });
+    expect(claimed?.id).toBe("latch-evt");
+
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "line",
+        channelIds: ["line"],
+        migration: {
+          id: "line-ingress-latch-test",
+          label: "LINE ingress latch test",
+          detectLegacyState: () => ({ preview: ["ingress latch preview"] }),
+          migrateLegacyState({ context }) {
+            const line = (context.channelIngressQueues ?? []).find(
+              (entry) => entry.channelId === "line",
+            );
+            const open = line?.openChannelIngressQueue;
+            if (open) {
+              const queue = open<{ note: string }>({ accountId: "default" });
+              // Started but deliberately not awaited: the migration returns first.
+              void queue
+                .recoverStaleClaims({
+                  staleMs: 0,
+                  shouldRecover: async () => {
+                    await predicateGate;
+                    return true;
+                  },
+                })
+                .then(() => {
+                  recoveryOutcome = "completed";
+                })
+                .catch((error: unknown) => {
+                  recoveryOutcome = String(error);
+                })
+                .finally(() => recoverySettled());
+            }
+            return { changes: ["ingress latch test migrated"], warnings: [] };
+          },
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: createConfig(),
+      env,
+      homedir: () => root,
+    });
+    await runLegacyStateMigrations({ detected, config: createConfig(), env });
+
+    // Only now, with the section closed, does the predicate resolve.
+    releasePredicate();
+    await recoveryDone;
+
+    expect(recoveryOutcome).toMatch(/ingress queue access has expired/i);
+    // The claim is still held: the post-await write never reached SQLite.
+    const claims = await createChannelIngressQueue<{ note: string }>({
+      channelId: "line",
+      accountId: "default",
+      stateDir,
+    }).listClaims();
+    expect(claims.map((claim) => claim.id)).toStrictEqual(["latch-evt"]);
+  });
+
   it("runs doctor-only plugin file imports only during explicit Doctor repair", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -1333,6 +1747,78 @@ describe("state migrations", () => {
     expect(repaired.changes).toContain("doctor-only plugin state migrated");
     expect(detectLegacyState).toHaveBeenCalledTimes(2);
     expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("excludes post-session plugin repair from legacy migration detection and execution", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {} },
+      },
+    };
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
+    await fs.writeFile(
+      legacyStorePath,
+      JSON.stringify({ legacy: { sessionId: "imported-session", updatedAt: 1 } }),
+      "utf8",
+    );
+    const detect = vi.fn(({ context }: { context: unknown }) => {
+      expect(
+        (context as PluginDoctorStateMigrationContext).deletePluginStateEntriesIfUnchanged,
+      ).toBeUndefined();
+      return { preview: ["fixture plugin migration"] };
+    });
+    const postSessionDetect = vi.fn(() => ({ preview: ["post-session repair"] }));
+    const postSessionMigrate = vi.fn(() => ({ changes: ["post-session phase"], warnings: [] }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "fixture",
+        migration: {
+          id: "fixture-legacy",
+          label: "Fixture legacy plugin migration",
+          doctorOnly: true,
+          detectLegacyState: detect,
+          migrateLegacyState({ context }) {
+            expect(fsSync.existsSync(legacyStorePath)).toBe(true);
+            expect(
+              (context as PluginDoctorStateMigrationContext).deletePluginStateEntriesIfUnchanged,
+            ).toBeUndefined();
+            return { changes: ["legacy phase"], warnings: [] };
+          },
+        },
+      },
+      {
+        pluginId: "fixture",
+        migration: {
+          id: "fixture-after-session-repair",
+          label: "Fixture post-session plugin migration",
+          doctorOnly: true,
+          phase: "after-session-repair",
+          detectLegacyState: postSessionDetect,
+          migrateLegacyState: postSessionMigrate,
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+
+    expect(result.warnings).toEqual([]);
+    expect(detect).toHaveBeenCalledTimes(2);
+    expect(postSessionDetect).not.toHaveBeenCalled();
+    expect(postSessionMigrate).not.toHaveBeenCalled();
+    expect(result.changes).toContain("legacy phase");
+    expect(result.changes).not.toContain("post-session phase");
   });
 
   it("restores retained Memory Core host events only for explicit plugin-only Doctor repair", async () => {
@@ -1920,7 +2406,12 @@ describe("state migrations", () => {
         },
       } as OpenClawConfig;
 
-      result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+      result = await autoMigrateLegacyState({
+        cfg,
+        env,
+        homedir: () => root,
+        doctorOnlyStateMigrations: true,
+      });
       targetStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
         string,
         { sessionId: string }
@@ -1960,7 +2451,12 @@ describe("state migrations", () => {
     await fs.symlink(outsideStorePath, storePath);
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     expect((await fs.lstat(storePath)).isSymbolicLink()).toBe(true);
     const outsideStore = JSON.parse(await fs.readFile(outsideStorePath, "utf8")) as Record<
@@ -2005,7 +2501,12 @@ describe("state migrations", () => {
       agents: { list: [{ id: "main", default: true }] },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     expect((await fs.lstat(configuredStorePath)).isSymbolicLink()).toBe(true);
     const outsideStore = JSON.parse(await fs.readFile(outsideStorePath, "utf8")) as Record<
@@ -2060,7 +2561,12 @@ describe("state migrations", () => {
       agents: { list: [{ id: "main", default: true }] },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     for (const storePath of [targetStorePath, configuredStorePath]) {
       const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
@@ -2108,7 +2614,12 @@ describe("state migrations", () => {
       agents: { list: [{ id: "main", default: true }] },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     for (const storePath of [configuredStorePath, targetStorePath]) {
       const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
@@ -2167,7 +2678,12 @@ describe("state migrations", () => {
       },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
       string,
@@ -2240,7 +2756,12 @@ describe("state migrations", () => {
       },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
       string,
@@ -2338,7 +2859,12 @@ describe("state migrations", () => {
       acp: { allowedAgents: ["voice"] },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
       string,
@@ -2393,7 +2919,12 @@ describe("state migrations", () => {
     await fs.symlink(outsideStorePath, storePath);
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     expect((await fs.lstat(storePath)).isSymbolicLink()).toBe(true);
     const outsideStore = JSON.parse(await fs.readFile(outsideStorePath, "utf8")) as Record<
@@ -2406,7 +2937,7 @@ describe("state migrations", () => {
     );
   });
 
-  it("migrates standalone ACP metadata through the automatic fast path", async () => {
+  it("leaves standalone ACP session metadata unchanged until Doctor repair", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);
@@ -2436,10 +2967,30 @@ describe("state migrations", () => {
       "utf8",
     );
 
+    const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+    const originalBytes = await fs.readFile(storePath);
+    const readFile = vi.spyOn(fsSync, "readFileSync");
+    try {
+      const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+      expect(readFile.mock.calls.map(([pathname]) => pathname)).not.toContain(storePath);
+      expect(automatic.changes).toEqual([]);
+    } finally {
+      readFile.mockRestore();
+    }
+    await expect(fs.readFile(storePath)).resolves.toEqual(originalBytes);
+    expect(
+      readAcpSessionMetaForEntry({
+        sessionKey: pendingKey,
+        entry: { lifecycleRevision: undefined },
+        env,
+      }),
+    ).toBeUndefined();
+
     const result = await autoMigrateLegacyState({
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
+      cfg,
       env,
       homedir: () => root,
+      doctorOnlyStateMigrations: true,
     });
 
     expect(result.changes).toContain("Migrated 1 ACP session metadata row → shared SQLite state");
@@ -2473,13 +3024,14 @@ describe("state migrations", () => {
     ).toBe("existing-runtime");
 
     const firstBytes = await fs.readFile(storePath, "utf8");
-    closeOpenClawStateDatabaseForTest();
-    resetAutoMigrateLegacyStateForTest();
-    const rerun = await autoMigrateLegacyState({
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
+    const rerun = await rerunAutomaticMigrationAfterRestart({
+      cfg,
       env,
       homedir: () => root,
+      doctorOnlyStateMigrations: true,
     });
+    expect(rerun.skipped).toBe(false);
+    expect(rerun.warnings).toEqual([]);
     await expect(fs.readFile(storePath, "utf8")).resolves.toBe(firstBytes);
     expect(rerun.changes).not.toContain(
       "Migrated 1 ACP session metadata row → shared SQLite state",
@@ -2544,7 +3096,12 @@ describe("state migrations", () => {
       agents: { list: [{ id: "main", default: true }, { id: "voice" }] },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     expect(
       readAcpSessionMetaForEntry({
@@ -3143,6 +3700,53 @@ describe("state migrations", () => {
     expect(after.preview).not.toContain(
       "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
     );
+  });
+
+  it("repairs shared SQLite before discarding retired commitments JSON", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    await createLegacyAuditLedger(stateDir);
+    const sourcePath = path.join(stateDir, "commitments", "commitments.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({ version: 1, commitments: [{ id: "retired" }] }),
+      "utf8",
+    );
+    const cfg = createConfig();
+
+    const runtime = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(runtime.commitments?.hasLegacy).toBe(false);
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.preview).toContain(
+      "- Commitments: discard retired commitments/commitments.json rows without import, archive, or export",
+    );
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+
+    expect(result.warnings).toStrictEqual([]);
+    const schemaChange = result.changes.indexOf(
+      "Migrated shared state audit event ledger → versioned message lifecycle schema",
+    );
+    const discardChange = result.changes.indexOf(
+      "Discarded retired commitments JSON with 1 row; no data was imported, archived, or exported.",
+    );
+    expect(schemaChange).toBeGreaterThanOrEqual(0);
+    expect(discardChange).toBeGreaterThan(schemaChange);
+    await expectMissingPath(sourcePath);
+    expect(
+      openOpenClawStateDatabase({ env })
+        .db.prepare(
+          "SELECT removed_source FROM migration_sources WHERE migration_kind = 'legacy-commitments-json'",
+        )
+        .get(),
+    ).toEqual({ removed_source: 1 });
   });
 
   it("doctor discards worktree rows that predate the provisioned-file ledger", async () => {
@@ -3750,10 +4354,10 @@ describe("state migrations", () => {
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain("Migrated update-check state → shared SQLite state");
     expect(readUpdateCheckState(env)).toMatchObject({
-      last_checked_at: "2026-01-17T09:30:00.000Z",
-      last_available_version: "2.0.0",
-      last_available_tag: "latest",
-      auto_install_id: "install-1",
+      lastCheckedAt: "2026-01-17T09:30:00.000Z",
+      lastAvailableVersion: "2.0.0",
+      lastAvailableTag: "latest",
+      autoInstallId: "install-1",
     });
     await expectMissingPath(sourcePath);
     await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain("2.0.0");
@@ -3772,7 +4376,7 @@ describe("state migrations", () => {
     expect(conflictResult.notices).toEqual([
       expect.stringContaining("Kept shared SQLite update-check state because legacy cache differs"),
     ]);
-    expect(readUpdateCheckState(env)?.last_available_version).toBe("2.0.0");
+    expect(readUpdateCheckState(env)?.lastAvailableVersion).toBe("2.0.0");
     await expectMissingPath(sourcePath);
     await expect(fs.readFile(`${sourcePath}.migrated.2`, "utf8")).resolves.toContain("3.0.0");
 
@@ -5027,7 +5631,7 @@ describe("state migrations", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "preserves a key-shaped pending row while moving its matching legacy transcript",
+    "preserves a key-shaped pending row while Doctor moves its matching legacy transcript",
     async () => {
       const { root, stateDir, env, cfg } = await createLegacyStateFixture();
 
@@ -5069,6 +5673,7 @@ describe("state migrations", () => {
         env,
         homedir: () => root,
         now: () => 1234,
+        doctorOnlyStateMigrations: true,
       });
 
       expect(result.changes).toContain(`Merged sessions store → ${targetStorePath}`);
@@ -5120,14 +5725,15 @@ describe("state migrations", () => {
       expect(afterStore[ordinaryKey]?.sessionId).toBe("ordinary-session");
 
       const firstBytes = await fs.readFile(targetStorePath, "utf8");
-      closeOpenClawStateDatabaseForTest();
-      resetAutoMigrateLegacyStateForTest();
-      const rerun = await autoMigrateLegacyState({
+      const rerun = await rerunAutomaticMigrationAfterRestart({
         cfg,
         env,
         homedir: () => root,
         now: () => 1234,
+        doctorOnlyStateMigrations: true,
       });
+      expect(rerun.skipped).toBe(false);
+      expect(rerun.warnings).toEqual([]);
       await expect(fs.readFile(targetStorePath, "utf8")).resolves.toBe(firstBytes);
       expect(rerun.changes.some((change) => change.startsWith("Merged sessions store"))).toBe(
         false,

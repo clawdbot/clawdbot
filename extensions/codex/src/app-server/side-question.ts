@@ -7,7 +7,6 @@ import {
   resolveAttemptSpawnWorkspaceDir,
   resolveModelAuthMode,
   resolveSandboxContext,
-  resolveSessionAgentIds,
   registerNativeHookRelay,
   supportsModelTools,
   type AnyAgentTool,
@@ -18,6 +17,7 @@ import {
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -215,7 +215,7 @@ export async function runCodexAppServerSideQuestion(
     );
   }
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
-  const { sessionAgentId } = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
     sessionKey: params.sessionKey,
     config: params.cfg,
     agentId: params.agentId,
@@ -756,7 +756,7 @@ export async function runCodexAppServerSideQuestion(
               ephemeral: true,
               threadSource: "user",
             },
-            requestOptions,
+            requestOptions(),
           );
         },
         onClientChange: rebindClientHandlers,

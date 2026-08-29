@@ -3,7 +3,7 @@ import path from "node:path";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { resolveUserPath } from "../utils.js";
-import { buildPluginApi } from "./api-builder.js";
+import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import {
   resolveEffectiveEnableState,
   resolveEffectivePluginActivationState,
@@ -11,6 +11,11 @@ import {
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import {
+  getReusableCachedPluginRegistry,
+  isPluginRegistryCacheEnabled,
+  setCachedPluginRegistry,
+} from "./loader-cache.js";
 import { resolvePluginLoadDiscovery } from "./loader-discovery.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
@@ -41,21 +46,26 @@ import { withProfile } from "./plugin-load-profile.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
-import type { PluginRuntime } from "./runtime/types.js";
 import { hasKind, kindsEqual } from "./slots.js";
 import type { OpenClawPluginModule } from "./types.js";
-
-const CLI_METADATA_ENTRY_BASENAMES = [
-  "cli-metadata.ts",
-  "cli-metadata.js",
-  "cli-metadata.mjs",
-  "cli-metadata.cjs",
-] as const;
 
 export async function loadOpenClawPluginCliRegistry(
   options: PluginLoadOptions = {},
 ): Promise<PluginRegistry> {
   const context = resolvePluginLoadCacheContext({ ...options, activate: false });
+  // One CLI invocation resolves descriptors from several bootstrap stages; without reuse each
+  // stage re-executes every legacy external plugin's register and re-emits its diagnostics.
+  // The namespace is required: a runtime load with activate:false shares this cacheKey but
+  // produces a completely different registry. Diagnostics ride the cached registry, so only
+  // the duplicate log emission is dropped.
+  const cacheKey = `cli-metadata::${context.cacheKey}`;
+  const cacheEnabled = isPluginRegistryCacheEnabled(options);
+  if (cacheEnabled) {
+    const cached = getReusableCachedPluginRegistry(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
   const logger = options.logger ?? createPluginLoaderLogger();
   const onlyPluginIdSet = createPluginIdScopeSet(context.onlyPluginIds);
   const loadPluginModule = createPluginModuleLoader({
@@ -64,7 +74,7 @@ export async function loadOpenClawPluginCliRegistry(
   });
   const { registry, registerCli, rollbackPluginGlobalSideEffects } = createPluginRegistry({
     logger,
-    runtime: {} as PluginRuntime,
+    runtime: createUnavailableRuntime("cli-metadata"),
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
     ...(options.coreGatewayMethodNames !== undefined && {
       coreGatewayMethodNames: options.coreGatewayMethodNames,
@@ -189,16 +199,20 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
     const validatedConfig = validatePluginConfig({
+      origin: candidate.origin,
       schema: manifestRecord.configSchema,
       cacheKey: manifestRecord.schemaCacheKey,
       value: entry?.config,
+      sourceValue: manifestRecord.configContracts?.secretInputs
+        ? context.activationSource.plugins.entries[policyId]?.config
+        : undefined,
     });
     if (!validatedConfig.ok) {
       logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.error.join(", ")}`);
       pushPluginLoadError(`invalid config: ${validatedConfig.error.join(", ")}`);
       continue;
     }
-    const cliMetadataSource = resolveCliMetadataEntrySource(candidate.rootDir);
+    const cliMetadataSource = resolveCliMetadataEntrySource(candidate.rootDir, candidate.source);
     const sourceForCliMetadata =
       candidate.origin === "bundled"
         ? cliMetadataSource
@@ -322,7 +336,7 @@ export async function loadOpenClawPluginCliRegistry(
       registrationMode: "cli-metadata",
       config: context.cfg,
       pluginConfig: validatedConfig.value,
-      runtime: {} as PluginRuntime,
+      runtime: createUnavailableRuntime("cli-metadata", record.id),
       logger,
       resolvePath: (input) => resolveUserPath(input),
       handlers: {
@@ -351,14 +365,19 @@ export async function loadOpenClawPluginCliRegistry(
       });
     }
   }
+  if (cacheEnabled) {
+    setCachedPluginRegistry(cacheKey, registry);
+  }
   return registry;
 }
 
-function resolveCliMetadataEntrySource(rootDir: string): string | null {
-  for (const basename of CLI_METADATA_ENTRY_BASENAMES) {
-    const candidate = path.join(rootDir, basename);
-    if (fs.existsSync(candidate)) {
-      return candidate;
+function resolveCliMetadataEntrySource(rootDir: string, source: string): string | null {
+  for (const directory of new Set([rootDir, path.dirname(source)])) {
+    for (const extension of [".ts", ".js", ".mjs", ".cjs"]) {
+      const candidate = path.join(directory, `cli-metadata${extension}`);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
     }
   }
   return null;

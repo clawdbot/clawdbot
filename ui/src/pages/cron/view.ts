@@ -57,6 +57,7 @@ import type {
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { renderSegmented } from "./segmented-control.ts";
 import { renderCronStats } from "./stats.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
@@ -71,6 +72,9 @@ type CronProps = {
   basePath: string;
   agentId: string;
   loading: boolean;
+  /** True once a cron.list response has completed (initial load finished). */
+  hasLoaded: boolean;
+  listError: string | null;
   /** Canonical gateway capability for every mutation-capable cron control. */
   canManage: boolean;
   jobsLoadingMore: boolean;
@@ -247,7 +251,7 @@ function focusFormField(id: string) {
     return;
   }
   if (typeof el.scrollIntoView === "function") {
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
   }
   el.focus();
 }
@@ -474,6 +478,8 @@ function renderListView(props: CronProps) {
     props.jobsEnabledFilter !== "all";
   const showStarterAutomations =
     !props.loading &&
+    props.hasLoaded &&
+    !props.listError &&
     !props.error &&
     props.jobsTotal === 0 &&
     !hasAnyJobsFilters &&
@@ -492,7 +498,12 @@ function renderListView(props: CronProps) {
               </div>
             `
           : nothing}
-        ${props.error ? html`<div class="cron-error-banner">${props.error}</div>` : nothing}
+        ${props.listError
+          ? html`<div class="cron-error-banner" role="alert">${props.listError}</div>`
+          : nothing}
+        ${props.error
+          ? html`<div class="cron-error-banner" role="alert">${props.error}</div>`
+          : nothing}
         ${renderToolbar(props, hasAdvancedJobsFilters)}
       </div>
     `,
@@ -728,8 +739,15 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
 }
 
 function renderJobsTable(props: CronProps, hasAnyJobsFilters: boolean) {
+  // A snapshot revision is the successful-list fact. Until one exists, show
+  // pending or failure, never completed-empty guidance.
+  const initialPending = props.loading && !props.hasLoaded;
+  const tableBusy = props.loading || props.jobsLoadingMore;
   return html`
-    <div class="cron-table ${props.canManage ? "" : "cron-table--read-only"}">
+    <div
+      class="cron-table ${props.canManage ? "" : "cron-table--read-only"}"
+      aria-busy=${tableBusy ? "true" : nothing}
+    >
       <div class="cron-table__head">
         <span>${t("cron.jobs.name")}</span>
         <span>${t("cron.jobs.schedule")}</span>
@@ -738,16 +756,29 @@ function renderJobsTable(props: CronProps, hasAnyJobsFilters: boolean) {
         ${props.canManage ? html`<span aria-hidden="true"></span>` : nothing}
       </div>
       ${props.jobs.length === 0
-        ? html`
-            <div class="cron-empty-state">
-              <div class="cron-empty-state__title">
-                ${hasAnyJobsFilters ? t("cron.list.noMatching") : t("cron.list.emptyTitle")}
+        ? initialPending
+          ? html`
+              <div
+                class="cron-empty-state"
+                role="status"
+                aria-live="polite"
+                data-test-id="cron-jobs-loading"
+              >
+                <div class="cron-empty-state__title">${t("cron.list.loading")}</div>
               </div>
-              ${hasAnyJobsFilters
-                ? nothing
-                : html`<div class="cron-empty-state__copy">${t("cron.list.emptyHint")}</div>`}
-            </div>
-          `
+            `
+          : props.hasLoaded
+            ? html`
+                <div class="cron-empty-state">
+                  <div class="cron-empty-state__title">
+                    ${hasAnyJobsFilters ? t("cron.list.noMatching") : t("cron.list.emptyTitle")}
+                  </div>
+                  ${hasAnyJobsFilters
+                    ? nothing
+                    : html`<div class="cron-empty-state__copy">${t("cron.list.emptyHint")}</div>`}
+                </div>
+              `
+            : nothing
         : repeat(
             props.jobs,
             (job) => job.id,

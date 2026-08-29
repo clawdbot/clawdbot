@@ -32,17 +32,23 @@ describe("CallManager termination lifecycle", () => {
     const endedAt = Date.now() + 1_000;
 
     const pendingEnd = manager.endCall(call.callId, { reason: "timeout" });
-    expect(provider.attempts).toHaveLength(1);
+    try {
+      expect(provider.attempts).toHaveLength(1);
 
-    manager.processEvent({
-      id: "provider-terminal",
-      type: "call.ended",
-      callId: call.callId,
-      providerCallId: call.providerCallId,
-      timestamp: endedAt,
-      reason: "completed",
-    });
-    provider.attempts[0]?.resolve();
+      manager.processEvent({
+        id: "provider-terminal",
+        type: "call.ended",
+        callId: call.callId,
+        providerCallId: call.providerCallId,
+        timestamp: endedAt,
+        reason: "completed",
+      });
+    } finally {
+      for (const attempt of provider.attempts) {
+        attempt.resolve();
+      }
+      await pendingEnd;
+    }
 
     await expect(pendingEnd).resolves.toEqual({ success: true });
     expect(call).toMatchObject({
@@ -64,11 +70,18 @@ describe("CallManager termination lifecycle", () => {
     const [firstResult, secondResult] = await Promise.all([first, second]);
 
     const retry = manager.endCall(call.callId, { reason: "error" });
-    const retryAttempt = provider.attempts.at(-1);
-    if (!retryAttempt) {
-      throw new Error("expected retry hangup attempt");
+    try {
+      const retryAttempt = provider.attempts.at(-1);
+      if (!retryAttempt) {
+        throw new Error("expected retry hangup attempt");
+      }
+      retryAttempt.resolve();
+    } finally {
+      for (const attempt of provider.attempts) {
+        attempt.resolve();
+      }
+      await retry;
     }
-    retryAttempt.resolve();
     await expect(retry).resolves.toEqual({ success: true });
 
     expect(second).toBe(first);

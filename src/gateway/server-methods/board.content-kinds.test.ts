@@ -56,7 +56,7 @@ describe("board registered widget content kinds", () => {
     const previous = getActivePluginRegistry();
     const { registry, validateSource, composeDocument } = registeredWidgetRegistry();
     setActivePluginRegistry(registry);
-    const { invoke, store } = createBoardHarness(
+    const { context, invoke, store } = createBoardHarness(
       undefined,
       {},
       undefined,
@@ -112,7 +112,9 @@ describe("board registered widget content kinds", () => {
         frameUrl: expect.stringContaining("/__openclaw__/board/"),
         sandboxUrl: expect.stringContaining("/mcp-app-sandbox"),
       });
-      const authorized = resolveAuthorizedBoardWidgetView(store, widget.viewTicket!);
+      const authorized = resolveAuthorizedBoardWidgetView(store, widget.viewTicket!, {
+        gatewayContext: context,
+      });
       expect(authorized.document.html).toContain("<main>diagram:second</main>");
       expect(authorized.document.html).toContain(
         "https://gateway.test/__openclaw__/cap/diagram-token/__openclaw__/diagram/app.js",
@@ -148,7 +150,7 @@ describe("board registered widget content kinds", () => {
     async (mode) => {
       const { registry, composeDocument } = registeredWidgetRegistry();
       setActivePluginRegistry(registry);
-      const { invoke, store } = createBoardHarness(
+      const { context, invoke, store } = createBoardHarness(
         undefined,
         {},
         undefined,
@@ -193,7 +195,9 @@ describe("board registered widget content kinds", () => {
       }
       const widget = (snapshot as BoardSnapshot).widgets[0]!;
 
-      resolveAuthorizedBoardWidgetView(store, widget.viewTicket!);
+      resolveAuthorizedBoardWidgetView(store, widget.viewTicket!, {
+        gatewayContext: context,
+      });
 
       expect(composeDocument).toHaveBeenCalledWith(
         expect.objectContaining({ promptGranted: true }),

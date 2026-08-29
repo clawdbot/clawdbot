@@ -1,5 +1,6 @@
 /** Worker-thread entrypoint for complete model-catalog discovery. */
 import { parentPort, workerData } from "node:worker_threads";
+import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import {
@@ -77,7 +78,17 @@ function refreshAuthStore(params: {
 
 async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
   const { prepareWorkspaceBuildGroup } = await import("./prepared-model-runtime.facts.js");
-  const prepared = await prepareWorkspaceBuildGroup([value.input], "live");
+  // Rediscovery under agent workspaces or runtime activation overlays loses the owner's
+  // metadata generation. Transfer its facts and restore only process-local behavior.
+  const metadata = restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
+  const prepared = await prepareWorkspaceBuildGroup(
+    [value.input],
+    "live",
+    {},
+    undefined,
+    undefined,
+    metadata,
+  );
   const agentFacts = prepared.agentFacts[0];
   if (!agentFacts) {
     throw new Error("prepared model catalog worker produced no agent facts");
