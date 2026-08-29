@@ -432,7 +432,6 @@ describe("detectChangedScope", () => {
     "test/scripts/ci-checkout.test-support.ts",
     "test/scripts/ci-git-owner.test.ts",
     "test/scripts/ci-git-owner.test-support.ts",
-    "test/scripts/ci-git-clock.test-support.ts",
     "test/scripts/ci-linux-git.test.ts",
     "test/scripts/ci-platform-checkout.test.ts",
     "test/scripts/fixtures/ci-platform-checkout.mjs",

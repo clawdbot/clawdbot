@@ -5,9 +5,9 @@ import { parse } from "yaml";
 import {
   expectCiCheckoutCleanup,
   readCiCheckoutStep,
+  renderGitTestClock,
   withCiCheckoutFixture,
 } from "./ci-checkout.test-support.js";
-import { renderGitTestClock } from "./ci-git-clock.test-support.js";
 
 type Step = { name?: string; run?: string; env?: Record<string, string | number> };
 export type FetchResult = number | "hang" | "cleanup-failure";

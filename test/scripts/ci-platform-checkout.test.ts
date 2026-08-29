@@ -10,9 +10,9 @@ import {
   ciCheckoutFixture,
   expectCiCheckoutCleanup,
   readCiCheckoutStep,
+  renderGitTestClock,
   withCiCheckoutFixture,
 } from "./ci-checkout.test-support.js";
-import { renderGitTestClock } from "./ci-git-clock.test-support.js";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
 
 // Execute both workflow policies against the same owned tree fixture. A leader's

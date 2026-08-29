@@ -45,8 +45,8 @@ function publish(name, value) {
 }
 
 function stall(attempt) {
-  // Immutable ticks expire the test fetch budget only after the full tree is
-  // ready and its parent chooses to hang. Cancellation waits for the real signal.
+  // Expire only a ready, deliberately stalled tree. Ordinary cancel-* cases
+  // wait for their signal; cancelDuringCleanup needs a tick to enter real drain.
   if (!scenario.startsWith("cancel-")) {
     publish(`fetch-tick-${attempt}.json`, attempt);
   }
