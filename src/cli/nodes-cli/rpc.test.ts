@@ -130,4 +130,9 @@ describe("node inventory resolution", () => {
       gatewayMocks.callGatewayFromCliWithTransport.mock.calls.map(([method]) => method),
     ).toEqual(["node.list"]);
   });
+
+  it("rejects an explicit empty --timeout instead of silently defaulting the transport", async () => {
+    await expect(resolveCliNode({ timeout: "" }, "some-node")).rejects.toThrow(/Invalid --timeout/);
+    expect(gatewayMocks.callGatewayFromCliWithTransport).not.toHaveBeenCalled();
+  });
 });
