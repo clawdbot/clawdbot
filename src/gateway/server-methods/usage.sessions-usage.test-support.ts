@@ -1,9 +1,9 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveExistingUsageSessionFile } from "../../infra/session-cost-usage.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 
@@ -71,20 +71,16 @@ export function mockStoredUsageSession(
 export async function withUsageTestState(
   run: (writeSessionFile: (fileName: string) => string) => Promise<void>,
 ) {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
-  const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
-  const writeSessionFile = (fileName: string) => {
-    const sessionFile = path.join(agentSessionsDir, fileName);
-    fs.writeFileSync(sessionFile, "", "utf-8");
-    return sessionFile;
-  };
-
-  try {
+  await withTestDir({ prefix: "openclaw-usage-test-" }, async (stateDir) => {
+    const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
+    const writeSessionFile = (fileName: string) => {
+      const sessionFile = path.join(agentSessionsDir, fileName);
+      fs.writeFileSync(sessionFile, "", "utf-8");
+      return sessionFile;
+    };
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       fs.mkdirSync(agentSessionsDir, { recursive: true });
       await run(writeSessionFile);
     });
-  } finally {
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
+  });
 }

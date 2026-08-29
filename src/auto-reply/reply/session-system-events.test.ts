@@ -74,11 +74,8 @@ vi.mock("../../runtime.js", () => ({
 
 const { drainFormattedSystemEvents, prepareFormattedSystemEvents } =
   await import("./session-system-events.js");
-const {
-  acknowledgePersistedManagedSystemEvents,
-  resolveFinalSystemEventAdoption,
-  settleManagedSystemEventsAfterTurnAdoption,
-} = await import("./session-system-event-adoption.js");
+const { resolveFinalSystemEventAdoption, settleManagedSystemEventsAfterTurnAdoption } =
+  await import("./session-system-event-adoption.js");
 
 describe("drainFormattedSystemEvents trace context", () => {
   beforeEach(() => {
@@ -561,7 +558,7 @@ describe("drainFormattedSystemEvents trace context", () => {
       { id: "delivery-2", acknowledge: delivery2 },
     ];
 
-    await acknowledgePersistedManagedSystemEvents({
+    await settleManagedSystemEventsAfterTurnAdoption({
       deliveries,
       persistedMessage: {
         role: "user",
@@ -572,7 +569,7 @@ describe("drainFormattedSystemEvents trace context", () => {
     expect(delivery1).not.toHaveBeenCalled();
     expect(delivery2).not.toHaveBeenCalled();
 
-    await acknowledgePersistedManagedSystemEvents({
+    await settleManagedSystemEventsAfterTurnAdoption({
       deliveries,
       persistedMessage: {
         role: "user",

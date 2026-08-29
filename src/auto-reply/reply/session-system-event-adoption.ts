@@ -66,7 +66,7 @@ export function readAdoptedSystemEventDeliveryIds(events: readonly unknown[]): S
   return ids;
 }
 
-export async function acknowledgePersistedManagedSystemEvents(params: {
+async function acknowledgePersistedManagedSystemEvents(params: {
   deliveries: Iterable<PreparedManagedSystemEventDelivery>;
   persistedMessage: unknown;
 }): Promise<void> {
