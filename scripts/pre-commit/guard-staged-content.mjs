@@ -8,11 +8,23 @@ const maxBuffer = 16 * 1024 * 1024;
 let rules = [];
 
 function redact(text) {
-  let redacted = text;
+  // Match the original text so replacements cannot hide overlaps or rescan inserted markers.
+  const spans = [];
   for (const rule of rules) {
-    redacted = redacted.replaceAll(rule, "[REDACTED]");
+    for (let start = text.indexOf(rule); start !== -1; start = text.indexOf(rule, start + 1)) {
+      spans.push([start, start + rule.length]);
+    }
   }
-  return redacted;
+  spans.sort((a, b) => a[0] - b[0]);
+  let redacted = "";
+  let cursor = 0;
+  for (const [start, end] of spans) {
+    if (start >= cursor) {
+      redacted += text.slice(cursor, start) + "[REDACTED]";
+    }
+    cursor = Math.max(cursor, end);
+  }
+  return redacted + text.slice(cursor);
 }
 
 function fail(message, code = 1) {

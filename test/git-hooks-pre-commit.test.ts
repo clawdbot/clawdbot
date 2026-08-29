@@ -574,23 +574,45 @@ describe("staged content guard", () => {
     expect(readFormatterLog(log)).toEqual([]);
   });
 
-  it("preserves formatter failure status and redacts both output streams without running the post-scan", () => {
-    const dir = fixture();
-    stage(dir, "payload.ts", "clean\n");
-    installFormattingRecorder(
-      dir,
-      `printf 'stdout %s\\n' '${literals[0]}'\nprintf 'stderr %s\\n' '${literals[1]}' >&2\nprintf broken > .git/index\nexit 23`,
-    );
-    const result = runFailure(dir, "bash", ["git-hooks/pre-commit"]);
-    expect(result.status).toBe(23);
-    expect(result.stdout).toContain("stdout [REDACTED]");
-    expect(result.stderr).toContain("stderr [REDACTED]");
-    expect(result.stderr).toContain("FAILED (exit 23)");
-    expect(result.stderr).not.toContain("Git could not");
-    for (const literal of literals) {
-      expect(result.stdout + result.stderr).not.toContain(literal);
-    }
-  });
+  it.each([
+    ["literal metacharacters", [...literals], literals.join(" "), "[REDACTED] [REDACTED]"],
+    [
+      "shorter prefix first",
+      ["foo", "foobar"],
+      "foobar foo FOOBAR",
+      "[REDACTED] [REDACTED] FOOBAR",
+    ],
+    ["longer prefix first", ["foobar", "foo"], "foobar foo FOOBAR", "[REDACTED] [REDACTED] FOOBAR"],
+    ["crossing overlaps", ["abc", "bcd"], "abcd", "[REDACTED]"],
+    ["reversed crossing overlaps", ["bcd", "abc"], "abcd", "[REDACTED]"],
+    ["self-overlap", ["aba"], "ababa", "[REDACTED]"],
+    ["marker literal", ["foo", "REDACTED"], "foo REDACTED", "[REDACTED] [REDACTED]"],
+  ])(
+    "redacts filenames and formatter streams with %s while preserving failure status",
+    (_label, rules, text, redacted) => {
+      const dir = fixture();
+      writeFileSync(path.join(dir, rulePath), `${rules.join("\n")}\n`);
+      const name = `report-${text}\n🦞.ts`;
+      stage(dir, name, text);
+      const finding = runFailure(dir, "bash", ["git-hooks/pre-commit"]);
+
+      stage(dir, name, "clean\n");
+      const context = `🦞 café ${text}\nuntouched ${text} tail\n`;
+      const expected = `🦞 café ${redacted}\nuntouched ${redacted} tail\n`;
+      installFormattingRecorder(
+        dir,
+        `printf 'stdout %s' '${context}'\nprintf 'stderr %s' '${context}' >&2\nprintf broken > .git/index\nexit 23`,
+      );
+      const result = runFailure(dir, "bash", ["git-hooks/pre-commit"]);
+      expect(result).toEqual({
+        status: 23,
+        stdout: `stdout ${expected}`,
+        stderr: `stderr ${expected}[pre-commit] Formatter failed. Fix the reported error and retry.\n[pre-commit] FAILED (exit 23)\n`,
+      });
+      expect(finding.status).toBe(1);
+      expect(finding.stderr).toContain(`  ${JSON.stringify(`report-${redacted}\n🦞.ts`)}\n`);
+    },
+  );
 
   it.each(["config path", "index", "blob", "post-format blob"])(
     "blocks Git %s read errors without raw diagnostics",
