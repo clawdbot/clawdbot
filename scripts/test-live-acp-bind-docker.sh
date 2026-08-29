@@ -187,32 +187,7 @@ WRAP
     if [ ! -x "$NPM_CONFIG_PREFIX/bin/gemini" ]; then
       run_setup_command npm install -g @google/gemini-cli
     fi
-    if [ -n "${GEMINI_API_KEY:-}" ] || [ -n "${GOOGLE_API_KEY:-}" ]; then
-      gemini_auth_type="gemini-api-key"
-      if [ -z "${GEMINI_API_KEY:-}" ] && [ -n "${GOOGLE_API_KEY:-}" ]; then
-        gemini_auth_type="vertex-ai"
-        export GOOGLE_GENAI_USE_VERTEXAI="${GOOGLE_GENAI_USE_VERTEXAI:-true}"
-      fi
-      GEMINI_CLI_AUTH_TYPE="$gemini_auth_type" node <<'NODE'
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-
-const settingsPath = path.join(os.homedir(), ".gemini", "settings.json");
-let settings = {};
-try {
-  settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-} catch {}
-settings.security = settings.security && typeof settings.security === "object" ? settings.security : {};
-settings.security.auth =
-  settings.security.auth && typeof settings.security.auth === "object" ? settings.security.auth : {};
-settings.security.auth.selectedType = process.env.GEMINI_CLI_AUTH_TYPE;
-settings.security.auth.enforcedType = process.env.GEMINI_CLI_AUTH_TYPE;
-fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
-NODE
-      echo "Using Gemini CLI auth type $gemini_auth_type"
-    fi
+    openclaw_live_stage_gemini_auth
     ;;
   opencode)
     if [ ! -x "$NPM_CONFIG_PREFIX/bin/opencode" ]; then
