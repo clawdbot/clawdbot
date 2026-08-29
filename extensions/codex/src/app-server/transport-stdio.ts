@@ -8,6 +8,7 @@ import {
   resolveWindowsSpawnProgram,
 } from "openclaw/plugin-sdk/windows-spawn";
 import type { CodexAppServerStartOptions } from "./config.js";
+import { normalizeCodexAppServerArgs } from "./launch-args.js";
 
 const UNSAFE_ENVIRONMENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const RUNTIME_INJECTION_ENVIRONMENT_KEYS = new Set([
@@ -45,7 +46,8 @@ function resolveCodexAppServerSpawnInvocation(
     execPath: runtime.execPath,
     packageName: "@openai/codex",
   });
-  const resolved = materializeWindowsSpawnProgram(program, options.args);
+  const args = normalizeCodexAppServerArgs(options.args);
+  const resolved = materializeWindowsSpawnProgram(program, args);
   return {
     command: resolved.command,
     args: resolved.argv,

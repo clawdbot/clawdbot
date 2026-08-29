@@ -16,6 +16,7 @@ export type LocalMediaAccessErrorCode =
   | "invalid-file-url"
   | "network-path-not-allowed"
   | "unsafe-bypass"
+  | "unsupported-media-type"
   | "not-found"
   | "invalid-path"
   | "not-file";
@@ -28,6 +29,16 @@ export class LocalMediaAccessError extends Error {
     super(message, options);
     this.code = code;
     this.name = "LocalMediaAccessError";
+  }
+}
+
+/**
+ * Lets core classify rejected content without changing loadWebMedia's public error code.
+ * Removing this boundary would make detailed reply outcomes break plugin error handling.
+ */
+export class HostReadMediaTypeError extends LocalMediaAccessError {
+  constructor(message: string) {
+    super("path-not-allowed", message);
   }
 }
 

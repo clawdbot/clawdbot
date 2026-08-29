@@ -1,8 +1,13 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
 import { desktopFocusPath } from "../../components/desktop/desktop-focus-window.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  renderPanelLoadingSkeleton,
+  type PanelLoadingSkeletonVariant,
+} from "../../components/panel-loading-skeleton.ts";
 import { t } from "../../i18n/index.ts";
 import {
   formatKeyboardShortcutCombo,
@@ -11,7 +16,10 @@ import {
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
+import {
+  isSessionWorkspaceItemLoading,
+  resolveSessionDiffSidebarContent,
+} from "./components/chat-session-workspace.ts";
 import type {
   SidebarPanelDefinition,
   SidebarPanelTemplates,
@@ -25,6 +33,8 @@ type SidebarPanelDefinitionParams = {
   themeMode: "dark" | "light";
   agentId: string | null;
   browserPresented: boolean;
+  browserRefreshOnPresentation: boolean;
+  preferredBrowserTab?: BrowserTabSelection;
   desktopPresented: boolean;
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
@@ -63,6 +73,18 @@ type SidebarPanelTextKey =
   | "tasks"
   | "terminal";
 
+const SIDEBAR_PANEL_LOADING_VARIANTS = {
+  browser: "browser",
+  chat: "chat",
+  companion: "chat",
+  desktop: "desktop",
+  detail: "review",
+  discussion: "discussion",
+  tasks: "tasks",
+  terminal: "terminal",
+  workspace: "files",
+} satisfies Record<SidebarSlotId, PanelLoadingSkeletonVariant>;
+
 /** One ordered declaration for every chat side-panel slot. */
 export function sidebarPanelDefinitions(
   params?: SidebarPanelDefinitionParams,
@@ -86,6 +108,7 @@ export function sidebarPanelDefinitions(
     icon,
     available: options?.available ?? hasPaneContext,
     content,
+    loading: renderPanelLoadingSkeleton(SIDEBAR_PANEL_LOADING_VARIANTS[slot], t("common.loading")),
     empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
     ...(options?.headerAction ? { headerAction: options.headerAction } : {}),
     ...(options?.shortcut ? { shortcut: options.shortcut } : {}),
@@ -110,6 +133,9 @@ export function sidebarPanelDefinitions(
           .client=${state.connected ? state.client : null}
           .available=${state.browserPanelAvailable}
           .presented=${params?.browserPresented ?? false}
+          .refreshOnPresentation=${params?.browserRefreshOnPresentation ?? true}
+          .sessionKey=${state.sessionKey}
+          .preferredTab=${params?.preferredBrowserTab}
           .resourceBasePath=${state.resourceBasePath}
           .authToken=${resolveAssistantAttachmentAuthToken(state)}
         ></openclaw-browser-panel>`
@@ -153,9 +179,12 @@ export function sidebarPanelDefinitions(
       ></openclaw-session-discussion>`
     : null;
   const attachmentContent = state?.attachmentSidebarContent ?? null;
+  const detailLoading = state ? isSessionWorkspaceItemLoading(state) : false;
   const detailContent =
     state?.sidebarContent ??
-    (state && params?.detailOpen ? resolveSessionDiffSidebarContent(state) : null);
+    (state && params?.detailOpen && !detailLoading
+      ? resolveSessionDiffSidebarContent(state)
+      : null);
   const workspaceContent =
     attachmentContent && params
       ? params.renderDetail(attachmentContent)
@@ -165,7 +194,11 @@ export function sidebarPanelDefinitions(
       "detail",
       "review",
       icons.diff,
-      detailContent && params ? params.renderDetail(detailContent) : null,
+      detailLoading
+        ? renderPanelLoadingSkeleton("review", t("common.loading"))
+        : detailContent && params
+          ? params.renderDetail(detailContent)
+          : null,
     ),
     definePanel("terminal", "terminal", icons.terminal, terminal, {
       available: terminalAvailable,

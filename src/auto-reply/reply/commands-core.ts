@@ -32,6 +32,10 @@ function normalizeCommandHandlerResult(result: CommandHandlerResult): CommandHan
 }
 
 export async function handleCommands(params: HandleCommandsParams): Promise<CommandHandlerResult> {
+  // Literal Gateway input must bypass commands as well as directive parsing.
+  if (params.ctx.CommandInterpretationSuppressed === true) {
+    return { shouldContinue: true };
+  }
   if (HANDLERS === null) {
     HANDLERS = (await loadCommandHandlersRuntime()).loadCommandHandlers();
   }

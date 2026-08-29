@@ -29,6 +29,7 @@ type ChatModelSelectOption = {
   value: string;
   label: string;
   disabled?: boolean;
+  unavailableReason?: ModelCatalogEntry["unavailableReason"];
 };
 
 type ChatModelSelectState = {
@@ -53,11 +54,17 @@ export type ChatFastModeSelectState = {
   supported: boolean;
 };
 
+export type ChatFastModeTarget = Pick<
+  GatewaySessionRow,
+  "effectiveFastMode" | "fastMode" | "model" | "modelProvider"
+>;
+
 type ChatFastModeSelectStateInput = {
   activeRunId: string | null;
   catalog: ModelCatalogEntry[];
   connected: boolean;
   currentModelOverride: string;
+  fastModeTarget?: ChatFastModeTarget;
   gatewayAvailable: boolean;
   loading: boolean;
   sending: boolean;
@@ -70,6 +77,11 @@ type ChatFastModeSelectStateInput = {
 // service_tier), OpenAI sets service_tier priority, MiniMax/xAI select fast variants.
 // Providers without a wire mapping must not offer the toggle.
 const FAST_MODE_PROVIDER_IDS = new Set(["anthropic", "minimax", "minimax-portal", "openai", "xai"]);
+
+export function isChatFastModeProviderSupported(provider: string | null | undefined): boolean {
+  const providerId = normalizeChatModelProviderId(provider ?? "");
+  return Boolean(providerId && FAST_MODE_PROVIDER_IDS.has(providerId));
+}
 
 function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
   return state.sessionsResult?.sessions?.find((row) =>
@@ -167,16 +179,21 @@ function buildChatModelOptions(
       continue;
     }
     seen.add(key);
-    options.push({ ...option, ...(entry.available === false ? { disabled: true } : {}) });
+    options.push({
+      ...option,
+      ...(entry.available === false
+        ? { disabled: true, unavailableReason: entry.unavailableReason }
+        : {}),
+    });
   }
   return options;
 }
 
-export function isChatModelUnavailable(
+export function resolveChatModelUnavailableReason(
   model: string | null | undefined,
   provider: string | null | undefined,
   catalog: ModelCatalogEntry[],
-): boolean {
+): ModelCatalogEntry["unavailableReason"] {
   const value = resolvePreferredServerChatModelValue(model, provider, catalog);
   const key = normalizeChatModelAvailabilityKey(value);
   const matches = catalog.filter(
@@ -184,7 +201,31 @@ export function isChatModelUnavailable(
       normalizeChatModelAvailabilityKey(buildQualifiedChatModelValue(entry.id, entry.provider)) ===
       key,
   );
-  return matches.length > 0 && matches.every((entry) => entry.available === false);
+  if (
+    !matches.length ||
+    matches.some((entry) => entry.available !== false || !entry.unavailableReason)
+  ) {
+    return undefined;
+  }
+  // Any recovering route can still serve the selection. Do not let an alias's
+  // permanent auth failure turn a transient catalog snapshot into a send gate.
+  if (matches.some((entry) => entry.unavailableReason === "cooldown")) {
+    return "cooldown";
+  }
+  return matches.some((entry) => entry.unavailableReason === "auth-failed")
+    ? "auth-failed"
+    : "missing-auth";
+}
+
+export function chatModelUnavailableMessage(
+  reason: ModelCatalogEntry["unavailableReason"],
+): string | undefined {
+  if (reason === "missing-auth") {
+    return t("modelSetup.missingAuth");
+  }
+  return reason === "auth-failed"
+    ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
+    : undefined;
 }
 
 export function resolveChatModelSelectState(
@@ -312,9 +353,11 @@ function resolveFastModeProvider(
 export function resolveChatFastModeSelectState(
   input: ChatFastModeSelectStateInput,
 ): ChatFastModeSelectState {
-  const activeRow = input.sessionsResult?.sessions?.find((row) =>
-    areUiSessionKeysEquivalent(row.key, input.sessionKey),
-  );
+  const activeRow =
+    input.fastModeTarget ??
+    input.sessionsResult?.sessions?.find((row) =>
+      areUiSessionKeysEquivalent(row.key, input.sessionKey),
+    );
   const activeProvider = normalizeChatModelProviderId(activeRow?.modelProvider ?? "") || null;
   const defaultProvider =
     normalizeChatModelProviderId(input.sessionsResult?.defaults?.modelProvider ?? "") || null;
@@ -343,9 +386,7 @@ export function resolveChatFastModeSelectState(
         ? "auto"
         : "off"
     : configuredOverride;
-  const providerSupported = Boolean(
-    effectiveProvider && FAST_MODE_PROVIDER_IDS.has(effectiveProvider),
-  );
+  const providerSupported = isChatFastModeProviderSupported(effectiveProvider);
   const supported = providerSupported || Boolean(configuredOverride);
   // The picker exposes speed as a two-state toggle: fast on, or back to the
   // provider baseline (explicit off for OpenAI's priority tier, inherited

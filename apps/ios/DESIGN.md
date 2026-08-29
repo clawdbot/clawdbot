@@ -41,7 +41,7 @@ Feature-local layout enums may define row heights and grid dimensions, but shoul
 
 ## Liquid Glass rules
 
-Use `openClawGlassButton` for primary actions, compact header controls, and navigation-adjacent controls. Use the prominent style for one primary action per region. Wrap nearby controls in `OpenClawGlassControlGroup`.
+Use `openClawGlassButton` for primary actions and navigation-adjacent controls. Use the prominent style for one primary action per region. Wrap nearby controls in `OpenClawGlassControlGroup`. Shared sidebar reveal controls and Chat actions are the background-free header exceptions; they retain 44-point hit targets without adding separate circles around their glyphs.
 
 Do not place Liquid Glass behind reading content, forms, metrics, or every card in a scroll view. Excess glass weakens hierarchy, increases rendering cost, and competes with the sidebar and navigation chrome.
 

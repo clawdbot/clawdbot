@@ -8,7 +8,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
-import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
+import { restartRunningChannelAccounts, type ThawRestartTarget } from "./channel-thaw-restart.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -35,6 +35,7 @@ import {
   incrementPresenceVersion,
 } from "./server/health-state.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import { resolveGrantExpiryDaysConfig } from "./standing-grant-expiry-config.js";
 
 type GatewayLifecycle = Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -170,6 +171,7 @@ export async function startGatewayCoreRuntime(input: {
   if (secretEgressProxy) {
     kernel.addGatewayLifetimeSidecar(secretEgressProxy);
   }
+  let pendingThawRestartTargets: readonly ThawRestartTarget[] | undefined;
   const earlyRuntime = await startupTrace.measure("runtime.early", () =>
     loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
       startGatewayEarlyRuntime({
@@ -189,11 +191,28 @@ export async function startGatewayCoreRuntime(input: {
         getPresenceVersion,
         getHealthVersion,
         refreshGatewayHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
-        restartRunningChannels: async () =>
-          await restartRunningChannelAccounts(channelManager, {
-            shouldContinue: () => !isGatewayWorkAdmissionClosed(),
-            onError: (message) => logHealth.error(message),
-          }),
+        restartRunningChannels: async (
+          mode,
+          shouldContinue = () => !isGatewayWorkAdmissionClosed(),
+        ) => {
+          // A new timing gap must resnapshot every running account even while
+          // older failures remain pending. A retry before the first attempted
+          // pass has no target list yet, so it also needs that fresh snapshot.
+          const selection =
+            mode === "new-thaw" || pendingThawRestartTargets === undefined
+              ? { kind: "new-thaw" as const, pendingTargets: pendingThawRestartTargets }
+              : { kind: "deferred-retry" as const, targets: pendingThawRestartTargets };
+          const failedTargets = await restartRunningChannelAccounts(
+            channelManager,
+            {
+              shouldContinue,
+              onError: (message) => logHealth.error(message),
+            },
+            selection,
+          );
+          pendingThawRestartTargets = failedTargets.length > 0 ? failedTargets : undefined;
+          return failedTargets.length === 0;
+        },
         refreshPresence: () =>
           broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion }),
         resetEventLoopHealth: readinessEventLoopHealth.reset,
@@ -295,6 +314,12 @@ export async function startGatewayCoreRuntime(input: {
         log,
         chatAbortControllers,
         hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),
+        // Grant terms freeze at mint. This reads the live config so a policy
+        // change applies to grants minted after it, never retroactively.
+        resolveGrantDefaultExpiresAtMs: (nowMs) => {
+          const days = resolveGrantExpiryDaysConfig(getRuntimeConfig());
+          return days !== null ? nowMs + days * 86_400_000 : null;
+        },
         activateRuntimeSecrets,
         sharedGatewaySessionGenerationState,
         resolveSharedGatewaySessionGenerationForConfig,

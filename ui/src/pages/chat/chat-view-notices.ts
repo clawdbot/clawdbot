@@ -5,6 +5,7 @@ import { renderCopyButton } from "../../components/copy-button.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
+import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 
@@ -24,6 +25,7 @@ type ChatViewNoticesProps = ChatPlacementStartupNoticeProps & {
 };
 
 type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
+  messages: readonly unknown[];
   runError?: { summary: string } | null;
   onDismissWorkspaceConflict?: () => void;
   workspaceConflict?: WorkspaceResultConflict | null;
@@ -131,24 +133,34 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,
     })}
-    ${renderPlacementStartupError(props.placementStartup, props.onRetrySessionPlacementStartup)}
+    ${renderPlacementStartupError(
+      props.placementStartup,
+      props.messages,
+      props.onRetrySessionPlacementStartup,
+    )}
   `;
 }
 
 function renderPlacementStartupError(
   status: ApplicationPlacementStartupStatus | null | undefined,
+  messages: readonly unknown[],
   onRetry?: () => void,
 ) {
   if (status?.phase !== "failed") {
     return nothing;
   }
-  const error = t("newSession.placementStartFailed", {
-    error: status.error ?? t("newSession.createFailed"),
-  });
+  const checking = status.action === "check-delivery";
+  const error = checking
+    ? [t("chat.queue.checkDeliveryHelp"), status.error].filter(Boolean).join("\n\n")
+    : t("newSession.placementStartFailed", { error: status.error ?? t("newSession.createFailed") });
+  // History can own the bubble before startup observes its receipt. Keep the
+  // banner action reachable when transcript deduplication hides the row.
+  const hasInlineTurn =
+    status.initialTurn && !chatMessagesContainQueuedSend(messages, status.initialTurn, true);
   const retry =
-    status.retryable && onRetry
+    status.retryable && onRetry && !hasInlineTurn
       ? html`<button class="btn btn--sm" type="button" @click=${onRetry}>
-          ${t("common.retry")}
+          ${t(checking ? "chat.queue.checkDelivery" : "common.retry")}
         </button>`
       : nothing;
   return renderErrorNotice(error, retry);

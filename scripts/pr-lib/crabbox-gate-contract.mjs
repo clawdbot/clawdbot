@@ -139,6 +139,40 @@ export function parseCrabboxGateCheckSummary(summary) {
   return binding;
 }
 
+export function validateForwardAncestry(comparisonValue, { baseSha, headSha }, label) {
+  const ancestryLabel = requiredString(label, "ancestry label");
+  if (
+    !SHA_PATTERN.test(baseSha) ||
+    !SHA_PATTERN.test(headSha) ||
+    comparisonValue === null ||
+    typeof comparisonValue !== "object" ||
+    Array.isArray(comparisonValue)
+  ) {
+    throw new Error(`${ancestryLabel} is malformed`);
+  }
+  const comparison = comparisonValue;
+  const aheadBy = comparison.ahead_by;
+  const behindBy = comparison.behind_by;
+  const validCounts =
+    Number.isSafeInteger(aheadBy) &&
+    aheadBy >= 0 &&
+    Number.isSafeInteger(behindBy) &&
+    behindBy === 0;
+  const validStatus =
+    baseSha === headSha
+      ? comparison.status === "identical" && aheadBy === 0
+      : comparison.status === "ahead" && aheadBy >= 1;
+  if (
+    comparison.base_commit?.sha !== baseSha ||
+    comparison.merge_base_commit?.sha !== baseSha ||
+    !validCounts ||
+    !validStatus
+  ) {
+    throw new Error(`${ancestryLabel} is not identical or forward`);
+  }
+  return { baseSha, headSha };
+}
+
 export function isProtectedMainWorkflowPath(value, workflowPath) {
   return value === workflowPath || value === `${workflowPath}@refs/heads/main`;
 }

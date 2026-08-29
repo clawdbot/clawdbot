@@ -1,8 +1,18 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { preserveQueuedUserTurn } from "./chat-send-support.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+} from "./history-merge.ts";
+import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
@@ -64,6 +74,203 @@ async function loadHistoryWithBrowserTimers(state: ReturnType<typeof createState
 }
 
 describe("chat history cursor revalidation", () => {
+  it.each(["live", "history-delta"] as const)(
+    "retains an attributed pending steer across a leaf advance before %s persistence",
+    async (delivery) => {
+      const sessionKey = "agent:main:participant-steer";
+      const sendRunId = "bob-send";
+      const aliceFinal = {
+        ...message("assistant", "Alice finished the command.", "alice-final", 4),
+        timestamp: 2000,
+      };
+      const handler = vi.fn(
+        async (): Promise<unknown> => ({
+          kind: "delta",
+          messages: [
+            {
+              sessionKey,
+              message: aliceFinal,
+              messageId: "alice-final",
+              messageSeq: 4,
+              runId: "alice-run",
+            },
+          ],
+          deltaCursor: "cursor-4",
+          sessionInfo: {
+            key: sessionKey,
+            kind: "direct",
+            sessionId: "session-cursor",
+            activeLeafEntryId: "alice-final",
+            updatedAt: 2000,
+            hasActiveRun: false,
+            status: "done",
+            lastRunId: "alice-run",
+          },
+        }),
+      );
+      const state = createState(handler);
+      state.sessionKey = sessionKey;
+      state.chatDisplayedLeafEntryId = "alice-tool-result";
+      seedCachedHistory(
+        state,
+        [
+          {
+            ...message("user", "Run the long command.", "alice-user", 1),
+            __openclaw: {
+              id: "alice-user",
+              seq: 1,
+              idempotencyKey: "alice-run:user",
+              senderId: "alice-profile",
+              senderName: "Alice Proof",
+            },
+          },
+          message(
+            "assistant",
+            [{ type: "toolCall", id: "exec-call", name: "exec", arguments: {} }],
+            "alice-tool-call",
+            2,
+          ),
+          {
+            role: "toolResult",
+            toolCallId: "exec-call",
+            content: "Command finished.",
+            __openclaw: { id: "alice-tool-result", seq: 3 },
+          },
+        ],
+        "cursor-3",
+      );
+      const queued: ChatQueueItem = {
+        id: "bob-queued-send",
+        text: "Reply exactly: BOB_STEER_ACK",
+        createdAt: 1500,
+        sendRunId,
+        sendState: "sending",
+        sendAttempts: 1,
+        queueMode: "steer",
+        sessionKey,
+        sender: { id: "bob-profile", name: "Bob Proof" },
+      };
+      state.chatQueue = [queued];
+      const renderedBobMessages = () =>
+        buildChatItems({
+          paneId: "participant-steer-cursor",
+          sessionKey,
+          runId: state.chatRunId,
+          messages: state.chatMessages,
+          queue: state.chatQueue,
+          toolMessages: state.chatToolMessages ?? [],
+          streamSegments: state.chatStreamSegments ?? [],
+          stream: state.chatStream,
+          streamStartedAt: state.chatStreamStartedAt,
+          showToolCalls: true,
+        }).flatMap((item) =>
+          item.kind === "group" && item.role === "user"
+            ? item.messages.filter(
+                ({ message: candidate }) => extractText(candidate) === queued.text,
+              )
+            : [],
+        );
+      expect(renderedBobMessages()).toHaveLength(1);
+
+      // Delivery retirement materializes the acknowledged turn before its durable row arrives.
+      preserveQueuedUserTurn(state, queued);
+      state.chatQueue = [];
+      expect(renderedBobMessages()).toHaveLength(1);
+      await loadChatHistory(state);
+      expect(handler).toHaveBeenCalledWith(expect.objectContaining({ cursor: "cursor-3" }));
+      expect(state.chatDisplayedLeafEntryId).toBe("alice-final");
+      expect(renderedBobMessages()).toHaveLength(1);
+
+      const persistedBob = {
+        role: "user",
+        content: queued.text,
+        timestamp: queued.createdAt,
+        idempotencyKey: `${sendRunId}:user`,
+        __openclaw: {
+          id: "bob-user",
+          seq: 5,
+          idempotencyKey: `${sendRunId}:user`,
+          senderId: "bob-profile",
+          senderName: "Bob Proof",
+          recordTimestampMs: 2500,
+        },
+      };
+      const persistedPayload = {
+        sessionKey,
+        clientRunId: sendRunId,
+        message: persistedBob,
+        messageId: "bob-user",
+        messageSeq: 5,
+      };
+      if (delivery === "live") {
+        applySessionMessagePayload(state, persistedPayload, true, {
+          kind: "live",
+          activeRunId: state.chatRunId,
+        });
+      } else {
+        handler.mockResolvedValueOnce({
+          kind: "delta",
+          messages: [persistedPayload],
+          deltaCursor: "cursor-5",
+          sessionInfo: {
+            key: sessionKey,
+            kind: "direct",
+            sessionId: "session-cursor",
+            activeLeafEntryId: "bob-user",
+            updatedAt: 2500,
+            hasActiveRun: true,
+            status: "running",
+            lastRunId: "alice-run",
+          },
+        });
+        await loadChatHistory(state);
+      }
+
+      expect(renderedBobMessages()).toHaveLength(1);
+      expect(
+        state.chatMessages.filter((candidate) => extractText(candidate) === queued.text),
+      ).toEqual([persistedBob]);
+    },
+  );
+
+  it("retains live and terminal run ownership across an accepted delta leaf advance", async () => {
+    const state = createState(() => ({
+      kind: "delta",
+      messages: [],
+      deltaCursor: "cursor-2",
+      sessionInfo: {
+        key: "main",
+        kind: "direct",
+        sessionId: "session-cursor",
+        activeLeafEntryId: "next-leaf",
+        updatedAt: 2,
+        hasActiveRun: true,
+      },
+    }));
+    state.chatDisplayedLeafEntryId = "previous-leaf";
+    seedCachedHistory(state, [], "cursor-1");
+    reduceChatSessionProjection(state, {
+      type: "runTerminal",
+      runId: "completed-run",
+      status: "completed",
+    });
+    const projection = reduceChatSessionProjection(state, {
+      type: "runDelta",
+      runId: "active-run",
+      message: message("assistant", "Still working.", "live-message", 1),
+    });
+
+    await loadChatHistory(state);
+
+    const current = getChatSessionProjection(
+      state,
+      state.chatMessages,
+      readChatSessionProjectionScope(state),
+    );
+    expect(current.scope.activeLeafEntryId).toBe("next-leaf");
+    expect(current.runs).toBe(projection.runs);
+  });
+
   it("keeps cached paint while replay updates an existing tool message in place", async () => {
     const cached = message(
       "assistant",

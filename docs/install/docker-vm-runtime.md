@@ -92,9 +92,9 @@ The examples below cover three binaries only, alphabetically:
 These are examples, not a complete list. Docker Compose builds the repo-root
 `Dockerfile`, so extend that file rather than creating a standalone example or
 replacing its contents. The repository Dockerfile has required
-`workspace-deps`, build, runtime-assets, and final runtime stages. Its manifest
-extraction covers the `packages/*` and selected plugin workspaces before
-`pnpm install --frozen-lockfile`.
+manifest extraction, build, production dependency, runtime-assets, and final
+runtime stages. Build and production installs share the same manifests and
+lockfile, including `packages/*` and selected plugin workspaces.
 
 For Debian packages, prefer the existing build argument:
 

@@ -89,6 +89,10 @@ function enrichHarnessRows(
     }
   }
   return rows.map((entry) => {
+    // Native discovery owns these capabilities; host donors cannot invent its transport.
+    if (entry.nativeRuntime) {
+      return entry;
+    }
     const donor =
       routeDonors.get(routeVariantKey(entry)) ??
       (entry.api === undefined && entry.baseUrl === undefined
@@ -163,6 +167,9 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     });
+    if (!params.pluginRegistry && getActivePluginRegistry() !== pluginRegistry) {
+      return params.snapshot;
+    }
     if (listedRows.length === 0) {
       return params.snapshot;
     }

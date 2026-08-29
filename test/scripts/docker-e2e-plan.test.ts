@@ -139,6 +139,7 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 
 describe("scripts/lib/docker-e2e-plan", () => {
   it.each([
+    ["release-typed-onboarding", ["@openclaw/codex"]],
     ["npm-onboard-channel-agent", ["@openclaw/codex"]],
     ["npm-onboard-discord-channel-agent", ["@openclaw/codex"]],
     ["npm-onboard-slack-channel-agent", ["@openclaw/codex"]],
@@ -347,7 +348,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       bareImage: true,
       e2eImage: true,
       functionalImage: true,
-      liveImage: true,
+      liveImage: false,
       package: true,
       prepublishPluginRegistry: true,
     });
@@ -1431,7 +1432,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       bareImage: true,
       e2eImage: true,
       functionalImage: false,
-      liveImage: true,
+      liveImage: false,
       package: true,
       prepublishPluginRegistry: false,
     });
@@ -1487,7 +1488,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(lane.resources).toEqual(["docker", "live", "live:openai", "npm"]);
     expect(lane.stateScenario).toBe("empty");
     expect(plan.needs.bareImage).toBe(true);
-    expect(plan.needs.liveImage).toBe(true);
+    expect(plan.needs.liveImage).toBe(false);
     expect(plan.needs.package).toBe(true);
   });
 
@@ -1566,7 +1567,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       bareImage: true,
       e2eImage: true,
       functionalImage: true,
-      liveImage: true,
+      liveImage: false,
       package: true,
       prepublishPluginRegistry: false,
     });

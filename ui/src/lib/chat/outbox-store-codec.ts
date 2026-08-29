@@ -2,7 +2,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
 import { normalizeAgentId } from "../sessions/session-key.ts";
-import type { ChatAttachment, ChatQueueItem } from "./chat-types.ts";
+import type { ChatAttachment, ChatGoalDraftMode, ChatQueueItem } from "./chat-types.ts";
+import { isChatGoalDraftMode } from "./goal-draft.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
 
 export const MAX_STORED_SESSIONS = 20;
@@ -16,6 +17,7 @@ export const INTERRUPTED_SETTINGS_WAIT_ERROR =
 
 export type StoredComposerSession = {
   draft?: string;
+  goalMode?: ChatGoalDraftMode;
   draftRevision?: number;
   queue?: ChatQueueItem[];
   updatedAt: number;
@@ -70,6 +72,29 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  if (entry.intent !== undefined) {
+    const intent = entry.intent;
+    // Never restore a structured admission as ordinary text after losing its intent.
+    if (
+      !isRecord(intent) ||
+      Object.keys(intent).length !== 3 ||
+      intent.kind !== "session-goal-start" ||
+      intent.version !== 1 ||
+      typeof intent.issuedAtMs !== "number" ||
+      !Number.isSafeInteger(intent.issuedAtMs) ||
+      intent.issuedAtMs <= 0
+    ) {
+      return null;
+    }
+    item.intent = { kind: intent.kind, version: intent.version, issuedAtMs: intent.issuedAtMs };
+    const sessionId = normalizeOptionalString(entry.sessionId);
+    if (sessionId) {
+      item.sessionId = sessionId;
+    }
+    if (entry.expectedLeafEntryId === null || typeof entry.expectedLeafEntryId === "string") {
+      item.expectedLeafEntryId = entry.expectedLeafEntryId;
+    }
+  }
   if (typeof entry.orderKey === "number" && Number.isFinite(entry.orderKey)) {
     item.orderKey = entry.orderKey;
   }
@@ -147,6 +172,10 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
   }
   const entry = value;
   const draft = typeof entry.draft === "string" ? entry.draft : undefined;
+  if (entry.goalMode !== undefined && !isChatGoalDraftMode(entry.goalMode)) {
+    return null;
+  }
+  const goalMode = entry.goalMode;
   const normalizedQueue = Array.isArray(entry.queue)
     ? entry.queue
         .slice(0, MAX_RETAINED_QUEUE_ITEMS)
@@ -173,11 +202,12 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
   // Legacy rows did not version drafts, so their row timestamp is the best
   // available ordering signal. Queue-only rows must not claim draft ownership.
   const draftRevision = storedDraftRevision ?? (draft ? updatedAt : undefined);
-  if (!draft && draftRevision === undefined && (!queue || queue.length === 0)) {
+  if (!draft && !goalMode && draftRevision === undefined && (!queue || queue.length === 0)) {
     return null;
   }
   return {
     ...(draft ? { draft } : {}),
+    ...(goalMode ? { goalMode } : {}),
     ...(draftRevision !== undefined ? { draftRevision } : {}),
     ...(queue && queue.length > 0 ? { queue } : {}),
     updatedAt,

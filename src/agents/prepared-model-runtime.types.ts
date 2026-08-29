@@ -9,6 +9,7 @@ import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { PublishedModelCatalogOwnerCandidate } from "./prepared-model-catalog.types.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
 import type { AuthStorage } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
@@ -31,6 +32,7 @@ export type PreparedModelRuntimePluginGeneration = Readonly<{
 }>;
 
 export type PreparedModelRuntimeSnapshot = Readonly<{
+  catalogOwner: PublishedModelCatalogOwnerCandidate["catalogOwner"];
   agentId?: string;
   agentDir: string;
   inheritedAuthDir?: string;
@@ -147,6 +149,7 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
 
 export type PreparedModelRuntimeOwner = {
   input: PreparedModelRuntimeInput;
+  catalogOwner: PublishedModelCatalogOwnerCandidate["catalogOwner"];
   environmentFingerprint: string;
   catalogMode: PreparedModelRuntimeCatalogMode;
   provenance: "configured" | "standalone" | "explicit" | "run" | "ephemeral";

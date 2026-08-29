@@ -17,6 +17,8 @@ import {
   listSessionBranches,
   loadSessionEntry,
   loadTranscriptEvents,
+  listSessionParticipantsReadOnly,
+  recordSessionParticipant,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
   rewindSessionToMessage,
@@ -573,6 +575,10 @@ describe("SQLite session message cuts", () => {
     const { env, scope } = await createSession();
     const canonicalSourceKey = "agent:main:canonical-message-cut-source";
     const targetKey = "agent:main:dashboard:message-cut-fork";
+    recordSessionParticipant(scope, {
+      identity: { type: "profile", id: "source-person" },
+      promptedAt: 7,
+    });
 
     const result = await forkSessionAtMessage({
       agentId,
@@ -607,6 +613,15 @@ describe("SQLite session message cuts", () => {
       ),
     ).toEqual([result.entry.sessionId, "user-1", "assistant-1"]);
     expect(loadSessionEntry(scope)?.sessionId).toBe(scope.sessionId);
+    expect(listSessionParticipantsReadOnly({ agentId, env }).get(targetKey)).toBeUndefined();
+    expect(listSessionParticipantsReadOnly({ agentId, env }).get(sessionKey)).toEqual([
+      {
+        identity: { type: "profile", id: "source-person" },
+        contributionCount: 1,
+        firstPromptedAt: 7,
+        lastPromptedAt: 7,
+      },
+    ]);
     expect(result.entry.lifecycleRevision).not.toBe("source-lifecycle-revision");
     expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
     expect((result.entry as InternalSessionEntry).lastRunId).toBeUndefined();

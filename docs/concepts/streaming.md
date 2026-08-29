@@ -68,8 +68,9 @@ exceeds the limit.
 Bundled channels spell these overrides as
 `channels.<id>.streaming.{chunkMode,block.enabled,block.coalesce}`. The flat
 `*.chunkMode` / `*.blockStreaming` / `*.blockStreamingCoalesce` spellings are
-rejected everywhere. `openclaw doctor --fix` migrates legacy configs into the
-nested shape.
+rejected by validation. `openclaw doctor --fix` migrates legacy configs into the
+nested shape; Gateway startup applies the same migration automatically when the
+single-file config meets the [startup migration conditions](/gateway/doctor#detailed-behavior-and-rationale).
 
 **Boundary semantics** for `blockStreamingBreak`:
 

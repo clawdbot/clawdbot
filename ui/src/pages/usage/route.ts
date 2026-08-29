@@ -7,7 +7,6 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { providerUsageFromSnapshotResult, requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import type { UsageRouteData } from "./usage-page.ts";
 
 function currentLocalDate(): string {
@@ -47,6 +46,9 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
   }
 
   try {
+    // Usage RPC assembly is not needed by the default chat startup graph.
+    const { providerUsageFromSnapshotResult, requestUsageSnapshot } =
+      await import("./request-usage-snapshot.ts");
     const snapshot = await requestUsageSnapshot(gatewaySnapshot.client, {
       ...query,
       agentId: query.agentId ?? undefined,

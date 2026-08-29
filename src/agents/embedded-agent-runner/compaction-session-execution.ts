@@ -2,6 +2,10 @@
  * Executes compaction while owning the transcript lock, session lifecycle,
  * hooks, checkpoint, and optional successor transcript rotation.
  */
+import {
+  preserveCompactionReplayWindow,
+  resolveCompactionReplayEligibility,
+} from "@openclaw/ai/transports";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session-compaction-checkpoints.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
@@ -62,6 +66,7 @@ import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
+import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
@@ -279,6 +284,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
           });
+          const compactionReplayEnabled = resolveCompactionReplayEligibility(effectiveModel, {
+            extraParams: effectiveExtraParams,
+            apiKey: transportApiKey,
+          });
           diagnosticOwner = createDiagnosticEmbeddedRunOwner({
             sessionId: params.sessionId,
             ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -345,9 +354,22 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           // "Original" compaction metrics should describe the validated transcript that enters
           // limiting/compaction, not the raw on-disk session snapshot.
           const originalMessages = session.messages.slice();
-          const truncated = limitHistoryTurns(
-            session.messages,
-            getHistoryLimitFromSessionKey(params.sessionKey, params.config),
+          const truncated = preserveCompactionReplayWindow(
+            originalMessages,
+            limitHistoryTurns(
+              session.messages,
+              getHistoryLimitFromSessionKey(params.sessionKey, params.config, {
+                accountId: params.agentAccountId,
+                peerId: params.conversationRoutePeerId,
+                chatType: params.chatType,
+              }),
+            ),
+            effectiveModel,
+            {
+              sessionId: params.sessionId,
+              authProfileId: runtimePlan.auth.forwardedAuthProfileId,
+              enabled: compactionReplayEnabled,
+            },
           );
           // Re-run tool_use/tool_result pairing repair after truncation, since
           // limitHistoryTurns can orphan tool_result blocks by removing the
@@ -420,6 +442,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             sessionManager,
             extraParams: effectiveExtraParams,
             customInstructions: params.customInstructions,
+            config: params.config,
             requestOptions: {
               apiKey: transportApiKey,
               sessionId: params.sessionId,
@@ -449,15 +472,26 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               );
           const effectiveFirstKeptEntryId = clientResult?.firstKeptEntryId;
           const tokensBefore = serverResult?.usage.input_tokens ?? clientResult!.tokensBefore;
-          // Estimate tokens after compaction by summing token estimates for remaining messages
-          const tokensAfter =
-            serverResult?.usage.output_tokens ??
-            estimateTokensAfterCompaction({
-              messagesAfter: session.messages,
-              observedTokenCount,
-              fullSessionTokensBefore: limitedTranscriptTokensBefore ?? 0,
-              estimateTokensFn: estimateTokens,
-            });
+          // Endpoint output_tokens excludes retained inputs. Count the actual
+          // committed replacement window, not the owner's pre-compaction usage.
+          const tokensAfter = serverResult
+            ? estimateLlmBoundaryTokenPressure({
+                messages: sessionManager.buildSessionContext().messages,
+                systemPrompt: systemPromptText,
+                prompt: "",
+                replay: {
+                  model: effectiveModel,
+                  sessionId: params.sessionId,
+                  authProfileId: runtimePlan.auth.forwardedAuthProfileId,
+                  enabled: compactionReplayEnabled,
+                },
+              })
+            : estimateTokensAfterCompaction({
+                messagesAfter: session.messages,
+                observedTokenCount,
+                fullSessionTokensBefore: limitedTranscriptTokensBefore ?? 0,
+                estimateTokensFn: estimateTokens,
+              });
           const messageCountAfter = session.messages.length;
           const compactedCount = Math.max(0, messageCountOriginal - messageCountAfter);
           const activeSessionFile = formatSqliteSessionFileMarker({

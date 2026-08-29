@@ -74,7 +74,13 @@ function makeDispatchInput(
       fallbackActive: false,
       fallbackReason: null,
       agentHarnessId: "codex",
-      runtimePlan: {},
+      runtimePlan: {
+        resolvedRef: { provider: "openai", modelId: "gpt-5.6-luna" },
+        auth: {
+          providerForAuth: "openai",
+          authProfileProviderForAuth: "openai",
+        },
+      },
       model: {
         id: "gpt-5.6-luna",
         provider: "openai",

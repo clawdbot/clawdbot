@@ -922,7 +922,7 @@
    of which tab is active so its title and actions do not jump by one space. */
 .shell--settings .content:has(.memory-page) .content-header.hub-page-header {
   max-width: 1120px;
-  padding-inline: var(--space-4);
+  padding-inline: var(--settings-header-inline-padding, var(--space-4));
 }
 
 .memory-page__panel .settings-page,

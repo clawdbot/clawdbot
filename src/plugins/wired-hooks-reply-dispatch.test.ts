@@ -3,7 +3,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
+import type {
+  PluginHookRegistrationOptions,
+  PluginHookReplyDispatchContext,
+} from "./hook-types.js";
+import { createHookRunner } from "./hooks.js";
 import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
+import { createPluginRegistry } from "./registry.js";
+import type { PluginRuntime } from "./runtime/types.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 const replyDispatchEvent = {
   ctx: buildTestCtx({ SessionKey: "agent:test:session", BodyForAgent: "hello" }),
@@ -34,7 +42,72 @@ function firstErrorLog(logger: { error: ReturnType<typeof vi.fn> }) {
   return logger.error.mock.calls[0];
 }
 
+function createRegisteredReplyHook(eligibleDispatchKinds: unknown) {
+  const builder = createPluginRegistry({
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    runtime: {} as PluginRuntime,
+    activateGlobalSideEffects: false,
+  });
+  const api = builder.createApi(createPluginRecord({ id: "scoped-dispatch", origin: "bundled" }), {
+    config: {},
+  });
+  const result = { handled: true, queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+  const handler = vi.fn(() => result);
+  const options: PluginHookRegistrationOptions<"reply_dispatch"> = {};
+  // JavaScript plugins can supply invalid metadata despite the typed registration contract.
+  Reflect.set(options, "eligibleDispatchKinds", eligibleDispatchKinds);
+  api.on("reply_dispatch", handler, options);
+  return { handler, result, runner: createHookRunner(builder.registry) };
+}
+
 describe("reply_dispatch hook runner", () => {
+  it.each([
+    { dispatchKind: "agent", eligible: false },
+    { dispatchKind: "acp", eligible: true },
+    { dispatchKind: undefined, eligible: true },
+    { dispatchKind: "unknown-runtime", eligible: true },
+  ])(
+    "keeps invocation and presence checks aligned for $dispatchKind",
+    async ({ dispatchKind, eligible }) => {
+      const { handler, result, runner } = createRegisteredReplyHook(["acp"]);
+      const ctx: PluginHookReplyDispatchContext = { ...replyDispatchCtx };
+      Reflect.set(ctx, "dispatchKind", dispatchKind);
+
+      expect(runner.hasHooks("reply_dispatch", ctx)).toBe(eligible);
+      await expect(runner.runReplyDispatch(replyDispatchEvent, ctx)).resolves.toEqual(
+        eligible ? result : undefined,
+      );
+      expect(handler).toHaveBeenCalledTimes(eligible ? 1 : 0);
+    },
+  );
+
+  it.each(
+    [undefined, null, [], "acp", ["acp", "unknown-runtime"], [undefined, "acp"]].map(
+      (eligibility) => ({ eligibility }),
+    ),
+  )(
+    "keeps omitted or malformed dispatch eligibility unscoped ($eligibility)",
+    async ({ eligibility }) => {
+      const { handler, result, runner } = createRegisteredReplyHook(eligibility);
+      const ctx: PluginHookReplyDispatchContext = { ...replyDispatchCtx, dispatchKind: "agent" };
+
+      expect(runner.hasHooks("reply_dispatch", { dispatchKind: "agent" })).toBe(true);
+      await expect(runner.runReplyDispatch(replyDispatchEvent, ctx)).resolves.toEqual(result);
+      expect(handler).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([["agent"], ["agent", "acp", "agent"]].map((eligibility) => ({ eligibility })))(
+    "accepts agent dispatch eligibility $eligibility through the public registration API",
+    async ({ eligibility }) => {
+      const { handler, result, runner } = createRegisteredReplyHook(eligibility);
+      await expect(
+        runner.runReplyDispatch(replyDispatchEvent, { ...replyDispatchCtx, dispatchKind: "agent" }),
+      ).resolves.toEqual(result);
+      expect(handler).toHaveBeenCalledOnce();
+    },
+  );
+
   it("stops at the first handler that claims reply dispatch", async () => {
     const first = vi.fn().mockResolvedValue({
       handled: true,

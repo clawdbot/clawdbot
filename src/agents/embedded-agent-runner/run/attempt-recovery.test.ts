@@ -197,6 +197,15 @@ describe("recoverEmbeddedRunAttempt", () => {
       throw new Error("expected normalized usage fixture");
     }
     const attempt = makeEmbeddedRunnerAttempt({
+      modelAttempt: {
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        credentialSource: {
+          kind: "direct",
+          evidence: "environment",
+          authorization: "ambient",
+        },
+      },
       terminal: {
         kind: "failed",
         source: "hook:before_agent_run",
@@ -267,6 +276,11 @@ describe("recoverEmbeddedRunAttempt", () => {
           },
           livenessState: "blocked",
           agentMeta: {
+            credentialSource: {
+              kind: "direct",
+              evidence: "environment",
+              authorization: "ambient",
+            },
             lastCallUsage: { input: 42_000, output: 1_000, total: 43_000 },
             promptTokens: 42_000,
           },

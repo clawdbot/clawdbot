@@ -352,6 +352,10 @@ export function createSlackMessageHandler(params: {
                     settlementHandedOff = true;
                     return undefined;
                   },
+                  onDeferredHeartbeat: () => {
+                    turnAdoptionLifecycle?.onDeferredHeartbeat?.();
+                    admissionLifecycle.onDeferredHeartbeat?.();
+                  },
                   onAbandoned: () => {
                     settlementHandedOff = true;
                     releaseClaims();

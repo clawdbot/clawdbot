@@ -1,7 +1,6 @@
 /** Policy and execution pipeline for approved node-host system.run requests. */
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   describeInterpreterInlineEval,
@@ -21,7 +20,6 @@ import {
   resolveAllowAlwaysPersistenceDecision,
   resolveDurableExecApprovalRequirement,
   resolveExecApprovalsLocked,
-  resolveExecModePolicy,
   type ExecAllowlistEntry,
   type ExecApprovalUsageAuthorization,
   type ExecApprovalPolicySnapshot,
@@ -35,7 +33,6 @@ import {
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
 import { resolveExecAutoReviewDecision, type ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
-import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   extractEnvAssignmentKeysFromDispatchWrappers,
@@ -62,7 +59,11 @@ import {
 } from "../infra/system-run-cwd-binding.js";
 import { logWarn } from "../logger.js";
 import type { NodeHostClient } from "./client.js";
-import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
+import {
+  evaluateSystemRunPolicy,
+  resolveExecApprovalDecision,
+  resolveNodeExecConfigPolicy,
+} from "./exec-policy.js";
 import {
   applyOutputTruncation,
   evaluateSystemRunAllowlist,
@@ -92,6 +93,7 @@ type SystemRunDeniedReason =
   | "allowlist-miss"
   | "execution-plan-miss"
   | "companion-unavailable"
+  | "cwd-unavailable"
   | "permission:screenRecording";
 
 type SystemRunExecutionContext = {
@@ -184,21 +186,12 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
     case "allowlist-miss":
     case "execution-plan-miss":
     case "companion-unavailable":
+    case "cwd-unavailable":
     case "permission:screenRecording":
       return reason;
     default:
       return "approval-required";
   }
-}
-
-function resolveAgentExecConfig(
-  cfg: OpenClawConfig,
-  agentId: string | undefined,
-): ExecToolConfig | undefined {
-  if (!agentId) {
-    return undefined;
-  }
-  return resolveAgentConfig(cfg, agentId)?.tools?.exec;
 }
 
 /** Resolves the effective exec security/ask policy for one system.run request. */
@@ -209,23 +202,8 @@ export async function resolveEffectiveSystemRunExecPolicy(params: {
   defaultAsk: ExecAsk;
   requireSocket: boolean;
 }): Promise<EffectiveSystemRunExecPolicy> {
-  const agentExec = resolveAgentExecConfig(params.cfg, params.agentId);
-  const globalExec = params.cfg.tools?.exec;
-  const layeredPolicy = applyExecPolicyLayer(
-    applyExecPolicyLayer(
-      {
-        security: params.defaultSecurity,
-        ask: params.defaultAsk,
-      },
-      globalExec,
-    ),
-    agentExec,
-  );
-  const modePolicy = resolveExecModePolicy({
-    mode: layeredPolicy.mode,
-    security: layeredPolicy.security,
-    ask: layeredPolicy.ask,
-  });
+  const modePolicy = resolveNodeExecConfigPolicy(params);
+  const { agentExec, globalExec } = modePolicy;
   const approvals = await resolveExecApprovalsLocked(params.agentId, {
     security: modePolicy.security,
     ask: modePolicy.ask,
@@ -325,7 +303,11 @@ async function sendSystemRunDenied(
   );
   await opts.sendInvokeResult({
     ok: false,
-    error: { code: "UNAVAILABLE", message: params.message },
+    // A missing companion reply can follow execution; it is not a policy denial.
+    error: {
+      code: params.reason === "companion-unavailable" ? "UNAVAILABLE" : "SYSTEM_RUN_DENIED",
+      message: params.message,
+    },
   });
 }
 
@@ -912,13 +894,17 @@ async function executeSystemRunPhase(
   if (!(await revalidateSystemRunApprovedPathBindings(opts, phase))) {
     return;
   }
-  const expectedMutableFileOperand = phase.approvalPlan
-    ? resolveMutableFileOperandSnapshotSync({
-        argv: phase.argv,
-        cwd: phase.cwd,
-        shellCommand: phase.shellPayload,
-      })
-    : null;
+  const expectedMutableFileOperand =
+    phase.approvalPlan &&
+    (phase.policy.approvedByAsk ||
+      phase.approvalSource !== undefined ||
+      phase.security === "allowlist")
+      ? resolveMutableFileOperandSnapshotSync({
+          argv: phase.argv,
+          cwd: phase.cwd,
+          shellCommand: phase.shellPayload,
+        })
+      : null;
   if (expectedMutableFileOperand && !expectedMutableFileOperand.ok) {
     logWarn(`security: system.run approval script binding blocked (runId=${phase.runId})`);
     await sendSystemRunDenied(opts, phase.execution, {

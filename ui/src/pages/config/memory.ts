@@ -5,7 +5,7 @@ import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
   renderLearnMoreLink,
-  renderSettingsDefaultState,
+  renderSettingsDefaultDescription,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsSegmented,
@@ -164,7 +164,6 @@ type MemoryViewProps = {
   /** Distinguishes a rejected write from a committed write with a failed refresh. */
   engineOutcome: MemoryEngineOutcome | null;
   onEngineChange: (engineId: string | null) => void;
-  onEngineReset: () => void;
   addons: readonly MemoryAddonRow[];
   canToggleAddons: boolean;
   onAddonChange: (pluginId: string, enabled: boolean) => void;
@@ -211,12 +210,10 @@ function renderEngineSection(props: MemoryViewProps) {
   const defaultEngine =
     props.engineOptions.find((option) => option.id === DEFAULT_MEMORY_ENGINE_ID)?.label ??
     t("memoryPage.engine.openClawMemory");
-  const defaultState = renderSettingsDefaultState({
-    value: defaultEngine,
-    overridden: props.engineSelection.kind !== "auto",
-    disabled: props.engineBusy,
-    onReset: props.onEngineReset,
-  });
+  const defaultDescription = renderSettingsDefaultDescription(
+    defaultEngine,
+    props.engineSelection.kind !== "auto",
+  );
   if (props.engineOptions.length === 0) {
     return renderSettingsSection(
       { title: t("memoryPage.engine.title"), description: t("memoryPage.engine.description") },
@@ -224,12 +221,9 @@ function renderEngineSection(props: MemoryViewProps) {
         title: t("memoryPage.engine.rowTitle"),
         description: html`
           ${t("memoryPage.engine.catalogUnavailable")} ${t(engineHintKey(props.engineSelection))}
-          ${defaultState.description}
+          ${defaultDescription}
         `,
-        control: html`
-          ${defaultState.action}
-          ${renderSettingsValue(engineId ?? t("memoryPage.engine.off"), { mono: true })}
-        `,
+        control: renderSettingsValue(engineId ?? t("memoryPage.engine.off"), { mono: true }),
       }),
     );
   }
@@ -247,18 +241,15 @@ function renderEngineSection(props: MemoryViewProps) {
     html`
       ${renderSettingsRow({
         title: t("memoryPage.engine.rowTitle"),
-        description: html`${t(engineHintKey(props.engineSelection))} ${defaultState.description}`,
+        description: html`${t(engineHintKey(props.engineSelection))} ${defaultDescription}`,
         stacked: true,
-        control: html`
-          ${defaultState.action}
-          ${renderSettingsSegmented({
-            value: engineId ?? MEMORY_ENGINE_OFF,
-            options,
-            disabled: props.engineBusy,
-            ariaLabel: t("memoryPage.engine.rowTitle"),
-            onChange: (value) => props.onEngineChange(value || null),
-          })}
-        `,
+        control: renderSettingsSegmented({
+          value: engineId ?? MEMORY_ENGINE_OFF,
+          options,
+          disabled: props.engineBusy,
+          ariaLabel: t("memoryPage.engine.rowTitle"),
+          onChange: (value) => props.onEngineChange(value || null),
+        }),
       })}
       ${renderDisabledEngineRow(props, engineId)}
       ${props.engineOutcome === null

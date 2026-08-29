@@ -5,6 +5,7 @@ import { AgentOwnershipSchema } from "./agents-models-skills.js";
 import { closedObject } from "./closed-object.js";
 import { UpdateAvailableSchema, UpdateScheduleStateSchema } from "./config.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionPersonSchema } from "./session-participant.js";
 
 /**
  * Gateway state snapshot schemas.
@@ -37,8 +38,9 @@ export const PresenceEntrySchema = closedObject({
   instanceId: Type.Optional(NonEmptyString),
   user: Type.Optional(
     closedObject({
-      /** Canonical profile id when resolved, otherwise authenticated identity. Clients group presence by this. */
+      /** Canonical profile id when resolved, otherwise authenticated identity; grouping also uses identity qualification. */
       id: NonEmptyString,
+      identity: Type.Optional(SessionPersonSchema.properties.identity),
       email: Type.Optional(NonEmptyString),
       name: Type.Optional(NonEmptyString),
       avatarUrl: Type.Optional(NonEmptyString),

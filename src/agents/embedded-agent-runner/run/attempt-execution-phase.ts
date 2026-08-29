@@ -87,6 +87,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     replayAllowedToolNames,
     liveAllowedToolNames,
     anthropicPayloadLogger,
+    codeModeExecToolNames,
     effectiveAgentTransport,
     providerTextTransforms,
     runTrace: input.diagnostics.runTrace,
@@ -110,6 +111,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
       cacheTrace,
       capabilityToolNames,
+      compactionReplayEnabled: sessionRuntime.transport.compactionReplayEnabled,
       effectiveWorkspace: input.setup.effectiveWorkspace,
       isOpenAIResponsesApi,
       isRawModelRun: input.isRawModelRun,
@@ -217,7 +219,9 @@ export async function runEmbeddedAttemptExecutionPhase(
     codeModeExecToolNames,
     sideEffectToolOwners,
     diagnosticOwner,
+    trajectoryRecorder: sessionRuntime.trajectoryRecorder,
   });
+  state.deferredLifecycleOwner = preparedStream.deferredLifecycleOwner;
   input.lifecycle.setToolSearchCatalogExecutor(preparedStream.toolSearchCatalogExecutor);
   input.externalAbortController.setCompactionState({
     isPendingOrRetrying: preparedStream.subscription.isCompacting,

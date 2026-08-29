@@ -230,7 +230,7 @@ describe("normalizeInitialApplicationLocation", () => {
         snapshot: { phase: "connecting", client: null, hello: null },
         subscribe,
       } as unknown as ApplicationContext<RouteId>["gateway"],
-      agentsList: () => ({ defaultId: "main", mainKey: "main", agents: [] }),
+      agentsList: () => ({ defaultId: "main", mainKey: "main", scope: "global", agents: [] }),
       signal: new AbortController().signal,
     });
 
@@ -334,7 +334,7 @@ describe("normalizeInitialApplicationLocation", () => {
       basePath: "",
       sessionKey: "agent:main:main",
       gateway,
-      agentsList: () => ({ defaultId: "main", mainKey: "main", agents: [] }),
+      agentsList: () => ({ defaultId: "main", mainKey: "main", scope: "global", agents: [] }),
       signal: new AbortController().signal,
     });
     let currentLocation: RouteLocation = initialLocation;

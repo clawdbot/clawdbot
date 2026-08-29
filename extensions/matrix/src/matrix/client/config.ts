@@ -13,7 +13,7 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   coerceSecretRef,
   normalizeResolvedSecretInputString,
-} from "openclaw/plugin-sdk/secret-input-runtime";
+} from "openclaw/plugin-sdk/secret-input";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
   isPrivateNetworkOptInEnabled,

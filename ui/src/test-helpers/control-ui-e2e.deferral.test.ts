@@ -28,8 +28,8 @@ it.for(["resolve", "reject"] as const)(
     ] as const;
     const frames: ResponseFrame[] = [];
     for (const socket of sockets) {
-      socket.addEventListener("message", (event) => {
-        const frame = JSON.parse(String((event as MessageEvent).data)) as ResponseFrame;
+      socket.addEventListener("message", (event: MessageEvent) => {
+        const frame = JSON.parse(String(event.data)) as ResponseFrame;
         if (frame.type === "res") {
           frames.push(frame);
         }

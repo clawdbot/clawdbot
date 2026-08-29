@@ -494,26 +494,25 @@ describe("resolve-openclaw-package-candidate", () => {
       `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
       "setInterval(() => {}, 1000);",
     ].join("\n");
-    const run = startProcessWatchdogFixture(() =>
-      runCommandForTest(process.execPath, ["-e", parentScript], {
-        killAfterMs: 25,
-        timeoutMs: 500,
-      }),
+    const releaseAndWait = startProcessWatchdogFixture(() =>
+      expect(
+        runCommandForTest(process.execPath, ["-e", parentScript], {
+          killAfterMs: 25,
+          timeoutMs: 500,
+        }),
+      ).rejects.toThrow(/timed out after 500ms/u),
     );
-    const timeoutAssertion = expect(run.runPromise).rejects.toThrow(/timed out after 500ms/u);
     const killSpy = vi.spyOn(process, "kill");
     let childPid: number | undefined;
     try {
       childPid = await waitForPidFile(childPidPath, 2_000);
       expect(isProcessAlive(childPid)).toBe(true);
-      run.releaseTimeout();
-      await timeoutAssertion;
+      await releaseAndWait();
       expect(killSpy).toHaveBeenCalledWith(expect.any(Number), "SIGKILL");
       await waitForDead(childPid, 2_000);
     } finally {
-      run.releaseTimeout();
       try {
-        await timeoutAssertion;
+        await releaseAndWait();
       } finally {
         killSpy.mockRestore();
         if (childPid !== undefined && isProcessAlive(childPid)) {
@@ -540,24 +539,23 @@ describe("resolve-openclaw-package-candidate", () => {
       "setInterval(() => {}, 1000);",
       `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
     ].join("\n");
-    const run = startProcessWatchdogFixture(() =>
-      runCommandForTest(process.execPath, ["-e", childScript], {
-        killAfterMs: Number.MAX_SAFE_INTEGER,
-        timeoutMs: 500,
-      }),
+    const releaseAndWait = startProcessWatchdogFixture(() =>
+      expect(
+        runCommandForTest(process.execPath, ["-e", childScript], {
+          killAfterMs: Number.MAX_SAFE_INTEGER,
+          timeoutMs: 500,
+        }),
+      ).rejects.toThrow(/timed out after 500ms/u),
     );
-    const timeoutAssertion = expect(run.runPromise).rejects.toThrow(/timed out after 500ms/u);
     let childPid: number | undefined;
     try {
       childPid = await waitForPidFile(childPidPath, 2_000);
-      run.releaseTimeout();
-      await timeoutAssertion;
+      await releaseAndWait();
       expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
       await waitForDead(childPid, 2_000);
     } finally {
-      run.releaseTimeout();
       try {
-        await timeoutAssertion;
+        await releaseAndWait();
       } finally {
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
@@ -592,24 +590,23 @@ describe("resolve-openclaw-package-candidate", () => {
       `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
       "setInterval(() => {}, 1000);",
     ].join("\n");
-    const run = startProcessWatchdogFixture(() =>
-      runCommandForTest(process.execPath, ["-e", parentScript], {
-        killAfterMs: 250,
-        timeoutMs: 250,
-      }),
+    const releaseAndWait = startProcessWatchdogFixture(() =>
+      expect(
+        runCommandForTest(process.execPath, ["-e", parentScript], {
+          killAfterMs: 250,
+          timeoutMs: 250,
+        }),
+      ).rejects.toThrow(/timed out after 250ms/u),
     );
-    const timeoutAssertion = expect(run.runPromise).rejects.toThrow(/timed out after 250ms/u);
     let childPid: number | undefined;
     try {
       childPid = await waitForPidFile(childPidPath, 2_000);
-      run.releaseTimeout();
-      await timeoutAssertion;
+      await releaseAndWait();
       expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
       await waitForDead(childPid, 2_000);
     } finally {
-      run.releaseTimeout();
       try {
-        await timeoutAssertion;
+        await releaseAndWait();
       } finally {
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");

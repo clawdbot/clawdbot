@@ -399,7 +399,7 @@ jobs:
               --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
-              --ignore-scripts=false \
+              --config.ignore-scripts=false \
               --config.engine-strict=false \
               --config.enable-pre-post-scripts=true \
               --config.package-import-method=copy \
@@ -561,7 +561,7 @@ jobs:
               --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
-              --ignore-scripts=false \
+              --config.ignore-scripts=false \
               --config.engine-strict=false \
               --config.enable-pre-post-scripts=true \
               --config.package-import-method=copy \
@@ -866,7 +866,7 @@ jobs:
               --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
-              --ignore-scripts=false \
+              --config.ignore-scripts=false \
               --config.engine-strict=false \
               --config.enable-pre-post-scripts=true \
               --config.package-import-method=copy \

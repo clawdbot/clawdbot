@@ -141,16 +141,17 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
   const agentDir =
     params.agentDir ?? resolveAgentDir(config, explicitOrDefaultAgentId as string, params.env);
   const matchingAgentIds =
-    params.agentDir === undefined
+    explicitOrDefaultAgentId !== undefined
       ? []
       : listAgentIds(config).filter(
-          (candidateAgentId) => resolveAgentDir(config, candidateAgentId) === agentDir,
+          (candidateAgentId) => resolveAgentDir(config, candidateAgentId, params.env) === agentDir,
         );
   const agentId =
     explicitOrDefaultAgentId ?? (matchingAgentIds.length === 1 ? matchingAgentIds[0] : undefined);
   const explicitWorkspaceDir = params.workspaceDir === undefined ? undefined : params.workspaceDir;
   const activationWorkspaceDir =
-    explicitWorkspaceDir ?? (agentId ? resolveAgentWorkspaceDir(config, agentId) : undefined);
+    explicitWorkspaceDir ??
+    (agentId ? resolveAgentWorkspaceDir(config, agentId, params.env) : undefined);
   const full: PreparedModelRuntimeInput = {
     ...(agentId ? { agentId } : {}),
     agentDir,

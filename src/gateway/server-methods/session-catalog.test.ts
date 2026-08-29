@@ -401,7 +401,11 @@ describe("session catalog Gateway methods", () => {
     const projectedSessions = [
       expect.objectContaining({
         threadId: "owned-thread",
-        createdActor: { type: "agent", id: "worker-1" },
+        createdActor: {
+          type: "agent",
+          id: "worker-1",
+          identity: { type: "agent", id: "worker-1" },
+        },
       }),
       expect.not.objectContaining({ createdActor: expect.anything() }),
       expect.not.objectContaining({ createdActor: expect.anything() }),

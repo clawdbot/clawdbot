@@ -36,6 +36,7 @@ import {
   createMcpAppTeardownRecorder,
   type McpAppFixtureEvent as FixtureEvent,
   openMcpAppProofContext,
+  observeMcpAppHttpResponses,
   observeMcpAppNetwork,
   findAppFrame,
   mountControlUiHost,
@@ -548,6 +549,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
       ),
     );
     const diagnostics: Array<Record<string, unknown>> = [];
+    const http = observeMcpAppHttpResponses(gatewayPort);
     const cancellationResults: Array<Record<string, unknown>> = [];
     const timingResults: Array<{
       scenario: string;
@@ -716,6 +718,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
           await fixture.configure({ ...spec, releasePath });
           const startedAtMs = Date.now();
           const networkStart = diagnostics.length;
+          const httpStart = http.responses.length;
           const observation: Record<string, unknown> = { scenario: spec.scenario, startedAtMs };
           cancellationResults.push(observation);
           try {
@@ -728,6 +731,9 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
                   ).length,
               )
               .toBe(1);
+            const startedResponses = http.responses.slice(httpStart);
+            expect(startedResponses).toHaveLength(1);
+            const response = startedResponses[0]!;
             if (spec.action === "abort") {
               await app.locator("#cancel-call").click();
             }
@@ -782,11 +788,14 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
             expect(events.filter((event) => event.event === "tool-complete")).toMatchObject(
               spec.cooperative ? [] : [{ requestId: call.id, aborted: true }],
             );
-            expect(
-              diagnostics
-                .slice(networkStart)
-                .filter((event) => event.event === "requestfailed" && event.method === "POST"),
-            ).toHaveLength(1);
+            // Chromium may omit requestfailed when navigation destroys the old document.
+            // Observe the exact Gateway response, not an unrelated teardown/control POST.
+            await expect.poll(() => response.destroyed).toBe(true);
+            observation.transport = {
+              closed: response.destroyed,
+              writableFinished: response.writableFinished,
+            };
+            expect(response.writableFinished).toBe(false);
           } finally {
             if (releasePath) {
               await fs.writeFile(releasePath, "released");
@@ -834,8 +843,12 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
             scenario: spec.scenario + "-control",
             callDelayMs: 0,
           });
+          const controlHttpStart = http.responses.length;
           await app.locator("#call-app").click();
           await waitForTextContaining(app.locator("#app-tool"), "companion-called");
+          const controlResponses = http.responses.slice(controlHttpStart);
+          expect(controlResponses).toHaveLength(1);
+          expect(controlResponses[0]?.writableFinished).toBe(true);
           const controlEvents = (await fixture.readEvents()).filter(
             (event) => event.scenario === spec.scenario + "-control",
           );
@@ -995,6 +1008,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
         "companion-called",
       );
     } finally {
+      http.stop();
       await fs.writeFile(
         path.join(proofDir, "browser-diagnostics.json"),
         JSON.stringify(diagnostics, null, 2),

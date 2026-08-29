@@ -83,6 +83,18 @@ External-plugin compatibility work follows this order:
 6. Remove only after the announced migration window, usually in a major
    release.
 
+### Model-provider result compatibility
+
+`openclaw/plugin-sdk/models-provider-runtime` preserves the `ModelsProviderData`
+construction shape and `buildModelsProviderData` return signature published in
+`v2026.7.1-2`, including typed adapters that return that shape. These contracts
+remain supported until an explicitly approved SDK-breaking boundary.
+
+Call `buildPreparedModelsProviderData` when forwarding model selections. Its
+result includes the required `modelCatalog` with
+the selected physical-route metadata. Both builders use one metadata producer;
+callers must carry prepared rows forward rather than reconstructing them from IDs.
+
 ### Memory read missing results
 
 Memory managers now return `status: "ok"` for successful excerpts and

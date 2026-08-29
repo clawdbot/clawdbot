@@ -25,6 +25,7 @@ export {
   type ProjectCloneFailureCause,
   type UnknownAgentIdErrorDetails,
   type WizardNotFoundErrorDetails,
+  type SetupAdmissionBusyErrorDetails,
   readCronJobNotFoundError,
   isMcpAppViewExpiredError,
   readMissingScopeError,
@@ -64,6 +65,10 @@ export const UnknownAgentIdErrorDetailsSchema = closedObject({
   agentId: NonEmptyString,
 });
 
+export const SetupAdmissionBusyErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY),
+});
+
 export const WizardNotFoundErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.WIZARD_NOT_FOUND),
 });
@@ -94,6 +99,7 @@ export const GatewayErrorDetailsSchema = Type.Union([
   ProjectCloneErrorDetailsSchema,
   UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
+  SetupAdmissionBusyErrorDetailsSchema,
 ]);
 
 /** Builds the canonical gateway error payload while preserving optional retry metadata. */

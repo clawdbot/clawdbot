@@ -199,7 +199,7 @@ plugins.
     | `/elevated [on\|off\|ask\|full]` | Toggle elevated mode. Alias: `/elev` |
     | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show or set exec defaults |
     | `/login [codex\|openai\|openai-codex]` | Pair Codex/OpenAI login from a private chat or Web UI session. Owner/admin only |
-    | `/model [name\|#\|status] [-s\|--session\|-a\|--agent\|-g\|--global]` | Show or select a model. `-s` changes only this session; owner/admin `-a` and `-g` also update configured defaults |
+    | `/model [name\|default\|list\|status] [-s\|--session\|-a\|--agent\|-g\|--global]` | Show or select a model. `-s` changes only this session; owner/admin `-a` and `-g` also update configured defaults |
     | `/models [provider] [page] [limit=<n>\|all]` | List configured/auth-available providers or models |
     | `/queue <mode>` | Manage active-run queue behavior. See [Queue](/concepts/queue) and [Queue steering](/concepts/queue-steering) |
     | `/steer <message>` | Inject guidance into the active run. Alias: `/tell`. See [Steer](/tools/steer) |
@@ -384,10 +384,13 @@ Without a flag or that optional setting, direct owner/admin `/model <model>` com
 
 The setting also accepts `"agent"` and `"global"`; it does not grant permission to write configured defaults. See [Model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
 
+In text commands, select a model by `provider/model` or a configured alias.
+Numeric selections such as `/model 3` are not supported.
+
 ```text
-/model             # show model picker
-/model list        # same
-/model 3           # select by number from picker
+/model             # show current model and usage guidance
+/model list        # browse providers (same as /models)
+/models openai     # list models from a provider
 /model openai/gpt-5.4    # configured scope, or existing behavior when unset
 /model openai/gpt-5.4 -s # explicit session scope
 /model openai/gpt-5.4 -a # session + agent default update request
@@ -398,9 +401,10 @@ The setting also accepts `"agent"` and `"global"`; it does not grant permission 
 /model status      # detailed view with endpoint and API mode
 ```
 
-On Discord, `/model` and `/models` open an interactive picker with provider and
-model dropdowns. Discord follows the direct command behavior, including
-`modelSelectionScope`. Telegram callback selections always remain session-only.
+On Discord, the bare native `/model` and `/models` commands open an interactive
+picker. Choose a provider and model from the dropdowns, then select **Submit**.
+Discord follows the direct command behavior, including `modelSelectionScope`.
+Telegram model browsing uses callback buttons; selections always remain session-only.
 The picker respects `agents.defaults.modelPolicy.allow`,
 including `provider/*` entries. Without an explicit allowlist, model entries and
 aliases do not restrict selection.

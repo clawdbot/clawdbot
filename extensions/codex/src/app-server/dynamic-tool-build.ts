@@ -19,7 +19,10 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { runWithCronCreatorAuthorityCapabilityResolver } from "openclaw/plugin-sdk/codex-mcp-projection";
+import {
+  resolveCodexScheduledToolProjectionFactory,
+  runWithCronCreatorAuthorityCapabilityResolver,
+} from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import {
   isCodexRemoteExecPlacementSandbox,
@@ -47,8 +50,9 @@ import {
   CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
   CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
   CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
-  createExecAliasDynamicTool,
-  createGatewayProcessAliasDynamicTool,
+  createGatewayExecProjection,
+  createGatewayProcessProjection,
+  createNodeExecAliasDynamicTool,
   isCodexDynamicToolExcluded,
 } from "./shell-dynamic-tools.js";
 import { filterCodexVisionTools } from "./vision-tools.js";
@@ -152,6 +156,7 @@ type DynamicToolBuildParams = {
     frameToolCallId?: string;
     frameImageIdentity?: string;
   };
+  registerRunCleanup?: OpenClawCodingToolsOptions["registerRunCleanup"];
 };
 /** Splits sandbox and run session keys so tool calls can bind to both scopes when needed. */
 function resolveOpenClawCodingToolsSessionKeys(
@@ -254,6 +259,10 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const messagePolicyParams = input.ignoreDisableMessageTool
     ? { ...params, disableMessageTool: false }
     : params;
+  const toolRunContext = buildEmbeddedAttemptToolRunContext({
+    ...params,
+    forceMessageTool: shouldForceMessageTool(messagePolicyParams),
+  });
   if (params.disableTools) {
     input.onWebSearchPolicyResolved?.(false);
     return [];
@@ -291,7 +300,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     );
     const options: OpenClawCodingToolsOptions = {
       agentId: input.sessionAgentId,
-      ...buildEmbeddedAttemptToolRunContext(params),
+      ...toolRunContext,
       exec: {
         ...params.execOverrides,
         ...(input.sessionPermissionPolicy ? { mode: input.sessionPermissionPolicy.execMode } : {}),
@@ -377,6 +386,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       hasRepliedRef: params.hasRepliedRef,
       modelHasVision,
       computerContextEpoch: input.computerContextEpoch,
+      registerRunCleanup: input.registerRunCleanup,
       requireExplicitMessageTarget:
         params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -508,8 +518,10 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         transientWebSearchRestriction &&
         webSearchPolicy.persistentAllowed),
   );
-  const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, messagePolicyParams);
-  const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
+  const filteredTools = filterCodexDynamicToolsForAllowlist(
+    visionFilteredTools,
+    toolRunContext.runtimeToolAllowlist,
+  );
   toolBuildStages.mark("allowlist-filter");
   const normalizedTools = normalizeAgentRuntimeTools({
     runtimePlan: input.ignoreRuntimePlan ? undefined : params.runtimePlan,
@@ -614,38 +626,22 @@ function addGatewayShellDynamicToolsIfAvailable(
   const processAliasAvailable = Boolean(
     processTool && !processExcluded && !existingNames.has(CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME),
   );
+  const createProjection = resolveCodexScheduledToolProjectionFactory(
+    input.params.hostCapabilities,
+  );
+  if (!createProjection) {
+    return filteredTools;
+  }
   const toolsToAppend = [
-    createExecAliasDynamicTool(execTool, {
-      host: "gateway",
+    createGatewayExecProjection(createProjection, execTool, {
       processAliasAvailable,
       ...(input.sessionPermissionPolicy?.mode === "guarded" ? { ask: "always" } : {}),
     }),
   ];
   if (processAliasAvailable && processTool) {
-    toolsToAppend.push(createGatewayProcessAliasDynamicTool(processTool));
+    toolsToAppend.push(createGatewayProcessProjection(createProjection, processTool));
   }
   return [...filteredTools, ...toolsToAppend];
-}
-/** Preserves delivery-critical tools when a narrow allowlist would otherwise hide them. */
-function includeForcedCodexDynamicToolAllow(
-  toolsAllow: string[] | undefined,
-  params: EmbeddedRunAttemptParams,
-): string[] | undefined {
-  if (toolsAllow === undefined || hasWildcardCodexToolsAllow(toolsAllow)) {
-    return toolsAllow;
-  }
-  const forcedToolNames = shouldForceMessageTool(params) ? ["message"] : [];
-  if (forcedToolNames.length === 0) {
-    return toolsAllow;
-  }
-  if (toolsAllow.length === 0) {
-    return forcedToolNames;
-  }
-  const normalized = new Set(toolsAllow.map((name) => normalizeCodexDynamicToolName(name)));
-  const missingToolNames = forcedToolNames.filter(
-    (toolName) => !normalized.has(normalizeCodexDynamicToolName(toolName)),
-  );
-  return missingToolNames.length === 0 ? toolsAllow : [...toolsAllow, ...missingToolNames];
 }
 /** Decides whether Codex native code mode can own shell/file tools for this turn. */
 export function shouldEnableCodexAppServerNativeToolSurface(
@@ -675,7 +671,7 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   ) {
     return false;
   }
-  const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
+  const toolsAllow = params.toolsAllow;
   if (toolsAllow === undefined) {
     return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
   }
@@ -920,10 +916,7 @@ function addNodeShellDynamicToolsIfNeeded(
       (tool) => normalizeCodexDynamicToolName(tool.name) === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
     )
   ) {
-    return [
-      ...filteredTools,
-      createExecAliasDynamicTool(execTool, { host: "node", node: nodePolicy.node }),
-    ];
+    return [...filteredTools, createNodeExecAliasDynamicTool(execTool, nodePolicy.node)];
   }
   return filteredTools;
 }

@@ -18,11 +18,11 @@ import {
   persistedSteerTargetRunId,
   rolloverChatStream,
 } from "./stream-causal-boundary.ts";
+import { maybeResetToolStreamRun } from "./stream-reconciliation.ts";
 import {
-  assistantMessageReplacesCurrentStream,
-  maybeResetToolStreamRun,
-} from "./stream-reconciliation.ts";
-import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
+  prunePersistedAssistantStreamSegments,
+  reconcilePersistedAssistantStream,
+} from "./stream-segment-pruning.ts";
 
 type SessionMessageApplySource =
   | { kind: "history-delta" }
@@ -127,6 +127,7 @@ export function applySessionMessagePayload(
       ...(incoming.id ? { id: incoming.id } : {}),
       ...(incoming.idempotencyKey ? { idempotencyKey: incoming.idempotencyKey } : {}),
       ...(incoming.sequence !== null ? { seq: incoming.sequence } : {}),
+      ...(producerRunId ? { runId: producerRunId } : {}),
     },
   };
   const projection = reduceChatSessionProjection(
@@ -140,15 +141,12 @@ export function applySessionMessagePayload(
   );
   if (incoming.role === "assistant" && projection.messages.includes(message)) {
     prunePersistedAssistantStreamSegments(state, message);
-    if (assistantOwnerRunId) {
-      if (runActive === false) {
-        state.chatStream = null;
-        state.chatStreamStartedAt = null;
-        maybeResetToolStreamRun(state, assistantOwnerRunId);
-      } else if (assistantMessageReplacesCurrentStream(state, message)) {
-        rolloverChatStream(state, { runId: assistantOwnerRunId, persisted: true });
-      }
+    if (assistantOwnerRunId && runActive === false) {
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+      maybeResetToolStreamRun(state, assistantOwnerRunId);
     }
+    reconcilePersistedAssistantStream(state);
   }
   const steerTargetRunId = persistedSteerTargetRunId(message);
   const currentRunId = state.chatRunId;

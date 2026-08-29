@@ -4,12 +4,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
-import { startQaGatewayChild, startQaMockOpenAiServer } from "../../../../extensions/qa-lab/api.js";
+import {
+  createQaGatewayChild,
+  startQaMockOpenAiServer,
+} from "../../../../extensions/qa-lab/api.js";
 import type {
   BoardWidgetAppViewResult,
   BoardWidgetPutResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   TEST_TIMEOUT_MS,
@@ -174,6 +178,7 @@ describe("Gateway MCP App board grant revalidation", () => {
       );
       let fixture: HttpFixture | undefined;
       let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
+      const gatewayOwner = createQaGatewayChild();
       let gateway: GatewayHandle | undefined;
       let pendingCall: Promise<Response> | undefined;
       let proofError: unknown;
@@ -200,7 +205,7 @@ describe("Gateway MCP App board grant revalidation", () => {
         });
         mock = await startQaMockOpenAiServer();
         const activeFixture = fixture;
-        gateway = await startQaGatewayChild({
+        gateway = await gatewayOwner.start({
           repoRoot,
           command: {
             executablePath: process.execPath,
@@ -326,7 +331,7 @@ describe("Gateway MCP App board grant revalidation", () => {
         await fs.writeFile(releasePath, "released\n").catch(() => {});
         await pendingCall?.catch(() => {});
         const stopped = await Promise.allSettled([
-          ...(gateway ? [Promise.resolve(gateway.stop())] : []),
+          stopQaGatewayFixture(gatewayOwner),
           ...(fixture ? [stopChild(fixture)] : []),
           ...(mock ? [Promise.resolve(mock.stop())] : []),
         ]);

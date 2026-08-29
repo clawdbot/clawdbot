@@ -157,6 +157,8 @@ export function projectTuiSessionFinal(
     event.message && typeof event.message === "object" && !Array.isArray(event.message)
       ? (event.message as Record<string, unknown>)
       : {};
+  // Failure receipts are already in finalText; retain only successful blocks
+  // so a history rebuild cannot append the same failure a second time.
   const attachments = Array.isArray(source.content)
     ? source.content.filter(isTuiAssistantAttachmentBlock)
     : [];

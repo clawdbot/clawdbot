@@ -19,9 +19,8 @@ import {
   PreparedModelRuntimeOwnerRetention,
   PreparedModelRuntimePublicationSupersededError,
   advancePreparedModelRuntimeOwnerConfig,
-  createPreparedModelRuntimeOwner,
+  prepareModelRuntimeOwner,
   createPreparedModelRuntimeReplacement,
-  effectiveEnvironmentFingerprint,
   hasSameLifecycleInput,
   normalizeOptionalDir,
   normalizePreparedModelRuntimeInput,
@@ -490,14 +489,12 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   const candidates = entries.map(({ owner: existing, input }) => {
     // Dynamic and standalone owners have different lifetime contracts. A configured publication
     // must replace them so an older lease release cannot remove the committed generation.
-    const owner =
-      existing?.provenance === "configured"
-        ? existing
-        : createPreparedModelRuntimeOwner(input, "configured", catalogMode);
-    owner.input = input;
-    owner.environmentFingerprint = effectiveEnvironmentFingerprint(input);
-    owner.catalogMode = catalogMode;
-    owner.provenance = "configured";
+    const owner = prepareModelRuntimeOwner(
+      input,
+      "configured",
+      catalogMode,
+      existing?.provenance === "configured" ? existing : undefined,
+    );
     return { input, owner };
   });
   await publishPreparedModelRuntimeOwnerBatch({
