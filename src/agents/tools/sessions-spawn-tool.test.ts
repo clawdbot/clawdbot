@@ -765,12 +765,67 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it.each(["Projects", ""])("rejects category %j without visible mode", async (category) => {
+  it("rejects a non-empty category without visible mode", async () => {
     const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
 
-    await expect(tool.execute("hidden-category", { task: "inspect", category })).rejects.toThrow(
-      "Parameters require visible=true: category",
+    await expect(
+      tool.execute("hidden-category", { task: "inspect", category: "Projects" }),
+    ).rejects.toThrow("Parameters require visible=true: category");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("treats a blank or whitespace-only category as omitted for hidden subagent spawns", async () => {
+    for (const blank of ["", "   ", "\n\t"]) {
+      const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+      const result = await tool.execute("hidden-blank-category", {
+        task: "inspect",
+        category: blank,
+      });
+
+      expectDetailFields(result.details, { status: "accepted" });
+      expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledOnce();
+      const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+      expect(spawnArgs).not.toHaveProperty("category");
+      hoisted.spawnSubagentDirectMock.mockReset();
+    }
+  });
+
+  it("treats a blank or whitespace-only category as omitted for ACP spawns", async () => {
+    registerAcpBackendForTest();
+    for (const blank of ["", "   ", "\n\t"]) {
+      const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+      const result = await tool.execute("acp-blank-category", {
+        runtime: "acp",
+        task: "investigate",
+        agentId: "codex",
+        category: blank,
+      });
+
+      expectDetailFields(result.details, { status: "accepted" });
+      expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledOnce();
+      const spawnArgs = mockCallArg(hoisted.spawnAcpDirectMock, 0, 0, "spawnAcpDirect");
+      expect(spawnArgs).not.toHaveProperty("category");
+      hoisted.spawnAcpDirectMock.mockReset();
+    }
+  });
+
+  it("explains that non-empty categories only fit a visible subagent session", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+    await expect(
+      tool.execute("acp-with-category", {
+        runtime: "acp",
+        task: "investigate",
+        agentId: "codex",
+        category: "handoff investigation",
+      }),
+    ).rejects.toThrow(
+      "category is only available for visible dashboard sessions. Choose one: omit category for a hidden or ACP run; or set visible=true, use runtime=\"subagent\", and omit mode and streamTo.",
     );
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 

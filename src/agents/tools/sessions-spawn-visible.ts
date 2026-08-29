@@ -112,8 +112,8 @@ export async function maybeSpawnVisibleSession(params: {
   const worktree = params.raw.worktree === true;
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
-  const categoryProvided = Object.hasOwn(params.raw, "category");
   const requestedCategory = readToolStringParam(params.raw, "category", { allowEmpty: true });
+  const categoryProvided = normalizeOptionalString(requestedCategory) !== undefined;
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
       ["category", categoryProvided ? requestedCategory : undefined],
