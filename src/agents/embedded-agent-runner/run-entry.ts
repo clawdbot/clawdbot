@@ -126,7 +126,7 @@ type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
   abortSignal?: AbortSignal;
   onFallbackStep?: (step: ModelFallbackStepFields) => void | Promise<void>;
   /** Runs once after the successful winner is accepted, before post-turn context commit. */
-  onAcceptedTerminal?: () => void | Promise<void>;
+  onAcceptedTerminal?: () => void | (() => void) | Promise<void | (() => void)>;
   runCandidate: (provider: string, model: string, options: RunEntryCandidateOptions) => Promise<T>;
 };
 
@@ -557,22 +557,30 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       fallbackOutcome: settledResult.outcome,
       terminal,
     });
+    let releaseAcceptedTerminalWork: (() => void) | undefined;
     if (acceptedTerminal && !params.abortSignal?.aborted) {
-      await params.onAcceptedTerminal?.();
-    }
-    if (fallbackResult.result.turnAttempt) {
-      if (acceptedTerminal) {
-        await finalizeAcceptedContextEngineTurn({
-          facts: fallbackResult.result.turnAttempt,
-          lease: contextEngineLogicalTurnLease,
-        });
-      } else {
-        discardContextEngineTurnAttemptIntent({
-          facts: fallbackResult.result.turnAttempt,
-          lease: contextEngineLogicalTurnLease,
-        });
+      const acceptedTerminalWork = await params.onAcceptedTerminal?.();
+      if (typeof acceptedTerminalWork === "function") {
+        releaseAcceptedTerminalWork = acceptedTerminalWork;
       }
-      unsettledContextEngineTurnAttempt = undefined;
+    }
+    try {
+      if (fallbackResult.result.turnAttempt) {
+        if (acceptedTerminal) {
+          await finalizeAcceptedContextEngineTurn({
+            facts: fallbackResult.result.turnAttempt,
+            lease: contextEngineLogicalTurnLease,
+          });
+        } else {
+          discardContextEngineTurnAttemptIntent({
+            facts: fallbackResult.result.turnAttempt,
+            lease: contextEngineLogicalTurnLease,
+          });
+        }
+        unsettledContextEngineTurnAttempt = undefined;
+      }
+    } finally {
+      releaseAcceptedTerminalWork?.();
     }
     let sessionOverrideSettled = false;
     const settleSessionOverride = async () => {

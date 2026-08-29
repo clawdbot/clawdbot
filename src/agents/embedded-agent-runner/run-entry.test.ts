@@ -537,6 +537,39 @@ describe("runEmbeddedAgentEntry", () => {
     expect(state.finalizedAttempts).toEqual(["fallback"]);
   });
 
+  it("releases accepted-terminal finalization work after context commit", async () => {
+    const releaseFinalizationWork = vi.fn();
+    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
+      return {
+        outcome: "completed" as const,
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
+    await runEmbeddedAgentEntry({
+      selection: { cfg: {}, provider: "provider", model: "model" },
+      identity: { runId: "release-finalization-work", agentId: "main", sessionId: "session-1" },
+      harness: {
+        workspaceDir: "/tmp/workspace",
+        preparation: { kind: "direct" },
+        resolveRuntimeOverride: () => undefined,
+      },
+      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+      sessionOverride: { kind: "preserve" },
+      onAcceptedTerminal: () => releaseFinalizationWork,
+      runCandidate: async (provider, model, options) => {
+        recordTurnAttempt(options.onContextEngineTurnCandidate, "candidate");
+        return makeResult({ provider, model });
+      },
+    });
+
+    expect(releaseFinalizationWork).toHaveBeenCalledOnce();
+  });
+
   it("does not commit the accepted terminal after abort wins before fallback settlement", async () => {
     const abortController = new AbortController();
     const onAcceptedTerminal = vi.fn();
