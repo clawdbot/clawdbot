@@ -298,10 +298,11 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         handedOff = true;
       }
       if (stopTask && !handedOff) {
-        return {
-          kind: "failed-retryable" as const,
-          error: new Error("LINE webhook spool stopped before delivery handoff."),
-        };
+        // Hand every claim back, not just the one the drain is holding: the rest
+        // of a set was deferred into this turn and would otherwise stay deferred
+        // forever, with stop() waiting on claims nothing will ever finish.
+        await fannedIn.abandon();
+        return undefined;
       }
       return undefined;
     },
