@@ -72,12 +72,10 @@ vi.mock("../../runtime.js", () => ({
   },
 }));
 
-const {
-  acknowledgePersistedManagedSystemEvents,
-  drainFormattedSystemEvents,
-  prepareFormattedSystemEvents,
-  settleManagedSystemEventsAfterTurnAdoption,
-} = await import("./session-system-events.js");
+const { drainFormattedSystemEvents, prepareFormattedSystemEvents } =
+  await import("./session-system-events.js");
+const { acknowledgePersistedManagedSystemEvents, settleManagedSystemEventsAfterTurnAdoption } =
+  await import("./session-system-event-adoption.js");
 
 describe("drainFormattedSystemEvents trace context", () => {
   beforeEach(() => {

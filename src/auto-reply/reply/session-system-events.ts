@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -22,7 +21,6 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import { emitContinuationQueueDrainSpan } from "../../infra/continuation-tracer.js";
-import { toErrorObject } from "../../infra/errors.js";
 import {
   formatUtcTimestamp,
   formatZonedTimestamp,
@@ -44,6 +42,15 @@ import { defaultRuntime } from "../../runtime.js";
 import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
 import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
 import { resolveContinuationRuntimeConfig } from "../continuation/config.js";
+import {
+  createPreparedSystemEventAuthorityResolver,
+  readAdoptedSystemEventDeliveryIds,
+  resolveFinalSystemEventAdoption,
+  settleStaleSystemEventAuthority,
+  type PreparedFormattedSystemEvents,
+  type PreparedManagedSystemEventDelivery,
+  type PreparedSystemEventBlock,
+} from "./session-system-event-adoption.js";
 
 function isCronContextSystemEvent(event: SystemEvent): boolean {
   return event.contextKey?.startsWith("cron:") ?? false;
@@ -125,78 +132,6 @@ function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
   );
 }
 
-type PreparedSystemEventBlock = {
-  key?: string;
-  text: string;
-};
-
-export type PreparedManagedSystemEventDelivery = {
-  id: string;
-  acknowledge: () => Promise<void>;
-};
-
-type PreparedFormattedSystemEvents = {
-  blocks: PreparedSystemEventBlock[];
-  managedDeliveries: PreparedManagedSystemEventDelivery[];
-};
-
-const MESSAGE_METADATA_KEY = "__openclaw";
-
-function readSessionDeliveryAckIds(message: unknown): Set<string> {
-  const ids = new Set<string>();
-  if (!isRecord(message)) {
-    return ids;
-  }
-  const metadata = message[MESSAGE_METADATA_KEY];
-  if (!isRecord(metadata)) {
-    return ids;
-  }
-  const deliveryIds = metadata.sessionDeliveryAckIds;
-  if (!Array.isArray(deliveryIds)) {
-    return ids;
-  }
-  for (const id of deliveryIds) {
-    const normalized = normalizeOptionalString(id);
-    if (normalized) {
-      ids.add(normalized);
-    }
-  }
-  return ids;
-}
-
-export async function acknowledgePersistedManagedSystemEvents(params: {
-  deliveries: Iterable<PreparedManagedSystemEventDelivery>;
-  persistedMessage: unknown;
-}): Promise<void> {
-  const adoptedIds = readSessionDeliveryAckIds(params.persistedMessage);
-  let firstError: Error | undefined;
-  for (const delivery of params.deliveries) {
-    if (!adoptedIds.has(delivery.id)) {
-      continue;
-    }
-    try {
-      await delivery.acknowledge();
-    } catch (error) {
-      firstError ??= toErrorObject(error, "Managed session delivery acknowledgement failed");
-    }
-  }
-  if (firstError !== undefined) {
-    throw firstError;
-  }
-}
-
-export async function settleManagedSystemEventsAfterTurnAdoption(params: {
-  deliveries: Iterable<PreparedManagedSystemEventDelivery>;
-  persistedMessage: unknown;
-  onTurnAdopted?: () => void | Promise<void>;
-}): Promise<void> {
-  // The ingress owner must tombstone its claim first. Managed settlement can
-  // replay from the transcript receipt; an untombstoned ingress claim can
-  // replay the already-injected user turn.
-  await params.onTurnAdopted?.();
-  await acknowledgePersistedManagedSystemEvents(params);
-}
-
 type ManagedDeliverySettlement = {
   event: SystemEvent;
   id: string;
@@ -204,19 +139,6 @@ type ManagedDeliverySettlement = {
   receipt?: NonNullable<SystemEvent["delegateArtifactReceipt"]>;
   deliveryEligible: boolean;
 };
-
-function readAdoptedSessionDeliveryIds(events: readonly unknown[]): Set<string> {
-  const ids = new Set<string>();
-  for (const event of events) {
-    if (!isRecord(event)) {
-      continue;
-    }
-    for (const id of readSessionDeliveryAckIds(event.message)) {
-      ids.add(id);
-    }
-  }
-  return ids;
-}
 
 async function settleManagedDelivery(
   sessionKey: string,
@@ -283,36 +205,38 @@ export async function prepareFormattedSystemEvents(params: {
   // Storage must resolve under the SAME agent the ownership filter selected for,
   // or a global-scope key under a non-default agent reads the wrong store.
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey, params.agentId);
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+  const authorityScope = {
+    agentId,
+    sessionKey: params.sessionKey,
+    storePath,
+  };
   const currentSessionEntry = loadSessionEntry({
     agentId,
     sessionKey: params.sessionKey,
-    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+    storePath,
     readConsistency: "latest",
     hydrateSkillPromptRefs: false,
   });
   const currentSessionId = currentSessionEntry?.sessionId;
-  const staleAuthorityEvents = selected.filter(
-    (event) =>
-      event.recipientAuthority &&
-      !isSessionRecipientAuthorityCurrent(
-        {
-          agentId,
-          sessionKey: params.sessionKey,
-          storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
-        },
-        event.recipientAuthority,
-      ),
-  );
-  for (const event of staleAuthorityEvents) {
-    if (event.sessionDeliveryAckId) {
-      await ackSessionDelivery(event.sessionDeliveryAckId, event.sessionDeliveryAckStateDir);
+  const removeStaleAuthorityEvents = async () => {
+    const staleAuthorityEvents = selected.filter(
+      (event) =>
+        event.recipientAuthority &&
+        !isSessionRecipientAuthorityCurrent(authorityScope, event.recipientAuthority),
+    );
+    for (const event of staleAuthorityEvents) {
+      await settleStaleSystemEventAuthority({
+        event,
+        sessionKey: params.sessionKey,
+      });
     }
-  }
-  if (staleAuthorityEvents.length > 0) {
-    consumeSelectedSystemEventEntries(params.sessionKey, staleAuthorityEvents);
-    const stale = new Set(staleAuthorityEvents);
-    selected = selected.filter((event) => !stale.has(event));
-  }
+    if (staleAuthorityEvents.length > 0) {
+      const stale = new Set(staleAuthorityEvents);
+      selected = selected.filter((event) => !stale.has(event));
+    }
+  };
+  await removeStaleAuthorityEvents();
   // Adoption-scoped events settle only after the turn is durably adopted, so a
   // crash between the transcript write and the queue ack leaves an ack id that
   // IS already adopted but whose row is still pending. Both kinds must consult
@@ -324,15 +248,17 @@ export async function prepareFormattedSystemEvents(params: {
   );
   const adoptedDeliveryIds =
     currentSessionId && hasManagedDelivery
-      ? readAdoptedSessionDeliveryIds(
+      ? readAdoptedSystemEventDeliveryIds(
           await loadTranscriptEvents({
             agentId,
             sessionId: currentSessionId,
             sessionKey: params.sessionKey,
-            storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+            storePath,
           }),
         )
       : new Set<string>();
+  await removeStaleAuthorityEvents();
+  const resolvePreparedAuthority = createPreparedSystemEventAuthorityResolver(authorityScope);
   const runtime = resolveContinuationRuntimeConfig(params.cfg);
   const deferredManagedEvents = new Set<SystemEvent>();
   const pendingManagedKeys = new Set<string>();
@@ -554,11 +480,13 @@ export async function prepareFormattedSystemEvents(params: {
       excludedAdoptedAckIds.add(id);
       continue;
     }
+    const authority = resolvePreparedAuthority(event);
     adoptionScopedDeliveries.push({
       id,
       acknowledge: async () => {
         await ackSessionDelivery(id, stateDir);
       },
+      ...(authority ? { authority } : {}),
     });
   }
   for (const ack of alreadyAdoptedAckIds) {
@@ -651,11 +579,13 @@ export async function prepareFormattedSystemEvents(params: {
     // Inbound text is deliberately not rewritten to neutralize look-alike `System:` lines.
     // Role separation plus external-content wrapping is the boundary.
     // This is an explicit product decision.
+    const authority = resolvePreparedAuthority(event);
     blocks.push({
       ...(event.sessionDeliveryAckId
         ? { key: `session-delivery:${event.sessionDeliveryAckId}` }
         : {}),
       text: lines.join("\n"),
+      ...(authority ? { authority } : {}),
     });
   }
   if (params.isMainSession && params.isNewSession) {
@@ -688,10 +618,20 @@ export async function drainFormattedSystemEvents(
   params: Parameters<typeof prepareFormattedSystemEvents>[0],
 ): Promise<string | undefined> {
   const prepared = await prepareFormattedSystemEvents(params);
-  for (const delivery of prepared.managedDeliveries) {
+  let adoption = resolveFinalSystemEventAdoption({ prepared: [prepared] });
+  while (adoption.kind === "settle-stale") {
+    await adoption.settle();
+    adoption = resolveFinalSystemEventAdoption({ prepared: [prepared] });
+  }
+  for (const delivery of adoption.managedDeliveries.values()) {
     await delivery.acknowledge();
   }
-  return prepared.blocks.length > 0
-    ? prepared.blocks.map((block) => block.text).join("\n")
+  let finalAdoption = resolveFinalSystemEventAdoption({ prepared: [prepared] });
+  while (finalAdoption.kind === "settle-stale") {
+    await finalAdoption.settle();
+    finalAdoption = resolveFinalSystemEventAdoption({ prepared: [prepared] });
+  }
+  return finalAdoption.blocks.length > 0
+    ? finalAdoption.blocks.map((block) => block.text).join("\n")
     : undefined;
 }

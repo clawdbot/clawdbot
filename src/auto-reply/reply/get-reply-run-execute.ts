@@ -43,7 +43,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { normalizeToolProgressDetail } from "./prompt-session-context.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
-import { settleManagedSystemEventsAfterTurnAdoption } from "./session-system-events.js";
+import { settleManagedSystemEventsAfterTurnAdoption } from "./session-system-event-adoption.js";
 import {
   bindSourceReplyDeliveryRuntime,
   createSourceReplyDeliveryRuntime,
@@ -62,13 +62,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     resolvedThinkLevel,
     thinkingCatalog,
     skillsSnapshot,
-    prefixedCommandBody,
-    queuedBody,
-    transcriptBody,
-    transcriptCommandBody,
     promptMedia,
     currentInboundContext,
-    managedSystemEventDeliveries,
+    adoptPreparedSystemEvents,
     isRoomEvent,
     providedReplyOperation,
     preparedSessionState,
@@ -257,6 +253,27 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   });
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
+  let adoptedSystemEvents: Extract<
+    ReturnType<typeof adoptPreparedSystemEvents>,
+    { kind: "adopted" }
+  >;
+  for (;;) {
+    const adoption = adoptPreparedSystemEvents();
+    if (adoption.kind === "adopted") {
+      adoptedSystemEvents = adoption;
+      break;
+    }
+    await traceRunPhase("reply.settle_stale_system_event_authority", adoption.settle);
+  }
+  // Keep prompt bytes and adoption receipts inside this synchronous section:
+  // any future awaited preparation belongs before the authority recheck above.
+  const {
+    prefixedCommandBody,
+    queuedBody,
+    transcriptBody,
+    transcriptCommandBody,
+    managedSystemEventDeliveries,
+  } = adoptedSystemEvents;
   // prompt-prelude substitutes MEDIA_ONLY_USER_TEXT as transcriptBody for
   // bodyless turns; storage stays bare (the LLM boundary re-injects it), while
   // room-event lines that merely contain the marker keep their real text.

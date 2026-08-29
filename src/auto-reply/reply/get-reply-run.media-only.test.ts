@@ -34,6 +34,7 @@ import {
 } from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { routeReply } from "./route-reply.runtime.js";
+import type { PreparedFormattedSystemEvents } from "./session-system-event-adoption.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import {
   createSourceReplyDeliveryRuntime,
@@ -215,14 +216,8 @@ const sessionSystemEventsMocks = vi.hoisted(() => {
     async (_params: unknown): Promise<string | undefined> => undefined,
   );
   const state: {
-    prepared?: {
-      blocks: Array<{ key?: string; text: string }>;
-      managedDeliveries: Array<{ id: string; acknowledge: () => Promise<void> }>;
-    };
-    preparedQueue: Array<{
-      blocks: Array<{ key?: string; text: string }>;
-      managedDeliveries: Array<{ id: string; acknowledge: () => Promise<void> }>;
-    }>;
+    prepared?: PreparedFormattedSystemEvents;
+    preparedQueue: PreparedFormattedSystemEvents[];
   } = { preparedQueue: [] };
   return {
     state,
@@ -241,7 +236,6 @@ const sessionSystemEventsMocks = vi.hoisted(() => {
         managedDeliveries: [],
       };
     }),
-    settleManagedSystemEventsAfterTurnAdoption: vi.fn().mockResolvedValue(undefined),
   };
 });
 const loadSessionEntryMock = vi.hoisted(() => vi.fn());
@@ -338,8 +332,6 @@ vi.mock("./session-updates.runtime.js", () => ({
 vi.mock("./session-system-events.js", () => ({
   drainFormattedSystemEvents: sessionSystemEventsMocks.drainFormattedSystemEvents,
   prepareFormattedSystemEvents: sessionSystemEventsMocks.prepareFormattedSystemEvents,
-  settleManagedSystemEventsAfterTurnAdoption:
-    sessionSystemEventsMocks.settleManagedSystemEventsAfterTurnAdoption,
 }));
 
 vi.mock("../../sessions/stored-model-overrides.js", () => ({
@@ -654,6 +646,88 @@ describe("runPreparedReply media-only handling", () => {
       "managed delegate artifact",
     );
     expect(requireRunReplyAgentCall().opts?.turnAdoptionLifecycle).toBeUndefined();
+  });
+
+  it("removes an authority-bound event revoked during current-turn image resolution", async () => {
+    let authorityStatus: "current" | "stale" | "settled" = "current";
+    const authority = {
+      status: () => authorityStatus,
+      settleStale: vi.fn(async () => {
+        authorityStatus = "settled";
+      }),
+    };
+    sessionSystemEventsMocks.state.prepared = {
+      blocks: [
+        {
+          key: "session-delivery:delivery-stale",
+          text: "System: stale delegate result",
+          authority,
+        },
+        { text: "System: unbound sibling event" },
+        {
+          key: "session-delivery:delivery-managed",
+          text: "System: managed artifact event",
+        },
+      ],
+      managedDeliveries: [
+        {
+          id: "delivery-stale",
+          acknowledge: vi.fn().mockResolvedValue(undefined),
+          authority,
+        },
+        {
+          id: "delivery-managed",
+          acknowledge: vi.fn().mockResolvedValue(undefined),
+        },
+      ],
+    };
+    resolveCurrentTurnImagesMock.mockImplementationOnce(async () => {
+      authorityStatus = "stale";
+      return {};
+    });
+
+    await runPrepared();
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.prompt).not.toContain("stale delegate result");
+    expect(call.followupRun.prompt).toContain("unbound sibling event");
+    expect(call.followupRun.prompt).toContain("managed artifact event");
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      __openclaw: { sessionDeliveryAckIds: ["delivery-managed"] },
+    });
+    expect(authority.settleStale).toHaveBeenCalledOnce();
+  });
+
+  it("preserves an authority-bound event through final prompt adoption while it remains current", async () => {
+    const authority = {
+      status: () => "current" as const,
+      settleStale: vi.fn(async () => undefined),
+    };
+    sessionSystemEventsMocks.state.prepared = {
+      blocks: [
+        {
+          key: "session-delivery:delivery-current",
+          text: "System: accepted delegate result",
+          authority,
+        },
+      ],
+      managedDeliveries: [
+        {
+          id: "delivery-current",
+          acknowledge: vi.fn().mockResolvedValue(undefined),
+          authority,
+        },
+      ],
+    };
+
+    await runPrepared();
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.prompt).toContain("accepted delegate result");
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      __openclaw: { sessionDeliveryAckIds: ["delivery-current"] },
+    });
+    expect(authority.settleStale).not.toHaveBeenCalled();
   });
 
   it("passes approved elevated defaults to the runner", async () => {
