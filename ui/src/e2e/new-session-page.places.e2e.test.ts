@@ -203,6 +203,12 @@ suite.define(() => {
       expect(commandPaletteBox).not.toBeNull();
       expect(incognitoBox?.y).toBeCloseTo(commandPaletteBox?.y ?? 0, 0);
       expect(incognitoBox?.x ?? 0).toBeGreaterThan((commandPaletteBox?.x ?? 0) + 100);
+      expect(
+        await page
+          .locator(".new-session-page__composer")
+          .getByRole("switch", { name: "Incognito" })
+          .count(),
+      ).toBe(0);
       const fastMode = page.locator(".new-session-page__composer [data-chat-speed-toggle]");
       expect(await fastMode.count()).toBe(1);
       expect(await fastMode.getAttribute("aria-checked")).toBe("false");

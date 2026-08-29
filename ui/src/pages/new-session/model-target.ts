@@ -5,7 +5,7 @@ import {
   resolvePreferredServerChatModelValue,
 } from "../../lib/chat/model-ref.ts";
 
-export type DraftModelTarget = {
+type DraftModelTarget = {
   entry?: ModelCatalogEntry;
   model: string;
   provider: string | null;

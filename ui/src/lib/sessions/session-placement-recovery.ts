@@ -1,4 +1,5 @@
 import {
+  SessionsCreateParamsSchema,
   SessionPermissionModeSchema,
   SessionToolOverridesSchema,
 } from "@openclaw/gateway-protocol";
@@ -74,6 +75,7 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "incognito",
   "visibility",
   "permissionMode",
+  "fastMode",
   "toolOverrides",
   ...PLACEMENT_CREATE_STRING_FIELDS,
 ]);
@@ -95,6 +97,8 @@ export function parseSessionPlacementCreateParams(
     record.worktree !== true ||
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
+    (record.fastMode !== undefined &&
+      !Value.Check(SessionsCreateParamsSchema.properties.fastMode, record.fastMode)) ||
     (record.permissionMode !== undefined &&
       !Value.Check(SessionPermissionModeSchema, record.permissionMode)) ||
     (record.toolOverrides !== undefined &&

@@ -21,11 +21,13 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       try {
+        // Navigation can finish before the shell installs its shortcut handler.
+        await page.getByRole("button", { name: "Open command palette" }).waitFor();
         await page.keyboard.press("Control+K");
-        await paletteModule.request;
 
         const shell = page.locator(".cmd-palette");
         await shell.waitFor({ state: "visible" });
+        await paletteModule.request;
         expect(await shell.getAttribute("aria-label")).toBe("Loading…");
         expect(await page.locator(".lazy-view-state--loading").count()).toBe(0);
 

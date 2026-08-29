@@ -266,6 +266,8 @@ suite.define(() => {
           element.classList.contains("chat-controls__speed-toggle"),
         ),
       ).toBe(true);
+      await fastMode.click();
+      await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("true");
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("");
       await thinkingSlider.press("Home");
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("off");
@@ -429,6 +431,7 @@ suite.define(() => {
         worktreeBaseRef: "main",
         worktreeName: "cloud-e2e",
         thinkingLevel: "high",
+        fastMode: true,
       });
       expect(create.params).not.toHaveProperty("attachments");
       expect(create.params).not.toHaveProperty("cwd");

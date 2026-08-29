@@ -1282,6 +1282,12 @@ export async function performGatewaySessionReset(params: {
           ),
         };
       }
+      // Admitted directives can finish persisting while reset drains them.
+      // Recheck their final selection before retiring placement or running cleanup.
+      const currentFastModeSelectionError = resolveFastModeSelectionError(entry);
+      if (currentFastModeSelectionError) {
+        return { ok: false, error: currentFastModeSelectionError };
+      }
       const currentOwnershipError = resolvePluginSessionOwnershipError({
         action: "reset",
         entry,

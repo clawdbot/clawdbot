@@ -15,6 +15,7 @@ import {
   listRegistryWorktrees,
 } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import {
@@ -2711,6 +2712,82 @@ test("sessions.create rechecks Fast Mode before interrupting reset work", async 
     });
   } finally {
     admission.release();
+  }
+});
+
+test("sessions.create rejects a Fast Mode change completed by draining work before reset cleanup", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:main";
+  const initialEntry = sessionStoreEntry("sess-fast-drain", { fastMode: false });
+  await writeSessionStore({ entries: { main: initialEntry } });
+  const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+  const claim = placements.claimTurn({
+    agentId: "main",
+    sessionKey: key,
+    sessionId: initialEntry.sessionId,
+    owner: { kind: "local" },
+    claimId: "fast-drain-claim",
+    runId: "fast-drain-run",
+  });
+  const interrupted = createDeferredCore();
+  const admission = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: [key, initialEntry.sessionId],
+    assertAllowed: () => undefined,
+    onInterrupt: () => interrupted.resolve(),
+  });
+  const writerEntered = createDeferredCore();
+  const releaseWriter = createDeferredCore();
+  const heldWriter = runExclusiveSqliteSessionWrite(
+    resolveSqliteStoreScope(storePath, { agentId: "main" }),
+    async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    },
+  );
+  await writerEntered.promise;
+  const persisted = persistReplySessionEntry({
+    storePath,
+    sessionKey: key,
+    initialEntry,
+    entry: { ...initialEntry, fastMode: true },
+    touchedFields: ["fastMode"],
+  });
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  const reset = performGatewaySessionReset({
+    key,
+    reason: "new",
+    commandSource: "test",
+    fastModeSelection: { value: false, allowExistingChange: false },
+    workerPlacementContext: { workerSessionPlacementService: placements },
+  });
+  try {
+    await interrupted.promise;
+    releaseWriter.resolve();
+    await heldWriter;
+    expect(await persisted).toMatchObject({ status: "current", entry: { fastMode: true } });
+    placements.releaseTurn(claim);
+    admission.release();
+    expect(await reset).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
+    });
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+    expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+    expect(embeddedRunMock.abortCalls).toEqual([]);
+    expect(placements.get(initialEntry.sessionId)).toMatchObject({ state: "local" });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      sessionId: initialEntry.sessionId,
+      fastMode: true,
+    });
+  } finally {
+    releaseWriter.resolve();
+    await heldWriter;
+    if (placements.validateTurnClaim(claim)) {
+      placements.releaseTurn(claim);
+    }
+    admission.release();
+    await reset;
   }
 });
 

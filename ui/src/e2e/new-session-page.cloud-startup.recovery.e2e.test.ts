@@ -28,6 +28,16 @@ suite.define(() => {
     const message = "recover the cloud create";
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.create"],
+      agentModel: "openai/gpt-5.6-luna",
+      models: [
+        {
+          id: "gpt-5.6-luna",
+          provider: "openai",
+          name: "Luna",
+          reasoning: true,
+          effectiveFastMode: true,
+        },
+      ],
       workspaceGit: true,
       methodResponses: {
         "agents.list": {
@@ -85,8 +95,15 @@ suite.define(() => {
         .toBe("fast");
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
+      await page.locator('[data-chat-thinking-select="true"]').click();
+      const fastMode = page.locator("[data-chat-speed-toggle]");
+      await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("true");
+      await fastMode.click();
+      await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("false");
+      await page.keyboard.press("Escape");
       await page.getByRole("button", { name: "Start session" }).click();
       const firstCreate = await gateway.waitForRequest("sessions.create");
+      expect(firstCreate.params).toMatchObject({ fastMode: false });
       const firstKey = (firstCreate.params as { key?: string }).key;
       if (!firstKey) {
         throw new Error("expected the first recovery create to include a session key");
@@ -107,7 +124,12 @@ suite.define(() => {
       ).toBe("aws · fast");
       await page.getByRole("button", { name: "Start session" }).click();
       const retryCreate = await gateway.waitForRequest("sessions.create");
-      expect(retryCreate.params).toMatchObject({ key: firstKey, message: "", worktree: true });
+      expect(retryCreate.params).toMatchObject({
+        key: firstKey,
+        message: "",
+        worktree: true,
+        fastMode: false,
+      });
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
       await gateway.deferNext("sessions.dispatch");
       await gateway.resolveDeferred("sessions.create", { key: firstKey });
