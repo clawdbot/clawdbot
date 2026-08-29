@@ -16,6 +16,10 @@ type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
 
 type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
   originRank: number;
+  // preferOver targets of the currently selected schema owner for this channel,
+  // kept so a same-origin challenger can be resolved against Real Owner precedence
+  // instead of registry iteration order.
+  channelPreferOver?: readonly string[];
 };
 
 type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
@@ -201,6 +205,7 @@ export function collectChannelSchemaMetadataWithOwnership(
           configUiHints: current?.configUiHints,
           schemaPluginId: current?.schemaPluginId,
           schemaPluginOrigin: current?.schemaPluginOrigin ?? record.origin,
+          channelPreferOver: current?.channelPreferOver,
           originRank,
         });
       }
@@ -217,6 +222,18 @@ export function collectChannelSchemaMetadataWithOwnership(
         // advertises the same channel id.
         continue;
       }
+      // Same-origin claimants (this plugin and the current schema owner) are resolved by
+      // declared replacement precedence, not registry iteration order, mirroring
+      // shouldSkipPreferredPluginAutoEnable: a plugin that another claimant lists in its
+      // preferOver is displaced for the channel and must not publish its schema. Only the
+      // current owner declared as displaced but not a displacer keeps its claim; any other
+      // equal-origin case falls through to the deterministic last-wins overwrite below.
+      if (current && current.originRank === originRank && current.schemaPluginId) {
+        const currentReplaces = (current.channelPreferOver ?? []).includes(record.id);
+        if (currentReplaces && !(channelConfig.preferOver ?? []).includes(current.schemaPluginId)) {
+          continue;
+        }
+      }
       const configSchema = prepareChannelConfigSchema(
         record.origin,
         channelId,
@@ -231,13 +248,14 @@ export function collectChannelSchemaMetadataWithOwnership(
         schemaPluginId: configSchema === undefined ? undefined : record.id,
         schemaPluginOrigin: record.origin,
         originRank,
+        channelPreferOver: channelConfig.preferOver,
       });
     }
   }
 
   return [...byChannelId.values()]
     .toSorted((left, right) => left.id.localeCompare(right.id))
-    .map(({ originRank: _originRank, ...entry }) => entry);
+    .map(({ originRank: _originRank, channelPreferOver: _channelPreferOver, ...entry }) => entry);
 }
 
 /** Collects public per-channel config UI metadata without internal schema ownership. */
