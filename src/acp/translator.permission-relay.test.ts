@@ -172,6 +172,15 @@ function hasApprovalRelay(agent: AcpGatewayAgent, approvalId: string): boolean {
   return relayMap.has(approvalId);
 }
 
+function approvalRelayPendingDecision(agent: AcpGatewayAgent, approvalId: string): unknown {
+  const relayMap = (
+    agent as unknown as {
+      approvalRelays: Map<string, { pendingDecision?: unknown }>;
+    }
+  ).approvalRelays;
+  return relayMap.get(approvalId)?.pendingDecision;
+}
+
 function requireRecord(value: unknown): Record<string, unknown> {
   if (!value) {
     throw new Error("expected record");
@@ -385,7 +394,7 @@ describe("ACP translator permission relay", () => {
     await Promise.all([firstPrompt, secondPrompt]);
   });
 
-  it("allows approval relay retry when Gateway resolution fails", async () => {
+  it("retries the recorded decision on a duplicate approval event instead of re-asking", async () => {
     const resolveApproval = vi
       .fn()
       .mockRejectedValueOnce(new Error("gateway not connected"))
@@ -399,20 +408,54 @@ describe("ACP translator permission relay", () => {
       expect(harness.requestPermission).toHaveBeenCalledTimes(1);
       expect(resolveApproval).toHaveBeenCalledTimes(1);
     });
+    // The user's decision stays on the relay after the failed resolve.
     await vi.waitFor(() => {
-      expect(hasApprovalRelay(harness.agent, "approval-retry")).toBe(false);
+      expect(approvalRelayPendingDecision(harness.agent, "approval-retry")).toBe("allow-once");
     });
 
     await harness.agent.handleGatewayEvent(event);
 
     await vi.waitFor(() => {
-      expect(harness.requestPermission).toHaveBeenCalledTimes(2);
       expect(resolveApproval).toHaveBeenCalledTimes(2);
     });
+    // The user is not re-prompted; their original decision is retried.
+    expect(harness.requestPermission).toHaveBeenCalledTimes(1);
     expect(harness.request).toHaveBeenLastCalledWith("exec.approval.resolve", {
       id: "approval-retry",
       decision: "allow-once",
     });
+
+    await cleanupHarness(harness);
+  });
+
+  it("replays the user's approval decision on gateway reconnect", async () => {
+    const resolveApproval = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("gateway not connected"))
+      .mockResolvedValueOnce({});
+    const harness = await createHarness({ resolveApproval });
+    const event = createApprovalEvent({ runId: harness.runId, approvalId: "approval-replay" });
+
+    await harness.agent.handleGatewayEvent(event);
+
+    await vi.waitFor(() => {
+      expect(harness.requestPermission).toHaveBeenCalledTimes(1);
+      expect(resolveApproval).toHaveBeenCalledTimes(1);
+    });
+    await vi.waitFor(() => {
+      expect(approvalRelayPendingDecision(harness.agent, "approval-replay")).toBe("allow-once");
+    });
+
+    harness.agent.handleGatewayReconnect();
+
+    await vi.waitFor(() => {
+      expect(resolveApproval).toHaveBeenCalledTimes(2);
+    });
+    expect(harness.request).toHaveBeenLastCalledWith("exec.approval.resolve", {
+      id: "approval-replay",
+      decision: "allow-once",
+    });
+    expect(harness.requestPermission).toHaveBeenCalledTimes(1);
 
     await cleanupHarness(harness);
   });

@@ -157,6 +157,9 @@ export class AcpTranslatorPromptStream {
   }
 
   handleGatewayReconnect(): void {
+    // Replay approval decisions the user made while the gateway was away
+    // before prompt reconcile settles anything around them.
+    void this.agentEvents.replayApprovalDecisionsOnReconnect();
     this.disconnects.handleGatewayReconnect();
   }
 
