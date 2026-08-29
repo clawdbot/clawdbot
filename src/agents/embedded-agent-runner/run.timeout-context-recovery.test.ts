@@ -329,6 +329,30 @@ describe("recoverEmbeddedRunTimeout", () => {
     expect(isEmbeddedRunAbandoned({ sessionId: "session-1" })).toBe(true);
   });
 
+  it("restores terminal abandonment when the next attempt fails before registration", async () => {
+    const handle = {
+      runId: "run-1",
+    } as Parameters<typeof setActiveEmbeddedRun>[1];
+    setActiveEmbeddedRun("session-1", handle, "agent:main:session-1");
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-1",
+        handle,
+        sessionKey: "agent:main:session-1",
+        reason: "timeout",
+      }),
+    ).toBe(true);
+
+    const state = createEmbeddedRunContextRecoveryState();
+    expect(await recoverEmbeddedRunTimeout(makeInput({ state }))).toBe(true);
+    expect(isEmbeddedRunAbandoned({ sessionId: "session-1" })).toBe(false);
+
+    // The run loop owns this cleanup after recovery returns, including the
+    // fallible preparation window before the next active run is registered.
+    expect(state.restoreTimeoutRecoveryAbandonment()).toBe(true);
+    expect(isEmbeddedRunAbandoned({ sessionId: "session-1" })).toBe(true);
+  });
+
   it.each(["durable", "detached"] as const)(
     "keeps %s recovery accounting separate from durable post-compaction effects",
     async (sessionPersistence) => {

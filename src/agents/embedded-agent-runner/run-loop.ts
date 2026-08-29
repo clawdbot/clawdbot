@@ -703,6 +703,9 @@ export async function runPreparedEmbeddedLoop(
       return terminalResolution.result;
     }
   } finally {
+    // Successful registration already cleared the marker; every earlier exit
+    // must restore terminal suppression before asynchronous settlement begins.
+    contextRecoveryState.restoreTimeoutRecoveryAbandonment();
     await settleEmbeddedRun({
       runInput: admittedRunInput,
       runtime: preparedRuntime,

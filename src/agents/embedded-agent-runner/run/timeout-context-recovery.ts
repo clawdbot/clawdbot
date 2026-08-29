@@ -117,6 +117,11 @@ export async function recoverEmbeddedRunTimeout(
     input.armPostCompactionGuard();
     await input.prepareCompactedTranscriptRetry(input.assertRecoveryActive);
     input.assertRecoveryActive();
+    if (recoveryMarker) {
+      // Transfer exact-marker cleanup ownership only after local recovery
+      // succeeds; the run loop owns every exit before the next registration.
+      input.state.retainTimeoutRecoveryMarker(recoveryMarker);
+    }
     return true;
   } catch (err) {
     // Any exception after marking recovery is terminal for this attempt. Do
