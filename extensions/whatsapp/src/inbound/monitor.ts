@@ -3,6 +3,7 @@ import type { WAMessageKey, WASocket } from "baileys";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { createSubsystemLogger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { hasWebCredsSyncedHistory } from "../auth-store.js";
 import { createWaSocket, waitForWaConnection } from "../session.js";
 import { resolveWhatsAppSocketTiming, type WhatsAppSocketTimingOptions } from "../socket-timing.js";
 import {
@@ -31,6 +32,41 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   if (enabled) {
     defaultRuntime.log(message);
   }
+}
+
+/**
+ * Ceiling on how far back a connect-time offline flush may reach. Mirrors the
+ * reconnect catch-up cap so a restart can never answer further back than a
+ * reconnect already does.
+ */
+const WHATSAPP_OFFLINE_CATCH_UP_MAX_MS = 20 * 60_000;
+
+/**
+ * Baileys tags an inbound stanza `append` when the server released it from this
+ * device's offline queue, so a burst of them on connect is the backlog accrued
+ * while we were gone. The caller supplies a window when it knows the socket
+ * reopened mid-conversation; a process that just started has no such knowledge
+ * and would otherwise fall back to a sixty-second cutoff that discards the
+ * backlog. An already-synced credential is an established session, so it earns
+ * the same bounded catch-up. A credential still awaiting its first sync does
+ * not, because its replay is the phone's history rather than our backlog.
+ */
+function resolveAppendReplyWindow(params: {
+  requested: WhatsAppAppendReplyWindow | undefined;
+  authDir: string;
+  connectedAtMs: number;
+}): WhatsAppAppendReplyWindow | undefined {
+  if (params.requested) {
+    return params.requested;
+  }
+  if (!hasWebCredsSyncedHistory(params.authDir)) {
+    return undefined;
+  }
+  return {
+    afterMs: params.connectedAtMs - WHATSAPP_OFFLINE_CATCH_UP_MAX_MS,
+    untilMs: params.connectedAtMs + WHATSAPP_OFFLINE_CATCH_UP_MAX_MS,
+    maxAgeMs: WHATSAPP_OFFLINE_CATCH_UP_MAX_MS,
+  };
 }
 
 type MonitorWebInboxOptions = {
@@ -131,7 +167,11 @@ export async function attachWebInboxToSocket(
     mediaMaxMb: options.mediaMaxMb,
     sendReadReceipts: options.sendReadReceipts,
     debounceMs: options.debounceMs,
-    appendReplyWindow: options.appendReplyWindow,
+    appendReplyWindow: resolveAppendReplyWindow({
+      requested: options.appendReplyWindow,
+      authDir: options.authDir,
+      connectedAtMs: socketSession.connectedAtMs,
+    }),
     shouldDebounce: options.shouldDebounce,
     onPendingWorkChanged: options.onPendingWorkChanged,
     durableInboundQueue:

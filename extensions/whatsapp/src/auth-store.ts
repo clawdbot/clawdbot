@@ -464,6 +464,30 @@ export function getWebAuthAgeMs(authDir: string = resolveDefaultWebAuthDir()): n
   return stats ? Math.max(0, Date.now() - stats.mtimeMs) : null;
 }
 
+/**
+ * Whether this credential has already completed a Baileys history sync.
+ *
+ * Baileys seeds `accountSyncCounter` at 0 in `initAuthCreds` and increments it once
+ * the first sync settles, then reads `> 0` itself to decide the server will no longer
+ * push history. Zero therefore marks a session whose very first connection is still
+ * pending, where replayed history belongs to the phone rather than to us.
+ *
+ * Unreadable or malformed credentials answer false, which keeps the caller on the
+ * narrower first-link handling.
+ */
+export function hasWebCredsSyncedHistory(authDir: string = resolveDefaultWebAuthDir()): boolean {
+  try {
+    const raw = readCredsJsonRaw(resolveWebCredsPath(resolveUserPath(authDir)));
+    if (!raw) {
+      return false;
+    }
+    const parsed = JSON.parse(raw) as { accountSyncCounter?: unknown } | undefined;
+    return typeof parsed?.accountSyncCounter === "number" && parsed.accountSyncCounter > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function logWebSelfId(
   authDir: string = resolveDefaultWebAuthDir(),
   runtime: RuntimeEnv = defaultRuntime,
