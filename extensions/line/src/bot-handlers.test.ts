@@ -1539,6 +1539,8 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).not.toHaveBeenCalled();
   });
 
+  // The spool hands the whole set to the handler at once; the handler's job is to
+  // make it one turn carrying every image rather than one turn per part.
   it("answers a multi-image send as one turn instead of one turn per image", async () => {
     downloadLineMediaMock.mockImplementation(async (messageId: string) => ({
       path: `/media/${messageId}.png`,
@@ -1563,131 +1565,32 @@ describe("handleLineWebhookEvents", () => {
         webhookEventId: `evt-${index}`,
       });
 
-    // LINE delivers each image as its own webhook request, and not in order. The
-    // first part holds its dispatch open, so it must not be awaited until the set
-    // is whole - awaiting here is what the ingress drain does per claim.
-    const held = handleLineWebhookEvents([imagePart("m2", 2)], context);
-    await handleLineWebhookEvents([imagePart("m1", 1)], context);
-    expect(processMessage).not.toHaveBeenCalled();
-
-    await handleLineWebhookEvents([imagePart("m3", 3)], context);
-    await held;
+    // LINE does not deliver the parts in order; the spool preserves what it got.
+    await handleLineWebhookEvents(
+      [imagePart("m2", 2), imagePart("m1", 1), imagePart("m3", 3)],
+      context,
+    );
 
     expect(downloadLineMediaMock).toHaveBeenCalledTimes(3);
     expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
     expect(processMessage).toHaveBeenCalledTimes(1);
+    // Every part's media reaches the one turn that speaks for the set.
+    expect(buildLineMessageContextMock.mock.calls[0]?.[0]?.allMedia).toHaveLength(3);
   });
 
-  it("still delivers an image set whose remaining parts never arrive", async () => {
-    vi.useFakeTimers();
-    try {
-      downloadLineMediaMock.mockImplementation(async (messageId: string) => ({
-        path: `/media/${messageId}.png`,
-        contentType: "image/png",
-        size: 10,
-      }));
-      const processMessage = vi.fn();
-      const turnAdoptionLifecycle = createTurnAdoptionLifecycleSpy();
-      const context = createLineWebhookTestContext({
-        processMessage,
-        dmPolicy: "open",
-        turnAdoptionLifecycle,
+  it("keeps events that are not part of a set on their own turns", async () => {
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
+    const text = (id: string) =>
+      createTestMessageEvent({
+        message: { id, type: "text", text: id } as MessageEvent["message"],
+        source: { type: "user", userId: "U1" },
+        webhookEventId: `evt-${id}`,
       });
 
-      const held = handleLineWebhookEvents(
-        [
-          createTestMessageEvent({
-            message: {
-              id: "lonely",
-              type: "image",
-              contentProvider: { type: "line" },
-              imageSet: { id: "image-set-incomplete", index: 1, total: 3 },
-            } as MessageEvent["message"],
-            source: { type: "user", userId: "U1" },
-            webhookEventId: "evt-lonely",
-          }),
-        ],
-        context,
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      // The lane is released while the set waits, or its later parts could never
-      // be claimed; the claim itself is still held by this open dispatch.
-      expect(turnAdoptionLifecycle.onDeferred).toHaveBeenCalledTimes(1);
-      expect(processMessage).not.toHaveBeenCalled();
+    await handleLineWebhookEvents([text("t1"), text("t2")], context);
 
-      await vi.advanceTimersByTimeAsync(10_000);
-      await held;
-
-      expect(processMessage).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  // The combined turn must own every buffered part's claim, so a turn that is
-  // still queued behind an active reply does not complete them early and a
-  // terminal failure returns all of them for retry rather than replaying.
-  it("hands the combined turn one lifecycle standing for every buffered part", async () => {
-    vi.useFakeTimers();
-    try {
-      downloadLineMediaMock.mockImplementation(async (messageId: string) => ({
-        path: `/media/${messageId}.png`,
-        contentType: "image/png",
-        size: 10,
-      }));
-      const processMessage = vi.fn();
-      const first = createTurnAdoptionLifecycleSpy();
-      const second = createTurnAdoptionLifecycleSpy();
-      const part = (messageId: string, index: number) =>
-        createTestMessageEvent({
-          message: {
-            id: messageId,
-            type: "image",
-            contentProvider: { type: "line" },
-            imageSet: { id: "image-set-composite", index, total: 2 },
-          } as MessageEvent["message"],
-          source: { type: "user", userId: "U1" },
-          webhookEventId: `evt-composite-${index}`,
-        });
-
-      const held = handleLineWebhookEvents(
-        [part("c1", 1)],
-        createLineWebhookTestContext({
-          processMessage,
-          dmPolicy: "open",
-          turnAdoptionLifecycle: first,
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      await handleLineWebhookEvents(
-        [part("c2", 2)],
-        createLineWebhookTestContext({
-          processMessage,
-          dmPolicy: "open",
-          turnAdoptionLifecycle: second,
-        }),
-      );
-      await held;
-
-      expect(processMessage).toHaveBeenCalledTimes(1);
-      const handed = processMessage.mock.calls[0]?.[1]?.turnAdoptionLifecycle;
-      expect(handed).toBeDefined();
-      // Nothing is settled just because the turn was dispatched.
-      expect(first.onAdopted).not.toHaveBeenCalled();
-      expect(second.onAdopted).not.toHaveBeenCalled();
-
-      // Core adopting the combined turn settles every source behind it.
-      await handed.onAdopted();
-      expect(first.onAdopted).toHaveBeenCalledTimes(1);
-      expect(second.onAdopted).toHaveBeenCalledTimes(1);
-
-      // And abandoning it returns every source for retry.
-      await handed.onAbandoned();
-      expect(first.onAbandoned).toHaveBeenCalledTimes(1);
-      expect(second.onAbandoned).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(processMessage).toHaveBeenCalledTimes(2);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,15 +1,18 @@
 // Line plugin module owns durable webhook admission and core-drain wiring.
 import type { webhook } from "@line/bot-sdk";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+  type ChannelIngressMonitorLifecycle,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, type RuntimeEnv, warn } from "openclaw/plugin-sdk/runtime-env";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
+import { createLineImageSetIngressBuffer } from "./inbound-image-set.js";
 import { getLineRuntime } from "./runtime.js";
 import {
   eventIdFor,
@@ -44,7 +47,7 @@ type LineWebhookSpoolOptions = {
   accountId: string;
   runtime: RuntimeEnv;
   deliver: (
-    event: webhook.Event,
+    events: readonly webhook.Event[],
     destination: string,
     control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
   ) => Promise<void>;
@@ -104,7 +107,31 @@ async function waitForActiveDeliveriesBeforeDispose(
   }
 }
 
+/** The imageSet a LINE inbound event belongs to, when it reported one. */
+function resolveLineInboundImageSet(
+  event: webhook.Event,
+): { setId: string; messageId: string; index?: number; total?: number } | undefined {
+  if (event.type !== "message" || event.message.type !== "image") {
+    return undefined;
+  }
+  const imageSet = event.message.imageSet;
+  return imageSet?.id
+    ? {
+        setId: imageSet.id,
+        messageId: event.message.id,
+        ...(imageSet.index === undefined ? {} : { index: imageSet.index }),
+        ...(imageSet.total === undefined ? {} : { total: imageSet.total }),
+      }
+    : undefined;
+}
+
 export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWebhookSpool {
+  // Parts of one multi-image send arrive as separate claims; they are grouped
+  // here so the whole set becomes one delivery with one fanned-in ownership.
+  const imageSets = createLineImageSetIngressBuffer<
+    webhook.Event,
+    ChannelIngressMonitorLifecycle
+  >();
   const queue =
     options.queue ??
     getLineRuntime().state.openChannelIngressQueue<LineWebhookSpoolPayload>({
@@ -154,11 +181,43 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         ),
     },
     deliver: async ({ event, destination }, lifecycle) => {
+      const laneKey = laneKeyFor(event, eventIdFor(event));
+      const imageSet = resolveLineInboundImageSet(event);
+      let turnEvents: readonly webhook.Event[] = [event];
+      let turnLifecycles: readonly (typeof lifecycle)[] = [lifecycle];
+      if (imageSet) {
+        // Hold this claim while the rest of the set arrives. Deferring frees the
+        // lane, which is the only way the later parts can be claimed at all.
+        lifecycle.onDeferred();
+        const set = await imageSets.admit({
+          laneKey,
+          setId: imageSet.setId,
+          messageId: imageSet.messageId,
+          event,
+          lifecycle,
+          ...(imageSet.index === undefined ? {} : { index: imageSet.index }),
+          ...(imageSet.total === undefined ? {} : { total: imageSet.total }),
+        });
+        if (!set) {
+          // Another part holds this set and delivers every claim behind it.
+          return undefined;
+        }
+        turnEvents = set.events;
+        turnLifecycles = set.lifecycles;
+      } else {
+        // The lane was released so a set could form; keep this behind it so a
+        // message sent after the images is not delivered before them.
+        await imageSets.awaitLane(laneKey);
+      }
+      // One ownership lifecycle spanning every durable claim this turn consumed.
+      const fannedIn = fanInChannelIngressLifecycles(turnLifecycles);
       // Reply options intentionally omit the drain-only onAdoptionFinalizing callback;
       // the monitor wrapper already tracks that callback as a handoff before invoking us.
-      const boundLifecycle = bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle;
+      const boundLifecycle = bindIngressLifecycleToReplyOptions(
+        fannedIn.lifecycle ?? lifecycle,
+      ).turnAdoptionLifecycle;
       let handedOff = false;
-      const delivery = options.deliver(event, destination, {
+      const delivery = options.deliver(turnEvents, destination, {
         turnAdoptionLifecycle: {
           ...boundLifecycle,
           onAdopted: async () => {
@@ -192,6 +251,11 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         await delivery;
       } finally {
         activeDeliveries.delete(delivery);
+      }
+      if (!handedOff && !stopTask) {
+        // A gated or deliberately skipped turn still consumed every source claim.
+        await fannedIn.settle();
+        handedOff = true;
       }
       if (stopTask && !handedOff) {
         return {

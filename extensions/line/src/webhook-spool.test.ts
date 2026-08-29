@@ -305,11 +305,11 @@ describe("LINE webhook spool", () => {
       const spoolRuntime = runtime();
       const deliver = vi.fn(
         async (
-          event: webhook.Event,
+          events: readonly webhook.Event[],
           _destination: string,
           control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
         ) => {
-          if ((event as webhook.MessageEvent).message.id === "message-event-stop-deferred") {
+          if ((events[0] as webhook.MessageEvent).message.id === "message-event-stop-deferred") {
             deferredLifecycle = control.turnAdoptionLifecycle;
             control.turnAdoptionLifecycle.onDeferred();
             return;
@@ -512,8 +512,10 @@ describe("LINE webhook spool", () => {
         runtime: runtime(),
         queue,
         deliver: async (delivered, _destination, control) => {
-          if (delivered.type === "message" && delivered.message.type === "text") {
-            deliveredText.push(delivered.message.text);
+          for (const event of delivered) {
+            if (event.type === "message" && event.message.type === "text") {
+              deliveredText.push(event.message.text);
+            }
           }
           await control.turnAdoptionLifecycle.onAdopted();
         },
@@ -699,24 +701,18 @@ describe("LINE webhook spool", () => {
   // LINE lanes are keyed per sender, so every part of one multi-image send shares
   // one. A part that defers while its set is incomplete must stop owning that lane
   // or the later parts can never arrive to complete it.
-  it("delivers every part of a same-lane image set while earlier parts stay deferred", async () => {
+  // LINE splits one multi-image send across several webhook events on one lane.
+  // The spool groups their claims so the set reaches the handler as a single turn.
+  it("delivers a same-lane image set as one turn owning every part's claim", async () => {
     await withQueue(async (queue) => {
-      const deferred: LineWebhookTurnAdoptionLifecycle[] = [];
+      const delivered: (readonly webhook.Event[])[] = [];
       const deliver = vi.fn(
         async (
-          event: webhook.Event,
+          events: readonly webhook.Event[],
           _destination: string,
           control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
         ) => {
-          const index = (
-            event as webhook.MessageEvent & { message: { imageSet?: { index: number } } }
-          ).message.imageSet?.index;
-          if (index !== 3) {
-            // The set is still incomplete: hold the claim, release the lane.
-            deferred.push(control.turnAdoptionLifecycle);
-            control.turnAdoptionLifecycle.onDeferred();
-            return;
-          }
+          delivered.push(events);
           await control.turnAdoptionLifecycle.onAdopted();
         },
       );
@@ -729,7 +725,7 @@ describe("LINE webhook spool", () => {
 
       spool.start();
       try {
-        for (const index of [1, 2, 3]) {
+        for (const index of [2, 1, 3]) {
           await spool.accept(
             callback(
               createEvent({
@@ -741,14 +737,62 @@ describe("LINE webhook spool", () => {
           );
         }
 
-        // All three reach the handler. Holding the lane would strand parts 2 and 3.
-        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(3));
-        expect(deferred).toHaveLength(2);
+        // One delivery carrying the whole set, ordered the way the sender picked.
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+        expect(delivered[0]?.map((event) => (event as webhook.MessageEvent).message.id)).toEqual([
+          "message-event-image-set-1",
+          "message-event-image-set-2",
+          "message-event-image-set-3",
+        ]);
 
-        // The deferred claims are still ours to settle, not completed by the drain.
-        for (const lifecycle of deferred) {
-          await lifecycle.onAdopted();
-        }
+        // Adopting that one turn settles all three durable claims.
+        await vi.waitFor(async () => expect(await queue.listPending()).toHaveLength(0));
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
+  // The lane is released so the rest of a set can be claimed; a message the sender
+  // sent afterwards must still arrive after the images, not before them.
+  it("keeps a later message on the same lane behind an incomplete image set", async () => {
+    await withQueue(async (queue) => {
+      const order: string[] = [];
+      const deliver = vi.fn(
+        async (
+          events: readonly webhook.Event[],
+          _destination: string,
+          control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+        ) => {
+          order.push((events[0] as webhook.MessageEvent).message.type);
+          await control.turnAdoptionLifecycle.onAdopted();
+        },
+      );
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver,
+      });
+
+      spool.start();
+      try {
+        // An image set that never completes: only its timer can release the lane.
+        await spool.accept(
+          callback(
+            createEvent({
+              webhookEventId: "event-incomplete",
+              userId: "user-order",
+              imageSet: { id: "set-order", index: 1, total: 3 },
+            }),
+          ),
+        );
+        await spool.accept(
+          callback(createEvent({ webhookEventId: "event-after", userId: "user-order" })),
+        );
+
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2), { timeout: 20_000 });
+        expect(order).toEqual(["image", "text"]);
       } finally {
         await spool.stop();
       }

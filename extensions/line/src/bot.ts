@@ -66,8 +66,8 @@ export function createLineBot(opts: LineBotOptions): LineBot {
   const spool = createLineWebhookSpool({
     accountId: account.accountId,
     runtime,
-    deliver: async (event, _destination, control) =>
-      await handleLineWebhookEvents([event], {
+    deliver: async (events, _destination, control) =>
+      await handleLineWebhookEvents([...events], {
         cfg,
         account,
         runtime,

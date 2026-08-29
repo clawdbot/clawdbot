@@ -1,78 +1,119 @@
-// Line plugin module groups the events LINE splits one multi-image send into.
+// Line plugin module groups the durable claims LINE splits one multi-image send into.
 
 // LINE does not deliver several images picked in one action as one message. It
 // sends one webhook event per image, ties them together with an imageSet id, and
 // does not deliver them in order. Handled one at a time they become N concurrent
 // turns for a single user action: the agent cannot answer about the set, and the
-// turns contend so one of them ends with no reply at all. Parts wait here until
-// the set is whole, then leave as a single turn.
+// turns contend so one of them ends with no reply at all.
+//
+// The parts are buffered here, at the ingress boundary that owns their durable
+// claims, so the set reaches the handler as one delivery whose ownership spans
+// every claim behind it.
 //
 // `index` and `total` are optional in LINE's own contract - older Android clients
 // omit them - so completion can never be assumed and the timer, not the count, is
 // what guarantees a set is always delivered.
 const IMAGE_SET_FLUSH_DELAY_MS = 4_000;
 
-type PendingImageSetEntry<T> = {
+type PendingImageSetPart<TEvent, TLifecycle> = {
   index?: number;
   arrivedAt: number;
-  part: T;
+  event: TEvent;
+  lifecycle: TLifecycle;
 };
 
-type PendingLineImageSet<T> = {
+type PendingImageSet<TEvent, TLifecycle> = {
+  setId: string;
   // Keyed by message id so a redelivered event replaces its part instead of
   // adding a duplicate image to the turn.
-  parts: Map<string, PendingImageSetEntry<T>>;
+  parts: Map<string, PendingImageSetPart<TEvent, TLifecycle>>;
   total?: number;
   /** Wakes the holder once the set is whole or its wait has expired. */
   release: () => void;
+  /** Settles once the holder has taken the set and the lane is free again. */
+  taken: Promise<void>;
+  finishTaken: () => void;
   timer: ReturnType<typeof setTimeout>;
 };
 
-function orderedParts<T>(pending: PendingLineImageSet<T>): readonly T[] {
-  return [...pending.parts.values()]
-    .toSorted((left, right) =>
-      left.index !== undefined && right.index !== undefined
-        ? left.index - right.index
-        : left.arrivedAt - right.arrivedAt,
-    )
-    .map((entry) => entry.part);
+/** The whole set, ordered the way the sender picked it. */
+export type LineImageSetDelivery<TEvent, TLifecycle> = {
+  events: readonly TEvent[];
+  lifecycles: readonly TLifecycle[];
+};
+
+function orderedParts<TEvent, TLifecycle>(
+  pending: PendingImageSet<TEvent, TLifecycle>,
+): readonly PendingImageSetPart<TEvent, TLifecycle>[] {
+  return [...pending.parts.values()].toSorted((left, right) =>
+    left.index !== undefined && right.index !== undefined
+      ? left.index - right.index
+      : left.arrivedAt - right.arrivedAt,
+  );
 }
 
 /**
- * Creates the buffer that holds LINE image-set parts until the set is whole. The
- * pending map lives in the returned closure so the part type stays concrete.
+ * Buffers the parts of a LINE image set until the set is whole.
  *
- * The first part of a set becomes its holder and does not resolve until the set
- * completes or its wait expires; every later part resolves immediately. Keeping
- * the holder's dispatch open is what lets the combined turn run under a live
- * ingress adoption: a turn dispatched after every part had returned would be
- * refused by admission, so a set that never completes would never be delivered.
+ * The first part becomes the set's holder: its call does not resolve until the
+ * set completes or its wait expires, and it is the one that delivers. Keeping
+ * that call open is what keeps the combined turn inside a live ingress
+ * adoption - a turn dispatched after every part had returned is refused by
+ * admission, so a set that never completes would never be delivered at all.
  */
-export function createLineImageSetBuffer<T>(): (params: {
-  key: string;
-  messageId: string;
-  index?: number;
-  total?: number;
-  part: T;
-  flushDelayMs?: number;
-}) => Promise<readonly T[] | null> {
-  const pendingImageSets = new Map<string, PendingLineImageSet<T>>();
+export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
+  admit: (input: {
+    laneKey: string;
+    setId: string;
+    messageId: string;
+    index?: number;
+    total?: number;
+    event: TEvent;
+    lifecycle: TLifecycle;
+    flushDelayMs?: number;
+  }) => Promise<LineImageSetDelivery<TEvent, TLifecycle> | null>;
+  awaitLane: (laneKey: string) => Promise<void>;
+} {
+  const pendingByLane = new Map<string, PendingImageSet<TEvent, TLifecycle>>();
 
-  /** Resolves the whole set for the holder, or null for a part that only joins it. */
-  return async function bufferLineImageSetPart(params): Promise<readonly T[] | null> {
-    const existing = pendingImageSets.get(params.key);
-    const entry: PendingImageSetEntry<T> = {
-      index: params.index,
+  // Releasing the ingress lane is what lets the rest of a set arrive, but it also
+  // lets anything the sender sent afterwards overtake the set. Everything else on
+  // the lane waits here instead, so a later message still lands after the images.
+  const awaitLane = async (laneKey: string): Promise<void> => {
+    for (let pending = pendingByLane.get(laneKey); pending; pending = pendingByLane.get(laneKey)) {
+      await pending.taken;
+    }
+  };
+
+  const admit = async (input: {
+    laneKey: string;
+    setId: string;
+    messageId: string;
+    index?: number;
+    total?: number;
+    event: TEvent;
+    lifecycle: TLifecycle;
+    flushDelayMs?: number;
+  }): Promise<LineImageSetDelivery<TEvent, TLifecycle> | null> => {
+    const existing = pendingByLane.get(input.laneKey);
+    if (existing && existing.setId !== input.setId) {
+      // A different set is still forming on this lane; keep the sends in order.
+      await awaitLane(input.laneKey);
+    }
+    const joined = pendingByLane.get(input.laneKey);
+    const part: PendingImageSetPart<TEvent, TLifecycle> = {
+      index: input.index,
       arrivedAt: Date.now(),
-      part: params.part,
+      event: input.event,
+      lifecycle: input.lifecycle,
     };
 
-    if (existing) {
-      existing.parts.set(params.messageId, entry);
+    if (joined && joined.setId === input.setId) {
+      joined.parts.set(input.messageId, part);
       // A later part may carry the total an earlier one omitted.
-      existing.total ??= params.total;
-      if (existing.total !== undefined && existing.parts.size >= existing.total) {
-        existing.release();
+      joined.total ??= input.total;
+      if (joined.total !== undefined && joined.parts.size >= joined.total) {
+        joined.release();
       }
       return null;
     }
@@ -81,23 +122,37 @@ export function createLineImageSetBuffer<T>(): (params: {
     const whole = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const pending: PendingLineImageSet<T> = {
-      parts: new Map([[params.messageId, entry]]),
-      total: params.total,
+    let finishTaken = () => {};
+    const taken = new Promise<void>((resolve) => {
+      finishTaken = resolve;
+    });
+    const pending: PendingImageSet<TEvent, TLifecycle> = {
+      setId: input.setId,
+      parts: new Map([[input.messageId, part]]),
+      total: input.total,
       release: () => {
         clearTimeout(pending.timer);
         release();
       },
-      timer: setTimeout(release, params.flushDelayMs ?? IMAGE_SET_FLUSH_DELAY_MS),
+      taken,
+      finishTaken,
+      timer: setTimeout(release, input.flushDelayMs ?? IMAGE_SET_FLUSH_DELAY_MS),
     };
     pending.timer.unref?.();
-    pendingImageSets.set(params.key, pending);
+    pendingByLane.set(input.laneKey, pending);
 
     if (pending.total !== undefined && pending.parts.size >= pending.total) {
       pending.release();
     }
     await whole;
-    pendingImageSets.delete(params.key);
-    return orderedParts(pending);
+    pendingByLane.delete(input.laneKey);
+    pending.finishTaken();
+    const ordered = orderedParts(pending);
+    return {
+      events: ordered.map((entry) => entry.event),
+      lifecycles: ordered.map((entry) => entry.lifecycle),
+    };
   };
+
+  return { admit, awaitLane };
 }
