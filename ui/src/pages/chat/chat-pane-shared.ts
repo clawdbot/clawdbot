@@ -268,3 +268,30 @@ export function keyboardEventPathMatches(event: KeyboardEvent, selector: string)
     .composedPath()
     .some((target) => target instanceof Element && target.matches(selector));
 }
+
+export function focusChatComposerFromPrintableKeydown(
+  root: ParentNode,
+  event: KeyboardEvent,
+): void {
+  if (
+    event.defaultPrevented ||
+    event.isComposing ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    event.key.length !== 1 ||
+    keyboardEventPathMatches(event, CHAT_AUTOTYPE_EXEMPT_SELECTOR) ||
+    (event.key === " " && keyboardEventPathMatches(event, CHAT_SPACE_ACTIVATION_SELECTOR)) ||
+    document.openClawModalLayers?.size ||
+    document.querySelector("[aria-modal='true']")
+  ) {
+    return;
+  }
+  const composer = root.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
+  if (!composer || composer.disabled || composer.readOnly) {
+    return;
+  }
+  // Focus during keydown capture so the browser delivers beforeinput/input,
+  // including the first character, through the composer's normal pipeline.
+  composer.focus({ preventScroll: true });
+}

@@ -8,6 +8,23 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("preserves the first character typed outside the new-session composer", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+
+      const composer = page.locator(".new-session-page__message");
+      await composer.waitFor({ state: "visible" });
+      await page.locator("main").click({ position: { x: 5, y: 5 } });
+      await page.keyboard.type("x");
+
+      await expect.poll(() => composer.inputValue()).toBe("x");
+      await expect
+        .poll(() => composer.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+    });
+  });
+
   it("keeps remote-control typing out of the chat composer", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, {

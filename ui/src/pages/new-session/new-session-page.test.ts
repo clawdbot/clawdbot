@@ -54,6 +54,40 @@ afterEach(() => {
 });
 
 describe("new session draft route ownership", () => {
+  it("leaves shortcuts, composition, and other form controls alone", async () => {
+    const page = await mount(routeData("research"));
+    const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
+    page.tabIndex = -1;
+
+    for (const init of [
+      { key: "x", ctrlKey: true },
+      { key: "x", metaKey: true },
+      { key: "Tab" },
+      { key: "Escape" },
+      { key: "Process", isComposing: true },
+    ]) {
+      page.focus();
+      page.dispatchEvent(new KeyboardEvent("keydown", { ...init, bubbles: true, composed: true }));
+      expect(document.activeElement).toBe(page);
+    }
+
+    for (const control of [
+      document.createElement("input"),
+      document.createElement("select"),
+      document.createElement("textarea"),
+      Object.assign(document.createElement("div"), { contentEditable: "true" }),
+    ]) {
+      page.append(control);
+      control.focus();
+      control.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "x", bubbles: true, composed: true }),
+      );
+      expect(document.activeElement).toBe(control);
+    }
+
+    expect(document.activeElement).not.toBe(textarea);
+  });
+
   it("labels the message input independently of its placeholder", async () => {
     const page = await mount(routeData("research"));
     const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
