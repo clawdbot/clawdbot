@@ -1,5 +1,11 @@
 // Coverage for assembling provider-transformed embedded attempt system prompts.
+import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/internal/shared";
+import { Type } from "typebox";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
+import type { AgentTool } from "../../runtime/index.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 let buildAttemptSystemPrompt: typeof import("./attempt-system-prompt.js").buildAttemptSystemPrompt;
 let prepareEmbeddedAttemptSystemPrompt: typeof import("./attempt-system-prompt-prepare.js").prepareEmbeddedAttemptSystemPrompt;
@@ -23,7 +29,133 @@ const transformProviderSystemPrompt: Parameters<
   typeof buildAttemptSystemPrompt
 >[0]["transformProviderSystemPrompt"] = ({ context }) => context.systemPrompt;
 
+async function preparePermissionPrompt(isRawModelRun = false) {
+  const tool = (name: string): AgentTool => ({
+    name,
+    label: name,
+    description: name,
+    parameters: Type.Object({}),
+    execute: async () => ({ content: [], details: {} }),
+  });
+  const read = tool("read");
+  const write = tool("write");
+  const exec = tool("exec");
+  const tools = [read, write, exec];
+  const attempt = {
+    provider: "openai",
+    modelId: "gpt-5.6-luna",
+    model: makeProviderModelFixture({
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    }),
+    permissionMode: "full",
+    promptMode: "minimal",
+    sessionId: "permission-prompt",
+    sessionKey: "agent:main:permission-prompt",
+    workspaceDir: "/tmp/openclaw",
+    config: {},
+  } as EmbeddedRunAttemptParams;
+  const capabilityToolNames = new Set(tools.map(({ name }) => name));
+  const prepared = await prepareEmbeddedAttemptSystemPrompt({
+    attempt,
+    activeContextEngine: undefined,
+    bootstrap: {
+      ...buildBootstrapBudgetState({ bootstrapFiles: [], injectedFiles: [] }),
+      bootstrapMode: "full",
+      contextFiles: [],
+      hookAdjustedBootstrapFiles: [],
+      shouldRecordCompletedBootstrapTurn: false,
+      workspaceNotes: [],
+    },
+    capabilityToolNames,
+    effectiveCwd: "/tmp/openclaw",
+    effectiveTools: tools,
+    effectiveWorkspace: "/tmp/openclaw",
+    getProviderRuntimeHandle: () => ({ provider: attempt.provider, modelId: attempt.modelId }),
+    isRawModelRun,
+    markStage: vi.fn(),
+    modelToolsEnabled: true,
+    proactiveSubagentOrchestration: false,
+    sandboxSessionKey: attempt.sessionKey!,
+    sessionAgentId: "main",
+    skillsPrompt: "",
+    toolSearchDirectoryEnabled: false,
+    toolSearchRuntimeConfig: attempt.config,
+  });
+  if (!prepared.refreshSystemPrompt) {
+    throw new Error("Expected a refreshable attempt prompt");
+  }
+  return {
+    attempt,
+    capabilityToolNames,
+    prepared,
+    read,
+    refreshSystemPrompt: prepared.refreshSystemPrompt,
+    write,
+  };
+}
+
 describe("buildAttemptSystemPrompt", () => {
+  it("replaces an intermediate permission prompt after later changes", async () => {
+    const fixture = await preparePermissionPrompt();
+    const { attempt, capabilityToolNames, prepared, read, refreshSystemPrompt, write } = fixture;
+    const initialPrompt = prepared.systemPromptText;
+    expect(initialPrompt).toContain("- exec:");
+    expect(initialPrompt).toContain("exec approval-pending:");
+
+    attempt.permissionMode = "workspace";
+    capabilityToolNames.delete("exec");
+    const intermediatePrompt = refreshSystemPrompt(initialPrompt, [read, write]);
+    expect(intermediatePrompt).toContain("- write:");
+    expect(intermediatePrompt).not.toContain("- exec:");
+
+    attempt.permissionMode = "read-only";
+    capabilityToolNames.delete("write");
+    refreshSystemPrompt(intermediatePrompt, [read]);
+    // The delayed hook retained B while the live owner already advanced to C.
+    const delayedHookPrompt = prependSystemPromptAdditionAfterCacheBoundary({
+      systemPrompt: `Hook prefix\n\n${intermediatePrompt}\n\nHook suffix`,
+      systemPromptAddition: "Current runtime addition",
+    });
+    const refreshed = refreshSystemPrompt(delayedHookPrompt, [read]);
+    expect(refreshed).toContain("- read:");
+    expect(refreshed).not.toContain("- write:");
+    expect(refreshed).not.toContain("- exec:");
+    expect(refreshed).not.toContain("exec approval-pending:");
+    expect(refreshed).toContain("Hook prefix");
+    expect(refreshed).toContain("Hook suffix");
+    expect(refreshed).toContain("Current runtime addition");
+    expect(refreshed).toContain("permissions to read-only");
+    expect(refreshed).not.toContain("permissions to workspace");
+    expect(refreshed.match(/## Permission change/g)).toHaveLength(1);
+    expect(refreshSystemPrompt(refreshed, [read])).toBe(refreshed);
+  });
+
+  it("preserves explicit hook overrides while replacing their stale permission notice", async () => {
+    const { attempt, read, refreshSystemPrompt } = await preparePermissionPrompt();
+    attempt.permissionMode = "workspace";
+    const overridden = refreshSystemPrompt("Use the deliberate hook override.", [read]);
+    attempt.permissionMode = "guarded";
+    refreshSystemPrompt(overridden, [read]);
+    attempt.permissionMode = "read-only";
+    const refreshed = refreshSystemPrompt(overridden, [read]);
+
+    expect(refreshed).toContain("Use the deliberate hook override.");
+    expect(refreshed).not.toContain("## Tooling");
+    expect(refreshed).toContain("permissions to read-only");
+    expect(refreshed).not.toContain("permissions to workspace");
+    expect(refreshed.match(/## Permission change/g)).toHaveLength(1);
+  });
+
+  it("does not inject permission guidance into raw model prompts", async () => {
+    const { attempt, prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(true);
+    attempt.permissionMode = "read-only";
+    expect(prepared.systemPromptText).toBe("");
+    expect(refreshSystemPrompt("", [read])).toBe("");
+  });
+
   it("does not invoke ambient contributors during settled finalization", async () => {
     const getProviderRuntimeHandle = vi.fn();
     const markStage = vi.fn();

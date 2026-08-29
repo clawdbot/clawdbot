@@ -823,6 +823,47 @@ describe("agent harness host capability", () => {
     ).resolves.toEqual({ decision: "deny", terminalReason: "timeout" });
   });
 
+  it("carries native-turn closure through policy, approval registration, and decision waits", async () => {
+    const { attempt } = await admittedAttempt("run-native-approval-scope");
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const turn = new AbortController();
+    const scopes: AbortSignal[] = [];
+    const captureScope = () => {
+      scopes.push(AbortSignal.any([...(getGatewayToolCallerIdentity()?.approvalSignals ?? [])]));
+    };
+    mockRunBefore.mockImplementationOnce(async ({ params }) => {
+      captureScope();
+      return { blocked: false, params };
+    });
+    mockCallGatewayTool.mockImplementation(async () => {
+      captureScope();
+      return { id: "approval", decision: "allow-once" };
+    });
+    await host.capabilities.runBeforeToolCall({
+      toolName: "exec",
+      params: {},
+      signal: turn.signal,
+    });
+    await host.capabilities.requestApproval({
+      title: "Run command",
+      description: "Native command",
+      severity: "warning",
+      toolName: "exec",
+      timeoutMs: 1_000,
+      signal: turn.signal,
+    });
+    await host.capabilities.waitForApproval({
+      approvalId: "approval",
+      timeoutMs: 1_000,
+      signal: turn.signal,
+    });
+    expect(scopes).toHaveLength(3);
+    turn.abort();
+    expect(scopes.every((signal) => signal.aborted)).toBe(true);
+    expect(() => host.capabilities.assertActive()).not.toThrow();
+    host.close();
+  });
+
   it("revokes a retained bound tool when the same run id gets a replacement owner", async () => {
     const first = await admittedAttempt("run-replaced");
     const { tool, execute } = testTool();

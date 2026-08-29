@@ -588,6 +588,57 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     ]);
   });
 
+  it("replaces permission-bound tools during a run without retaining removed tools", async () => {
+    const executions: string[] = [];
+    const sessionRef: { current?: AgentSession } = {};
+    const readTool: ToolDefinition = {
+      name: "read_policy",
+      label: "Read policy",
+      description: "Read with the current permission boundary",
+      parameters: Type.Object({}),
+      execute: async () => {
+        executions.push("restricted");
+        return { content: [{ type: "text", text: "restricted" }], details: {} };
+      },
+    };
+    const changeTool: ToolDefinition = {
+      ...readTool,
+      name: "change_permission",
+      execute: async () => {
+        sessionRef.current!.replaceCustomTools([readTool], [readTool.name]);
+        return { content: [{ type: "text", text: "Permission change" }], details: {} };
+      },
+    };
+    const previousReadTool: ToolDefinition = {
+      ...readTool,
+      execute: async () => {
+        executions.push("unrestricted");
+        return { content: [{ type: "text", text: "unrestricted" }], details: {} };
+      },
+    };
+    const requests: string[][] = [];
+    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+      requests.push(context.tools?.map((tool) => tool.name) ?? []);
+      const name = requests.length === 1 ? changeTool.name : readTool.name;
+      const content: AssistantMessage["content"] =
+        requests.length < 3
+          ? [{ type: "toolCall", id: `call-${requests.length}`, name, arguments: {} }]
+          : [{ type: "text", text: "done" }];
+      return createAssistantResultStream(
+        createAssistant(model, content, requests.length < 3 ? "toolUse" : "stop"),
+      );
+    });
+    const { session } = await createTestSession({ customTools: [changeTool, previousReadTool] });
+    sessionRef.current = session;
+    session.setActiveToolsByName([changeTool.name, readTool.name]);
+
+    await session.prompt("tighten permissions");
+
+    expect(requests).toEqual([[changeTool.name, readTool.name], [readTool.name], [readTool.name]]);
+    expect(executions).toEqual(["restricted"]);
+    expect(session.getAllTools().map((tool) => tool.name)).toEqual([readTool.name]);
+  });
+
   it("preserves explicit updates from an existing next-turn hook", async () => {
     const hookModel = { ...testModel, id: "hook-model" };
     const hookTool: AgentTool = {

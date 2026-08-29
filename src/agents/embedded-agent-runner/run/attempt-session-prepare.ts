@@ -164,6 +164,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     resourceLoader,
     resolveDeferredTool: input.clientToolPreparation.deferredDirectoryToolsCallable
       ? ({ toolCall }) => {
+          const toolAbortSignal =
+            input.clientToolPreparation.getToolAbortSignal?.() ?? input.runAbortSignal;
           const tool = resolveToolSearchCatalogTool(
             {
               config: attempt.config,
@@ -173,13 +175,18 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
               sessionId: attempt.sessionId,
               runId: attempt.runId,
               catalogRef: input.clientToolPreparation.toolSearchCatalogRef,
-              abortSignal: input.runAbortSignal,
+              abortSignal: toolAbortSignal,
             },
             toolCall.name,
           );
-          // Catalog entries already own before_tool_call wrapping.
+          // Catalog entries own hooks; the adapter must carry the captured
+          // generation into them so approvals cannot outlive a permission change.
           const definition = tool
-            ? toToolDefinitions([tool], input.clientToolPreparation.catalogToolHookContext)[0]
+            ? toToolDefinitions(
+                [tool],
+                input.clientToolPreparation.catalogToolHookContext,
+                toolAbortSignal,
+              )[0]
             : undefined;
           const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
           if (hydratedTool) {
@@ -222,9 +229,33 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   input.onSessionCreated(activeSession);
   installToolLoopRecoveryCleanup({ agent: activeSession.agent, runId: attempt.runId });
   activeSession.setActiveToolsByName(sessionToolAllowlist);
+  let permissionPromptRefresh: ((prompt: string) => string) | undefined;
   const setActiveSessionSystemPrompt = (nextSystemPrompt: string) => {
-    input.onSystemPromptChanged(nextSystemPrompt);
-    applySystemPromptToSession(activeSession, nextSystemPrompt);
+    const refreshedPrompt = permissionPromptRefresh?.(nextSystemPrompt) ?? nextSystemPrompt;
+    input.onSystemPromptChanged(refreshedPrompt);
+    applySystemPromptToSession(activeSession, refreshedPrompt);
+    return refreshedPrompt;
+  };
+  const previousPrepareNextTurn = activeSession.agent.prepareNextTurn;
+  activeSession.agent.prepareNextTurn = async (signal) => {
+    const snapshot = await previousPrepareNextTurn?.call(activeSession.agent, signal);
+    if (!permissionPromptRefresh) {
+      return snapshot;
+    }
+    // A permission change can land while prompt/extension hooks await. Apply
+    // the current owner snapshot after those hooks, before the next model call.
+    const prompt = snapshot?.context?.systemPrompt ?? activeSession.agent.state.systemPrompt;
+    const refreshedPrompt = setActiveSessionSystemPrompt(prompt);
+    return snapshot?.context
+      ? {
+          ...snapshot,
+          context: {
+            ...snapshot.context,
+            systemPrompt: refreshedPrompt,
+            tools: activeSession.agent.state.tools.slice(),
+          },
+        }
+      : snapshot;
   };
   setActiveSessionSystemPrompt(input.initialSystemPrompt);
   let didDeliverSourceReplyViaMessageTool = false;
@@ -276,6 +307,16 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     },
     setActiveSessionSystemPrompt,
     settingsManager,
+    refreshTools: () => {
+      const currentPrompt = activeSession.agent.state.systemPrompt;
+      preparedClientTools.refreshTools();
+      activeSession.replaceCustomTools(allCustomTools, sessionToolAllowlist);
+      setActiveSessionSystemPrompt(currentPrompt);
+    },
+    setPermissionPromptRefresh: (refreshSystemPrompt?: (prompt: string) => string) => {
+      permissionPromptRefresh = refreshSystemPrompt;
+      setActiveSessionSystemPrompt(activeSession.agent.state.systemPrompt);
+    },
   };
 }
 

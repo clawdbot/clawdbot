@@ -1,4 +1,14 @@
+import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
+import {
+  EmbeddedPluginApprovalBroker,
+  getEmbeddedPluginApprovalBroker,
+  setEmbeddedPluginApprovalBroker,
+} from "../../../infra/embedded-plugin-approval-broker.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
+import type { AgentTool } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -106,8 +116,9 @@ function createInput(options?: {
     }
   });
   const activeSession = {
-    agent: { id: "agent", subscribe: vi.fn() },
+    agent: { id: "agent", subscribe: vi.fn(), state: { systemPrompt: "", tools: [] } },
     setActiveToolsByName,
+    replaceCustomTools: vi.fn(),
   } as unknown as AgentSession;
   const sessionManager = { id: "session-manager" };
   const transcriptLifecycle = {
@@ -138,12 +149,14 @@ function createInput(options?: {
     allCustomTools,
     sessionToolAllowlist,
     ...clientToolRuntime,
+    refreshTools: vi.fn(),
   });
   hoisted.createAgentSessionForEmbeddedRunner.mockImplementation(async () => {
     events.push("create-session");
     return { session: activeSession };
   });
-  hoisted.applySystemPromptToSession.mockImplementation(() => {
+  hoisted.applySystemPromptToSession.mockImplementation((_session, prompt: string) => {
+    activeSession.agent.state.systemPrompt = prompt;
     events.push("apply-system-prompt");
   });
   hoisted.installMessageToolOnlyTerminalHook.mockImplementation(
@@ -205,6 +218,123 @@ beforeEach(() => {
 });
 
 describe("prepareEmbeddedAttemptAgentSession", () => {
+  it("cancels a hydrated directory tool's approval with its captured permission generation", async () => {
+    const fixture = createInput();
+    const generation = new AbortController();
+    fixture.input.clientToolPreparation = {
+      codeModeControlsEnabledForRun: false,
+      deferredDirectoryToolsCallable: true,
+      getToolAbortSignal: () => generation.signal,
+    } as never;
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+    const { toToolDefinitions } = await vi.importActual<
+      typeof import("../../agent-tool-definition-adapter.js")
+    >("../../agent-tool-definition-adapter.js");
+    const { wrapToolDefinition } = await vi.importActual<
+      typeof import("../../sessions/tools/tool-definition-wrapper.js")
+    >("../../sessions/tools/tool-definition-wrapper.js");
+    hoisted.toToolDefinitions.mockImplementation(toToolDefinitions);
+    hoisted.wrapToolDefinition.mockImplementation(wrapToolDefinition);
+    hoisted.getGlobalHookRunner.mockReturnValue({
+      hasHooks: (name: string) => name === "before_tool_call",
+      runBeforeToolCall: async () => ({
+        requireApproval: { title: "MCP write", description: "Approve remote mutation" },
+      }),
+    });
+    const execute = vi.fn(async () => ({ content: [], details: { changed: true } }));
+    hoisted.resolveToolSearchCatalogTool.mockReturnValue(
+      wrapToolWithAbortSignal(
+        {
+          name: "mcp_write",
+          label: "Write",
+          description: "Write",
+          parameters: Type.Object({}),
+          execute,
+        },
+        generation.signal,
+      ),
+    );
+    const previousMode = isEmbeddedMode();
+    const previousBroker = getEmbeddedPluginApprovalBroker();
+    const broker = new EmbeddedPluginApprovalBroker();
+    const requested = createDeferredCore();
+    broker.subscribe((event) => {
+      if (event.event === "plugin.approval.requested") {
+        requested.resolve();
+      }
+    });
+    setEmbeddedMode(true);
+    setEmbeddedPluginApprovalBroker(broker);
+    const resolveDeferredTool =
+      hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0]![0].resolveDeferredTool;
+    const tool = resolveDeferredTool({ toolCall: { name: "mcp_write" } });
+    const settled = Promise.allSettled([tool.execute("deferred-write", {})]);
+    try {
+      await requested.promise;
+      expect(broker.listPending()).toHaveLength(1);
+      generation.abort(new Error("Permission change"));
+      expect(broker.listPending()).toHaveLength(0);
+      await settled;
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      broker.stop();
+      await settled;
+      setEmbeddedPluginApprovalBroker(previousBroker);
+      setEmbeddedMode(previousMode);
+    }
+  });
+
+  it("refreshes permission guidance when hook tool caps change without new prompt bytes", async () => {
+    const fixture = createInput();
+    fixture.input.onSystemPromptChanged = vi.fn();
+    const prepared = await prepareEmbeddedAttemptAgentSession(fixture.input);
+    let currentToolNames = ["read", "write"];
+    prepared.setPermissionPromptRefresh(() => `Permission tools: ${currentToolNames.join(", ")}`);
+    expect(fixture.activeSession.agent.state.systemPrompt).toBe("Permission tools: read, write");
+
+    // A late prompt hook may narrow tools without supplying a new system prompt.
+    currentToolNames = ["read"];
+    await fixture.activeSession.agent.prepareNextTurn?.(new AbortController().signal);
+
+    expect(fixture.activeSession.agent.state.systemPrompt).toBe("Permission tools: read");
+  });
+
+  it("keeps updated permission tools and prompt when an older next-turn hook finishes later", async () => {
+    const fixture = createInput();
+    fixture.input.onSystemPromptChanged = vi.fn();
+    type Snapshot = Awaited<
+      ReturnType<NonNullable<typeof fixture.activeSession.agent.prepareNextTurn>>
+    >;
+    const pending = createDeferredCore<Snapshot>();
+    fixture.activeSession.agent.prepareNextTurn = () => pending.promise;
+    const prepared = await prepareEmbeddedAttemptAgentSession(fixture.input);
+    const nextTurn = fixture.activeSession.agent.prepareNextTurn?.(new AbortController().signal);
+    const readTool: AgentTool = {
+      name: "read",
+      label: "Read",
+      description: "Current read-only tool",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    };
+    const currentTools = [readTool];
+    fixture.activeSession.agent.state.tools = currentTools;
+
+    prepared.refreshTools();
+    prepared.setPermissionPromptRefresh((prompt) => `Permission change: read-only\n${prompt}`);
+    pending.resolve({
+      context: {
+        systemPrompt: "old hook prompt",
+        messages: [],
+        tools: [{ ...readTool, name: "stale_write" }],
+      },
+    });
+
+    const snapshot = await nextTurn;
+    expect(snapshot?.context?.systemPrompt).toBe("Permission change: read-only\nold hook prompt");
+    expect(snapshot?.context?.tools).toEqual(currentTools);
+    expect(fixture.activeSession.agent.state.systemPrompt).toBe(snapshot?.context?.systemPrompt);
+  });
+
   it("prepares resources and publishes the activated session runtime", async () => {
     const fixture = createInput();
 

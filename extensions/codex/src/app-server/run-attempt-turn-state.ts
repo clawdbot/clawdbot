@@ -47,6 +47,8 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     rateLimitsRevisionBeforeLastTurnStart: undefined as number | undefined,
     completed: false,
     abortCleanup: Promise.resolve(),
+    // Confirm replacement only after exact-turn stop and native terminal cleanup.
+    permissionChangeRestart: undefined as "requested" | "confirmed" | undefined,
     localCompletionRequested: false,
     terminalTurnNotificationQueued: false,
     // App-server collapses user interrupts and replacements to "interrupted";

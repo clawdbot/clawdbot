@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
+  const onToolExecute = vi.fn(async () => ({ content: [], details: {} }));
   const stubTool = (name: string) =>
     ({
       name,
@@ -14,12 +15,13 @@ const mocks = vi.hoisted(() => {
       displaySummary: name,
       description: name,
       parameters: { type: "object", properties: {} },
-      execute: vi.fn(),
+      execute: onToolExecute,
     }) satisfies AnyAgentTool;
 
   return {
     createOpenClawToolsOptions: vi.fn(),
     stubTool,
+    onToolExecute,
   };
 });
 
@@ -39,6 +41,7 @@ import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 function firstOpenClawToolsOptions(): { cronSelfRemoveOnlyJobId?: string } | undefined {
   return mocks.createOpenClawToolsOptions.mock.calls[0]?.[0] as
@@ -90,6 +93,35 @@ vi.mock("./lazy-exec-tool.js", async (importOriginal) => {
 });
 
 describe("createOpenClawCodingTools exec notification routing", () => {
+  it("binds native tool approval requests to the constructed permission generation", async () => {
+    const generation = new AbortController();
+    let approvalScope: AbortSignal | undefined;
+    mocks.onToolExecute.mockImplementationOnce(async () => {
+      approvalScope = AbortSignal.any([...(getGatewayToolCallerIdentity()?.approvalSignals ?? [])]);
+      return { content: [], details: {} };
+    });
+    const tools = createOpenClawCodingTools({
+      agentId: "main",
+      sessionKey: "agent:main:scope",
+      abortSignal: generation.signal,
+      wrapBeforeToolCallHook: false,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+    const tool = tools.find((candidate) => candidate.name === AUTOMATIONS_TOOL_NAME);
+    if (!tool) {
+      throw new Error("Expected automation tool");
+    }
+    await tool.execute("call", {});
+    generation.abort();
+    expect(approvalScope?.aborted).toBe(true);
+  });
+
   it("routes detached completions to the live session without changing process scope", () => {
     const liveSessionKey = "agent:main:channel:group:example:thread:25";
     const policySessionKey = "agent:main:runtime-policy";
