@@ -1358,11 +1358,14 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it.each([
-    { execMode: "auto", permissionMode: "workspace" },
-    { execMode: "full", permissionMode: "full" },
+    { execMode: "deny", permissionMode: "read-only", expectedExecMode: "deny" },
+    { execMode: "allowlist", permissionMode: "guarded", expectedExecMode: "ask" },
+    { execMode: "ask", permissionMode: "guarded", expectedExecMode: "ask" },
+    { execMode: "auto", permissionMode: "workspace", expectedExecMode: "auto" },
+    { execMode: "full", permissionMode: "full", expectedExecMode: "full" },
   ] as const)(
     "uses the final $permissionMode permission policy for compaction tools",
-    async ({ execMode, permissionMode }) => {
+    async ({ execMode, permissionMode, expectedExecMode }) => {
       await compactEmbeddedAgentSessionDirect(
         wrappedCompactionArgs({
           workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
@@ -1383,7 +1386,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           root: join(TEST_WORKSPACE_DIR, "workspace"),
         },
       });
-      expect(toolOptions.exec).toEqual(expect.objectContaining({ mode: execMode }));
+      expect(toolOptions.exec).toEqual(expect.objectContaining({ mode: expectedExecMode }));
     },
   );
 
