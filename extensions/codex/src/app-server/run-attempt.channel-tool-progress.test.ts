@@ -75,10 +75,14 @@ describe("Codex channel tool progress", () => {
     const presentationOrder: string[] = [];
     params.messageChannel = "telegram";
     params.verboseLevel = "on";
-    params.onAgentEvent = (event) => {
+    params.onAgentEvent = async (event) => {
       onAgentEvent(event);
       if (event.stream === "tool") {
         presentationOrder.push(`event:${event.data.phase}`);
+      }
+      if (event.stream === "tool" && event.data.toolCallId === "dynamic-1") {
+        await Promise.resolve();
+        presentationOrder.push(`event:${event.data.phase}:complete`);
       }
     };
     params.onToolResult = (payload) => {
@@ -220,8 +224,9 @@ describe("Codex channel tool progress", () => {
         resultCount + 1,
       );
       if (testCase.label === "OpenClaw dynamic tool") {
-        expect(presentationOrder.slice(presentationCount, presentationCount + 2)).toEqual([
+        expect(presentationOrder.slice(presentationCount, presentationCount + 3)).toEqual([
           "event:start",
+          "event:start:complete",
           "summary",
         ]);
       }

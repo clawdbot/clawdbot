@@ -189,7 +189,7 @@ export function createCodexAttemptServerRequestController(
       const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
       const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool, toolArgs);
       if (shouldEmitDynamicToolProgress) {
-        void emitCodexAppServerEvent(params, {
+        await emitCodexAppServerEvent(params, {
           stream: "tool",
           data: {
             phase: "start",
