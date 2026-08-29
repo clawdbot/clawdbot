@@ -1,11 +1,13 @@
 // Failure alerts must describe only cron outcomes that survived durable persistence.
 import { randomUUID } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDueIsolatedJob,
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { markCronJobActive } from "../active-jobs.js";
 import { createCronExecutionId } from "../run-id.js";
@@ -279,6 +281,7 @@ describe("cron failure alert persistence", () => {
       nowMs: () => dueAt + 10,
       sendCronFailureAlert: async () => undefined,
     });
+    const taskRunId = `${createCronExecutionId(job.id, dueAt)}:${randomUUID()}`;
     await finalizeAlertOutcome({
       state,
       job,
@@ -286,6 +289,7 @@ describe("cron failure alert persistence", () => {
       error: "provider unavailable",
       startedAt: dueAt,
       endedAt: dueAt + 10,
+      taskRunId,
     });
 
     await vi.waitFor(() =>
@@ -322,6 +326,7 @@ describe("cron failure alert persistence", () => {
       },
       enqueueSystemEvent,
     });
+    const taskRunId = `${createCronExecutionId(job.id, dueAt)}:${randomUUID()}`;
     await finalizeAlertOutcome({
       state,
       job,
@@ -329,6 +334,7 @@ describe("cron failure alert persistence", () => {
       error: "provider unavailable",
       startedAt: dueAt,
       endedAt: dueAt + 10,
+      taskRunId,
     });
 
     await vi.waitFor(() =>
@@ -541,5 +547,144 @@ describe("cron failure alert persistence", () => {
     // Job state must still reflect B's outcome (A's callback must not clobber it).
     expect(state.store?.jobs[0]?.state.lastFailureAlertAtMs).toBe(startedAtB + 10);
     expect(state.store?.jobs[0]?.state.lastFailureNotificationDeliveryStatus).toBe("delivered");
+  });
+
+  it("settles two alerts that share the same wall-clock millisecond onto their own history rows", async () => {
+    // Two runs whose endedAt land on the exact same millisecond get distinct
+    // taskRunIds. The old alertAtMs guard could not distinguish them; the
+    // taskRunId guard must correctly route each settlement.
+    const store = fixtures.makeStorePath();
+    const sharedMs = Date.parse("2026-08-01T16:20:00.000Z");
+    const job = createAlertJob({ id: "failure-alert-same-ms", dueAt: sharedMs });
+    job.failureAlert = { after: 1, cooldownMs: 0 };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const taskRunIdA = `${createCronExecutionId(job.id, sharedMs)}:${randomUUID()}`;
+    const taskRunIdB = `${createCronExecutionId(job.id, sharedMs)}:${randomUUID()}`;
+
+    type Deferred = { resolve: () => void };
+    const pendingAlerts: Deferred[] = [];
+    const sendCronFailureAlert = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          pendingAlerts.push({ resolve });
+        }),
+    );
+
+    const state = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => sharedMs,
+      sendCronFailureAlert,
+    });
+
+    // Run A and B both share endedAt = sharedMs.
+    await finalizeAlertOutcome({
+      state,
+      job,
+      status: "error",
+      error: "first failure",
+      startedAt: sharedMs,
+      endedAt: sharedMs,
+      taskRunId: taskRunIdA,
+    });
+    expect(pendingAlerts).toHaveLength(1);
+
+    const jobAfterA = state.store?.jobs[0];
+    if (!jobAfterA) throw new Error("expected job after run A");
+
+    await finalizeAlertOutcome({
+      state,
+      job: jobAfterA,
+      status: "error",
+      error: "second failure",
+      startedAt: sharedMs,
+      endedAt: sharedMs,
+      taskRunId: taskRunIdB,
+    });
+    expect(pendingAlerts).toHaveLength(2);
+
+    // Settle A first (in-order).
+    pendingAlerts[0]!.resolve();
+    // A must not settle job state because B owns the slot (lastFailureAlertTaskRunId = taskRunIdB).
+    await Promise.resolve();
+    await vi.waitFor(() =>
+      expect(
+        readCronTaskRunHistoryPage({
+          storeKey: cronStoreKey(store.storePath),
+          jobId: job.id,
+          limit: 5,
+        }).entries.find((e) => e.runAtMs === sharedMs)?.failureNotificationDelivery?.status,
+      ).toBeDefined(),
+    );
+
+    // Job state still shows B's pending "unknown" (A was blocked by taskRunId mismatch).
+    expect(state.store?.jobs[0]?.state.lastFailureAlertTaskRunId).toBe(taskRunIdB);
+    expect(state.store?.jobs[0]?.state.lastFailureNotificationDeliveryStatus).toBe("unknown");
+
+    // Settle B.
+    pendingAlerts[1]!.resolve();
+    await vi.waitFor(() =>
+      expect(state.store?.jobs[0]?.state.lastFailureNotificationDeliveryStatus).toBe("delivered"),
+    );
+    expect(state.store?.jobs[0]?.state.lastFailureNotificationDeliveryStatus).toBe("delivered");
+  });
+
+  it("redacts credentials in a transport rejection before persisting the error", async () => {
+    // A misbehaving alert transport can embed credentials in its rejection
+    // message. The cron service must scrub them before writing to job state
+    // and run history so secrets never reach the protocol surface.
+    const secretValue = "tok_live_SUPERSECRETCREDENTIAL";
+    registerSecretValueForRedaction(secretValue);
+    // Register cleanup regardless of outcome to avoid leaking into sibling tests.
+    try {
+      const store = fixtures.makeStorePath();
+      const dueAt = Date.parse("2026-08-01T16:30:00.000Z");
+      const job = createAlertJob({ id: "failure-alert-redaction", dueAt });
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+      const rawError = `Webhook rejected: Authorization: Bearer ${secretValue}`;
+      const state = createAlertState({
+        storePath: store.storePath,
+        nowMs: () => dueAt + 10,
+        sendCronFailureAlert: async () => {
+          throw new Error(rawError);
+        },
+      });
+      const taskRunId = `${createCronExecutionId(job.id, dueAt)}:${randomUUID()}`;
+      await finalizeAlertOutcome({
+        state,
+        job,
+        status: "error",
+        error: "provider unavailable",
+        startedAt: dueAt,
+        endedAt: dueAt + 10,
+        taskRunId,
+      });
+
+      await vi.waitFor(() =>
+        expect(state.store?.jobs[0]?.state.lastFailureNotificationDeliveryStatus).toBe(
+          "not-delivered",
+        ),
+      );
+
+      const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state;
+      const persistedError = persisted?.lastFailureNotificationDeliveryError ?? "";
+
+      // The raw secret must not appear in the stored error.
+      expect(persistedError).not.toContain(secretValue);
+      // The error must still be informative (contains the non-secret parts).
+      expect(persistedError).toContain("Webhook rejected");
+
+      const history = readCronTaskRunHistoryPage({
+        storeKey: cronStoreKey(store.storePath),
+        jobId: job.id,
+        limit: 5,
+      });
+      const historyError = history.entries[0]?.failureNotificationDelivery?.error ?? "";
+      expect(historyError).not.toContain(secretValue);
+      expect(historyError).toContain("Webhook rejected");
+    } finally {
+      resetSecretRedactionRegistryForTest();
+    }
   });
 });

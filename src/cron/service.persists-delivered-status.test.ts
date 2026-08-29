@@ -1152,4 +1152,81 @@ describe("CronService persists delivered status", () => {
       await store.cleanup();
     }
   });
+
+  it("overlapping manual runs settle forward with distinct outcomes on their own rows", async () => {
+    // Two manual runs (A then B) each fire an alert (cooldownMs=0).
+    // A settles before B (forward/natural order). Each alert must land on its
+    // own run-history row with the correct outcome; B's settlement must not
+    // be blocked by A having already written its outcome.
+    const store = await makeStorePath();
+
+    type Deferred = { resolve: () => void };
+    const pendingAlerts: Deferred[] = [];
+    const sendCronFailureAlert = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          pendingAlerts.push({ resolve });
+        }),
+    );
+
+    let runCount = 0;
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        runCount++;
+        return { status: "error" as const, error: `failure ${runCount}` };
+      }),
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    try {
+      const job = await cron.add({
+        name: "overlapping-manual-forward",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "test" },
+        delivery: { mode: "none" },
+        failureAlert: { after: 1, cooldownMs: 0 },
+      });
+
+      // Run A → alert A dispatched but not yet settled.
+      await cron.run(job.id, "force");
+      expect(pendingAlerts).toHaveLength(1);
+
+      // Run B → alert B dispatched (cooldownMs=0 allows it immediately).
+      await cron.run(job.id, "force");
+      expect(pendingAlerts).toHaveLength(2);
+
+      // Settle A first (forward/natural order). A does NOT own job state
+      // (B's dispatch overwrote lastFailureAlertTaskRunId), so A should only
+      // land on its own run-history row, not on job state.
+      pendingAlerts[0]!.resolve();
+      await vi.waitFor(() => expect(sendCronFailureAlert).toHaveBeenCalledTimes(2));
+      await Promise.resolve();
+
+      // Job state is still "unknown" — B hasn't settled yet and A was blocked
+      // from overwriting it.
+      expect(cron.getJob(job.id)?.state.lastFailureNotificationDeliveryStatus).toBe("unknown");
+
+      // Now settle B.
+      pendingAlerts[1]!.resolve();
+      await vi.waitFor(() =>
+        expect(cron.getJob(job.id)?.state.lastFailureNotificationDeliveryStatus).toBe("delivered"),
+      );
+
+      // Job state reflects B's outcome.
+      expect(cron.getJob(job.id)?.state.lastFailureNotificationDeliveryStatus).toBe("delivered");
+      expect(cron.getJob(job.id)?.state.consecutiveErrors).toBe(2);
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
 });
