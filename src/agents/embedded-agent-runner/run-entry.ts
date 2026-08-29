@@ -91,6 +91,8 @@ type EmbeddedAgentRunEntryResult<T extends EmbeddedAgentRunResult> = {
   model: string;
   attempts: FallbackAttempt[];
   terminal: EmbeddedAgentRunEntryTerminal;
+  /** True when the accepted terminal callback already froze abort admission. */
+  acceptedTerminalCommitted: boolean;
   settleSessionOverride: () => Promise<void>;
 };
 
@@ -557,9 +559,11 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       fallbackOutcome: settledResult.outcome,
       terminal,
     });
+    let acceptedTerminalCommitted = false;
     let releaseAcceptedTerminalWork: (() => void) | undefined;
     if (acceptedTerminal && !params.abortSignal?.aborted) {
       const acceptedTerminalWork = await params.onAcceptedTerminal?.();
+      acceptedTerminalCommitted = params.onAcceptedTerminal !== undefined;
       if (typeof acceptedTerminalWork === "function") {
         releaseAcceptedTerminalWork = acceptedTerminalWork;
       }
@@ -598,7 +602,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
         });
       }
     };
-    return { ...settledResult, terminal, settleSessionOverride };
+    return { ...settledResult, terminal, acceptedTerminalCommitted, settleSessionOverride };
   } finally {
     if (unsettledContextEngineTurnAttempt) {
       discardContextEngineTurnAttemptIntent({

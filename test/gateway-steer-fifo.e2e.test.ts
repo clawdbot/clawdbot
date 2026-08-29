@@ -833,19 +833,23 @@ describe("Gateway steer FIFO", () => {
             }
           | undefined;
         await vi.waitFor(async () => {
-          historyBeforeAbort = await fixture.diagnosticsClient.request("chat.history", {
-            sessionKey: fixture.sessionKey,
-            limit: 20,
-          });
-          const assistantMessages = (historyBeforeAbort.messages ?? []).filter(
+          const history = await fixture.diagnosticsClient.request<{
+            messages?: Array<{ abortMeta?: unknown; content?: unknown; role?: unknown }>;
+            sessionInfo?: { activeRunIds?: string[]; hasActiveRun?: boolean };
+          }>("chat.history", { sessionKey: fixture.sessionKey, limit: 20 });
+          historyBeforeAbort = history;
+          const assistantMessages = (history.messages ?? []).filter(
             (message) => message.role === "assistant",
           );
           expect(assistantMessages).toHaveLength(1);
           expect(contentText(assistantMessages[0]?.content)).toBe("TURN_1_COMPLETE");
-          expect(historyBeforeAbort.sessionInfo).toMatchObject({
+          expect(history.sessionInfo).toMatchObject({
             hasActiveRun: true,
           });
         }, WAIT_OPTS);
+        if (!historyBeforeAbort) {
+          throw new Error("history was not captured before abort");
+        }
 
         const abort = await fixture.client.abortChat({
           sessionKey: fixture.sessionKey,

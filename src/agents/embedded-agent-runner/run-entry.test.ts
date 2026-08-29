@@ -593,7 +593,13 @@ describe("runEmbeddedAgentEntry", () => {
         preparation: { kind: "direct" },
         resolveRuntimeOverride: () => undefined,
       },
-      behavior: { kind: "channel-delivery", readDeliveryEvidence: () => ({}) },
+      behavior: {
+        kind: "channel-delivery",
+        readDeliveryEvidence: () => ({
+          hasDirectlySentBlockReply: false,
+          hasBlockReplyPipelineOutput: false,
+        }),
+      },
       sessionOverride: { kind: "preserve" },
       abortSignal: abortController.signal,
       onAcceptedTerminal,
