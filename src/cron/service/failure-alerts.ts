@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -197,6 +198,8 @@ function markFailureNotificationRequested(job: CronJob): void {
   job.state.lastFailureNotificationDelivered = undefined;
   job.state.lastFailureNotificationDeliveryStatus = "unknown";
   job.state.lastFailureNotificationDeliveryError = undefined;
+  // Clear the ownership token so the next dispatch sets a fresh one.
+  job.state.lastFailureAlertTaskRunId = undefined;
 }
 
 /** Persists the settled alert outcome to the job row and its run-history record. */
@@ -205,7 +208,7 @@ function recordFailureNotificationDeliveryOutcome(
   jobId: string,
   outcome: CronFailureNotificationDelivery,
   // Originating run identity captured when the alert was dispatched.
-  origin: { taskRunId?: string; alertAtMs?: number },
+  origin: { taskRunId?: string },
 ): void {
   try {
     const committed = commitCronRuntimeRows({
@@ -214,15 +217,15 @@ function recordFailureNotificationDeliveryOutcome(
       operationLabel: "cron.failure-alert-outcome",
       mutate: ({ jobs }) => {
         const current = jobs.get(jobId);
-        // Only the outstanding "unknown" write that belongs to the originating
-        // alert is ours to settle. A newer alert overwrites lastFailureAlertAtMs
-        // before its own "unknown" lands, so a mismatched timestamp means a later
-        // alert has taken ownership of job state and we must not touch it.
+        // Only settle when the job's pending alert slot belongs to this run.
+        // lastFailureAlertTaskRunId is persisted in state_json so it survives
+        // process restarts and commitCronRuntimeRows' DB re-read. Strict equality
+        // handles both sides undefined (legacy/no-task-run paths) and mismatched
+        // run IDs (newer alert overwrote the token before this callback fired).
         if (
           !current ||
           current.state.lastFailureNotificationDeliveryStatus !== "unknown" ||
-          (origin.alertAtMs !== undefined &&
-            current.state.lastFailureAlertAtMs !== origin.alertAtMs)
+          origin.taskRunId !== current.state.lastFailureAlertTaskRunId
         ) {
           return { value: false };
         }
@@ -236,7 +239,7 @@ function recordFailureNotificationDeliveryOutcome(
       const resident = state.store?.jobs.find((job) => job.id === jobId);
       if (
         resident?.state.lastFailureNotificationDeliveryStatus === "unknown" &&
-        (origin.alertAtMs === undefined || resident.state.lastFailureAlertAtMs === origin.alertAtMs)
+        origin.taskRunId === resident.state.lastFailureAlertTaskRunId
       ) {
         resident.state.lastFailureNotificationDelivered = outcome.delivered;
         resident.state.lastFailureNotificationDeliveryStatus = outcome.status;
@@ -268,11 +271,8 @@ function transportFailureAlert(
 ): void {
   // Capture the originating run identity at dispatch time so the callback
   // updates only this alert's run-history row and only this alert's job-state
-  // trace (guarded by lastFailureAlertAtMs, which a newer alert overwrites).
-  const origin = {
-    taskRunId: params.taskRunId,
-    alertAtMs: params.job.state.lastFailureAlertAtMs,
-  };
+  // trace (guarded by lastFailureAlertTaskRunId, which a newer alert overwrites).
+  const origin = { taskRunId: params.taskRunId };
   const recordOutcome = (outcome: CronFailureNotificationDelivery) =>
     recordFailureNotificationDeliveryOutcome(state, params.job.id, outcome, origin);
   let pendingFallback = true;
@@ -315,10 +315,13 @@ function transportFailureAlert(
         "cron: failure alert delivery failed",
       );
       fallback();
+      // Redact credentials that a misbehaving transport may embed in its
+      // rejection message before persisting it into job state / run history.
+      const safeErrText = truncateUtf16Safe(redactSensitiveText(String(err)), 200);
       recordOutcome({
         delivered: false,
         status: "not-delivered",
-        error: truncateUtf16Safe(String(err), 200),
+        error: safeErrText,
       });
     });
 }
@@ -403,6 +406,9 @@ function maybeEmitDeliveryFailureAlert(
     return;
   }
   markFailureNotificationRequested(params.job);
+  // Claim the settlement slot so the callback can guard against clobbering
+  // a concurrently dispatched main-run alert that owns its own slot.
+  params.job.state.lastFailureAlertTaskRunId = params.taskRunId;
   const job = structuredClone(params.job);
   const safeJobName = job.name || job.id;
   const detailLines =
@@ -468,6 +474,10 @@ export function maybeEmitFailureAlert(
   }
   markFailureNotificationRequested(params.job);
   params.job.state.lastFailureAlertAtMs = now;
+  // Own the job-state settlement slot with a collision-free run identity.
+  // lastFailureAlertTaskRunId survives via state_json so the async callback's
+  // DB re-read sees the same token that was set here.
+  params.job.state.lastFailureAlertTaskRunId = params.taskRunId;
   if (params.delivery === "record-only") {
     return;
   }

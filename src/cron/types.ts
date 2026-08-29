@@ -437,6 +437,13 @@ export type CronJobState = {
   consecutiveSkipped?: number;
   /** Last failure alert timestamp (ms since epoch) for cooldown gating. */
   lastFailureAlertAtMs?: number;
+  /**
+   * Identifies the task run that owns the current pending failure-alert delivery slot.
+   * Stored in state_json; not an indexed column. Cleared by markFailureNotificationRequested
+   * and set to the dispatching run's taskRunId by maybeEmitFailureAlert so that the async
+   * settlement callback can guard against clobbering a newer alert's job-state outcome.
+   */
+  lastFailureAlertTaskRunId?: string;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
   /** Timestamp of the last trigger script evaluation. */

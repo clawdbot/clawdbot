@@ -119,6 +119,10 @@ function applyManualRunOutcome(params: {
       scheduleMode: scheduleMode === "immediate-preserve" ? "preserve" : "advance",
       scheduleOwnership,
       scheduleOwnershipAtMs: params.prepared.scheduleOwnershipAtMs,
+      // Thread the originating run id so the async alert callback targets the
+      // correct job-state slot and run-history row instead of falling back to
+      // the newest-unknown scan (Finding 1).
+      taskRunId: params.prepared.taskRunId,
       deferredNotifications: params.deferredNotifications,
     },
   );

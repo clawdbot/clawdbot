@@ -19,7 +19,6 @@ import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqli
 import { updateTaskStateByRunId } from "../../tasks/task-registry-record-api.js";
 import {
   bindTaskRunExecution,
-  listTaskRegistryRecordsByRuntimeSourceIdFromSqlite,
   listTaskRecordsByRuntimeSourceIdInDatabase,
 } from "../../tasks/task-registry.store.sqlite.js";
 import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
@@ -67,41 +66,23 @@ export function tryRecordCronFailureNotificationDeliveryOutcome(
   },
 ): void {
   try {
-    const storeKey = cronStoreKey(state.deps.storePath);
-    let runId: string | undefined;
-    let detail: unknown;
-    if (params.taskRunId !== undefined) {
-      // Use the exact originating run — replacing the job-level pending-row scan.
-      const exact = findTaskByRunId(params.taskRunId);
-      if (
-        exact?.runtime !== "cron" ||
-        cronTaskRecordStoreKey(exact) !== storeKey ||
-        !isRecord(exact.detail)
-      ) {
-        return;
-      }
-      runId = exact.runId;
-      detail = exact.detail;
-    } else {
-      const pending = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
-        runtime: "cron",
-        sourceId: params.jobId,
-      })
-        .filter(
-          (task) =>
-            cronTaskRecordStoreKey(task) === storeKey &&
-            task.runId !== undefined &&
-            isRecord(task.detail) &&
-            isRecord(task.detail.failureNotificationDelivery) &&
-            task.detail.failureNotificationDelivery.status === "unknown",
-        )
-        .toSorted((left, right) => right.createdAt - left.createdAt)[0];
-      runId = pending?.runId;
-      detail = pending?.detail;
-      if (!pending || runId === undefined || !isRecord(detail)) {
-        return;
-      }
+    // Only settle the exact originating run-history row. The newest-unknown
+    // fallback scan is removed: taskRunId is the sole settlement identity
+    // (Finding 3), and both the job-state and history-row guards use it.
+    if (params.taskRunId === undefined) {
+      return;
     }
+    const storeKey = cronStoreKey(state.deps.storePath);
+    const exact = findTaskByRunId(params.taskRunId);
+    if (
+      exact?.runtime !== "cron" ||
+      cronTaskRecordStoreKey(exact) !== storeKey ||
+      !isRecord(exact.detail)
+    ) {
+      return;
+    }
+    const runId = exact.runId;
+    const detail = exact.detail;
     if (runId === undefined || !isRecord(detail)) {
       return;
     }
