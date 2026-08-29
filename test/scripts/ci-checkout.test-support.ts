@@ -107,12 +107,10 @@ export async function withCiCheckoutFixture<T>(
     throw error;
   }
   let stderr = "";
-  let result: CloseResult | undefined;
   // An error can precede close, including failed spawn. Never reject this join.
   const closed = new Promise<CloseResult>((resolve) => {
     supervisor.once("close", (code, signal) => {
-      result = { code, signal };
-      resolve(result);
+      resolve({ code, signal });
     });
   });
   supervisor.stderr?.on("data", (data) => (stderr += String(data)));
@@ -151,7 +149,15 @@ export async function withCiCheckoutFixture<T>(
         (process.platform === "win32"
           ? termination?.processTreeState === "terminated"
           : inspectManagedProcessGroup(supervisor, { errorPolicy: "indeterminate" }) === "dead");
-      while (!result || !groupDead()) {
+      // Join actual close before checking extinction, sharing the original cleanup budget.
+      const didClose = await Promise.race([
+        closed.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
+        }),
+      ]);
+      clearTimeout(timer);
+      while (!groupDead()) {
         const remaining = deadline - Date.now();
         if (remaining <= 0) {
           break;
@@ -160,7 +166,7 @@ export async function withCiCheckoutFixture<T>(
       }
       console.error(
         `Checkout fixture retained at ${root}; no completed report. ` +
-          `Supervisor close: ${Boolean(result)}; group extinction: ${groupDead()}. ` +
+          `Supervisor close: ${didClose}; group extinction: ${groupDead()}. ` +
           `Inspect workflow.log and stop remaining owned writers before removing this exact directory.\n${stderr}`,
       );
     }

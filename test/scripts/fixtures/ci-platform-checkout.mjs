@@ -491,7 +491,8 @@ async function supervise() {
         );
       } catch (err) {
         // Only the completed report releases the namespace; exit alone does not.
-        console.error(`Fixture cleanup unverified; retaining ${root}: ${err}`);
+        const detail = err instanceof Error ? err.message : String(err);
+        console.error(`Fixture cleanup unverified; retaining ${root}: ${detail}`);
         fs.closeSync(output);
         process.exit(1);
       }
@@ -558,7 +559,8 @@ async function supervise() {
       // Parent teardown owns this group even before sentinel self-registration.
       stdio: "ignore",
     });
-    track(sentinel);
+    // stop() joins the sentinel's actual close through pendingChildren before reporting.
+    void track(sentinel);
     await until(
       () => stopping || records().some((entry) => entry.role === "sentinel"),
       "sentinel readiness",

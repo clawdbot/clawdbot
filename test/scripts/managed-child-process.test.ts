@@ -20,6 +20,7 @@ import {
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -52,6 +53,24 @@ function expectProcessPid(pid: number | undefined): number {
     throw new Error("Expected spawned process to expose a pid");
   }
   return pid;
+}
+
+async function killFixturePid(pid: number, processGroup = false): Promise<void> {
+  if (!Number.isSafeInteger(pid) || pid <= 1) {
+    throw new Error("Invalid owned fixture PID");
+  }
+  await runQaGatewayFixture(
+    async () => {
+      try {
+        process.kill(processGroup ? -pid : pid, "SIGKILL");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+          throw error;
+        }
+      }
+    },
+    () => waitForDead(pid, 2_000),
+  );
 }
 
 // Call after installing handlers and keepalive: existence must mean a complete, ready PID.
@@ -192,51 +211,45 @@ ${publish(2)}
         );
       });
       const pids: number[] = [];
-      try {
-        for (const pidPath of pidPaths) {
-          pids.push(await waitForPidFile(pidPath, 10_000));
-        }
-        expect(pids.every(isProcessAlive)).toBe(true);
-        if (abort) {
-          abortController.abort();
-        }
-        expect(await releaseAndWait()).toMatchObject({
-          message: expect.stringContaining(
-            abort ? "canceled after sibling failure" : "timed out after 100ms",
-          ),
-        });
-        expect(
-          pids.filter(isProcessAlive),
-          "timeout must join every nested child before rejection",
-        ).toEqual([]);
-        if (runner === "preparation") {
+      // Finish cleanup before the harness afterEach removes PID evidence, retaining all failures.
+      await runQaGatewayFixture(
+        async () => {
+          for (const pidPath of pidPaths) {
+            pids.push(await waitForPidFile(pidPath, 10_000));
+          }
+          expect(pids.every(isProcessAlive)).toBe(true);
+          if (abort) {
+            abortController.abort();
+          }
+          expect(await releaseAndWait()).toMatchObject({
+            message: expect.stringContaining(
+              abort ? "canceled after sibling failure" : "timed out after 100ms",
+            ),
+          });
           expect(
-            stdout.mock.calls.some(([chunk]) => String(chunk) === "[nested] shutdown-tail"),
-          ).toBe(true);
-        } else if (runner === "managed-inherit") {
-          expect(stdout.mock.calls.some(([chunk]) => String(chunk) === "shutdown-tail")).toBe(true);
-        } else {
-          expect(output).toBe("shutdown-tail");
-        }
-      } finally {
-        await releaseAndWait();
-        stdout.mockRestore();
-        for (const pidPath of pidPaths.toReversed()) {
-          if (!fs.existsSync(pidPath)) {
-            continue;
+            pids.filter(isProcessAlive),
+            "timeout must join every nested child before rejection",
+          ).toEqual([]);
+          if (runner === "preparation") {
+            expect(
+              stdout.mock.calls.some(([chunk]) => String(chunk) === "[nested] shutdown-tail"),
+            ).toBe(true);
+          } else if (runner === "managed-inherit") {
+            expect(stdout.mock.calls.some(([chunk]) => String(chunk) === "shutdown-tail")).toBe(
+              true,
+            );
+          } else {
+            expect(output).toBe("shutdown-tail");
           }
-          const pid = Number(fs.readFileSync(pidPath, "utf8"));
-          if (!Number.isSafeInteger(pid) || pid <= 1) {
-            continue;
+        },
+        releaseAndWait,
+        () => stdout.mockRestore(),
+        ...pidPaths.toReversed().map((pidPath) => async () => {
+          if (fs.existsSync(pidPath)) {
+            await killFixturePid(Number(fs.readFileSync(pidPath, "utf8")));
           }
-          try {
-            process.kill(pid, "SIGKILL");
-          } catch (error) {
-            expect((error as NodeJS.ErrnoException).code).toBe("ESRCH");
-          }
-          await waitForDead(pid, 2_000);
-        }
-      }
+        }),
+      );
     },
     20_000,
   );
@@ -918,32 +931,30 @@ if (role === "leaf") {
       controller.stderr!.on("data", (chunk) => {
         stderr += String(chunk);
       });
-      try {
-        expect(await waitForChildClose(controller), stderr).toEqual({ code: 0, signal: null });
-      } finally {
-        if (controller.exitCode === null && controller.signalCode === null)
-          controller.kill("SIGKILL");
-        await waitForDead(expectProcessPid(controller.pid), 2_000);
-        for (const role of ["leader", "leaf"]) {
-          const pidPath = path.join(dir, `${role}.pid`);
-          if (!fs.existsSync(pidPath)) continue;
-          const pid = Number(fs.readFileSync(pidPath, "utf8"));
-          if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error("Invalid owned fixture PID");
-          try {
-            process.kill(-pid, "SIGKILL");
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      await runQaGatewayFixture(
+        async () => {
+          expect(await waitForChildClose(controller), stderr).toEqual({ code: 0, signal: null });
+        },
+        () => {
+          if (controller.exitCode === null && controller.signalCode === null) {
+            controller.kill("SIGKILL");
           }
-          await waitForDead(pid, 2_000);
-        }
-      }
+        },
+        () => waitForDead(expectProcessPid(controller.pid), 2_000),
+        ...["leader", "leaf"].map((role) => async () => {
+          const pidPath = path.join(dir, `${role}.pid`);
+          if (fs.existsSync(pidPath)) {
+            await killFixturePid(Number(fs.readFileSync(pidPath, "utf8")), true);
+          }
+        }),
+      );
     },
   );
 
   posixIt.concurrent.for(["timeout", "sibling failure", "normal exit", "normal drainage"])(
     "joins escaped output or fails closed within the cleanup budget after $0",
     { timeout: 25_000 },
-    async (mode, { expect: expectConcurrent }) => {
+    async (mode, { expect: expectCase }) => {
       // Concurrent rows own their roots; the shared afterEach can run while a sibling is alive.
       const dir = fs.mkdtempSync(
         path.join(fs.realpathSync(os.tmpdir()), "openclaw-managed-held-output-"),
@@ -1031,10 +1042,10 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
         const canceledAt = Date.now();
         if (mode === "normal drainage") {
           await waitFor(() => exitedAt !== 0);
-          expectConcurrent(child?.exitCode).toBe(0);
-          expectConcurrent(child?.stdout?.closed).toBe(false);
-          expectConcurrent(child?.stderr?.closed).toBe(false);
-          expectConcurrent(settledAt).toBe(0);
+          expectCase(child?.exitCode).toBe(0);
+          expectCase(child?.stdout?.closed).toBe(false);
+          expectCase(child?.stderr?.closed).toBe(false);
+          expectCase(settledAt).toBe(0);
           fs.writeFileSync(failPath, "drain");
         }
         if (mode === "sibling failure") {
@@ -1050,33 +1061,33 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
           processTreeState: "indeterminate",
         };
         if (mode === "normal drainage") {
-          expectConcurrent(failure).toBe(0);
-          expectConcurrent(stdout).toBe("drained-out");
-          expectConcurrent(stderr).toBe("drained-err");
-          expectConcurrent(child?.stdout?.closed).toBe(true);
-          expectConcurrent(child?.stderr?.closed).toBe(true);
+          expectCase(failure).toBe(0);
+          expectCase(stdout).toBe("drained-out");
+          expectCase(stderr).toBe("drained-err");
+          expectCase(child?.stdout?.closed).toBe(true);
+          expectCase(child?.stderr?.closed).toBe(true);
         } else if (mode !== "sibling failure") {
-          expectConcurrent(failure).toMatchObject(cleanupFailure);
-          expectConcurrent(child?.stdout?.destroyed).toBe(true);
-          expectConcurrent(child?.stderr?.destroyed).toBe(true);
+          expectCase(failure).toMatchObject(cleanupFailure);
+          expectCase(child?.stdout?.destroyed).toBe(true);
+          expectCase(child?.stderr?.destroyed).toBe(true);
           if (mode === "normal exit") {
-            expectConcurrent(child?.exitCode).toBe(0);
-            expectConcurrent(settledAt - exitedAt).toBeGreaterThanOrEqual(5_000);
-            expectConcurrent(settledAt - exitedAt).toBeLessThan(7_000);
+            expectCase(child?.exitCode).toBe(0);
+            expectCase(settledAt - exitedAt).toBeGreaterThanOrEqual(5_000);
+            expectCase(settledAt - exitedAt).toBeLessThan(7_000);
           }
         } else {
-          expectConcurrent(failure).toBeInstanceOf(AggregateError);
-          expectConcurrent(failure).toMatchObject({
+          expectCase(failure).toBeInstanceOf(AggregateError);
+          expectCase(failure).toMatchObject({
             message: "primary failed with exit code 2; sibling cleanup could not be verified",
             errors: [{ message: "primary failed with exit code 2" }, cleanupFailure],
           });
         }
-        expectConcurrent(Date.now() - canceledAt).toBeLessThan(12_000);
-        expectConcurrent(isProcessAlive(parentPid)).toBe(false);
+        expectCase(Date.now() - canceledAt).toBeLessThan(12_000);
+        expectCase(isProcessAlive(parentPid)).toBe(false);
         if (mode === "normal drainage") {
           await waitForDead(escapedPid, 2_000);
         }
-        expectConcurrent(isProcessAlive(escapedPid)).toBe(mode !== "normal drainage");
+        expectCase(isProcessAlive(escapedPid)).toBe(mode !== "normal drainage");
       } finally {
         fs.writeFileSync(failPath, "fail");
         abortController.abort();

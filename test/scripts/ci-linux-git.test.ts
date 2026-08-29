@@ -208,11 +208,9 @@ const resetCases: { label: string; fetchResults: FetchResult[]; code: number; at
     { label: "timeouts exhausted", fetchResults: Array(5).fill("hang"), code: 1, attempts: 5 },
     { label: "unverified cleanup", fetchResults: ["cleanup-failure"], code: 125, attempts: 1 },
   ];
-linuxIt.each(
-  resetProfiles.flatMap((profile) => resetCases.map((entry) => ({ ...profile, ...entry }))),
-)(
-  "$job drains descendants before reset/reuse ($label)",
-  async ({ job, step, target, remote, fetchResults, code, attempts }) => {
+linuxIt.each(resetProfiles.flatMap((profile) => resetCases.map((entry) => ({ profile, entry }))))(
+  "$profile.job drains descendants before reset/reuse ($entry.label)",
+  async ({ profile: { job, step, target, remote }, entry: { fetchResults, code, attempts } }) => {
     const report = await runStep({ job, step, fetchResults });
     expect(report.code).toBe(code);
     expect(report.readyAttempts).toHaveLength(attempts);
