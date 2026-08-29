@@ -1828,6 +1828,10 @@ export type StagedOlderHistoryPage = {
     connectionEpoch: number;
     sessionKey: string;
     agentId?: string;
+    /** Projection fence: any later history request or reset (tail reload,
+     * rewind, branch switch) advances the version and voids this page even
+     * when the replacement projection lands on the same cursor. */
+    historyVersion: number;
   };
   requestedOffset: number;
   result: ChatHistoryResult;
@@ -1847,6 +1851,7 @@ export async function fetchStagedOlderHistoryPage(
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
   const sessionKey = state.sessionKey;
+  const historyVersion = getChatHistoryPaneRequests(state).historyVersion;
   const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
@@ -1856,6 +1861,7 @@ export async function fetchStagedOlderHistoryPage(
       client,
       connectionEpoch,
       sessionKey,
+      historyVersion,
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
     },
     requestedOffset: offset,
@@ -1876,6 +1882,7 @@ export function isStagedOlderHistoryPageCurrent(
     state.client === claim.client &&
     state.connected &&
     state.connectionEpoch === claim.connectionEpoch &&
+    getChatHistoryPaneRequests(state).historyVersion === claim.historyVersion &&
     state.sessionKey === claim.sessionKey &&
     (!isUiSelectedGlobalSessionKey(state, claim.sessionKey) ||
       resolveUiSelectedSessionAgentId(state) === claim.agentId) &&

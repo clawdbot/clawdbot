@@ -9,7 +9,11 @@ import { extractText } from "../../lib/chat/message-extract.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
-import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
+import {
+  loadChatHistory,
+  resetChatHistoryProjection,
+  type ChatHistoryResult,
+} from "./chat-history.ts";
 import {
   appendChatThread,
   createNativeShowEarlierPane,
@@ -533,6 +537,42 @@ describe("chat pane native history pagination", () => {
       offset: 5,
     });
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([31, 32, 5, 6, 7, 8]);
+  });
+
+  // Rewind and branch switch share resetChatHistoryProjection as their reset
+  // owner: the projection fence must void a staged page even when the
+  // replacement projection lands on the same pagination cursor.
+  it("discards a staged page after a same-cursor projection reset", async () => {
+    let offsetFourCalls = 0;
+    const request = stagedPagesRequest({
+      4: () => {
+        offsetFourCalls += 1;
+        return {
+          messages:
+            offsetFourCalls === 1
+              ? [nativeHistoryMessage(3, "pre-rewind branch"), nativeHistoryMessage(4)]
+              : [nativeHistoryMessage(41, "post-rewind branch"), nativeHistoryMessage(42)],
+          hasMore: false,
+          totalMessages: 8,
+        };
+      },
+    });
+    const { pane, state } = createStagedPrefetchPane(request);
+
+    await pane.loadOlderMessages();
+    await vi.waitFor(() => expect(pane.stagedOlderPage).not.toBeNull());
+
+    resetChatHistoryProjection(state);
+    // The replacement branch happens to resume at the identical cursor.
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 4, totalMessages: 8 };
+    await expect(pane.loadOlderMessages()).resolves.toBe(true);
+
+    expect(offsetFourCalls).toBe(2);
+    const texts = state.chatMessages.map((message) =>
+      extractText(message as Parameters<typeof extractText>[0]),
+    );
+    expect(texts.some((text) => text?.includes("post-rewind branch"))).toBe(true);
+    expect(texts.some((text) => text?.includes("pre-rewind branch"))).toBe(false);
   });
 
   it("clears the staged page on viewport reset", async () => {
