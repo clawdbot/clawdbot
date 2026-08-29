@@ -186,7 +186,9 @@ export function buildHeartbeatEventPrompt(params: {
     return buildSystemEventPrompt([], opts);
   }
   if (sections.length === 1) {
-    return truncateHeartbeatEventPromptSection(sections[0], MAX_HEARTBEAT_EVENT_PROMPT_CHARS);
+    const [onlySection] = sections;
+    if (!onlySection) return buildSystemEventPrompt([], opts);
+    return truncateHeartbeatEventPromptSection(onlySection, MAX_HEARTBEAT_EVENT_PROMPT_CHARS);
   }
   const header =
     "Multiple heartbeat events were triggered. Assess each event and handle every event shown below.";
