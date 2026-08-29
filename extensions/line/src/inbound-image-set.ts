@@ -44,14 +44,21 @@ type LineImageSetDelivery<TEvent, TLifecycle> = {
   finish: () => void;
 };
 
-/** Ordered by the index the sender picked, falling back to arrival. */
+/**
+ * Ordered by the index the sender picked, falling back to arrival.
+ *
+ * `index` is optional per part in LINE's contract, so a set can arrive partly
+ * indexed. Choosing the key per pair would make the comparator intransitive and
+ * the resulting order depend on insertion; ranking unindexed parts last keeps
+ * one total order for every mix.
+ */
 function orderedParts<TEvent, TLifecycle>(
   pending: PendingImageSet<TEvent, TLifecycle>,
 ): readonly PendingImageSetPart<TEvent, TLifecycle>[] {
-  return [...pending.parts.values()].toSorted((left, right) =>
-    left.index !== undefined && right.index !== undefined
-      ? left.index - right.index
-      : left.arrivedAt - right.arrivedAt,
+  return [...pending.parts.values()].toSorted(
+    (left, right) =>
+      (left.index ?? Number.MAX_SAFE_INTEGER) - (right.index ?? Number.MAX_SAFE_INTEGER) ||
+      left.arrivedAt - right.arrivedAt,
   );
 }
 

@@ -47,6 +47,31 @@ describe("createLineImageSetIngressBuffer", () => {
     });
   });
 
+  it("keeps one order for a set LINE indexed only partly", async () => {
+    // `index` is optional per part, so a set can arrive partly indexed. Ranking
+    // the unindexed part by arrival against an indexed one would make the
+    // comparator intransitive and leave the order dependent on insertion.
+    const held = arrive({ index: 2, total: 3 });
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(
+      buffer.admit({
+        laneKey: "user:U1",
+        setId: "set-1",
+        messageId: "m-unindexed",
+        event: "image-unindexed",
+        lifecycle: "claim-unindexed",
+        total: 3,
+      }),
+    ).resolves.toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(arrive({ index: 1, total: 3 })).resolves.toBeNull();
+
+    await expect(held).resolves.toMatchObject({
+      events: ["image-1", "image-2", "image-unindexed"],
+      lifecycles: ["claim-1", "claim-2", "claim-unindexed"],
+    });
+  });
+
   it("delivers what arrived when LINE never reports a total", async () => {
     const held = arrive({ index: 1, flushDelayMs: 1_000 });
 
