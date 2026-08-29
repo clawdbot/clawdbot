@@ -997,4 +997,79 @@ describe("LINE webhook spool", () => {
       }
     });
   });
+
+  it("keeps a later image set behind a message already queued on the lane", async () => {
+    await withQueue(async (queue) => {
+      const order: string[] = [];
+      let inFlight = 0;
+      let overlapped = false;
+      const deliver = vi.fn(
+        async (
+          events: readonly webhook.Event[],
+          _destination: string,
+          control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+        ) => {
+          inFlight += 1;
+          overlapped ||= inFlight > 1;
+          const message = (events[0] as webhook.MessageEvent).message;
+          const label =
+            message.type === "text" ? message.text : (message as { id: string }).id.slice(-4);
+          if (message.type === "text") {
+            // A queued message still has to build its turn. The later set is
+            // already whole, so nothing but the lane queue can stop it from
+            // overtaking this work the moment the first set lets go.
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 500);
+            });
+          }
+          order.push(label);
+          inFlight -= 1;
+          await control.turnAdoptionLifecycle.onAdopted();
+        },
+      );
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver,
+      });
+
+      spool.start();
+      try {
+        await spool.accept(
+          callback(
+            createEvent({
+              webhookEventId: "event-set-a",
+              messageId: "message-seta",
+              userId: "user-mixed",
+              imageSet: { id: "set-a", index: 1, total: 3 },
+            }),
+          ),
+        );
+        await spool.accept(
+          callback(
+            createEvent({ webhookEventId: "event-mid", userId: "user-mixed", text: "queued" }),
+          ),
+        );
+        for (const index of [1, 2]) {
+          await spool.accept(
+            callback(
+              createEvent({
+                webhookEventId: `event-set-b-${index}`,
+                messageId: `message-setb${index}`,
+                userId: "user-mixed",
+                imageSet: { id: "set-b", index, total: 2 },
+              }),
+            ),
+          );
+        }
+
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(3), { timeout: 30_000 });
+        expect(order).toEqual(["seta", "queued", "etb1"]);
+        expect(overlapped).toBe(false);
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
 });

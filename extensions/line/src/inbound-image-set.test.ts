@@ -146,8 +146,9 @@ describe("createLineImageSetIngressBuffer", () => {
   it("keeps a later unrelated event behind an incomplete set", async () => {
     const held = arrive({ index: 1, total: 3, flushDelayMs: 1_000 });
     let laneFree = false;
-    const later = buffer.awaitLane("user:U1").then(() => {
+    const later = buffer.enterLane("user:U1").then((release) => {
       laneFree = true;
+      release();
     });
 
     await vi.advanceTimersByTimeAsync(500);
@@ -169,7 +170,10 @@ describe("createLineImageSetIngressBuffer", () => {
   it("lets an unrelated lane through while a set is still forming", async () => {
     const held = arrive({ index: 1, total: 3, flushDelayMs: 1_000 });
 
-    await expect(buffer.awaitLane("user:UOTHER")).resolves.toBeUndefined();
+    const release = await buffer.enterLane("user:UOTHER");
+    expect(buffer.isBusy("user:UOTHER")).toBe(true);
+    release();
+    expect(buffer.isBusy("user:UOTHER")).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1_000);
     (await held)?.finish();

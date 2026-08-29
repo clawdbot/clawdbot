@@ -23,24 +23,13 @@ type PendingImageSetPart<TEvent, TLifecycle> = {
 };
 
 type PendingImageSet<TEvent, TLifecycle> = {
-  setId: string;
-  /**
-   * Set once the holder has taken the parts. The entry stays on the lane until
-   * delivery finishes, so without this a late matching part would still join a
-   * set whose contents were already snapshotted: it would defer, be left out of
-   * the fanned-in ownership, and then be discarded with the entry.
-   */
-  sealed: boolean;
   // Keyed by message id so a redelivered event replaces its part instead of
   // adding a duplicate image to the turn.
   parts: Map<string, PendingImageSetPart<TEvent, TLifecycle>>;
   total?: number;
   /** Wakes the holder once the set is whole or its wait has expired. */
   release: () => void;
-  /** Settles once the holder has taken the set and the lane is free again. */
-  taken: Promise<void>;
-  finishTaken: () => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 /** The whole set, ordered the way the sender picked it. */
@@ -48,9 +37,9 @@ type LineImageSetDelivery<TEvent, TLifecycle> = {
   events: readonly TEvent[];
   lifecycles: readonly TLifecycle[];
   /**
-   * Frees the lane. Call it once the set has been delivered, not when it is
-   * taken: the holder still has to fetch media and build its turn, and anything
-   * released before that finishes would overtake the images it waited for.
+   * Leaves the lane queue. Call it once the set has been delivered, not when it
+   * is taken: the holder still has to fetch media and build its turn, and
+   * anything released before that finishes would overtake the images.
    */
   finish: () => void;
 };
@@ -76,12 +65,14 @@ function orderedParts<TEvent, TLifecycle>(
  * admission, so a set that never completes would never be delivered at all.
  */
 export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
-  /** Whether anything already bypassed drain serialization on this lane. */
+  /** Whether anything on this lane is still queued behind deferred work. */
   isBusy: (laneKey: string) => boolean;
   /**
    * Takes a place in the lane's queue, resolving when it is this event's turn.
-   * Deferring frees the drain's lane, so this is the only thing keeping events
-   * released behind a set from racing each other into delivery.
+   * Deferring frees the drain's lane, so this queue is the only thing keeping
+   * events released behind a set from racing each other into delivery. Every
+   * deferred event takes a place here, image sets included, so one lane has one
+   * order rather than a set path and a message path that cannot see each other.
    */
   enterLane: (laneKey: string) => Promise<() => void>;
   admit: (input: {
@@ -94,9 +85,11 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     lifecycle: TLifecycle;
     flushDelayMs?: number;
   }) => Promise<LineImageSetDelivery<TEvent, TLifecycle> | null>;
-  awaitLane: (laneKey: string) => Promise<void>;
 } {
-  const pendingByLane = new Map<string, PendingImageSet<TEvent, TLifecycle>>();
+  // Sets still open to their remaining parts, keyed the way LINE ties them
+  // together. Registered before the starter waits its turn, so parts that arrive
+  // while it is still queued join it instead of starting a second set.
+  const pendingBySet = new Map<string, PendingImageSet<TEvent, TLifecycle>>();
   // Tail of each lane's queue: everything that deferred waits behind it in turn.
   const laneChain = new Map<string, Promise<void>>();
 
@@ -109,23 +102,12 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     const mine = prior.then(async () => await held);
     laneChain.set(laneKey, mine);
     await prior;
-    // A set forming when this event arrived still owns the turn ahead of it.
-    await awaitLane(laneKey);
     return () => {
       release();
       if (laneChain.get(laneKey) === mine) {
         laneChain.delete(laneKey);
       }
     };
-  };
-
-  // Releasing the ingress lane is what lets the rest of a set arrive, but it also
-  // lets anything the sender sent afterwards overtake the set. Everything else on
-  // the lane waits here instead, so a later message still lands after the images.
-  const awaitLane = async (laneKey: string): Promise<void> => {
-    for (let pending = pendingByLane.get(laneKey); pending; pending = pendingByLane.get(laneKey)) {
-      await pending.taken;
-    }
   };
 
   const admit = async (input: {
@@ -145,72 +127,49 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
       lifecycle: input.lifecycle,
     };
 
-    // Join the set still forming on this lane, or wait out one that cannot take
-    // this part - a different set, or this one after its parts were taken.
-    for (;;) {
-      const current = pendingByLane.get(input.laneKey);
-      if (!current) {
-        break;
+    const forming = pendingBySet.get(input.setId);
+    if (forming) {
+      forming.parts.set(input.messageId, part);
+      // A later part may carry the total an earlier one omitted.
+      forming.total ??= input.total;
+      if (forming.total !== undefined && forming.parts.size >= forming.total) {
+        forming.release();
       }
-      if (current.setId === input.setId && !current.sealed) {
-        current.parts.set(input.messageId, part);
-        // A later part may carry the total an earlier one omitted.
-        current.total ??= input.total;
-        if (current.total !== undefined && current.parts.size >= current.total) {
-          current.release();
-        }
-        return null;
-      }
-      await current.taken;
+      return null;
     }
 
     let release = () => {};
     const whole = new Promise<void>((resolve) => {
       release = resolve;
     });
-    let finishTaken = () => {};
-    const taken = new Promise<void>((resolve) => {
-      finishTaken = resolve;
-    });
     const pending: PendingImageSet<TEvent, TLifecycle> = {
-      setId: input.setId,
-      sealed: false,
       parts: new Map([[input.messageId, part]]),
       total: input.total,
       release: () => {
         clearTimeout(pending.timer);
         release();
       },
-      taken,
-      finishTaken,
-      timer: setTimeout(release, input.flushDelayMs ?? IMAGE_SET_FLUSH_DELAY_MS),
     };
+    pendingBySet.set(input.setId, pending);
+    const releaseLane = await enterLane(input.laneKey);
+    // The wait starts here, not on arrival: time spent queued behind earlier work
+    // on this lane is not time LINE spent delivering the rest of the set.
+    pending.timer = setTimeout(pending.release, input.flushDelayMs ?? IMAGE_SET_FLUSH_DELAY_MS);
     pending.timer.unref?.();
-    pendingByLane.set(input.laneKey, pending);
-
     if (pending.total !== undefined && pending.parts.size >= pending.total) {
       pending.release();
     }
     await whole;
-    // Nothing may join from here: these parts are the turn.
-    pending.sealed = true;
+    // These parts are the turn. A part arriving after this starts its own set and
+    // queues behind this delivery rather than joining a snapshot it missed.
+    pendingBySet.delete(input.setId);
     const ordered = orderedParts(pending);
     return {
       events: ordered.map((entry) => entry.event),
       lifecycles: ordered.map((entry) => entry.lifecycle),
-      finish: () => {
-        if (pendingByLane.get(input.laneKey) === pending) {
-          pendingByLane.delete(input.laneKey);
-        }
-        pending.finishTaken();
-      },
+      finish: releaseLane,
     };
   };
 
-  return {
-    admit,
-    awaitLane,
-    enterLane,
-    isBusy: (laneKey) => pendingByLane.has(laneKey) || laneChain.has(laneKey),
-  };
+  return { admit, enterLane, isBusy: (laneKey) => laneChain.has(laneKey) };
 }

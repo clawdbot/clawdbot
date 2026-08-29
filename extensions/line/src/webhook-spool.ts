@@ -185,7 +185,6 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       const imageSet = resolveLineInboundImageSet(event);
       let turnEvents: readonly webhook.Event[] = [event];
       let turnLifecycles: readonly (typeof lifecycle)[] = [lifecycle];
-      let finishSet: (() => void) | undefined;
       let releaseLane: (() => void) | undefined;
       if (imageSet) {
         if (!acceptsDeferredClaims) {
@@ -214,7 +213,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         turnLifecycles = set.lifecycles;
         // Hold the lane until this delivery is done, or a message sent after the
         // images overtakes them while this turn is still fetching their media.
-        finishSet = set.finish;
+        releaseLane = set.finish;
       } else if (imageSets.isBusy(laneKey)) {
         if (!acceptsDeferredClaims) {
           await lifecycle.onAbandoned();
@@ -278,7 +277,6 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         throw error;
       } finally {
         activeDeliveries.delete(delivery);
-        finishSet?.();
         releaseLane?.();
       }
       if (!handedOff && !stopTask) {
