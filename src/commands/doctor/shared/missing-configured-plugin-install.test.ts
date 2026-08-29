@@ -2968,14 +2968,16 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         path.join(targetDir, "package.json"),
         JSON.stringify({ name: "@openclaw/codex", version: compatibilityHostVersion }),
       );
-      mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
-        successfulInstall({
-          pluginId: "codex",
-          npmSpec: "@openclaw/codex",
-          version: compatibilityHostVersion,
-          targetDir,
-        }),
-      );
+      if (shouldRepair) {
+        mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
+          successfulInstall({
+            pluginId: "codex",
+            npmSpec: "@openclaw/codex",
+            version: compatibilityHostVersion,
+            targetDir,
+          }),
+        );
+      }
       mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
         {
           id: "codex",
