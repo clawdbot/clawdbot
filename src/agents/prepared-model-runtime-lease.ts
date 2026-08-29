@@ -32,6 +32,23 @@ type PreparedModelRuntimeLeaseContext = {
   prepareSnapshot(input: PreparedModelRuntimeInput): Promise<PreparedModelRuntimeSnapshot>;
 };
 
+/**
+ * A gateway generation can only supply dynamic provider models for plugin owners it actually
+ * loaded. Model ids do not matter to that ownership boundary: the registry is selected by the
+ * normalized provider/runtime pair (for example `openai` + `codex`).
+ */
+function runtimePluginSelectionsAreCovered(
+  available: PreparedModelRuntimeInput["runtimePluginSelections"],
+  requested: PreparedModelRuntimeInput["runtimePluginSelections"],
+): boolean {
+  const availableOwners = new Set(
+    (available ?? []).map(({ provider, runtime }) => JSON.stringify([provider, runtime])),
+  );
+  return (requested ?? []).every(({ provider, runtime }) =>
+    availableOwners.has(JSON.stringify([provider, runtime])),
+  );
+}
+
 export async function acquirePreparedModelRuntimeLeaseFromOwners(
   rawInput: PreparedModelRuntimeInput,
   provenance: "run" | "ephemeral",
@@ -43,6 +60,12 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
   } = {},
 ): Promise<PreparedModelRuntimeLease> {
+  // Keep the admitted generation separate from the reusable generation. A selected route can
+  // require a provider/runtime owner outside the configured primary's registry; it must build a
+  // fresh registry from the same immutable metadata snapshot. The admitted generation still
+  // guards reload staleness below.
+  const admittedPluginGeneration = options.pluginGeneration;
+  let reusablePluginGeneration = admittedPluginGeneration;
   let normalizedInput = normalizePreparedModelRuntimeInput({
     ...rawInput,
     preserveWorkspaceDirOnRefresh:
@@ -51,7 +74,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   if (
     provenance === "run" &&
     context.getGatewayLifecycleActive() &&
-    !options.pluginGeneration &&
+    !admittedPluginGeneration &&
     !context.getPendingReplacement()
   ) {
     try {
@@ -67,6 +90,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   let owner: PreparedModelRuntimeOwner;
   let snapshot: PreparedModelRuntimeSnapshot;
   for (;;) {
+    let selectedRouteRequiresFreshRegistry = false;
     // Replacement owns publication from synchronous staling through atomic generation commit.
     // Dynamic work arriving inside that window must retry after the new owners become visible.
     const replacement = context.getPendingReplacement();
@@ -75,13 +99,13 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       if (context.getPendingReplacement()) {
         continue;
       }
-      if (provenance === "run" && !options.pluginGeneration) {
+      if (provenance === "run" && !admittedPluginGeneration) {
         input = rebindInputToCommittedConfiguredOwner(context.owners, input);
         key = ownerKey(input);
       }
       continue;
     }
-    if (provenance === "run" && context.getGatewayLifecycleActive() && options.pluginGeneration) {
+    if (provenance === "run" && context.getGatewayLifecycleActive() && admittedPluginGeneration) {
       const configuredOwner = resolveConfiguredOwner(context.owners, input);
       if (configuredOwner?.pending) {
         await configuredOwner.pending.catch(() => undefined);
@@ -90,13 +114,13 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       if (
         configuredOwner &&
         (configuredOwner.needsRefresh ||
-          configuredOwner.pluginGeneration !== options.pluginGeneration)
+          configuredOwner.pluginGeneration !== admittedPluginGeneration)
       ) {
-        const borrowed = getPreparedModelRuntimeBorrowedSnapshot(options.pluginGeneration);
+        const borrowed = getPreparedModelRuntimeBorrowedSnapshot(admittedPluginGeneration);
         if (
           !configuredOwner.needsRefresh &&
           borrowed &&
-          borrowed.metadataSnapshot === options.pluginGeneration.pluginMetadataSnapshot &&
+          borrowed.metadataSnapshot === admittedPluginGeneration.pluginMetadataSnapshot &&
           preparedModelRuntimeConfigsMatch(borrowed.config, input.config) &&
           borrowed.agentId === input.agentId &&
           borrowed.agentDir === input.agentDir &&
@@ -116,6 +140,18 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
           `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
         );
       }
+      if (
+        configuredOwner &&
+        !runtimePluginSelectionsAreCovered(
+          configuredOwner.input.runtimePluginSelections,
+          input.runtimePluginSelections,
+        )
+      ) {
+        // Preserve the exact metadata generation admitted by the gateway, but do not reuse its
+        // registry when the selected route needs another provider/runtime owner.
+        reusablePluginGeneration = undefined;
+        selectedRouteRequiresFreshRegistry = true;
+      }
     }
     let existing = context.owners.get(key);
     let staleDynamicOwner =
@@ -123,9 +159,13 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       !existing.pending &&
       (existing.provenance === "run" || existing.provenance === "ephemeral");
     const pluginGenerationChanged =
-      options.pluginGeneration !== undefined &&
+      !selectedRouteRequiresFreshRegistry &&
+      admittedPluginGeneration !== undefined &&
       (existing?.pending ? existing.pendingPluginGeneration : existing?.pluginGeneration) !==
-        options.pluginGeneration;
+        admittedPluginGeneration;
+    const reusablePluginMetadataSnapshot = selectedRouteRequiresFreshRegistry
+      ? admittedPluginGeneration?.pluginMetadataSnapshot
+      : options.pluginMetadataSnapshot;
     if (existing?.pending && pluginGenerationChanged) {
       // Do not supersede active discovery. Wait for its owner to settle, then retry against
       // the published identity so same-generation callers still coalesce.
@@ -135,7 +175,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     if (
       context.getGatewayLifecycleActive() &&
       provenance === "run" &&
-      !options.pluginGeneration &&
+      !admittedPluginGeneration &&
       (!existing || staleDynamicOwner)
     ) {
       // Dynamic workspaces still inherit the committed agent/config generation. Only their
@@ -187,8 +227,8 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
           undefined,
           provenance,
           options.catalogMode,
-          options.pluginGeneration,
-          options.pluginMetadataSnapshot,
+          reusablePluginGeneration,
+          reusablePluginMetadataSnapshot,
         );
       }
     } catch (error) {
