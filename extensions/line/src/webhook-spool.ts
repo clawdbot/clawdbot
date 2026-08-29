@@ -216,6 +216,11 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     admissionMode: "durable-after-stop",
     drain: {
       adoptionStallTimeoutMs: DEFAULT_INGRESS_ADOPTION_STALL_MS,
+      // A deferred claim keeps its durable retry guarantee but stops owning the
+      // lane. LINE lanes are per sender/group/room, so the parts of one
+      // multi-image send share one; holding it would block every later part
+      // behind the first, and the set they are meant to join could never form.
+      deferredLaneOccupancy: "release",
       orderBy: "received",
       scanLimit: LINE_WEBHOOK_DRAIN_SCAN_LIMIT,
       startLimit: LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES,

@@ -31,15 +31,26 @@ export function createEvent(params: {
   messageId?: string;
   userId?: string;
   text?: string;
+  /** Marks the event as one part of a LINE multi-image send. */
+  imageSet?: { id: string; index: number; total: number };
 }): webhook.Event {
+  const message: webhook.MessageEvent["message"] = params.imageSet
+    ? {
+        id: params.messageId ?? `message-${params.webhookEventId}`,
+        type: "image",
+        contentProvider: { type: "line" },
+        imageSet: params.imageSet,
+        quoteToken: "test-quote-token-placeholder",
+      }
+    : {
+        id: params.messageId ?? `message-${params.webhookEventId}`,
+        type: "text",
+        text: params.text ?? "hello",
+        quoteToken: "test-quote-token-placeholder",
+      };
   const event: webhook.MessageEvent = {
     type: "message",
-    message: {
-      id: params.messageId ?? `message-${params.webhookEventId}`,
-      type: "text",
-      text: params.text ?? "hello",
-      quoteToken: "test-quote-token-placeholder",
-    },
+    message,
     replyToken: "test-reply-token",
     timestamp: Date.now(),
     source: { type: "user", userId: params.userId ?? "user-1" },

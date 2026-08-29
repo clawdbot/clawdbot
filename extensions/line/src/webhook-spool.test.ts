@@ -695,4 +695,63 @@ describe("LINE webhook spool", () => {
       }
     });
   });
+
+  // LINE lanes are keyed per sender, so every part of one multi-image send shares
+  // one. A part that defers while its set is incomplete must stop owning that lane
+  // or the later parts can never arrive to complete it.
+  it("delivers every part of a same-lane image set while earlier parts stay deferred", async () => {
+    await withQueue(async (queue) => {
+      const deferred: LineWebhookTurnAdoptionLifecycle[] = [];
+      const deliver = vi.fn(
+        async (
+          event: webhook.Event,
+          _destination: string,
+          control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+        ) => {
+          const index = (
+            event as webhook.MessageEvent & { message: { imageSet?: { index: number } } }
+          ).message.imageSet?.index;
+          if (index !== 3) {
+            // The set is still incomplete: hold the claim, release the lane.
+            deferred.push(control.turnAdoptionLifecycle);
+            control.turnAdoptionLifecycle.onDeferred();
+            return;
+          }
+          await control.turnAdoptionLifecycle.onAdopted();
+        },
+      );
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver,
+      });
+
+      spool.start();
+      try {
+        for (const index of [1, 2, 3]) {
+          await spool.accept(
+            callback(
+              createEvent({
+                webhookEventId: `event-image-set-${index}`,
+                userId: "user-image-set",
+                imageSet: { id: "set-1", index, total: 3 },
+              }),
+            ),
+          );
+        }
+
+        // All three reach the handler. Holding the lane would strand parts 2 and 3.
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(3));
+        expect(deferred).toHaveLength(2);
+
+        // The deferred claims are still ours to settle, not completed by the drain.
+        for (const lifecycle of deferred) {
+          await lifecycle.onAdopted();
+        }
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
 });
