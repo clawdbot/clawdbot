@@ -147,7 +147,9 @@ until their dependent enforcement changes land.
     `run_release_soak=true` or explicit focused groups
   - `stable-publish`: `release_profile=stable`
 - Keep at most one active parent for the same Validation SHA + Tooling SHA + rerun
-  group. Concurrency does not cancel an older exact child automatically.
+  group + release profile + effective soak coverage. Stable/full always include
+  soak. Distinct coverage profiles can run independently; concurrency does not
+  cancel an older exact child automatically.
 - Parent cancellation or timeout leaves adopted identity-checked children
   running. The operator must cancel an exact child explicitly when it is no
   longer useful. Do not infer a child identity from branch, title prefix, or

@@ -4488,7 +4488,9 @@ jobs:
     permissions:
       contents: read
     name: "ios-screenshots-${{ matrix.device_family }}"
-    needs: [preflight, ios-build]
+    # Each shard builds its own simulator app; ios-build produces no input here.
+    # The final CI gate still requires both build and screenshot evidence.
+    needs: [preflight]
     # Full manual/release validation always captures. PRs and their exact-head
     # release-gate substitutes use the same conservative screenshot-risk scope.
     if: ${{ ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}

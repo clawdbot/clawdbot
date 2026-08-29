@@ -1606,6 +1606,7 @@ jobs:
     timeout-minutes: ${{ matrix.group.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
+      max-parallel: 32
       matrix:
         group: ${{ fromJson(needs.plan_docker_lane_groups.outputs.groups_json) }}
     env:
@@ -1668,7 +1669,7 @@ jobs:
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_manifest_sha256 }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.group.published_upgrade_survivor_baselines || inputs.published_upgrade_survivor_baselines }}
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ matrix.group.published_upgrade_survivor_scenarios || inputs.published_upgrade_survivor_scenarios }}
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}

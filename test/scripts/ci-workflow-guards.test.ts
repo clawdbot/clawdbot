@@ -4725,6 +4725,10 @@ server.listen(0, "127.0.0.1", () => {
     expect(releaseChecks.jobs.validate_docker_lanes["timeout-minutes"]).toBe(
       "${{ matrix.group.timeout_minutes || 60 }}",
     );
+    expect(releaseChecks.jobs.validate_docker_lanes.strategy["max-parallel"]).toBe(32);
+    expect(releaseChecks.jobs.validate_docker_lanes.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS).toBe(
+      "${{ matrix.group.published_upgrade_survivor_scenarios || inputs.published_upgrade_survivor_scenarios }}",
+    );
   });
 
   it("persists Node 22 declarations through trusted bounded artifacts", () => {

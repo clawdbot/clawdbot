@@ -2,6 +2,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { findLaneByName } from "../../scripts/lib/docker-e2e-plan.mts";
@@ -1062,7 +1063,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
 
     expect(releaseChecksWorkflow.concurrency).toEqual({
       group:
-        "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.phase }}",
+        "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.phase }}-${{ inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}",
       "cancel-in-progress": "${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}",
     });
     expect(readPluginPrereleaseWorkflow().concurrency).toEqual({
@@ -1071,9 +1072,39 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     });
     expect(fullReleaseWorkflow.concurrency).toEqual({
       group:
-        "full-release-validation-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}",
+        "full-release-validation-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}",
       "cancel-in-progress": false,
     });
+    for (const workflow of [fullReleaseWorkflow, releaseChecksWorkflow]) {
+      const coverageKey = (profile: string, soak: boolean) =>
+        workflow.concurrency.group.replace(
+          /\$\{\{\s*([\s\S]*?)\s*\}\}/gu,
+          (_: string, expression: string) =>
+            String(
+              runInNewContext(expression, {
+                github: { sha: "a".repeat(40) },
+                inputs: {
+                  expected_sha: "b".repeat(40),
+                  rerun_group: "all",
+                  phase: "candidate",
+                  release_profile: profile,
+                  run_release_soak: soak,
+                },
+              }),
+            ),
+        );
+      expect(
+        new Set([
+          coverageKey("beta", false),
+          coverageKey("beta", true),
+          coverageKey("stable", false),
+          coverageKey("full", false),
+        ]).size,
+      ).toBe(4);
+      for (const profile of ["stable", "full"]) {
+        expect(coverageKey(profile, false)).toBe(coverageKey(profile, true));
+      }
+    }
     expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.expected_sha).toEqual({
       description: "Optional full Validation SHA that ref must resolve to",
       required: false,

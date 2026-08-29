@@ -314,8 +314,12 @@ publish consumers. The verifier always prefers the attempt-qualified artifact;
 as a transition, it accepts the stable name only for an attempt-1 manifest v2
 producer. It rejects that legacy name for later attempts and manifest v3.
 
-Concurrency is keyed by Validation SHA, Tooling SHA, and rerun group and does
-not cancel an older run. Parent cancellation or timeout leaves adopted
+Concurrency is keyed by Validation SHA, Tooling SHA, rerun group, release
+profile, and effective soak coverage, and does not cancel an older run. The
+Release Checks child also separates profiles and effective soak, preserving
+independent admission through both workflow levels. Stable/full normalize soak
+to enabled, so explicitly enabling it does not admit a duplicate request.
+Parent cancellation or timeout leaves adopted
 identity-checked children running and records `cancelled_with_children` when
 the state collector can complete its cancellation handoff. Cancel an exact
 child explicitly when it is no longer useful. Do not run a second foreground
@@ -366,6 +370,12 @@ empty:
 | `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes.                                                                                                |
 | `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                                        |
 | `openwebui`                                                     | OpenWebUI compatibility smoke isolated on a dedicated large-disk runner when requested.                                                      |
+
+Expanded published-upgrade survivor and update-migration coverage runs in
+baseline-specific groups of at most three scenarios, with up to 32 targeted
+Docker jobs active per matrix. The grouping and execution planners share the
+same baseline compatibility rules; package identities, fresh scenario
+containers, per-runner npm limits, and failure reporting remain unchanged.
 
 Use targeted `docker_lanes=<lane[,lane]>` on the reusable live/E2E workflow when
 only one Docker lane failed. The release artifacts include per-lane rerun

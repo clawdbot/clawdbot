@@ -155,7 +155,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: full-release-validation-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}
+  # Profiles own different coverage and verdicts, so their admission is independent.
+  # Stable/full force soak, so their explicit soak flag must not split the lock.
+  group: full-release-validation-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
   cancel-in-progress: false
 
 env:
