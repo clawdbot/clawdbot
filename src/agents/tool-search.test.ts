@@ -27,13 +27,14 @@ import {
   formatToolExecutionErrorMessage,
   resolveToolExecutionErrorKind,
 } from "./tool-result-error.js";
+import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   addClientToolsToToolSearchCatalog as addRunClientToolsToToolSearchCatalog,
   applyToolSearchCatalog as applyRunToolSearchCatalog,
   applyToolSchemaDirectoryCatalog as applyRunToolSchemaDirectoryCatalog,
   buildToolSchemaDirectoryPrompt as buildRunToolSchemaDirectoryPrompt,
   clearToolSearchCatalog as clearRunToolSearchCatalog,
-  compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   createToolSearchTools as createRunToolSearchTools,
   registerHeadlessToolSearchCatalog,
@@ -45,7 +46,6 @@ import {
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
-  ToolSearchRuntime,
 } from "./tool-search.js";
 import { testing } from "./tool-search.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";

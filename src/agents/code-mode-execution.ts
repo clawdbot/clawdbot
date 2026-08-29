@@ -56,7 +56,8 @@ import {
 import { normalizeCodeModeWorkerResult, runCodeModeWorker } from "./code-mode-worker.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
-import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
+import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
 
 export async function runCodeModeExec(params: {

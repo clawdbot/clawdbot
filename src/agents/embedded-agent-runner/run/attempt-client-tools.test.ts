@@ -10,10 +10,10 @@ import { runUntilCompleted } from "../../code-mode.test-support.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { compactToolSearchCatalogEntry } from "../../tool-search-catalog.js";
 import {
   applyToolSearchCatalog,
   clearToolSearchCatalog,
-  compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../../tool-search.js";

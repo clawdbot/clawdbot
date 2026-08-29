@@ -1725,7 +1725,6 @@ src/agents/cli-runner/execute.ts	3
 src/agents/cli-runner/helpers.ts	1
 src/agents/cli-runner/prepare.ts	5
 src/agents/cli-runner/session-history.ts	3
-src/agents/code-mode-bridge.ts	1
 src/agents/code-mode-namespaces.ts	5
 src/agents/code-mode-runtime.ts	4
 src/agents/code-mode-script-syntax.ts	1
@@ -2989,7 +2988,6 @@ src/gateway/server-reload-utils.ts	1
 src/gateway/server-restart-sentinel-agent-delivery.ts	2
 src/gateway/server-runtime-handles.ts	9
 src/gateway/server-runtime-state-prepare.ts	2
-src/gateway/server-session-events.ts	1
 src/gateway/server-startup-bootstrap.ts	1
 src/gateway/server-startup-config-helpers.ts	1
 src/gateway/server-startup-config.ts	1

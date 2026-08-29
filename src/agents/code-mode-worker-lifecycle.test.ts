@@ -24,11 +24,11 @@ import {
 import { runCodeModeWorker } from "./code-mode-worker.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import { createCodeModeHarness, resultDetails } from "./code-mode.test-support.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   createToolSearchCatalogRef,
   clearToolSearchCatalog,
   registerHeadlessToolSearchCatalog,
-  ToolSearchRuntime,
 } from "./tool-search.js";
 
 function parkExpiringRun(method: "callValue" | "agentWait") {
