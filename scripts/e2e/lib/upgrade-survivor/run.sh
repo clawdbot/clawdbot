@@ -1412,11 +1412,10 @@ update_candidate() {
   if [ "$update_status" -eq 0 ]; then
     node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
       assert-successful-update-json "$UPDATE_JSON" "$candidate_version"
-    # This tagged baseline predates capability consent and owns the recovery regression proof.
-    # Newer/dynamic baselines may already have consent and legitimately update without repair.
+    # This tagged baseline predates capability consent, even when its updater exits cleanly.
+    # Run candidate-owned repair before post-update validation; newer baselines need no repair.
     if [ "$baseline_version" = "2026.7.1-2" ]; then
-      echo "baseline $baseline_spec unexpectedly skipped capability-consent recovery" >&2
-      return 1
+      update_repair_required="1"
     fi
     if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
       update_end="$(node -e "process.stdout.write(String(Date.now()))")"

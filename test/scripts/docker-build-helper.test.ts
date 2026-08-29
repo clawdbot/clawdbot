@@ -4803,7 +4803,7 @@ if (starts === 1) {
       'if [ "$update_status" -eq 0 ]; then',
       "assert-successful-update-json",
       'if [ "$baseline_version" = "2026.7.1-2" ]; then',
-      'echo "baseline $baseline_spec unexpectedly skipped capability-consent recovery" >&2',
+      'update_repair_required="1"',
       "assert-recoverable-update-json",
       'echo "openclaw update failed before the recoverable post-core boundary" >&2',
       'openclaw config validate --json >"$POST_UPDATE_VALIDATE_JSON"',

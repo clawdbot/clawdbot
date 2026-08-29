@@ -62,6 +62,24 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+function readUpdateJson(file) {
+  const raw = fs.readFileSync(file, "utf8");
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    // Published baselines may emit legacy service-control logs before the JSON payload.
+    const jsonStart = raw.indexOf("{");
+    if (jsonStart === -1) {
+      throw error;
+    }
+    return JSON.parse(raw.slice(jsonStart));
+  }
+}
+
+function isCapabilityConsentReason(value) {
+  return typeof value === "string" && value.includes("requires capability consent");
+}
+
 function resolveHomePath(value) {
   if (typeof value !== "string" || value.length === 0) {
     return "";
@@ -1155,7 +1173,7 @@ function assertStatusJson([file]) {
 
 function assertRecoverableUpdateJson([file, expectedVersion]) {
   assert(file && expectedVersion, "assert-recoverable-update-json requires a path and version");
-  const result = readJson(file);
+  const result = readUpdateJson(file);
   const steps = result?.steps;
   const plugins = result?.postUpdate?.plugins;
   assert(result?.status === "error", "recoverable update did not report error status");
@@ -1182,16 +1200,40 @@ function assertRecoverableUpdateJson([file, expectedVersion]) {
     plugins?.reason === "post-plugin-doctor-invalid-config",
     `unexpected plugin convergence failure: ${String(plugins?.reason)}`,
   );
+  const syncErrors = plugins?.sync?.errors;
+  const npmOutcomes = plugins?.npm?.outcomes;
+  const integrityDrifts = plugins?.integrityDrifts;
   assert(
-    Array.isArray(plugins?.warnings) &&
-      plugins.warnings.some((warning) => warning?.reason?.includes("requires capability consent")),
+    Array.isArray(syncErrors) && syncErrors.every(isCapabilityConsentReason),
+    "recoverable update contained a non-consent plugin synchronization error",
+  );
+  assert(
+    Array.isArray(npmOutcomes) &&
+      npmOutcomes.every(
+        (outcome) =>
+          outcome?.status !== "error" || outcome?.code === "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+      ),
+    "recoverable update contained a non-consent failed plugin update",
+  );
+  assert(
+    Array.isArray(integrityDrifts) && integrityDrifts.length === 0,
+    "recoverable update contained a plugin integrity drift",
+  );
+  assert(
+    (Array.isArray(plugins?.warnings) &&
+      plugins.warnings.some((warning) => isCapabilityConsentReason(warning?.reason))) ||
+      syncErrors.some(isCapabilityConsentReason) ||
+      npmOutcomes.some(
+        (outcome) =>
+          outcome?.status === "error" && outcome?.code === "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+      ),
     "plugin convergence failure did not require capability consent",
   );
 }
 
 function assertSuccessfulUpdateJson([file, expectedVersion]) {
   assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
-  const result = readJson(file);
+  const result = readUpdateJson(file);
   assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
   assert(
     result?.after?.version === expectedVersion,
