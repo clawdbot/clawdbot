@@ -67,6 +67,45 @@ describe("card image URLs the LINE API will not fetch", () => {
     expect(bubbleNotes(bubble)).toEqual([WARNING]);
   });
 
+  it("drops a body image LINE will not fetch instead of losing the card", () => {
+    // LINE rejects the scheme per URL, not per position: /body/contents/0/url is
+    // refused exactly like /hero/url, so a picture in a box costs the same reply.
+    const bubble = normalizeBubble({
+      type: "bubble",
+      body: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          { type: "text", text: "still here" },
+          { type: "image", url: "http://example.com/cover.jpg" },
+        ],
+      },
+    });
+
+    const contents = expectDefined(bubble.body?.contents, "body contents");
+    expect(contents.some((item) => item.type === "image")).toBe(false);
+    expect(contents.some((item) => item.text === "still here")).toBe(true);
+    expect(contents.some((item) => item.text?.includes(WARNING))).toBe(true);
+  });
+
+  it("drops a video hero whose own URLs LINE will not fetch", () => {
+    // A video hero carries two URLs of its own; either one refuses the message.
+    const bubble = normalizeBubble({
+      type: "bubble",
+      hero: {
+        type: "video",
+        url: "http://example.com/clip.mp4",
+        previewUrl: "http://example.com/cover.jpg",
+        altContent: { type: "image", url: HTTPS_IMAGE },
+      },
+      body: { type: "box", layout: "vertical", contents: [{ type: "text", text: "body" }] },
+    });
+
+    expect(bubble.hero).toBeUndefined();
+    const contents = expectDefined(bubble.body?.contents, "body contents");
+    expect(contents.some((item) => item.text?.includes(WARNING))).toBe(true);
+  });
+
   it("keeps the buttons of an action card whose hero image is unusable", () => {
     const bubble = normalizeBubble(
       createActionCard(
