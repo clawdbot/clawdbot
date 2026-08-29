@@ -101,6 +101,7 @@ export async function updateNpmInstalledPlugins(params: {
   updateChannel?: UpdateChannel;
   officialPluginUpdateChannel?: UpdateChannel;
   coreVersion?: string;
+  versionBoundToCorePluginIds?: ReadonlySet<string>;
   dangerouslyForceUnsafeInstall?: boolean;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   specOverrides?: Record<string, string>;
@@ -224,6 +225,7 @@ export async function updateNpmInstalledPlugins(params: {
             updateChannel,
             officialPackageName: officialNpmPackageName,
             coreVersion: params.coreVersion,
+            versionBoundToCore: params.versionBoundToCorePluginIds?.has(pluginId),
           })
         : undefined;
     const clawhubSpecs =
