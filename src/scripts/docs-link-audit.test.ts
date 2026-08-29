@@ -1,9 +1,8 @@
 // Docs link audit tests cover documentation link validation behavior.
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
 const {
@@ -16,8 +15,6 @@ const {
   runDocsLinkAuditCli,
   sanitizeDocsConfigForEnglishOnly,
 } = await import("../../scripts/docs-link-audit.mts");
-
-const repoRoot = path.resolve(import.meta.dirname, "../..");
 
 describe("docs-link-audit", () => {
   function tempEntries(prefix: string): Set<string> {
@@ -51,15 +48,16 @@ describe("docs-link-audit", () => {
     );
 
     try {
-      const output = execFileSync(
-        process.execPath,
-        [path.join(repoRoot, "scripts/docs-link-audit.mjs")],
-        {
-          cwd: fixtureRoot,
-          encoding: "utf8",
-        },
-      );
-      expect(output).toContain("broken_links=0");
+      const output: string[] = [];
+      const logSpy = vi.spyOn(console, "log").mockImplementation((...args) => {
+        output.push(args.join(" "));
+      });
+      try {
+        expect(runDocsLinkAuditCli({ args: [], docsDir: docsRoot })).toBe(0);
+        expect(output).toContain("broken_links=0");
+      } finally {
+        logSpy.mockRestore();
+      }
     } finally {
       cleanupTempDirs(tempDirs);
     }

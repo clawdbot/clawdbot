@@ -51,6 +51,7 @@ type ScriptSpawn = (
 type RunDocsLinkAuditOptions = {
   args?: string[];
   comSpec?: string;
+  docsDir?: string;
   env?: NodeJS.ProcessEnv;
   nodeExecPath?: string;
   nodeVersion?: string;
@@ -927,7 +928,7 @@ export function runDocsLinkAuditCli(options: RunDocsLinkAuditOptions = {}) {
     }
   }
 
-  const mirroredDocsDir = prepareMirroredDocsDir(DOCS_DIR);
+  const mirroredDocsDir = prepareMirroredDocsDir(options.docsDir ?? DOCS_DIR);
   try {
     const { checked, broken } = auditDocsLinks({
       docsDir: mirroredDocsDir.dir,
