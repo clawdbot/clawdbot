@@ -86,12 +86,12 @@ describe("renderSessionHovercard", () => {
   });
 
   it.each([
-    { name: "dashboard", facts: { boardFace: "dashboard" }, labels: ["Dashboard available"] },
+    { name: "dashboard", facts: { boardFace: "dashboard" }, labels: ["Opens as dashboard"] },
     { name: "automation", facts: { hasAutomation: true }, labels: ["Automation attached"] },
     {
       name: "both",
       facts: { boardFace: "dashboard", hasAutomation: true },
-      labels: ["Dashboard available", "Automation attached"],
+      labels: ["Opens as dashboard", "Automation attached"],
     },
     { name: "absent", facts: {}, labels: [] },
     { name: "disabled", facts: { boardFace: "chat", hasAutomation: false }, labels: [] },

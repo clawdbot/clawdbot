@@ -396,13 +396,13 @@ function renderSessionContext({
     ${row?.boardFace === "dashboard"
       ? html`<div
           class="session-hovercard__context-row"
-          aria-label=${t("sessionsView.dashboardAvailable")}
+          aria-label=${t("sessionsView.opensAsDashboard")}
         >
           <span class="session-hovercard__context-icon" aria-hidden="true"
             >${icons.layoutDashboard}</span
           >
           <span class="session-hovercard__context-value session-hovercard__context-text"
-            >${t("sessionsView.dashboardAvailable")}</span
+            >${t("sessionsView.opensAsDashboard")}</span
           >
         </div>`
       : nothing}
