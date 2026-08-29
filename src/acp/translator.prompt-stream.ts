@@ -518,19 +518,26 @@ export class AcpTranslatorPromptStream {
       return;
     }
     if (state === "aborted") {
+      // Claim before the first await so a stalled or rejected interruption
+      // delivery cannot strand the prompt (same shape as settleRecoveredPrompt).
+      if (!this.claimPendingPrompt(pending)) {
+        return;
+      }
       const errorMessage =
-        typeof payload.errorMessage === "string" ? payload.errorMessage : undefined;
-      if (errorMessage?.trim()) {
+        typeof payload.errorMessage === "string" ? payload.errorMessage.trim() : undefined;
+      if (errorMessage) {
         // The Gateway attaches the abort cause (e.g. tool validation failure)
         // to the event; surface it or the IDE shows a bare "cancelled" for a
-        // run that actually died from an error.
+        // run that actually died from an error. Nonblocking: the notice is
+        // best-effort and must not hold terminal settlement hostage.
         await this.emitPromptChunk(
           pending,
           "agent_message_chunk",
-          `[OpenClaw interruption] ${errorMessage.trim()}`,
+          `[OpenClaw interruption] ${errorMessage}`,
+          false,
         );
       }
-      await this.finishPrompt(pending.sessionId, pending, "cancelled");
+      await this.finishPrompt(pending.sessionId, pending, "cancelled", { claimed: true });
       return;
     }
     if (state === "error") {

@@ -144,7 +144,14 @@ describe("acp translator stop reason mapping", () => {
     await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
   });
 
-  it("aborted state with errorMessage surfaces the cause before resolving as cancelled", async () => {
+  async function createAbortedPromptHarness(
+    sessionUpdateImpl: (params: unknown) => Promise<void>,
+  ): Promise<{
+    agent: AcpGatewayAgent;
+    promptPromise: Promise<unknown>;
+    sessionUpdate: ReturnType<typeof vi.fn>;
+    getRunId: () => string | undefined;
+  }> {
     let runId: string | undefined;
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "chat.send") {
@@ -154,9 +161,7 @@ describe("acp translator stop reason mapping", () => {
       return {};
     }) as GatewayClient["request"];
     const connection = createAcpConnection();
-    const sessionUpdate = vi.fn(
-      async (_params: Parameters<typeof connection.sessionUpdate>[0]) => {},
-    );
+    const sessionUpdate = vi.fn(sessionUpdateImpl);
     connection.sessionUpdate = sessionUpdate as typeof connection.sessionUpdate;
     const sessionStore = createInMemorySessionStore();
     sessionStore.createSession({
@@ -169,8 +174,11 @@ describe("acp translator stop reason mapping", () => {
     await vi.waitFor(() => {
       expect(runId).toBeDefined();
     });
+    return { agent, promptPromise, sessionUpdate, getRunId: () => runId };
+  }
 
-    await agent.handleGatewayEvent(
+  function sendAbortWithCause(agent: AcpGatewayAgent, runId: string | undefined): Promise<void> {
+    return agent.handleGatewayEvent(
       createChatEvent({
         runId,
         sessionKey: "agent:main:main",
@@ -179,6 +187,14 @@ describe("acp translator stop reason mapping", () => {
         errorMessage: "Tool validation failed: command contains unsupported flag",
       }),
     );
+  }
+
+  it("aborted state with errorMessage surfaces the cause before resolving as cancelled", async () => {
+    const { agent, promptPromise, sessionUpdate, getRunId } = await createAbortedPromptHarness(
+      async () => {},
+    );
+
+    await sendAbortWithCause(agent, getRunId());
 
     await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
     const chunkTexts = sessionUpdate.mock.calls
@@ -195,6 +211,16 @@ describe("acp translator stop reason mapping", () => {
     expect(chunkTexts).toContain(
       "[OpenClaw interruption] Tool validation failed: command contains unsupported flag",
     );
+  });
+
+  it("resolves as cancelled when the interruption notice delivery rejects", async () => {
+    const { agent, promptPromise, getRunId } = await createAbortedPromptHarness(async () => {
+      throw new Error("client gone");
+    });
+
+    await sendAbortWithCause(agent, getRunId());
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
   });
 
   it("reconciles provisional ACP session keys to canonical Gateway keys by run id", async () => {
