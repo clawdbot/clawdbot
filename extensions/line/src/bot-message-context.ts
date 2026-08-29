@@ -28,6 +28,7 @@ import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
+  readNonEmptyStringPreservingWhitespace,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
@@ -189,7 +190,7 @@ function describeLineSticker(sticker: StickerEventMessage): string {
   // Sender-authored text is authoritative; LINE's experimental keywords are a
   // random selection and only describe stickers that carry no sender text.
   const description =
-    normalizeOptionalString(sticker.text) ??
+    readNonEmptyStringPreservingWhitespace(sticker.text) ??
     normalizeStringEntries(sticker.keywords ?? [])
       .slice(0, 3)
       .join(", ");

@@ -231,6 +231,21 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: See you tomorrow]");
   });
 
+  it.each([
+    ["  See you tomorrow  ", "[Sent a sticker:   See you tomorrow  ]"],
+    ["   ", "[Sent a sticker:    ]"],
+  ])("preserves sender-authored sticker whitespace", async (text, expected) => {
+    const context = await buildLineMessageContext({
+      event: stickerEvent({ text, keywords: ["fallback"] }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe(expected);
+  });
+
   it("prefers message-sticker text over experimental keywords", async () => {
     // LINE's official message-sticker webhook example carries both properties.
     const context = await buildLineMessageContext({
