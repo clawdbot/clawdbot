@@ -14,6 +14,8 @@ import {
 } from "../../agents/agent-runtime-id.js";
 import {
   buildUsageAgentMetaFields,
+  resolveFinalAssistantRawText,
+  resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
 } from "../../agents/embedded-agent-runner/run/helpers.js";
 import {
@@ -265,9 +267,15 @@ export function assistantText(message: AgentMessage): string {
   return message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
 }
 
-export function buildWorkerAgentMeta(params: {
+export function buildWorkerTurnResult(params: {
   messages: AgentMessage[];
   modelRef: { provider: string; model: string };
+  terminal: Extract<AgentMessage, { role: "assistant" }>;
+  durationMs: number;
+  sessionId: string;
+  sessionFile: SessionPlacementTurnParams["sessionFile"];
+  text: string;
+  workspaceConflictSummary?: string;
 }) {
   const usageAccumulator = createUsageAccumulator();
   const assistants = params.messages.filter(
@@ -292,12 +300,29 @@ export function buildWorkerAgentMeta(params: {
     ...params.modelRef,
     assistant: lastAssistant,
   });
+  const replyText =
+    params.workspaceConflictSummary === undefined
+      ? params.text
+      : params.text
+        ? `${params.text}\n\n${params.workspaceConflictSummary}`
+        : params.workspaceConflictSummary;
   return {
-    provider: reportedModelRef.provider,
-    model: reportedModelRef.model,
-    usage: usageMeta.usage,
-    lastCallUsage: usageMeta.lastCallUsage,
-    promptTokens: usageMeta.promptTokens,
+    ...(replyText ? { payloads: [{ text: replyText }] } : {}),
+    meta: {
+      durationMs: params.durationMs,
+      agentMeta: {
+        sessionId: params.sessionId,
+        sessionFile: params.sessionFile,
+        provider: reportedModelRef.provider,
+        model: reportedModelRef.model,
+        usage: usageMeta.usage,
+        lastCallUsage: usageMeta.lastCallUsage,
+        promptTokens: usageMeta.promptTokens,
+      },
+      stopReason: params.terminal.stopReason,
+      finalAssistantVisibleText: resolveFinalAssistantVisibleText(params.terminal),
+      finalAssistantRawText: resolveFinalAssistantRawText(params.terminal),
+    },
   };
 }
 

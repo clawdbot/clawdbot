@@ -47,7 +47,7 @@ import {
 import {
   assertSupportedTurn,
   assistantText,
-  buildWorkerAgentMeta,
+  buildWorkerTurnResult,
   emitProviderReplayRejected,
   fitLaunchDescriptorWithRuntimeIdentity,
   parseRuntimeResult,
@@ -392,23 +392,16 @@ async function executeWorkerTurn(params: {
   if (workerTurnFailed) {
     throw new WorkerTurnExecutionError(terminal.message.errorMessage ?? "Cloud worker turn failed");
   }
-  const replyText = workspaceConflict
-    ? text
-      ? `${text}\n\n${workspaceConflict.summary}`
-      : workspaceConflict.summary
-    : text;
-  return {
-    ...(replyText ? { payloads: [{ text: replyText }] } : {}),
-    meta: {
-      durationMs: Date.now() - startedAt,
-      agentMeta: {
-        sessionId: placement.sessionId,
-        sessionFile: turn.sessionFile,
-        ...buildWorkerAgentMeta({ messages: workerMessages, modelRef }),
-      },
-      stopReason: terminal.message.stopReason,
-    },
-  };
+  return buildWorkerTurnResult({
+    messages: workerMessages,
+    modelRef,
+    terminal: terminal.message,
+    durationMs: Date.now() - startedAt,
+    sessionId: placement.sessionId,
+    sessionFile: turn.sessionFile,
+    text,
+    workspaceConflictSummary: workspaceConflict?.summary,
+  });
 }
 
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
