@@ -3,6 +3,7 @@ import type {
   AgentHarnessAttemptParamsV2,
   AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createContractToolTerminalObserver } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -55,6 +56,8 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
   };
   const sessionId = "catalog-lifetime-session";
   const sessionKey = "agent:main:catalog-lifetime";
+  const runId = "catalog-lifetime-run";
+  const providerFailure = "deterministic non-timeout provider failure";
   const target = {
     agentId: "main",
     sessionId,
@@ -90,7 +93,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
   const config = { tools: { codeMode: { enabled: true } } };
   const host = await createAdmittedHostCapabilityTestFixture({
     config,
-    runId: "catalog-lifetime-run",
+    runId,
     agentId: "main",
     sessionId,
     sessionKey,
@@ -125,7 +128,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       sessionKey,
       sessionTarget: target,
       sessionFile: path.join(state.sessionsDir(), "catalog-lifetime.jsonl"),
-      runId: "catalog-lifetime-run",
+      runId,
       config,
       hostCapabilities: host.hostCapabilities,
       auth: { useLoggedInUser: true },
@@ -150,6 +153,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       prompt: userMessage.content,
       timeoutMs: 60_000,
       abortSignal: callController.signal,
+      observeToolTerminal: createContractToolTerminalObserver(runId),
       userTurnTranscriptRecorder: recorder,
       onAgentToolResult: (event: { toolName: string; result: unknown }) => {
         observed.push(event);
@@ -175,7 +179,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     host.hostCapabilities.assertActive();
     expect(nestedSignal?.aborted).toBe(false);
     peer.emit("session.error", {
-      message: "deterministic non-timeout provider failure",
+      message: providerFailure,
       errorType: "model_error",
     });
     await peer.destroying;
@@ -203,7 +207,36 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       waitResult,
     };
     peer.releaseDestroy();
-    await attempt;
+    const attemptResult = await attempt;
+    if (!("terminal" in attemptResult)) {
+      throw new Error("Expected a canonical Copilot attempt terminal");
+    }
+    const terminal = attemptResult.terminal;
+    const failure =
+      terminal.kind === "failed" ? terminal : "failure" in terminal ? terminal.failure : undefined;
+    const attemptFacts = {
+      terminal: {
+        kind: terminal.kind,
+        source: "source" in terminal ? terminal.source : null,
+        failureSource: failure?.source ?? null,
+        errorMessage: failure?.error instanceof Error ? failure.error.message.slice(0, 512) : null,
+      },
+      lastToolError: attemptResult.lastToolError
+        ? {
+            toolName: attemptResult.lastToolError.toolName,
+            error: attemptResult.lastToolError.error?.slice(0, 512),
+            executionStarted: attemptResult.lastToolError.executionStarted,
+            mutatingAction: attemptResult.lastToolError.mutatingAction,
+          }
+        : null,
+      toolMetas: attemptResult.toolMetas.slice(0, 8).map(({ toolName, isError, meta }) => ({
+        toolName,
+        isError,
+        meta: meta?.slice(0, 512),
+      })),
+      replayMetadata: attemptResult.replayMetadata,
+      outerAborted: callController.signal.aborted,
+    };
     expect(() => host.hostCapabilities.assertActive()).toThrow(/no longer active/);
     const retainedTool = retained.at(0);
     if (!retainedTool) {
@@ -214,6 +247,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       "CATALOG_LIFETIME_VERDICT",
       JSON.stringify({
         ...cleanupWindow,
+        attempt: attemptFacts,
         caller: "createCopilotAgentHarness.runAttempt",
         finalHostClosed: true,
         retainedToolRejected: true,
@@ -225,6 +259,18 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     expect(aborts).toBe(1);
     expect(waitResult).toMatchObject({ details: { status: "failed", code: "aborted" } });
     expect(JSON.stringify(waitResult)).not.toContain("STALE AFTER CLOSE");
+    expect(attemptFacts.terminal).toEqual({
+      kind: "failed",
+      source: "prompt",
+      failureSource: "prompt",
+      errorMessage: providerFailure,
+    });
+    expect(callController.signal.aborted).toBe(false);
+    expect(attemptResult.lastToolError).toMatchObject({
+      toolName: "wait",
+      error: "code mode execution aborted",
+      executionStarted: true,
+    });
   } finally {
     gate.resolve();
     peer.releaseDestroy();

@@ -32,6 +32,7 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -61,6 +62,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
+import { agentWaitHandler } from "./agent-wait.js";
 import { handleChatSend, handleChatSendWithRuntimeTools } from "./chat-send-handler.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -4269,50 +4271,155 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it.each([
-    ["after start", true],
-    ["before launch", false],
-  ] as const)("broadcasts returned agent-run error payloads $0", async (_name, agentStarted) => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-agent-returned-error-");
-    const errorMessage = agentStarted
-      ? "LLM idle timeout (120s): no response from model"
-      : STALE_WORKER_BUILD_REASON;
-    mockState.triggerAgentRunStart = agentStarted;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: {
-          text: errorMessage,
-          isError: true,
-        },
-      },
-    ];
-    const { context, send } = createChatRequestFixture();
-    const runId = agentStarted ? "idem-agent-returned-error" : "idem-agent-rejected-before-launch";
+    ["error payload after start", true, "error", undefined],
+    ["error payload before launch", false, "error", undefined],
+    ["recorded failure with ordinary output", true, "ordinary", "failed"],
+    ["recorded failure without output", true, "empty", "failed"],
+    ["recorded failure with source reply", true, "source", "failed"],
+    ["recorded success with ordinary output", true, "ordinary", "completed"],
+    ["recorded success with a recoverable warning", true, "warning", "completed"],
+    ["recorded success with source reply plus warning", true, "source-warning", "completed"],
+  ] as const)(
+    "projects agent-run terminal: $0",
+    async (name, agentStarted, presentation, outcome) => {
+      const fixtureDir = await createGatewayUserTurnSqliteFixture(
+        "openclaw-chat-send-agent-terminal-",
+      );
+      const runId = `idem-agent-terminal-${name.replaceAll(" ", "-")}`;
+      const failed = outcome === "failed" || presentation === "error";
+      const sourceReply = presentation === "source" || presentation === "source-warning";
+      const replyText = "Partial agent reply";
+      const errorMessage =
+        presentation === "error"
+          ? agentStarted
+            ? "LLM idle timeout (120s): no response from model"
+            : STALE_WORKER_BUILD_REASON
+          : "agent run failed";
+      const mirrorIdempotencyKey = `${runId}:internal-source-reply:0`;
+      const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+      mockState.triggerAgentRunStart = agentStarted;
+      if (outcome) {
+        await appendTestTranscriptMessage({
+          eventId: `${runId}:user`,
+          role: "user",
+          content: "please keep working",
+          now: 0,
+          parentId: null,
+        });
+        mockState.triggerUserMessagePersisted = true;
+      }
+      if (sourceReply) {
+        writeSavedPng(fixtureDir, "source-terminal.png");
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: mirrorIdempotencyKey,
+          text: replyText,
+        });
+        mockState.dispatchedReplies = [
+          createMainSourceReply({
+            idempotencyKey: mirrorIdempotencyKey,
+            text: replyText,
+            mediaUrls: [mediaUrl],
+          }),
+        ];
+      } else if (presentation === "empty") {
+        mockState.finalText = "";
+      } else if (presentation === "error") {
+        mockState.dispatchedReplies = [
+          {
+            kind: "final",
+            payload: { text: errorMessage, isError: true },
+          },
+        ];
+      } else {
+        mockState.runtimeAssistantTextsBeforeDelivery = [replyText];
+        mockState.dispatchedReplies = [{ kind: "final", payload: { text: replyText } }];
+      }
+      if (presentation === "warning" || presentation === "source-warning") {
+        mockState.dispatchedReplies.push({
+          kind: "final",
+          payload: { text: "tool warning", isError: true },
+        });
+      }
+      if (outcome) {
+        const dispatch = expectDefined(
+          dispatchInboundMessageMock.getMockImplementation(),
+          "default chat dispatch fixture",
+        );
+        dispatchInboundMessageMock.mockImplementationOnce(async (params: TestDispatchParams) =>
+          recordAgentRunTerminalOutcome(await dispatch(params), outcome),
+        );
+      }
+      const { context, send } = createChatRequestFixture();
 
-    const broadcast = await send({
-      idempotencyKey: runId,
-      message: "please keep working",
-    });
-
-    expect(broadcast).toMatchObject({
-      runId,
-      sessionKey: "agent:main:main",
-      state: "error",
-      errorMessage,
-    });
-    expect(broadcast).not.toHaveProperty("message");
-    const dedupe = context.dedupe.get(`chat:${runId}`);
-    expect(dedupe?.ok).toBe(false);
-    expect(dedupe?.payload).toMatchObject({
-      runId,
-      status: "error",
-      summary: errorMessage,
-    });
-    const userUpdate = findUserUpdate();
-    expectUserUpdateIdentity(userUpdate);
-    const assistantUpdates = findAssistantTranscriptUpdates();
-    expect(assistantUpdates).toStrictEqual([]);
-  });
+      await send({
+        idempotencyKey: runId,
+        message: "please keep working",
+        waitFor: "none",
+      });
+      // Admission already owns a dedupe entry; observe the first terminal write, not key presence.
+      await waitForAssertion(() => {
+        expect(["ok", "error"]).toContain(context.dedupe.get(`chat:${runId}`)?.payload?.status);
+      });
+      const dedupe = context.dedupe.get(`chat:${runId}`);
+      expect(dedupe?.ok).toBe(!failed);
+      expect(dedupe?.payload).toMatchObject({
+        runId,
+        status: failed ? "error" : "ok",
+        ...(failed ? { summary: errorMessage } : {}),
+      });
+      const waitRespond = vi.fn<RespondFn>();
+      await agentWaitHandler({
+        params: { runId, timeoutMs: 0 },
+        respond: waitRespond,
+        context,
+        req: {} as never,
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      expect(waitRespond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId, status: failed ? "error" : "ok" }),
+      );
+      const broadcasts = context.broadcast.mock.calls
+        .filter(([event]) => event === "chat")
+        .map(([, payload]) => payload);
+      if (failed) {
+        expect(broadcasts).toEqual([
+          expect.objectContaining({
+            runId,
+            sessionKey: "agent:main:main",
+            state: "error",
+            errorMessage,
+          }),
+        ]);
+        expect(broadcasts[0]).not.toHaveProperty("message");
+      } else if (sourceReply) {
+        expect(broadcasts).toEqual([expect.objectContaining({ runId, state: "final" })]);
+        expect(extractFirstTextBlock(broadcasts[0])).toBe(replyText);
+      } else {
+        expect(broadcasts).toEqual([]);
+      }
+      const assistantEntries = await readActiveAssistantTranscriptMessages();
+      if (presentation === "error" || presentation === "empty") {
+        expect(assistantEntries).toEqual([]);
+        expect(findAssistantTranscriptUpdates()).toEqual([]);
+      } else {
+        expect(assistantEntries).toHaveLength(1);
+        expect(JSON.stringify(assistantEntries[0]?.content)).toContain(replyText);
+      }
+      if (sourceReply) {
+        expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
+        expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
+        expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
+        expect(fs.existsSync(mockState.transcriptPath)).toBe(false);
+      }
+      if (presentation === "error") {
+        expectUserUpdateIdentity(findUserUpdate());
+      } else {
+        expect(readPersistedUserMessages()).toHaveLength(1);
+      }
+    },
+  );
 
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
     const transcriptDir = await createTranscriptFixture("openclaw-chat-send-command-tts-final-");

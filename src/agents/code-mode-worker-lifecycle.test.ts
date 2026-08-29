@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BroadcastChannel, Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as workerUrls from "../infra/runtime-worker-url.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
@@ -76,12 +77,17 @@ describe("Code Mode worker lifecycle", () => {
   it.each(["exec", "resume"] as const)(
     "terminates a real CPU-active %s worker when its catalog closes",
     async (phase) => {
-      const dir = await mkdtemp(path.join(os.tmpdir(), "code-mode-catalog-cpu-"));
+      // Finish hooks unwind in reverse order: stop workers before restoring their
+      // loader spies and releasing the channel and files, including on setup failure.
+      const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
+      const dir = tempDirs.make("code-mode-catalog-cpu-");
       const channelName = `catalog-cpu-${phase}-${crypto.randomUUID()}`;
       const channel = new BroadcastChannel(channelName);
+      onTestFinished(() => channel.close());
       const executing = createDeferred();
       channel.addEventListener("message", () => executing.resolve(), { once: true });
       const h = createCodeModeHarness();
+      onTestFinished(() => clearToolSearchCatalog(h.ctx));
       applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
       const exec = h.tools.find((tool) => tool.name === "exec");
       const wait = h.tools.find((tool) => tool.name === "wait");
@@ -128,31 +134,28 @@ describe("Code Mode worker lifecycle", () => {
       const resolveWorker = vi
         .spyOn(workerUrls, "resolveRuntimeWorkerUrl")
         .mockReturnValue(pathToFileURL(workerPath));
+      onTestFinished(() => resolveWorker.mockRestore());
       const terminate = vi.spyOn(Worker.prototype, "terminate");
+      onTestFinished(() => terminate.mockRestore());
       const execution =
         phase === "exec"
           ? exec.execute("cpu", { code: "while (true) {}" })
           : wait.execute("resume-cpu", { runId });
-      try {
-        await executing.promise;
-        clearToolSearchCatalog(h.ctx);
-        expect(resultDetails(await execution)).toMatchObject({ status: "failed", code: "aborted" });
-        expect(terminate).toHaveBeenCalledOnce();
-        const worker = terminate.mock.contexts[0];
-        if (!(worker instanceof Worker)) {
-          throw new Error("Expected a terminated real worker");
-        }
-        expect(worker.threadId).toBe(-1);
-        expect(activeRuns.size).toBe(0);
-        expect(h.catalogRef.onDispose).toBeUndefined();
-      } finally {
+      onTestFinished(async () => {
         clearToolSearchCatalog(h.ctx);
         await execution;
-        terminate.mockRestore();
-        resolveWorker.mockRestore();
-        channel.close();
-        await rm(dir, { recursive: true, force: true });
+      });
+      await executing.promise;
+      clearToolSearchCatalog(h.ctx);
+      expect(resultDetails(await execution)).toMatchObject({ status: "failed", code: "aborted" });
+      expect(terminate).toHaveBeenCalledOnce();
+      const worker = terminate.mock.contexts[0];
+      if (!(worker instanceof Worker)) {
+        throw new Error("Expected a terminated real worker");
       }
+      expect(worker.threadId).toBe(-1);
+      expect(activeRuns.size).toBe(0);
+      expect(h.catalogRef.onDispose).toBeUndefined();
     },
   );
 
