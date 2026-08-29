@@ -1072,6 +1072,9 @@ jobs:
         run: scripts/sandbox-setup.sh
 
       - name: Run repo E2E suite
+        env:
+          OPENCLAW_E2E_WORKERS: "2"
+          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
         run: pnpm test:e2e
 
   validate_special_e2e:
