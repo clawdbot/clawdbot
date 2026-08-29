@@ -340,42 +340,126 @@ describe("context-engine host parameter projection", () => {
     ]);
   });
 
-  it("does not mutate frozen engines reused by a factory", async () => {
-    const engineId = `host-param-frozen-${++engineCounter}`;
-    const assemble = vi.fn<ContextEngine["assemble"]>(async (params) => ({
-      messages: params.messages,
-      estimatedTokens: 0,
-    }));
-    class FrozenProbeEngine implements ContextEngine {
-      readonly #info = { id: engineId, name: "Frozen Probe", acceptedHostParams: [] };
+  it.each(["process", "logical-turn"] as const)(
+    "does not mutate frozen engines reused by a factory (%s)",
+    async (mode) => {
+      const engineId = `host-param-frozen-${++engineCounter}`;
+      const assemble = vi.fn<ContextEngine["assemble"]>(async (params) => ({
+        messages: params.messages,
+        estimatedTokens: 0,
+      }));
+      class FrozenProbeEngine implements ContextEngine {
+        readonly #info = { id: engineId, name: "Frozen Probe", acceptedHostParams: [] };
 
-      get info() {
-        return this.#info;
+        get info() {
+          return this.#info;
+        }
+
+        async ingest() {
+          return { ingested: true };
+        }
+
+        assemble = assemble;
+
+        async compact() {
+          return { ok: true, compacted: false };
+        }
       }
+      const sharedEngine = Object.freeze(new FrozenProbeEngine());
+      registerContextEngineForOwner(engineId, () => sharedEngine, `test:${engineId}`);
 
-      async ingest() {
-        return { ingested: true };
+      const config = { plugins: { slots: { contextEngine: engineId } } };
+      const firstTurn =
+        mode === "logical-turn" ? await resolveLogicalTurnContextEngines(config) : undefined;
+      const secondTurn =
+        mode === "logical-turn" ? await resolveLogicalTurnContextEngines(config) : undefined;
+      const first = firstTurn?.configured.engine ?? (await resolveContextEngine(config));
+      const second = secondTurn?.configured.engine ?? (await resolveContextEngine(config));
+      try {
+        expect(first.info).toEqual({ id: engineId, name: "Frozen Probe", acceptedHostParams: [] });
+        await first.assemble({ sessionId: "session-1", sessionKey: "first", messages: [message] });
+        await second.assemble({
+          sessionId: "session-2",
+          sessionKey: "second",
+          messages: [message],
+        });
+
+        expect(assemble).toHaveBeenCalledTimes(2);
+        expect(assemble.mock.contexts[0]).toBe(sharedEngine);
+        expect(assemble.mock.contexts[1]).toBe(sharedEngine);
+        expect(assemble.mock.calls.map(([params]) => params)).toEqual([
+          { sessionId: "session-1", messages: [message] },
+          { sessionId: "session-2", messages: [message] },
+        ]);
+      } finally {
+        await Promise.allSettled([
+          firstTurn?.fallback.engine.dispose?.(),
+          secondTurn?.fallback.engine.dispose?.(),
+        ]);
       }
+    },
+  );
 
-      assemble = assemble;
+  it("preserves raw call identity despite process quarantine", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const engineId = `host-param-quarantined-${++engineCounter}`;
+    const processFailure = new Error("process compact failed");
+    const syncFailure = new Error("raw assemble failed");
+    const retainedPromise = Promise.resolve({ messages: [message], estimatedTokens: 0 });
+    const assemble = vi
+      .fn<ContextEngine["assemble"]>()
+      .mockReturnValueOnce(retainedPromise)
+      .mockImplementationOnce(() => {
+        throw syncFailure;
+      });
+    const info = { id: engineId, name: "Quarantined Probe", acceptedHostParams: [] };
+    registerContextEngineForOwner(
+      engineId,
+      () => ({
+        info,
+        ingest: async () => ({ ingested: true }),
+        assemble,
+        compact: async () => {
+          throw processFailure;
+        },
+      }),
+      `plugin:${engineId}`,
+    );
+    const config = { plugins: { slots: { contextEngine: engineId } } };
+    const processEngine = await resolveContextEngine(config);
+    await expect(
+      processEngine.compact({ sessionId: "session-1", sessionKey: "agent:main:session-1" }),
+    ).rejects.toBe(processFailure);
+    const quarantine = listContextEngineQuarantines();
+    expect(quarantine).toEqual([expect.objectContaining({ engineId, operation: "compact" })]);
 
-      async compact() {
-        return { ok: true, compacted: false };
+    const resolution = await resolveLogicalTurnContextEngines(config);
+    try {
+      expect(resolution.configured.ownerPluginId).toBe(engineId);
+      expect(resolution.configured.engine.info).toBe(info);
+      const params = { sessionId: "session-1", sessionKey: "raw", messages: [message] };
+      const result = resolution.configured.engine.assemble(params);
+      expect(result).toBe(retainedPromise);
+      await expect(result).resolves.toEqual({ messages: [message], estimatedTokens: 0 });
+
+      let returned: ReturnType<ContextEngine["assemble"]> | undefined;
+      let thrown: unknown;
+      try {
+        returned = resolution.configured.engine.assemble(params);
+      } catch (error) {
+        thrown = error;
       }
+      // Drain an accidental async rejection before asserting synchronous error identity.
+      await returned?.catch(() => {});
+      expect(thrown).toBe(syncFailure);
+      expect(assemble).toHaveBeenCalledTimes(2);
+      expect(listContextEngineQuarantines()).toEqual(quarantine);
+    } finally {
+      await Promise.allSettled([
+        processEngine.dispose?.(),
+        resolution.configured.engine.dispose?.(),
+        resolution.fallback.engine.dispose?.(),
+      ]);
     }
-    const sharedEngine = Object.freeze(new FrozenProbeEngine());
-    registerContextEngineForOwner(engineId, () => sharedEngine, `test:${engineId}`);
-
-    const first = await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
-    const second = await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
-    expect(first.info).toEqual({ id: engineId, name: "Frozen Probe", acceptedHostParams: [] });
-    await first.assemble({ sessionId: "session-1", sessionKey: "first", messages: [message] });
-    await second.assemble({ sessionId: "session-2", sessionKey: "second", messages: [message] });
-
-    expect(assemble).toHaveBeenCalledTimes(2);
-    expect(assemble.mock.calls.map(([params]) => params)).toEqual([
-      { sessionId: "session-1", messages: [message] },
-      { sessionId: "session-2", messages: [message] },
-    ]);
   });
 });

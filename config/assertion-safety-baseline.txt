@@ -2748,7 +2748,7 @@ src/config/zod-schema.channels-config.ts	3
 src/config/zod-schema.core.ts	1
 src/config/zod-schema.ts	2
 src/context-engine/delegate.ts	1
-src/context-engine/registry.ts	10
+src/context-engine/registry.ts	9
 src/context-engine/runtime-settings.ts	2
 src/cron/delivery-channel-validation.ts	2
 src/cron/delivery-context.ts	1
