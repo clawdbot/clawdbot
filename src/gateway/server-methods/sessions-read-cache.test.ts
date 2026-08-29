@@ -295,7 +295,7 @@ describe("sessions.list single-flight", () => {
       let catalog = startupCatalog;
       const context = {
         ...requestContext(config),
-        readPreparedGatewayModelCatalog: vi.fn(async () => catalog),
+        readPreparedGatewayModelCatalog: vi.fn(async () => ({ entries: catalog })),
       };
       const client = identifiedClient("owner@example.com");
       const request = { archived: "all" as const, limit: 100 };

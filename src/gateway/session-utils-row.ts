@@ -351,12 +351,12 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  // A per-agent catalog map keeps unscoped listings owner-scoped: each row uses
-  // its own agent's completed catalog instead of a shared default-agent catalog.
+  // Entries and provider policy must stay bound to the same prepared agent owner;
+  // the Gateway startup registry can contain a different set of plugins.
+  const preparedCatalog =
+    params.modelCatalog instanceof Map ? params.modelCatalog.get(sessionAgentId) : undefined;
   const rowModelCatalog =
-    params.modelCatalog instanceof Map
-      ? params.modelCatalog.get(sessionAgentId)
-      : params.modelCatalog;
+    params.modelCatalog instanceof Map ? preparedCatalog?.entries : params.modelCatalog;
   // Event/list rows must not rediscover plugin-backed configured catalog metadata.
   // Lightweight projections may use an already-active provider policy, but must
   // not fall through to public artifacts that reload the manifest registry.
@@ -370,7 +370,7 @@ export function buildGatewaySessionRow(params: {
     entry,
     modelCatalog: thinkingModelCatalog,
     rowContext,
-    providerPolicySource: lightweight ? "active" : undefined,
+    providerPolicySource: preparedCatalog?.pluginRegistry ?? (lightweight ? "active" : undefined),
   });
   const catalogEntry =
     rowModelCatalog && rowModelProvider && rowModel

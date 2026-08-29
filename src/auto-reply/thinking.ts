@@ -6,7 +6,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveClaudeThinkingProfile } from "../plugins/provider-claude-thinking.js";
 import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
-import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
+import type {
+  ProviderThinkingPolicySource,
+  ProviderThinkingProfile,
+} from "../plugins/provider-thinking.types.js";
 import {
   BASE_THINKING_LEVELS,
   normalizeThinkLevel,
@@ -212,7 +215,7 @@ export function resolveThinkingProfile(params: {
   catalog?: ThinkingCatalogEntry[];
   agentRuntime?: string | null;
   configuredReasoning?: boolean;
-  providerPolicySource?: "active" | "active-or-bundled";
+  providerPolicySource?: ProviderThinkingPolicySource;
 }): ResolvedThinkingProfile {
   const context = resolveThinkingPolicyContext(params);
   if (!context.normalizedProvider) {
@@ -232,11 +235,15 @@ export function resolveThinkingProfile(params: {
     context: providerContext,
   };
   const providerProfile =
-    params.providerPolicySource === "active"
+    typeof params.providerPolicySource === "object"
       ? resolveEffectiveThinkingProfile(providerProfileParams, {
-          allowPublicArtifactFallback: false,
+          registry: params.providerPolicySource,
         })
-      : resolveEffectiveThinkingProfile(providerProfileParams);
+      : params.providerPolicySource === "active"
+        ? resolveEffectiveThinkingProfile(providerProfileParams, {
+            allowPublicArtifactFallback: false,
+          })
+        : resolveEffectiveThinkingProfile(providerProfileParams);
   // Any anthropic-messages catalog row routes through the canonical Claude
   // resolver: Claude families get the proper profile (incl. xhigh/adaptive/max);
   // non-Claude models on the anthropic-messages transport collapse to the Claude
@@ -401,7 +408,7 @@ export function resolveSupportedThinkingLevel(params: {
   catalog?: ThinkingCatalogEntry[];
   agentRuntime?: string | null;
   configuredReasoning?: boolean;
-  providerPolicySource?: "active" | "active-or-bundled";
+  providerPolicySource?: ProviderThinkingPolicySource;
 }): ThinkLevel {
   const profile = resolveThinkingProfile({
     provider: params.provider,

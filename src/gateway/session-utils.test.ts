@@ -3960,8 +3960,8 @@ describe("gateway session utils", () => {
 
     const result = listAgentsForGateway(cfg, disabledCatalog, {
       modelCatalogByAgentId: new Map([
-        ["main", disabledCatalog],
-        ["work", enabledCatalog],
+        ["main", { entries: disabledCatalog }],
+        ["work", { entries: enabledCatalog }],
         ["missing", undefined],
       ]),
     });

@@ -206,7 +206,7 @@ async function archiveLifecycleRequestContext(
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     getRuntimeConfig,
     loadGatewayModelCatalog,
-    readPreparedGatewayModelCatalog: loadGatewayModelCatalog,
+    readPreparedGatewayModelCatalog: async () => ({ entries: await loadGatewayModelCatalog() }),
     ...overrides,
   } as unknown as GatewayRequestContext;
 }

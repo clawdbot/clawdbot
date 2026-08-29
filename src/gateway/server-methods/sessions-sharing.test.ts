@@ -592,7 +592,7 @@ describe("session sharing handlers", () => {
                 visibility: "draft",
               }));
               invalidateSessionSharingSnapshot(sessionKey);
-              return [];
+              return { entries: [] };
             },
           } as unknown as GatewayRequestContext,
           respond: (...response: Parameters<RespondFn>) => responses.push(response),
@@ -668,7 +668,7 @@ describe("session sharing handlers", () => {
               visibility: "draft",
             }));
             invalidateSessionSharingSnapshot(hiddenKey);
-            return [];
+            return { entries: [] };
           },
         } as unknown as GatewayRequestContext,
         respond: (...response: Parameters<RespondFn>) => responses.push(response),
