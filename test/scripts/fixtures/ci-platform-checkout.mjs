@@ -179,8 +179,8 @@ async function command() {
     launch("child", attempt);
     await until(() => fs.existsSync(path.join(root, `ready-${attempt}.json`)), "tree readiness");
     if (scenario.startsWith("cancel-")) {
-      const owned = records();
-      const alive = owned.filter((entry) => entry.attempt === attempt && isPidAlive(entry.pid));
+      const owned = liveRecords();
+      const alive = owned.filter((entry) => entry.attempt === attempt);
       if (
         !["parent", "child", "grandchild"].every((role) =>
           alive.some((entry) => entry.role === role),
@@ -221,7 +221,7 @@ async function command() {
     }
     // Expire the two-second fetch budget only after the full tree is ready.
     // Immutable ticks avoid replacing a clock file held open by Windows readers.
-    // Cancellation scenarios instead wait for the supervisor's actual signal.
+    // Cancellation scenarios signal from the ready fetch without advancing this clock.
     if (!scenario.startsWith("cancel-")) {
       publish(`fetch-tick-${attempt}.json`, attempt);
     }
