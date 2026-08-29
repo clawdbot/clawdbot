@@ -289,9 +289,17 @@ export class CodexAppServerClient {
     if (startOptions.transport === "websocket" || startOptions.transport === "unix") {
       return new CodexAppServerClient(createWebSocketTransport(startOptions));
     }
-    return new CodexAppServerClient(
-      await createStdioTransport(startOptions, process.env, assertCurrent),
-    );
+    // The spawn callback runs synchronously before registration; initialization
+    // stays blocked until registration finishes, without losing startup errors.
+    let client!: CodexAppServerClient;
+    try {
+      await createStdioTransport(startOptions, process.env, assertCurrent, (child) => {
+        client = new CodexAppServerClient(child);
+      });
+      return client;
+    } catch (error) {
+      throw client?.getCloseError() ?? error;
+    }
   }
 
   /** Builds a client around a fake transport for tests. */

@@ -130,6 +130,7 @@ export async function createStdioTransport(
   options: CodexAppServerStartOptions,
   baseEnv: NodeJS.ProcessEnv = process.env,
   assertCurrent?: () => void,
+  onSpawn?: (child: ChildProcessWithoutNullStreams) => void,
 ): Promise<ChildProcessWithoutNullStreams> {
   const env = resolveCodexAppServerSpawnEnv(options, baseEnv);
   const invocation = resolveCodexAppServerSpawnInvocation(options, {
@@ -149,8 +150,10 @@ export async function createStdioTransport(
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: invocation.windowsHide,
   });
-  await register(child);
   try {
+    // Attach lifecycle observers before inspection can yield to an early exit.
+    onSpawn?.(child);
+    await register(child);
     assertCurrent?.();
     return child;
   } catch (error) {
