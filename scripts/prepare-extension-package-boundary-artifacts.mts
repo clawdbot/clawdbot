@@ -232,8 +232,14 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     rootDir: `extensions/${id}`,
     required: [`${LOCAL_PLUGIN_ROOT}/${id}/${entry}.d.ts`],
   }));
+  const batches = [[sdk], mode === "all" ? plugins : []].map((batch) =>
+    batch.map((unit) => {
+      fs.mkdirSync(resolve(repoRoot, unit.outDir), { recursive: true });
+      return { ...unit, outputRoot: fs.realpathSync(resolve(repoRoot, unit.outDir)) };
+    }),
+  );
   let before = new BoundaryInputSnapshot(repoRoot);
-  for (const batch of [[sdk], mode === "all" ? plugins : []]) {
+  for (const batch of batches) {
     if (!batch.length) {
       continue;
     }
@@ -262,9 +268,15 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         ];
         const previous = readArtifactRecord(recordPath);
         // Prime config/toolchain/topology before starting even an uncached owner.
-        before.signature(unit.config, args, []);
+        before.signature(unit.config, args, [], unit.outputRoot);
         if (
-          before.matches(previous, unit.config, args, [...unit.required, buildInfo], unit.outDir)
+          before.matches(
+            previous,
+            unit.config,
+            args,
+            [...unit.required, buildInfo],
+            unit.outputRoot,
+          )
         ) {
           process.stdout.write(`[${unit.id} boundary dts] fresh; skipping\n`);
           return null;
@@ -314,6 +326,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         outputs,
         before,
         unit.startedAt,
+        unit.outputRoot,
       );
       return Object.assign(unit, { record });
     });
