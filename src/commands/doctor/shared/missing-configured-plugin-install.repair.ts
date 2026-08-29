@@ -42,6 +42,11 @@ import {
   resolveSafeBrokenOfficialInstallRemovalPath,
 } from "./missing-configured-plugin-install.records.js";
 import {
+  describeVersionBoundRuntimeReleaseCohort,
+  preserveExactVersionBoundRuntimeSelector,
+  versionBoundRuntimeInstallRecordMatchesReleaseCohort,
+} from "./missing-configured-plugin-install.runtime-package.js";
+import {
   isLegacyPackageUpdateDoctorPass,
   shouldDeferConfiguredPluginInstallRepair,
 } from "./update-phase.js";
@@ -176,6 +181,38 @@ async function repairMissingPluginInstallsWithLease(
   const repairedPluginIds = new Set<string>();
   const deferredPluginIds = new Set<string>();
   const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
+  const compatibilityHostVersion = resolveCompatibilityHostVersion(env);
+  const cohortDescription = describeVersionBoundRuntimeReleaseCohort({
+    currentVersion: compatibilityHostVersion,
+    updateChannel,
+  });
+  const cohortFailure = (pluginId: string) =>
+    `Failed to converge version-bound configured plugin "${pluginId}" to the ${cohortDescription} release cohort. Existing install records were retained.`;
+  const pinFailure = (pluginId: string) =>
+    `Failed to preserve the exact npm selector for version-bound configured plugin "${pluginId}". Existing install records were retained.`;
+  const acceptVersionBoundRuntimeRecord = async (params: {
+    pluginId: string;
+    previousRecord: PluginInstallRecord | undefined;
+    repairedRecord: PluginInstallRecord | undefined;
+  }): Promise<{ record: PluginInstallRecord } | { error: string }> => {
+    if (
+      !(await versionBoundRuntimeInstallRecordMatchesReleaseCohort({
+        record: params.repairedRecord,
+        env,
+        currentVersion: compatibilityHostVersion,
+        updateChannel,
+      }))
+    ) {
+      return { error: cohortFailure(params.pluginId) };
+    }
+    const record = params.repairedRecord
+      ? preserveExactVersionBoundRuntimeSelector({
+          previousRecord: params.previousRecord,
+          repairedRecord: params.repairedRecord,
+        })
+      : undefined;
+    return record ? { record } : { error: pinFailure(params.pluginId) };
+  };
   let nextRecords = records;
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
   const recordFailure = (pluginId: string, messages: string[], code?: string) => {
@@ -329,7 +366,7 @@ async function repairMissingPluginInstallsWithLease(
           pluginIds: preparedMissingRecordedPluginIds,
           skipDisabledPlugins: true,
           updateChannel,
-          coreVersion: resolveCompatibilityHostVersion(env),
+          coreVersion: compatibilityHostVersion,
           specOverrides: versionBoundToCoreSpecOverrides,
           versionBoundToCorePluginIds: new Set(Object.keys(versionBoundToCoreSpecOverrides)),
           logger: {
@@ -353,8 +390,22 @@ async function repairMissingPluginInstallsWithLease(
       }
 
       const completedDependencyRepairPluginIds = new Set<string>();
+      const acceptedUpdateRecords = { ...(updateResult.config.plugins?.installs ?? nextRecords) };
+      const versionBoundRuntimePluginIds = new Set(Object.keys(versionBoundToCoreSpecOverrides));
       for (const outcome of updateResult.outcomes) {
         if (outcome.status === "updated" || outcome.status === "unchanged") {
+          if (versionBoundRuntimePluginIds.has(outcome.pluginId)) {
+            const accepted = await acceptVersionBoundRuntimeRecord({
+              pluginId: outcome.pluginId,
+              previousRecord: nextRecords[outcome.pluginId],
+              repairedRecord: acceptedUpdateRecords[outcome.pluginId],
+            });
+            if ("error" in accepted) {
+              recordFailure(outcome.pluginId, [accepted.error]);
+              continue;
+            }
+            acceptedUpdateRecords[outcome.pluginId] = accepted.record;
+          }
           completedDependencyRepairPluginIds.add(outcome.pluginId);
           repairedPluginIds.add(outcome.pluginId);
           changes.push(
@@ -380,10 +431,10 @@ async function repairMissingPluginInstallsWithLease(
           (pluginId) => !completedDependencyRepairPluginIds.has(pluginId),
         ),
       );
-      if (repairedPluginIds.size > 0) {
-        nextRecords = { ...(updateResult.config.plugins?.installs ?? nextRecords) };
+      if (completedDependencyRepairPluginIds.size > 0) {
+        nextRecords = acceptedUpdateRecords;
         for (const [pluginId, record] of missingRecordedPlugins) {
-          if (!repairedPluginIds.has(pluginId)) {
+          if (!completedDependencyRepairPluginIds.has(pluginId)) {
             nextRecords[pluginId] = record;
           }
         }
@@ -450,7 +501,7 @@ async function repairMissingPluginInstallsWithLease(
         })
       : null;
     const previousRecords = nextRecords;
-    const installed = await installCandidate({
+    let installed = await installCandidate({
       candidate,
       config: params.cfg,
       records: nextRecords,
@@ -463,6 +514,33 @@ async function repairMissingPluginInstallsWithLease(
         : {}),
       ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     });
+    const enforceVersionBoundRuntimeCohort =
+      candidate.versionBoundToOpenClaw === true &&
+      candidate.trustedSourceLinkedOfficialInstall === true;
+    if (!installed.failedPluginId && enforceVersionBoundRuntimeCohort) {
+      const accepted = await acceptVersionBoundRuntimeRecord({
+        pluginId: candidate.pluginId,
+        previousRecord: record,
+        repairedRecord: installed.records[candidate.pluginId],
+      });
+      if ("error" in accepted) {
+        installed = {
+          records: previousRecords,
+          changes: [],
+          notices: [],
+          warnings: [...installed.warnings, accepted.error],
+          failedPluginId: candidate.pluginId,
+        };
+      } else if (accepted.record !== installed.records[candidate.pluginId]) {
+        installed = {
+          ...installed,
+          records: {
+            ...installed.records,
+            [candidate.pluginId]: accepted.record,
+          },
+        };
+      }
+    }
     if (shouldReplaceBrokenOfficialInstall) {
       const installedRecord = installed.records[candidate.pluginId];
       const replacementSucceeded = installed.records !== previousRecords;
