@@ -93,8 +93,7 @@ jobs:
               '.workflow_runs[]
                 | select(.id != $current_run_id)
                 | select(.created_at >= $one_hour_ago)
-                | select(.status != "cancelled")
-                | select((.conclusion // "") != "skipped")
+                | select(.conclusion != "cancelled" and .conclusion != "skipped")
                 | [.id, .status, (.conclusion // ""), .created_at, .head_sha]
                 | @tsv' "$runs_json"
           )"
@@ -112,8 +111,7 @@ jobs:
               --arg remote_main "$remote_main" \
               '.workflow_runs[]
                 | select(.id != $current_run_id)
-                | select(.status != "cancelled")
-                | select((.conclusion // "") != "skipped")
+                | select(.conclusion != "cancelled" and .conclusion != "skipped")
                 | .head_sha
                 | select(. != null and . != "")
                 | select(. != $remote_main)

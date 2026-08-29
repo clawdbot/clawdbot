@@ -880,7 +880,9 @@ Quality stays separate from security so quality findings can be scheduled, measu
 
 ### Docs Agent
 
-The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping existing docs aligned with recently landed changes. It has no pure schedule: a successful non-bot push CI run on `main` can trigger it, and manual dispatch can run it directly. Workflow-run invocations skip when `main` has moved on or when another non-skipped Docs Agent run was created in the last hour. When it runs, it reviews the commit range from the previous non-skipped Docs Agent source SHA to current `main`, so one hourly run can cover all main changes accumulated since the last docs pass.
+The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping existing docs aligned with recently landed changes. It has no pure schedule: a successful non-bot push CI run on `main` can trigger it, and manual dispatch can run it directly. Workflow-run invocations skip when `main` has moved on or when another eligible Docs Agent workflow-run invocation was created in the last hour. Canceled and skipped workflow conclusions are excluded from both hourly cadence and review-base selection; active runs with no conclusion still count. When admitted, the agent reviews the commit range from the previous eligible invocation's source SHA to current `main`.
+
+History eligibility tracks workflow attempts, not completed docs reviews: a gate-rejected attempt that finishes successfully remains eligible history.
 
 ### Duplicate PRs After Merge
 
