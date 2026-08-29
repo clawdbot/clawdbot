@@ -68,8 +68,7 @@ const CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, number>(
   ["@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
 ]);
 
-const FROZEN_TARGET_REVISION = "fdc1c2e6c1b5f41d00edb2eb55244fa7c51f87dd";
-const FROZEN_TARGET_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+const FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
   ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts", 1],
@@ -83,7 +82,7 @@ const FROZEN_TARGET_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, nu
   ["@openclaw/voice-call:dangerous-exec:src/tunnel.ts", 1],
   ["@openclaw/voice-call:dangerous-exec:src/webhook/tailscale.ts", 1],
 ]);
-const FROZEN_TARGET_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, number>([
+const FROZEN_RELEASE_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs", 1],
   ["@openclaw/acpx:dangerous-exec:dist/service-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:dist/client-<hash>.js", 1],
@@ -116,20 +115,25 @@ const CURRENT_SECURITY_INVENTORY_POLICY = createPluginSecurityInventoryPolicy({
   codexSourceLayouts: [CODEX_LEGACY_SOURCE_FINDING_COUNTS, CODEX_CURRENT_SOURCE_FINDING_COUNTS],
 });
 
-// This exact candidate predates the current plugin and finding inventory.
-// Keep its complete reviewed policy isolated so every other revision fails closed.
-const FROZEN_TARGET_SECURITY_INVENTORY_POLICY = createPluginSecurityInventoryPolicy({
-  requiredSourceFindingCounts: FROZEN_TARGET_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
-  optionalPackedFindingCounts: FROZEN_TARGET_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+// A frozen release line can retain its complete reviewed inventory while the
+// trusted scanner evolves. The release controller validates the context first.
+const FROZEN_RELEASE_SECURITY_INVENTORY_POLICY = createPluginSecurityInventoryPolicy({
+  requiredSourceFindingCounts: FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  optionalPackedFindingCounts: FROZEN_RELEASE_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
   codexSourceLayouts: [CODEX_LEGACY_SOURCE_FINDING_COUNTS],
 });
 
+const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurityInventoryPolicy>([
+  ["extended-stable/2026.6.33", FROZEN_RELEASE_SECURITY_INVENTORY_POLICY],
+]);
+
 function selectPluginSecurityInventoryPolicy(
-  candidateRevision: string,
+  targetContextRef: string,
 ): PluginSecurityInventoryPolicy {
-  return candidateRevision === FROZEN_TARGET_REVISION
-    ? FROZEN_TARGET_SECURITY_INVENTORY_POLICY
-    : CURRENT_SECURITY_INVENTORY_POLICY;
+  return (
+    FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES.get(targetContextRef) ??
+    CURRENT_SECURITY_INVENTORY_POLICY
+  );
 }
 
 function parseNpmPackFiles(raw: string, packageName: string): string[] {
@@ -370,20 +374,6 @@ function listFindExtensionPackageFiles(): string[] | null {
     .toSorted();
 }
 
-function resolveCandidateRevision(): string {
-  const result = spawnSync("git", ["rev-parse", "HEAD"], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  const revision = result.stdout.trim();
-  if (result.status !== 0 || !/^[0-9a-f]{40}$/u.test(revision)) {
-    throw new Error("Could not resolve the exact candidate Git revision.");
-  }
-  return revision;
-}
-
 function collectPublishablePluginPackages(): PublishablePluginPackage[] {
   return listPublishablePluginPackageDirs()
     .flatMap((packageDir) => {
@@ -523,8 +513,9 @@ async function scanPublishablePluginPackage(
 }
 
 describe("publishable plugin npm package install security scan", () => {
-  const candidateRevision = resolveCandidateRevision();
-  const securityInventoryPolicy = selectPluginSecurityInventoryPolicy(candidateRevision);
+  const securityInventoryPolicy = selectPluginSecurityInventoryPolicy(
+    process.env.OPENCLAW_RELEASE_TARGET_CONTEXT_REF ?? "",
+  );
   const publishablePluginPackages = collectPublishablePluginPackages();
   const scanResultsByPackageName = new Map<
     string,
@@ -618,14 +609,14 @@ describe("publishable plugin npm package install security scan", () => {
     ).toEqual([]);
     expect(
       expectedOptionalReviewedFindingsForPackedPath(
-        FROZEN_TARGET_SECURITY_INVENTORY_POLICY,
+        FROZEN_RELEASE_SECURITY_INVENTORY_POLICY,
         "@openclaw/codex",
         "dist/client-frozen.js",
       ),
     ).toEqual(["@openclaw/codex:dangerous-exec:dist/client-<hash>.js"]);
     expect(
       expectedOptionalReviewedFindingsForPackedPath(
-        FROZEN_TARGET_SECURITY_INVENTORY_POLICY,
+        FROZEN_RELEASE_SECURITY_INVENTORY_POLICY,
         "@openclaw/codex",
         "dist/dynamic-tools-current.js",
       ),
@@ -684,28 +675,30 @@ describe("publishable plugin npm package install security scan", () => {
       resolveReviewedCodexSourceLayout(CURRENT_SECURITY_INVENTORY_POLICY, currentLayout),
     ).toEqual(currentLayout);
     expect(
-      resolveReviewedCodexSourceLayout(FROZEN_TARGET_SECURITY_INVENTORY_POLICY, legacyLayout),
+      resolveReviewedCodexSourceLayout(FROZEN_RELEASE_SECURITY_INVENTORY_POLICY, legacyLayout),
     ).toEqual(legacyLayout);
     expect(
-      resolveReviewedCodexSourceLayout(FROZEN_TARGET_SECURITY_INVENTORY_POLICY, currentLayout),
+      resolveReviewedCodexSourceLayout(FROZEN_RELEASE_SECURITY_INVENTORY_POLICY, currentLayout),
     ).toBeUndefined();
     expect(
-      resolveReviewedCodexSourceLayout(FROZEN_TARGET_SECURITY_INVENTORY_POLICY, [
+      resolveReviewedCodexSourceLayout(FROZEN_RELEASE_SECURITY_INVENTORY_POLICY, [
         ...legacyLayout,
         firstLegacyFinding,
       ]),
     ).toBeUndefined();
-    expect(selectPluginSecurityInventoryPolicy(FROZEN_TARGET_REVISION)).toBe(
-      FROZEN_TARGET_SECURITY_INVENTORY_POLICY,
+    expect(selectPluginSecurityInventoryPolicy("extended-stable/2026.6.33")).toBe(
+      FROZEN_RELEASE_SECURITY_INVENTORY_POLICY,
     );
-    expect(selectPluginSecurityInventoryPolicy(`0${FROZEN_TARGET_REVISION.slice(1)}`)).toBe(
-      CURRENT_SECURITY_INVENTORY_POLICY,
-    );
+    for (const targetContextRef of ["", "extended-stable/2026.7.33", "release/2026.6.35"]) {
+      expect(selectPluginSecurityInventoryPolicy(targetContextRef)).toBe(
+        CURRENT_SECURITY_INVENTORY_POLICY,
+      );
+    }
     const historicalFinding = "@openclaw/matrix:dangerous-exec:src/matrix/deps.ts";
     const currentFinding = "@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts";
     expect(
       isReviewedPublishableCriticalFinding(
-        FROZEN_TARGET_SECURITY_INVENTORY_POLICY,
+        FROZEN_RELEASE_SECURITY_INVENTORY_POLICY,
         historicalFinding,
       ),
     ).toBe(true);
@@ -716,7 +709,10 @@ describe("publishable plugin npm package install security scan", () => {
       isReviewedPublishableCriticalFinding(CURRENT_SECURITY_INVENTORY_POLICY, currentFinding),
     ).toBe(true);
     expect(
-      isReviewedPublishableCriticalFinding(FROZEN_TARGET_SECURITY_INVENTORY_POLICY, currentFinding),
+      isReviewedPublishableCriticalFinding(
+        FROZEN_RELEASE_SECURITY_INVENTORY_POLICY,
+        currentFinding,
+      ),
     ).toBe(false);
   });
 
@@ -768,7 +764,7 @@ describe("publishable plugin npm package install security scan", () => {
     ).toBe(false);
     expect(
       isReviewedPublishableCriticalFinding(
-        FROZEN_TARGET_SECURITY_INVENTORY_POLICY,
+        FROZEN_RELEASE_SECURITY_INVENTORY_POLICY,
         relocatedFinding,
       ),
     ).toBe(false);
