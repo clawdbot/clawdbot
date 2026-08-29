@@ -1,0 +1,107 @@
+diff --git a/dist/chunks/cli-api.CnMVyzaz.js b/dist/chunks/cli-api.CnMVyzaz.js
+index 2b8bb8d9cb13dc89892f4983afd404c8594bdcc5..554a865b72deee1bff2d7cbfffda156b451c1316 100644
+--- a/dist/chunks/cli-api.CnMVyzaz.js
++++ b/dist/chunks/cli-api.CnMVyzaz.js
+@@ -3034 +3034,2 @@ class PoolRunner {
+-						resolve();
++						// Only the responding transport can promise an explicit graceful exit.
++						resolve(response.willExit ? Promise.resolve().then(() => this.worker.waitForExit?.()) : undefined);
+@@ -3049 +3050 @@ class PoolRunner {
+-			}), STOP_TIMEOUT).finally(() => {
++			}), STOP_TIMEOUT).finally(async () => {
+@@ -3050 +3051,3 @@ class PoolRunner {
+-				stopSpan.end();
++				stopSpan.end();
++				// Deadline/error paths must also terminate and join the worker.
++				await this._traces.$(`vitest.${this.worker.name}.stop`, { context: this._otel?.workerContext }, () => this.worker.stop());
+@@ -3052,6 +3054,0 @@ class PoolRunner {
+-			this._eventEmitter.removeAllListeners();
+-			this._offCancel();
+-			this._rpc.$close(/* @__PURE__ */ new Error("[vitest-pool-runner]: Pending methods while closing rpc"));
+-			// Stop the worker process (this sets _fork/_thread to undefined)
+-			// Worker's event listeners (error, message) are implicitly removed when worker terminates
+-			await this._traces.$(`vitest.${this.worker.name}.stop`, { context: this._otel?.workerContext }, () => this.worker.stop());
+@@ -3060 +3057,2 @@ class PoolRunner {
+-			// Ensure we transition to stopped state even on error
++			// Ensure failed graceful shutdown cannot report a successful test run.
++			this.project.vitest.state.catchError(error, "Teardown Error");
+@@ -3063 +3061,4 @@ class PoolRunner {
+-		} finally {
++		} finally {
++			this._eventEmitter.removeAllListeners();
++			this._offCancel();
++			this._rpc.$close(/* @__PURE__ */ new Error("[vitest-pool-runner]: Pending methods while closing rpc"));
+@@ -3166 +3167 @@ class ForksPoolWorker {
+-	async stop() {
++	waitForExit() {
+@@ -3167 +3168,13 @@ class ForksPoolWorker {
+-		const fork = this.fork;
++		const fork = this.fork;
++		return new Promise((resolve, reject) => {
++			const onExit = (code, signal) => {
++				if (code === 0 && signal == null) resolve();
++				else reject(new Error(`Worker exited during graceful shutdown (code: ${code}, signal: ${signal})`));
++			};
++			if (fork.exitCode != null || fork.signalCode != null) onExit(fork.exitCode, fork.signalCode);
++			else fork.once("exit", onExit);
++		});
++	}
++	async stop() {
++		const fork = this._fork;
++		if (!fork) return;
+@@ -3169 +3182 @@ class ForksPoolWorker {
+-			if (fork.exitCode != null) resolve();
++			if (fork.exitCode != null || fork.signalCode != null) resolve();
+@@ -3178,4 +3191,6 @@ class ForksPoolWorker {
+-		const sigkillTimeout = setTimeout(() => fork.kill("SIGKILL"), SIGKILL_TIMEOUT);
+-		fork.kill();
+-		await waitForExit;
+-		clearTimeout(sigkillTimeout);
++		if (fork.exitCode == null && fork.signalCode == null) {
++			const sigkillTimeout = setTimeout(() => fork.kill("SIGKILL"), SIGKILL_TIMEOUT);
++			fork.kill();
++			await waitForExit;
++			clearTimeout(sigkillTimeout);
++		}
+@@ -3551 +3566 @@ class Pool {
+-				this.exitPromises.push(runner.stop({ force: resolver.isRejected }).then(() => clearTimeout(id)).catch((error) => this.logger.error(`[vitest-pool]: Failed to terminate ${task.worker} worker for test files ${formatFiles(task)}.`, error)));
++				this.exitPromises.push(runner.stop({ force: resolver.isRejected }).finally(() => clearTimeout(id)).catch((error) => this.logger.error(`[vitest-pool]: Failed to terminate ${task.worker} worker for test files ${formatFiles(task)}.`, error)));
+@@ -3781 +3796,3 @@ function createPool(ctx) {
+-		}
++		}
++		// Join worker teardown before reporters and the CLI compute the run result.
++		await pool.close();
+diff --git a/dist/chunks/init-forks.H5ZuobOQ.js b/dist/chunks/init-forks.H5ZuobOQ.js
+index 3a3a5f671e3d503eae1af13c6068e4d18bb8f60b..5754b53fc412909f0697c043c7b29f3846e1e134 100644
+--- a/dist/chunks/init-forks.H5ZuobOQ.js
++++ b/dist/chunks/init-forks.H5ZuobOQ.js
+@@ -16 +16,6 @@ function workerInit(options) {
+-		post: (v) => processSend(v),
++		// Flush the response, then exit explicitly while native profiler signal handlers
++		// are still installed. The parent joins actual exit within its stop deadline.
++		post: (v) => {
++			if (v.__vitest_worker_response__ && v.type === "stopped") return processSend({ ...v, willExit: true }, (error) => processExit(error ? 1 : process.exitCode));
++			return processSend(v);
++		},
+diff --git a/dist/chunks/reporters.d.DtoKVV2s.d.ts b/dist/chunks/reporters.d.DtoKVV2s.d.ts
+index fbe82be6ea7d5dd5e3fa6771c040f0a438f5717f..b60a1abbb785f588bdf04ec1e8ba29baa630d5b1 100644
+--- a/dist/chunks/reporters.d.DtoKVV2s.d.ts
++++ b/dist/chunks/reporters.d.DtoKVV2s.d.ts
+@@ -2075 +2075,3 @@ interface PoolWorker {
+-	start: () => Promise<void>;
++	start: () => Promise<void>;
++	/** Observe exit when a stopped response declares willExit; reject abnormal termination. */
++	waitForExit?: () => Promise<void>;
+@@ -2141 +2143,3 @@ type WorkerResponse = {
+-	error?: unknown;
++	error?: unknown;
++	/** The transport will exit itself after sending this response. */
++	willExit?: true;
+diff --git a/dist/node.d.ts b/dist/node.d.ts
+index 4af12597408d7f46a148003f4425e83272e3ccdd..529b9b837041ed73f3daa2cf810cbe60450611f6 100644
+--- a/dist/node.d.ts
++++ b/dist/node.d.ts
+@@ -174 +174,2 @@ declare class ForksPoolWorker implements PoolWorker {
+-	start(): Promise<void>;
++	start(): Promise<void>;
++	waitForExit(): Promise<void>;

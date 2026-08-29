@@ -8,6 +8,7 @@ export const toolingIsolatedTestFiles = [
   "test/scripts/control-ui-i18n.test.ts",
   "test/scripts/openclaw-e2e-instance.test.ts",
   "test/scripts/test-projects-build-admission.test.ts",
+  "test/scripts/vitest-fork-shutdown.test.ts",
 ];
 
 const toolingIsolatedTestFileSet = new Set(toolingIsolatedTestFiles);

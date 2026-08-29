@@ -88,3 +88,4 @@ packageExtensions:
 
 patchedDependencies:
   "@vitest/runner@4.1.11": patches/@vitest__runner@4.1.11.patch
+  "vitest@4.1.11": patches/vitest@4.1.11.patch
