@@ -973,6 +973,10 @@
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
       "default": "./dist/plugin-sdk/device-bootstrap.js"
     },
+    "./plugin-sdk/diagnostic-flags": {
+      "types": "./dist/plugin-sdk/diagnostic-flags.d.ts",
+      "default": "./dist/plugin-sdk/diagnostic-flags.js"
+    },
     "./plugin-sdk/diagnostic-runtime": {
       "types": "./dist/plugin-sdk/diagnostic-runtime.d.ts",
       "default": "./dist/plugin-sdk/diagnostic-runtime.js"
