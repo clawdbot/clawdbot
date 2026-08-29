@@ -80,6 +80,9 @@ function applyExpectedBuildId(
   if (snapshot.gatewayBuildId === expectedBuildId) {
     return { ...snapshot, expectedBuildId };
   }
+  if (snapshot.gatewayBuildId === undefined) {
+    return { ...snapshot, healthy: false, expectedBuildId };
+  }
   return {
     ...snapshot,
     healthy: false,
@@ -311,7 +314,26 @@ function withWaitContext(
   waitOutcome: GatewayRestartWaitOutcome,
   elapsedMs: number,
 ): GatewayRestartSnapshot {
-  return { ...snapshot, waitOutcome, elapsedMs };
+  const settledSnapshot = waitOutcome === "healthy" ? snapshot : settleUnprovenBuildId(snapshot);
+  return { ...settledSnapshot, waitOutcome, elapsedMs };
+}
+
+function settleUnprovenBuildId(snapshot: GatewayRestartSnapshot): GatewayRestartSnapshot {
+  if (
+    !snapshot.expectedBuildId ||
+    snapshot.buildIdMismatch ||
+    snapshot.gatewayBuildId === snapshot.expectedBuildId
+  ) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    healthy: false,
+    buildIdMismatch: {
+      expected: snapshot.expectedBuildId,
+      actual: snapshot.gatewayBuildId ?? null,
+    },
+  };
 }
 
 export async function waitForGatewayHealthyRestart(params: {
