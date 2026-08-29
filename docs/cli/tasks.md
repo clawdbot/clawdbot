@@ -91,6 +91,13 @@ successful; retry creates a fenced delivery generation from the retained
 canonical result. An ambiguous earlier acknowledgement can still cause a
 duplicate visible result.
 
+Retry and dismissal select the task's exact retained run, never another result
+from the same child session. Unrelated parent turns leave suspended completions
+blocked until you retry them. Upgrading from an older release repairs missing task
+bindings before loading runs, including runs that have not finished yet. Only
+unambiguous bindings are repaired; conflicting records remain unchanged and
+cannot be recovered by guessing from a shared session.
+
 ### `dismiss`
 
 ```bash

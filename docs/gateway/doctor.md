@@ -432,14 +432,6 @@ That stages grounded durable candidates into the short-term dreaming store while
     When an explicit roster no longer contains `main`, OpenClaw migrates durable `agent:main:*` SQLite rows only if the replacement owner is unambiguous: the sole roster member or the configured upgrade owner in `agents.defaults.sessionStore.agentId`. The explicit owner works for both per-agent and fixed session stores; fixed-store runtime ownership remains scoped to that physical store. Conflicting canonical or alias rows are preserved during startup and reported with a Doctor hint. `openclaw doctor --fix` first imports any legacy JSON session store, then keeps the winning canonical claim and renames each losing claim to `agent:<owner>:legacy-main-conflict-<n>` in its original database. Quarantine changes only the key; the entry and full transcript remain available for inspection or archival.
 
   </Accordion>
-  <Accordion title="Legacy subagent completion bindings">
-    Older releases could retain a completed subagent result after replacing its run ID without saving the original task binding. Doctor reports `would-backfill`, `left-ambiguous`, `already-canonical`, and `left-unbound` counts; `--fix` reports `backfilled` after verifying each write.
-
-    Stop the Gateway, run `openclaw doctor --fix`, then restart it before retrying or dismissing the blocked completion. The migration requires exclusive state ownership and changes only the retained task run binding. It does not change the database schema or retry delivery itself.
-
-    Doctor backfills only a legacy replacement with one retained run and one task for the child session, matching requester identity, consistent creation timestamps, and no competing run binding. Multiple runs or tasks on a reused child session remain ambiguous even if one is newer or already delivered. Doctor leaves these rows unchanged and warns; recovery continues to refuse an unbound completion rather than use another run's result. Repeated migration runs are safe. Unmatched or conflicting state requires ownership investigation, not an automatic guess.
-
-  </Accordion>
   <Accordion title="3a. Legacy plugin manifest migrations">
     Doctor scans all installed plugin manifests for deprecated top-level capability keys (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders`). When found, it offers to move them into the `contracts` object and rewrite the manifest file in-place. This migration is idempotent; if `contracts` already has the same values, the legacy key is removed without duplicating data.
   </Accordion>
