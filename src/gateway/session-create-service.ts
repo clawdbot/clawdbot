@@ -5,6 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -306,6 +307,8 @@ export async function createGatewaySession(params: {
   key?: string;
   agentId?: string;
   label?: string;
+  /** In-process create-only title seed; never populated from public Gateway params. */
+  displayName?: string;
   category?: string;
   model?: string;
   contextWindow?: string;
@@ -380,6 +383,9 @@ export async function createGatewaySession(params: {
   /** Synchronous caller-authority guard checked by each durable owner boundary. */
   commitGuard?: () => void;
 }): Promise<CreateGatewaySessionResult> {
+  // Presentation titles do not claim labels. Bound the snapshot at the shared
+  // creator so every native owner gets the same surrogate-safe storage contract.
+  const displayName = truncateUtf16Safe(params.displayName?.trim() ?? "", 500).trimEnd();
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   const projectId = normalizeOptionalString(params.projectId);
@@ -1170,6 +1176,7 @@ export async function createGatewaySession(params: {
           : undefined;
         const initializedEntry: InternalSessionEntry = {
           ...patched.entry,
+          ...(createdNewEntry && displayName ? { displayName } : {}),
           // New rows must expose the same canonical delivery shape to callbacks
           // that the SQLite writer persists, or guarded finalization sees its own write as drift.
           ...(existingEntry === undefined && patched.entry.delivery === undefined

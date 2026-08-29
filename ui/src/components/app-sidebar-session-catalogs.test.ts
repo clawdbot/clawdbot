@@ -41,7 +41,7 @@ describe("formatSidebarTimestamp", () => {
 });
 
 describe("findCatalogSessionHovercardRow", () => {
-  it("distinguishes repository context from a plain workspace cwd", () => {
+  it("preserves adopted naming while distinguishing repository and workspace context", () => {
     const catalogSession = (threadId: string, name: string) => ({
       threadId,
       name,
@@ -62,7 +62,8 @@ describe("findCatalogSessionHovercardRow", () => {
           connected: true,
           sessions: [
             {
-              ...catalogSession("project", "Project"),
+              ...catalogSession("project", "Renamed upstream"),
+              sessionKey: "agent:main:adopted-project",
               cwd: "/work/openclaw",
               gitBranch: "feature/hovercard",
             },
@@ -83,13 +84,17 @@ describe("findCatalogSessionHovercardRow", () => {
     expect(
       findCatalogSessionHovercardRow({
         catalogs: [catalog],
-        sessionKey: "catalog:codex:gateway%3Acodex:project",
-      })?.workContext,
-    ).toEqual({
-      kind: "project",
-      name: "openclaw",
-      path: "/work/openclaw",
-      branch: "feature/hovercard",
+        sessionKey: "agent:main:adopted-project",
+        liveRow: { label: "Operator chosen label" },
+      }),
+    ).toMatchObject({
+      label: "Operator chosen label",
+      workContext: {
+        kind: "project",
+        name: "openclaw",
+        path: "/work/openclaw",
+        branch: "feature/hovercard",
+      },
     });
     expect(
       findCatalogSessionHovercardRow({

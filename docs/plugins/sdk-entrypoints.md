@@ -162,6 +162,12 @@ export default definePluginEntry({
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
 
+  Native source titles are presentation, not unique session labels. When adopting
+  a new source, pass its title as `displayName` to the owner-authorized
+  [session creator](/plugins/sdk-runtime); the host bounds and stores that snapshot
+  with the new row. Keep source identity independent of naming, preserve existing
+  labels and snapshots on reuse or recovery, and do not resync native renames.
+
   CLI-backed catalogs that expose the same local-plus-paired-node shape can use
   `createSessionCatalogFamily(...)`. The family composer owns canonical cursor
   validation, node payload validation, host projection, adopted-session

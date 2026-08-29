@@ -168,7 +168,7 @@ export function renderRecentSession(params: {
     method: "sessions.patch",
     params: { key: session.key, pinned: !session.pinned },
   });
-  const label = display?.label ?? session.label;
+  const label = session.label;
   const { subtitle, narration } = host.sessionProjection.resolveSubtitle({
     session,
     hasDisplay: display !== undefined,

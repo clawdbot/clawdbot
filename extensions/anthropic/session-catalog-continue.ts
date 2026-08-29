@@ -138,7 +138,7 @@ export async function continueClaudeSession(
         key: adoptedSessionKey(hostId, threadId),
         agentId: adoptingAgentId,
         recoverMatchingInitialEntry: true,
-        ...(record.name ? { label: record.name } : {}),
+        ...(record.name ? { displayName: record.name } : {}),
         ...(record.cwd ? { spawnedCwd: record.cwd } : {}),
         ...(nodeId ? { execNode: nodeId, ...(record.cwd ? { execCwd: record.cwd } : {}) } : {}),
         initialEntry: {
