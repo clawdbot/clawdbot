@@ -10,11 +10,18 @@ vi.mock("./doctor-bootstrap-size.js", () => ({
 }));
 
 vi.mock("./doctor-auth-flat-profiles.js", () => ({
+  collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map()),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
+    detected: [],
     changes: [],
+    migrationApplied: false,
     warnings: [],
   }),
-  maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => cfg),
+  maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => ({
+    config: cfg,
+    changes: [],
+    warnings: [],
+  })),
 }));
 
 vi.mock("./doctor-auth-legacy-oauth.js", () => ({
