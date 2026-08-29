@@ -1,4 +1,4 @@
-title: Slack full verbose progress retains command detail without duplicate commentary
+title: Slack full verbose progress delivers tool output without duplicate commentary
 scenario:
   id: slack-progress-commentary-verbose-full
   surface: channels

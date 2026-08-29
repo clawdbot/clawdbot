@@ -672,14 +672,15 @@ describe("Slack live QA runtime helpers", () => {
       const input = run && "input" in run ? run.input : "";
       const commentaryMarker = input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
       const toolMarker = input.match(/SLACK-QA-TOOL-[0-9A-F]{8}/u)?.[0];
+      const outputMarker = input.match(/SLACK-QA-OUTPUT-[0-9A-F]{8}/u)?.[0];
       const finalMarker = input.match(/SLACK-QA-COMMENTARY-DONE-[0-9A-F]{8}/u)?.[0];
       const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
-      if (!commentaryMarker || !toolMarker || !finalMarker || !verifyObserved) {
+      if (!commentaryMarker || !toolMarker || !outputMarker || !finalMarker || !verifyObserved) {
         throw new Error(`missing Slack progress verifier: ${testCase.id}`);
       }
       // Progress cards compact command details from the middle, so the QA marker
       // stays at the command suffix where the real Slack presentation preserves it.
-      expect(input).toContain(`run: sleep 5 # ${toolMarker}.`);
+      expect(input).toContain(`sleep 5; printf '%s\\n' '${outputMarker}' # ${toolMarker}`);
       const messages = [
         {
           channelId: "C123456789",
@@ -692,7 +693,7 @@ describe("Slack live QA runtime helpers", () => {
                 channelId: "C123456789",
                 text: testCase.commentaryStyle === "lane" ? "Working…" : commentaryMarker,
                 ...(testCase.commentaryStyle === "lane"
-                  ? { blockText: [`• *Update* — ${commentaryMarker}`] }
+                  ? { blockText: [`• *Commentary* — _${commentaryMarker}_`] }
                   : {}),
                 ts: testCase.commentaryTs,
               },
@@ -706,7 +707,9 @@ describe("Slack live QA runtime helpers", () => {
                 text:
                   testCase.toolProgress === "standalone-redacted"
                     ? "🛠️ Exec"
-                    : `🛠️ Exec ${toolMarker}`,
+                    : testCase.toolProgress === "standalone"
+                      ? `🛠️ Exec\n\`\`\`\n${outputMarker}\n\`\`\``
+                      : `🛠️ Exec ${toolMarker}`,
                 ts: testCase.toolProgress === "draft" ? "1.500000" : "1.750000",
               },
             ]),
@@ -720,7 +723,7 @@ describe("Slack live QA runtime helpers", () => {
     }
   });
 
-  it("classifies only exact Slack commentary lane presentations", () => {
+  it("recognizes exact commentary rows within Slack progress cards", () => {
     const scenario = testing.findScenario(["slack-progress-commentary-true"])[0];
     const run = scenario?.buildRun("U999999999");
     const input = run && "input" in run ? run.input : "";
@@ -751,16 +754,33 @@ describe("Slack live QA runtime helpers", () => {
       { text: `_${commentaryMarker}_` },
       { text: ` \n_${commentaryMarker}_\t` },
       { text: `💬 ${commentaryMarker}` },
-      { blockText: [`• *Update* — ${commentaryMarker}`], text: "Working…" },
+      { text: `:speech_balloon: ${commentaryMarker}` },
+      { text: `_${commentaryMarker}_\n_more commentary_` },
+      {
+        blockText: [
+          `✅ *Working*`,
+          `• *Commentary* — _${commentaryMarker}_\n• *Commentary* — _another note_`,
+        ],
+        text: "Working…",
+      },
+      {
+        blockText: [
+          `• *Commentary* — _${commentaryMarker}_\n• *Commentary* — _${commentaryMarker}_`,
+        ],
+        text: "Working…",
+      },
     ]) {
       expect(() => verifyCommentaryMessage(message)).not.toThrow();
     }
-    for (const text of [
-      commentaryMarker,
-      `prefix _${commentaryMarker}_ suffix`,
-      `_${commentaryMarker}_\nmore`,
+    for (const message of [
+      { text: commentaryMarker },
+      { text: `prefix _${commentaryMarker}_ suffix` },
+      { text: `💬 ${commentaryMarker} extra prose` },
+      { text: "Working…", blockText: [`• *Exec* — _${commentaryMarker}_`] },
+      { text: "Working…", blockText: [`• *Commentary* — _${commentaryMarker} extra prose_`] },
+      { text: "Working…", blockText: [`• *Update* — ${commentaryMarker}`] },
     ]) {
-      expect(() => verifyCommentaryMessage({ text })).toThrow(
+      expect(() => verifyCommentaryMessage(message)).toThrow(
         "expected commentary in the Slack progress commentary lane",
       );
     }
@@ -885,9 +905,13 @@ describe("Slack live QA runtime helpers", () => {
     },
   );
 
-  it.each([false, true])(
-    "rejects command details in verbose-on progress (final edit: %s)",
-    (finalEdit) => {
+  it.each(
+    [false, true].flatMap((finalEdit) =>
+      ["TOOL", "OUTPUT"].map((markerKind) => ({ finalEdit, markerKind })),
+    ),
+  )(
+    "rejects $markerKind disclosure in verbose-on progress (final edit: $finalEdit)",
+    ({ finalEdit, markerKind }) => {
       const run = testing
         .findScenario(["slack-progress-commentary-verbose-dedupe"])[0]
         ?.buildRun("U_SUT");
@@ -895,7 +919,7 @@ describe("Slack live QA runtime helpers", () => {
         throw new Error("expected Slack progress message scenario");
       }
       const commentary = run.input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
-      const tool = run.input.match(/SLACK-QA-TOOL-[0-9A-F]{8}/u)?.[0];
+      const tool = run.input.match(new RegExp(`SLACK-QA-${markerKind}-[0-9A-F]{8}`, "u"))?.[0];
       expect(() =>
         run.verifyObserved?.({
           finalMessage: { text: run.matchText, ts: "3" },
@@ -909,9 +933,57 @@ describe("Slack live QA runtime helpers", () => {
             { channelId: "C123456789", text: run.matchText, ts: "3" },
           ],
         }),
-      ).toThrow("command details must stay hidden in verbose-on progress");
+      ).toThrow("command details and output must stay hidden in verbose-on progress");
     },
   );
+
+  it("requires actual full tool output instead of echoed command metadata", () => {
+    const run = testing
+      .findScenario(["slack-progress-commentary-verbose-full"])[0]
+      ?.buildRun("U_SUT");
+    if (!run || !("input" in run) || !run.verifyObserved) {
+      throw new Error("expected Slack progress message scenario");
+    }
+    const commentary = run.input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
+    const output = run.input.match(/SLACK-QA-OUTPUT-[0-9A-F]{8}/u)?.[0];
+    const command = run.input.match(/SLACK-QA-TOOL-[0-9A-F]{8}/u)?.[0];
+    const verify = (toolMessages: Array<{ text: string; ts: string }>) =>
+      run.verifyObserved?.({
+        finalMessage: { text: run.matchText, ts: "final" },
+        messages: [
+          { channelId: "C123456789", text: `💬 ${commentary}`, ts: "commentary" },
+          ...toolMessages.map((message) => ({ channelId: "C123456789", ...message })),
+          { channelId: "C123456789", text: run.matchText, ts: "final" },
+        ],
+      });
+    expect(() => verify([{ text: `🛠️ Exec: printf '${output}'`, ts: "tool" }])).toThrow(
+      "expected exact tool output",
+    );
+    expect(() => verify([{ text: output ?? "", ts: "tool" }])).toThrow(
+      "expected exact tool output",
+    );
+    expect(() => verify([{ text: `🛠️ Exec: # ${command}\n${output}`, ts: "tool" }])).toThrow(
+      "command details must stay hidden",
+    );
+    expect(() =>
+      verify([
+        { text: `🛠️ Exec\n${output}`, ts: "tool-1" },
+        { text: `🛠️ Exec\n${output}`, ts: "tool-2" },
+      ]),
+    ).toThrow("expected exact tool output in one standalone verbose message");
+    expect(() =>
+      verify([
+        { text: "🛠️ Exec", ts: "summary" },
+        { text: `🛠️ Exec\n${output}`, ts: "output" },
+      ]),
+    ).toThrow("expected exact tool output in one standalone verbose message");
+    expect(() =>
+      verify([
+        { text: "🛠️ Exec", ts: "tool" },
+        { text: `🛠️ Exec\n\`\`\`\n${output}\n\`\`\``, ts: "tool" },
+      ]),
+    ).not.toThrow();
+  });
 
   it.each(["slack-progress-commentary-verbose-dedupe", "slack-progress-commentary-verbose-full"])(
     "rejects absent or merged standalone tool identities for %s",
@@ -921,7 +993,7 @@ describe("Slack live QA runtime helpers", () => {
         throw new Error("expected Slack progress message scenario");
       }
       const commentary = run.input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
-      const tool = run.input.match(/SLACK-QA-TOOL-[0-9A-F]{8}/u)?.[0];
+      const output = run.input.match(/SLACK-QA-OUTPUT-[0-9A-F]{8}/u)?.[0];
       for (const toolTs of [undefined, "1", "3"]) {
         expect(() =>
           run.verifyObserved?.({
@@ -932,7 +1004,7 @@ describe("Slack live QA runtime helpers", () => {
                 ? [
                     {
                       channelId: "C123456789",
-                      text: scenarioId.endsWith("-full") ? `🛠️ Exec ${tool}` : "🛠️ Exec",
+                      text: scenarioId.endsWith("-full") ? `🛠️ Exec\n${output}` : "🛠️ Exec",
                       ts: toolTs,
                     },
                   ]

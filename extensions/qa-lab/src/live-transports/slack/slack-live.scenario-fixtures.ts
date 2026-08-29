@@ -85,11 +85,20 @@ function hasSlackCommentaryLaneMarker(
   message: { blockText?: string[]; text: string },
   marker: string,
 ) {
-  if (message.text.includes(`💬 ${marker}`) || message.text.trim() === `_${marker}_`) {
+  // A progress card can contain several authored rows within one Slack message.
+  if (
+    message.text
+      .split(/\r?\n/u)
+      .some((line) =>
+        [`💬 ${marker}`, `:speech_balloon: ${marker}`, `_${marker}_`].includes(line.trim()),
+      )
+  ) {
     return true;
   }
   const blockText = message.blockText ?? [];
-  return blockText.some((text) => text.trim() === `• *Update* — ${marker}`);
+  return blockText.some((text) =>
+    text.split(/\r?\n/u).some((line) => line.trim() === `• *Commentary* — _${marker}_`),
+  );
 }
 
 function isSlackSafeExecSummary(message: { text: string }) {
@@ -146,13 +155,14 @@ export function buildSlackProgressCommentaryRun(
   // stay byte-identical across draft edits and final-message reads.
   const commentaryMarker = `SLACK-QA-COMMENTARY-${suffix}`;
   const toolMarker = `SLACK-QA-TOOL-${suffix}`;
+  const outputMarker = `SLACK-QA-OUTPUT-${suffix}`;
   const finalMarker = `SLACK-QA-COMMENTARY-DONE-${suffix}`;
   return {
     expectReply: true,
     input: [
       `<@${sutUserId}> This is a Slack progress protocol test. First, emit an assistant commentary message whose entire text is exactly ${commentaryMarker}.`,
       "Do not call any tool until that commentary message is complete.",
-      `Then use the exec tool exactly once to run: sleep 5 # ${toolMarker}.`,
+      `Then use the exec tool exactly once to run this exact command: \`sleep 5; printf '%s\\n' '${outputMarker}' # ${toolMarker}\`.`,
       `After the command finishes, reply with only this exact marker: ${finalMarker}`,
     ].join(" "),
     matchText: finalMarker,
@@ -241,14 +251,21 @@ export function buildSlackProgressCommentaryRun(
           .map((message) => message.ts),
       );
       if (expectation.toolProgress === "standalone-redacted") {
-        if (messages.some((message) => observedSlackText(message).includes(toolMarker))) {
-          fail("command details must stay hidden in verbose-on progress");
+        if (
+          messages.some((message) =>
+            [toolMarker, outputMarker].some((marker) =>
+              observedSlackText(message).includes(marker),
+            ),
+          )
+        ) {
+          fail("command details and output must stay hidden in verbose-on progress");
         }
         const safeToolTimestamps = new Set(
           progressMessages.filter(isSlackSafeExecSummary).map((message) => message.ts),
         );
         if (
           safeToolTimestamps.size !== 1 ||
+          safeToolTimestamps.has(undefined) ||
           safeToolTimestamps.has(commentaryTs) ||
           safeToolTimestamps.has(finalMessage.ts)
         ) {
@@ -262,12 +279,30 @@ export function buildSlackProgressCommentaryRun(
           fail("expected commentary and tool progress on one Slack draft identity");
         }
       } else if (expectation.toolProgress === "standalone") {
+        if (messages.some((message) => observedSlackText(message).includes(toolMarker))) {
+          fail("command details must stay hidden in standalone channel tool output");
+        }
+        const toolMessages = progressMessages.filter((message) =>
+          isSlackSafeExecSummary({ text: message.text.split(/\r?\n/u)[0] ?? "" }),
+        );
+        const toolMessageTimestamps = new Set(toolMessages.map((message) => message.ts));
+        const outputTimestamps = new Set(
+          toolMessages
+            .filter((message) =>
+              observedSlackText(message)
+                .split(/\r?\n/u)
+                .some((line) => line.trim() === outputMarker),
+            )
+            .map((message) => message.ts),
+        );
         if (
-          toolTimestamps.size === 0 ||
-          toolTimestamps.has(commentaryTs) ||
-          toolTimestamps.has(finalMessage.ts)
+          toolMessageTimestamps.size !== 1 ||
+          outputTimestamps.size !== 1 ||
+          outputTimestamps.has(undefined) ||
+          outputTimestamps.has(commentaryTs) ||
+          outputTimestamps.has(finalMessage.ts)
         ) {
-          fail("expected tool progress only in standalone verbose messages");
+          fail("expected exact tool output in one standalone verbose message");
         }
       } else if (toolTimestamps.size !== 0) {
         fail("expected tool progress to stay out of Slack progress messages");

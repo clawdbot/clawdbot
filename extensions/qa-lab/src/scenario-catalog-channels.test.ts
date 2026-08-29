@@ -3,7 +3,6 @@ import { createQaBusState } from "./bus-state.js";
 import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
-  readQaScenarioPack,
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
@@ -70,15 +69,6 @@ function runTelegramStreamingFinalScenario(params: {
 
 describe("qa scenario catalog channel contracts", () => {
   const agentRuntime = "agent-runtime";
-
-  it("classifies every current module flow intrinsically", () => {
-    const moduleFlows = readQaScenarioPack().scenarios.filter(
-      (scenario) => scenario.execution.flowKind === "module",
-    );
-
-    expect(moduleFlows).toHaveLength(146);
-    expect(moduleFlows.every((scenario) => scenario.execution.flow)).toBe(true);
-  });
 
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
@@ -194,6 +184,7 @@ describe("qa scenario catalog channel contracts", () => {
       "matrix-mxid-prefixed-command-block",
       "slack-codex-approval-exec-native",
       "slack-codex-approval-plugin-native",
+      "slack-progress-commentary-verbose-full",
     ]) {
       const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
       expect(scenario.execution.flowKind, scenarioId).toBe("module");

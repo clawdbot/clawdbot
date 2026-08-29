@@ -728,12 +728,12 @@ Slack YAML module scenarios (`qa/scenarios/channels/slack-*.yaml`):
   `slack-progress-commentary-verbose-dedupe` / `slack-progress-commentary-verbose-full` - opt-in real-Slack probes for
   independent commentary/tool-progress controls, the omitted-key legacy
   default, and single-delivery behavior for durable verbose progress. The `on`
-  probe requires a safe Exec summary without command text; the `full` probe
-  separately verifies command-marker delivery. Failures retain bounded
+  probe requires a safe Exec summary without command text or output; the `full`
+  probe requires the exact stdout marker in a separate tool-output message.
+  Both use the same command, retain command privacy, and require one commentary
+  identity separate from the final answer. Failures retain bounded
   presentation facts without raw Slack messages or platform identities,
   including marker formatting and `sleep` summaries missing the command marker.
-  Marker absence alone cannot prove redaction if the model omitted the shell
-  comment; the safe-summary assertion and separate `full` probe remain necessary.
 - `slack-reaction-glyph-native` - opt-in live message-tool reaction scenario.
   Instructs the agent to pass the exact `✅` glyph and confirms Slack stored
   `white_check_mark` for the SUT bot on the target message.
