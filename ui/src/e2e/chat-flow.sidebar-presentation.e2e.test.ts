@@ -342,18 +342,19 @@ suite.define(() => {
     const busyKey = "agent:main:busy-session";
     const plainKey = "agent:main:plain-session";
     const longKey = "agent:main:long-title-session";
+    const unreadKey = "agent:main:unread-session";
     const homeKey = "agent:main:main";
     await installMockGateway(page, {
       featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
       methodResponses: {
         "board.get": {
-          cases: [homeKey, busyKey, plainKey, longKey].map((sessionKey) => ({
+          cases: [homeKey, busyKey, plainKey, longKey, unreadKey].map((sessionKey) => ({
             match: { sessionKey },
             response: {
               sessionKey,
               revision: 1,
               tabs:
-                sessionKey === homeKey || sessionKey === busyKey
+                sessionKey === homeKey || sessionKey === busyKey || sessionKey === unreadKey
                   ? [{ tabId: "overview", title: "Overview", position: 0, chatDock: "right" }]
                   : [],
               widgets: [],
@@ -361,6 +362,14 @@ suite.define(() => {
           })),
         },
         "sessions.list": chatSessionListResponse([
+          {
+            key: unreadKey,
+            kind: "direct",
+            label: "Movies and recommendations for the weekend",
+            icon: "🎬",
+            updatedAt: 3,
+            unread: true,
+          },
           {
             key: busyKey,
             kind: "direct",
@@ -608,6 +617,38 @@ suite.define(() => {
       const intrinsicAtomWidth = longLayout.atoms.reduce((sum, width) => sum + width, 0);
       expect(intrinsicAtomWidth).toBeGreaterThan(0);
       expect(longLayout.endcapWidth).toBeGreaterThanOrEqual(intrinsicAtomWidth);
+
+      const unreadRow = page.locator(`.sidebar-recent-session[data-session-key="${unreadKey}"]`);
+      const unreadDot = unreadRow.locator(".session-unread-dot");
+      const unreadTitle = unreadRow.locator(".sidebar-recent-session__name");
+      await unreadDot.waitFor({ state: "visible" });
+      const restingWidth = await unreadTitle.evaluate((element) => element.clientWidth);
+      await unreadRow.hover();
+      if (captureUiProofEnabled) {
+        await shellNav.screenshot({
+          animations: "disabled",
+          path: path.join(sessionSecondRowProofDir, "03-unread-hover.png"),
+        });
+      }
+      await unreadDot.waitFor({ state: "hidden" });
+      const hoverWidth = await unreadTitle.evaluate((element) => element.clientWidth);
+      const actionReserve = await unreadRow.evaluate((element) =>
+        Number.parseFloat(
+          getComputedStyle(element).getPropertyValue("--session-row-actions-reserve"),
+        ),
+      );
+      // Collapsing the unread track gives its width back to the title; merely
+      // making the dot transparent would still squeeze the text by the full reserve.
+      expect(restingWidth - hoverWidth).toBeLessThan(actionReserve);
+      await unreadRow
+        .getByRole("img", { name: "Dashboard available" })
+        .waitFor({ state: "visible" });
+      await page.mouse.move(900, 400);
+      await unreadDot.waitFor({ state: "visible" });
+      await unreadRow.locator("[data-session-menu]").focus();
+      await unreadDot.waitFor({ state: "hidden" });
+      await sidebarResizer.focus();
+      await unreadDot.waitFor({ state: "visible" });
 
       await busyRow.hover();
       await expect
