@@ -319,24 +319,53 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     }, signal);
   });
 
-  it("keeps declarations alive until their writer joins and keeps ownership across dist cleanup", async ({
-    signal,
-  }) => {
-    await withProcesses(async ({ checkpoint, waitEvent, start }) => {
-      const root = createCheckout();
-      installCompiler(root, checkpoint("declarations-ready"));
-      write(root, "pnpm.cjs", checkpoint("build-started"));
-      const writer = start(root, path.join(sourceRoot, "scripts/run-tsgo.mts"), tsgoArgs);
-      const writerGate = await writer.event("declarations-ready");
-      const declaration = path.join(root, declarationPath);
-      expect(fs.readFileSync(declaration, "utf8")).toContain("interface Channel");
+  it.for([
+    { directory: ".", nested: false },
+    { directory: "src", nested: false },
+    { directory: "src", nested: true },
+  ])(
+    "keeps declarations alive from $directory (nested=$nested) until their writer joins and keeps ownership across dist cleanup",
+    { timeout: 30_000 },
+    async ({ directory, nested }, { signal }) => {
+      await withProcesses(async ({ checkpoint, waitEvent, start }) => {
+        const root = createCheckout();
+        const cwd = path.join(root, directory);
+        installCompiler(root, checkpoint("declarations-ready"));
+        if (directory !== ".") {
+          fs.symlinkSync(path.join(root, "node_modules"), path.join(cwd, "node_modules"));
+        }
+        write(root, "pnpm.cjs", checkpoint("build-started"));
+        const writerArgs = [
+          "-p",
+          path.join(root, "tsconfig.plugin-sdk.dts.json"),
+          "--declaration",
+          "true",
+        ];
+        const compilerScript = path.join(sourceRoot, "scripts/run-tsgo.mts");
+        const writerScript = nested
+          ? write(
+              root,
+              "nested-writer.mts",
+              `
+          import { withDistArtifactOwnership, distArtifactEntryArgs } from ${JSON.stringify(path.join(sourceRoot, "scripts/lib/dist-artifact-ownership.mts"))};
+          import { runManagedCommand } from ${JSON.stringify(path.join(sourceRoot, "scripts/lib/managed-child-process.mts"))};
+          await withDistArtifactOwnership(${JSON.stringify(root)}, () => runManagedCommand({
+            bin: process.execPath, args: distArtifactEntryArgs(${JSON.stringify(compilerScript)}, ${JSON.stringify(writerArgs)}), requireProcessTreeExit: true,
+          }));
+        `,
+            )
+          : compilerScript;
+        const writer = start(cwd, writerScript, nested ? [] : writerArgs);
+        const writerGate = await writer.event("declarations-ready");
+        const declaration = path.join(root, declarationPath);
+        expect(fs.readFileSync(declaration, "utf8")).toContain("interface Channel");
 
-      // Advance the contender's wall clock past the observed sixteen-minute build
-      // without spending that time in Vitest; restore it before executing tsdown.
-      const contender = write(
-        root,
-        "contender.mts",
-        `
+        // Advance the contender's wall clock past the observed sixteen-minute build
+        // without spending that time in Vitest; restore it before executing tsdown.
+        const contender = write(
+          root,
+          "contender.mts",
+          `
         import { withDistArtifactOwnership } from ${JSON.stringify(path.join(sourceRoot, "scripts/lib/dist-artifact-ownership.mts"))};
         import { runTsdownBuild } from ${JSON.stringify(path.join(sourceRoot, "scripts/tsdown-build.mts"))};
         const now = Date.now;
@@ -347,44 +376,49 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           return await runTsdownBuild(${JSON.stringify(buildArgs)});
         });
       `,
-      );
-      const build = start(root, contender);
-      await Promise.race([build.waiting, waitEvent("build-started"), build.done]);
-      // Before the repair the real tsdown cleanup deletes the emitted file here.
-      expect(
-        fs.existsSync(declaration),
-        "cleanup must wait for the active declaration writer",
-      ).toBe(true);
-      writerGate.write("continue");
-      expect(await writer.done).toMatchObject({ code: 0 });
-      const buildGate = await build.event("build-started");
-      expect(fs.existsSync(declaration)).toBe(false);
+        );
+        const build = start(root, contender);
+        await Promise.race([build.waiting, waitEvent("build-started"), build.done]);
+        // Before the repair the real tsdown cleanup deletes the emitted file here.
+        expect(
+          fs.existsSync(declaration),
+          "cleanup must wait for the active declaration writer",
+        ).toBe(true);
+        writerGate.write("continue");
+        expect(await writer.done).toMatchObject({ code: 0 });
+        const buildGate = await build.event("build-started");
+        expect(fs.existsSync(declaration)).toBe(false);
 
-      installCompiler(root, checkpoint("next-declarations-ready"));
-      const nextWriter = start(root, path.join(sourceRoot, "scripts/run-tsgo.mts"), tsgoArgs);
-      await Promise.race([
-        nextWriter.waiting,
-        waitEvent("next-declarations-ready"),
-        nextWriter.done,
-      ]);
-      expect(fs.existsSync(declaration), "deleting dist must not delete build ownership").toBe(
-        false,
-      );
+        installCompiler(root, checkpoint("next-declarations-ready"));
+        const nextWriter = start(root, path.join(sourceRoot, "scripts/run-tsgo.mts"), tsgoArgs);
+        await Promise.race([
+          nextWriter.waiting,
+          waitEvent("next-declarations-ready"),
+          nextWriter.done,
+        ]);
+        expect(fs.existsSync(declaration), "deleting dist must not delete build ownership").toBe(
+          false,
+        );
 
-      const otherRoot = createCheckout();
-      installCompiler(otherRoot, checkpoint("other-checkout-ready"));
-      const independent = start(otherRoot, path.join(sourceRoot, "scripts/run-tsgo.mts"), tsgoArgs);
-      (await independent.event("other-checkout-ready")).write("continue");
-      expect(await independent.done).toMatchObject({ code: 0 });
-      expect(fs.existsSync(declaration)).toBe(false);
+        const otherRoot = createCheckout();
+        installCompiler(otherRoot, checkpoint("other-checkout-ready"));
+        const independent = start(
+          otherRoot,
+          path.join(sourceRoot, "scripts/run-tsgo.mts"),
+          tsgoArgs,
+        );
+        (await independent.event("other-checkout-ready")).write("continue");
+        expect(await independent.done).toMatchObject({ code: 0 });
+        expect(fs.existsSync(declaration)).toBe(false);
 
-      buildGate.write("continue");
-      expect(await build.done).toMatchObject({ code: 0 });
-      (await nextWriter.event("next-declarations-ready")).write("continue");
-      expect(await nextWriter.done).toMatchObject({ code: 0 });
-      expect(fs.readFileSync(declaration, "utf8")).toContain("interface Channel");
-    }, signal);
-  }, 30_000);
+        buildGate.write("continue");
+        expect(await build.done).toMatchObject({ code: 0 });
+        (await nextWriter.event("next-declarations-ready")).write("continue");
+        expect(await nextWriter.done).toMatchObject({ code: 0 });
+        expect(fs.readFileSync(declaration, "utf8")).toContain("interface Channel");
+      }, signal);
+    },
+  );
 
   it("retains ownership when a supervisor exits before its compiler joins", async ({ signal }) => {
     await withProcesses(async ({ checkpoint, waitEvent, start }) => {

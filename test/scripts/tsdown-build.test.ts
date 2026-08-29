@@ -1940,16 +1940,22 @@ describe("resolveTsdownBuildInvocation", () => {
     await expectPathMissing(outputDir);
   });
 
-  it("refuses an output root containing checkout artifact ownership", async () => {
-    const rootDir = createTempDir("openclaw-tsdown-owner-clean-");
-    const owner = path.join(rootDir, ".artifacts/dist-artifacts.lock/owner.json");
-    await fsPromises.mkdir(path.dirname(owner), { recursive: true });
-    await fsPromises.writeFile(owner, "owned");
-    expect(() => cleanTsdownOutputRoots({ cwd: rootDir, roots: [".artifacts"] })).toThrow(
-      "Cannot clean the checkout's dist artifact ownership location",
-    );
-    expect(await fsPromises.readFile(owner, "utf8")).toBe("owned");
-  });
+  it.each([".", "src"])(
+    "refuses an output root containing checkout artifact ownership from %s",
+    async (directory) => {
+      const rootDir = createTempDir("openclaw-tsdown-owner-clean-");
+      const cwd = path.join(rootDir, directory);
+      const owner = path.join(rootDir, ".artifacts/dist-artifacts.lock/owner.json");
+      await fsPromises.mkdir(path.dirname(owner), { recursive: true });
+      await fsPromises.mkdir(cwd, { recursive: true });
+      await fsPromises.mkdir(path.join(rootDir, ".git"));
+      await fsPromises.writeFile(owner, "owned");
+      expect(() =>
+        cleanTsdownOutputRoots({ cwd, roots: [path.join(rootDir, ".artifacts")] }),
+      ).toThrow("Cannot clean the checkout's dist artifact ownership location");
+      expect(await fsPromises.readFile(owner, "utf8")).toBe("owned");
+    },
+  );
 
   it("refuses to clean the working directory and leaves it intact", async () => {
     const rootDir = createTempDir("openclaw-tsdown-cwd-clean-");

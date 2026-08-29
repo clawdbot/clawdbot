@@ -5,13 +5,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { acquireFileLock } from "@openclaw/fs-safe/file-lock";
 import { root as openLockRoot } from "@openclaw/fs-safe/root";
 import { isDirectRunUrl } from "./direct-run.mjs";
+import { findRepoRoot } from "./repo-root.mjs";
 
-export const DIST_ARTIFACT_LOCK_PATH = ".artifacts/dist-artifacts.lock";
+const DIST_ARTIFACT_LOCK_PATH = ".artifacts/dist-artifacts.lock";
 const LOCK_POLL_MS = 500;
-let inheritedOwnershipRoot: string | undefined;
+let inheritedOwnershipPath: string | undefined;
 
-function lockPath(rootDir: string) {
-  return path.join(rootDir, DIST_ARTIFACT_LOCK_PATH);
+export function resolveDistArtifactLockPath(rootDir: string) {
+  // Compiler inputs can resolve outside cwd. Subdirectories share checkout
+  // ownership; standalone non-checkout work owns its directory.
+  return path.join(findRepoRoot(rootDir) ?? rootDir, DIST_ARTIFACT_LOCK_PATH);
 }
 
 function hasUnjoinedWork(error: unknown): boolean {
@@ -27,39 +30,39 @@ function hasUnjoinedWork(error: unknown): boolean {
   return "cause" in error && hasUnjoinedWork(error.cause);
 }
 
-function retainUnjoinedDistArtifactWork(rootDir: string, error: unknown) {
+function retainUnjoinedDistArtifactWork(directory: string, error: unknown) {
   if (hasUnjoinedWork(error)) {
-    fs.writeFileSync(path.join(lockPath(rootDir), "unjoined"), "Child cleanup was not verified.\n");
+    fs.writeFileSync(path.join(directory, "unjoined"), "Child cleanup was not verified.\n");
   }
 }
 
 async function runOwnedDistArtifactEntry(script: string, args: string[]) {
-  const directory = lockPath(process.cwd());
+  const directory = resolveDistArtifactLockPath(process.cwd());
   const claim = path.join(directory, `child-${process.pid}`);
   // A killed nested wrapper cannot certify its detached compiler has joined.
   // Its surviving claim keeps the outer owner from releasing on leader exit.
   fs.writeFileSync(claim, "Awaiting child completion.\n", { flag: "wx" });
-  inheritedOwnershipRoot = process.cwd();
+  inheritedOwnershipPath = directory;
   process.argv = [process.execPath, fileURLToPath(script), ...args];
   try {
     await import(script);
   } catch (error) {
-    retainUnjoinedDistArtifactWork(process.cwd(), error);
+    retainUnjoinedDistArtifactWork(directory, error);
     throw error;
   } finally {
-    inheritedOwnershipRoot = undefined;
+    inheritedOwnershipPath = undefined;
     fs.unlinkSync(claim);
   }
 }
 
 /** The callback must join every writer/reader before returning, including on failure. */
 export async function withDistArtifactOwnership<T>(rootDir: string, run: () => Promise<T>) {
+  const directory = resolveDistArtifactLockPath(fs.realpathSync(rootDir));
   // Only the private child entry can inherit its parent's checkout ownership;
   // the same standalone CLI flow runs without reacquiring that parent's lock.
-  if (rootDir === inheritedOwnershipRoot) {
+  if (directory === inheritedOwnershipPath) {
     return await run();
   }
-  const directory = lockPath(rootDir);
   fs.mkdirSync(directory, { recursive: true });
   const ownerPath = path.join(directory, "owner.json");
   let reportedWait = false;
@@ -108,7 +111,7 @@ export async function withDistArtifactOwnership<T>(rootDir: string, run: () => P
   try {
     return await run();
   } catch (error) {
-    retainUnjoinedDistArtifactWork(rootDir, error);
+    retainUnjoinedDistArtifactWork(directory, error);
     throw error;
   } finally {
     if (

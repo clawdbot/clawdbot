@@ -17,7 +17,7 @@ import { decodeMountInfoPath } from "../packages/normalization-core/src/mountinf
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
-  DIST_ARTIFACT_LOCK_PATH,
+  resolveDistArtifactLockPath,
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
 import { toErrorObject } from "./lib/error-format.mts";
@@ -190,7 +190,7 @@ function assertTsdownCleanOutputRoots(params: OutputRootParams = {}) {
         "Cannot clean the current working directory or one of its ancestors. Please specify a dedicated output directory.",
       );
     }
-    if (isPathInside(rootPath, pathImpl.resolve(cwd, DIST_ARTIFACT_LOCK_PATH))) {
+    if (isPathInside(rootPath, resolveDistArtifactLockPath(cwd))) {
       throw new Error("Cannot clean the checkout's dist artifact ownership location.");
     }
     // A safe final component is insufficient: recursive removal follows symlinked parents.
