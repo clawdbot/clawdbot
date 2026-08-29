@@ -108,10 +108,12 @@ export function resolveRunStaleThresholdMs(
     DiagnosticSessionActivitySnapshot,
     "activeWorkKind" | "activeToolDeadlineAtMs" | "lastProgressAgeMs"
   >,
-  progressAgeMs = activity.lastProgressAgeMs ?? 0,
+  evidenceAgeMs = activity.lastProgressAgeMs ?? 0,
 ): number {
   if (activity.activeToolDeadlineAtMs !== undefined) {
-    return Math.max(0, progressAgeMs + activity.activeToolDeadlineAtMs - Date.now());
+    // Use the same age the caller compares: subtracting it leaves only the
+    // absolute deadline, even when reply activity and tool progress differ.
+    return Math.max(0, evidenceAgeMs + activity.activeToolDeadlineAtMs - Date.now());
   }
   return activity.activeWorkKind === "tool_call"
     ? Math.max(RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)

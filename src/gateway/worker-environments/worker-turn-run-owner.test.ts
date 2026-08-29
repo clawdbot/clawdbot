@@ -47,9 +47,15 @@ describe("cloud worker run ownership", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
 
-  it.each(["user", "deadline"] as const)(
-    "keeps a bounded remote tool alive until %s cancellation",
-    async (cancellation) => {
+  it.each([
+    { cancellation: "user", firstToolDelayMs: 0 },
+    { cancellation: "deadline", firstToolDelayMs: 0 },
+    { cancellation: "deadline", firstToolDelayMs: 10 * 60_000 },
+  ] as const)(
+    "keeps a bounded remote tool alive until $cancellation cancellation after a $firstToolDelayMs ms tool-start delay",
+    async ({ cancellation, firstToolDelayMs }) => {
+      const turnStartedAtMs = Date.UTC(2026, 7, 29);
+      vi.useFakeTimers({ toFake: ["Date"], now: turnStartedAtMs });
       seedActivePlacement();
       const launched = createDeferred();
       const finishLaunch = createDeferred();
@@ -140,6 +146,7 @@ describe("cloud worker run ownership", () => {
       receiver.start();
       vi.useFakeTimers({
         toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"],
+        now: turnStartedAtMs + firstToolDelayMs,
       });
       const previousDiagnostics = areDiagnosticsEnabledForProcess();
       setDiagnosticsEnabledForProcess(true);
@@ -176,7 +183,7 @@ describe("cloud worker run ownership", () => {
             },
           }),
         ).toEqual({ ok: true, result: { ackedSeq: 1 } });
-        await vi.advanceTimersByTimeAsync(16 * 60_000);
+        await vi.advanceTimersByTimeAsync(20 * 60_000 + 1 - firstToolDelayMs);
 
         expect(operation.abortSignal.aborted).toBe(false);
         expect(isReplyRunEvidenceStale(operation)).toBe(false);
@@ -213,7 +220,9 @@ describe("cloud worker run ownership", () => {
               },
             }),
           ).toEqual({ ok: true, result: { ackedSeq: 2 } });
-          vi.setSystemTime(Date.now() + 14 * 60_000 + 1);
+          vi.setSystemTime(turnStartedAtMs + input.timeoutMs);
+          expect(isReplyRunEvidenceStale(operation)).toBe(false);
+          vi.setSystemTime(turnStartedAtMs + input.timeoutMs + 1);
           expect(isReplyRunEvidenceStale(operation)).toBe(true);
           await vi.advanceTimersByTimeAsync(60_000);
           expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
