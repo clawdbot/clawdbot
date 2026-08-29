@@ -46,6 +46,10 @@ still-active child that owns the blocking failure.
 Same-parent continuation requires the original root to have been dispatched
 with `fail_fast=false`. The controller verifies that exact logged input before
 any rerun mutation.
+It is also unavailable when that parent produced the sealed candidate
+artifacts, because GitHub reruns make those prior-attempt artifacts unavailable.
+Keep the candidate and Tooling SHAs frozen, supersede the parent, and start a
+fresh all-group Full Release Validation.
 
 After dispatch, the parent writes one immutable
 `full-release-execution-plan-<run-id>` artifact and preserves the same bytes in
