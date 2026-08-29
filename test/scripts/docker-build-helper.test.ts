@@ -383,10 +383,7 @@ async function forEachUpgradeSurvivorSystemctlShim(
   }) => void | Promise<void>,
   targetPid?: number,
 ): Promise<void> {
-  for (const scriptPath of [
-    UPGRADE_SURVIVOR_RUN_SCRIPT,
-    UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH,
-  ]) {
+  for (const scriptPath of [UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH]) {
     const workDir = tempDirs.make("openclaw-systemctl-shim-");
     const binDir = join(workDir, "bin");
     const pidPath = join(workDir, "gateway.pid");
@@ -3555,7 +3552,7 @@ printf '%s\n' "$status" >"$TMPDIR/status"
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
     const updateRestartAuth = readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8");
 
-    for (const script of [publishedRunner, updateRestartAuth]) {
+    for (const script of [updateRestartAuth]) {
       expectTextToIncludeAll(script, [
         'supervisor_script="${pid_file}.supervisor.mjs"',
         'OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start"',
@@ -3907,6 +3904,110 @@ exit "$lane_exit"
     },
   );
 
+  it("exposes the published survivor service through the manager fixture", () => {
+    const workDir = tempDirs.make("openclaw-published-survivor-manager-");
+    const unitDir = join(workDir, ".config", "systemd", "user");
+    mkdirSync(unitDir, { recursive: true });
+    writeFileSync(
+      join(unitDir, "openclaw-gateway.service"),
+      "[Service]\nExecStart=/usr/bin/node /fixture/gateway.mjs\n",
+    );
+    const source = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+    const definitions = source.slice(0, source.indexOf("phase storage-preflight"));
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `${definitions}
+trap - EXIT ERR INT TERM
+install_update_restart_systemctl_shim
+test -x "$npm_config_prefix/bin/busctl"
+"$npm_config_prefix/bin/busctl" --user --json=short call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager LoadUnit s openclaw-gateway.service
+`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: workDir,
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.4.15",
+          OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: join(workDir, "artifacts", "summary.json"),
+          OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(workDir, "runtime"),
+        },
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual({
+      type: "o",
+      data: ["/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice"],
+    });
+  });
+
+  it.each(["unchanged", "pid-only", "request-only", "replaced"])(
+    "requires an update-owned service replacement after consent recovery (%s)",
+    (mode) => {
+      const workDir = tempDirs.make("openclaw-survivor-recovery-restart-");
+      const artifacts = join(workDir, "artifacts");
+      const bin = join(workDir, "bin");
+      mkdirSync(artifacts);
+      const pidFile = join(artifacts, "supervisor.pid");
+      const logFile = join(artifacts, "systemctl.log");
+      writeFileSync(pidFile, "12345\n");
+      // An earlier baseline restart must not count for the recovery invocation.
+      writeFileSync(logFile, "--user restart openclaw-gateway.service\n");
+      writeExecutables(bin, {
+        systemctl: "#!/usr/bin/env bash\nexit 0\n",
+        openclaw: `#!${process.execPath}
+const fs = require("node:fs");
+if (["pid-only", "replaced"].includes(process.env.RESTART_TEST_MODE)) fs.writeFileSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, "23456\\n");
+if (["request-only", "replaced"].includes(process.env.RESTART_TEST_MODE)) fs.appendFileSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG, "--user restart openclaw-gateway.service\\n");
+console.log(JSON.stringify({status:"ok",after:{version:"2026.8.1"},steps:[{name:"global update",exitCode:0}]}));
+`,
+      });
+      const source = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+      const update = source.slice(
+        source.indexOf("update_candidate() {"),
+        source.indexOf("\nassert_root_managed_vps_cli_usable()"),
+      );
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -eu
+source ${shellQuote(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH)}
+openclaw_e2e_maybe_timeout() { shift; "$@"; }
+candidate_update_spec() { printf '%s' fixture.tgz; }
+read_installed_version() { printf '%s' 2026.8.1; }
+ARTIFACT_ROOT=${shellQuote(artifacts)}
+SYSTEMCTL_SHIM_PID_FILE=${shellQuote(pidFile)}
+SYSTEMCTL_SHIM_LOG=${shellQuote(logFile)}
+UPDATE_JSON="$ARTIFACT_ROOT/update.json"
+UPDATE_ERR="$ARTIFACT_ROOT/update.err"
+COMMAND_TIMEOUT=900s
+ROOT_MANAGED_VPS=0
+UPDATE_RESTART_MODE=auto-auth
+baseline_spec=openclaw@2026.4.15
+candidate_version=2026.8.1
+CANDIDATE_KIND=tarball
+${update}
+update_candidate 1
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH ?? ""}`,
+            RESTART_TEST_MODE: mode,
+            OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: pidFile,
+            OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: logFile,
+          },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(mode === "replaced" ? 0 : 1);
+    },
+  );
+
   it.each(["sqlite", "wal", "historical"])(
     "captures persisted plugin identity without changing application data (%s)",
     (storage) => {
@@ -4135,7 +4236,7 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
     }
   });
 
-  it.each([UPGRADE_SURVIVOR_RUN_SCRIPT, UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH])(
+  it.each([UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH])(
     "retains a failed service child and only sanitized diagnostics from %s",
     async (scriptPath) => {
       const workDir = tempDirs.make("openclaw-survivor-diagnostics-");
@@ -4265,7 +4366,7 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
     },
   );
 
-  it.each([UPGRADE_SURVIVOR_RUN_SCRIPT, UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH])(
+  it.each([UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH])(
     "retains supervisor bootstrap stderr without inventing a child exit in %s",
     async (scriptPath) => {
       const workDir = tempDirs.make("openclaw-survivor-bootstrap-");
@@ -4530,10 +4631,7 @@ exit 0
 
   it("stops supervised gateway restarts after the systemd burst limit", async () => {
     const workDir = tempDirs.make("openclaw-update-restart-supervisor-");
-    const scripts = [
-      readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
-      readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
-    ];
+    const scripts = [readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8")];
 
     for (const [index, script] of scripts.entries()) {
       const supervisorPath = join(workDir, `supervisor-${index}.mjs`);
@@ -4567,10 +4665,7 @@ exit 0
 
   it("allows a supervised gateway to drain within the systemd stop timeout", async () => {
     const workDir = tempDirs.make("openclaw-update-restart-graceful-stop-");
-    const scripts = [
-      readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
-      readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
-    ];
+    const scripts = [readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8")];
 
     for (const [index, script] of scripts.entries()) {
       const supervisorPath = join(workDir, `graceful-supervisor-${index}.mjs`);
@@ -4622,10 +4717,7 @@ const starts = fs.readFileSync(process.env.URLS_FILE, "utf8").trim().split("\\n"
 process.exit(starts === 1 ? 1 : 78);
 `,
     );
-    const scripts = [
-      readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
-      readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
-    ];
+    const scripts = [readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8")];
 
     for (const [index, script] of scripts.entries()) {
       const supervisorPath = join(workDir, `clawhub-env-supervisor-${index}.mjs`);
@@ -4687,10 +4779,7 @@ const ready = setInterval(() => {
 setInterval(() => {}, 1_000);
 `,
       );
-      const scripts = [
-        readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
-        readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
-      ];
+      const scripts = [readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8")];
 
       for (const [index, script] of scripts.entries()) {
         const supervisorPath = join(workDir, `process-group-supervisor-${index}.mjs`);
@@ -4774,10 +4863,7 @@ if (starts === 1) {
 }
 `,
       );
-      const scripts = [
-        readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
-        readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
-      ];
+      const scripts = [readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8")];
 
       for (const [index, script] of scripts.entries()) {
         const supervisorPath = join(workDir, `restart-group-supervisor-${index}.mjs`);
