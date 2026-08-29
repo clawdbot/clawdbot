@@ -8,6 +8,7 @@ import {
 import { repairObsoleteGeneratedExecApprovals } from "../../infra/exec-approvals-generated-migration.js";
 import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
@@ -226,10 +227,17 @@ export async function runDoctorRepairSequence(params: {
     // Inventory repair changes the authoritative plugin generation. Replace the
     // shared Doctor base before later discovery so nested scopes cannot reuse stale metadata.
     const currentScope = resolveCurrentPluginMetadataScope();
+    const repairedIndex = loadInstalledPluginIndex({
+      config: currentScope.config,
+      env,
+      installRecords: missingConfiguredPluginInstallRepair.records,
+      workspaceDir: currentScope.workspaceDir,
+    });
     pluginMetadataSnapshotState.current = resolveConfigWideDoctorPluginMetadataSnapshot({
       snapshot: loadPluginMetadataSnapshot({
         config: currentScope.config,
         env,
+        index: repairedIndex,
         workspaceDir: currentScope.workspaceDir,
       }),
       config: currentScope.config,
